@@ -86,12 +86,14 @@ internal sealed class AutoEffect : Computation
     {
         _ctx = ctx; _layout = layout; _run = RunBody;
         // Do NOT run at construction — the hook Primes the first run into the pending list so it lands in the passive
-        // drain (after paint), like every other UseEffect body. New Computations start Stale; that is fine (nothing
+        // drain (after paint), like every other UseEffect body. New Computations start Dirty; that is fine (nothing
         // schedules or runs us until Prime), and RunComputation flips us to Clean once the first run executes.
     }
 
     // A read signal changed off-frame ⇒ ask the runtime to schedule (it wakes the host + dedups). The Flush picks us up
-    // and calls RunStale, which does NOT run the body inline — it enqueues it into the passive/layout list instead.
+    // via Computation.RunIfNecessary, which FIRST resolves a Check (polling our sources: if every memo we read recomputes
+    // to an equal value we are cut off here and never enter the drain at all) and only then calls RunStale — which still
+    // does NOT run the body inline, it enqueues it into the passive/layout list, so the passive timing is unchanged.
     private protected override void OnStale() => Runtime.Schedule(this);
 
     internal override void RunStale() => _ctx.EnqueueEffectRun(_run, _layout);

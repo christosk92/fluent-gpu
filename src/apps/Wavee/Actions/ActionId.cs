@@ -11,4 +11,7 @@ public enum ActionId : ushort
     RenamePlaylist, TogglePlaylistPublic, InviteCollaborators, DeletePlaylist,
     PinToSidebar,
     GoToSongRadio, GoToArtistRadio, ViewCredits, CopySpotifyUri, OpenInSpotifyWeb,
+    // The Video ▸ submenu (local video overrides): attach/replace are the same verb over the uri primary key, so they
+    // are still two IDENTITIES — the label, the icon and the undo semantics differ.
+    AttachVideo, ReplaceVideo, LocateVideo, RemoveVideo, ShowVideoInExplorer,
 }

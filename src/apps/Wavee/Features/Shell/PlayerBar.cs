@@ -539,9 +539,12 @@ sealed class PlayerBarContent : Component
                         Transport(Icons.Movie, b.ToggleVideo, true, videoActive, accent, buttonBox, buttonGlyph),
                         Loc.Get(videoActive ? Strings.Player.SwitchToAudio : Strings.Player.SwitchToVideo)),
                     ToolTip.Wrap(
-                        // active: false — a disclosure never lights.
+                        // active: false — a disclosure never lights. NARROW but FULL-HEIGHT (WinUI SplitButton's
+                        // secondary half is Width=SecondaryButtonSize, Height=ControlHeight): a shorter box would top-
+                        // align against the primary, because ToolTip.Wrap's wrapper sets AlignSelf=Start and a child's
+                        // AlignSelf beats this row's AlignItems=Center — which is what put the chevron ~8px high.
                         Transport(Icons.ChevronDownSmall, OpenVideoMenu, true, false, accent,
-                            buttonBox * 0.55f, buttonGlyph * 0.62f),
+                            buttonBox * 0.55f, buttonGlyph * 0.62f, boxHeight: buttonBox),
                         Loc.Get(Strings.Player.VideoOptions)),
                 ],
             });
@@ -828,14 +831,21 @@ sealed class PlayerBarContent : Component
     /// <summary>A transport TOGGLE/command glyph button. The active state is shown by an ACCENT glyph + a 3px accent dot
     /// under it — never a filled background (that's reserved for the hover/press interaction axis). Box never fills at
     /// rest; hover/press use the WinUI subtle fills, the glyph carries the foreground ramp + AnimatedIcon-style scale.</summary>
+    /// <param name="boxHeight">Override the button's HEIGHT (default: square, <paramref name="box"/>). Only the split
+    /// video button uses it: a narrow disclosure half must still be as TALL as the primary it sits beside, exactly like
+    /// <c>SplitButton</c>'s secondary half (Width = SecondaryButtonSize, Height = ControlHeight). Equal heights are what
+    /// keeps the two glyphs on one visual centre line — the row's <c>AlignItems=Center</c> cannot do it, because
+    /// <c>ToolTip.Wrap</c>'s wrapper carries <c>AlignSelf=Start</c> and a per-child AlignSelf beats the row's AlignItems.
+    /// The active dot never affects this: the outer box is explicitly sized, so it is the same in both states.</param>
     internal static BoxEl Transport(string glyph, Action onClick, bool enabled, bool active, ColorF accent, float box = 36f, float glyphSize = 16f,
-        Action<NodeHandle>? onRealized = null, string? font = null)
+        Action<NodeHandle>? onRealized = null, string? font = null, float? boxHeight = null)
     {
+        float height = boxHeight ?? box;
         ColorF fg = !enabled ? Tok.TextDisabled : active ? accent : Tok.TextSecondary;
         ColorF hover = !enabled ? Tok.TextDisabled : active ? accent : Tok.TextPrimary;
         var glyphLayer = new BoxEl
         {
-            Width = box, Height = box, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Width = box, Height = height, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             HitTestVisible = false,
             Children = [new TextEl(glyph) { Size = glyphSize, FontFamily = font ?? Theme.IconFont, Color = fg, HoverColor = hover }],
         };
@@ -847,7 +857,7 @@ sealed class PlayerBarContent : Component
         };
         return new BoxEl
         {
-            Width = box, Height = box, ZStack = true,
+            Width = box, Height = height, ZStack = true,
             Fill = ColorF.Transparent, HoverFill = ColorF.Transparent, PressedFill = ColorF.Transparent,
             HoverScale = enabled ? 1.06f : 1f, PressScale = enabled ? 0.92f : 1f,
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,

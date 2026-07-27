@@ -127,7 +127,15 @@ public sealed class ConnectCommandRouter : IDisposable
         RequestResult result;
         if (ConnectCommand.TryParse(req, out var cmd))
         {
-            try { _dispatch(cmd); result = RequestResult.Success; _log.Info("connect command: " + cmd.Kind); }
+            // The sender + endpoint + message id are already parsed and free; without them a `connect command: Play` in
+            // the log cannot be told from a LOCAL play, nor attributed to the device that sent it — which is exactly the
+            // question a playback change nobody asked for raises.
+            try
+            {
+                _dispatch(cmd);
+                result = RequestResult.Success;
+                _log.Info($"connect command: {cmd.Kind} endpoint={cmd.Endpoint} from={(string.IsNullOrEmpty(cmd.SenderDeviceId) ? "-" : cmd.SenderDeviceId)} msgId={cmd.MessageId} payload={cmd.Payload?.Length ?? 0}B");
+            }
             catch (Exception ex) { result = RequestResult.ContextPlayerError; _log.Info("connect command dispatch error: " + ex.Message); }
         }
         else

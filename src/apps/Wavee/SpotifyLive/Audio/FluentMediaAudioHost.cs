@@ -304,6 +304,13 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     string _prepUri = "";
     long _prepDurMs;
     bool _prepOverlap;
+    // TRUE from the instant a NEW load (or a Stop) is REQUESTED until the replacement session is live. MediaPlayerCore's
+    // Position keeps ticking the OUTGOING track's clock until the new session opens on the serialized pump, so every
+    // reader in that window — the Connect PutState snapshot, an EmitSnap/EmitState publish, this class's own diagnostics —
+    // would report the previous track's position for the track that is starting (observed: a track restarting at 0 was
+    // announced at 190488 ms). Load/Stop are synchronous entry points, so setting the gate there closes the window
+    // completely; OpenSessionAsync clears it at the one place a session becomes live.
+    volatile bool _clockStale;
     // the CURRENTLY-PLAYING (active) track's mixer state, so PositionMs reports active-relative time
     long _activeStartMs;          // raw session ms at which the active track's frame-0 played (0 for a fresh load)
     long _activeDurMs;            // the active track's duration (drives the fade-window trigger)
@@ -338,7 +345,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
 
     // The raw session clock (track A's decode position, in ms). After an overlapping crossfade the active track is a
     // later mixer voice, so PositionMs subtracts the active track's start offset to stay active-track-relative.
-    long RawPositionMs => (long)_core.Position.Peek().TotalMilliseconds;
+    long RawPositionMs => _clockStale ? 0L : (long)_core.Position.Peek().TotalMilliseconds;
     public long PositionMs => Math.Max(0, RawPositionMs - _activeStartMs);
     public bool IsPlaying => _core.IsPlaying.Peek();
     public bool IsBuffering => _core.IsBuffering.Peek();
@@ -358,6 +365,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
 
     public void LoadFastStart(in AudioFastStart start)
     {
+        _clockStale = true;   // the outgoing track's clock stops being ours the moment a new load is asked for
         long epoch = Interlocked.Increment(ref _loadEpoch);
         var s = start;   // capture (can't use 'in' inside async)
         Enqueue(() => LoadFastStartAsync(s, epoch));
@@ -382,6 +390,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     public void Stop()
     {
         _playIntent = false;
+        _clockStale = true;   // nothing is playing → report 0, never the torn-down session's last position
         long epoch = Interlocked.Increment(ref _loadEpoch);   // invalidate any in-flight open
         Enqueue(async () =>
         {
@@ -493,6 +502,29 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         if (epoch != Volatile.Read(ref _loadEpoch)) { _log.Info($"supply-body ignored stale epoch file={body.FileIdHex}"); return; }
         _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Buffering, PositionMs));
 
+        // Local file (a "Play file…" pick / a shell drop) — open the file and the session now. Same deferred-open shape
+        // as the external branch below: the plan carried an EMPTY head, so LoadFastStart parked the load and THIS is
+        // where the session actually opens. The decoder kind comes from the resolver's extension map (never a sniff —
+        // a local file's extension is the only thing we have, and the provider already refused anything unsupported).
+        if (body.SourceKind == AudioSourceKind.LocalFile)
+        {
+            LocalFileAudioStream file;
+            try { file = LocalFileAudioStream.Open(body.CdnUrl); }
+            catch (Exception ex)
+            {
+                // The resolver checked existence, so this is the narrow window where the file vanished (or is
+                // unreadable) between resolve and open. Surface it typed rather than leaving a silent "playing" state —
+                // the serialized pump's own catch would only have logged it.
+                _log.Info($"local file open failed path={body.CdnUrl}: {ex.GetType().Name}: {ex.Message}");
+                _signals.OnNext(AudioHostSignal.Fault(0, AudioKeyFailureReason.Restricted, ex.Message));
+                return;
+            }
+            var localBytes = new SpotifyMediaByteSource(file, 0, KindOf(body.Format), body.DurationMs, 1f);
+            _activeStream = null;
+            await OpenSessionAsync(localBytes, epoch).ConfigureAwait(false);
+            return;
+        }
+
         // External plain-HTTP (podcast MP3) — open a plain stream and the session now.
         if (body.SourceKind == AudioSourceKind.ExternalPlain)
         {
@@ -560,6 +592,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             _activeBytes = bytes;   // retained so a mid-track device-rate change can re-open the SAME stream at the new rate
             // Fresh active track: reset the crossfade/offset bookkeeping to this session's primary voice.
             _activeStartMs = 0;
+            _clockStale = false;   // THIS session now owns _core.Position — the reported clock is honest again
             _activeDurMs = bytes.DurationMs;
             _activeUri = "";
             _crossfadeInFlight = false;

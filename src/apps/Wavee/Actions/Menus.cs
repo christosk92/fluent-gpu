@@ -50,6 +50,8 @@ public static class Menus
                 rows.Add(TrackActions.ViewCredits.ToMenuItem(ctx));
             if (ActionRules.CanStartTrackRadio(in ctx.Target))
                 rows.Add(TrackActions.GoToSongRadio.ToMenuItem(ctx));
+            if (VideoItem(in ctx) is { } video)
+                rows.Add(video);
         }
 
         rows.Add(ShareItem(in ctx));
@@ -75,6 +77,34 @@ public static class Menus
             items.Add(TrackActions.OpenInSpotifyWeb.ToMenuItem(ctx));
         }
         return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Menu.Share), items, ActionIcons.Resolve(ActionIcons.Share));
+    }
+
+    // ── Video ▸ (the user's local video-override curation for ONE playable) ─────────────────────────────────────────
+    /// <summary>The Video submenu: "Attach video file…" when nothing is attached, else "Replace video file…" +
+    /// "Locate video file…" (broken link only) + "Show in Explorer" (file present) + a separated "Remove video".
+    /// Null — the row is absent entirely — for a multi-selection (one file, one playable) or on a backend with no
+    /// curation service. Which rows exist is decided by <see cref="VideoOverrideUx.MenuFor"/>, which walks the SAME
+    /// tier decision playback takes, so the menu can never disagree with what will actually play.</summary>
+    static MenuFlyoutItem? VideoItem(in ActionContext ctx)
+    {
+        string? uri = ctx.Target.Single is { Uri.Length: > 0 } t ? t.Uri : null;
+        var which = VideoOverrideUx.MenuFor(ctx.Target.Single is not null, uri, ctx.S.VideoOverrides);
+        if (which == VideoMenuItems.None) return null;
+
+        var items = new List<MenuFlyoutItem>(5);
+        if ((which & VideoMenuItems.Attach) != 0) items.Add(VideoActions.AttachVideo.ToMenuItem(ctx));
+        if ((which & VideoMenuItems.Replace) != 0) items.Add(VideoActions.ReplaceVideo.ToMenuItem(ctx));
+        if ((which & VideoMenuItems.Locate) != 0) items.Add(VideoActions.LocateVideo.ToMenuItem(ctx));
+        if ((which & VideoMenuItems.ShowInExplorer) != 0) items.Add(VideoActions.ShowVideoInExplorer.ToMenuItem(ctx));
+        // Destructive last, behind a separator (the SidebarPlaylist Delete convention). No confirm dialog — detaching is
+        // metadata-only, never touches the file, and the toast carries Undo.
+        if ((which & VideoMenuItems.Remove) != 0)
+        {
+            items.Add(MenuFlyoutItem.Separator);
+            items.Add(VideoActions.RemoveVideo.ToMenuItem(ctx));
+        }
+        return MenuFlyoutItem.SubMenu(Loc.Get(Strings.VideoOverride.MenuTitle), items,
+            ActionIcons.Resolve(ActionIcons.Video));
     }
 
     /// <summary>Multi-artist track → a "Go to artists" cascade, one row per artist.</summary>

@@ -58,41 +58,35 @@ public readonly record struct PlacementPolicy(PlacementSet Allowed, SurfacePlace
 /// <item><b>One placement, not a set of booleans.</b> <see cref="Requested"/> is an enum, so "mounted in two places at
 /// once" (the Media Foundation double-pump hazard: exactly one mounted surface may pump a given player) cannot be
 /// expressed.</item>
-/// <item><b>Dismiss is content-scoped.</b> <see cref="DismissedGen"/> is compared against <see cref="ContentGen"/>, so
-/// "hide for this song" expires by itself on the next track without clearing the sticky intent.</item>
+/// <item><b>Closing IS off (2026-07-26).</b> There is no "hidden but still on" state to represent: every user-initiated
+/// close writes <see cref="Requested"/> = <see cref="SurfacePlacement.None"/>, so the only way a surface comes back is
+/// the user asking for it again. The old content-scoped dismiss (a <c>DismissedGen</c> compared against a per-track
+/// <c>ContentGen</c>, which expired by itself on the next track) is DELETED — it is what made a closed video re-open on
+/// the following song, and keeping the fields around would leave "off, but it will come back" expressible.</item>
 /// </list>
 /// </summary>
 /// <param name="Requested">The user's live intent: the placement they asked for, or <see cref="SurfacePlacement.None"/>
-/// for "off". STICKY across content changes — that is what makes video carry from track to track.</param>
+/// for "off". STICKY across content changes in BOTH directions — an on intent carries video from track to track, and an
+/// off intent keeps every subsequent track on audio until the user turns video back on.</param>
 /// <param name="Preferred">The last non-off, non-fullscreen placement the user chose. Where an unlit primary click
 /// opens, and the only placement worth persisting ("persist where you like to work").</param>
 /// <param name="ReturnTo">Where <see cref="SurfacePlacement.Fullscreen"/> exits back to.</param>
 /// <param name="Live">What the owner actually has mounted right now. Written ONLY by the owner/host.</param>
 /// <param name="Available">Allowed ∧ host-capable ∧ content-capable, right now.</param>
-/// <param name="ContentGen">Monotonic per-content generation (bumped on every track change).</param>
-/// <param name="DismissedGen">The <see cref="ContentGen"/> the user dismissed this surface for, or
-/// <see cref="NotDismissed"/>.</param>
 public readonly record struct PlacementState(
     SurfacePlacement Requested,
     SurfacePlacement Preferred,
     SurfacePlacement ReturnTo,
     SurfacePlacement Live,
-    PlacementSet Available,
-    long ContentGen,
-    long DismissedGen)
+    PlacementSet Available)
 {
-    /// <summary>The <see cref="DismissedGen"/> sentinel for "not dismissed" (<see cref="ContentGen"/> is never negative).</summary>
-    public const long NotDismissed = -1;
-
     /// <summary>The off, nothing-mounted, nothing-available starting state for a surface with the given policy.</summary>
     public static PlacementState Initial(in PlacementPolicy policy) => new(
         Requested: SurfacePlacement.None,
         Preferred: policy.Default,
         ReturnTo: SurfacePlacement.None,
         Live: SurfacePlacement.None,
-        Available: PlacementSet.None,
-        ContentGen: 0,
-        DismissedGen: NotDismissed);
+        Available: PlacementSet.None);
 }
 
 /// <summary>What an owner must do to make reality match intent.</summary>
@@ -113,15 +107,14 @@ public enum MountAction : byte
 /// (and therefore property-tested over arbitrary command sequences) — the app calls the named transitions directly.</summary>
 public enum PlacementCommandKind : byte
 {
-    TogglePrimary, OpenAt, TurnOff, Dismiss, Restore, ContentChanged, Availability, HostClosed, EnterFullscreen, ExitFullscreen, LiveChanged,
+    TogglePrimary, OpenAt, TurnOff, Availability, HostClosed, EnterFullscreen, ExitFullscreen, LiveChanged,
 }
 
 /// <summary>One command for <see cref="PlacementCore.Apply"/>. Unused fields are ignored per <paramref name="Kind"/>.</summary>
 public readonly record struct PlacementCommand(
     PlacementCommandKind Kind,
     SurfacePlacement Placement = SurfacePlacement.None,
-    PlacementSet Available = PlacementSet.None,
-    long ContentGen = 0);
+    PlacementSet Available = PlacementSet.None);
 
 /// <summary>
 /// How a surface's placement and geometry survive a restart, as pure string ↔ value conversions (the app layer owns the
@@ -243,8 +236,8 @@ public static class PlacementCore
     };
 
     /// <summary>THE derived truth every surface, owner and affordance reads: the placement that should be mounted right
-    /// now, or <see cref="SurfacePlacement.None"/>. Off when the user turned it off, when it is dismissed for this
-    /// content, or when nothing is available (e.g. the track has no video).</summary>
+    /// now, or <see cref="SurfacePlacement.None"/>. Off when the user turned it off (including by closing it) or when
+    /// nothing is available (e.g. the track has no video).</summary>
     public static SurfacePlacement Resolve(in PlacementState s) => ResolveWith(s, s.Available);
 
     /// <summary><see cref="Resolve"/> with the availability overridden — for asking "what WOULD be resolved for
@@ -252,7 +245,6 @@ public static class PlacementCore
     public static SurfacePlacement ResolveWith(in PlacementState s, PlacementSet available)
     {
         if (s.Requested == SurfacePlacement.None) return SurfacePlacement.None;
-        if (s.DismissedGen == s.ContentGen) return SurfacePlacement.None;
         return FirstAvailable(s.Requested, available);
     }
 
@@ -266,9 +258,8 @@ public static class PlacementCore
     public static PlacementState TogglePrimary(in PlacementState s)
         => IsActive(s) ? TurnOff(s) : OpenAt(s, s.Preferred);
 
-    /// <summary>Show the surface at <paramref name="target"/>. Clears any per-content dismiss (an explicit "show it"
-    /// beats an earlier "hide it for this song") and — for a real home, not Fullscreen — makes the target the new
-    /// <see cref="PlacementState.Preferred"/>.</summary>
+    /// <summary>Show the surface at <paramref name="target"/> — the ONE way video comes back on after any close — and,
+    /// for a real home (not Fullscreen), make the target the new <see cref="PlacementState.Preferred"/>.</summary>
     public static PlacementState OpenAt(in PlacementState s, SurfacePlacement target)
     {
         if (target == SurfacePlacement.None) return TurnOff(s);
@@ -278,28 +269,19 @@ public static class PlacementCore
             Requested = target,
             Preferred = target,
             ReturnTo = SurfacePlacement.None,
-            DismissedGen = PlacementState.NotDismissed,
         };
     }
 
-    /// <summary>Off. Keeps <see cref="PlacementState.Preferred"/> (so the next open returns to the user's home) and
-    /// clears the transient fullscreen/dismiss bookkeeping.</summary>
+    /// <summary>Off — GLOBALLY and stickily, which since 2026-07-26 is what EVERY user-initiated close means (the
+    /// surface's own ✕, the picker's "turn off video", the primary's "switch to audio"). No subsequent track re-opens
+    /// the surface; only an explicit <see cref="OpenAt"/>/<see cref="TogglePrimary"/> does. Keeps
+    /// <see cref="PlacementState.Preferred"/> (so that next open returns to the user's home) and clears the transient
+    /// fullscreen bookkeeping.</summary>
     public static PlacementState TurnOff(in PlacementState s) => s with
     {
         Requested = SurfacePlacement.None,
         ReturnTo = SurfacePlacement.None,
-        DismissedGen = PlacementState.NotDismissed,
     };
-
-    /// <summary>"Hide it for this song" (the surface's own ✕) — NOT off: the sticky intent survives, so the next track
-    /// brings the surface straight back.</summary>
-    public static PlacementState DismissForContent(in PlacementState s) => s with { DismissedGen = s.ContentGen };
-
-    /// <summary>Undo a per-content dismiss without changing placement.</summary>
-    public static PlacementState Restore(in PlacementState s) => s with { DismissedGen = PlacementState.NotDismissed };
-
-    /// <summary>The playing content changed. Bumping the generation expires any per-content dismiss by itself.</summary>
-    public static PlacementState ContentChanged(in PlacementState s, long contentGen) => s with { ContentGen = contentGen };
 
     /// <summary>Republish what is possible right now (allowed ∧ host-capable ∧ content-capable). Deliberately does NOT
     /// rewrite <see cref="PlacementState.Requested"/>: intent outlives a temporary loss of availability, so when the
@@ -331,7 +313,6 @@ public static class PlacementCore
     {
         ReturnTo = s.Requested == SurfacePlacement.Fullscreen ? s.ReturnTo : s.Requested,
         Requested = SurfacePlacement.Fullscreen,
-        DismissedGen = PlacementState.NotDismissed,
     };
 
     /// <summary>Leave fullscreen for <see cref="PlacementState.ReturnTo"/> (or the preferred home if it entered from
@@ -350,8 +331,11 @@ public static class PlacementCore
     /// <list type="bullet">
     /// <item>Closing the DETACHED window means "not in a separate window", not "stop watching" → fall to the next
     /// available less-committing placement (the mini player) and make that the new preference. Only if nothing is left
-    /// does it turn off.</item>
-    /// <item>Closing an in-app surface is "hide for this song" (<see cref="DismissForContent"/>).</item>
+    /// does it turn off. (The user still sees video, in the surface they fell back to — so this is not the "I closed the
+    /// video" gesture; closing THAT fallback surface is, and it turns video off like any other close.)</item>
+    /// <item>Closing an in-app surface is <see cref="TurnOff"/>: video is off, globally and stickily, until the user
+    /// asks for it again. It used to be a per-song dismiss that expired on the next track — which is exactly the
+    /// "I closed the video and the next song opened it again" complaint (fixed 2026-07-26).</item>
     /// <item>Leaving fullscreen by its own chrome is <see cref="ExitFullscreen"/>.</item>
     /// </list>
     /// A close reported for a placement that is no longer resolved is STALE (a newer placement already won the race)
@@ -361,7 +345,7 @@ public static class PlacementCore
     {
         if (closed == SurfacePlacement.None || Resolve(s) != closed) return s;
         if (closed == SurfacePlacement.Fullscreen) return ExitFullscreen(s);
-        if (closed != SurfacePlacement.Detached) return DismissForContent(s);
+        if (closed != SurfacePlacement.Detached) return TurnOff(s);
         var next = FirstAvailable(SurfacePlacement.Floating, s.Available & ~PlacementSet.Detached);
         return next == SurfacePlacement.None ? TurnOff(s) : OpenAt(s, next);
     }
@@ -395,9 +379,6 @@ public static class PlacementCore
         PlacementCommandKind.TogglePrimary => TogglePrimary(s),
         PlacementCommandKind.OpenAt => OpenAt(s, c.Placement),
         PlacementCommandKind.TurnOff => TurnOff(s),
-        PlacementCommandKind.Dismiss => DismissForContent(s),
-        PlacementCommandKind.Restore => Restore(s),
-        PlacementCommandKind.ContentChanged => ContentChanged(s, c.ContentGen),
         PlacementCommandKind.Availability => WithAvailability(s, c.Available),
         PlacementCommandKind.HostClosed => HostClosed(s, c.Placement),
         PlacementCommandKind.EnterFullscreen => EnterFullscreen(s),
@@ -409,16 +390,14 @@ public static class PlacementCore
     /// <summary>The invariants that must hold after EVERY command, whatever the order:
     /// (1) a resolved placement is always actually available — the surface can never be asked to mount somewhere it
     /// cannot; (2) <see cref="PlacementState.Preferred"/> is always a real home to return to (never off, never the
-    /// fullscreen mode); (3) nothing is resolved while the surface is off; (4) a per-content dismiss only ever silences
-    /// the content it was made for.</summary>
+    /// fullscreen mode); (3) nothing is resolved while the surface is off — and, since there is no longer any
+    /// "hidden but still on" state, off is also the ONLY thing that hides a surface whose content supports it.</summary>
     public static bool Invariant(in PlacementState s)
     {
         var r = Resolve(s);
         if (r != SurfacePlacement.None && !Allows(s.Available, r)) return false;
         if (s.Preferred == SurfacePlacement.None || s.Preferred == SurfacePlacement.Fullscreen) return false;
         if (s.Requested == SurfacePlacement.None && r != SurfacePlacement.None) return false;
-        // A dismiss made for OTHER content must be inert: resolving with it and without it must agree.
-        if (s.DismissedGen != s.ContentGen && Resolve(s with { DismissedGen = PlacementState.NotDismissed }) != r) return false;
         return true;
     }
 }

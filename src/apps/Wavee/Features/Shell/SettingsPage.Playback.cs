@@ -86,6 +86,8 @@ sealed partial class SettingsPage
             SettingsSectionHeader(Loc.Get(Strings.Settings.Sound.Title), Icons.Tag),
             EqualizerGroup(svc, settings, eqOn, gains, preset),
             CrossfadeGroup(svc, settings, crossOn),
+            SettingsSectionHeader(Loc.Get(Strings.VideoOverride.SettingsTitle), Icons.Movie),
+            VideoOverridesGroup(svc),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.PlayerBar), Icons.Pin),
             SettingsRow(Loc.Get(Strings.Settings.Playback.ShowRemaining), Loc.Get(Strings.Settings.Playback.ShowRemainingSub),
                 Toggle(WaveeSettings.PlayerBarShowRemaining, bumpPlayerBar: true), Icons.Clock));

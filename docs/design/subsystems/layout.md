@@ -388,6 +388,14 @@ container's own size, so the parent never re-runs. This is what makes a `setStat
 **not** relayout the whole page. **Virtual viewports are always layout boundaries** (§8): the viewport has a fixed
 extent and its content is positioned by transform, so realizing/derealizing rows never escapes the viewport.
 
+A mark with **no** boundary above it does not immediately escalate to a root solve. The invalidator first offers it
+to a size-stable probe (`FlexLayout.TryResolveSizeStable`): the subtree is re-measured at exactly the available
+width its parent last offered, and if its border-box size and every parent-facing `LayoutInput` field are
+unchanged, it is re-arranged in place and the root solve is skipped — a parent reads a child only through those two
+surfaces, so an unchanged pair means every ancestor and sibling rect is provably unchanged. Any doubt (no prior
+record, a viewport/grid/z-stack root, a changed signature or size) escalates to the full root solve exactly as
+before.
+
 ### 4.4 The dirty worklist (idle = O(0))
 
 The primary mechanism (folded, `architecture-spec.md` §4.4) is an **arena-backed dirty-node worklist** that

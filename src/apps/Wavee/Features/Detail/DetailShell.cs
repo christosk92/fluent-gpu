@@ -13,10 +13,12 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-/// <summary>The delegates the rail / tracks / trailing builders need (kept off the frozen ctor path; rebuilt each
-/// render so they close over live state). <see cref="Play"/>/<see cref="PlayAll"/>/<see cref="Shuffle"/> act on THIS
-/// page's context; <see cref="PlayContext"/> plays an arbitrary uri (the More-by cards). <see cref="Accent"/> is the
-/// art-derived (or default) accent colour.</summary>
+/// <summary>The delegates the rail / tracks / trailing builders need. DetailShell hands out ONE mount-stable instance
+/// whose delegates are trampolines into a per-render box (DetailShell.LiveHandlersRef), so a copy frozen into a
+/// component's ctor still calls this render's closures; only <see cref="Accent"/>, the one non-delegate field, re-mints
+/// it. <see cref="Play"/>/<see cref="PlayAll"/>/<see cref="Shuffle"/> act on THIS page's context;
+/// <see cref="PlayContext"/> plays an arbitrary uri (the More-by cards). <see cref="Accent"/> is the art-derived (or
+/// default) accent colour.</summary>
 readonly record struct DetailHandlers(
     Action<int> Play, Action PlayAll, Action Shuffle, Action<string> PlayContext, Action<string, string?> Go, ColorF Accent,
     IReadSignal<TrackSort> Sort, Action<TrackSort> SetSort,
@@ -238,17 +240,55 @@ sealed class DetailShell : Component
         void SetDensity(int d) { _density.Value = d; settings?.Set(WaveeSettings.RowDensity, d); }   // app-wide
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
-        var playAllOverride = new Action?[1];   // TrackList fills [0] with the visible-order play; the rail's Play late-binds through it
-        var handlers = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
+        // The record below is the LIVE one — its closures see THIS render's svc / model / settings — but nothing
+        // downstream holds it. It is parked in a mount-stable box, and the record everyone actually receives
+        // (`handlers`) carries trampolines that call through that box. The indirection buys two things:
+        //   · IDENTITY. `_liveHandlers` feeds TrackList's rowsSnapshot memo. A freshly-built record every render (fresh
+        //     closures ⇒ never equal, and DepKey.FromRef over it is a new identity every render — see DepKey.cs) wrote
+        //     that signal on every render, invalidated the memo, and re-rendered EVERY realized track row. That was the
+        //     whole-list fanout behind a slow artist→album hop. The record below changes identity only with `accent`.
+        //   · CORRECTNESS AT THE FROZEN EDGE. Component ctor args freeze at mount (component-props-contract), so every
+        //     builder taking DetailHandlers BY VALUE (the rail's More menu, the vertical hero, AlbumTrailing) used to
+        //     freeze one render's closures. Trampolines make even those frozen copies late-bind to the live record.
+        // Accent is the one non-delegate field, so it cannot ride the box: the stable record is re-minted (with fresh
+        // trampolines — cheap, and rare) exactly when the art-derived accent actually moves, and only then.
+        var live = UseRef(new LiveHandlersRef()).Value;
+        // TrackList fills [0] with the visible-order play; the rail's Play late-binds through it. Mount-stable (UseRef):
+        // a fresh array per render would hand the rail an empty cell every time TrackList had already filled one.
+        var playAllOverride = UseRef(new Action?[1]).Value;
+        live.Current = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
             Shuffle, PlayContext, go, accent, _sort, SetSort,
             _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
             a => DetailNav.OpenAlbum(navPreview, go, a),
             p => DetailNav.OpenPlaylist(navPreview, go, p),
             playAllOverride,
             MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v);
-        // TrackList is retained across preview→palette hydration and route reuse. Publish after render so its accent and
-        // context-closing actions update through the supported signal path instead of frozen constructor arguments.
-        UseEffect(() => _liveHandlers.Value = handlers, DepKey.FromRef(handlers));
+        // Fields that are ALREADY mount-stable (the view-control signals, the override cell, and the two setters that
+        // only poke this shell's own signals) pass straight through; everything that closes over per-render state goes
+        // through the box.
+        var accentKey = DepKey.From(accent.R, accent.G, accent.B, accent.A);
+        var handlers = UseMemo(() => new DetailHandlers(
+            i => live.Current.Play(i),
+            () => live.Current.PlayAll(),
+            () => live.Current.Shuffle(),
+            uri => live.Current.PlayContext(uri),
+            (uri, name) => live.Current.Go(uri, name),
+            accent,
+            _sort, s => live.Current.SetSort(s),
+            _query, _filterFlags, f => _filterFlags.Value = f,
+            _density, d => live.Current.SetDensity(d),
+            () => live.Current.PlayNext(),
+            () => live.Current.AddToQueue(),
+            () => live.Current.AddToPlaylist(),
+            a => live.Current.OpenAlbum(a),
+            p => live.Current.OpenPlaylist(p),
+            playAllOverride,
+            MultiSelect: _multiSelect, SetMultiSelect: v => _multiSelect.Value = v), accentKey);
+        // TrackList is retained across preview→palette hydration and route reuse. Publish AFTER render (never write a
+        // signal from Render) so its accent and context-closing actions arrive through the supported signal path
+        // instead of frozen constructor arguments. Keyed on the accent — the only thing that can change the published
+        // record — so the write, and the row re-render it costs, happens on a real palette change, not once per render.
+        UseEffect(() => _liveHandlers.Value = handlers, accentKey);
 
         // Viewport-size context signal — resolved UNCONDITIONALLY here (rules of hooks): the positional-hook cursor must
         // see the SAME hook sequence on every render, but the branches below differ (single-column / vertical / two-column),
@@ -439,6 +479,12 @@ sealed class DetailShell : Component
                 with { Key = "detail-rail-grip:" + kind },
         ],
     };
+
+    /// <summary>The mutable box the mount-stable <see cref="DetailHandlers"/> trampolines call through. Re-assigned
+    /// (with a freshly-closed-over record) every render, so the delegates children froze at mount always run against
+    /// the CURRENT svc / model / settings while the record's identity — which gates TrackList's rowsSnapshot memo —
+    /// stays put. Plain field, written during Render: it is not a signal, so nothing re-renders off it.</summary>
+    sealed class LiveHandlersRef { public DetailHandlers Current; }
 
     /// <summary>Per-route cover latch: prefer the painted preview URL through the first Ready, then adopt only real
     /// model cover identity changes (edit / live sync).</summary>

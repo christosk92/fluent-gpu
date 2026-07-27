@@ -208,6 +208,38 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     /// so the portable controller never references the SpotifyLive video types. Wired by <c>LiveConnect.WireVideoMedia</c>.</summary>
     public Func<Track, CancellationToken, Task<bool>>? LoadCurrentVideoAsync { get; set; }
 
+    /// <summary>Source-agnostic seam — may a prepared (gapless/crossfaded) hand-off be scheduled INTO this playable? Wired
+    /// by the live bootstrap to the media-provider registry's <c>SupportsPreparedNext</c>, so a source that ships without
+    /// the prepared-next capability takes the proven Ended→AutoAdvance hard cut instead. NULL (the default — unit tests and
+    /// the fake/silent bootstrap) allows every hand-off, so the audio path is byte-for-byte unchanged.</summary>
+    public Func<Track, bool>? CanPrepareNext { get; set; }
+
+    /// <summary>Source-agnostic seam — a VIDEO that failed to OPEN gets one chance to be recovered before the failure is
+    /// reported. Consulted in <c>OnHostSignal</c> on an Error while the current media is Video, BEFORE
+    /// <c>ReportPlaybackError</c>. The hook returns TRUE when it has changed something that makes a retry meaningful (the
+    /// live impl quarantines an unplayable local attachment so the resolver walks past it to the source's own video /
+    /// audio), in which case this controller simply re-runs the load; FALSE means "nothing to do" and the error is
+    /// reported exactly as it is today. NULL (the default — unit tests, audio-only builds) is byte-identical to today.
+    /// <para>Called fire-and-forget from the host-signal callback and holding NO lock (the same discipline as
+    /// AutoAdvanceAsync — taking <c>_lock</c> inside a host signal is what deadlocked track-end). At most ONE recovery
+    /// per playable per visit (see <c>_videoRecoveryUri</c>): a second failure on the same uri reports.</para></summary>
+    public Func<Track, CancellationToken, Task<bool>>? TryRecoverVideoAsync { get; set; }
+
+    /// <summary>Raised when VIDEO definitively did NOT happen for a playable that the app believes has one: the video
+    /// source resolved to nothing (we fell back to audio), or the open failed and <see cref="TryRecoverVideoAsync"/>
+    /// declined. The app-side surfaces mount off AVAILABILITY ("does this uri have a video"), which stays true in both
+    /// cases — so without this edge a mounted surface waits forever for a source that will never arrive (an indeterminate
+    /// "Loading" poster sitting over audio that is already playing). Wired by <c>LiveConnect.WireVideoMedia</c> to
+    /// <c>PlaybackBridge.NotifyVideoMediaEnded</c>, which latches THAT PLAYABLE — never the user's standing intent, so
+    /// sticky "watch video" and sticky-off both keep their exact meaning. NULL (unit tests, audio-only builds) = today.
+    /// <para>Invoked while <c>_lock</c> is held, so the handler must be non-blocking (the live one posts to the UI thread).</para></summary>
+    public Action<Track>? OnVideoMediaUnavailable { get; set; }
+
+    // The loop guard's playable half: the uri a video recovery has already been attempted for. Cleared when a DIFFERENT
+    // playable loads, never by the recovery's own reload — otherwise the fallback could ping-pong forever. The (uri, source
+    // key) half lives in the hook's own quarantine, which is what makes the retry resolve to something different.
+    string? _videoRecoveryUri;
+
     /// <summary>The kind the ONE current media is playing as right now (Audio until a video boundary swaps it). The single
     /// truth Connect's <c>track_player</c> derives from via <see cref="MediaSwitchLogic.TrackPlayer"/> — never a bare
     /// has-video flag.</summary>
@@ -243,6 +275,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         _currentHost = target;
         _hostSub.Dispose();
+        // Disposing the outgoing subscription orphans any BUFFERING state that host had published: it can no longer
+        // deliver the Playing/Ended edge that would clear it, so the spinner would latch over the incoming media (the
+        // observed "closed the video, audio played, buffering spun forever"). Retire it at the swap — the incoming host
+        // republishes its own buffering state on its first signal.
+        _projection.ClearTransientBuffering();
         _hostSub = _currentHost.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
     }
 
@@ -272,8 +309,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     /// on it. This is what makes the user's "watch video" / "switch to audio" toggle take effect NOW instead of at the next
     /// track boundary — and what picks up the music-video association when it lands asynchronously after the track already
     /// started. A no-op when nothing is playing, when the kind already matches, when the hooks are unwired (kill switch), or
-    /// when another Connect device owns playback. Wired to <c>PlaybackBridge.RequestMediaKindRefresh</c>.</summary>
-    public async Task RefreshCurrentMediaKindAsync(CancellationToken ct = default)
+    /// when another Connect device owns playback. Wired to <c>PlaybackBridge.RequestMediaKindRefresh</c>.
+    /// <para><paramref name="forceReloadIfVideo"/> closes the same-kind gap: a mid-playback video-SOURCE change (the user
+    /// attached / replaced / removed a local override) leaves the kind at Video on both sides, so the same-kind early
+    /// return would swallow it. Forcing falls through to the same <c>LoadAndPlayCurrentAsync</c> under <c>_lock</c>;
+    /// an unchanged source Key is still a no-op inside the video host, so forcing is safe.</para></summary>
+    public async Task RefreshCurrentMediaKindAsync(bool forceReloadIfVideo = false, CancellationToken ct = default)
     {
         if (ShouldPlayAsVideo is null) return;   // hooks unwired → the kind can never be anything but audio
         if (!RouteLocal()) return;               // a remote device owns playback — never reload locally
@@ -283,8 +324,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             var cur = _session.Current;
             if (cur is null) return;
             var next = KindFor(cur);
-            if (next == _currentKind) return;
-            _log.Info($"media kind re-evaluated {_currentKind}→{next} for {cur.Uri} — reloading the current playable");
+            if (next == _currentKind)
+            {
+                if (!forceReloadIfVideo || next != PlayableKind.Video) return;
+                _log.Info($"forced same-kind video reload for {cur.Uri} — the resolved video source changed");
+            }
+            else
+                _log.Info($"media kind re-evaluated {_currentKind}→{next} for {cur.Uri} — reloading the current playable");
             // POSITION HANDOFF IS DELIBERATELY NOT ATTEMPTED across a kind boundary, in EITHER direction. A music video is a
             // DIFFERENT EDIT of the song with its own timeline (spoken intros, alternate arrangements), so the audio position
             // and the video position are NOT comparable — seeking one to the other lands in the wrong place. Both directions
@@ -470,7 +516,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // ── IPlaybackPlayer (UI intents) — each verb routes local vs. forward ─────────────────────────────────────────────
     public async Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default)
     {
-        await ExecutePlayAsync(PlayRequest.Default(contextUri, startIndex), ct).ConfigureAwait(false);
+        await ExecutePlayAsync(PlayRequest.Default(contextUri, startIndex), "play-context", ct).ConfigureAwait(false);
     }
 
     public async Task PlayContextTrackAsync(string contextUri, PlaybackContextTrack track, int fallbackIndex = 0, CancellationToken ct = default)
@@ -480,7 +526,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             Math.Max(0, fallbackIndex),
             null,
             string.IsNullOrEmpty(track.Uri) ? null : track.Uri,
-            string.IsNullOrEmpty(track.Uid) ? null : track.Uid), ct).ConfigureAwait(false);
+            string.IsNullOrEmpty(track.Uid) ? null : track.Uid), "play-context-track", ct).ConfigureAwait(false);
     }
 
     public async Task PlayOrderedAsync(string contextUri, IReadOnlyList<PlaybackContextTrack> tracks, int startIndex = 0, CancellationToken ct = default)
@@ -494,24 +540,26 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var refs = ToQueuedRefs(tracks);
         int start = Math.Clamp(startIndex, 0, refs.Length - 1);
         var selected = refs[start];
-        await ExecutePlayAsync(new PlayRequest(contextUri, start, refs, selected.Uri, selected.Uid), ct).ConfigureAwait(false);
+        await ExecutePlayAsync(new PlayRequest(contextUri, start, refs, selected.Uri, selected.Uid), "play-ordered", ct).ConfigureAwait(false);
     }
 
     public async Task PlayTrackAsync(string trackUri, CancellationToken ct = default)
     {
         if (!RouteLocal())
         {
-            await ExecutePlayAsync(PlayRequest.Default(trackUri, 0), ct).ConfigureAwait(false);
+            await ExecutePlayAsync(PlayRequest.Default(trackUri, 0), "play-track-uri", ct).ConfigureAwait(false);
             return;
         }
 
+        LogPlayIntent("play-track-uri", trackUri, 0, trackUri, null, 0, local: true);
         var track = await HydrateOneAsync(trackUri, ct).ConfigureAwait(false);
         await LocalPlayTracksAsync(trackUri, new[] { track }, 0, ct).ConfigureAwait(false);
     }
 
     public Task PlayTrackAsync(Track track, CancellationToken ct = default)
     {
-        if (!RouteLocal()) return ExecutePlayAsync(PlayRequest.Default(track.Uri, 0), ct);
+        if (!RouteLocal()) return ExecutePlayAsync(PlayRequest.Default(track.Uri, 0), "play-track", ct);
+        LogPlayIntent("play-track", track.Uri, 0, track.Uri, null, 0, local: true);
         return LocalPlayTracksAsync(track.Uri, new[] { new QueuedTrack(track, "") }, 0, ct);
     }
 
@@ -848,8 +896,17 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         try
         {
-            if (ExtractPlaySpec(cmd.Payload) is { } spec) await LocalPlaySpecAsync(spec, default).ConfigureAwait(false);
-            else await LocalResumeAsync(default).ConfigureAwait(false);   // bare transfer → ghost-resume the cluster state here
+            if (ExtractPlaySpec(cmd.Payload) is { } spec)
+            {
+                LogPlayIntent("remote-" + cmd.Kind + "-from-" + (string.IsNullOrEmpty(cmd.SenderDeviceId) ? "?" : cmd.SenderDeviceId),
+                    spec.Uri, spec.SkipToIndex ?? 0, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.EmbeddedPages?.Count ?? 0, local: true);
+                await LocalPlaySpecAsync(spec, default).ConfigureAwait(false);
+            }
+            else
+            {
+                _log.Info($"remote {cmd.Kind} carried no play spec — resuming from the cluster (from={(string.IsNullOrEmpty(cmd.SenderDeviceId) ? "-" : cmd.SenderDeviceId)})");
+                await LocalResumeAsync(default).ConfigureAwait(false);   // bare transfer → ghost-resume the cluster state here
+            }
         }
         catch (Exception ex) { _log.Info("controller inbound play/transfer error: " + ex.Message); }
     }
@@ -1032,6 +1089,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
 
         if (start < 0) start = 0;   // no skip target at all → start at the top
+        // The other half of the attribution pair: what the (silent, network-latency-bearing) resolve actually decided to
+        // play. Pairing this with the `play intent` line above turns "the app jumped to another song by itself" into a
+        // two-line story — including HOW LONG the resolve took, which is what makes a play look spontaneous.
+        _log.Info($"play resolved ctx={resolved.ContextUri ?? spec.Uri} tracks={tracks.Count} start={start} " +
+            $"current={(start < tracks.Count ? tracks[start].Uri : "-")}");
         await LocalPlayTracksAsync(resolved.ContextUri ?? spec.Uri, tracks, start, ct,
             nextPage, resolved.IsInfinite, resolved.Metadata).ConfigureAwait(false);
     }
@@ -1088,6 +1150,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             _projection.NoteLocalCommand();
             _snap = _session.Next();
+            // Attribution: a queue STEP and a fresh context PLAY both end in the same silent LoadAndPlayCurrentAsync, so
+            // without this line the log cannot tell "the user pressed Next" from "something re-resolved the context".
+            _log.Info($"queue advance → {_snap.Current?.Track.Uri ?? "(end of context)"}");
             if (_snap.Current is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
             else if (await TryContinueContextAsync(ct).ConfigureAwait(false)) { }
             else { _currentHost.Stop(); Emit(BuildEvent(EvKind.Ended, null, 0, reasonEnd: "endplay")); }   // end-of-context
@@ -1102,8 +1167,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             _projection.NoteLocalCommand();
             // Desktop semantics: >3 s into the track, "previous" restarts the current track instead of stepping back.
-            if (_currentHost.PositionMs > 3000) { _currentHost.Seek(0); return; }
-            if (_session.Prev() is { } snap) { _snap = snap; await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false); }
+            if (_currentHost.PositionMs > 3000) { _log.Info("queue back → restart current (>3s in)"); _currentHost.Seek(0); return; }
+            if (_session.Prev() is { } snap)
+            {
+                _snap = snap;
+                _log.Info($"queue back → {_snap.Current?.Track.Uri ?? "(none)"}");
+                await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+            }
         }
         finally { _lock.Release(); }
     }
@@ -1221,6 +1291,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var cur = _session.Current;
         if (cur is null) { _currentHost.Stop(); return; }
 
+        // A DIFFERENT playable re-arms the video-recovery loop guard. The recovery's OWN reload keeps the same uri, so it
+        // deliberately does NOT re-arm — that is what caps the fallback at one attempt per playable.
+        if (_videoRecoveryUri is not null && !string.Equals(_videoRecoveryUri, cur.Uri, StringComparison.Ordinal))
+            _videoRecoveryUri = null;
+
         byte[]? mediaId = null;
         byte[]? fileId = null;
         int bitrateKbps = 160;
@@ -1258,6 +1333,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _log.Info($"no playable video source for {cur.Uri} — falling back to audio for this playable");
             SwitchHost(_audioHost);
             _currentKind = MediaSwitchLogic.KindOf(false, cur.Origin == TrackOrigin.Local);
+            NotifyVideoUnavailable(cur);   // the app still thinks this playable has a video → its surface would spin forever
         }
 
         if (_fast is not null)
@@ -1672,6 +1748,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (Exception ex) { _log.Info($"fast-warm dispatch failed {track.Uri}: {ex.Message}"); }
     }
 
+    // Fail-soft like KindFor: a throwing gate (it reads app state) falls back to the hard cut, never to preparing a
+    // playable whose source could not be asked.
+    bool MayPrepare(Track track)
+    {
+        if (CanPrepareNext is not { } gate) return true;
+        try { return gate(track); }
+        catch (Exception ex) { _log.Info($"can-prepare-next gate failed for {track.Uri}: {ex.Message}"); return false; }
+    }
+
     void SchedulePreparedNext(string reason)
     {
         if (_preparedHost is null) return;
@@ -1684,6 +1769,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var next = _currentKind == PlayableKind.Video || current is null ? null : _session.PreviewNext();
         // Never prepare an audio hand-off INTO a video track — that boundary is a hard cut (AllowCrossfade is false).
         if (next is not null && KindFor(next.Track) == PlayableKind.Video) next = null;
+        // Same boundary, source-agnostic: a media source without the prepared-next capability gets the hard cut too.
+        if (next is not null && !MayPrepare(next.Track)) next = null;
         bool allowOverlap = current is not null && next is not null && _snap.Repeat != RepeatMode.Track
             && IsMusic(current.Track) && IsMusic(next.Track)
             && MediaSwitchLogic.AllowCrossfade(_currentKind, KindFor(next.Track));   // overlap only Audio→Audio (never across a video boundary)
@@ -1883,13 +1970,56 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
         else if (s.Kind == AudioHostSignalKind.Error)
         {
-            var reason = s.FailureReason == AudioKeyFailureReason.None
-                ? AudioKeyFailureReason.EmulationFault
-                : s.FailureReason;
-            if (reason == AudioKeyFailureReason.Network && _session.Current is { } current)
-                _failureCheckpoint = new PlaybackFailureCheckpoint(current.Uri, Math.Max(0, s.PositionMs));
-            ReportPlaybackError(new AudioPlaybackException(reason, s.Detail ?? "audio host playback error"));
+            // A VIDEO that failed to open gets ONE recovery attempt before the error is reported (the local-override
+            // fallback). Fire-and-forget, holding no lock — exactly like AutoAdvanceAsync above; taking _lock inside a
+            // host-signal callback is what deadlocked track-end. The scheduled task reports the error itself when the
+            // hook declines, so the non-video / unwired / already-attempted paths stay byte-identical to today.
+            if (TryRecoverVideoAsync is not null && _currentKind == PlayableKind.Video
+                && _session.Current is { } videoTrack
+                && !string.Equals(_videoRecoveryUri, videoTrack.Uri, StringComparison.Ordinal))
+            {
+                _videoRecoveryUri = videoTrack.Uri;
+                _ = RecoverVideoAsync(videoTrack, s);
+                return;
+            }
+            ReportHostError(s);
         }
+    }
+
+    // Fail-soft: the hook reaches app code, and a throwing surface notification must never take playback down with it.
+    void NotifyVideoUnavailable(Track track)
+    {
+        if (OnVideoMediaUnavailable is not { } notify) return;
+        try { notify(track); }
+        catch (Exception ex) { _log.Info($"video-unavailable notification failed for {track.Uri}: {ex.GetType().Name}: {ex.Message}"); }
+    }
+
+    void ReportHostError(in AudioHostSignal s)
+    {
+        // A VIDEO that errored out (and whose recovery hook declined) is the second way video "doesn't happen": the app's
+        // surface is mounted on availability, which is still true, so it would keep waiting on a dead session.
+        if (_currentKind == PlayableKind.Video && _session.Current is { } videoTrack) NotifyVideoUnavailable(videoTrack);
+        var reason = s.FailureReason == AudioKeyFailureReason.None
+            ? AudioKeyFailureReason.EmulationFault
+            : s.FailureReason;
+        if (reason == AudioKeyFailureReason.Network && _session.Current is { } current)
+            _failureCheckpoint = new PlaybackFailureCheckpoint(current.Uri, Math.Max(0, s.PositionMs));
+        ReportPlaybackError(new AudioPlaybackException(reason, s.Detail ?? "audio host playback error"));
+    }
+
+    // The scheduled half of the video-open recovery: ask the hook, and either re-run the load (the resolver now walks past
+    // whatever failed) or report the original error. _lock is taken HERE, never in the signal callback.
+    async Task RecoverVideoAsync(Track track, AudioHostSignal s)
+    {
+        bool recovered = false;
+        try { recovered = await TryRecoverVideoAsync!(track, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { _log.Info($"video recovery hook failed for {track.Uri}: {ex.GetType().Name}: {ex.Message}"); }
+        if (!recovered) { ReportHostError(s); return; }
+        _log.Info($"video open failed for {track.Uri} — recovered; reloading the playable");
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try { await LoadAndPlayCurrentAsync(EvKind.Started, CancellationToken.None).ConfigureAwait(false); }
+        catch (Exception ex) { _log.Info("video recovery reload failed: " + ex.Message); }
+        finally { _lock.Release(); }
     }
 
     async Task AutoAdvanceAsync() { try { await LocalNextAsync(default).ConfigureAwait(false); } catch (Exception ex) { _log.Info("auto-advance error: " + ex.Message); } }
@@ -1906,9 +2036,21 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             new(contextUri, Math.Max(0, startIndex), null, null, null);
     }
 
-    async Task ExecutePlayAsync(PlayRequest request, CancellationToken ct)
+    // THE ONE ATTRIBUTION POINT for "something asked us to play a context". Every play verb — local UI, an inbound
+    // dealer play/transfer, a drop, an action — funnels through here, and until this line existed a play that nobody
+    // pressed was INVISIBLE in the log: LocalPlaySpecAsync logs only failures, the context resolve is silent, and the
+    // first evidence was a bare `head … fetch start` seconds later (the resolve's network latency). Info, one line per
+    // play intent (not a hot path), carrying the ORIGIN so the next unexplained jump names its own caller.
+    void LogPlayIntent(string origin, string contextUri, int startIndex, string? skipUri, string? skipUid, int orderedCount, bool local)
+        => _log.Info($"play intent origin={origin} route={(local ? "local" : "forward")} ctx={contextUri} index={startIndex} " +
+            $"skipUri={(string.IsNullOrEmpty(skipUri) ? "-" : skipUri)} skipUid={(string.IsNullOrEmpty(skipUid) ? "-" : skipUid)} ordered={orderedCount}");
+
+    async Task ExecutePlayAsync(PlayRequest request, string origin, CancellationToken ct)
     {
-        if (!RouteLocal()) { await ForwardPlayAsync(request, ct).ConfigureAwait(false); return; }
+        bool local = RouteLocal();
+        LogPlayIntent(origin, request.ContextUri, request.StartIndex, request.SkipTrackUri, request.SkipTrackUid,
+            request.OrderedTracks?.Count ?? 0, local);
+        if (!local) { await ForwardPlayAsync(request, ct).ConfigureAwait(false); return; }
         MintCommand("playbtn");
         if (request.OrderedTracks is { Count: > 0 })
         {

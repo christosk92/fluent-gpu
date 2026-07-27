@@ -51,13 +51,12 @@ sealed class ContentHost : Component
         };
     }
 
-    // Detail and artist routes each collapse to ONE slot per tab (identity = tab × page-class; the route is content) so
-    // album→album / artist→artist reconciles the mounted shell instead of cold-remounting. TabId stays in the key → tabs
-    // never share a slot. Everything else (incl. discography) keys per name+arg for a fresh slot.
+    // Every destination page gets its own slot inside the active tab, so ALL forward/back navigation uses the same
+    // page-slide language. The prior detail/artist family keys made album→album and artist→artist mutate in place while
+    // cross-family hops slid a new page in — two visibly different navigation systems for adjacent links. Search remains
+    // one live workspace because its query changes in place as the omnibar is edited.
     static string SlotKey(PageSlot s)
     {
-        if (IsDetail(s.Route)) return s.TabId + "\u001Fdetail";
-        if (IsArtist(s.Route)) return s.TabId + "\u001Fartist";
         if (s.Route.Name == "search") return s.TabId + "\u001Fsearch";
         return s.TabId + "\u001F" + s.Route.Name + "\u001F" + (s.Route.Arg ?? "");
     }
@@ -77,22 +76,19 @@ sealed class ContentHost : Component
         return enter with { Exit = default };
     }
 
-    // The shared detail page (album / playlist / single / liked) reads the route reactively (via _route) and derives its
-    // own kind/id, so ONE DetailPage instance serves successive detail routes in place. The Key is route-INDEPENDENT
-    // ("page:detail") so KeepAlive reuses the mounted slot across albums — the swap reconciles + reloads in place rather
-    // than tearing down and cold-remounting the rail / track-list / trailing.
-    Element DetailHost() => new BoxEl
+    // Detail/artist pages still use their existing signal-based internals, but each route owns its signal and cached
+    // subtree. Returning via Back reactivates that destination's preserved page; opening another entity activates a new
+    // slot and therefore receives the same PageTransition as every other page.
+    static Element DetailHost(Route route) => new BoxEl
     {
         Key = "page:detail", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-        Children = [ Embed.Comp(() => new DetailPage(_route)) ],
+        Children = [ Embed.Comp(() => new DetailPage(new Signal<Route>(route))) ],
     };
 
-    // The artist page reads the route reactively so ONE instance serves successive artist routes (a fans-also-like hop,
-    // a track's artist link) in place — route-independent Key so KeepAlive reuses the mounted slot across artists.
-    Element ArtistHost() => new BoxEl
+    static Element ArtistHost(Route route) => new BoxEl
     {
         Key = "page:artist", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
-        Children = [ Embed.Comp(() => new ArtistPage(_route)) ],
+        Children = [ Embed.Comp(() => new ArtistPage(new Signal<Route>(route))) ],
     };
 
     // album / playlist / liked / local / SHOW all flow through the one shared detail surface (DetailPage → DetailShell);
@@ -137,8 +133,8 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:concert-route", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new ConcertRoutePage(r)) ] };
 
-        if (IsArtist(r)) return ArtistHost();
-        if (IsDetail(r)) return DetailHost();
+        if (IsArtist(r)) return ArtistHost(r);
+        if (IsDetail(r)) return DetailHost(r);
 
         var (title, glyph) = ShellNav.Dest(r);
         return new BoxEl

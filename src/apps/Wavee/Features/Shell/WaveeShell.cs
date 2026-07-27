@@ -45,6 +45,14 @@ sealed class WaveeShell : Component
     // subtree (ActionServicesOverlayBinder). Context, not ctor args — the component-props-freeze contract.
     readonly ActionServices _actions = new();
 
+    // ── The shell-wide "drop a file to play it" target (P4) ──────────────────────────────────────────────────────────
+    // Allocated ONCE (the PlaylistInlineEdit precedent: a per-render spec would churn the scene's drop-target column) and
+    // hung on the full-bleed `tinted` layer, which is an ancestor of the whole chrome column. The engine hands a drop to
+    // the DEEPEST accepting target under the pointer (DragDropContext.FindTarget), so the per-row .mp4 attach targets in
+    // DetailTracks still win for a drop that lands on a track row; only drops on the rest of the window reach this.
+    readonly Signal<bool> _fileDropOver = new(false);
+    DropTargetSpec? _fileDrop;
+
     int _nextTabId = 1;
     readonly List<OpenTab> _open = new() { new OpenTab(0, "home", Loc.Get(Strings.Nav.Home), Icons.Home, null) };
     readonly Signal<int> _tabsVersion = new(0);
@@ -271,6 +279,18 @@ sealed class WaveeShell : Component
         _actions.Clipboard = UseContext(InputHooks.Current).Clipboard;
         _actions.Go = GoNav;
         _actions.Post = post;
+        _actions.VideoOverrides = _actions.Svc?.VideoOverrides;
+        // The row indicator / "Videos only" filter read the curation through a process-wide probe rather than context,
+        // because they run per ROW (a context read or a signal subscription per row is not affordable there).
+        VideoPresence.Attach(_actions.VideoOverrides);
+        // The two override toasts' "Manage" button + the Settings roster deep-link: bump the request counter (the
+        // PlaybackRuntimeBanner precedent — Settings has no route-arg tab deep-link) and navigate.
+        if (_actions.Playback is { } pb && pb.OpenVideoOverrideManager is null)
+            pb.OpenVideoOverrideManager = _ =>
+            {
+                pb.OpenVideoOverrides.Value = pb.OpenVideoOverrides.Peek() + 1;
+                GoNav("settings", null);
+            };
         // Maintain ShellUi.RailFits from the live viewport/sidebar/rail widths. The rail no longer auto-closes on a
         // fits-flip — it switches between inline (spacer reserves width) and floating (overlay only). Peek-guarded so
         // this never re-triggers.
@@ -287,6 +307,9 @@ sealed class WaveeShell : Component
             Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
             Children =
             [
+                // Zero-size, renders nothing: owns the ambient-cadence policy's two subscriptions (window activation +
+                // the debounced power poll). It lives here because the shell is the one always-mounted host in the tree.
+                Embed.Comp(() => new AmbientPowerPolicy.Watcher()),
                 Embed.Comp(() => new TitleBar
                 {
                     IconGlyph = "", ShowPaneToggle = false, ShowCaptionButtons = true,
@@ -527,10 +550,20 @@ sealed class WaveeShell : Component
         // The Mica-tint scrim: a full-bleed layer BEHIND the 4-row chrome whose Fill is the (bound) page tint. The root
         // stays Mica-passthrough when the tint is null (Transparent); when a detail page sets it, the low-alpha colour
         // sits between DWM Mica and the translucent chrome, so the visible Mica regions carry the album/playlist hue.
+        _fileDrop ??= new DropTargetSpec(
+            [DropKinds.Files],
+            OnEnter: _ => _fileDropOver.Value = true,
+            OnLeave: _ => _fileDropOver.Value = false,
+            OnDrop: s =>
+            {
+                _fileDropOver.Value = false;
+                if (s.Payload is FileDropData { Count: > 0 } files) LocalFileActions.PlayDropped(_actions, files.Paths);
+            });
         var tinted = new BoxEl
         {
             Grow = 1f, Direction = 1,
             Fill = Prop.Of(() => _shellTint.Value.Color ?? ColorF.Transparent),
+            DropTarget = _fileDrop,
             Children = [column],
         };
 
@@ -561,7 +594,24 @@ sealed class WaveeShell : Component
         // the page + player bar; engine popups (in the
         // outer OverlayHost ZStack) still stack above it. VideoPlacementHost is the sibling CONTROLLER leaf (renders
         // empty) that owns the detached pop-out window's lifecycle off the same derived placement state.
-        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer,
+        // The shell drop cue: a pass-through pill that fades in while a file drag is over the window (BOUND opacity, so
+        // showing/hiding it is compositor-only — the shell is never re-rendered by a drag hover).
+        var fileDropLayer = new BoxEl
+        {
+            Grow = 1f, HitTestPassThrough = true,
+            Direction = 1, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center,
+            Opacity = Prop.Of(() => _fileDropOver.Value ? 1f : 0f),
+            Children =
+            [
+                new BoxEl
+                {
+                    Padding = new Edges4(18f, 10f, 18f, 10f), Corners = CornerRadius4.All(Radii.Control),
+                    Fill = Tok.FillSolidBase, BorderColor = Tok.AccentDefault, BorderWidth = 1f, Shadow = Elevation.Dialog,
+                    Children = [new TextEl(Loc.Get(Strings.LocalFile.DropHint)) { Size = 14f, Color = Tok.TextPrimary }],
+                },
+            ],
+        };
+        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, fileDropLayer,
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
             Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
             Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings })) with { Grow = 1f };

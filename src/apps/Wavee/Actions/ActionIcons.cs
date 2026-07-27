@@ -29,6 +29,10 @@ public static class ActionIcons
     public const string CopyUri = "copy-uri";
     public const string OpenWeb = "open-web";
     public const string Radio = "radio";
+    public const string Video = "video";
+    public const string Replace = "replace";
+    public const string Locate = "locate";
+    public const string RevealFolder = "reveal-folder";
 
     /// <summary>Key → an <see cref="IconRef"/>. Keys the ThemedIcon starter set covers resolve to a layered vector name
     /// with a glyph fallback (<c>IconRef.Themed</c>); the rest are plain Segoe Fluent glyphs (implicit string → IconRef).
@@ -60,6 +64,12 @@ public static class ActionIcons
         CopyUri => Icons.Copy,
         OpenWeb => Icons.Globe,
         Radio => Icons.RadioTower,
+        // The local video-override verbs. Movie is the SAME mark the row indicator and the player-bar video button use,
+        // so "this playable has a video" reads identically everywhere.
+        Video => Icons.Movie,
+        Replace => Icons.Refresh,
+        Locate => Icons.Search,
+        RevealFolder => Icons.FolderOpen,
         _ => Icons.More,
     };
 }

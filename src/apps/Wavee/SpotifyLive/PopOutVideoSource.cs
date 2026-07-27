@@ -17,6 +17,11 @@ public sealed record PopOutVideoSource
     /// <summary>Clear/Canvas URL (a plain .mp4 / unencrypted stream). Null for a DRM source.</summary>
     public string? ClearUrl { get; init; }
 
+    /// <summary>A LOCAL file path (the user's attached .mp4). Non-null only for an override source; it takes precedence
+    /// over <see cref="ClearUrl"/>/<see cref="DrmDescriptor"/> in the host, which opens it with <c>MediaSource.FromFile</c>
+    /// on the clear MF backend — so the file's OWN audio track plays, which is the whole point of an override.</summary>
+    public string? FilePath { get; init; }
+
     /// <summary>Parsed PlayReady descriptor (init/segment addressing + PSSH). Null for a clear source.</summary>
     public DashSourceDescriptor? DrmDescriptor { get; init; }
     /// <summary>The <c>WithDrm</c> license relay (POSTs the CDM challenge to Spotify). Required with a DRM descriptor.</summary>
@@ -30,6 +35,12 @@ public sealed record PopOutVideoSource
     public bool IsDrm => DrmDescriptor is not null && LicenseRelay is not null;
 
     public static PopOutVideoSource Clear(string url) => new() { ClearUrl = url, Key = url };
+
+    /// <summary>A user-attached local video. <see cref="Key"/> is the <c>local:video:&lt;id&gt;</c> namespace — the stable
+    /// per-file remount identity every surface/host already keys on — so re-entering the video path for the same
+    /// attachment is the host's existing same-Key no-op, while swapping the attached file is a clean player swap.</summary>
+    public static PopOutVideoSource LocalFile(Wavee.Backend.VideoOverride o)
+        => new() { FilePath = o.Path, Key = o.SourceKey };
     public static PopOutVideoSource PlayReady(string manifestId, DashSourceDescriptor descriptor,
         Func<LicenseRequest, ValueTask<LicenseResponse>> relay, string? licenseServerUri)
         => new() { DrmDescriptor = descriptor, LicenseRelay = relay, LicenseServerUri = licenseServerUri, Key = manifestId };

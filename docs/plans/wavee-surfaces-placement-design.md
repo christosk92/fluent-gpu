@@ -4,6 +4,30 @@
 **Author:** lead architect / UX.
 **Grounded in current `main` @ `3893b056`** — every file and line reference below was read, not recalled.
 
+> ### Amendment — 2026-07-26: **closing a surface is STICKY OFF; the per-content dismiss is deleted**
+>
+> The user reported the consequence of the rule this document designed: close the video, and the next song that has one
+> re-opened it. Per-content dismissal was working exactly as specified (`DismissedGen == ContentGen`, expiring on the next
+> `ContentChanged`) — the *rule* was wrong. "I closed the video" is a statement about the feature, not about the song.
+>
+> **New rule.** Every user-initiated close — the surface's own ✕, the picker's "turn off video", the primary's "switch to
+> audio" — is `TurnOff`: `Requested = None`, globally and stickily. No later track re-opens the surface; only an explicit
+> re-enable does (player-bar primary, placement picker, or the attach-a-video-and-reveal flow). The one exception is
+> unchanged: closing the **detached** window still falls down the commitment ladder to the mini player, because the user
+> is still watching — closing *that* is then the close that turns video off.
+>
+> **What was deleted, not merely bypassed** (`src/apps/Wavee/App/PlacementCore.cs`): `PlacementState.{ContentGen,
+> DismissedGen, NotDismissed}`, `PlacementCore.{DismissForContent, Restore, ContentChanged}`, the `Dismiss`/`Restore`/
+> `ContentChanged` command kinds, `PlaybackBridge.{DismissVideoForCurrentTrack, RestoreVideo}`, and the `ContentChanged`
+> bump in `PlaybackBridge.PushState`. Keeping the fields would have left "off, but it will come back" expressible, which
+> is the whole class of bug. A track change now touches placement state **only** through the availability recompute.
+>
+> Everything below that describes per-content dismissal — §2.2's `DismissForCurrentContent`/`Restore` intents, §2.3's
+> state shape, §2.4's `DismissForContent`/`ContentChanged` rows, §2.5's "dismissal is content-scoped by construction",
+> §5's "Hide for this song" chrome tooltip, §7's per-content-dismiss persistence row, and §9's
+> `ContentChanged_ExpiresDismissal` test — is **superseded by this amendment**. `PlacementCoreTests` carries the new rule
+> (`Regression_ClosedVideoReopenedOnTheNextTrack` and the sticky-off section).
+
 ---
 
 ## 0. The verdict, in one page

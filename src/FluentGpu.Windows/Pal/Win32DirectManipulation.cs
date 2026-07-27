@@ -66,6 +66,16 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private const float DmMinTransformDelta = 0.01f;
     /// <summary>Wedge watchdog (§7): a <c>SetContact</c> that does not reach <c>RUNNING</c> within this many ms is a wedge.</summary>
     private const long DmEngageTimeoutMs = 120;
+    /// <summary>Stall watchdog for a LIVE manipulation — the inertia sibling of the engage wedge above. A gesture that
+    /// reached RUNNING/INERTIA and then produces neither a content delta nor a status change for this long is stuck: the
+    /// observed case is a coast whose fling target is unmounted by a navigation mid-inertia, after which DM never fires
+    /// the terminal READY callback. Nothing clears <see cref="GestureLive"/> then, so <see cref="NeedsClockTick"/> stays
+    /// true, <see cref="DmManualUpdatePacer.ClampWait"/> keeps returning a due-now 0, and the host's
+    /// <c>MsgWaitForMultipleObjectsEx</c> degenerates into a pure poll — the UI loop free-runs at 1000-3300 it/s.
+    /// 250ms is comfortably longer than any real inertia frame gap (DM emits every vblank while coasting) and short
+    /// enough that a user never sees the poll. Recovery goes through <c>Viewport.Stop()</c> so the ordinary READY
+    /// callback runs the ordinary terminal path — this watchdog never fabricates state.</summary>
+    internal const long DmInertiaStallTimeoutMs = 250;
     /// <summary>After this many wedges DM session-disables and the §3.3 fallback owns the touchpad forever (§7).</summary>
     private const int DmWedgeCountToDisable = 3;
 
@@ -109,6 +119,8 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private bool _awaitingEngage;           // a SetContact is pending RUNNING
     private long _engageTick;               // Environment.TickCount64 at SetContact
     private int _wedgeCount;
+    // ── inertia stall watchdog ──
+    private long _lastProgressMs;           // Environment.TickCount64 at the last content delta / status change
 
     // ── pump-time stamping (scroll-jitter §B.1) ──
     private long _pumpQpc;                   // Stopwatch.GetTimestamp() captured once at the top of Update() — the frame instant
@@ -267,6 +279,18 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
             OnWedge();
             if (!_enabled) return;   // OnWedge may have session-disabled + torn down
         }
+        // Inertia stall watchdog (see DmInertiaStallTimeoutMs): a live gesture that has produced nothing for the timeout
+        // is stuck, and a stuck gesture holds NeedsClockTick true — which pins the host wait at 0 and free-runs the loop.
+        // Stop() is the ONLY intervention: the READY status callback then emits the terminal phase event, disarms the
+        // pacer and recenters the viewport exactly as a normal gesture end does. Re-stamping progress here bounds the
+        // retry to one Stop per timeout window if DM is wedged badly enough to ignore it.
+        if (DmInertiaStall.IsStalled(GestureLive, nowMs, _lastProgressMs) && _vp != null)
+        {
+            if (ScrollLog.On)
+                ScrollLog.Line($"DM STALL {StatusName(_status)} (no progress >{DmInertiaStallTimeoutMs}ms) — Stop()");
+            _lastProgressMs = nowMs;
+            _vp->Stop();
+        }
         if (!NeedsClockTick)
         {
             _updatePacer.Disarm();
@@ -334,6 +358,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         }
         _awaitingEngage = true;
         _engageTick = Environment.TickCount64;
+        _lastProgressMs = _engageTick;   // a fresh engage is progress — never let a new gesture inherit a stale stamp
         _updatePacer.ArmImmediate(Stopwatch.GetTimestamp());
         return true;
     }
@@ -345,6 +370,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     internal void HandleStatusChanged(int current, int previous)
     {
         _status = current;
+        _lastProgressMs = Environment.TickCount64;   // a status change IS progress (stall watchdog)
         if (ScrollLog.On) ScrollLog.Line($"DM STATUS {StatusName(previous)}->{StatusName(current)}");
 
         if (current == DM_RUNNING)
@@ -373,7 +399,9 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
     /// <summary>Give a positively identified physical mouse immediate ownership over a live touchpad manipulation.
     /// Stop covers both contact and inertia; one synchronous manual update emits the terminal phase before the caller
-    /// queues the same wheel packet. Unknown/touchpad sources must never call this method.</summary>
+    /// queues the same wheel packet. Unknown/touchpad sources must never call this method.
+    /// False = there was no live manipulation left to stop, which also means the caller's live-gesture wheel state (the
+    /// ±120 burst latch) is stale — Win32Platform clears it on this return so it cannot eat the next gesture.</summary>
     internal bool TryStopForPhysicalWheel()
     {
         if (!GestureLive || _vp == null) return false;
@@ -411,8 +439,12 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         float dx = px - _lastTx, dy = py - _lastTy;
         _lastTx = px; _lastTy = py;   // advance the baseline even on suppressed frames so no jump accumulates
 
-        if (MathF.Abs(scale - 1f) > DmPinchScaleEpsilon) return;              // pinch: suppress the pan (§7)
+        // The stall watchdog measures DM PRODUCTION, not emitted scroll: a pinch is suppressed downstream but DM is very
+        // much alive, so stamp before the suppression returns. Sub-epsilon no-op deltas deliberately do NOT stamp — a
+        // manipulation that only ever produces those is exactly the stuck state the watchdog exists to end.
+        if (MathF.Abs(scale - 1f) > DmPinchScaleEpsilon) { _lastProgressMs = Environment.TickCount64; return; }   // pinch: suppress the pan (§7)
         if (MathF.Abs(dx) < DmMinTransformDelta && MathF.Abs(dy) < DmMinTransformDelta) return;
+        _lastProgressMs = Environment.TickCount64;
 
         float wscale = _window.ScaleInternal;
         if (wscale <= 0f) wscale = 1f;
@@ -542,8 +574,10 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         new(0xB89962CB, 0x3D89, 0x442B, 0xBB, 0x58, 0x50, 0x98, 0xFA, 0x0F, 0x9F, 0x16);
 }
 
-/// <summary>Allocation-free absolute-deadline pacer for manual-update DirectManipulation. It is deliberately pure so
-/// message-storm, no-drift, and no-catch-up behavior can be locked by the Windows headless tests.</summary>
+/// <summary>Allocation-free absolute-deadline pacer for manual-update DirectManipulation. It is deliberately free of any
+/// OS dependency (time is a parameter) so message-storm, no-drift, and no-catch-up behavior can be locked by the Windows
+/// headless tests. Its only state beyond the deadline is the <see cref="ZeroWaitRun"/> tripwire counter — so
+/// <see cref="ClampWait"/> does mutate, and must be called on the live pacer, never on a copy.</summary>
 internal struct DmManualUpdatePacer
 {
     internal const int IntervalMs = 7;
@@ -551,7 +585,21 @@ internal struct DmManualUpdatePacer
         (long)Math.Ceiling(Stopwatch.Frequency * (IntervalMs / 1000d)));
 
     private long _nextDueQpc;
+    private int _zeroWaitRun;                  // consecutive due-now (0 ms) clamps with no intervening consume
+    private static int s_maxZeroWaitRun;       // process high-water — the free-run tripwire (UI thread only)
     internal bool Armed { get; private set; }
+
+    /// <summary>Consecutive <see cref="ClampWait"/> calls that returned a due-now 0 without an intervening successful
+    /// <see cref="TryConsume"/>. The healthy loop never exceeds 1: a 0 wait means the deadline has passed, so the host
+    /// wait returns at once, the pump drains, and <c>UpdateIfDue</c> consumes the slot — which advances the deadline. A
+    /// climbing run is the free-run pathology itself (the host polling <c>MsgWaitForMultipleObjectsEx</c> at 0 ms because
+    /// something keeps <c>NeedsClockTick</c> true while the update never runs), so it is the regression tripwire for the
+    /// inertia stall watchdog: with the watchdog working, it stays ≤1.</summary>
+    internal int ZeroWaitRun => _zeroWaitRun;
+
+    /// <summary>Longest <see cref="ZeroWaitRun"/> seen this process — surfaced through <c>Diag</c> as
+    /// <c>dm.pacer.zeroWaitRun</c> whenever it climbs (diag builds only; the call site is erased from Release).</summary>
+    internal static int MaxZeroWaitRun => s_maxZeroWaitRun;
 
     internal void ArmImmediate(long nowQpc)
     {
@@ -563,6 +611,7 @@ internal struct DmManualUpdatePacer
     {
         _nextDueQpc = 0;
         Armed = false;
+        _zeroWaitRun = 0;
     }
 
     internal bool TryConsume(long nowQpc)
@@ -571,6 +620,7 @@ internal struct DmManualUpdatePacer
         long late = nowQpc - _nextDueQpc;
         long slots = late / s_intervalTicks + 1;
         _nextDueQpc += slots * s_intervalTicks;
+        _zeroWaitRun = 0;   // the due slot was taken and the deadline moved — the next clamp is a real wait again
         return true;
     }
 
@@ -580,6 +630,17 @@ internal struct DmManualUpdatePacer
         long remaining = _nextDueQpc - nowQpc;
         int dueMs = remaining <= 0 ? 0 : (int)Math.Min(int.MaxValue,
             Math.Ceiling(remaining * 1000d / Stopwatch.Frequency));
+        if (dueMs == 0)
+        {
+            // Cheap (two int ops, no allocation) and only REPORTS on a new high-water, so a diag build does not pay a
+            // dictionary write per poll while the pathology is live.
+            _zeroWaitRun++;
+            if (_zeroWaitRun > s_maxZeroWaitRun)
+            {
+                s_maxZeroWaitRun = _zeroWaitRun;
+                Diag.Set("dm.pacer", "zeroWaitRun", _zeroWaitRun);
+            }
+        }
         return hostTimeoutMs < 0 ? dueMs : Math.Min(hostTimeoutMs, dueMs);
     }
 }
@@ -596,6 +657,18 @@ internal enum DmWheelRoute : byte
     ExistingClassifier,
     StopDmAndPass,
     DmOwned,
+}
+
+/// <summary>Pure stall arbitration — the decision half of the inertia watchdog, split out (like
+/// <see cref="DmWheelArbitration"/>) so it can be locked by the Windows headless tests without a real HWND, a real
+/// DirectManipulation viewport, or an STA pump.</summary>
+internal static class DmInertiaStall
+{
+    /// <summary>True when a LIVE manipulation has gone <see cref="Win32DirectManipulation.DmInertiaStallTimeoutMs"/>
+    /// without a content delta or a status change. Idle DM is never stalled — the whole point is that a gesture nobody
+    /// will ever terminate is what pins the host wait at 0.</summary>
+    internal static bool IsStalled(bool gestureLive, long nowMs, long lastProgressMs)
+        => gestureLive && nowMs - lastProgressMs > Win32DirectManipulation.DmInertiaStallTimeoutMs;
 }
 
 /// <summary>Pure device-evidence arbitration. Only a positively identified physical mouse can preempt live DM.</summary>

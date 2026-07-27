@@ -52,6 +52,14 @@ public interface IColdStore : IDisposable
     IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations();
     void UpsertVideoAssociation(string uri, byte[] payload);   // non-blocking (write-behind)
 
+    // User-attached local video overrides (`video_override`, schema v4): typed columns rather than a payload blob, because
+    // the roster UI queries them by field. Deliberately NOT folded into video_assoc — Spotify's 6-hourly revalidation
+    // full-replaces those rows and would erase the user's curation. The defaults keep pre-v4 / in-memory fakes compiling
+    // (an override-free cold tier is simply an empty roster).
+    IEnumerable<VideoOverride> LoadAllVideoOverrides() => Array.Empty<VideoOverride>();
+    void UpsertVideoOverride(VideoOverride o) { }        // non-blocking (write-behind)
+    void DeleteVideoOverride(string uri) { }             // non-blocking (write-behind)
+
     // Per-set sync token (the opaque collection delta cursor / playlist-style revision). null = never synced.
     string? GetCollectionRevision(string setId);
     void SetCollectionRevision(string setId, string? revision, long syncedAt);   // non-blocking (write-behind, ordered after its items)

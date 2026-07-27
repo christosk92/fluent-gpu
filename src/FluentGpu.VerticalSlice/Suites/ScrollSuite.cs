@@ -1128,6 +1128,47 @@ static class ScrollSuite
                 $"wIdle={wIdle} (want >300) wHold={wHold} (want <=7) wAfter={wAfter} (want >300) holdArmed={holdArmed}");
         }
 
+        // gate.host.ambientRateMode: the ambient cap's RATE selection. HalfRefresh must be panel-DERIVED (a whole-vblank
+        // divisor at every rate — 120⇒60, 90⇒45, 60⇒30 — which is the whole point: a fixed 60 beats against the vsync-
+        // locked present on a 120Hz panel and is simply the wrong number on a 90Hz one), while ExplicitFps stays
+        // refresh-INDEPENDENT and Uncapped stays 0. Plus the engagement half: the mode-aware gate that replaced the old
+        // `AmbientAnimationFps > 0` test must still throttle loop-only motion under HalfRefresh and must NOT throttle it
+        // under Uncapped (a false engagement there is invisible in a unit test but caps an app that asked for display rate).
+        {
+            // Rate derivation (pure) — the arithmetic, at the three panel rates that ship.
+            bool half = AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 120.0) == 60
+                     && AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 90.0) == 45
+                     && AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 60.0) == 30
+                     && AppHost.DeriveAmbientFps(AmbientRateMode.HalfRefresh, 60, 0.0) == 30;    // refresh unknown ⇒ the 60Hz answer
+            bool explicitFps = AppHost.DeriveAmbientFps(AmbientRateMode.ExplicitFps, 60, 120.0) == 60
+                            && AppHost.DeriveAmbientFps(AmbientRateMode.ExplicitFps, 60, 60.0) == 60
+                            && AppHost.DeriveAmbientFps(AmbientRateMode.ExplicitFps, 0, 120.0) == 0;
+            bool uncapped = AppHost.DeriveAmbientFps(AmbientRateMode.Uncapped, 60, 120.0) == 0
+                         && AppHost.DeriveAmbientFps(AmbientRateMode.Uncapped, 0, 0.0) == 0;
+
+            // Engagement (live host) — the headless device reports no refresh period, so HalfRefresh resolves to the
+            // 30 fps fallback: an ambient wait in (7, 34]. Uncapped must fall through to display-rate pacing (0/7).
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("ambient-mode", new Size2(360, 460), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
+            host.RunFrame();
+            host.Animation.Keyframes(host.Scene.Root, AnimChannel.Opacity,
+                new[] { new Keyframe(0f, 0.4f, Easing.Linear), new Keyframe(1f, 1f, Easing.Linear) }, 800f, loop: true);
+            host.RunFrame();
+            host.AmbientRate = AmbientRateMode.HalfRefresh;
+            int wHalf = host.RecommendedWaitMs();
+            host.AmbientRate = AmbientRateMode.Uncapped;
+            int wUncapped = host.RecommendedWaitMs();
+            host.AmbientAnimationFps = 1;                       // the legacy int setter must still mean ExplicitFps
+            int wExplicit = host.RecommendedWaitMs();
+            bool engagement = wHalf > 7 && wHalf <= 34 && wUncapped <= 7 && wExplicit > 300
+                           && host.AmbientRate == AmbientRateMode.ExplicitFps;
+
+            Check("gate.host.ambientRateMode HalfRefresh derives 60@120Hz / 45@90Hz / 30@60Hz (30 when the refresh is unknown); ExplicitFps + Uncapped are refresh-independent; the ambient branch engages under HalfRefresh, falls through under Uncapped, and the int setter still means ExplicitFps",
+                half && explicitFps && uncapped && engagement,
+                $"half={half} explicit={explicitFps} uncapped={uncapped} wHalf={wHalf} (want 8..34) wUncapped={wUncapped} (want <=7) wExplicit={wExplicit} (want >300)");
+        }
+
         // gate.motion.scrollSuppressionSnapsFlip (W2-P2.2): a reconcile landing on the frame right after a scroll
         // offset actually wrote SNAPS the moved BoundsAnimated node (no structural FLIP track seeded — cards must not
         // fly through a scrolling viewport); the same move on a still frame FLIPs — both before any scroll AND after

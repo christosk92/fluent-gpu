@@ -148,6 +148,10 @@ public sealed class SystemMediaControlsBridge : IDisposable
     void OnButton(MediaButton button)
     {
         if (_disposed) return;
+        // A hardware media key, a headset AVRCP event, or another app poking the OS flyout lands here and moves playback
+        // with NOTHING on screen and (until now) nothing in the log — indistinguishable from a spontaneous jump. One Info
+        // line per button press (a human-rate event) makes an unexplained transport change attributable.
+        WaveeLog.Instance.Info("playback", "smtc transport button: " + button);
         switch (button)
         {
             case MediaButton.Play: _ = _player.ResumeAsync(); break;

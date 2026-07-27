@@ -57,6 +57,64 @@ public sealed class DirectManipulationPacingTests
     }
 
     [Fact]
+    public void StalledLiveGesture_TripsTheInertiaWatchdog_ButIdleAndProgressingOnesDoNot()
+    {
+        const long t0 = 10_000;
+        long timeout = Win32DirectManipulation.DmInertiaStallTimeoutMs;
+
+        // A live gesture (RUNNING or INERTIA) that produced nothing for longer than the timeout is stuck: this is the
+        // coast whose fling target a navigation unmounted, which never reaches READY on its own. UpdateIfDue's caller
+        // then issues Viewport.Stop(), whose READY callback runs the ordinary terminal path (clearing GestureLive and
+        // with it NeedsClockTick, which is what releases the host wait from its due-now 0 clamp).
+        Assert.True(DmInertiaStall.IsStalled(gestureLive: true, nowMs: t0 + timeout + 1, lastProgressMs: t0));
+
+        // Boundary: exactly at the timeout is NOT yet stalled (strict >), matching the engage wedge watchdog's shape.
+        Assert.False(DmInertiaStall.IsStalled(gestureLive: true, nowMs: t0 + timeout, lastProgressMs: t0));
+
+        // A gesture that is still producing content deltas / status changes is never stalled, however long it coasts.
+        Assert.False(DmInertiaStall.IsStalled(gestureLive: true, nowMs: t0 + 8, lastProgressMs: t0));
+
+        // Idle DM (READY between gestures) is never "stalled" no matter how old the last progress stamp is — it holds
+        // nothing awake, and Stopping it would be a spurious COM call on every pump.
+        Assert.False(DmInertiaStall.IsStalled(gestureLive: false, nowMs: t0 + 10 * timeout, lastProgressMs: t0));
+    }
+
+    [Fact]
+    public void DueNowClamp_NeverRepeatsWithoutAnInterveningConsume()
+    {
+        var pacer = new DmManualUpdatePacer();
+        long now = Stopwatch.Frequency;   // arbitrary non-zero epoch
+        pacer.ArmImmediate(now);
+
+        // The healthy loop: a due-now 0 wait returns immediately, the pump drains, UpdateIfDue consumes the slot — which
+        // advances the absolute deadline, so the next clamp is a real wait again. The run never exceeds 1.
+        for (int frame = 0; frame < 50; frame++)
+        {
+            Assert.Equal(0, pacer.ClampWait(-1, now));
+            Assert.True(pacer.ZeroWaitRun <= 1);
+            Assert.True(pacer.TryConsume(now));
+            Assert.Equal(0, pacer.ZeroWaitRun);
+            Assert.True(pacer.ClampWait(-1, now) > 0);   // the consumed slot moved the deadline into the future
+            now += Stopwatch.Frequency / 100;            // 10 ms — past the 7 ms interval on any tick frequency
+        }
+
+        // The pathology the tripwire names: clamps that keep returning 0 with no consume in between. That is the host
+        // polling MsgWaitForMultipleObjectsEx at 0 ms — the 1000-3300 it/s free-run — and the counter climbs with it.
+        var stuck = new DmManualUpdatePacer();
+        stuck.ArmImmediate(0);
+        for (int i = 1; i <= 5; i++)
+        {
+            Assert.Equal(0, stuck.ClampWait(-1, Stopwatch.Frequency));
+            Assert.Equal(i, stuck.ZeroWaitRun);
+        }
+        Assert.True(DmManualUpdatePacer.MaxZeroWaitRun >= 5);   // surfaced as diag dm.pacer.zeroWaitRun
+
+        // Disarming (the terminal path a Stop() ultimately reaches) clears the run along with the deadline.
+        stuck.Disarm();
+        Assert.Equal(0, stuck.ZeroWaitRun);
+    }
+
+    [Fact]
     public void OnlyKnownPhysicalMouse_PreemptsLiveDirectManipulation()
     {
         Assert.Equal(DmWheelRoute.StopDmAndPass,

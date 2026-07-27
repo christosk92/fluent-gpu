@@ -194,7 +194,12 @@ public sealed partial class RenderContext
     }
 
     /// <summary>Thunk form of <see cref="UseDebouncedValue{T}(IReadSignal{T}, float)"/>: <paramref name="source"/> is a
-    /// getter over the signals to watch (wrapped in a memo that auto-tracks them).</summary>
+    /// getter over the signals to watch (wrapped in a memo that auto-tracks them).
+    /// The thunk must be VALUE-MEANINGFUL: the wrapping memo is equality-gated (an equal recompute notifies nobody —
+    /// see <see cref="Memo{T}"/>), so the debounce re-arms on a CHANGE of <paramref name="source"/>'s value, not on
+    /// every write to the signals it reads. A thunk that churns but returns an equal value deliberately does not
+    /// re-arm; a thunk that returns a constant would arm exactly once. Use the <see cref="IReadSignal{T}"/> overload
+    /// (or read the signal directly) when you need a retrigger rather than a value.</summary>
     public IReadSignal<T> UseDebouncedValue<T>(Func<T> source, float ms, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0) => UseDebouncedValue(source, ms, out _, __hf, __hl);
 
     /// <inheritdoc cref="UseDebouncedValue{T}(Func{T}, float)"/>
@@ -246,7 +251,9 @@ public sealed partial class RenderContext
         return cell.Output;
     }
 
-    /// <summary>Thunk form of <see cref="UseThrottledValue{T}(IReadSignal{T}, float)"/>.</summary>
+    /// <summary>Thunk form of <see cref="UseThrottledValue{T}(IReadSignal{T}, float)"/>. The thunk must be
+    /// VALUE-MEANINGFUL for the same reason as <see cref="UseDebouncedValue{T}(Func{T}, float)"/>: the wrapping memo is
+    /// equality-gated, so an equal recompute does not re-arm the throttle.</summary>
     public IReadSignal<T> UseThrottledValue<T>(Func<T> source, float ms, [CallerFilePath] string? __hf = null, [CallerLineNumber] int __hl = 0)
     {
         int idx = LookupCell(__hf, __hl, out var __k);

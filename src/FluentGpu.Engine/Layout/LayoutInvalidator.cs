@@ -15,10 +15,17 @@ public sealed class LayoutInvalidator
     private readonly SceneStore _scene;
     private readonly FlexLayout _layout;
     private readonly List<NodeHandle> _roots = new();
+    private readonly List<NodeHandle> _escaped = new();   // this frame's boundary-less marks, pending the size-stable probe
 
     /// <summary>Relayout escapes counted since the last <see cref="BeginFrame"/> — surfaced as
-    /// <c>FrameStats.RootRelayoutEscapes</c>. Always-on (no DEBUG gate); the throttled human message is the DEBUG part.</summary>
+    /// <c>FrameStats.RootRelayoutEscapes</c>. Always-on (no DEBUG gate); the throttled human message is the DEBUG part.
+    /// Counts the boundary-search outcome (a mark that found no firewall), NOT the cost that followed: an escape that the
+    /// size-stable early-out resolved locally still counts here and is also counted in <see cref="LocalResolvesThisFrame"/>.</summary>
     public int EscapesThisFrame { get; private set; }
+
+    /// <summary>Of <see cref="EscapesThisFrame"/>: marks proven size-stable and re-solved in place, i.e. full-window
+    /// solves NOT paid. escapes==localResolves on a frame means every escape was absorbed (no root solve at all).</summary>
+    public int LocalResolvesThisFrame { get; private set; }
 
     /// <summary>DEBUG-only best-effort node→key resolver for the escape message (wired by the host to the reconciler).
     /// Invoked only inside the throttled, FG_DIAG-gated message path, so it costs nothing on Release / when quiet.</summary>
@@ -38,6 +45,7 @@ public sealed class LayoutInvalidator
     public void BeginFrame(double frameNowMs)
     {
         EscapesThisFrame = 0;
+        LocalResolvesThisFrame = 0;
         _frameNowMs = frameNowMs;
     }
 
@@ -89,14 +97,39 @@ public sealed class LayoutInvalidator
         if (dirty.Count == 0) return;
 
         _roots.Clear();
+        _escaped.Clear();
         for (int i = 0; i < dirty.Count; i++)
         {
             var n = dirty[i];
             if (!_scene.IsLive(n)) continue;
             var root = FindRelayoutRoot(n, out int depth);
+            if (root == _scene.Root && depth > 1)
+            {
+                NoteEscape(n);                                    // escaped past every boundary to the scene root
+                // …but an escape is only a boundary-search VERDICT, not proof that the WINDOW must be re-solved. Defer:
+                // the size-stable early-out below can re-solve such a mark in place. Deferred (not decided here) so that a
+                // frame which ends up needing the root solve anyway never pays for a probe the full solve would redo.
+                _escaped.Add(n); continue;
+            }
             if (_scene.IsLive(root) && !_roots.Contains(root)) _roots.Add(root);
-            if (root == _scene.Root && depth > 1) NoteEscape(n);   // escaped past every boundary to the scene root
+        }
 
+        // Escaped marks: re-measure ONLY that subtree at the width its parent offered last pass. If its outer size and its
+        // parent-facing layout inputs are unchanged, no ancestor's numbers can move, so the subtree is re-solved in place
+        // and the whole-window solve is skipped (FlexLayout.TryResolveSizeStable). The first mark that cannot be proven
+        // local schedules the root solve — which subsumes every remaining escape, so we stop probing at that point.
+        if (_escaped.Count > 0)
+        {
+            bool rootScheduled = _roots.Contains(_scene.Root);
+            for (int i = 0; i < _escaped.Count && !rootScheduled; i++)
+            {
+                var n = _escaped[i];
+                if (!_scene.IsLive(n)) continue;
+                if (_layout.TryResolveSizeStable(n)) LocalResolvesThisFrame++;
+                else rootScheduled = true;
+            }
+            if (rootScheduled && !_roots.Contains(_scene.Root)) _roots.Add(_scene.Root);
+            _escaped.Clear();
         }
 
         // Running an ancestor root and a descendant root is harmless (layout is idempotent); we keep it simple and

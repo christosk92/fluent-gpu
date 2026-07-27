@@ -32,7 +32,7 @@ public sealed class TreeReconciler
     // bindings deliberately stay NODE-owned (_nodeBindings, disposed at node unmount) — a bind created during a render
     // outlives that render and can die with its node WITHOUT the component unmounting (Show/For swaps, KeepAlive
     // eviction), so it must not hang off the component scope. G4c's per-component props signal will hang off Scope too.
-    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
+    private sealed class CompEntry { public Component Comp = null!; public Element? Rendered; public Type Type = null!; public Effect? Effect; public ReactiveScope? Scope; public bool Parked; public bool DeferredRender; public bool QueuedReplay; public Signal<bool>? ActiveSig; public Signal<object?>? PropsSig; public SkeletonStyle? DerivedSkeletonStyle; }
     private readonly Dictionary<NodeHandle, CompEntry> _comps = new();
     private readonly Dictionary<Component, NodeHandle> _anchorOf = new();
     private readonly List<Component> _live = new();
@@ -100,9 +100,29 @@ public sealed class TreeReconciler
     private const int ColdRealizeRowsPerFrame = 4;
     public int FrameEpoch;
     private int _warmingCount;
-    /// <summary>True while any bound virtual list is still spreading its initial window across frames — the host ORs this
-    /// into its wake mask so the loop keeps running until the cold realize completes (it isn't a re-render or anim).</summary>
-    public bool HasWarmingVirtuals => _warmingCount > 0;
+    /// <summary>True while any bound virtual list is still spreading its initial window across frames, or a just-un-parked
+    /// keep-alive subtree is still dripping its deferred renders — the host ORs this into its wake mask so the loop keeps
+    /// running until both finish (neither is a re-render or an anim).</summary>
+    public bool HasWarmingVirtuals => _warmingCount > 0 || _replayQueue.Count > 0;
+
+    // ── Un-park replay budget (KeepAlive page return) ──────────────────────────────────────────────────────────────
+    // While a KeepAlive page is parked its components skip their render-effects and record the debt (RunComponent sets
+    // DeferredRender). Un-parking released the WHOLE debt into ONE flush — measured 143 component renders in a single
+    // 13.6 ms paint on an artist-page return (a per-frame overlay ×83, cover shimmers ×44, chart rows, shelves) — which
+    // janks the page-enter animation. So the replay is BUDGETED exactly like the cold-realize stagger above: the first
+    // UnparkReplaysPerFrame debtors of the un-park walk (pre-order ⇒ ancestors and the top of the page lead) replay in
+    // the un-park flush itself, the rest queue and drip at the same rate per frame (drained from BeginRenderCensus).
+    // K is sized to cover a screenful because this layer has no viewport info: the deferred remainder is typically
+    // off-screen cards/sections, and a queued debtor still shows the valid content it rendered before it was parked.
+    // Never deferred: the activation signal (UseIsActive) flips immediately in the walk, and a real signal write that
+    // reaches a queued component schedules it normally (RunComponent cancels the queue slot) — the drip only carries
+    // entries whose ONLY reason to run is the park debt.
+    private const int UnparkReplaysPerFrame = 24;
+    private readonly Queue<CompEntry> _replayQueue = new();
+    private int _replayBudgetUsed;
+    private int _replayBudgetEpoch = -1;
+    /// <summary>True while a just-un-parked keep-alive subtree still owes queued renders (the drip is mid-flight).</summary>
+    public bool HasDeferredReplays => _replayQueue.Count > 0;
 
     // ── E4 steady-scroll realize budget ────────────────────────────────────────────────────────────────────────────
     // The per-FRAME row pool shared across every realize call in a Paint (pre-layout ReRealizeVirtuals + the D1 loop + the
@@ -243,9 +263,12 @@ public sealed class TreeReconciler
         return true;
     }
 
-    /// <summary>Clear the per-frame render-type histogram (no-op unless <c>FG_RENDER_CENSUS=1</c>). Call at Paint start.</summary>
+    /// <summary>The per-paint reconciler tick. Drips the budgeted un-park replay queue (BEFORE the frame's reactive
+    /// flush, so the drained batch renders in this same frame) and clears the per-frame render-type histogram (the
+    /// histogram half is a no-op unless <c>FG_RENDER_CENSUS=1</c>). Call at Paint start.</summary>
     public void BeginRenderCensus()
     {
+        DrainDeferredReplays();
         if (!s_renderCensus) return;
         _renderCensus ??= new Dictionary<string, int>(64, StringComparer.Ordinal);
         _renderCensus.Clear();
@@ -832,6 +855,9 @@ public sealed class TreeReconciler
         // rebuilding it is pure waste (and a parked page subscribed to a per-frame signal would re-render every frame).
         // Remember that a render was owed; ReactivateKeepAliveEntry replays it once when the subtree comes back.
         if (entry.Parked) { entry.DeferredRender = true; return; }
+        // A real invalidation (a signal write reaching this component) beat the un-park drip to it — running now settles
+        // the debt, so cancel the queue slot (the drain skips a cancelled entry without spending its budget).
+        entry.QueuedReplay = false;
         _renderCount++;
         NoteRenderCensus(entry.Comp);
         if (Diag.Enabled) Diag.Event("render", entry.Comp.GetType().Name);   // who re-rendered (granularity diagnosis)
@@ -886,7 +912,7 @@ public sealed class TreeReconciler
         var kids = new List<NodeHandle>();
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c)) kids.Add(c);
         foreach (var k in kids) Remove(k);
-        if (_comps.Remove(node, out var old)) { old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
+        if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
         MountComponent(node, ce);
     }
 
@@ -1096,7 +1122,14 @@ public sealed class TreeReconciler
             Element desired = ka.View(token) with { Key = key };
 
             ReconcileKeepAlive(node, state, ka.Options, key, token, desired, cacheable);
-        }, owner: null, runNow: true);
+            // structural: this effect PARKS the outgoing subtree (ReconcileKeepAlive → DeactivateKeepAliveEntry →
+            // SetSubtreeParked), and a parked component's render is skipped + deferred (RunComponent). It must therefore
+            // beat the render effects of the pages inside it whenever ONE signal write feeds both — otherwise the
+            // outgoing page renders once against the incoming route before being parked. ReactiveRuntime.Flush drains
+            // the structural queue first, so the park always lands before those renders. (Only KeepAlive qualifies:
+            // Show/Skel/For boundaries REMOVE their outgoing branch rather than park it, and a removed computation is
+            // already skipped by the drain's Disposed check.)
+        }, owner: null, runNow: true, structural: true);
         AddBinding(node, eff);
     }
 
@@ -1247,8 +1280,12 @@ public sealed class TreeReconciler
             SetSubtreeResourcesActive(entry.Root, active: true);
             entry.ResourcesActive = true;
         }
+        // budgetReplays: a whole PAGE comes back here, so its accumulated render debt is spread across frames rather than
+        // dumped into this one flush (the page-enter animation has to stay smooth). The row-level keep-alive un-park in
+        // RealizeWindow stays UNBUDGETED on purpose — that subtree is re-entering the viewport, so it must be current now.
+        BeginUnparkReplayWindow();
         SetSubtreeParked(entry.Root, parked: false,
-            snapStructural: options.SuppressLayoutTransitionsOnActivation);
+            snapStructural: options.SuppressLayoutTransitionsOnActivation, budgetReplays: true);
         _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
         _scene.Mark(parent, NodeFlags.LayoutDirty);
     }
@@ -1335,12 +1372,13 @@ public sealed class TreeReconciler
     // Park / un-park a kept-alive subtree so an INACTIVE page doesn't keep working while invisible. The single chokepoint
     // for three effects, all driven off one walk on the tab-switch edge:
     //  (1) component render-effects: while parked RunComponent defers (sets DeferredRender); on un-park we replay exactly
-    //      the components that owed a render — once, now attached, so context resolves and content is current.
+    //      the components that owed a render — once, now attached, so context resolves and content is current. A page
+    //      un-park (budgetReplays) spreads that replay across frames — see UnparkReplaysPerFrame.
     //  (2) the per-component activation signal (UseIsActive): flipped here so UseActivation fires onDeactivated/onActivated.
     //  (3) a scene-level Parked marker + a per-node ticker notification so the animation/scroll engines quiesce this
     //      subtree's tracks (a backgrounded looping animation / mid-fling scroll must not defeat the idle wake-stop), and
     //      so a component mounted under a parked ancestor seeds inactive (MountComponent reads the marker).
-    private void SetSubtreeParked(NodeHandle node, bool parked, bool snapStructural = false)
+    private void SetSubtreeParked(NodeHandle node, bool parked, bool snapStructural = false, bool budgetReplays = false)
     {
         if (!_scene.IsLive(node)) return;
         // A cached page can be parked halfway through a card-refit/reveal. Navigation-owned activation must land those
@@ -1352,10 +1390,52 @@ public sealed class TreeReconciler
         {
             entry.Parked = parked;
             if (entry.ActiveSig is { } sig) sig.Value = !parked;   // value-gated; flips the UseIsActive memo → UseActivation
-            if (!parked && entry.DeferredRender) { entry.DeferredRender = false; entry.Effect?.Schedule(); }
+            // Re-parked before its queued replay ran: cancel the queue slot and hand the debt back to DeferredRender, so
+            // the NEXT un-park owns it (a parked component must never be scheduled by the drip).
+            if (parked && entry.QueuedReplay) { entry.QueuedReplay = false; entry.DeferredRender = true; }
+            if (!parked && entry.DeferredRender)
+            {
+                entry.DeferredRender = false;
+                if (!budgetReplays || TakeReplayBudget()) entry.Effect?.Schedule();
+                else { entry.QueuedReplay = true; _replayQueue.Enqueue(entry); }   // drips from BeginRenderCensus
+            }
         }
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
-            SetSubtreeParked(c, parked, snapStructural);
+            SetSubtreeParked(c, parked, snapStructural, budgetReplays);
+    }
+
+    // The per-frame replay allowance, epoch-keyed exactly like the steady realize budget (the host bumps FrameEpoch once
+    // per paint), and SHARED between the un-park walk itself and that frame's drip so a frame can never exceed K.
+    private bool TakeReplayBudget()
+    {
+        if (_replayBudgetEpoch != FrameEpoch) { _replayBudgetEpoch = FrameEpoch; _replayBudgetUsed = 0; }
+        if (_replayBudgetUsed >= UnparkReplaysPerFrame) return false;
+        _replayBudgetUsed++;
+        return true;
+    }
+
+    /// <summary>Open a fresh replay window for an un-park that starts with nothing queued. Belt-and-braces for a host-less
+    /// reconciler (the VerticalSlice suites) which never ticks <see cref="FrameEpoch"/> and never drains: with the queue
+    /// empty there is no drip in flight to protect, so no navigation can be starved by an earlier one's spend.</summary>
+    private void BeginUnparkReplayWindow()
+    {
+        if (_replayQueue.Count == 0) { _replayBudgetEpoch = FrameEpoch; _replayBudgetUsed = 0; }
+    }
+
+    /// <summary>Drip the queued un-park replays in tree order: schedule up to <see cref="UnparkReplaysPerFrame"/> per
+    /// frame (minus whatever an un-park in the same frame already spent). Cancelled entries — re-parked, unmounted, or
+    /// already re-rendered by a real signal write — are dropped without spending budget.</summary>
+    private void DrainDeferredReplays()
+    {
+        while (_replayQueue.Count > 0)
+        {
+            var entry = _replayQueue.Peek();
+            if (!entry.QueuedReplay) { _replayQueue.Dequeue(); continue; }
+            if (!TakeReplayBudget()) return;
+            _replayQueue.Dequeue();
+            entry.QueuedReplay = false;
+            entry.Effect?.Schedule();
+        }
     }
 
     private void AddBinding(NodeHandle node, Computation c)
@@ -1510,15 +1590,41 @@ public sealed class TreeReconciler
                     _scene.Mark(node, NodeFlags.PaintDirty);
                 }, owner: null, runNow: true));
             }
+            // Width/Height write the LAYOUT column, so an ungated re-fire is the most expensive no-op in the engine: a
+            // signal that ticks every frame (a clock, a scroll offset a size is derived from) marked LayoutDirty even when
+            // it re-wrote the SAME number, and with no boundary above that mark it escalates into a whole-window solve.
+            // Equality-gate the mark exactly like the Text/Validation bindings above. float.Equals — not == — so NaN
+            // (auto) compares equal to NaN and an auto→auto re-fire is a true no-op. The FIRST run always writes+marks
+            // (`primed`), keeping mount behaviour byte-identical to the ungated version.
             if (b.Width.IsBound)
             {
                 var wb = b.Width.Thunk; var ws = b.Width.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Width = wb is not null ? wb() : ws!.Value; _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+                bool wPrimed = false;
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    float next = wb is not null ? wb() : ws!.Value;
+                    ref var li = ref _scene.Layout(node);
+                    if (wPrimed && li.Width.Equals(next)) return;
+                    wPrimed = true;
+                    li.Width = next;
+                    _scene.Mark(node, NodeFlags.LayoutDirty);
+                }, owner: null, runNow: true));
             }
             if (b.Height.IsBound)
             {
                 var hb = b.Height.Thunk; var hs = b.Height.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Layout(node).Height = hb is not null ? hb() : hs!.Value; _scene.Mark(node, NodeFlags.LayoutDirty); } }, owner: null, runNow: true));
+                bool hPrimed = false;
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    float next = hb is not null ? hb() : hs!.Value;
+                    ref var li = ref _scene.Layout(node);
+                    if (hPrimed && li.Height.Equals(next)) return;
+                    hPrimed = true;
+                    li.Height = next;
+                    _scene.Mark(node, NodeFlags.LayoutDirty);
+                }, owner: null, runNow: true));
             }
             b.OnRealized?.Invoke(node);
         }
@@ -2787,7 +2893,7 @@ public sealed class TreeReconciler
         _skelForce.Remove(idx);
         ReleaseSkeletonScrollbarSuppression(idx);
         if (_skelState.Remove(idx, out var sk) && sk.Group is { } skg) SkelGroupCoordinator.Unregister(skg, idx);
-        if (_comps.Remove(node, out var e)) { e.Scope?.Dispose(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
+        if (_comps.Remove(node, out var e)) { e.QueuedReplay = false; e.Scope?.Dispose(); _live.Remove(e.Comp); _anchorOf.Remove(e.Comp); }   // Scope.Dispose cascades: dispose render-effect → RunAllCleanups
         if (_virtuals.Remove(node, out var v))
         {
             if (v.Warming) _warmingCount--;   // a bound list unmounted mid-warm → keep the warming census exact

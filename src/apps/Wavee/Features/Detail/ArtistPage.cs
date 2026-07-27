@@ -239,23 +239,32 @@ sealed partial class ArtistPage : Component
         // — NOT a plain replay of the artist context (the previous bug passed Play as the radio callback).
         void Radio() => RadioLaunch.Start(svc.Player, uri, a.Name, go);
 
+        // EVERY section carries a stable Key. This list is built CONDITIONALLY off a loadable: extras/top-albums arrive
+        // after the first Ready render, so sections appear mid-stream and shift every later sibling's index. Keyless
+        // children pair by raw list index + ElementTypeId, and all but the two DiscographySection entries are BoxEl —
+        // one identical type — so an inserted section made each following one pair against its NEIGHBOUR's old subtree:
+        // silent cross-wiring of shelves plus a remount cascade of their cards (the LazyNowPlayingOverlay/CoverShimmer
+        // mount mass on artist loads). Keyed children pair by key regardless of position, so an insert now costs exactly
+        // the inserted section. Keys must stay UNIQUE (a duplicate silently mounts a second node) and must stay stable
+        // across renders — note "related" and "fans" are deliberately DISTINCT keys: they are alternatives holding
+        // different data, and reusing one key would reuse the shelf subtree across the swap.
         var sections = new List<Element>(14);
         if (popular.Count > 0)
-            sections.Add(TopBand(popular, uri, bridge, svc, a.LatestRelease, a.PopularReleases, go, PlayContext, accent));
+            sections.Add(TopBand(popular, uri, bridge, svc, a.LatestRelease, a.PopularReleases, go, PlayContext, accent) with { Key = "sec:popular" });
         // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
-        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent)));
-        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent)));
-        if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext));
+        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent)) with { Key = "sec:albums" });
+        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent)) with { Key = "sec:singles" });
+        if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext) with { Key = "sec:appears-on" });
         if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
-            () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)));
-        if (extras?.MusicVideos is { Count: > 0 } videos) sections.Add(MusicVideosShelf(videos, PlayContext));
-        if (extras?.Playlists is { Count: > 0 } playlists) sections.Add(PlaylistsShelf(playlists, go, PlayContext));
-        if (extras?.Concerts is { Count: > 0 } concerts) sections.Add(ConcertsRow(concerts, go));
-        if (extras?.Merch is { Count: > 0 } merch) sections.Add(MerchRow(merch));
-        sections.Add(BiographyBand(a, albums.Length, singles.Length, extras, fans.Length, go));
-        if (extras?.Gallery is { Count: > 0 } gallery) sections.Add(GalleryStrip(gallery));
-        if (extras?.Related is { Count: > 0 } related) sections.Add(RelatedShelf(related, go, PlayContext));
-        else if (fans.Length > 0) sections.Add(FansShelf(fans, go, PlayContext));
+            () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)) with { Key = "sec:tour" });
+        if (extras?.MusicVideos is { Count: > 0 } videos) sections.Add(MusicVideosShelf(videos, PlayContext) with { Key = "sec:music-videos" });
+        if (extras?.Playlists is { Count: > 0 } playlists) sections.Add(PlaylistsShelf(playlists, go, PlayContext) with { Key = "sec:playlists" });
+        if (extras?.Concerts is { Count: > 0 } concerts) sections.Add(ConcertsRow(concerts, go) with { Key = "sec:concerts" });
+        if (extras?.Merch is { Count: > 0 } merch) sections.Add(MerchRow(merch) with { Key = "sec:merch" });
+        sections.Add(BiographyBand(a, albums.Length, singles.Length, extras, fans.Length, go) with { Key = "sec:biography" });
+        if (extras?.Gallery is { Count: > 0 } gallery) sections.Add(GalleryStrip(gallery) with { Key = "sec:gallery" });
+        if (extras?.Related is { Count: > 0 } related) sections.Add(RelatedShelf(related, go, PlayContext) with { Key = "sec:related" });
+        else if (fans.Length > 0) sections.Add(FansShelf(fans, go, PlayContext) with { Key = "sec:fans" });
 
         var inner = new BoxEl
         {

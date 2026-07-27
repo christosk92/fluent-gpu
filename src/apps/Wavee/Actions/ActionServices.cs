@@ -33,6 +33,11 @@ public sealed class ActionServices
     public IClipboard? Clipboard;
     /// <summary>UI-thread marshal (UsePost) for async completions that must touch signals.</summary>
     public Action<Action>? Post;
+    /// <summary>The user's LOCAL VIDEO OVERRIDE curation, for the <c>Video ▸</c> submenu (attach / replace / locate /
+    /// remove / reveal). Null on a backend without one — the submenu then does not exist at all, which is the feature's
+    /// kill switch. Mutations go through this service, whose <c>OnChanged</c> is wired to the bridge's single
+    /// <c>NotifyVideoOverrideChanged</c> entry point; the actions never poke the bridge's cache themselves.</summary>
+    public VideoOverrideService? VideoOverrides;
 }
 
 /// <summary>The action context an <see cref="AppAction"/> receives: the WHAT (<see cref="Target"/>) + the HOW

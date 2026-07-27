@@ -42,7 +42,11 @@ sealed class DetailPage : Component
         if (svc is null) return new BoxEl { Grow = 1f };
         var navPreview = UseContext(NavPreviewStore.Slot);
 
-        var route = _route.Value;                          // subscribe → re-render when navigation swaps the detail route in place
+        // Subscribe the RAW route → re-render when navigation swaps the detail route in place. A nav to ANOTHER page
+        // class (artist:/home) also writes this signal, but the reconciler's structural-effect ordering guarantees the
+        // KeepAlive boundary parks this page before its render effect drains, so no stale cross-class render happens
+        // (engine: ReactiveRuntime.Flush park-before-render; gate.reconciler.park-before-render).
+        var route = _route.Value;
         var (kind, id) = ParseDetail(route);
 
         // Preview identity is route-scoped so a card's already-known header data can appear immediately while the full
@@ -246,7 +250,7 @@ sealed class DetailPage : Component
         for (int i = 0; i < tracks.Count; i++)
         {
             if (tracks[i].AddedAt is not null) hasDate = true;
-            if (tracks[i].HasVideo) hasVideo = true;
+            if (VideoPresence.HasVideo(tracks[i])) hasVideo = true;   // a user-attached mp4 also earns the Video column
             if (tracks[i].AddedBy is { } by) contributors.Add(by);
         }
         return new DetailModel(
@@ -293,7 +297,7 @@ sealed class DetailPage : Component
             Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: meta,
             Tracks: tracks, AboutArtist: null, Palette: null,
             HasDateAdded: tracks.Any(t => t.AddedAt is not null),   // liked rows carry the collection add time → Date-added column + sort
-            HasVideo: tracks.Any(t => t.HasVideo));
+            HasVideo: tracks.Any(VideoPresence.HasVideo));
     }
 
     // The album model: hero + tracklist + the "More by" shelf the getAlbum payload carries. The below-the-fold
@@ -317,7 +321,7 @@ sealed class DetailPage : Component
             BadgeType: badge, Year: a.Year.ToString(), OwnerName: null, OwnerImage: null,
             Artists: a.Artists, Description: null, MetaLine: meta,
             Tracks: tracks, AboutArtist: null, Palette: a.Palette,
-            HasVideo: tracks.Any(t => t.HasVideo), ReleaseKind: a.Kind, MoreByArtist: a.MoreByArtist,
+            HasVideo: tracks.Any(VideoPresence.HasVideo), ReleaseKind: a.Kind, MoreByArtist: a.MoreByArtist,
             Label: a.Label, Copyright: a.Copyright, ReleaseDate: FormatReleaseDate(a.ReleaseDate, a.ReleaseDatePrecision), AlbumArtists: a.ArtistsDetailed,
             OtherVersions: a.OtherVersions, CourtesyLine: a.CourtesyLine, ReleaseDatePrecision: a.ReleaseDatePrecision,
             DiscCount: a.DiscCount, ShareUrl: a.ShareUrl, IsPreRelease: a.IsPreRelease, PreReleaseEnd: a.PreReleaseEnd);

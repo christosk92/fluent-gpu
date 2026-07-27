@@ -2753,6 +2753,31 @@ sealed class KeepAlivePresencePage : Component
     }
 }
 
+// ── gate.reconciler.park-before-render ──────────────────────────────────────────────────────────────────────────────
+// One execution log shared by a KeepAlive BOUNDARY and the pages inside it, both subscribed to the SAME route signal.
+// Entries are appended in run order: "B@<route>" when the boundary effect body runs, "<pageKey>@<route>" when a page
+// renders. That makes the flush ordering directly assertable — a page entry carrying the INCOMING route is exactly the
+// stale render the structural-priority queue exists to prevent.
+sealed class ParkOrderLog
+{
+    public readonly List<string> Entries = new();
+}
+
+sealed class ParkOrderPage : Component
+{
+    readonly string _key;
+    readonly Signal<string> _route;
+    readonly ParkOrderLog _log;
+    public ParkOrderPage(string key, Signal<string> route, ParkOrderLog log) { _key = key; _route = route; _log = log; }
+
+    public override Element Render()
+    {
+        string seen = _route.Value;   // subscribe the SAME signal the boundary routes on — the whole point of the gate
+        _log.Entries.Add(_key + "@" + seen);
+        return new BoxEl { Width = 60f, Height = 24f, Children = [Text("page-" + _key)] };
+    }
+}
+
 // Transparent-boundary input probe: the outer component does not subscribe to Live; only the nested component swaps
 // from a non-hit-testable placeholder to a real scroller. A transparent ancestor must remain traversable without
 // relying on the inner HitTestVisible bit being synchronously copied back through every component boundary.

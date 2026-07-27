@@ -94,6 +94,8 @@ public static class AppActions
         TrackActions.CopyLink, TrackActions.GoToAlbum, TrackActions.GoToArtist,
         TrackActions.ViewCredits, TrackActions.CopySpotifyUri, TrackActions.OpenInSpotifyWeb,
         TrackActions.RemoveFromThisPlaylist, TrackActions.RemoveFromQueue,
+        VideoActions.AttachVideo, VideoActions.ReplaceVideo, VideoActions.LocateVideo,
+        VideoActions.RemoveVideo, VideoActions.ShowVideoInExplorer,
         ContainerActions.PlayContext, ContainerActions.SaveContext, ContainerActions.OpenItem,
         ContainerActions.RenamePlaylist, ContainerActions.InviteCollaborators, ContainerActions.DeletePlaylist,
     ];

@@ -172,7 +172,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // the async PopOutVideoSource handoff onto the player-owning FluentVideoMediaHost, the PlayerChanged → surface relay,
         // and the mid-track kind re-evaluation). All of it lives in LiveConnect.WireVideoMedia, wired unconditionally.
         // svc.Playback.ResolveVideoSource is wired later in GoLive — the hooks read it late-bound, at invoke time.
-        connect.WireVideoMedia(svc.Playback);
+        // The user's local video-override curation rides the same hooks (open-failure recovery + the mp4-authoritative
+        // duration); null on a backend built without a store, which leaves every override path unreachable.
+        connect.WireVideoMedia(svc.Playback, svc.VideoOverrides);
         transport.Start();
         // Profile (name + avatar) fetched before go-live so CurrentUser is complete on the first render (no refresh hook).
         // Best-effort — a failure just omits that field.
@@ -409,7 +411,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.Video.SetInner(videoSvc);
             // Wire the pop-out/inline video resolver: track uri → Spotify manifest → a playable PopOutVideoSource
             // (PlayReady via the native CDM, or null when the account isn't served a PlayReady mp4). Over the live transport.
-            svc.Playback.ResolveVideoSource = (uri, ct) => videoSvc.ResolvePlayableAsync(uri, transport, ct);
+            // Through the composite so the tiered walk has ONE home: tier 1 is the user's attached local file (it always
+            // wins, for ANY playable), tier 2 is this Spotify source tier, and a null answer falls through to the
+            // controller's audio fallback. This REPLACES the overrides-only composite the pre-login bootstrap installed.
+            svc.Playback.ResolveVideoSource =
+                new CompositeVideoResolver((uri, ct) => videoSvc.ResolvePlayableAsync(uri, transport, ct), svc.VideoOverrides).ResolveAsync;
             var userProfiles = new SpotifyUserProfileService(em, live.Pipeline, () => live.BaseUrl, socialLog, extensionCache);
             if (profileFetched)
                 userProfiles.Seed(live.Username, new Owner(

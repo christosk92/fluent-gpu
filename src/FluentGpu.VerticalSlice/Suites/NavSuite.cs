@@ -40,6 +40,8 @@ static class NavSuite
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);
+        ParkBeforeRenderChecks(strings);
+        UnparkReplayBudgetChecks(strings);
         NavRouterChecks(strings);
         GalleryChecks(strings);
         ActivationLifecycleChecks(strings);
@@ -254,6 +256,164 @@ static class NavSuite
                || anim.TryGetTrackValue(node, AnimChannel.SizeH, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutW, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutH, out _);
+    }
+
+    // gate.reconciler.park-before-render — the flush ORDERING guarantee (ReactiveCore: structural queue before normal).
+    //
+    // The hazard: a KeepAlive boundary and the page mounted inside it both subscribe to ONE route signal. The boundary
+    // is what PARKS the outgoing page (ReconcileKeepAlive → DeactivateKeepAliveEntry → SetSubtreeParked), and a parked
+    // component's render is skipped (Reconciler.RunComponent). Before the structural split, a flush ran effects in
+    // schedule order = REVERSE subscription order (Signal.NotifySubscribers walks its list backwards), so whichever of
+    // the two happened to be subscribed LAST ran FIRST. With the natural mount order (boundary subscribes first, page
+    // second) the page therefore ran BEFORE the boundary and rendered once against the INCOMING route — an artist page
+    // deriving an album uri, a detail page re-keying its whole track list — and only then got parked.
+    //
+    // Both subscription orders are exercised, and the boundary effect must lead in BOTH:
+    //   order A (natural mount)     — subs [boundary, page] ⇒ the page is scheduled first. This is the defect case.
+    //   order B (boundary re-armed) — a write to an unrelated signal the boundary also reads re-runs it, so it unlinks
+    //                                 and re-subscribes at the TAIL ⇒ subs [page, boundary], the boundary is scheduled
+    //                                 first. Correct even before the fix; it must stay correct after it.
+    static void ParkBeforeRenderChecks(StringTable strings)
+    {
+        var (okA, detailA) = RunParkOrderCase(strings, boundarySubscribesLast: false);
+        var (okB, detailB) = RunParkOrderCase(strings, boundarySubscribesLast: true);
+        Check("gate.reconciler.park-before-render a cross-slot KeepAlive route write parks the outgoing page BEFORE its render effect can run against the incoming route — for either subscription order (structural boundary effects flush ahead of component render effects)",
+            okA && okB, $"orderA(boundary-first-sub) [{detailA}] · orderB(page-first-sub) [{detailB}]");
+    }
+
+    static (bool Ok, string Detail) RunParkOrderCase(StringTable strings, bool boundarySubscribesLast)
+    {
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var route = new Signal<string>("a");
+        var rearm = new Signal<int>(0);     // read by the boundary ONLY — used to re-order its route subscription
+        var log = new ParkOrderLog();
+
+        recon.ReconcileRoot(
+            Flow.KeepAlive(
+                () => { _ = rearm.Value; log.Entries.Add("B@" + route.Peek()); return route.Value; },
+                k => k,
+                k => Embed.Comp(() => new ParkOrderPage(k, route, log)),
+                new KeepAliveOptions(MaxEntries: 2)),
+            null);
+
+        if (boundarySubscribesLast)
+        {
+            // Re-run the boundary alone (same key ⇒ the retained page is reused, NOT re-rendered — Reconciler.Update on
+            // a props-less ComponentEl is a no-op), so only the boundary re-links its sources and lands at the tail.
+            rearm.Value = 1;
+            recon.Runtime.Flush();
+        }
+
+        int before = log.Entries.Count;
+        route.Value = "b";              // the cross-slot navigation: park "a", mount + render "b"
+        recon.Runtime.Flush();
+
+        bool staleRender = false, boundaryLed = false, incomingRendered = false;
+        for (int i = before; i < log.Entries.Count; i++)
+        {
+            string e = log.Entries[i];
+            if (i == before) boundaryLed = e.StartsWith("B@", StringComparison.Ordinal);
+            if (e == "a@b") staleRender = true;             // THE defect: the outgoing page rendered on the new route
+            if (e == "b@b") incomingRendered = true;        // the destination really did render (no vacuous pass)
+        }
+        string trace = string.Join(",", log.Entries.Skip(before));
+        return (!staleRender && boundaryLed && incomingRendered,
+            $"trace={trace} stale={staleRender} boundaryLed={boundaryLed} incoming={incomingRendered}");
+    }
+
+    // gate.reconciler.unpark-replay-budget — the un-park replay is BUDGETED, not dumped into one flush.
+    //
+    // While a KeepAlive page is parked its components skip their render-effects and bank the debt (RunComponent sets
+    // DeferredRender). Un-parking used to release ALL of it into the activation flush — measured 143 component renders
+    // in a single 13.6 ms paint on an artist-page return — which janks the page-enter animation. SetSubtreeParked's
+    // budgetReplays path now schedules at most K debtors (tree order) and queues the rest to drip one batch per frame,
+    // drained from BeginRenderCensus (the host's per-paint reconciler tick, which runs before the frame's flush).
+    //
+    // Four properties, all load-bearing:
+    //   (1) the activation flush renders ≤ K debtors (the jank fix),
+    //   (2) every debtor still renders — exactly once, within a bounded number of frames (no lost render, no double),
+    //   (3) an invalidation reaching a QUEUED debtor renders it IMMEDIATELY and cancels its queue slot: the drip may
+    //       only carry components whose sole reason to run is the park debt,
+    //   (4) once the drip has run, the page is fully live again — a signal write re-renders every debtor.
+    //
+    // (3) uses the IMPERATIVE route (RenderContext.RequestRerender == the entry's effect.Schedule) rather than a signal
+    // write, because a signal write CANNOT reach a queued debtor: Computation.RunComputation unlinks its sources before
+    // invoking the body, and the while-parked run returns early out of RunComponent having read nothing — so a parked
+    // component ends up subscribed to NOTHING and stops being invalidated at all. That is the point of parking, and it
+    // is exactly why the DeferredRender debt flag (not a subscription) is what guarantees fresh content on return; (4)
+    // pins the other half — the replay re-tracks the sources, so the page is never left permanently deaf.
+    static void UnparkReplayBudgetChecks(StringTable strings)
+    {
+        const int K = 24;        // mirrors Reconciler.UnparkReplaysPerFrame (private const — this gate keeps it honest)
+        const int N = 70;        // > 2K so the drip genuinely spans ≥3 batches
+        const int MaxFrames = 8; // bound: ceil(N/K) batches + slack. Never "eventually" — the drip must terminate.
+
+        var scene = new SceneStore();
+        var recon = new TreeReconciler(scene, strings);
+        var route = new Signal<string>("a");
+        var shared = new Signal<int>(0);                  // read by EVERY debtor — one write banks the whole debt
+        var log = new List<int>();
+        var instances = new List<UnparkDebtor>();         // mount order == tree order, so [N-1] is the LAST to be dripped
+
+        recon.ReconcileRoot(
+            Flow.KeepAlive(() => route.Value, k => k,
+                k => k == "a"
+                    ? Embed.Comp(() => new UnparkDebtorPage(shared, N, log, instances))
+                    : (Element)new BoxEl { Width = 10f, Height = 10f },
+                new KeepAliveOptions(MaxEntries: 2)),
+            null);
+        recon.Runtime.Flush();
+        int mounted = log.Count;                          // N first renders at mount
+
+        route.Value = "b";                                // park page "a" (it stays cached + mounted)
+        recon.Runtime.Flush();
+        shared.Value = 1;                                 // reaches all N parked debtors ⇒ N banked DeferredRender debts
+        recon.Runtime.Flush();
+        int whileParked = log.Count - mounted;            // must be 0 — parked components don't render
+
+        log.Clear();
+        route.Value = "a";                                // the un-park: budgeted replay
+        recon.Runtime.Flush();
+        int firstFlush = log.Count;
+
+        // (3) An invalidation on a debtor still sitting in the queue must NOT wait its turn. Pick the LAST one — deepest
+        // in the drip — and re-render it imperatively, with no frame tick, so no drip could possibly explain the render.
+        int probe = N - 1;
+        bool probeWasQueued = instances.Count == N && instances[probe].Index == probe && !log.Contains(probe);
+        instances[probe].Context.RequestRerender();
+        recon.Runtime.Flush();
+        bool probeRanNow = log.Contains(probe);
+
+        // (2) Tick frames the way AppHost does — FrameEpoch++ then BeginRenderCensus (drains) then the flush.
+        int frames = 0;
+        while (recon.HasDeferredReplays && frames < MaxFrames)
+        {
+            frames++;
+            recon.FrameEpoch++;
+            recon.BeginRenderCensus();
+            recon.Runtime.Flush();
+        }
+
+        var seen = new HashSet<int>(log);
+        int totalRenders = log.Count;
+        bool everyDebtorRendered = seen.Count == N;
+        bool renderedOnce = totalRenders == N;            // no double-render: the probe's live run CANCELLED its queue slot
+        bool spread = firstFlush <= K && frames >= 2;     // budgeted, and it really did take multiple frames
+        bool drained = !recon.HasDeferredReplays;
+
+        // (4) The replayed page is fully live again: the replay re-tracked every debtor's sources, so one shared write
+        // re-renders all N. (Before the replay the same write reaches nobody — see the header.)
+        log.Clear();
+        shared.Value = 2;
+        recon.Runtime.Flush();
+        bool liveAgain = log.Count == N;
+
+        Check("gate.reconciler.unpark-replay-budget un-parking a KeepAlive page with N=70 banked render debts replays ≤24 in the activation flush and drips the rest one batch per frame until all 70 have rendered exactly once; an imperative re-render of a still-queued debtor runs immediately (cancelling its queue slot), and the replayed page is signal-live again",
+            mounted == N && whileParked == 0 && spread && everyDebtorRendered && renderedOnce && drained
+                && probeWasQueued && probeRanNow && liveAgain,
+            $"mounted={mounted} whileParked={whileParked} firstFlush={firstFlush} (K={K}) dripFrames={frames} " +
+            $"totalRenders={totalRenders} distinct={seen.Count}/{N} drained={drained} probeQueued={probeWasQueued} probeRanNow={probeRanNow} liveAgain={liveAgain}");
     }
 
     static void GalleryChecks(StringTable strings)
@@ -732,5 +892,48 @@ static class NavSuite
         Check("65a2. NavigationView: closed icon rail hides child rows and maps child selection chrome to parent",
             compactRailRootOnly && compactRailParentChrome && compactRailKeepsChildPage && reopenedStillExpanded,
             $"rootOnly={compactRailRootOnly} parentChrome={compactRailParentChrome} childPage={compactRailKeepsChildPage} reopenExpanded={reopenedStillExpanded}");
+    }
+}
+
+// ── gate.reconciler.unpark-replay-budget ────────────────────────────────────────────────────────────────────────────
+// A KeepAlive page holding many independently-reactive children — the shape that banks a large render debt while parked
+// (an artist page: a per-frame overlay, cover shimmers, chart rows, shelves). Every debtor tracks ONE shared channel, so
+// a single write while parked leaves all N owing a render. Each registers itself at construction, in mount (== tree)
+// order, so the gate can reach the LAST one — the deepest in the drip queue — and re-render it imperatively.
+sealed class UnparkDebtorPage : Component
+{
+    readonly Signal<int> _shared;
+    readonly int _count;
+    readonly List<int> _log;
+    readonly List<UnparkDebtor> _instances;
+    public UnparkDebtorPage(Signal<int> shared, int count, List<int> log, List<UnparkDebtor> instances)
+    { _shared = shared; _count = count; _log = log; _instances = instances; }
+
+    public override Element Render()
+    {
+        var kids = new Element[_count];
+        for (int i = 0; i < _count; i++)
+        {
+            int idx = i;   // capture per child — Embed.Comp freezes it at mount
+            kids[i] = Embed.Comp(() => new UnparkDebtor(idx, _shared, _log, _instances));
+        }
+        return new BoxEl { Children = kids };
+    }
+}
+
+sealed class UnparkDebtor : Component
+{
+    readonly int _index;
+    readonly Signal<int> _shared;
+    readonly List<int> _log;
+    public int Index => _index;
+    public UnparkDebtor(int index, Signal<int> shared, List<int> log, List<UnparkDebtor> instances)
+    { _index = index; _shared = shared; _log = log; instances.Add(this); }
+
+    public override Element Render()
+    {
+        _ = _shared.Value;   // the channel that banks the park debt for the whole page (and is re-tracked by the replay)
+        _log.Add(_index);
+        return new BoxEl { Width = 8f, Height = 8f };
     }
 }

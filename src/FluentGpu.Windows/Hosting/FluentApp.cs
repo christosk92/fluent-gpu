@@ -174,7 +174,9 @@ public static class FluentApp
 
         // FG_MEM_DIAG=1 GPU residency hooks: surface tracked D3D12 resource totals + a glyph/texture-store summary
         // (no-op unless the census is also enabled; headless devices leave these null).
-        if (device is D3D12Device gpu)
+        // Also the [fps] line's latW/opgrp source below: both counters live on the device and are not carried in FrameStats.
+        D3D12Device? gpuDev = device as D3D12Device;
+        if (gpuDev is { } gpu)
         {
             host.GpuResources = () => gpu.DiagResourceTotals;
             host.GpuDetail = () => gpu.DiagGpuDetail;
@@ -296,15 +298,34 @@ public static class FluentApp
                 if (fpsLog && (spike || s.ScrollActive || n % 30 == 0))
                 {
                     double gpuRenderMs = s.GpuRenderMs;   // FG_GPU_TIMING: true raster ms (0 when off) — disambiguates the fence wait
-                    // grender X(scene Y: rect R img I glyph G comp C) — the per-category scene split (all 0 unless FG_GPU_TIMING).
+                    // latW splits the always-printed `gpu` number (LastGpuFenceWaitMs conflates the frame fence with the
+                    // swapchain latency waitable), so it is ungated exactly like `gpu`; opgrp counts the full-window layer
+                    // composites the `comp` bucket is paid for, so it rides the FG_GPU_TIMING-gated grender group.
+                    double latWaitMs = gpuDev?.LastLatencyWaitMs ?? 0.0;
+                    int opGroups = gpuDev?.LastOpacityGroups ?? 0;
+                    // …split by kind (they sum to opGroups) plus how many blended the FULL canvas — a bare count cannot
+                    // tell a dozen cheap scissored row-fades from a handful of full-window reads, which is the real cost.
+                    int opPlain = gpuDev?.LastPlainOpacityGroups ?? 0;
+                    int opBounded = gpuDev?.LastBoundedOpacityGroups ?? 0;
+                    int opBlur = gpuDev?.LastBlurGroups ?? 0;
+                    int opEdge = gpuDev?.LastEdgeFadeGroups ?? 0;
+                    int opFull = gpuDev?.LastFullTargetGroups ?? 0;
+                    // grender X(scene Y: rect R img I glyph G comp C) opgrpN(o/bo/bl/ef,full) — all 0 unless FG_GPU_TIMING.
                     string gpuRenderTok = gpuRenderMs > 0.0
-                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0})"
+                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
                         : "";
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
+                    // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
+                    // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit
+                    // reflow seeding. Printed only when the bucket is worth splitting (≥0.1 ms), so quiet frames stay short.
+                    string layoutSplitTok = s.LayoutMs >= 0.1
+                        ? $"(fx{s.LayoutSolveMs:0.0} eff{s.LayoutEffectsMs:0.0} conn{s.ConnectedTickMs:0.0} rf{s.ReflowSeedMs:0.0})"
+                        : "";
                     string hitchTok =
                         $" | hitch comps={s.ComponentsRendered} nodes={s.NodesVisited}/{s.DrawNodeCount} " +
                         $"pump={s.ImagePumpMs:0.0}ms apply={s.ImageApplyCount}/{s.ImageApplyBytes / 1024}KB realize={s.RealizeCatchupMs:0.0}ms " +
-                        $"escapes={s.RootRelayoutEscapes} spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded} " +
+                        $"escapes={s.RootRelayoutEscapes} escLoc={s.LocalRelayoutResolves} " +
+                        $"spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded} " +
                         $"reasons=0x{((uint)s.SpanReuseDisabledReasons):X} gc0=+{s.Gc0Delta} gc1=+{s.Gc1Delta} gc2=+{s.Gc2Delta}";
                     string scrollTok = scrollPerf
                         ? $" | scroll clipE={s.StickyClipEvals} clipD={s.StickyClipDirties} fullHide={s.StickyClipFullyHidden} " +
@@ -335,9 +356,9 @@ public static class FluentApp
                     Console.Error.WriteLine(
                         $"[fps] tMs={FluentGpu.Foundation.ScrollTrace.NowMs:0.000}{(spike ? " SPIKE" : "")}{clusterTok}" +
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
-                        $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0} " +
+                        $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}");
                 }
             }

@@ -24,6 +24,7 @@ sealed partial class SettingsPage : Component
     readonly Signal<int> _uiEpoch = new(0);
 
     IOverlayService? _overlay;
+    Action<Action>? _voPost;   // the UI-thread post, kept for the video-override flyout's deferred deep-link open
 
     void Bump() => _uiEpoch.Value = _uiEpoch.Peek() + 1;
 
@@ -54,6 +55,7 @@ sealed partial class SettingsPage : Component
         var post = UsePost();
         var seeded = UseRef(false);
         _overlay = UseContext(Overlay.Service);
+        _voPost = post;
 
         UseEffect(() =>
         {
@@ -70,13 +72,37 @@ sealed partial class SettingsPage : Component
 
         _ = _uiEpoch.Value;
         _ = PlayerBarPrefs.Epoch.Value;
+
+        // "Manage" on a video-override toast navigates here and bumps this counter; land on the tab that owns the
+        // roster AND open its Manage flyout (the roster no longer lives inline, so landing on the tab alone would
+        // strand the user one click short). Same monotonic-request shape as OpenPlaybackRuntimeSetup (Settings has no
+        // route-arg tab deep-link).
+        int overridesReq = svc?.Playback.OpenVideoOverrides.Value ?? 0;
+        var lastOverridesReq = UseRef(-1);
+        UseEffect(() =>
+        {
+            if (lastOverridesReq.Value < 0) { lastOverridesReq.Value = overridesReq; return; }
+            if (overridesReq == lastOverridesReq.Value) return;
+            lastOverridesReq.Value = overridesReq;
+            _tab.Value = TabPlayback;
+            RequestVideoOverrideManager(post);
+        }, overridesReq);
+
         int tab = _tab.Value;
 
         UseEffect(() =>
         {
             if (tab == TabStorage && _storageLoad.Peek() == StorageLoadPhase.NotStarted)
                 RefreshStorage(post);
+            if (tab == TabPlayback) RefreshVideoOverrides(svc, post);
+            // Leaving the tab destroys the Manage button: close its flyout and drop the now-dead anchor, so a later
+            // deep-link can never open against a stale node.
+            else CloseVideoManager();
         }, tab);
+
+        // Live roster refresh: the curation also changes from the track context menu (and from an undo toast raised
+        // anywhere), so the section watches the store's roster sentinel rather than only its own mutations.
+        UseEffect(() => WatchVideoOverrides(svc, post), DepKey.Empty);
 
         Element body = tab switch
         {

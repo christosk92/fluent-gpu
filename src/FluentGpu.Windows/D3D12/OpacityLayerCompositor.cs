@@ -105,8 +105,50 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     private ID3D12PipelineState* _dsBlurPso;  // separable gaussian at texelSigma over the DOWNSAMPLED scratch, unrolled 7 folded bilinear taps
     private readonly float[] _blurTaps = new float[24];   // ds-blur consts: p0(texel.xy,dir.xy) + p1(usedFrac.xy,maxUv.xy) + o0/o1(offsets) + w0/w1(weights)
 
-    /// <summary>Opacity groups composited this frame (diagnostics).</summary>
+    /// <summary>Opacity groups composited this frame (diagnostics). The SUM of the four per-kind counters below.</summary>
     public int GroupsThisFrame { get; private set; }
+
+    /// <summary>Plain opacity groups composited over the WHOLE target this frame (unpatched extent — see <see cref="Composite"/>).</summary>
+    public int OpacityGroupsThisFrame { get; private set; }
+
+    /// <summary>Plain opacity groups composited through the patched-extent scissor this frame (<see cref="CompositeOpacity"/>).</summary>
+    public int BoundedOpacityGroupsThisFrame { get; private set; }
+
+    /// <summary>Self-blur groups composited this frame (<see cref="CompositeBlur"/> + the region-local path).</summary>
+    public int BlurGroupsThisFrame { get; private set; }
+
+    /// <summary>Edge-fade groups composited this frame (<see cref="EdgeFadeComposite"/>).</summary>
+    public int EdgeFadeGroupsThisFrame { get; private set; }
+
+    /// <summary>Groups composited with NO bounding scissor this frame — each is a full-canvas read+blend (the expensive
+    /// class: ~0.4–0.6 ms apiece at 4K-ish resolutions), so this is the number that explains a heavy `comp` bucket.</summary>
+    public int FullTargetGroupsThisFrame { get; private set; }
+
+    /// <summary>Which composite path a group took — per-kind attribution behind the `opgrp` split (diagnostics only).</summary>
+    private enum GroupKind { Opacity, BoundedOpacity, Blur, EdgeFade }
+
+    private void CountGroup(GroupKind kind, bool bounded)
+    {
+        GroupsThisFrame++;
+        switch (kind)
+        {
+            case GroupKind.Opacity: OpacityGroupsThisFrame++; break;
+            case GroupKind.BoundedOpacity: BoundedOpacityGroupsThisFrame++; break;
+            case GroupKind.Blur: BlurGroupsThisFrame++; break;
+            default: EdgeFadeGroupsThisFrame++; break;
+        }
+        if (!bounded) FullTargetGroupsThisFrame++;
+    }
+
+    private void ResetGroupCounts()
+    {
+        GroupsThisFrame = 0;
+        OpacityGroupsThisFrame = 0;
+        BoundedOpacityGroupsThisFrame = 0;
+        BlurGroupsThisFrame = 0;
+        EdgeFadeGroupsThisFrame = 0;
+        FullTargetGroupsThisFrame = 0;
+    }
 
     /// <summary>Self-blur layers filtered this frame (cache hits are excluded).</summary>
     public int BlurLayersThisFrame { get; private set; }
@@ -720,7 +762,7 @@ float4 BlurPS(V i) : SV_Target
         _parity = parity & 1;
         CollectGpuTime(_parity);
         _blurTimingOpen = false;
-        GroupsThisFrame = 0;
+        ResetGroupCounts();
         BlurLayersThisFrame = 0;
         BlurRegionPixelsThisFrame = 0;
         BlurWorkPixelsThisFrame = 0;
@@ -754,7 +796,7 @@ float4 BlurPS(V i) : SV_Target
     public void TickIdle(ulong completedFence)
     {
         if (_retired.Count > 0 || PooledRtCount > 0) TickPool(completedFence);
-        GroupsThisFrame = 0;
+        ResetGroupCounts();
     }
 
     /// <summary>Lease a canvas-sized RT, clear it transparent, and bind it as the current render target (the caller's
@@ -838,10 +880,10 @@ float4 BlurPS(V i) : SV_Target
     /// fullscreen pass; the group RT is canvas-sized and 1:1). The current scissor applies — it is the group node's
     /// enclosing clip, which already bounded the subtree's content.</summary>
     public void Composite(ID3D12GraphicsCommandList* cmd, int slot, float alpha)
-        => CompositeUv(cmd, slot, alpha, 0f, 0f, 1f, 1f);
+        => CompositeUv(cmd, slot, alpha, 0f, 0f, 1f, 1f, GroupKind.Opacity, bounded: false);
 
     private void CompositeUv(ID3D12GraphicsCommandList* cmd, int slot, float alpha,
-        float uvX, float uvY, float uvW, float uvH)
+        float uvX, float uvY, float uvW, float uvH, GroupKind kind, bool bounded)
     {
         ID3D12DescriptorHeap* h = _srvHeap;
         cmd->SetDescriptorHeaps(1, &h);
@@ -857,11 +899,13 @@ float4 BlurPS(V i) : SV_Target
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd->DrawInstanced(3, 1, 0, 0);
         }
-        GroupsThisFrame++;
+        CountGroup(kind, bounded);
     }
 
-    /// <summary>Composite a canvas-backed self-blur only over its finite Gaussian support. Generic opacity groups remain
-    /// full-target because their descendants may intentionally paint outside the node bounds.</summary>
+    /// <summary>Composite a canvas-backed self-blur only over its finite Gaussian support. A plain opacity group is
+    /// bounded the same way by <see cref="CompositeOpacity"/>, but off the recorder's accumulated subtree DRAW bounds
+    /// (a superset of the pixels the group emitted, incl. shadow/blur halos and rings) rather than the node bounds —
+    /// descendants do intentionally paint outside those. A group the recorder left unpatched stays full-target.</summary>
     public void CompositeBlur(ID3D12GraphicsCommandList* cmd, int slot, float alpha, in PushLayerCmd L, float scale, RECT clip)
     {
         RegionBox(in L, scale, out int minX, out int minY, out int maxX, out int maxY);
@@ -875,7 +919,36 @@ float4 BlurPS(V i) : SV_Target
         if (box.right <= box.left || box.bottom <= box.top) return;
         cmd->RSSetScissorRects(1, &box);
         BlurCompositePixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
-        Composite(cmd, slot, alpha);
+        CompositeUv(cmd, slot, alpha, 0f, 0f, 1f, 1f, GroupKind.Blur, bounded: true);
+    }
+
+    /// <summary>Composite a PLAIN opacity group over only its drawn extent: <see cref="PushLayerCmd.CompositeClip"/>
+    /// carries the recorder's accumulated subtree draw bounds for <see cref="LayerKind.Opacity"/> (see
+    /// <c>DrawList.PatchOpacityLayerExtent</c>). Mirrors <see cref="CompositeBlur"/> without the σ inflation — there is
+    /// no Gaussian to pull in a halo. The scissor is that box ∩ <paramref name="clip"/>, i.e. a SUBSET of the box the
+    /// matching <c>Acquire</c> cleared, so no uncleared pooled-slot texel is ever sampled. Callers must only take this
+    /// path for a PATCHED layer; an empty extent means "unknown" and belongs on the full-target <see cref="Composite"/>.</summary>
+    public void CompositeOpacity(ID3D12GraphicsCommandList* cmd, int slot, float alpha, in PushLayerCmd L, float scale, RECT clip)
+    {
+        RectF ex = L.CompositeClip;
+        if (ex.W <= 0f || ex.H <= 0f) return;
+        // Same floor/ceil clamp EdgeFadeLayerClear.Compute used for the clear — identical box, so scissor ⊆ cleared.
+        int left = Math.Clamp((int)MathF.Floor(ex.X * scale), 0, (int)_w);
+        int top = Math.Clamp((int)MathF.Floor(ex.Y * scale), 0, (int)_h);
+        int right = Math.Clamp((int)MathF.Ceiling((ex.X + ex.W) * scale), left, (int)_w);
+        int bottom = Math.Clamp((int)MathF.Ceiling((ex.Y + ex.H) * scale), top, (int)_h);
+        RECT box = new()
+        {
+            left = Math.Max(left, clip.left),
+            top = Math.Max(top, clip.top),
+            right = Math.Min(right, clip.right),
+            bottom = Math.Min(bottom, clip.bottom),
+        };
+        if (box.right <= box.left || box.bottom <= box.top) return;
+        cmd->RSSetScissorRects(1, &box);
+        // Bumps GroupsThisFrame exactly as the full-target and blur paths do — but as BOUNDED opacity, so the `opgrp`
+        // split separates it from the full-canvas class. An UNPATCHED group takes Composite() and counts full-target.
+        CompositeUv(cmd, slot, alpha, 0f, 0f, 1f, 1f, GroupKind.BoundedOpacity, bounded: true);
     }
 
     /// <summary>Composite the leased RT over the currently-bound target while feathering its premultiplied alpha per-edge
@@ -928,7 +1001,7 @@ float4 BlurPS(V i) : SV_Target
             cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
             cmd->DrawInstanced(3, 1, 0, 0);
         }
-        GroupsThisFrame++;
+        CountGroup(GroupKind.EdgeFade, bounded: true);
     }
 
     /// <summary>Return the slot to the free list (same-queue reuse needs no fence).</summary>
@@ -1030,7 +1103,8 @@ float4 BlurPS(V i) : SV_Target
             (output.MinX - surface.OriginX) / bw,
             (output.MinY - surface.OriginY) / bh,
             outW / bw,
-            outH / bh);
+            outH / bh,
+            GroupKind.Blur, bounded: true);   // viewport + scissor are the visible output box — never a full-canvas blend
         BlurCompositePixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
         SetViewport(cmd, _w, _h);
     }

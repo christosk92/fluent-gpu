@@ -48,7 +48,11 @@ sealed class QueuePanel : Component
         var acts = UseContext(ActionServices.Slot);     // queue-row context menus (Menus.QueueEntry)
         var menuOverlay = UseContext(Overlay.Service);
 
-        var serverQueue = b?.Queue.Value ?? Array.Empty<QueueEntry>();
+        // Peek, never Value: UseSignal consumes `initial` on the MOUNT pass only, so reading .Value here bought nothing
+        // but a live component→Queue dependency on every render — and with the effect below ALSO writing `display`, one
+        // queue push re-rendered the panel TWICE (the census's QueuePanel×2 ⇒ SwipeControlCore×100). The effect is the
+        // single intended path from the bridge into this panel.
+        var serverQueue = b?.Queue.Peek() ?? Array.Empty<QueueEntry>();
         var display = UseSignal<IReadOnlyList<QueueEntry>>(serverQueue);
         UseSignalEffect(() =>
         {

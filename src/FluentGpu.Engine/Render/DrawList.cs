@@ -228,6 +228,9 @@ public readonly record struct PushLayerCmd(RectF DeviceRect, CornerRadius4 Radii
     // EdgeFade (Kind == 3): per-edge feather band depth in DEVICE px (0 = edge disabled), falloff curve, fade intensity,
     // and enabled-edge bit mask. CompositeClip is the inherited active device-space clip for EdgeFade AND self-blur;
     // it bounds the offscreen result that can reach the canvas. The rounded-corner radii come from Radii.
+    // For Kind == Opacity the same field carries the group's DRAWN EXTENT (the recorder's accumulated subtree draw
+    // bounds ∩ the enclosing clip), back-patched at PopLayer — see PatchOpacityLayerExtent. An EMPTY rect there (the
+    // default) means "extent unknown" and the backend falls back to the full-canvas clear + composite.
     float FadeBandL = 0f, float FadeBandT = 0f, float FadeBandR = 0f, float FadeBandB = 0f, int FadeFalloff = 0, float FadeIntensity = 1f, int FadeEdges = 0,
     RectF CompositeClip = default,
     // Stable scene-layer id (the node handle, packed index|gen). Acrylic uses its own id to key the retained blurred-
@@ -576,6 +579,22 @@ public sealed class DrawList
         var span = _buf.AsSpan(payloadOff, Unsafe.SizeOf<PushLayerCmd>());
         var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
         cmd = cmd with { OwnDmgX = externalDmgDip.X, OwnDmgY = externalDmgDip.Y, OwnDmgW = externalDmgDip.W, OwnDmgH = externalDmgDip.H, DamageEpoch = damageEpoch };
+        MemoryMarshal.Write(span, in cmd);
+    }
+
+    /// <summary>Patch an already-emitted PLAIN-OPACITY <see cref="PushLayerCmd"/> (at the byte offset captured before the
+    /// <see cref="PushOpacityLayer"/> call — i.e. the offset of its op code) with the group's DRAWN EXTENT: the recorder's
+    /// accumulated subtree draw bounds, in the same device space as <see cref="PushLayerCmd.DeviceRect"/>. The extent is
+    /// known only once the whole subtree has been walked, so it is written back over the payload in place — alloc-free,
+    /// exactly like <see cref="PatchLayerExternalDamage"/>. It rides in <see cref="PushLayerCmd.CompositeClip"/>, unused
+    /// for <see cref="LayerKind.Opacity"/> (only EdgeFade/self-blur read it), so the opcode shape is unchanged. Leaving a
+    /// layer UNPATCHED keeps the empty default = "extent unknown" = the backend's full-canvas clear + composite.</summary>
+    public void PatchOpacityLayerExtent(int pushLayerByteStart, in RectF drawnExtent)
+    {
+        int payloadOff = pushLayerByteStart + sizeof(int);   // skip the op code int
+        var span = _buf.AsSpan(payloadOff, Unsafe.SizeOf<PushLayerCmd>());
+        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
+        cmd = cmd with { CompositeClip = drawnExtent };
         MemoryMarshal.Write(span, in cmd);
     }
 

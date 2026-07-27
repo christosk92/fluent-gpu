@@ -26,6 +26,11 @@ public sealed class Services
     /// track hydration via <c>OnDemandFetch</c> (playlists/albums open empty otherwise).</summary>
     public Wavee.Backend.Library.StoreLibrarySource? RealLibrarySource { get; private set; }
 
+    /// <summary>The user's LOCAL VIDEO OVERRIDE curation (REAL backend only — it is store-backed; null for the fake, where
+    /// every override path is unreachable). The one instance shared by the resolver's tier 1, the playback bridge's
+    /// has-video answer, and (in P3) the menu/settings surfaces: <c>Attach</c> / <c>Remove</c> / <c>All</c> / <c>Decide</c>.</summary>
+    public VideoOverrideService? VideoOverrides { get; private set; }
+
     /// <summary>The switchable mutation transport (REAL backend only): stub until go-live, then the live dealer transport,
     /// back to stub on logout — so writes made while logged out queue in the durable outbox and replay on next login (§2.1).</summary>
     public Wavee.Backend.SwitchableTransport? MutTransport { get; private set; }
@@ -335,6 +340,16 @@ public sealed class Services
         var svc = new Services(WaveeLog.Instance, swSession, library, swPlayer, swDevices, swLyrics, settings, mutations, userPlaylists, playlistMutations, new Wavee.Backend.Persistence.SqliteActivityStore(accountDbPath), locale);
         player.OnPlayIntentRejected = () => svc.Playback.NotifyLocalPlaybackUnsupported();   // pre-go-live: play intents show the "choose a remote device" toast
         svc.RealStore = store;
+        // The user's local video-override curation. Wired HERE (not on go-live) precisely so attaching a custom mp4 works
+        // WITHOUT Spotify: the bridge's has-video answer consults it directly, and the resolver installed below has no
+        // source tier at all — an override is the only video such a build can serve. LiveSessionHost later replaces that
+        // resolver with the full two-tier composite, keeping tier 1 identical.
+        var videoOverrides = new VideoOverrideService(store, new WaveeLogger(WaveeLog.Instance, VideoOverrideService.LogCategory));
+        videoOverrides.OnChanged = uri => svc.Playback.NotifyVideoOverrideChanged(uri);
+        videoOverrides.OnBrokenLink = uri => svc.Playback.NotifyVideoOverrideMissing(uri);
+        svc.VideoOverrides = videoOverrides;
+        svc.Playback.AttachVideoOverrides(videoOverrides);
+        svc.Playback.ResolveVideoSource = CompositeVideoResolver.OverridesOnly(videoOverrides).ResolveAsync;
         svc.RealLibrarySource = storeLibrary;
         storeLibrary.UserProfiles = svc.UserProfiles;
         svc.MutTransport = mutTransport;

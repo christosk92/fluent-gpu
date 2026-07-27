@@ -26,6 +26,29 @@ public readonly record struct RootlistEntry(int Position, int Kind, string Uri, 
 /// default order (added-date descending) reads this; <see cref="IStore.SavedUris"/> stays the unordered fast path.</summary>
 public readonly record struct SavedItem(string Uri, long AddedAtMs);
 
+/// <summary>One user-attached LOCAL video override: "when this playable plays, show THIS file instead of whatever video
+/// the source would serve". Keyed by the exact playable uri (any namespace — track, episode, a future local file), so the
+/// override system is source-agnostic like the rest of the playable seam. The file is LINKED, never copied: <see
+/// cref="Path"/> is an absolute path and a missing file is a fall-through at play time, not a broken record.
+/// <para><see cref="Id"/> is the first 16 hex chars of SHA-256 over the case-folded normalized path — the stable identity
+/// the video source key (<c>"local:video:" + Id</c>) is built from, which is what every surface/host keys its remount on.
+/// <see cref="SizeBytes"/>/<see cref="MTimeUnix"/> are STALENESS HINTS only (multi-GB files are never hashed);
+/// <see cref="DurationMs"/> is 0 until the media engine reports the file's real duration.</para></summary>
+public readonly record struct VideoOverride(
+    string Uri, string Path, string Id, long DurationMs, long SizeBytes, long MTimeUnix, long AddedAtUnix)
+{
+    /// <summary>The store <see cref="IStore.Changes"/> sentinel a roster-level change (any attach/replace/remove) bumps,
+    /// alongside the per-uri bump — so a "what have I attached?" view can subscribe without watching every uri.</summary>
+    public const string ChangeKey = "video-overrides";
+
+    /// <summary>The <c>PopOutVideoSource.Key</c> namespace prefix an override resolves to. Never a routed uri (the bare
+    /// <c>local:</c> namespace is already claimed by LocalSource, and the playing uri publishes verbatim to Connect).</summary>
+    public const string SourceKeyPrefix = "local:video:";
+
+    /// <summary>The stable video-source key for this override (<c>"local:video:" + Id</c>).</summary>
+    public string SourceKey => SourceKeyPrefix + Id;
+}
+
 public interface IStore
 {
     // entities (queryable)
@@ -47,6 +70,12 @@ public interface IStore
     // keyed by the SAME entity uri as the Track, so it lives in its own side table rather than the entity store.
     void UpsertVideoAssociation(VideoAssociation a);
     VideoAssociation? GetVideoAssociation(string uri);
+    // user-attached local video overrides (the custom-mp4 curation) — the SAME side-table shape as the association map,
+    // but user-owned and never revalidated away by a Spotify fetch. Keyed by the exact playable uri.
+    void UpsertVideoOverride(VideoOverride o);
+    void RemoveVideoOverride(string uri);
+    VideoOverride? GetVideoOverride(string uri);
+    IReadOnlyList<VideoOverride> VideoOverrides();
     // library sets (collections) + per-item sync state (+ the server add timestamp; 0 = unknown → preserve existing)
     void SetSaved(string setId, string uri, bool saved, SyncState sync);
     void SetSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs);
@@ -229,6 +258,7 @@ public sealed class InMemoryStore : IStore
     readonly Dictionary<string, Show> _shows = new();
     readonly Dictionary<string, Episode> _episodes = new();
     readonly Dictionary<string, VideoAssociation> _videoAssoc = new();
+    readonly Dictionary<string, VideoOverride> _videoOverrides = new(StringComparer.Ordinal);
     readonly Dictionary<string, long> _versions = new();
     readonly Dictionary<(string set, string uri), (SyncState Sync, long AddedAt)> _saved = new();
     readonly Dictionary<string, HashSet<string>> _savedBySet = new();   // set → uris, so SavedUris is O(set), not O(all-saved)
@@ -471,6 +501,26 @@ public sealed class InMemoryStore : IStore
     // handled by the caller). No Bump — this is side-table data; the rendered has-video signal is Track.HasVideo.
     public void UpsertVideoAssociation(VideoAssociation a) { lock (_gate) _videoAssoc[a.Uri] = a; }
     public VideoAssociation? GetVideoAssociation(string uri) { lock (_gate) return _videoAssoc.TryGetValue(uri, out var a) ? a : null; }
+
+    // User video overrides DO Bump — unlike the association side table, an attach/remove is a user edit whose availability
+    // edge must reach the player (has-video → the audio↔video swap) and any roster view. Two signals per write: the
+    // playable's own uri (row indicators, the now-playing recompute) and the roster sentinel (the Settings list).
+    public void UpsertVideoOverride(VideoOverride o)
+    {
+        lock (_gate) _videoOverrides[o.Uri] = o;
+        Bump(o.Uri);
+        Bump(VideoOverride.ChangeKey);
+    }
+    public void RemoveVideoOverride(string uri)
+    {
+        bool removed;
+        lock (_gate) removed = _videoOverrides.Remove(uri);
+        if (!removed) return;   // no-op elision (§7.4): an absent removal is literal silence
+        Bump(uri);
+        Bump(VideoOverride.ChangeKey);
+    }
+    public VideoOverride? GetVideoOverride(string uri) { lock (_gate) return _videoOverrides.TryGetValue(uri, out var o) ? o : null; }
+    public IReadOnlyList<VideoOverride> VideoOverrides() { lock (_gate) return new List<VideoOverride>(_videoOverrides.Values); }
 
     public void SetSaved(string setId, string uri, bool saved, SyncState sync) => SetSavedCore(setId, uri, saved, sync, 0);
     public void SetSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs) => SetSavedCore(setId, uri, saved, sync, addedAtMs);

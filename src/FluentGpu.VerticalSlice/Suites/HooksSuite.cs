@@ -60,6 +60,148 @@ static class HooksSuite
         PropNetClobberChecks(strings);
         PropUnionChecks(strings);
         G4dMigrationChecks(strings);
+        MemoCutoffChecks();
+    }
+
+    // ── Memo push-pull equality cut-off (Check/Dirty) ────────────────────────────────────────────────────────────────
+    // A Memo that RECOMPUTES TO AN EQUAL VALUE must not re-run its subscribers. The eager half of the propagation still
+    // reaches every transitive subscriber at write time (as a cheap Check flag), so nothing is lost: the decision to run
+    // is just deferred to a source poll that happens at the ONE resolution site (ReactiveRuntime.Flush →
+    // Computation.RunIfNecessary) or on a lazy read. These gates pin both halves — the cut AND the no-lost-update.
+    // Plain reactive graphs, no scene/host: they run outside every alloc-audited hot phase.
+    static void MemoCutoffChecks()
+    {
+        // gate.signals.memo-cutoff — an equal recompute is SILENT: the memo re-runs, the subscribing effect does not.
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(0);
+            int memoRuns = 0, effectRuns = 0;
+            var m = new Memo<int>(rt, () => { memoRuns++; return s.Value % 2; });   // 0,2,4… all map to 0
+            var e = new Effect(rt, () => { effectRuns++; _ = m.Value; });
+            int runsAfterMount = effectRuns;                 // 1 (Effect runs now at construction)
+
+            s.Value = 2; rt.Flush();                         // memo recomputes 0 → 0 (EQUAL) ⇒ effect must be cut off
+            bool cut = effectRuns == runsAfterMount && memoRuns == 2 && m.Peek() == 0;
+
+            s.Value = 4; rt.Flush();                         // still 0 — cut off again, and it must STAY cut off
+            bool stillCut = effectRuns == runsAfterMount && memoRuns == 3;
+
+            Check("gate.signals.memo-cutoff", cut && stillCut && runsAfterMount == 1,
+                $"effectRuns={effectRuns} (want 1) memoRuns={memoRuns} (want 3 — the memo still recomputes)");
+            e.Dispose();
+        }
+
+        // gate.signals.memo-changed — the other half: a memo whose value DID change still re-runs its effect exactly
+        // once, with the new value visible (no lost update — the cut-off must never swallow a real change).
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(0);
+            int effectRuns = 0, seen = -1;
+            var m = new Memo<int>(rt, () => s.Value % 2);
+            var e = new Effect(rt, () => { effectRuns++; seen = m.Value; });
+
+            s.Value = 3; rt.Flush();                         // 0 → 1: a real change
+            bool ran = effectRuns == 2 && seen == 1;
+            s.Value = 5; rt.Flush();                         // 1 → 1: equal ⇒ cut
+            bool thenCut = effectRuns == 2;
+            s.Value = 6; rt.Flush();                         // 1 → 0: change again, after a cut
+            bool ranAgain = effectRuns == 3 && seen == 0;
+
+            Check("gate.signals.memo-changed", ran && thenCut && ranAgain,
+                $"runs={effectRuns} (want 3) seen={seen} (want 0)");
+            e.Dispose();
+        }
+
+        // gate.signals.memo-chain — S→M1→M2→E. One write ⇒ ONE effect run with the correct value; a write that dies in
+        // M1 (equal) never reaches E, and M2 is not even recomputed (the Check resolution early-outs at M1).
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(0);
+            int m1Runs = 0, m2Runs = 0, effectRuns = 0, seen = -1;
+            var m1 = new Memo<int>(rt, () => { m1Runs++; return s.Value / 10; });
+            var m2 = new Memo<int>(rt, () => { m2Runs++; return m1.Value * 2; });
+            var e = new Effect(rt, () => { effectRuns++; seen = m2.Value; });
+
+            s.Value = 1; rt.Flush();                         // 1/10 = 0 ⇒ M1 unchanged ⇒ M2 never recomputes, E never runs
+            bool absorbed = effectRuns == 1 && m1Runs == 2 && m2Runs == 1;
+
+            s.Value = 10; rt.Flush();                        // M1 0→1, M2 0→2 ⇒ exactly ONE run of E, seeing 2
+            bool propagated = effectRuns == 2 && seen == 2 && m1Runs == 3 && m2Runs == 2;
+
+            Check("gate.signals.memo-chain", absorbed && propagated,
+                $"runs={effectRuns} (want 2) seen={seen} (want 2) m1={m1Runs} m2={m2Runs}");
+            e.Dispose();
+        }
+
+        // gate.signals.memo-diamond — S→(M1,M2)→E. Both legs go stale from one write, but E is queued once and runs
+        // ONCE, seeing both legs consistent with the SAME s (glitch-freedom under the deferred push).
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(1);
+            int effectRuns = 0, seenA = -1, seenB = -1;
+            var m1 = new Memo<int>(rt, () => s.Value + 1);
+            var m2 = new Memo<int>(rt, () => s.Value + 2);
+            var e = new Effect(rt, () => { effectRuns++; seenA = m1.Value; seenB = m2.Value; });
+
+            s.Value = 5; rt.Flush();
+            bool once = effectRuns == 2;                     // 1 mount + 1 (NOT 2 — no double-run from the two legs)
+            bool consistent = seenA == 6 && seenB == 7;      // both derived from s == 5
+
+            Check("gate.signals.memo-diamond", once && consistent,
+                $"runs={effectRuns} (want 2) m1={seenA} (want 6) m2={seenB} (want 7)");
+            e.Dispose();
+        }
+
+        // gate.signals.memo-lazy-read — a read BETWEEN the write and the flush must recompute (the reader can never see
+        // a stale value), and must not make the pending effect run twice: the memo's deferred push only UPGRADES the
+        // already-queued Check to Dirty. The equal-value read variant leaves the effect cut off entirely.
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(0);
+            int effectRuns = 0;
+            var m = new Memo<int>(rt, () => s.Value * 2);
+            var e = new Effect(rt, () => { effectRuns++; _ = m.Value; });
+
+            s.Value = 4;                                     // written, not yet flushed
+            int lazily = m.Peek();                           // lazy pull outside the flush: must be fresh
+            bool freshOnRead = lazily == 8 && effectRuns == 1;
+            rt.Flush();
+            bool ranOnce = effectRuns == 2;                  // exactly once — not twice because of the eager pull
+
+            var rt2 = new ReactiveRuntime();
+            var s2 = new Signal<int>(0);
+            int runs2 = 0;
+            var m2 = new Memo<int>(rt2, () => s2.Value % 2);
+            var e2 = new Effect(rt2, () => { runs2++; _ = m2.Value; });
+            s2.Value = 2;
+            int lazily2 = m2.Peek();                         // pulls, recomputes to an EQUAL value ⇒ no push
+            rt2.Flush();
+            bool cutAfterLazyRead = runs2 == 1 && lazily2 == 0;
+
+            Check("gate.signals.memo-lazy-read", freshOnRead && ranOnce && cutAfterLazyRead,
+                $"lazy={lazily} (want 8) runs={effectRuns} (want 2) equalLazyRuns={runs2} (want 1)");
+            e.Dispose(); e2.Dispose();
+        }
+
+        // gate.signals.memo-signal-consistency — an effect reading BOTH a signal and a memo OF that signal sees the two
+        // agree within one run (the source poll refreshes the memo in read order before the body executes), and it runs
+        // once per write, not once per source.
+        {
+            var rt = new ReactiveRuntime();
+            var s = new Signal<int>(1);
+            int effectRuns = 0, seenRaw = -1, seenDerived = -1;
+            var m = new Memo<int>(rt, () => s.Value * 2);
+            var e = new Effect(rt, () => { effectRuns++; seenRaw = s.Value; seenDerived = m.Value; });
+
+            s.Value = 7; rt.Flush();
+            bool agree1 = seenRaw == 7 && seenDerived == 14 && effectRuns == 2;
+            s.Value = 9; rt.Flush();
+            bool agree2 = seenRaw == 9 && seenDerived == 18 && effectRuns == 3;
+
+            Check("gate.signals.memo-signal-consistency", agree1 && agree2,
+                $"raw={seenRaw} derived={seenDerived} (want 9/18) runs={effectRuns} (want 3)");
+            e.Dispose();
+        }
     }
 
     static void HookChecks()
@@ -1053,6 +1195,49 @@ static class HooksSuite
             Check("gate.timer.quiesce-idle a pending 5s timeout: the wait reflects the due time and no intermediate frame runs",
                 waitReflectsDue && noTimerWake && wouldIdle && noIntermediateFrames,
                 $"wait={wait} noTimerWake={noTimerWake} wouldIdle={wouldIdle} rendered={anyRendered} fires={probe.Fires}");
+        }
+
+        // ── gate.timer.clamp-never-spins: an OVERDUE timer must never clamp the host wait to 0 (pure poll) ──
+        // The clamp shortens a throttled/idle wait so the loop wakes when the earliest timer is due — but Paint is the
+        // ONLY HostTimerQueue.Drain call site and three RunFrame early-outs skip it (device-lost recovery, the minimize
+        // gate, a display-phase-gate decline). A due timer + a skipped Paint = the clamp re-returns 0 every iteration
+        // and the loop free-runs at CPU speed forever (measured on-device against the always-mounted 2 s power poll:
+        // ~175k it/s minimized, ~60k it/s bursts while gate-blocked). Two invariants, and the drain must still work:
+        //   (a) an overdue timer floors the wait at 1 ms and the frame is still classified by BRANCH — an Ambient wait
+        //       rewritten to 0 ALSO read as display-rate (IsDisplayRateWait's w==0 clause), suppressing the step-up Resync;
+        //   (b) a MINIMIZED host keeps its blocking -1 whatever is armed: no wait length can fire a timer whose only
+        //       drain site is gated off, so shortening the block would trade a 0%-CPU sleep for a spin. A message
+        //       (restore / activate / power broadcast) is what wakes it, and the restore edge forces the draining frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-clamp", new Size2(200, 120), 1f)); window.Show();
+            var probe = new TimeoutProbe(5000f);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount (leaves the pending 5 s timer)
+            host.AmbientAnimationFps = 30;                    // ExplicitFps ⇒ the ambient cap owns a timer-only wake
+            int wPending = host.RecommendedWaitMs();          // future timer: the clamp still shapes the wait to reach it
+            bool pendingReachesDue = wPending >= 4000 && wPending <= 5100;
+
+            // Arm one already PAST due on the headless frame clock, and ask for the wait WITHOUT running a frame (a
+            // RunFrame would Paint and drain it). Overdue ⇒ WakeReasons.Timer ⇒ the ambient branch ⇒ the clamp.
+            int fires = 0;
+            host.TimersForTest.Schedule(host.FrameClockMsForTest - 1000.0, 0, _ => fires++);
+            int wDue = host.RecommendedWaitMs();
+            bool dueNeverZero = wDue >= 1 && host.LastWaitKind == HostWaitKind.Ambient;
+
+            window.State = WindowState.Minimized;
+            int wMin = host.RecommendedWaitMs();
+            bool minimizedBlocks = wMin == -1 && host.LastWaitKind == HostWaitKind.Idle;
+
+            window.State = WindowState.Normal;
+            int wRestored = host.RecommendedWaitMs();
+            bool restoredStillFloors = wRestored >= 1;
+            host.RunFrame();                                  // and the timer is not stranded: Paint drains it
+            bool drained = fires == 1;
+
+            Check("gate.timer.clamp-never-spins an overdue timer never clamps the host wait to 0 (the drain is a frame away and may be skipped): a pending timer still shapes the wait, an overdue one floors at 1ms and stays Ambient-classified, a minimized host keeps its blocking -1, and the timer still drains on the next painted frame",
+                pendingReachesDue && dueNeverZero && minimizedBlocks && restoredStillFloors && drained,
+                $"wPending={wPending} (want 4000..5100) wDue={wDue} (want >=1, kind Ambient) wMin={wMin} (want -1, kind Idle) wRestored={wRestored} (want >=1) fires={fires} lastKind={host.LastWaitKind}");
         }
 
         // ── gate.timer.zero-steady-alloc: an armed timer adds 0 bytes to the hot phase on quiet frames ──

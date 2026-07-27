@@ -139,12 +139,32 @@ loads, instead of resetting to `Pending(seed)`).
 | `UseState<T>(initial)` | `(T value, Action<T> set)` | reading `value` does | ordinary component state |
 | `UseSignal<T>(initial)` | `Signal<T>` | only when you read `.Value` | a cell you own; bind it, or read `.Value` to subscribe |
 | `UseFloatSignal(initial)` | `FloatSignal` | only when you read `.Value` | hot scalars (slider/scroll/progress) bound to channels |
-| `UseComputed<T>(fn)` | `Memo<T>` | reading `.Value` does | derived value (lazy, cached, recomputed when inputs change) |
+| `UseComputed<T>(fn)` | `Memo<T>` | reading `.Value` does | derived value (lazy, cached, recomputed when inputs change; **an equal recompute notifies nobody** — see below) |
 | `UseReducer<S,A>(reducer, init)` | `(S state, Action<A> dispatch)` | reading `state` does | folded state; `dispatch` applies immediately |
 | `UseRef<T>(initial)` | `Ref<T>` | never | mutable box that survives re-renders without triggering them |
 | `UseMemo<T>(factory, deps)` | `T` | n/a (deps-gated memo) | expensive value recomputed only when the `DepKey` `deps` changes (`default` = compute once) |
 
 `UseState` is just sugar over a signal: the setter writes the signal; the value read subscribes the render-effect.
+
+### `UseComputed` is a real equality gate (the memo cut-off)
+
+A `Memo<T>` notifies its subscribers **only when its recomputed value actually differs** under its comparer (default
+`EqualityComparer<T>.Default`, so records/structs compare by value). If the inputs churn but the derived value lands on
+the same thing, the memo recomputes and **nothing downstream re-runs** — no re-render, no effect. That is the whole point
+of putting a `UseComputed` between a noisy signal and an expensive consumer: `UseComputed(() => new RowState(a.Value,
+b.Value))` collapses a burst of unrelated writes into the one frame the row's visuals really changed.
+
+It stays glitch-free: a write still flags every transitive subscriber immediately (as a cheap "maybe"), so nothing can
+read a stale value; the memo is then pulled — in the order the consumer read its sources — before the consumer's body
+runs, and only a genuinely-changed value promotes the "maybe" into a run.
+
+Two consequences worth knowing:
+
+- **Subscribe-only reads inside a memo do not propagate.** `UseComputed(() => { _ = epoch.Value; return Compute(); })`
+  uses the epoch purely to *trigger a recompute* — correct and idiomatic — but if `Compute()` returns an equal value,
+  consumers do NOT re-run. Anything a consumer needs to react to must be part of the memo's returned **value**.
+- **Don't use a memo as a pure retrigger relay.** A memo that returns a constant (or a value that ignores its inputs)
+  now propagates exactly once. Read the signal directly in the consumer for that.
 
 ### Hook cells are keyed by call site — conditional and looped hooks are legal
 

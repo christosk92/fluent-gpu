@@ -101,6 +101,12 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     RepeatMode _repeat;
     double _volume = 0.7;
     long _posMs, _posAnchorWall, _durMs;
+    // The MEDIA-AUTHORITATIVE duration override: a user-attached local video is a DIFFERENT EDIT with its own length, so
+    // once the media engine reports it, that length — not the catalog's — is the truth the seek bar scales by and the
+    // PutState publishes. Scoped to ONE playable uri and dropped the moment the track changes, so it can never leak onto
+    // the next song; re-applied at BOTH _durMs write sites so a queue-mutation republish cannot revert it.
+    string? _durOverrideUri;
+    long _durOverrideMs;
     double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
     Palette? _palette;
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
@@ -190,6 +196,48 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     /// <summary>Allow the app to set a palette derived from the current art (off the slab path).</summary>
     public void SetPalette(Palette? p) { lock (_gate) _palette = p; FireChanges(); }
 
+    /// <summary>Publish the media-authoritative duration for ONE playable (the real length of a user-attached local
+    /// video, as reported by the media engine). Applies immediately when that playable is current, and is re-applied on
+    /// every later local fold — so a queue mutation republishing the catalog duration can't revert it. Cleared
+    /// automatically when the current track changes; <paramref name="durationMs"/> ≤ 0 clears it explicitly.</summary>
+    public void SetDurationOverride(string? playableUri, long durationMs)
+    {
+        bool changed;
+        lock (_gate)
+        {
+            if (playableUri is not { Length: > 0 } || durationMs <= 0)
+            {
+                changed = _durOverrideUri is not null;
+                _durOverrideUri = null;
+                _durOverrideMs = 0;
+            }
+            else
+            {
+                changed = _durOverrideMs != durationMs || !string.Equals(_durOverrideUri, playableUri, StringComparison.Ordinal);
+                _durOverrideUri = playableUri;
+                _durOverrideMs = durationMs;
+                SyncDurationOverrideLocked();
+            }
+        }
+        if (changed) FireChanges();
+    }
+
+    /// <summary>The duration override in effect right now (0 = none). Diagnostics / tests.</summary>
+    public long DurationOverrideMs { get { lock (_gate) return DurationOverrideAppliesLocked() ? _durOverrideMs : 0; } }
+
+    bool DurationOverrideAppliesLocked()
+        => _durOverrideMs > 0 && _durOverrideUri is not null && _track is { } t
+           && string.Equals(t.Uri, _durOverrideUri, StringComparison.Ordinal);
+
+    // Called immediately after every LOCAL _durMs write: either re-assert the override (it outranks the catalog length) or
+    // drop it because the current track has moved on. Caller holds _gate.
+    void SyncDurationOverrideLocked()
+    {
+        if (_durOverrideUri is null) return;
+        if (DurationOverrideAppliesLocked()) { _durMs = _durOverrideMs; return; }
+        if (_track is not null) { _durOverrideUri = null; _durOverrideMs = 0; }   // a real track change ends the override
+    }
+
     /// <summary>The Connect controller pushes QueueCore's snapshot here after a local queue change, so IPlaybackState.Queue
     /// (and the PutState next-up) reflect OUR local queue while we're the active device. OnCluster won't overwrite it while
     /// we're active (local wins); a viewer's queue still comes from the cluster.</summary>
@@ -229,6 +277,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         {
             _track = snap.Current?.Track ?? ev?.Track;   // the single source of "current" while we're active
             if (_track is { DurationMs: > 0 } t) _durMs = t.DurationMs;
+            SyncDurationOverrideLocked();   // a media-authoritative length outranks the catalog one (and survives republishes)
             if (ev is { } e)
             {
                 switch (e.Kind)
@@ -449,6 +498,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 // the player-bar label shows the old duration AND the seek bar scales scrub fractions by the wrong
                 // length, so every committed seek targets the wrong millisecond.
                 if (e.Track.DurationMs > 0) _durMs = e.Track.DurationMs;
+                SyncDurationOverrideLocked();   // …unless the media itself reported a length for this exact playable
             }
             switch (e.Kind)
             {
@@ -474,6 +524,24 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         FireChanges();
         RestartTicker();
         MaybeEnrichCurrent();
+    }
+
+    /// <summary>Retire a BUFFERING state that can no longer be cleared by the host that raised it. The controller swaps
+    /// the ONE current-media host by disposing the outgoing host's signal subscription
+    /// (<c>PlaybackController.SwitchHost</c>), so a host that was mid-buffer when it was swapped out can never deliver the
+    /// Playing/Ended edge that would clear the flag — the spinner then latches over whatever plays next (the video ✕ →
+    /// audio case: the video host is stopped while still Buffering). Deliberately narrow: it clears the two transient
+    /// flags only, never play-state, position, or the track.</summary>
+    public void ClearTransientBuffering()
+    {
+        lock (_gate)
+        {
+            if (!_isBuffering && !_isPrebuffering) return;
+            _isBuffering = false;
+            _isPrebuffering = false;
+            _lastPubBuffering = false;
+        }
+        FireChanges();
     }
 
     public void OnHostSignal(in AudioHostSignal s)

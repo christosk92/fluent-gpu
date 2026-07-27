@@ -89,12 +89,18 @@ public sealed class Signal<T> : ISignalSource, IReadSignal<T>
 
     private void NotifySubscribers()
     {
-        // Iterate a snapshot count downward — MarkStale won't mutate _subs (effects only schedule), so a forward
+        // Iterate a snapshot count downward — MarkDirty won't mutate _subs (effects only schedule), so a forward
         // loop is safe; using the live list avoids an allocation on the hot write path.
-        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkStale();
+        // DIRTY, not Check: a write is the one place we KNOW the value moved (the comparer above already said so), so a
+        // direct subscriber must run. Memos further downstream get the cheap Check cascade instead (Memo.OnStale).
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty();
     }
 
     void ISignalSource.Unsubscribe(Computation c) => _subs.Remove(c);
+
+    // A signal is its own source of truth: a write IS the push, so there is never anything to pull. (The pull half of
+    // the push-pull cut-off only has work to do on a Memo.)
+    void ISignalSource.EnsureFresh() { }
 }
 
 /// <summary>
@@ -127,7 +133,8 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
             BackwardsWriteGuard.CheckWriteFloat(Tracking.Current, _subs);
         if (_value == value) return false;
         _value = value;
-        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkStale();
+        // DIRTY (see Signal<T>.NotifySubscribers): the value demonstrably moved, so direct subscribers must run.
+        for (int i = _subs.Count - 1; i >= 0; i--) _subs[i].MarkDirty();
         return true;
     }
 
@@ -141,4 +148,7 @@ public sealed class FloatSignal : ISignalSource, IReadSignal<float>
     }
 
     void ISignalSource.Unsubscribe(Computation c) => _subs.Remove(c);
+
+    // Always current by construction — see Signal<T>.EnsureFresh.
+    void ISignalSource.EnsureFresh() { }
 }

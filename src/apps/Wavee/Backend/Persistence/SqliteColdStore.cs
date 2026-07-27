@@ -30,9 +30,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     // Prepared once, reused across batches: Microsoft.Data.Sqlite has no cross-command statement cache, so rebuilding the
     // commands + parameters every drain re-compiles statements and allocates per batch (and the steady-state drain often
     // processes a batch of 1).
-    SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd, _extensionCmd;
+    SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd, _extensionCmd, _ovrUpCmd, _ovrDelCmd;
     SqliteParameter _eu = null!, _ek = null!, _ep = null!, _el = null!, _et = null!;
     SqliteParameter _vu = null!, _vp = null!;
+    SqliteParameter _ou = null!, _op = null!, _oi = null!, _od = null!, _os = null!, _om = null!, _oa = null!, _oxu = null!;
     SqliteParameter _sa = null!, _ss = null!, _su = null!, _sy = null!, _st = null!;
     SqliteParameter _da = null!, _ds = null!, _du = null!;
     SqliteParameter _ra = null!, _rs = null!, _rr = null!, _rt = null!;
@@ -157,6 +158,34 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 }
                 using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','3');"; c.ExecuteNonQuery(); }
                 tx.Commit();
+                ver = "3";
+            }
+
+            // v3 → v4: user-attached local video overrides. Purely ADDITIVE (one CREATE TABLE) — an existing library.db
+            // keeps every row it had. `uri` is the exact playable uri (any namespace) and the PK, so an attach onto an
+            // already-overridden playable IS the replace. No `account` column: the db file is device-wide by construction,
+            // which is exactly the disclosed sharing model ("applied on this computer, for every account").
+            if (ver == "3")
+            {
+                using var tx = _conn.BeginTransaction();
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = """
+                        CREATE TABLE IF NOT EXISTS video_override(
+                            uri TEXT PRIMARY KEY,
+                            path TEXT NOT NULL,
+                            id TEXT NOT NULL,
+                            duration_ms INTEGER DEFAULT 0,
+                            size INTEGER DEFAULT 0,
+                            mtime INTEGER DEFAULT 0,
+                            added_at INTEGER DEFAULT 0);
+                        """;
+                    c.ExecuteNonQuery();
+                }
+                using (var c = _conn.CreateCommand()) { c.Transaction = tx; c.CommandText = "INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','4');"; c.ExecuteNonQuery(); }
+                tx.Commit();
+                ver = "4";
             }
         }
     }
@@ -257,6 +286,21 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             using var r = c.ExecuteReader();
             while (r.Read())
                 list.Add(new ColdVideoAssoc(r.GetString(0), r.GetFieldValue<byte[]>(1)));
+        }
+        return list;
+    }
+
+    public IEnumerable<VideoOverride> LoadAllVideoOverrides()
+    {
+        var list = new List<VideoOverride>(32);   // a curation list, not a catalog — tens, not thousands
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT uri, path, id, duration_ms, size, mtime, added_at FROM video_override;";
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                list.Add(new VideoOverride(r.GetString(0), r.GetString(1), r.GetString(2),
+                    r.GetInt64(3), r.GetInt64(4), r.GetInt64(5), r.GetInt64(6)));
         }
         return list;
     }
@@ -436,6 +480,8 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
     public void UpsertEntity(string uri, EntityKind kind, byte[] payload) => _queue.Writer.TryWrite(WriteOp.Entity(uri, (int)kind, payload));
     public void UpsertVideoAssociation(string uri, byte[] payload) => _queue.Writer.TryWrite(WriteOp.VideoAssoc(uri, payload));
+    public void UpsertVideoOverride(VideoOverride o) => _queue.Writer.TryWrite(WriteOp.VideoOverrideSet(o));
+    public void DeleteVideoOverride(string uri) => _queue.Writer.TryWrite(WriteOp.VideoOverrideDelete(uri));
     public void UpsertSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs = 0) => _queue.Writer.TryWrite(WriteOp.Saved(setId, uri, saved, (int)sync, addedAtMs));
     public void SetCollectionRevision(string setId, string? revision, long syncedAt) => _queue.Writer.TryWrite(WriteOp.Revision(setId, revision, syncedAt));
 
@@ -495,6 +541,23 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         _vu = _videoCmd.Parameters.Add("$u", SqliteType.Text);
         _vp = _videoCmd.Parameters.Add("$p", SqliteType.Blob);
 
+        // User video overrides: uri is the PK, so the attach-onto-an-already-overridden-playable case IS this upsert.
+        _ovrUpCmd = _conn.CreateCommand();
+        _ovrUpCmd.CommandText = "INSERT INTO video_override(uri,path,id,duration_ms,size,mtime,added_at) VALUES($u,$p,$i,$d,$s,$m,$a) " +
+            "ON CONFLICT(uri) DO UPDATE SET path=excluded.path, id=excluded.id, duration_ms=excluded.duration_ms, " +
+            "size=excluded.size, mtime=excluded.mtime, added_at=excluded.added_at;";
+        _ou = _ovrUpCmd.Parameters.Add("$u", SqliteType.Text);
+        _op = _ovrUpCmd.Parameters.Add("$p", SqliteType.Text);
+        _oi = _ovrUpCmd.Parameters.Add("$i", SqliteType.Text);
+        _od = _ovrUpCmd.Parameters.Add("$d", SqliteType.Integer);
+        _os = _ovrUpCmd.Parameters.Add("$s", SqliteType.Integer);
+        _om = _ovrUpCmd.Parameters.Add("$m", SqliteType.Integer);
+        _oa = _ovrUpCmd.Parameters.Add("$a", SqliteType.Integer);
+
+        _ovrDelCmd = _conn.CreateCommand();
+        _ovrDelCmd.CommandText = "DELETE FROM video_override WHERE uri=$u;";
+        _oxu = _ovrDelCmd.Parameters.Add("$u", SqliteType.Text);
+
         _savedUpCmd = _conn.CreateCommand();
         // added_at: a non-zero incoming timestamp wins; 0 preserves whatever is stored (the optimistic/fold writers don't
         // know the server timestamp — the delta/paging apply does).
@@ -531,6 +594,8 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             _entityCmd!.Transaction = tx;
             if (_extensionCmd is not null) _extensionCmd.Transaction = tx;
             _videoCmd!.Transaction = tx;
+            _ovrUpCmd!.Transaction = tx;
+            _ovrDelCmd!.Transaction = tx;
             _savedUpCmd!.Transaction = tx;
             _savedDelCmd!.Transaction = tx;
             _revCmd!.Transaction = tx;
@@ -556,6 +621,12 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                         _extensionCmd.ExecuteNonQuery();
                         break;
                     case OpKind.VideoAssoc: _vu.Value = op.A; _vp.Value = op.Payload!; _videoCmd.ExecuteNonQuery(); break;
+                    case OpKind.VideoOverrideSet when op.Override is { } o:
+                        _ou.Value = o.Uri; _op.Value = o.Path; _oi.Value = o.Id;
+                        _od.Value = o.DurationMs; _os.Value = o.SizeBytes; _om.Value = o.MTimeUnix; _oa.Value = o.AddedAtUnix;
+                        _ovrUpCmd.ExecuteNonQuery();
+                        break;
+                    case OpKind.VideoOverrideDelete: _oxu.Value = op.A; _ovrDelCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedSet: _sa.Value = _account; _ss.Value = op.A; _su.Value = op.B!; _sy.Value = op.Kind; _st.Value = op.L; _savedUpCmd.ExecuteNonQuery(); break;
                     case OpKind.SavedRemove: _da.Value = _account; _ds.Value = op.A; _du.Value = op.B!; _savedDelCmd.ExecuteNonQuery(); break;
                     case OpKind.Revision: _ra.Value = _account; _rs.Value = op.A; _rr.Value = (object?)op.B ?? DBNull.Value; _rt.Value = op.L; _revCmd.ExecuteNonQuery(); break;
@@ -654,13 +725,15 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         _entityCmd?.Dispose();
         _extensionCmd?.Dispose();
         _videoCmd?.Dispose();
+        _ovrUpCmd?.Dispose();
+        _ovrDelCmd?.Dispose();
         _savedUpCmd?.Dispose();
         _savedDelCmd?.Dispose();
         _revCmd?.Dispose();
         _conn.Dispose();
     }
 
-    enum OpKind : byte { Entity, Extension, VideoAssoc, SavedSet, SavedRemove, Revision, Flush }
+    enum OpKind : byte { Entity, Extension, VideoAssoc, VideoOverrideSet, VideoOverrideDelete, SavedSet, SavedRemove, Revision, Flush }
 
     readonly struct WriteOp
     {
@@ -671,17 +744,20 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         public readonly long L;              // revision synced_at
         public readonly byte[]? Payload;
         public readonly ColdExtension? Extension;
+        public readonly VideoOverride? Override;
         public readonly TaskCompletionSource? Done;
 
-        WriteOp(OpKind op, string a, string? b, int kind, long l, byte[]? payload, ColdExtension? extension, TaskCompletionSource? done)
-        { Op = op; A = a; B = b; Kind = kind; L = l; Payload = payload; Extension = extension; Done = done; }
+        WriteOp(OpKind op, string a, string? b, int kind, long l, byte[]? payload, ColdExtension? extension, VideoOverride? ovr, TaskCompletionSource? done)
+        { Op = op; A = a; B = b; Kind = kind; L = l; Payload = payload; Extension = extension; Override = ovr; Done = done; }
 
         public static WriteOp Entity(string uri, int kind, byte[] payload)
-            => new(OpKind.Entity, uri, null, kind, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), payload, null, null);
-        public static WriteOp ExtensionValue(ColdExtension extension) => new(OpKind.Extension, extension.EntityUri, null, 0, 0, null, extension, null);
-        public static WriteOp VideoAssoc(string uri, byte[] payload) => new(OpKind.VideoAssoc, uri, null, 0, 0, payload, null, null);
-        public static WriteOp Saved(string set, string uri, bool saved, int sync, long addedAtMs = 0) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, addedAtMs, null, null, null);
-        public static WriteOp Revision(string setId, string? revision, long syncedAt) => new(OpKind.Revision, setId, revision, 0, syncedAt, null, null, null);
-        public static WriteOp FlushMarker(TaskCompletionSource done) => new(OpKind.Flush, "", null, 0, 0, null, null, done);
+            => new(OpKind.Entity, uri, null, kind, DateTimeOffset.UtcNow.ToUnixTimeSeconds(), payload, null, null, null);
+        public static WriteOp ExtensionValue(ColdExtension extension) => new(OpKind.Extension, extension.EntityUri, null, 0, 0, null, extension, null, null);
+        public static WriteOp VideoAssoc(string uri, byte[] payload) => new(OpKind.VideoAssoc, uri, null, 0, 0, payload, null, null, null);
+        public static WriteOp VideoOverrideSet(VideoOverride o) => new(OpKind.VideoOverrideSet, o.Uri, null, 0, 0, null, null, o, null);
+        public static WriteOp VideoOverrideDelete(string uri) => new(OpKind.VideoOverrideDelete, uri, null, 0, 0, null, null, null, null);
+        public static WriteOp Saved(string set, string uri, bool saved, int sync, long addedAtMs = 0) => new(saved ? OpKind.SavedSet : OpKind.SavedRemove, set, uri, sync, addedAtMs, null, null, null, null);
+        public static WriteOp Revision(string setId, string? revision, long syncedAt) => new(OpKind.Revision, setId, revision, 0, syncedAt, null, null, null, null);
+        public static WriteOp FlushMarker(TaskCompletionSource done) => new(OpKind.Flush, "", null, 0, 0, null, null, null, done);
     }
 }

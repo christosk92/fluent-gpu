@@ -107,6 +107,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public int LastBlurHoldHit => _blurHoldHit;
     public int LastBlurHoldFallback => _blurHoldFallback;
     public int LastOpacityGroups => _opacity?.GroupsThisFrame ?? 0;
+    // Per-kind split of LastOpacityGroups (they sum to it) — layer-heavy frames are attributable without a GPU capture.
+    public int LastPlainOpacityGroups => _opacity?.OpacityGroupsThisFrame ?? 0;
+    public int LastBoundedOpacityGroups => _opacity?.BoundedOpacityGroupsThisFrame ?? 0;
+    public int LastBlurGroups => _opacity?.BlurGroupsThisFrame ?? 0;
+    public int LastEdgeFadeGroups => _opacity?.EdgeFadeGroupsThisFrame ?? 0;
+    /// <summary>Of <see cref="LastOpacityGroups"/>, the ones that blended the FULL canvas (no bounding scissor).</summary>
+    public int LastFullTargetGroups => _opacity?.FullTargetGroupsThisFrame ?? 0;
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -950,6 +957,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "acrylicLayers", _acrylic?.LayersThisFrame ?? 0);   // PushLayer composites this frame
         Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
         Diag.Set("d3d12", "opacityGroups", _opacity?.GroupsThisFrame ?? 0);   // flat opacity groups composited this frame
+        Diag.Set("d3d12", "opacityGroupsPlain", _opacity?.OpacityGroupsThisFrame ?? 0);       // ── the per-kind split of the line above
+        Diag.Set("d3d12", "opacityGroupsBounded", _opacity?.BoundedOpacityGroupsThisFrame ?? 0);
+        Diag.Set("d3d12", "opacityGroupsBlur", _opacity?.BlurGroupsThisFrame ?? 0);
+        Diag.Set("d3d12", "opacityGroupsEdgeFade", _opacity?.EdgeFadeGroupsThisFrame ?? 0);
+        Diag.Set("d3d12", "opacityGroupsFullTarget", _opacity?.FullTargetGroupsThisFrame ?? 0);   // full-canvas read+blend (the costly class)
         Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
         Diag.Set("d3d12", "blurLayers", _opacity?.BlurLayersThisFrame ?? 0);
         Diag.Set("d3d12", "blurRegionPx", _opacity?.BlurRegionPixelsThisFrame ?? 0);
@@ -1768,8 +1780,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ResetDesiredScissor();
         _layerKinds.Clear();
         _opacityGroups.Clear();
-        // One scratch RECT for edge-fade partial clears — MUST NOT stackalloc inside the draw-list loop (cookie overrun).
-        RECT* edgeFadeClearRect = stackalloc RECT[1];
+        // One scratch RECT for partial layer-RT clears (edge-fade + plain opacity) — MUST NOT stackalloc inside the
+        // draw-list loop (cookie overrun). Consumed by the ClearRenderTargetView in the same iteration that fills it.
+        RECT* layerClearRect = stackalloc RECT[1];
         int pos = 0;
         while (pos + sizeof(int) <= drawList.Length)
         {
@@ -1858,6 +1871,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // (scroll/animation moves content every frame) leaves pinHash 0 below ⇒ pure transient, no pin churn.
                         if (BlurHashSeenLastFrame(bhash))
                         {
+                            SceneCat(CatComposite);   // the lease's RT clear is layer cost — attribute it to comp, not to whatever ran before
                             int pslot = _opacity.Acquire(_cmdList, _fenceValue + 1);
                             // Mint a pin unless this is an edge-clamped region IN MOTION: an actively-scrolling clamped
                             // strip changes its clamp size ~1px/frame, so minting a fresh region-sized RT every frame is
@@ -1897,11 +1911,27 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         EdgeFadeLayerClear.Compute(in L, _frameScale, (int)_w, (int)_h, out int cl, out int ct, out int cr, out int cb, out bool fullCanvas);
                         if (!fullCanvas)
                         {
-                            edgeFadeClearRect[0] = new RECT { left = cl, top = ct, right = cr, bottom = cb };
-                            clearRect = edgeFadeClearRect;
+                            layerClearRect[0] = new RECT { left = cl, top = ct, right = cr, bottom = cb };
+                            clearRect = layerClearRect;
                             Diag.Set("d3d12", "edgeFadeClearPx", EdgeFadeLayerClear.ClearAreaPx(cl, ct, cr, cb));
                         }
                     }
+                    // A plain opacity group carries its subtree's DRAWN EXTENT in CompositeClip when the recorder patched
+                    // it (SceneRecorder.PatchOpacityLayerExtent) — clear only that box instead of the whole canvas. Same
+                    // geometry helper as the pure edge fade (both are zero-sigma, so nothing reads a halo past the box).
+                    // NOT intersected with the current scissor, deliberately: the box is then a strict SUPERSET of what
+                    // CompositeOpacity reads (that same box ∩ the scissor at POP), so every composited texel was cleared
+                    // with zero dependency on push/pop scissor-stack symmetry. Unpatched (empty rect) ⇒ null ⇒ full clear.
+                    else if (L.Kind == (int)LayerKind.Opacity && !L.CompositeClip.IsEmpty)
+                    {
+                        EdgeFadeLayerClear.Compute(in L, _frameScale, (int)_w, (int)_h, out int ol, out int ot, out int or_, out int ob, out bool full);
+                        if (!full && or_ > ol && ob > ot)
+                        {
+                            layerClearRect[0] = new RECT { left = ol, top = ot, right = or_, bottom = ob };
+                            clearRect = layerClearRect;
+                        }
+                    }
+                    SceneCat(CatComposite);   // the lease's RT clear is layer cost — attribute it to comp, not to whatever ran before
                     int slot = _opacity.Acquire(_cmdList, _fenceValue + 1, clearRect);
                     _opacityGroups.Add(new LayerGroup(slot, L, 0UL, default));
                     _layerKinds.Add(L.Kind);
@@ -1985,6 +2015,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
                     else if (kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
                     else if (kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
+                    // Patched plain opacity group: composite only the drawn extent (⊆ the box cleared at Acquire).
+                    else if (kind == (int)LayerKind.Opacity && !gl.CompositeClip.IsEmpty)
+                        _opacity.CompositeOpacity(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
                     else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
                     // Blur-cache MISS (pinHash != 0): COPY the just-composited blurred region out of the scratch into a small
                     // retained pin for next frame's FindPin. The scratch is ALWAYS released (the pin is a separate small RT).
@@ -2018,6 +2051,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (localBlur) _opacity.CompositeLocalBlur(_cmdList, in localSurface, gl.GroupAlpha, CurrentScissorRect());
             else if (gl.Kind == (int)LayerKind.EdgeFade) _opacity.EdgeFadeComposite(_cmdList, slot, in gl, _frameScale, CurrentScissorRect());
             else if (gl.Kind == (int)LayerKind.Blur) _opacity.CompositeBlur(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
+            else if (gl.Kind == (int)LayerKind.Opacity && !gl.CompositeClip.IsEmpty)
+                _opacity.CompositeOpacity(_cmdList, slot, gl.GroupAlpha, in gl, _frameScale, CurrentScissorRect());
             else _opacity.Composite(_cmdList, slot, gl.GroupAlpha);
             if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
             _opacity.Release(slot);
@@ -2292,6 +2327,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private double _lastLatencyWaitMs; // of which: the frame-latency waitable alone (compositor backpressure, not GPU work)
     /// <inheritdoc/>
     public double LastFenceWaitMs => _lastFenceWaitMs;
+    /// <summary>Diagnostic: of <see cref="LastFenceWaitMs"/>, the frame-latency-waitable portion alone — compositor/present
+    /// backpressure rather than GPU work. Always measured (no env gate); the <c>[fps]</c> line's <c>latW</c> token.</summary>
+    public double LastLatencyWaitMs => _lastLatencyWaitMs;
 
     // ── Whole-frame GPU timer (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────────────
     // A begin/end TIMESTAMP-query pair bracketing the entire command list, one pair per back-buffer index. Resolved into a
@@ -2317,8 +2355,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // into a managed side-buffer (no GPU roundtrip for the tags), read one frame later alongside the timestamps. Bounded:
     // at most SceneMarkCap interior boundaries per frame; beyond that the category freezes and the tail lumps into the last
     // seen category (rare; only under extreme interleave — the accounting degrades, never corrupts). Composite marks are
-    // placed only at the main acrylic/opacity composite sites; any un-marked composite time falls into the preceding FILL
-    // interval (a documented, benign approximation). All zero when FG_GPU_TIMING is off or the query heap is unavailable.
+    // placed at BOTH ends of a layer group — the PushLayer RT lease/clear and the acrylic/opacity composite on pop — so a
+    // group's full-window clear lands in COMPOSITE instead of the FILL interval that happened to precede it. The remaining
+    // un-marked composite work (the region-sized local-blur lease) still falls into the preceding FILL interval (a
+    // documented, benign approximation). All zero when FG_GPU_TIMING is off or the query heap is unavailable.
     private const byte CatFill = 0, CatImage = 1, CatGlyph = 2, CatComposite = 3, CatNone = 0xFF;
     private const int SceneMarkCap = 256;   // interior-boundary timestamp slots per frame (past this the tail lumps into the current category)
     private byte _sceneCurCat = CatNone;    // category currently active in the scene replay; CatNone before the first run

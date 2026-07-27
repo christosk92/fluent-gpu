@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
+using Wavee.Backend.MediaSources;
 using Wavee.Core;
 using Wavee.SpotifyLive.Audio;
 using Wavee.SpotifyLive.Gabo;
@@ -36,6 +37,7 @@ public sealed class LiveConnect : IDisposable
     readonly FluentVideoMediaHost _videoHost;   // the VIDEO half of the ONE current media (Milestone B) — OWNS the player
     readonly WaveeLogger _playbackLog;
     Action<FluentGpu.Media.MediaPlayer?>? _onVideoPlayerChanged;   // the wired PlayerChanged relay (detached on Dispose)
+    Action<string, long>? _onVideoDurationKnown;                   // the wired DurationKnown relay (detached on Dispose)
     readonly SpotifyServerClock _clock;   // server-clock skew estimator → corrects remote-position aging
     readonly ApConnection? _apChannel;   // owned: the adopted login socket
     readonly AudioPlaybackStack? _audio; // optional local-audio stack (null = silent/stub resolver)
@@ -84,6 +86,20 @@ public sealed class LiveConnect : IDisposable
         var fast = audio is not null
             ? new FastTrackPlayback(audio.TrackResolver, audio.HeadClient, playbackLog, audio.TrackResolver.InvalidateCdn)
             : null;
+        // Source-agnostic playable seams: resolve / warm / wire-meta all dispatch through the provider registry, which routes
+        // by uri ownership — no code between play-intent and the host inspects the scheme any more. The fake/silent bootstrap
+        // has no live resolver: it keeps the stub resolver wired directly and leaves every registry-driven hook null
+        // (= today's behavior).
+        //
+        // REGISTRATION ORDER IS THE ROUTING TABLE (first Owns wins): Spotify first because it is every hot playable, then the
+        // two engine-free local sources. Those two are constructed UNCONDITIONALLY — they need no session, no network and no
+        // credentials, which is precisely what makes them the validation cases for the seam.
+        MediaProviderRegistry? media = audio?.TrackResolver is { } liveResolver && fast is not null
+            ? new MediaProviderRegistry(
+                new SpotifyMediaProvider(liveResolver, fast),
+                new LocalFileMediaProvider(probeDurationMs: LocalAudioDurationProbe.Probe),
+                new GenericMediaProvider(probeDurationMs: LocalAudioDurationProbe.Probe))
+            : null;
         var outbound = new LiveOutboundControl(transport, deviceId, () => _connect.CurrentConnectionId);
         var gaboCtx = GaboContextFactory.Create();
         settings ??= AppDataSettings.ForUnpackaged("Wavee", "Wavee");
@@ -93,30 +109,22 @@ public sealed class LiveConnect : IDisposable
         _gabo = new RawCoreStreamProjection(_gaboBatcher, () => Projection.ContextUri, () => true, log: telemetryLog);
         var herodotus = new HerodotusClient(transport, telemetryLog);
         _resume = new ResumePointProjection(herodotus, () => Projection.IsPrivateSession, telemetryLog);
-        Controller = new PlaybackController(_host, resolver, Projection,
+        Controller = new PlaybackController(_host, media ?? resolver, Projection,
             contexts ?? EmptyContextResolver.Instance,
             deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, playbackLog,
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
-            fast: fast, videoHost: _videoHost);
+            fast: (IFastTrackResolver?)media ?? fast, videoHost: _videoHost);
         currentMediaKind = () => Controller.CurrentMediaKind;   // close the late-bound `track_player` loop (see above)
         Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);
-        if (audio?.TrackResolver is LiveTrackResolver ltr)
+        if (media is not null)
         {
-            Controller.MetaResolver = async (track, ct) =>
-            {
-                var m = await ltr.ResolveMetaAsync(track, ct).ConfigureAwait(false);
-                int kbps = m.Fmt switch
-                {
-                    AudioFormat.OggVorbis96 => 96,
-                    AudioFormat.OggVorbis160 => 160,
-                    AudioFormat.OggVorbis320 => 320,
-                    AudioFormat.Flac => 1411,
-                    AudioFormat.Mp3 => 160,
-                    _ => 160,
-                };
-                string fmtLabel = m.Fmt == AudioFormat.Mp3 ? "MP3" : $"Vorbis {kbps} kbps";
-                return new PlaybackTrackMeta(m.FileGid, m.FileId, kbps, fmtLabel, m.DurMs);
-            };
+            Controller.MetaResolver = media.ResolveWireMetaAsync;
+            Controller.CanPrepareNext = t => media.SupportsPreparedNext(t.Uri);
+            // CONNECT MASKING ON (P4). Now that non-Spotify playables exist, the publisher must stop putting uris on the
+            // cluster that no remote controller can resolve: publishable ones (Spotify's) go verbatim, everything else is
+            // rewritten into Spotify's own self-describing local-file namespace. The mask touches ONLY the uri field —
+            // the QueueEntry uid is untouched, so skip_to/remove from a controller still address the right row.
+            _publisher.PublishUriMask = ConnectUriMask.For(media);
         }
 
         _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
@@ -140,7 +148,7 @@ public sealed class LiveConnect : IDisposable
     /// (the manifest parser drops every audio profile; <c>ProtectedMediaBackend</c> advertises no audio voice), so the swap
     /// stops the song and the video plays silent. The milestone that demuxes the video's OWN audio is what makes this fully
     /// correct (<c>docs/plans/wavee-surfaces-placement-design.md</c>, M7).</para></summary>
-    public void WireVideoMedia(PlaybackBridge bridge)
+    public void WireVideoMedia(PlaybackBridge bridge, VideoOverrideService? overrides = null)
     {
         if (_onVideoPlayerChanged is not null) return;
 
@@ -167,6 +175,12 @@ public sealed class LiveConnect : IDisposable
         //    thread, the bridge marshals it onto the UI thread as one atomic (player, generation) value, and the mounted
         //    MediaPlayerElement is keyed on that generation so it re-binds to the new instance.
         _onVideoPlayerChanged = p => bridge.NotifyVideoPlayerChanged(p);
+        // 3b. THE DEAD-VIDEO EDGE. The controller is the only place that KNOWS video did not happen for a playable (it
+        //     fell back to audio because nothing was playable, or the open failed and the recovery hook declined). Without
+        //     this the placement model never learns: availability still says "this track has a video", so the mounted
+        //     surface keeps showing its indeterminate loading poster over audio that is already playing, forever. The app
+        //     latches THAT PLAYABLE (never the intent), so the next video-bearing track opens exactly as before.
+        Controller.OnVideoMediaUnavailable = track => bridge.NotifyVideoMediaEnded(track.Uri);
         _videoHost.PlayerChanged += _onVideoPlayerChanged;
         // Seed only if a player somehow already exists (re-wire after a logout/login); the default binding is already "none",
         // so seeding null would bump the generation and re-render the surfaces for nothing.
@@ -175,12 +189,45 @@ public sealed class LiveConnect : IDisposable
         // 4. Every writer of the video INTENT asks the controller to re-evaluate the CURRENT playable's kind, so "watch video",
         //    "switch to audio", and the surface ✕ swap the media host for the track already playing — not only at the next
         //    track boundary. Fire-and-forget: it is a locked backend operation, never awaited from a UI handler.
-        bridge.RequestMediaKindRefresh = () => _ = RefreshMediaKindAsync();
+        //    The bool is forceReloadIfVideo: an override attach/replace/remove changes the video SOURCE without changing the
+        //    KIND, so the same-kind early return has to be overridden for that one case.
+        bridge.RequestMediaKindRefresh = forced => _ = RefreshMediaKindAsync(forced);
+
+        // 5. MP4-AUTHORITATIVE DURATION. A user-attached local video is a different edit with its own length; the moment the
+        //    media engine knows it, it becomes the projection's truth for that playable (seek bar + the PutState duration
+        //    follow automatically). Scoped to `local:video:` keys ONLY — a Spotify music video keeps publishing the catalog
+        //    duration byte-for-byte as before.
+        _onVideoDurationKnown = (key, ms) =>
+        {
+            if (!key.StartsWith(Wavee.Backend.VideoOverride.SourceKeyPrefix, StringComparison.Ordinal)) return;
+            if (Projection.CurrentTrack?.Uri is not { Length: > 0 } uri) return;
+            Projection.SetDurationOverride(uri, ms);
+            overrides?.NoteDuration(uri, ms);
+            _playbackLog.Info($"local video duration adopted for {uri}: {ms} ms");
+        };
+        _videoHost.DurationKnown += _onVideoDurationKnown;
+
+        // 6. OPEN-FAILURE RECOVERY. A local attachment that exists but cannot be decoded must not become a dead end: peek the
+        //    source the host was playing, and if it is an override, quarantine that exact (uri, key) for the session, drop the
+        //    cached source, tell the user once, and answer TRUE so the controller re-runs the load — which now walks past the
+        //    attachment to the official video, or to audio. Anything else answers FALSE, i.e. today's behavior byte-for-byte.
+        Controller.TryRecoverVideoAsync = (track, _) =>
+        {
+            if (overrides is null) return Task.FromResult(false);
+            var key = bridge.PopOutVideoSource.Peek()?.Key;
+            if (key is not { Length: > 0 } || !key.StartsWith(Wavee.Backend.VideoOverride.SourceKeyPrefix, StringComparison.Ordinal))
+                return Task.FromResult(false);
+            overrides.Quarantine(track.Uri, key);
+            bridge.InvalidateVideoSource(track.Uri);   // else the reload would hand the same broken source straight back
+            bridge.NotifyVideoOverrideUnplayable(track.Uri);
+            _playbackLog.Info($"attached video {key} failed to open for {track.Uri} — quarantined for this session; falling back");
+            return Task.FromResult(true);
+        };
     }
 
-    async Task RefreshMediaKindAsync()
+    async Task RefreshMediaKindAsync(bool forceReloadIfVideo = false)
     {
-        try { await Controller.RefreshCurrentMediaKindAsync().ConfigureAwait(false); }
+        try { await Controller.RefreshCurrentMediaKindAsync(forceReloadIfVideo).ConfigureAwait(false); }
         catch (Exception ex) { _playbackLog.Info("media-kind refresh failed: " + ex.Message); }
     }
 
@@ -198,6 +245,7 @@ public sealed class LiveConnect : IDisposable
     public void Dispose()
     {
         if (_onVideoPlayerChanged is { } relay) { try { _videoHost.PlayerChanged -= relay; } catch { } _onVideoPlayerChanged = null; }
+        if (_onVideoDurationKnown is { } durRelay) { try { _videoHost.DurationKnown -= durRelay; } catch { } _onVideoDurationKnown = null; }
         try { Controller.DeactivateIfActiveOwner(); } catch { }   // best-effort clean is_active=false hand-off on logout
         _commands.Dispose();
         _publisher.Dispose();

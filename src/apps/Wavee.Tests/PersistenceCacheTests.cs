@@ -249,7 +249,7 @@ public class SqliteColdStoreTests
             using var r = q.ExecuteReader();
             Assert.True(r.Read());
             Assert.Equal(0L, r.GetInt64(0));        // `saved` dropped
-            Assert.Equal("3", r.GetString(1));      // schema_version = 3 after locale-aware metadata caches land
+            Assert.Equal("4", r.GetString(1));      // schema_version = 4 after the user video-override table lands
         }
         finally { TryDelete(path); }
     }
@@ -283,7 +283,7 @@ public class SqliteColdStoreTests
             verify.Open();
             using var q = verify.CreateCommand();
             q.CommandText = "SELECT value FROM meta WHERE key='schema_version';";
-            Assert.Equal("3", q.ExecuteScalar() as string);
+            Assert.Equal("4", q.ExecuteScalar() as string);   // the runner walks the whole ladder: v1 → v2 → v3 → v4
         }
         finally { TryDelete(path); }
     }

@@ -24,17 +24,20 @@ public sealed class FlexLayout
     // per-call semantics are unchanged, while the host resets them once per frame (ResetFrameDiagCounters) and reads
     // them into FrameStats — so a probe sees the whole frame's measure/arrange/text-reshape cost across the full layout
     // + scoped relayout + phase-7 reflow re-solves. Gated on s_layoutDiag ⇒ zero work/alloc when the flag is off.
-    private int _dMeasure, _dTextHit, _dTextMiss, _dArrange;
+    private int _dMeasure, _dTextHit, _dTextMiss, _dArrange, _dMeasureMemoHit;
 
     /// <summary>Per-frame layout-cost counters (valid only when FG_LAYOUT_DIAG=1; else 0). Surfaced into FrameStats.</summary>
     public int DiagMeasure => _dMeasure;
     public int DiagArrange => _dArrange;
     public int DiagTextHit => _dTextHit;
     public int DiagTextMiss => _dTextMiss;
+    /// <summary>Measure calls served by the within-pass memo (no recompute). <see cref="DiagMeasure"/> counts REAL
+    /// measures only, so measure+memoHit is the raw call count and memoHit/(measure+memoHit) is the redundancy rate.</summary>
+    public int DiagMeasureMemoHits => _dMeasureMemoHit;
 
     /// <summary>Host-driven per-frame reset: zero the diag counters at the top of a frame so DiagMeasure/Arrange/TextMiss
     /// read that frame's total after all layout (full + scoped + phase-7 reflow) has run. Cheap; no-op meaning when off.</summary>
-    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = 0; }
+    public void ResetFrameDiagCounters() { _dMeasure = _dTextHit = _dTextMiss = _dArrange = _dMeasureMemoHit = 0; }
 
     // Within-pass Measure memo. Measure(node, availW) is a PURE function of the node's subtree content + availW within
     // ONE layout solve (it has no external mutable input; its only side effect is writing the node's Bounds W/H). But the
@@ -44,7 +47,17 @@ public sealed class FlexLayout
     // the per-leaf text measure cache. A hit re-asserts the Bounds W/H so Arrange (which reads Bounds for base sizes) is
     // byte-identical to the unmemoized result. Reset by bumping the generation at each top-level solve (cross-pass tree
     // mutations are thereby never reused; within a pass the tree is immutable, so the function stays pure).
-    private struct MeasureMemo { public uint Gen; public float AvailW; public float W, H; }
+    // The same slot ALSO carries a PERSISTENT (cross-pass) record of the FIRST real measure of the last pass that
+    // measured this node — the call whose result propagated UP into the parent's own size (later same-pass re-measures
+    // happen inside an already-decided parent box). That record is what TryResolveSizeStable compares against.
+    private struct MeasureMemo
+    {
+        public uint Gen; public float AvailW; public float W, H;         // within-pass memo
+        public uint PassGen;                                             // _measureGen of the pass the record below is from (0 = never)
+        public uint NodeGen;                                             // handle generation — ABA guard on a recycled node index
+        public float PAvailW, PW, PH;                                    // that pass's offered width → measured border-box size
+        public ulong PInputSig;                                          // LayoutSig at that moment (see LayoutSig)
+    }
     private MeasureMemo[] _memo = System.Array.Empty<MeasureMemo>();
     private uint _measureGen;
 
@@ -52,14 +65,84 @@ public sealed class FlexLayout
     {
         _measureGen++;
         int cap = _scene.Capacity;
-        if (_memo.Length < cap) _memo = new MeasureMemo[cap];
+        // Resize (copy), never re-allocate blank: growth must not drop the persistent per-node measure records that
+        // TryResolveSizeStable needs. The within-pass half stays correct either way (it is keyed by generation).
+        if (_memo.Length < cap) System.Array.Resize(ref _memo, cap);
     }
 
     private Size2 StoreMemo(NodeHandle node, float availW, Size2 size)
     {
         uint i = node.Raw.Index;
-        if (i < (uint)_memo.Length) _memo[i] = new MeasureMemo { Gen = _measureGen, AvailW = availW, W = size.Width, H = size.Height };
+        if (i < (uint)_memo.Length)
+        {
+            ref MeasureMemo m = ref _memo[i];
+            if (m.PassGen != _measureGen || m.NodeGen != node.Raw.Gen)
+            {
+                m.PassGen = _measureGen; m.NodeGen = node.Raw.Gen;
+                m.PAvailW = availW; m.PW = size.Width; m.PH = size.Height;
+                m.PInputSig = LayoutSig(node);
+            }
+            m.Gen = _measureGen; m.AvailW = availW; m.W = size.Width; m.H = size.Height;
+        }
         return size;
+    }
+
+    // FNV-1a over every LayoutInput field a PARENT can read off this node (Margin/Flex*/AlignSelf/Min/Max/explicit
+    // size) plus the container-side fields and the flag column — i.e. a conservative superset of "did anything about
+    // this node's participation in its parent's solve change?". TextStyle is deliberately excluded: no ancestor reads
+    // it, it can only move this node's own measured size, and that is compared exactly (not hashed).
+    private static void MixU(ref ulong h, uint v) { h ^= v; h *= 1099511628211UL; }
+    private static void MixF(ref ulong h, float v) => MixU(ref h, BitConverter.SingleToUInt32Bits(v));
+    private static void MixE(ref ulong h, in Edges4 e) { MixF(ref h, e.Left); MixF(ref h, e.Top); MixF(ref h, e.Right); MixF(ref h, e.Bottom); }
+
+    private ulong LayoutSig(NodeHandle node)
+    {
+        ref LayoutInput li = ref _scene.Layout(node);
+        ulong h = 14695981039346656037UL;
+        MixU(ref h, (uint)_scene.Flags(node));
+        MixU(ref h, li.Direction);
+        MixF(ref h, li.Gap);
+        MixE(ref h, in li.Padding);
+        MixE(ref h, in li.Margin);
+        MixF(ref h, li.Width); MixF(ref h, li.Height); MixF(ref h, li.AspectRatio);
+        MixF(ref h, li.MinW); MixF(ref h, li.MinH); MixF(ref h, li.MaxW); MixF(ref h, li.MaxH);
+        MixF(ref h, li.FlexGrow); MixF(ref h, li.FlexShrink); MixF(ref h, li.FlexBasis);
+        MixU(ref h, (uint)li.AlignSelf); MixU(ref h, (uint)li.Justify); MixU(ref h, (uint)li.AlignItems);
+        MixU(ref h, li.Wrap ? 1u : 0u);
+        return h;
+    }
+
+    /// <summary>
+    /// Scoped-relayout early-out for a dirty node that found NO layout boundary above it (LayoutInvalidator's "escape to
+    /// root"). Re-measures ONLY this subtree, at exactly the width its parent offered on the last pass; if the resulting
+    /// border-box size AND every parent-facing LayoutInput field are byte-identical to that pass, no ancestor's Measure
+    /// or Arrange can produce a different number this frame, so the whole-window solve is skipped and the subtree is
+    /// re-arranged in place inside its existing (therefore still-correct) box. Returns false — caller must escalate to the
+    /// full solve — whenever anything is unproven: no record, a recycled index, a viewport/grid/z-stack root (those
+    /// measure paths keep no record), a changed field signature, or a changed measured size.
+    /// <para>The invariant: in this solver a parent reads a child ONLY as (a) its measured size at the availW the parent
+    /// supplies and (b) its own LayoutInput {Margin, FlexGrow/Shrink/Basis, AlignSelf, Min/Max, explicit Width/Height}.
+    /// Both unchanged ⇒ every ancestor and sibling rect is unchanged ⇒ this node's arranged box is unchanged.</para>
+    /// </summary>
+    public bool TryResolveSizeStable(NodeHandle node)
+    {
+        if (node.IsNull) return false;
+        uint i = node.Raw.Index;
+        if (i >= (uint)_memo.Length) return false;
+        // Viewport/grid/z-stack measure paths return without StoreMemo, so they carry no record to compare against.
+        if (_scene.HasScroll(node) || _scene.HasGrid(node) || (_scene.Flags(node) & NodeFlags.ZStack) != 0) return false;
+        ref MeasureMemo rec = ref _memo[i];
+        if (rec.PassGen == 0 || rec.NodeGen != node.Raw.Gen) return false;
+        // Copy out BEFORE BeginMeasurePass: the probe measure re-writes this slot (and may resize the array).
+        float availW = rec.PAvailW, pw = rec.PW, ph = rec.PH;
+        if (LayoutSig(node) != rec.PInputSig) return false;
+        // Also copy the ARRANGED rect before measuring — Measure overwrites Bounds W/H with the hypothetical size.
+        RectF arranged = _scene.Bounds(node);
+        BeginMeasurePass();
+        var m = Measure(node, availW);
+        if (m.Width != pw || m.Height != ph) return false;   // outer size moved ⇒ ancestors must re-solve (Bounds scribble is repaired by that solve)
+        Arrange(node, arranged.X, arranged.Y, arranged.W, arranged.H);
+        return true;
     }
 
     public FlexLayout(SceneStore scene, IFontSystem fonts)
@@ -83,14 +166,14 @@ public sealed class FlexLayout
     {
         if (root.IsNull) return;
         // Snapshot so the per-Run print stays per-call even though the counters are now frame accumulators (host-reset).
-        int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange;
+        int m0 = _dMeasure, th0 = _dTextHit, tm0 = _dTextMiss, a0 = _dArrange, mh0 = _dMeasureMemoHit;
         BeginMeasurePass();
         Measure(root, window.Width);
         ref LayoutInput li = ref _scene.Layout(root);
         float w = float.IsNaN(li.Width) ? window.Width : li.Width;
         float h = float.IsNaN(li.Height) ? window.Height : li.Height;
         Arrange(root, 0f, 0f, w, h);
-        if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure - m0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
+        if (s_layoutDiag) Console.Error.WriteLine($"[FG_LAYOUT_DIAG] measure={_dMeasure - m0} memoHit={_dMeasureMemoHit - mh0} arrange={_dArrange - a0} textHit={_dTextHit - th0} textMiss={_dTextMiss - tm0}");
     }
 
     /// <summary>Re-solve ONLY the subtree rooted at <paramref name="node"/> against its current Bounds (or its
@@ -169,7 +252,6 @@ public sealed class FlexLayout
     // ── Measure: fill Bounds.W/H with each node's base (hypothetical) border-box size ──
     private Size2 Measure(NodeHandle node, float availW = float.PositiveInfinity)
     {
-        if (s_layoutDiag) _dMeasure++;
         // Within-pass memo: same (node, availW) already solved this pass ⇒ reuse it, re-asserting the Bounds W/H so the
         // Arrange pass (which reads Bounds for base main/cross sizes) sees exactly what an unmemoized recompute would.
         uint mi = node.Raw.Index;
@@ -178,11 +260,15 @@ public sealed class FlexLayout
             ref MeasureMemo hit = ref _memo[mi];
             if (hit.Gen == _measureGen && hit.AvailW == availW)
             {
+                if (s_layoutDiag) _dMeasureMemoHit++;
                 ref RectF hb = ref _scene.Bounds(node);
                 hb = new RectF(hb.X, hb.Y, hit.W, hit.H);
                 return new Size2(hit.W, hit.H);
             }
         }
+        // Counted AFTER the memo check: _dMeasure is REAL measure work (a memo hit is a few loads, not a solve), so a
+        // measure≫arrange reading now means genuine recompute redundancy rather than call-site churn the memo absorbs.
+        if (s_layoutDiag) _dMeasure++;
         ref LayoutInput li = ref _scene.Layout(node);
         ref NodePaint paint = ref _scene.Paint(node);
 

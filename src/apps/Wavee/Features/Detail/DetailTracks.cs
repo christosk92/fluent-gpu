@@ -83,11 +83,12 @@ sealed class TrackList : Component
     // have no cached span to reuse and the engine's realize budget exempts the visible band by design. Instead of that
     // one-shot swap, the cold reveal ramps the count of REAL rows up DetailRevealRamp.Chunk-at-a-time over a few frames;
     // rows past the ramp render a cheap ShimmerRow, so no single frame records the whole band. Steady state = _reveal at
-    // DetailRevealRamp.Done (every row real, no per-row cost); an instant/cached load (no shimmer) never ramps. The
-    // progression math is the pure, unit-tested DetailRevealRamp.
+    // DetailRevealRamp.Done (every row real, no per-row cost); an instant/cached load only skips the ramp on pages whose
+    // list owns a real viewport — a HasTrailing page (album/single) is one unwindowed mandatory band, so it ramps warm
+    // opens too (see the arming edge in Render). The progression math is the pure, unit-tested DetailRevealRamp.
     readonly Signal<int> _reveal = new(DetailRevealRamp.Done);   // rows with displayIndex < _reveal are REAL; the rest render ShimmerRow. Done ⇒ all real
     readonly Signal<bool> _rampActive = new(false);     // gates the per-frame reveal clock — mounted only while ramping so the frame loop quiesces after
-    bool _sawPending;                                    // this content actually showed shimmer (cold load) ⇒ the ready edge ramps; a cached/instant load does not
+    bool _sawPending;                                    // this content actually showed shimmer (cold load) ⇒ the ready edge ramps; a warm load ramps only on a HasTrailing page
     float _lastRightW;                                         // last measured right-area width — replayed once when the rail layout-lock clears (Task C)
     readonly SelectionModel _selection = new();                // external → survives a tier remount
     // Keyed by the COLUMN SET, not the tier: the set already folds in every input the track sizes depend on (tier +
@@ -112,6 +113,7 @@ sealed class TrackList : Component
     // an added row's neighbors part (FLIP down) and the row itself fades in at its slot. No overlays, no remounts.
     readonly ItemsViewController _listCtl = new();             // scroll anchoring (ScrollOffset/ScrollBy)
     readonly Signal<int> _dispVer = new(0);                    // bump → the ItemsView displacement seed re-runs (FLIP/fade)
+    readonly Signal<int> _videoDropRow = new(-1);              // slot index a compatible .mp4 file drag is hovering (-1 = none)
     int _resetEpoch;                                          // render-local identity epoch: curated re-cut → keyed remount + fresh scroll state
     int _lastDealtTier = -1;                                   // the tier the realized rows were last narrated at (-1 = never dealt)
     long _lastDealtAtMs;                                       // stamp of the last breakpoint re-deal → rapid-reversal detection
@@ -136,6 +138,9 @@ sealed class TrackList : Component
     readonly HashSet<string> _recShown = new(StringComparer.Ordinal);   // every id ever shown → the accumulated skip set (non-repeating batches)
     readonly System.Threading.CancellationTokenSource _recCts = new();
     readonly Signal<int> _listCount = new(0);                  // ItemsView TOTAL (track rows + rec rows); _visibleCount stays the track count for §4.6
+    bool _recsLive;                                            // the DATA half of the recs gate (see Render): refreshed each render, read by
+                                                               // RowOrRecContent so an appended index can never render a header/rec row while the
+                                                               // gate is off — the count signal is the primary gate, this is the belt-and-braces one
     Services? _svc;                                            // cached in Render → the header/add handlers reach the extender + the post seam
     Action<Action>? _post;
     readonly HashSet<string> _recAdding = new(StringComparer.Ordinal);
@@ -172,7 +177,7 @@ sealed class TrackList : Component
 
     readonly record struct RowPresentation(
         Track Track, int DisplayIndex, TrackRow.State State,
-        bool MarqueeDisabled, bool ShowTrackArtist,
+        bool MarqueeDisabled, bool ShowTrackArtist, bool ShowListMetadata,
         Action<string, string?> Go, Owner? AddedBy);
 
     // The visible order (cached, keyed by sort + filter): view[displayPos] = original track index, for the tracks that
@@ -195,7 +200,7 @@ sealed class TrackList : Component
             {
                 var t = tracks[i];
                 if (hideX && t.IsExplicit) continue;
-                if (vidOnly && !t.HasVideo) continue;
+                if (vidOnly && !VideoPresence.HasVideo(t)) continue;   // override-only videos pass the filter too
                 if (q.Length > 0 && !MatchesQuery(t, q)) continue;
                 list.Add(i);
             }
@@ -254,7 +259,8 @@ sealed class TrackList : Component
     // every shared cell agree on the build order: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration.)
     //
     // Drop order as the area narrows (most expendable first): Added-by (≥1) / Video (≥2) → Album (≥2) → Plays/Date (≥3)
-    // → ♥ (≥4) → art-thumb (≥5). Video/Plays exist only on album surfaces (ShowPlays); Album/By/Date only on playlists.
+    // → ♥ (≥4) → art-thumb (≥5). Plays exists only on album surfaces; Video follows any hydrated list that has one.
+    // Album/By/Date exist only on playlists. Compact playlist tiers retain Album/Video in the title metadata subline.
     // Derived from the SNAPSHOT, never from the parent's mutable fields: a persistent row re-renders on its own
     // subscriptions (index rebind, sort, now-playing, and now the tier), so it must be able to derive its column set
     // without depending on this parent having published _cfg/_model first. Same contract as TrackRowsSnapshot itself.
@@ -275,7 +281,7 @@ sealed class TrackList : Component
             Album: s.Config.ShowAlbumColumn && tier < 2,
             By: s.Model.HasAddedBy && tier < 1,
             Date: s.Model.HasDateAdded && tier < 3,
-            Video: s.Config.ShowPlays && s.Model.HasVideo && tier < 2,
+            Video: s.Model.HasVideo && tier < 2,
             Plays: s.Config.ShowPlays && tier < 3,
             Heart: tier < 4,
             Thumb: s.Config.ShowArtThumb && tier < 5,
@@ -346,6 +352,11 @@ sealed class TrackList : Component
             var currentModel = _full.Value.Value;
             var config = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, currentModel);
             if (_embedded) config = config with { HasTrailing = false };
+            // Epoch = the RECOMPUTE TRIGGER only (Settings.Get is a plain read, not reactive). The memo is
+            // equality-gated, so what actually propagates is the returned snapshot's VALUE: bumping the epoch for an
+            // appearance flag this component does not consume correctly re-renders nothing. CONTRACT: every appearance
+            // setting read by a row must be carried in TrackRowsSnapshot (as noMarquee is) — a flag read outside the
+            // snapshot would recompute here, compare equal, and silently never reach the rows.
             _ = AppearancePrefs.Epoch.Value;
             bool noMarquee = svc?.Settings.Get(WaveeSettings.DisableMarquee) ?? false;
             return new TrackRowsSnapshot(
@@ -385,8 +396,8 @@ sealed class TrackList : Component
         // Reused slot: a detail-route swap changes the track set under a stable (sort,query,flags) view key, so the cached
         // view map + per-tier column sets + selection would be STALE (wrong / out-of-range indices). Invalidate them on a
         // context change so the new page recomputes cleanly.
-        // A row can only cold-ramp if this content actually showed shimmer (a Pending→Ready load). Tracked every render
-        // so the ready edge below (which lands on a Ready render) knows whether the swap was cold or instant/cached.
+        // Did this content actually show shimmer (a Pending→Ready load)? Tracked every render so the ready edge below
+        // (which lands on a Ready render) knows whether the swap was cold or instant/cached — one of its two arm gates.
         if (_full.State.Value == (byte)LoadState.Pending) _sawPending = true;
         if (model.ContextUri != _lastCtxUri)
         {
@@ -398,10 +409,16 @@ sealed class TrackList : Component
             _lastDisplayed = null;
             _flip.Clear(); _fade.Clear();
             _resetEpoch++;                               // current render remounts the virtual list — never publish a signal from Render
-            // Progressive reveal: a fresh content identity that showed shimmer ⇒ start the ramp (real rows fill in over
-            // frames instead of the whole band in one ~80ms frame). Keyed to the ContextUri edge, so it fires ONCE per
-            // content and never on scroll / re-render / a same-context refresh; an instant/cached load skips it entirely.
-            if (model.ContextUri is { Length: > 0 } && _sawPending)
+            // Progressive reveal: a fresh content identity ⇒ start the ramp (real rows fill in over frames instead of
+            // the whole band in one ~80ms frame). Keyed to the ContextUri edge, so it fires ONCE per content and never
+            // on scroll / re-render / a same-context refresh.
+            // Two arming conditions, because two different things cost the frame:
+            //   · _sawPending — this content actually showed shimmer (a cold Pending→Ready load), any page kind.
+            //   · HasTrailing (album/single) — the list is a natural-size, Grow=0 ItemsView inside the trailing page
+            //     scroller, so the WHOLE list is a mandatory band and the engine's realize budget cannot spread it: a
+            //     WARM KeepAlive re-open (preview already Ready ⇒ no shimmer ⇒ _sawPending false) still mounted every
+            //     row in one frame. Those pages therefore ramp on EVERY context edge, cold or warm.
+            if (model.ContextUri is { Length: > 0 } && (_sawPending || _cfg.HasTrailing))
             {
                 _reveal.Value = DetailRevealRamp.Chunk;   // the swap frame shows the first chunk real, the rest shimmer
                 _rampActive.Value = true;
@@ -493,14 +510,24 @@ sealed class TrackList : Component
         // "Recommended songs": owned/collaborative playlists only, non-embedded, non-vertical, live edits available. When
         // ON, the header (+ rec rows) are appended AFTER the track rows in the SAME bound list — the list TOTAL is a
         // SEPARATE signal (_listCount) so _visibleCount stays the track count the §4.6 choreography seeds are keyed to.
-        bool recsOn =
-            _cfg.Recommendations && !_embedded && !_verticalHeader
+        // The gate is deliberately split in two halves that live on different clocks.
+        // CAPABLE is the MOUNT-STABLE half — page config only (a playlist layout, standalone, with a rail). It is the
+        // only half the list Key and the bound TEMPLATE may depend on, because an ItemsView's slot template freezes at
+        // slot creation. LIVE adds everything that arrives WITH THE DATA (extender client, live edits, CanEditItems, a
+        // context uri) and gates the COUNT only. Folding the live half into the Key (as this used to) meant the moment
+        // the full model replaced the nav preview mid-navigation, CanEditItems flipped, the Key changed, and every
+        // bound slot in the viewport was destroyed and recreated — the second row-rebuild wave in a nav. Now the flip
+        // only grows _listCount, the CountSignal realizes the header + rec rows on top, and nothing remounts.
+        bool recsCapable = _cfg.Recommendations && !_embedded && !_verticalHeader;
+        bool recsLive =
+            recsCapable
             && svc?.RealExtender is not null
             && PlaylistInlineEdit.SpotifyEditsLive(svc)
             && model.Capabilities.CanEditItems
             && model.ContextUri is { Length: > 0 };
-        int recCount = recsOn ? _recs.Value.Count : 0;   // subscribe (only when ON) → the list re-sizes when a batch lands / an add removes one
-        int listTotal = recsOn ? visible + 1 + recCount : visible;   // +1 = the always-present "Recommended" header row
+        _recsLive = recsLive;                            // published to the bound slots (plain field: never write a signal from Render)
+        int recCount = recsLive ? _recs.Value.Count : 0;   // subscribe (only when LIVE) → the list re-sizes when a batch lands / an add removes one
+        int listTotal = recsLive ? visible + 1 + recCount : visible;   // +1 = the always-present "Recommended" header row
         UseLayoutEffect(() =>
         {
             _visibleCount.Value = visible;
@@ -515,11 +542,13 @@ sealed class TrackList : Component
             // clip below the sticky chrome (never one reactive clip binding per realized row).
             if (_verticalHeader && !_cfg.HasTrailing)
                 return VerticalList(visible, set, tracks, labeled, tier, rowH, narrateRemount, staggerCold, verticalLayout);
-            if (recsOn)
+            if (recsCapable)
             {
                 // A search/filter that matched nothing still shows the no-match message (recs browse the whole list, not
                 // the filtered slice); an EMPTY owned playlist still renders — the header at index 0 fetches immediately.
-                if (visible == 0 && _tracks.Count > 0) return FilterEmpty(noTracks: false);
+                // While the gate is capable but not yet LIVE the total is just the track count, so an empty list has no
+                // header to render either — fall back to the empty-playlist message exactly like a non-recs page does.
+                if (visible == 0 && (_tracks.Count > 0 || !recsLive)) return FilterEmpty(_tracks.Count == 0);
                 // The bound slots branch on the recycled index (RowOrRecContent): track rows keep the selection skin;
                 // the "Recommended" header + rec rows render their OWN content, so they never join the track multi-select
                 // (exactly like the vertical hero/chrome rows). The out-of-range guards (PlayRow / DisplayTrack / the
@@ -613,11 +642,13 @@ sealed class TrackList : Component
         float listGrow = _cfg.HasTrailing ? 0f : 1f;
         // The reset epoch folds into the key: a curated re-cut REMOUNTS the list — the slots' mount-opacity entrance
         // replays as the §4.6 "playlist was refreshed" crossfade (the truthful narration for an editorial re-cut).
-        // recsOn folds into the key: the ItemsView template + count-signal freeze at mount, so a gate flip (preview→full
-        // model load turns CanEditItems on) must REMOUNT the list to swap in the recommendations template. Constant once
-        // the full model has landed, so this is a one-time remount, not per-render churn.
+        // recsCAPABLE — not recsLive — folds into the key: the ItemsView template + count-signal freeze at mount, so the
+        // template choice must ride a value that CANNOT change while this list is mounted (page config only). The live
+        // half deliberately stays out: it flips when the full model lands mid-navigation, and folding it in remounted
+        // every bound slot in the viewport for nothing. A capable page mounts the recommendations template up front and
+        // simply carries a total of `visible` until the gate goes live.
         string filterKey = _verticalHeader ? "" : ":q" + query + ":f" + (int)flags;
-        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "d" + density + filterKey + ":r" + _resetEpoch + (recsOn ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
+        Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "d" + density + filterKey + ":r" + _resetEpoch + (recsCapable ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing
             ? TrailingBody(listKeyed,
@@ -1461,6 +1492,7 @@ sealed class TrackList : Component
                     t, displayIndex, st,
                     rowState.MarqueeDisabled,
                     rowState.Config.ShowTrackArtist,
+                    rowState.Config.ShowAlbumColumn,
                     rowState.Handlers.Go,
                     AddedByProfile(rowState.Model, t));
             });
@@ -1573,6 +1605,12 @@ sealed class TrackList : Component
                 child = _o.WrapRowSwipe(_scope,
                     _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, 0), _rowH, _entrance, 0),
                     0, _item) with { Key = "rec:track" };
+            // The DATA half of the gate (see Render): this template is mounted for every capable playlist, including the
+            // window before the full model lands (and non-owned playlists, which never go live). _listCount then equals
+            // the track count, so an appended index cannot be realized — except transiently, if a count write lands a
+            // frame apart from the row projection. Render nothing rather than a stray "Recommended" header.
+            else if (!_o._recsLive)
+                child = new BoxEl { Key = "rec:empty" };
             else if (i == visible)
                 child = Embed.Comp(() => new RecHeader(_o, _rowH)) with { Key = "rec:header" };
             else
@@ -1816,6 +1854,7 @@ sealed class TrackList : Component
     {
         var snapshot = presentation is null ? _rowsSnapshot!.Peek() : default;
         bool showTrackArtist = presentation is { } row ? row.ShowTrackArtist : snapshot.Config.ShowTrackArtist;
+        bool showListMetadata = presentation is { } rowMeta ? rowMeta.ShowListMetadata : snapshot.Config.ShowAlbumColumn;
         var go = presentation is { } rowGo ? rowGo.Go : snapshot.Handlers.Go;
         Owner? addedBy = presentation is { } rowOwner ? rowOwner.AddedBy : AddedByProfile(snapshot.Model, t);
         return TrackRow.Grid(t, displayIndex, new TrackRow.State(isNow, isPlaying, isBuffering, isTop, saved),
@@ -1825,7 +1864,9 @@ sealed class TrackList : Component
                          // button (input-a11y §6.5.1). Disabled for the shimmer rows: a skeleton keeps the identical
                          // reserved lane but stays non-interactive and hidden.
                          // The ultra-compact tier drops the "…" lane (set.Actions false) → no button built.
-                         actionsCell: set.Actions ? TrackRow.MoreButton(more) : null);
+                         actionsCell: set.Actions ? TrackRow.MoreButton(more) : null,
+                         showAlbumInMeta: showListMetadata && !set.Album,
+                         showListBadges: showListMetadata);
     }
 
     static Owner? AddedByProfile(DetailModel model, Track t)
@@ -1848,6 +1889,34 @@ sealed class TrackList : Component
         var onInteraction = scope.OnInteraction;
         var onFocusChanged = scope.OnFocusChanged;
         int DisplayIndex() => Math.Max(0, index.Value - trackStart);
+        // .mp4-onto-a-row attach. Scoped to the DETAIL-PAGE row wrapper (not the shared TrackRow cell) precisely because
+        // that is where a per-slot spec is affordable: this method already builds the slot's bound Prop closures + the
+        // lazy context-menu thunk once per bind, and the spec rides the SAME live index signal the menu does, so it stays
+        // correct across recycling. Built ONLY when the curation service exists — no service, no allocation, no target.
+        // The hover cue reuses the existing Fill closure (below) rather than adding an overlay element per row.
+        bool DropCue() => _videoDropRow.Value == index.Value;
+        DropTargetSpec? drop = _acts?.VideoOverrides is { } curation
+            ? new DropTargetSpec(
+                [DropKinds.Files],
+                OnEnter: _ => _videoDropRow.Value = index.Peek(),
+                OnLeave: _ => { if (_videoDropRow.Peek() == index.Peek()) _videoDropRow.Value = -1; },
+                OnDrop: s =>
+                {
+                    _videoDropRow.Value = -1;
+                    if (s.Payload is not FileDropData { Count: > 0 } files) return;
+                    if (VideoOverrideUx.FirstMp4(files.Paths) is not { } mp4)
+                    {
+                        // No video in the drop, so this was never an attach gesture. This row target sits BETWEEN the
+                        // pointer and the shell's play-this-file target (the engine picks the deepest accepting node),
+                        // so swallowing it would make the whole tracklist a dead zone for an audio drop. Hand it to the
+                        // very same shell path instead — which also raises the "can't play that" cue when it is neither.
+                        LocalFileActions.PlayDropped(_acts, files.Paths);
+                        return;
+                    }
+                    if (DisplayTrack(index.Peek(), trackStart) is not { Uri.Length: > 0 } t) return;
+                    VideoActions.Apply(_acts!, curation, t.Uri, mp4, replace: curation.Has(t.Uri));
+                })
+            : null;
         // Apple's immersive/stacked track list uses plain rows (no per-row pill/border) — only in that mode; wide
         // side-by-side keeps the WinUI zebra-pill treatment below.
         bool plainRows = _verticalHeader && _verticalHeroOrientation == DetailHeroOrientation.Immersive;
@@ -1864,8 +1933,12 @@ sealed class TrackList : Component
             // Zebra REST fill bound to the slot index (recycle-correct), reading WaveeColors so RethemeAll recolours
             // it on a theme/palette switch (RowZebra chooses the theme-appropriate neutral overlay).
             // Selection does NOT change the fill — the left accent bar (below) is the ONLY selection cue.
-            Fill = plainRows ? ColorF.Transparent
-                : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
+            // The .mp4 drop cue rides the fill closure that already exists (an extra overlay child would cost a node per
+            // row); DropCue() is a constant false when no drop target was built.
+            DropTarget = drop,
+            Fill = plainRows ? Prop.Of(() => DropCue() ? WaveeColors.RowHover : ColorF.Transparent)
+                : Prop.Of(() => DropCue() ? WaveeColors.RowHover
+                    : DisplayIndex() % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
             HoverFill = plainRows ? WaveeColors.RowHover
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowHoverZebra : WaveeColors.RowHover),
             PressedFill = plainRows ? WaveeColors.RowPressed

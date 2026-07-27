@@ -2831,7 +2831,16 @@ public sealed class InputDispatcher
             args ??= new WheelEventArgs { Delta = e.ScrollDelta, DeltaX = e.ScrollDeltaX, Mods = e.Mods };
             args.Local = LocalPos(n, e.PositionPx);
             _scene.GetPointerWheel(n)?.Invoke(args);
-            if (args.Handled) return true;
+            if (args.Handled)
+            {
+                // Drop class 4: the element ate the notch, so no viewport ever scrolls and no seed row is written — in a
+                // capture this looks exactly like a routing miss. Mark it (see the WheelDrop* remarks above ScrollAxis).
+                if (FluentGpu.Foundation.ScrollTrace.On)
+                    FluentGpu.Foundation.ScrollTrace.WheelSeed((int)n.Raw.Index,
+                        WheelDropMarker | WheelDropElementHandled | (e.ScrollDelta == 0f && e.ScrollDeltaX != 0f ? WheelDropHorizontal : 0),
+                        e.ScrollDelta != 0f ? e.ScrollDelta : e.ScrollDeltaX, 0f, 0f);
+                return true;
+            }
         }
         return false;
     }
@@ -3402,6 +3411,28 @@ public sealed class InputDispatcher
     /// jump, so it's near-free and doesn't perturb the frame loop the way the per-event FG_SCROLL_LOG does.</summary>
     private static readonly bool s_offsetJumpLog = System.Environment.GetEnvironmentVariable("FG_OFFSET_JUMP") == "1";
 
+    // ── wheel DROP markers (ScrollTrace wheelSeed rows, observability only — they never change routing) ───────────────
+    // A real wheel notch can clear the producer intact (a rawWheel row is written) and then die silently in dispatcher
+    // TARGET RESOLUTION: the hit chain has no scroller of this axis, or only a cross-axis one, or an element WheelBit
+    // handler set Handled. All three leave a byte-identical trace signature (a rawWheel row and nothing after it), so a
+    // capture cannot say which path ate the notch. These markers partition them.
+    //
+    //   i1 bit 4 (0x10) set ⇒ the row is a DROP marker, not a fling seed (seed rows only ever use bits 0-1).
+    //   class = (i1 >> 5) & 7:  1 = no Scrollable node anywhere in the chain
+    //                           2 = cross-axis-only chain (the only scroller(s) had the other orientation)
+    //                           3 = same-axis chain exhausted (a same-axis scroller existed but every candidate refused,
+    //                               i.e. edge-pinned — each of those also emitted its own atEdge seed row, flags=2)
+    //                           4 = an element WheelBit handler consumed it (DispatchWheel returned Handled)
+    //   i1 bit 8 (0x100) = horizontal axis;  bit 9 (0x200) = f0 is in device NOTCH units (else DIP; class 4 is always DIP).
+    //   i0 = node index (class 2 → the cross-axis scroller, class 4 → the handling element), else −1.
+    private const int WheelDropMarker           = 0x10;
+    private const int WheelDropNoScroller       = 1 << 5;
+    private const int WheelDropCrossAxisOnly    = 2 << 5;
+    private const int WheelDropSameAxisExhausted = 3 << 5;
+    private const int WheelDropElementHandled   = 4 << 5;
+    private const int WheelDropHorizontal       = 0x100;
+    private const int WheelDropNotch            = 0x200;
+
     private bool ScrollAxis(NodeHandle node, float delta, bool wantHorizontal, bool oppositeFallback, bool isNotch = false,
                             uint timestampMs = 0)
     {
@@ -3413,7 +3444,10 @@ public sealed class InputDispatcher
             bool horiz = _scene.ScrollRef(n).Orientation == 1;
             if (horiz != wantHorizontal)
             {
-                if (oppositeFallback && fallback.IsNull) fallback = n;   // opposite-axis scroller remembered as a fallback
+                // Opposite-axis scroller remembered as a fallback. Recorded even when oppositeFallback is false — the USE
+                // site below still gates on oppositeFallback (behaviour unchanged), but the drop marker then classifies a
+                // horizontal wheel over a vertical-only chain as cross-axis-only instead of "no scroller".
+                if (fallback.IsNull) fallback = n;
                 continue;
             }
             sawSameAxis = true;   // a same-axis scroller exists in the chain — even edge-pinned it OWNS this axis
@@ -3422,6 +3456,17 @@ public sealed class InputDispatcher
         // Opposite-axis fallback ONLY when NO same-axis scroller exists (a standalone carousel). A same-axis page pinned
         // at its top/bottom edge (TryScrollNode returned false) keeps the delta rather than leaking it sideways.
         if (oppositeFallback && !sawSameAxis && !fallback.IsNull && TryScrollNode(fallback, delta, isNotch, timestampMs)) return true;
+        // The notch dies HERE, with no row of its own — emit one drop marker naming which of the silent paths ate it.
+        if (FluentGpu.Foundation.ScrollTrace.On)
+        {
+            int cls, dropIdx = -1;
+            if (sawSameAxis) cls = WheelDropSameAxisExhausted;
+            else if (!fallback.IsNull) { cls = WheelDropCrossAxisOnly; dropIdx = (int)fallback.Raw.Index; }
+            else cls = WheelDropNoScroller;
+            FluentGpu.Foundation.ScrollTrace.WheelSeed(dropIdx,
+                WheelDropMarker | cls | (wantHorizontal ? WheelDropHorizontal : 0) | (isNotch ? WheelDropNotch : 0),
+                delta, 0f, 0f);
+        }
         return false;
     }
 

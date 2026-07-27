@@ -108,6 +108,32 @@ contracts owned elsewhere:
   `ReactiveRuntime` (per-`AppHost` scheduler: `Schedule`/`Flush`/`Batch`, `FrameRequested` wakes the loop). Files:
   `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs`. AOT-clean (delegates, no reflection);
   the set→notify path is allocation-free (subscriptions are wired once at mount).
+- **`Memo<T>` notification is a PUSH-PULL equality cut-off** (three `Computation` states — `Clean`/`Check`/`Dirty` — byte
+  flags, so the write path stays allocation-free). A signal write marks its direct subscribers `Dirty`; a memo going
+  stale cascades the cheaper `Check` ("maybe") to its own subscribers — eagerly, so every transitive subscriber is still
+  flagged and queued in that same write (glitch-freedom is preserved, and no lazy reader can observe a stale-but-`Clean`
+  node). The decision to actually run is then PULLED at one resolution site (`ReactiveRuntime.Flush` →
+  `Computation.RunIfNecessary`, and `Memo.Value`/`Peek` for a lazy read): a `Check`'d computation polls the sources it
+  recorded last run in READ ORDER, each memo recomputing if its own upstream moved. **A memo that recomputes to an EQUAL
+  value (its `IEqualityComparer<T>`) notifies nobody** — the subscriber falls back to `Clean` WITHOUT running its body;
+  only an unequal recompute pushes `Dirty`. So a `UseComputed` whose value did not move really does stop the re-render
+  behind it. Memos remain pull-only (never enqueued), so the flush loop and its max-iteration guard are unchanged and
+  the cut-off can only ever REDUCE the work a flush does.
+- **Flush ordering: STRUCTURAL boundary effects before component render effects (park-before-render).** The scheduler
+  keeps TWO pending queues, chosen by an immutable `Computation.Structural` flag fixed at construction (both lists are
+  allocated once and reused, so the split costs no per-frame allocation). Every quiescence iteration of
+  `ReactiveRuntime.Flush` drains the **structural** queue to empty first, and a structural effect scheduled from inside
+  a normal batch **pre-empts the remainder of that batch**. Structural = a reconciler-owned tree boundary that decides
+  whether the components below it may render at all — today exactly the `Flow.KeepAlive` boundary effect, which parks
+  the outgoing subtree (`SetSubtreeParked`), and a parked component's render is skipped and deferred. The guarantee:
+  **one signal write that both re-routes a KeepAlive boundary and is read by components inside it parks those
+  components BEFORE their render-effects run**, so an outgoing page can never render once against the incoming route
+  (deriving nonsense from another page class's route) before it is detached. Without the split, flush order is schedule
+  order — i.e. reverse subscription order — so the outcome depended on which of the two subscribed last. Ordering among
+  effects of the SAME priority is unchanged. `Show`/`For`/`Skel.Region` boundaries stay NORMAL priority: they REMOVE
+  their outgoing branch rather than park it, and a removed computation is already skipped by the drain's disposed check;
+  prioritizing them would only re-reconcile regions whose element a later parent render re-points. Gate:
+  `gate.reconciler.park-before-render` (both subscription orders).
 - **A component is a reactive computation.** `UseState`/`UseReducer` return a `Signal<T>` value; reading it in
   `Render()` subscribes the component's **render-effect**. A setState writes the signal → schedules ONLY that
   component's render-effect → on the next `ReactiveRuntime.Flush` (phase 3) it re-renders and reconciles **just its

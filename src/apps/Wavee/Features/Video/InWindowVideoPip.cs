@@ -210,9 +210,11 @@ sealed class InWindowVideoPip : Component
             PressedFill = Tok.OnMediaPrimary with { A = 0.22f },
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             Cursor = CursorId.Hand,
-            // ✕ dismisses the video for THIS track (audio keeps playing, surface hides) — it does NOT clear the sticky
-            // PreferVideo. The next track (or a "watch video" re-click → RestoreVideo) brings it back.
-            OnClick = () => b.DismissVideoForCurrentTrack(),
+            // ✕ turns video OFF (audio keeps playing, the surface goes away) — globally and stickily: no later track
+            // re-opens it, only an explicit "watch video" (the player-bar primary / the placement picker) does. It is
+            // reported as a HOST CLOSE for this surface's own placement so it shares the model's stale-close identity
+            // guard; the model, not this view, decides that an in-app close means off (PlacementCore.HostClosed).
+            OnClick = () => b.NotifyVideoSurfaceClosed(SurfacePlacement.Floating),
             Children =
             [
                 new TextEl(Icons.Cancel)

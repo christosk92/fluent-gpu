@@ -61,7 +61,7 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
         if (Diag.CompiledIn) _clock = _ctx.ResolveFrameClockForMeasure();   // frame clock — only read by the DEBUG tripwire
         RectF cur = scene.Bounds(node);                 // the arranged LOCAL rect (valid post-layout)
         scene.BoundsDeliveredRef(node) = cur;           // align the edge baseline so the next arrange doesn't re-fire the seed
-        Write(cur);                                     // seed the initial value (MarkStale → consumer re-renders NEXT frame)
+        Write(cur);                                     // seed the initial value (MarkDirty → consumer re-renders NEXT frame)
         scene.AddBoundsChangedHook(node, _onBounds);
         _installed = true;
     }

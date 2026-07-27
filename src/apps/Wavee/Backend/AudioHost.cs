@@ -14,10 +14,12 @@ namespace Wavee.Backend;
 
 public enum AudioFormat { OggVorbis96, OggVorbis160, OggVorbis320, Flac, Flac24, Mp3 }
 
-/// <summary>How the host fetches/decrypts a body: the Spotify encrypted CDN path (AES-CTR / native PlayPlay) vs an
-/// external plain-HTTP source (RSS/podcast, no decrypt). Explicit so we never overload an empty <c>Key</c> as a
-/// discriminator (empty Key still means "derive the PlayPlay key" on the Spotify path).</summary>
-public enum AudioSourceKind { SpotifyEncrypted = 0, ExternalPlain = 1 }
+/// <summary>How the host fetches/decrypts a body: the Spotify encrypted CDN path (AES-CTR / native PlayPlay), an
+/// external plain-HTTP source (RSS/podcast, no decrypt), or a file on this device. Explicit so we never overload an
+/// empty <c>Key</c> as a discriminator (empty Key still means "derive the PlayPlay key" on the Spotify path).
+/// <para><see cref="LocalFile"/> carries its absolute path in <see cref="AudioStreamHandle.CdnUrl"/> — the same field
+/// <see cref="ExternalPlain"/> uses for its URL — because both are "the one string that locates the bytes".</para></summary>
+public enum AudioSourceKind { SpotifyEncrypted = 0, ExternalPlain = 1, LocalFile = 2 }
 
 /// <summary>The user-facing streaming-quality preference (persisted as <c>playback.quality</c>) — the Spotify tier
 /// ladder. The resolver aims at the chosen rung and falls back to the nearest available file (lower first), never to

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -30,6 +31,7 @@ sealed class ProfileMenu : Component
         var overlay = UseContext(Overlay.Service);
         var requestTheme = UseContext(ThemeControl.Request);
         var go = UseContext(HistoryStore.NavCtx);
+        var actions = UseContext(ActionServices.Slot);   // the utility-command bag ("Play file…" needs Svc + Playback)
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
 
@@ -73,6 +75,11 @@ sealed class ProfileMenu : Component
                     onAccount: () => { Close(); LoginView.OpenUrl("https://www.spotify.com/account"); },
                     onSettings: () => { Close(); go("settings", null); },
                     onPalette: SetPalette,
+                    // "Play file…" is a GLOBAL utility (it belongs to no track), so it lives here rather than in the
+                    // per-track menu — and it is absent, not disabled, when the backend cannot play anything locally.
+                    onPlayFile: LocalFileActions.CanPlayFiles(actions)
+                        ? () => { Close(); LocalFileActions.PickAndPlay(actions); }
+                        : null,
                     onLogout: () => { Close(); ConfirmLogout(); }),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 // MENU chrome, not FlyoutPresenter: the body IS a MenuFlyout (an account header over
@@ -100,7 +107,7 @@ sealed class ProfileMenu : Component
 
     // The dropdown: a compact account header over stock WinUI menu rows.
     static Element MenuContent(string name, bool premium, string avatar, string? email,
-        Action close, Action onAccount, Action onSettings, Action<string> onPalette, Action onLogout)
+        Action close, Action onAccount, Action onSettings, Action<string> onPalette, Action? onPlayFile, Action onLogout)
     {
         string active = Tok.Palette.Id;
         var paletteItems = new MenuFlyoutItem[]
@@ -110,15 +117,18 @@ sealed class ProfileMenu : Component
             MenuFlyoutItem.RadioItem("Neutral", active == "neutral", () => onPalette("neutral")),
             MenuFlyoutItem.RadioItem("Accent", active == "accent", () => onPalette("accent")),
         };
-        var items = new MenuFlyoutItem[]
+        var rows = new List<MenuFlyoutItem>(7)
         {
             new(Loc.Get(Strings.Auth.Account), Icons.Contact, Invoke: onAccount),
             new(Loc.Get(Strings.Auth.Settings), Icons.Settings, Invoke: onSettings),
-            MenuFlyoutItem.Separator,
-            MenuFlyoutItem.SubMenu("Palette", paletteItems, Icons.Brush),
-            MenuFlyoutItem.Separator,
-            new(Loc.Get(Strings.Auth.LogOut), Icons.SignOut, Invoke: onLogout),
         };
+        if (onPlayFile is not null)
+            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.LocalFile.PlayFile), Icons.MusicNote, Invoke: onPlayFile));
+        rows.Add(MenuFlyoutItem.Separator);
+        rows.Add(MenuFlyoutItem.SubMenu("Palette", paletteItems, Icons.Brush));
+        rows.Add(MenuFlyoutItem.Separator);
+        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Auth.LogOut), Icons.SignOut, Invoke: onLogout));
+        var items = rows.ToArray();
 
         return new BoxEl
         {

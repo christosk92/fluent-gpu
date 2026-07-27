@@ -1008,22 +1008,24 @@ sealed class LazyNowPlayingOverlay : Component
     public override Element Render()
     {
         var bridge = UseContext(PlaybackBridge.Slot);
-        var active = UseSignal(false);
-        UseSignalEffect(() =>
+        // "Is my card the playing one?" is DERIVED, never written. It used to be a UseSignal that a UseSignalEffect wrote
+        // and Render read back — a render↔effect cycle with an ordering hazard: when a KeepAlive unpark scheduled this
+        // component's render ahead of the playback effect in the same flush, Render read a STALE `active`, the effect then
+        // wrote it, and Render ran a second time (the doubled overlay mount count on card-heavy pages). A Memo removes the
+        // cycle: Render pulls the value, so it cannot observe it stale, and the Memo's equality cut-off means an upstream
+        // write that leaves the answer unchanged resolves to CLEAN without re-rendering behind it.
+        //
+        // Cold-path decoupling is PRESERVED verbatim. Read the COARSE HasActiveContext bool FIRST and bail before touching
+        // the hot Identity signal: while nothing is playing no card can match (Matches is false with an empty
+        // context+track), so an idle overlay must NOT join Identity's ~70-way fanout nor run Matches. A Memo re-tracks its
+        // sources on EVERY recompute (RunComputation re-links), exactly like the effect did, so this early return leaves
+        // the memo subscribed to HasActiveContext ALONE while idle — Identity is only linked on the runs whose branch
+        // actually reads it, i.e. once a context goes active.
+        var active = UseComputed(() =>
         {
-            // Cold-path decoupling. Read the COARSE HasActiveContext bool FIRST and bail before touching the hot Identity
-            // signal: while nothing is playing no card can match (Matches is false with an empty context+track), so an idle
-            // overlay must NOT join Identity's ~70-way fanout nor run Matches. With the subscription-per-run model
-            // (ReactiveCore re-links sources each run), this early return leaves the effect subscribed to HasActiveContext
-            // ALONE while idle; when a context goes active every overlay's effect re-runs, reads Identity, and evaluates the
-            // precise match. (The hook itself still runs unconditionally each render — only its SUBSCRIPTIONS narrow.)
-            if (bridge is not { } b || !b.HasActiveContext.Value)
-            {
-                active.Value = false;
-                return;
-            }
+            if (bridge is not { } b || !b.HasActiveContext.Value) return false;
             var identity = b.Identity.Value;
-            active.Value = NowPlayingOverlay.Matches(_uri, identity.ContextUri, identity.Track);
+            return NowPlayingOverlay.Matches(_uri, identity.ContextUri, identity.Track);
         });
 
         if (!_hovered.Value && !active.Value)

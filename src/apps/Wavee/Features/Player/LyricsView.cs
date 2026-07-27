@@ -402,13 +402,21 @@ sealed class LyricsView : Component
         _dofNodes = new NodeHandle[doc.Lines.Count];
         _glowAlpha = new FloatSignal[doc.Lines.Count];
         for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
+        // Seed each line at its REAL bucket for the doc's opening active line — NOT a constant. PrepareDocument runs
+        // inside Render (LyricsDocHost), so the PushEmphasis below is a signal write during a render pass: seeding
+        // "fully dim" made that write move every line whose true bucket wasn't 6, fanning the whole document out at
+        // once on each new doc. Seeded with the computed value, PushEmphasis has nothing left to change and the write
+        // pass is silent. The steady sweep is untouched — it still goes through PushEmphasis, the one chokepoint.
+        bool timed = IsTimed(doc);
+        int seedActive = timed ? ResolveLine(doc.Lines, posMs) : -1;
+        bool seedInterlude = timed && _interlude.Peek();   // the timed branch below leaves _interlude as-is; the other clears it
         _lineEmphasis = new Signal<int>[doc.Lines.Count];
-        for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(6);   // seed = fully dim
+        for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive, seedInterlude));
         _docWordByWord = IsWordByWordDoc(doc);
         _glowInLine = -1; _glowOutLine = -1;
-        if (IsTimed(doc))
+        if (timed)
         {
-            _activeLine.Value = ResolveLine(doc.Lines, posMs);
+            _activeLine.Value = seedActive;
         }
         else
         {
@@ -416,7 +424,7 @@ sealed class LyricsView : Component
             _voiceLine.Value = -1;
             _interlude.Value = false;
         }
-        PushEmphasis();   // seed per-line emphasis for the freshly loaded doc (before OnFrame drives it)
+        PushEmphasis();   // per-line emphasis for the freshly loaded doc (before OnFrame drives it) — a no-op after the seed above
         _nowMs.Value = posMs;
         _scrollSnapped = false;
         ResetWipeThrottle();

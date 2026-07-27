@@ -98,6 +98,23 @@
     <Compile Include="..\Wavee\App\PlacementCore.cs" Link="PlacementCore.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
+    <!-- the local video-override curation: the warm map, the per-session quarantine, the PURE tier-1 decision, and the
+         has-video latch — all engine-free (IStore + WaveeLogger + BCL). VideoOverrideTests drive the precedence walk that
+         CompositeVideoResolver (engine-bound, not includable) only maps onto a PopOutVideoSource. -->
+    <Compile Include="..\Wavee\App\VideoOverrideService.cs" Link="VideoOverrideService.cs" />
+    <!-- P3's UX DECISION core over that curation (attach validation, the status chips, the Video ▸ submenu shape, the
+         Settings roster, the row-indicator predicate) — engine-free by construction, so VideoOverrideUxTests pin the
+         menu/settings/indicator models against production code rather than against a mock of it. -->
+    <Compile Include="..\Wavee\App\VideoOverrideUx.cs" Link="VideoOverrideUx.cs" />
+    <!-- P4's synthetic-playable builder (the Track a picked/dropped file becomes) + the shell drop-classification rule.
+         Engine-free on purpose, so "what does a file become?" is pinned without a picker, a window or a disk. -->
+    <Compile Include="..\Wavee\App\LocalPlayables.cs" Link="LocalPlayables.cs" />
+    <!-- The video-supersession fix's two engine-free decision units: the serialized/coalescing load pump (teardown before
+         build, latest-wins) and the per-load start watchdog. Both are System+BCL only BY DESIGN so VideoLoadSupersessionTests
+         pin the real ordering/fault contract against production code instead of a mock — the process-global native
+         PlayReady session it guards cannot be exercised headlessly. -->
+    <Compile Include="..\Wavee\SpotifyLive\Audio\VideoLoadPump.cs" Link="VideoLoadPump.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\Audio\VideoStartWatchdog.cs" Link="VideoStartWatchdog.cs" />
     <!-- the v9 video-manifest parser (System.Text.Json + FluentGpu.WindowsApi's DashSourceDescriptor) — SpotifyVideoManifestTests
          drive it against a real captured manifest in Fixtures\spotify-video-manifest-v9.json -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoManifest.cs" Link="SpotifyVideoManifest.cs" />
@@ -150,6 +167,9 @@
     <Compile Include="..\Wavee\App\LocalAudioDeviceService.cs" />
     <Compile Include="..\Wavee\App\DevicePickerModel.cs" />
     <Compile Include="..\Wavee\SpotifyLive\LiveTrackResolver.cs" />
+    <!-- the Spotify media provider (pure delegation onto the resolver above) — MediaProviderSeamTests drive the registry
+         dispatch through the real provider, so the source-agnostic routing contract is pinned against production code -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyMediaProvider.cs" />
     <Compile Include="..\Wavee\SpotifyLive\LiveContextResolver.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />

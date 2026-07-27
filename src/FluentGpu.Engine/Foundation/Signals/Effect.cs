@@ -9,8 +9,11 @@ public sealed class Effect : Computation
 {
     private readonly Action _body;
 
-    public Effect(ReactiveRuntime runtime, Action body, Computation? owner = null, bool runNow = true)
-        : base(runtime, owner)
+    /// <param name="structural">Flush this effect at STRUCTURAL priority (before every component render / user effect
+    /// in the same flush iteration). Reserved for reconciler-owned tree boundaries that decide whether the components
+    /// below them may render at all — see <see cref="Computation.Structural"/>. Default false: an app effect is normal.</param>
+    public Effect(ReactiveRuntime runtime, Action body, Computation? owner = null, bool runNow = true, bool structural = false)
+        : base(runtime, owner, structural)
     {
         _body = body;
         if (runNow) RunStale();

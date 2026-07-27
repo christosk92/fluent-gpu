@@ -68,6 +68,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         _connSub = connectionId.Subscribe(Observers.From<string?>(OnConnectionId));
     }
 
+    /// <summary>Optional Connect uri mask — the SINGLE upstream point covering current/prev/next rows. A playable whose
+    /// source declares no Connect publishability rewrites its uri here (remote controllers must never receive a uri they
+    /// cannot resolve); the queue <c>uid</c> is never touched, so the wire rows stay addressable. NULL (the default, and
+    /// all of Phase 1) publishes every uri VERBATIM.</summary>
+    public Func<Track, string>? PublishUriMask { get; set; }
+
     void OnConnectionId(string? id)
     {
         if (string.IsNullOrEmpty(id)) return;
@@ -148,7 +154,12 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             var resp = await _transport.Publish(_deviceId, connId!, bytes).ConfigureAwait(false);
             if (resp.Ok)
             {
-                _log.Debug($"put-state ({reason}, active={isActive}, track={snap?.Track.Uri ?? "-"})");
+                // Info, not Debug: this is the ONLY record of what we told the connect-state service, and the PUT's
+                // RESPONSE is a Cluster we immediately re-inject as if it were a remote push (onCluster below). The
+                // change-gate above (_lastPublishKey) already collapses steady-state republishes, so this is ~1 line per
+                // real state change — and without it a "why did the server correct us?" question has no input side.
+                _log.Info($"put-state {reason} active={isActive} track={snap?.Track.Uri ?? "-"} pos={snap?.PositionMs ?? 0} " +
+                    $"playing={snap?.IsPlaying ?? false} paused={snap?.IsPaused ?? false} ctx={snap?.ContextUri ?? "-"} cluster={resp.Body.Length}B");
                 if (resp.Body.Length > 0) _onCluster?.Invoke(resp.Body);
             }
             else
@@ -243,11 +254,17 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         return tracks.GetRange(0, MaxWireNextTracks);
     }
 
-    static SnapshotTrack ToSnapshotTrack(QueueEntry entry, string provider, int viewIndex)
+    SnapshotTrack ToSnapshotTrack(QueueEntry entry, string provider, int viewIndex)
     {
         var t = entry.Track;
         var artist = t.Artists.Count > 0 ? t.Artists[0] : new ArtistRef("", "", "");
-        return new SnapshotTrack(t.Uri, entry.Uid, provider, t.Title ?? "", t.Album.Name ?? "",
+        string uri = t.Uri;
+        if (PublishUriMask is { } mask)
+        {
+            try { uri = mask(t) is { Length: > 0 } masked ? masked : t.Uri; }
+            catch (Exception ex) { _log.Info("publish uri mask failed for " + t.Uri + ": " + ex.Message); }
+        }
+        return new SnapshotTrack(uri, entry.Uid, provider, t.Title ?? "", t.Album.Name ?? "",
             artist.Uri ?? "", artist.Name ?? "", t.Album.Uri ?? "", t.Image?.Url ?? "",
             t.HasVideo, viewIndex, entry.Metadata ?? new Dictionary<string, string>());
     }

@@ -142,7 +142,23 @@ internal sealed class PagedShelfCore : Component
     // NOTE the gutter shows scrolled-out neighbor content ATTENUATED BY THE EDGE FADE at non-page-aligned rests, so a
     // shelf that enables the bleed should carry an edge fade ≥ the bleed (the fade is what keeps the gutter soft).
     const float HaloBleed = 12f;
+    // Probe-lock granularity: two measured values this close are the SAME lock (see _measuredH/_measuredForCardW). Used
+    // by both the re-probe predicate (Render) and the signals' equality comparer, so they can never disagree.
+    const float MeasureTolerance = 0.5f;
     static readonly bool ShelfLog = Environment.GetEnvironmentVariable("FG_SHELFLOG") == "1";
+
+    /// <summary>Tolerance equality for the probe-lock signals: equal within <see cref="MeasureTolerance"/>, NaN-aware
+    /// (NaN equals NaN — the "never probed" sentinel must not notify itself; NaN never equals a real measurement).
+    /// A singleton — the shelf allocates no comparer per instance.</summary>
+    sealed class MeasureTolerantComparer : IEqualityComparer<float>
+    {
+        internal static readonly MeasureTolerantComparer Instance = new();
+        public bool Equals(float a, float b)
+            => float.IsNaN(a) || float.IsNaN(b) ? float.IsNaN(a) && float.IsNaN(b) : MathF.Abs(a - b) <= MeasureTolerance;
+        // Buckets are deliberately coarse-free: these signals are never hashed (Signal<T> only calls Equals), and a
+        // tolerance relation has no consistent hash. Constant 0 keeps the contract honest if one ever is.
+        public int GetHashCode(float v) => 0;
+    }
 
     readonly int _count;
     readonly Func<int, float, Element> _cardAt;
@@ -165,13 +181,21 @@ internal sealed class PagedShelfCore : Component
     readonly Signal<int> _page = new(0);              // current page (chevrons/pips; re-synced from the settled offset)
     readonly Signal<int> _pageNav = new(0);           // pager NAV intent — only chevron/pip navigation re-arms the glide,
                                                       // a free-scroll page re-sync must NOT snap the strip to the grid
-    readonly Signal<float> _measuredH = new(0f);      // probe-locked card height (measured-virtual mode)
+    // ±0.5px TOLERANCE (not default equality): the probe writes these from MEASURED bounds, and Render subscribes them
+    // (:235-237) — so a sub-pixel re-measure (a glyph metric that lands 0.02px taller after a font/atlas refresh) would
+    // notify → re-render → re-probe → write again, a measure→write→re-render loop that rebuilds every card of every
+    // shelf for as long as a page keeps filling. Half a pixel is below the layout's own snapping granularity, so a
+    // difference that small can never move a card; coalescing it costs nothing and cuts the loop at the source.
+    readonly Signal<float> _measuredH = new(0f, MeasureTolerantComparer.Instance);   // probe-locked card height (measured-virtual mode)
     readonly Signal<float> _cardW = new(0f);          // fitted width consumed by the mounted ItemsView template
     readonly ItemsViewController _ctl = new();
     FillRowVirtualLayout? _layout;                    // stateful — hoisted once, reused across renders
     // SIGNAL (not a field): the re-probe completes by WRITING this — when the re-measured height happens to equal the
     // already-locked value, the equality-gated _measuredH write alone would never re-render us out of probe mode.
-    readonly Signal<float> _measuredForCardW = new(float.NaN);
+    // Same ±0.5px tolerance, and it is EXACTLY the needProbe threshold (:237 re-probes when |mFor − cardW| > 0.5f), so the
+    // two stay complementary: whenever a re-probe is warranted the lock write is BY DEFINITION outside tolerance and still
+    // notifies — the exit-probe-mode contract above is preserved — while a within-tolerance re-write is silent.
+    readonly Signal<float> _measuredForCardW = new(float.NaN, MeasureTolerantComparer.Instance);
     readonly NodeHandle[] _probeNodes = new NodeHandle[MeasuredSampleCap];
     NodeHandle _probeHostNode = NodeHandle.Null;   // the invisible probe layer's root — RECORD-culled when not probing
     int _probeSample;
@@ -234,7 +258,7 @@ internal sealed class PagedShelfCore : Component
         // probe mode — a Peek here leaves the shelf stuck on the invisible probe host forever.
         float measuredHLock = _measuredH.Value;
         bool needProbe = _measured && !measuredRealizeAll
-            && (measuredHLock <= 0f || MathF.Abs(_measuredForCardW.Value - cardW) > 0.5f);
+            && (measuredHLock <= 0f || MathF.Abs(_measuredForCardW.Value - cardW) > MeasureTolerance);
         if (needProbe) _probeSample = Math.Min(_count, MeasuredSampleCap);
 
         var viewport = UseRef(NodeHandle.Null);
@@ -261,6 +285,11 @@ internal sealed class PagedShelfCore : Component
             }
             if (maxH > 0.5f)
             {
+                // Already locked on this measurement for this cardW ⇒ write NOTHING. The signals' tolerance comparer
+                // would coalesce these writes anyway; returning first also skips the two BackwardsWriteGuard checks and
+                // keeps the "probe wrote" intent readable — the loop this cuts is measure→write→re-render→re-probe.
+                if (MathF.Abs(_measuredH.Peek() - maxH) <= MeasureTolerance
+                    && MathF.Abs(_measuredForCardW.Peek() - cardW) <= MeasureTolerance) return;
                 // REPLACE, not Max: the lock is per-cardW (mFor invalidates it on a width change), and a shelf that
                 // re-fits narrower must not keep the taller old height as dead bottom padding.
                 _measuredH.Value = maxH;

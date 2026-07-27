@@ -37,6 +37,7 @@ public sealed class CachedStore : IStore, IDisposable
         _maxResidentBytes = maxResidentBytes;
         foreach (var e in _cold.LoadAllEntities()) Replay(e);                                  // entities → memory
         foreach (var v in _cold.LoadAllVideoAssociations()) ReplayVideo(v);                     // + the video↔audio map
+        foreach (var o in _cold.LoadAllVideoOverrides()) _hot.UpsertVideoOverride(o);           // + the user's video curation
         foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync, s.AddedAtMs);   // + library state
     }
 
@@ -112,6 +113,8 @@ public sealed class CachedStore : IStore, IDisposable
     public Show? GetShow(string uri) => _hot.GetShow(uri) ?? ColdFallback<Show>(uri, EntityKind.Show, EntityJson.Default.Show, static (h, v) => h.UpsertShow(v));
     public Episode? GetEpisode(string uri) => _hot.GetEpisode(uri) ?? ColdFallback<Episode>(uri, EntityKind.Episode, EntityJson.Default.Episode, static (h, v) => h.UpsertEpisode(v));
     public VideoAssociation? GetVideoAssociation(string uri) => _hot.GetVideoAssociation(uri);
+    public VideoOverride? GetVideoOverride(string uri) => _hot.GetVideoOverride(uri);
+    public IReadOnlyList<VideoOverride> VideoOverrides() => _hot.VideoOverrides();
 
     // Deserialize one evicted entity from the cold tier and promote it back into hot. Gated on HasEvictedEntities so an
     // un-evicted session never touches disk on a miss. The upsert re-Bumps (like the membership cold-promotion above),
@@ -234,6 +237,9 @@ public sealed class CachedStore : IStore, IDisposable
     public void UpsertPlaylist(Playlist p) { _hot.UpsertPlaylist(p); var thin = p.Tracks is null ? p : p with { Tracks = null }; _cold.UpsertEntity(p.Uri, EntityKind.Playlist, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Playlist)); }
     public void UpsertShow(Show s) { _hot.UpsertShow(s); _cold.UpsertEntity(s.Uri, EntityKind.Show, JsonSerializer.SerializeToUtf8Bytes(s, EntityJson.Default.Show)); }
     public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
+    // The user's video curation: typed columns, not a JSON blob (the roster UI queries them by field), so no serializer hop.
+    public void UpsertVideoOverride(VideoOverride o) { _hot.UpsertVideoOverride(o); _cold.UpsertVideoOverride(o); }
+    public void RemoveVideoOverride(string uri) { _hot.RemoveVideoOverride(uri); _cold.DeleteVideoOverride(uri); }
     public void UpsertEpisode(Episode e) { _hot.UpsertEpisode(e); _cold.UpsertEntity(e.Uri, EntityKind.Episode, JsonSerializer.SerializeToUtf8Bytes(e, EntityJson.Default.Episode)); }
     // Ask the hot tier whether the write actually changed state (§7.4 no-op elision) and skip the cold dual-write when it
     // didn't — so an idempotent echo/delta-overlap costs neither a change signal nor a SQLite round-trip. added_at rides

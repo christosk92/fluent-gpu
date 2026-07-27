@@ -7,54 +7,51 @@ namespace Wavee.Tests;
 /// <summary>
 /// The full behavioral spec of the surface placement state machine (<see cref="PlacementCore"/>) — the pure decision
 /// layer every video surface, the detached-window owner and the player-bar affordance derive from. Sections:
-/// activation (the parity port of the deleted <c>VideoPlacementLogicTests</c>), the click spec, per-content dismiss,
-/// availability, host-close, fullscreen, the owner mount decisions, one NAMED regression per historical bug, and two
-/// property tests over arbitrary command sequences.
+/// activation (the parity port of the deleted <c>VideoPlacementLogicTests</c>), the click spec, sticky-off, availability,
+/// host-close, fullscreen, the owner mount decisions, one NAMED regression per historical bug, and two property tests
+/// over arbitrary command sequences.
 /// </summary>
 public class PlacementCoreTests
 {
     static readonly PlacementPolicy Policy = PlacementPolicy.Video;
     const PlacementSet All = PlacementSet.Floating | PlacementSet.Detached;   // a track that HAS a video
 
-    static PlacementState Off(PlacementSet available = All, long contentGen = 0)
-        => PlacementState.Initial(Policy) with { Available = available, ContentGen = contentGen };
+    static PlacementState Off(PlacementSet available = All)
+        => PlacementState.Initial(Policy) with { Available = available };
 
-    static PlacementState At(SurfacePlacement p, PlacementSet available = All, long contentGen = 0)
-        => PlacementCore.OpenAt(Off(available, contentGen), p);
+    static PlacementState At(SurfacePlacement p, PlacementSet available = All)
+        => PlacementCore.OpenAt(Off(available), p);
+
+    /// <summary>What a TRACK CHANGE does to this model, and all it does: the bridge recomputes availability for the new
+    /// track (PlaybackBridge.RecomputeHasVideo → WithAvailability). There is no longer any per-track state in here — the
+    /// content generation that used to expire a dismiss is gone with the dismiss. A video-less track passes
+    /// <see cref="PlacementSet.None"/>; a track with a video passes <see cref="All"/>.</summary>
+    static PlacementState NextTrack(in PlacementState s, PlacementSet available = All)
+        => PlacementCore.WithAvailability(s, available);
 
     // ── activation (parity port: the old VideoPlacementLogic.VideoActive cases, one for one) ─────────────────────────
 
     [Fact]
-    public void Active_WhenRequestedAndContentHasVideoAndNotDismissed()
-        => Assert.True(PlacementCore.IsActive(At(SurfacePlacement.Floating, All, contentGen: 5)));
+    public void Active_WhenRequestedAndContentHasVideo()
+        => Assert.True(PlacementCore.IsActive(At(SurfacePlacement.Floating)));
 
     [Fact]
     public void Inactive_WhenTurnedOff()   // old: VideoActive_False_WhenNotPreferred
-        => Assert.False(PlacementCore.IsActive(Off(All, contentGen: 5)));
+        => Assert.False(PlacementCore.IsActive(Off()));
 
     [Fact]
     public void Inactive_WhenContentHasNoVideo()   // old: VideoActive_False_WhenNoVideo → availability, not a flag
-        => Assert.False(PlacementCore.IsActive(At(SurfacePlacement.Floating, PlacementSet.None, contentGen: 5)));
+        => Assert.False(PlacementCore.IsActive(At(SurfacePlacement.Floating, PlacementSet.None)));
 
     [Fact]
-    public void Inactive_WhenDismissedForThisContent()
+    public void StaysOn_AcrossTrackChanges_WhileTheIntentIsOn()
     {
-        var s = PlacementCore.DismissForContent(At(SurfacePlacement.Floating, All, contentGen: 5));
-        Assert.False(PlacementCore.IsActive(s));
-    }
-
-    [Fact]
-    public void ActiveAgain_AfterContentChange_WhileDismissStaysOld()
-    {
-        // Dismissed content 5; the next track bumps the generation, so the per-content dismiss expires by itself and the
-        // sticky intent brings the surface straight back — without any code clearing the dismiss.
-        var dismissed = PlacementCore.DismissForContent(At(SurfacePlacement.Floating, All, contentGen: 5));
-        Assert.False(PlacementCore.IsActive(dismissed));
-
-        var next = PlacementCore.ContentChanged(dismissed, 6);
-        Assert.True(PlacementCore.IsActive(next));
-        Assert.Equal(5, next.DismissedGen);                       // the stale mark is still there, and inert
-        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(next));
+        // The other half of stickiness: an ON intent still carries video from track to track (that is the whole point of
+        // it being an intent and not a per-surface flag).
+        var watching = At(SurfacePlacement.Floating);
+        Assert.True(PlacementCore.IsActive(NextTrack(watching)));
+        // …and an audio-only track in between does not clear it.
+        Assert.True(PlacementCore.IsActive(NextTrack(NextTrack(watching, PlacementSet.None))));
     }
 
     // ── the click spec ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -106,12 +103,39 @@ public class PlacementCoreTests
         Assert.Equal(SurfacePlacement.None, PlacementCore.Resolve(s));
     }
 
+    /// <summary>Regression (2026-07-27, "I closed the video and the surface stayed on screen, paused, buffering
+    /// forever"): a close that lands while a surface still CLAIMS to be mounted — a load in flight, a pop-out whose OS
+    /// window has not torn down yet — must still resolve to None. Reality (<c>Live</c>) is a report, never an input to
+    /// the decision; if it could hold the surface open, the ✕ would be a suggestion.</summary>
     [Fact]
-    public void OpenAt_ClearsAnEarlierDismiss()   // an explicit "show it" beats an earlier "hide it for this song"
+    public void TurnOff_UnmountsEvenWhileASurfaceStillClaimsToBeLive()
     {
-        var dismissed = PlacementCore.DismissForContent(At(SurfacePlacement.Floating));
-        var shown = PlacementCore.OpenAt(dismissed, SurfacePlacement.Floating);
+        foreach (var claimed in new[] { SurfacePlacement.Floating, SurfacePlacement.Detached })
+        {
+            var open = PlacementCore.WithLive(At(claimed), claimed);           // mid-load: the surface reported itself live
+            Assert.Equal(claimed, PlacementCore.Resolve(open));
+
+            var off = PlacementCore.TurnOff(open);
+            Assert.Equal(SurfacePlacement.None, PlacementCore.Resolve(off));   // …and the ✕ still wins
+            Assert.False(PlacementCore.IsActive(off));
+            Assert.True(PlacementCore.Invariant(off));
+
+            // The same for the surface reporting its own close: an IN-APP close is off, not a placement shuffle.
+            var closed = PlacementCore.HostClosed(PlacementCore.WithLive(At(SurfacePlacement.Floating), SurfacePlacement.Floating),
+                SurfacePlacement.Floating);
+            Assert.Equal(SurfacePlacement.None, PlacementCore.Resolve(closed));
+        }
+    }
+
+    [Fact]
+    public void OpenAt_TurnsVideoBackOn_AfterAClose()   // the explicit re-enable: the picker / the attach-and-reveal flow
+    {
+        var closed = PlacementCore.HostClosed(At(SurfacePlacement.Floating), SurfacePlacement.Floating);
+        Assert.False(PlacementCore.IsActive(closed));
+
+        var shown = PlacementCore.OpenAt(closed, SurfacePlacement.Floating);
         Assert.True(PlacementCore.IsActive(shown));
+        Assert.True(PlacementCore.IsActive(NextTrack(shown)));   // …and it is sticky-ON again from there
     }
 
     [Fact]
@@ -121,21 +145,47 @@ public class PlacementCoreTests
         Assert.Equal(SurfacePlacement.Detached, PlacementCore.Resolve(s));   // exactly one placement — an enum, not flags
     }
 
-    // ── per-content dismiss (the surface's own ✕) ────────────────────────────────────────────────────────────────────
+    // ── closing is STICKY OFF (the surface's own ✕ — product rule changed 2026-07-26) ─────────────────────────────────
 
     [Fact]
-    public void Dismiss_HidesTheSurface_ButKeepsTheStickyIntent()
+    public void ClosingTheSurface_TurnsVideoOff_NotHiddenForThisSong()
     {
-        var s = PlacementCore.DismissForContent(At(SurfacePlacement.Floating, All, contentGen: 3));
+        var s = PlacementCore.HostClosed(At(SurfacePlacement.Floating), SurfacePlacement.Floating);
         Assert.False(PlacementCore.IsActive(s));
-        Assert.Equal(SurfacePlacement.Floating, s.Requested);   // still "on" — it is hidden for this song only
+        Assert.Equal(SurfacePlacement.None, s.Requested);       // OFF — there is no "hidden but still on" state left
+        Assert.Equal(SurfacePlacement.Floating, s.Preferred);   // …but where they like to watch is remembered
     }
 
     [Fact]
-    public void Restore_UndoesADismiss_WithoutChangingPlacement()
+    public void ClosingTheSurface_KeepsEveryLaterTrackOnAudio_UntilTheUserTurnsVideoBackOn()
     {
-        var s = PlacementCore.Restore(PlacementCore.DismissForContent(At(SurfacePlacement.Detached)));
-        Assert.Equal(SurfacePlacement.Detached, PlacementCore.Resolve(s));
+        // THE reported bug: close the video on track A, then track B (which has a video) auto-opened it again.
+        var closed = PlacementCore.HostClosed(At(SurfacePlacement.Floating), SurfacePlacement.Floating);
+
+        var trackB = NextTrack(closed);                          // B has a video…
+        Assert.False(PlacementCore.IsActive(trackB));            // …and still does not open
+        Assert.Equal(SurfacePlacement.None, PlacementCore.Resolve(trackB));
+        // The playback-side predicate is the same rule, so B starts as AUDIO rather than as a video with a hidden surface.
+        Assert.Equal(SurfacePlacement.None, PlacementCore.ResolveWith(trackB, All));
+
+        var trackC = NextTrack(trackB);                          // and it does not wear off after one more track either
+        Assert.False(PlacementCore.IsActive(trackC));
+
+        // Only an explicit re-enable brings it back (player-bar primary / placement picker).
+        Assert.True(PlacementCore.IsActive(PlacementCore.TogglePrimary(trackC)));
+    }
+
+    [Fact]
+    public void ClosingTheSurface_MidTrack_RoutesTheCurrentTrackBackToAudioToo()
+    {
+        // The kind edge the bridge watches is IsActive true→false; asserting it here is what guarantees CommitVideoSurface
+        // fires RequestMediaKindRefresh, i.e. the song already playing swaps back from video to audio.
+        var watching = At(SurfacePlacement.Floating);
+        Assert.True(PlacementCore.IsActive(watching));
+
+        var closed = PlacementCore.HostClosed(watching, SurfacePlacement.Floating);
+        Assert.False(PlacementCore.IsActive(closed));                              // the active edge the bridge acts on
+        Assert.Equal(SurfacePlacement.None, PlacementCore.ResolveWith(closed, All));   // ShouldPlayAsVideo(currentTrack) = false
     }
 
     // ── availability (content ∧ host caps) ──────────────────────────────────────────────────────────────────────────
@@ -193,12 +243,16 @@ public class PlacementCoreTests
     }
 
     [Fact]
-    public void ClosingAnInAppSurface_IsHideForThisSong_NotOff()
+    public void ClosingTheMiniPlayerAfterTheDetachedFallback_TurnsVideoOff()
     {
-        var s = PlacementCore.HostClosed(At(SurfacePlacement.Floating), SurfacePlacement.Floating);
-        Assert.False(PlacementCore.IsActive(s));
-        Assert.Equal(SurfacePlacement.Floating, s.Requested);                  // still on…
-        Assert.True(PlacementCore.IsActive(PlacementCore.ContentChanged(s, s.ContentGen + 1)));   // …and back next track
+        // The two close rules compose: closing the pop-out hands video to the mini player (still watching, just not in a
+        // separate window); closing THAT is the "I closed the video" gesture and turns it off for good.
+        var fellBack = PlacementCore.HostClosed(At(SurfacePlacement.Detached), SurfacePlacement.Detached);
+        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(fellBack));
+
+        var off = PlacementCore.HostClosed(fellBack, SurfacePlacement.Floating);
+        Assert.Equal(SurfacePlacement.None, off.Requested);
+        Assert.False(PlacementCore.IsActive(NextTrack(off)));
     }
 
     [Fact]
@@ -375,6 +429,21 @@ public class PlacementCoreTests
         Assert.NotEqual(SurfacePlacement.Detached, PlacementCore.Resolve(s));
     }
 
+    /// <summary>Bug 6 (2026-07-26): closing the video came back on the next song that had one. The ✕ was a CONTENT-SCOPED
+    /// dismiss that expired by itself at the track boundary while the sticky intent stayed on, so "I closed it" and
+    /// "show it again in 3 minutes" were the same state. Closing is now plain off, and the dismiss machinery is deleted
+    /// rather than merely bypassed — there is no state left that means "off, but it will come back".</summary>
+    [Fact]
+    public void Regression_ClosedVideoReopenedOnTheNextTrack()
+    {
+        var closed = PlacementCore.HostClosed(At(SurfacePlacement.Floating), SurfacePlacement.Floating);
+        for (int track = 0; track < 5; track++)
+        {
+            closed = NextTrack(closed, track % 2 == 0 ? All : PlacementSet.None);
+            Assert.False(PlacementCore.IsActive(closed));
+        }
+    }
+
     // ── persistence: "persist where you like to work; never persist whether it is running" ──────────────────────────
 
     [Theory]
@@ -450,8 +519,8 @@ public class PlacementCoreTests
     // ── property tests ──────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Property 1: the invariants hold after EVERY command in EVERY order — a resolved placement is always
-    /// actually available, Preferred is always a real home, nothing resolves while off, and a dismiss made for other
-    /// content is inert. Deterministic pseudo-random sequences (fixed seed) so a failure always reproduces.</summary>
+    /// actually available, Preferred is always a real home, and nothing resolves while off. Deterministic pseudo-random
+    /// sequences (fixed seed) so a failure always reproduces.</summary>
     [Fact]
     public void Property_InvariantsHoldForArbitraryCommandSequences()
     {
@@ -474,16 +543,12 @@ public class PlacementCoreTests
         {
             var s = PlacementState.Initial(Policy);
             var trail = new List<PlacementCommand>(24);
-            long gen = 0;
             for (int step = 0; step < 24; step++)
             {
-                var kind = kinds[Next() % (uint)kinds.Length];
-                if (kind == PlacementCommandKind.ContentChanged) gen++;
                 var cmd = new PlacementCommand(
-                    kind,
+                    kinds[Next() % (uint)kinds.Length],
                     placements[Next() % (uint)placements.Length],
-                    sets[Next() % (uint)sets.Length],
-                    gen);
+                    sets[Next() % (uint)sets.Length]);
                 trail.Add(cmd);
                 s = PlacementCore.Apply(s, cmd);
                 Assert.True(PlacementCore.Invariant(s),
@@ -504,9 +569,8 @@ public class PlacementCoreTests
         foreach (var requested in placements)
         foreach (var preferred in new[] { SurfacePlacement.Floating, SurfacePlacement.Detached })
         foreach (var available in sets)
-        foreach (var dismissed in new[] { PlacementState.NotDismissed, 0L, 1L })
         {
-            var s = new PlacementState(requested, preferred, SurfacePlacement.None, SurfacePlacement.None, available, 0L, dismissed);
+            var s = new PlacementState(requested, preferred, SurfacePlacement.None, SurfacePlacement.None, available);
             bool wasActive = PlacementCore.IsActive(s);
             var next = PlacementCore.TogglePrimary(s);
 

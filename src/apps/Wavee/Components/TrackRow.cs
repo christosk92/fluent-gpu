@@ -161,7 +161,8 @@ internal static class TrackRow
     internal static Element Grid(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                  Element title, bool showTrackArtist, Action<string, string?> go,
                                  Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
-                                 bool likePop = false, Element? actionsCell = null)
+                                 bool likePop = false, Element? actionsCell = null,
+                                 bool showAlbumInMeta = false, bool showListBadges = false)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -184,14 +185,19 @@ internal static class TrackRow
         // single-artist albums/singles/EPs).
         if (set.Thumb)
             Add(CellKey.Art, CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, Radii.Control)));
+        bool showInlineVideo = showListBadges && !set.Video && VideoPresence.HasVideo(t);
+        bool showMeta = showTrackArtist || showAlbumInMeta
+            || (showListBadges && t.IsExplicit) || showInlineVideo;
         var titleCol = new BoxEl
         {
             // MinWidth=0: this stack sits in the STAR track, which the overflow guard collapses to 0 first. Without the
             // floor override it keeps its natural width and the title/artist runs paint across the whole row.
             Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f,
-            // Subline artist(s) — per config (playlists/Liked/compilations show them; single-artist albums/singles/EPs don't).
-            Children = showTrackArtist
-                ? [title, ArtistLinks(t.Artists, go)]
+            // At compact playlist tiers the dedicated Album/Video lanes disappear. Preserve their information on the
+            // existing artist subline instead of simply dropping it: Explicit · artists · album, plus the video glyph.
+            Children = showMeta
+                ? [title, MetadataLine(t, go, showTrackArtist, showAlbumInMeta,
+                                       showListBadges && t.IsExplicit, showInlineVideo)]
                 : [title],
         };
         Add(CellKey.Title, new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, ClipToBounds = true, Children = [titleCol] });
@@ -203,7 +209,9 @@ internal static class TrackRow
         if (set.Date)
             Add(CellKey.Date, LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
         if (set.Video)
-            Add(CellKey.Video, CenterCell(t.HasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
+            // Override-aware: a user-attached local video counts as "this row has a video" exactly like the source's own
+            // association. VideoPresence.HasVideo is one ordinal dictionary probe — no context read, no per-row signal.
+            Add(CellKey.Video, CenterCell(VideoPresence.HasVideo(t) ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
         if (set.Plays)
             Add(CellKey.Plays, EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
         Add(CellKey.Duration, EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
@@ -275,7 +283,7 @@ internal static class TrackRow
         var meta = new List<Element>(5);
 
         if (explicitBadge && t.IsExplicit) meta.Add(ExplicitBadge());
-        if (set.Video && t.HasVideo)
+        if (set.Video && VideoPresence.HasVideo(t))
         {
             if (meta.Count > 0) meta.Add(new TextEl("\u00B7") { Size = 12f, Color = Tok.TextTertiary });
             meta.Add(Icon(Icons.Movie, 13f, Tok.TextTertiary));
@@ -436,6 +444,47 @@ internal static class TrackRow
         {
             Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
             MinWidth = 0f,   // the NoWrap names must not inflate the flexible title column
+        };
+    }
+
+    // The responsive playlist/Liked metadata subline. Artist and album remain separate hyperlinks even though they share
+    // one ellipsized text run; the middle-dot separator makes the compact fallback read as one deliberate metadata line.
+    static Element MetadataLine(Track t, Action<string, string?> go, bool showArtists, bool showAlbum,
+                                bool showExplicit, bool showVideo)
+    {
+        var spans = new List<TextSpan>(t.Artists.Count * 2 + 2);
+        if (showArtists)
+        {
+            for (int i = 0; i < t.Artists.Count; i++)
+            {
+                if (i > 0) spans.Add(new TextSpan(", "));
+                var a = t.Artists[i];
+                spans.Add(new TextSpan(a.Name, OnClick: () => go("artist:" + a.Uri, a.Name)));
+            }
+        }
+        if (showAlbum && t.Album.Name.Length > 0)
+        {
+            if (spans.Count > 0) spans.Add(new TextSpan(" \u00B7 "));
+            var album = t.Album;
+            spans.Add(new TextSpan(album.Name, OnClick: () => go("album:" + album.Uri, album.Name)));
+        }
+
+        var kids = new List<Element>(3);
+        if (showExplicit) kids.Add(ExplicitBadge());
+        if (spans.Count > 0)
+            kids.Add(new SpanTextEl(spans.ToArray())
+            {
+                Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap,
+                Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+                Grow = 1f, Basis = 0f, MinWidth = 0f,
+            });
+        if (showVideo) kids.Add(Icon(Icons.Movie, 13f, Tok.TextTertiary));
+
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = 4f,
+            MinWidth = 0f, ClipToBounds = true,
+            Children = kids.ToArray(),
         };
     }
 

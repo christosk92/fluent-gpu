@@ -452,6 +452,39 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private int WheelTraceFlags(bool horizontal, bool thisHiRes, bool streamIdle, bool ptTouchpad, bool ctrl, bool phasePath, bool fbActiveBefore)
         => (horizontal ? 1 : 0) | (thisHiRes ? 2 : 0) | (streamIdle ? 4 : 0) | (_wheelHiRes ? 8 : 0)
          | (ptTouchpad ? 16 : 0) | (ctrl ? 32 : 0) | (phasePath ? 64 : 0) | (fbActiveBefore ? 128 : 0);
+
+    // ── swallowed-packet trace rows (observability only; the arbitration itself is untouched) ─────────────────────────
+    // The DM wheel-arbitration block below returns true from several points ABOVE every rawWheel emit site, so a packet
+    // it eats leaves NO trace row at all — in a capture that is indistinguishable from a notch the user never rolled.
+    // These rows make the swallow visible WITHOUT duplicating the surviving packets' rows (each is emitted only on a
+    // path that currently emits nothing, so the "one rawWheel row per delivered packet" invariant still holds; a
+    // swallow row is identified by bit 8 and delivers no InputEvent).
+    //   i1 bit 8 (256) = SWALLOWED by the producer; reason = (i1 >> 9) & 7 (bits 1-128 keep their classifier meaning):
+    //     1 = DmWheelRoute.DmOwned — device evidence says touchpad and a DM manipulation is live
+    //     2 = confirmed burst latch still closed, this packet continues the burst (gap < WheelBurstMaxGapMs)
+    //     3 = burst CONFIRMED by this packet (two fast ±120s during a live manipulation); the latch arms here
+    //     4 = HELD for confirmation — not (yet) a drop: 50 ms of silence makes PumpInto's FlushHeldWheelNotch deliver it
+    //     5 = hi-res packet suppressed because DM is the live phase producer for this gesture
+    // Reasons 2/3/4 rest on rule 3's premise, which the remarks in the burst block record as FALSIFIED on this device (a
+    // free-spin mouse sustains exact ±120 at 8-16 ms). That premise is deliberately NOT changed here — these rows are
+    // exactly the evidence needed to size that change, which is why this pass is observability only.
+    private const int WheelTraceSwallowed = 256;
+    private const int WheelSwallowDmOwned = 1 << 9;
+    private const int WheelSwallowBurstContinue = 2 << 9;
+    private const int WheelSwallowBurstConfirm = 3 << 9;
+    private const int WheelSwallowHeld = 4 << 9;
+    private const int WheelSwallowHiResUnderDm = 5 << 9;
+
+    private void TraceWheelSwallow(int notch, int reason, bool horizontal, bool thisHiRes, bool streamIdle, bool ptTouchpad,
+                                   uint wheelGapMs, bool phasePath = false)
+    {
+        if (!FluentGpu.Foundation.ScrollTrace.On) return;
+        FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
+            WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: phasePath, fbActiveBefore: _fbActive)
+                | WheelTraceSwallowed | reason,
+            _fbSeq, 0f, wheelGapMs, 0);
+    }
+
     private readonly Dictionary<nint, bool> _touchpadDeviceCache = new();   // source HANDLE -> POINTER_DEVICE_TYPE_TOUCH_PAD
     private readonly GCHandle _self;
     private readonly Queue<InputEvent> _queue = new();
@@ -1408,7 +1441,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 bool wheelTookOverDm = false;
                 DmWheelRoute dmRoute = DmWheelArbitration.Decide(
                     _dm is { Enabled: true, GestureLive: true }, sourceEvidence);
-                if (dmRoute == DmWheelRoute.DmOwned) return true;
+                if (dmRoute == DmWheelRoute.DmOwned)
+                {
+                    TraceWheelSwallow(notch, WheelSwallowDmOwned, horizontal,
+                        thisHiRes: notch != 0 && (notch % 120) != 0, streamIdle, ptTouchpad, wheelGapMs);
+                    return true;
+                }
                 if (dmRoute == DmWheelRoute.StopDmAndPass && _dm is { Enabled: true } takeoverDm)
                 {
                     wheelTookOverDm = takeoverDm.TryStopForPhysicalWheel();
@@ -1421,6 +1459,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                         _wheelAccumX = 0;
                         _wheelAccumY = 0;
                     }
+                    // TryStopForPhysicalWheel returns false only when there is no live manipulation left to stop, and the
+                    // burst latch means "swallow ±120s belonging to a live manipulation" — so a latch surviving that
+                    // return is stale, and would eat the opening notches of the NEXT gesture. Clear it with the gesture.
+                    else _dmWheelBurstLatch = false;
                 }
                 bool subNotch = notch != 0 && (notch % 120) != 0;                    // rule 2 (also the trace's "thisHiRes")
                 bool thisHiRes = subNotch;
@@ -1455,7 +1497,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 {
                     if (_dmWheelBurstLatch)
                     {
-                        if (wheelGapMs < WheelBurstMaxGapMs) return true;   // the burst continues — swallow
+                        if (wheelGapMs < WheelBurstMaxGapMs)
+                        {
+                            TraceWheelSwallow(notch, WheelSwallowBurstContinue, horizontal, thisHiRes, streamIdle, ptTouchpad, wheelGapMs);
+                            return true;   // the burst continues — swallow
+                        }
                         _dmWheelBurstLatch = false;                          // went quiet: fresh evaluation below
                     }
                     if (_dmHeldNotch != 0 && nowMs - _dmHeldMs < WheelBurstMaxGapMs)
@@ -1464,11 +1510,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                         _dmWheelBurstLatch = true;   // two fast ±120s during a live manipulation = synthesis
                         if (FluentGpu.Foundation.ScrollLog.On)
                             FluentGpu.Foundation.ScrollLog.Line("WHEEL ±120 burst during live DM gesture — swallowed (OS synthesis)");
+                        TraceWheelSwallow(notch, WheelSwallowBurstConfirm, horizontal, thisHiRes, streamIdle, ptTouchpad, wheelGapMs);
                         return true;
                     }
                     FlushHeldWheelNotch();   // a stale held notch already proved genuine — deliver it first
                     _dmHeldNotch = notch; _dmHeldMs = nowMs; _dmHeldHoriz = horizontal;
                     _dmHeldPt = WheelPt(lp); _dmHeldPid = wheelPid;
+                    TraceWheelSwallow(notch, WheelSwallowHeld, horizontal, thisHiRes, streamIdle, ptTouchpad, wheelGapMs);
                     return true;
                 }
                 FlushHeldWheelNotch();   // manipulation ended / non-±120 traffic: release any held notch in order
@@ -1484,7 +1532,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // Never two phase-contract producers for one gesture (§7): while a DManip manipulation is live, DM
                     // is THE producer — a wheel packet routed to the hi-res fallback here would emit a competing
                     // ScrollBegin/Update stream into the same latched gesture. Swallow it; DM reports the motion.
-                    if (!wheelTookOverDm && _dm is { Enabled: true } dmOwner && dmOwner.GestureLive) return true;
+                    if (!wheelTookOverDm && _dm is { Enabled: true } dmOwner && dmOwner.GestureLive)
+                    {
+                        TraceWheelSwallow(notch, WheelSwallowHiResUnderDm, horizontal, thisHiRes, streamIdle, ptTouchpad,
+                            wheelGapMs, phasePath: true);
+                        return true;
+                    }
                     // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
                     if ((Mods() & KeyModifiers.Ctrl) != 0)
                     {

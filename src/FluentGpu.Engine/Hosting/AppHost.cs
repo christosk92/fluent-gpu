@@ -34,7 +34,8 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int NodesCulled { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
     // Per-frame layout-cost counters (FlexLayout diag; valid only when FG_LAYOUT_DIAG=1, else 0). MeasureCount/ArrangeCount
-    // are total node visits across the frame's full + scoped + phase-7 reflow layout passes; TextShapeMisses is DirectWrite
+    // are total node visits across the frame's full + scoped + phase-7 reflow layout passes — MeasureCount counts REAL
+    // measures (within-pass memo hits are excluded; FlexLayout.DiagMeasureMemoHits has those); TextShapeMisses is DirectWrite
     // re-shapes (measure-cache misses). A projected (Reveal/FLIP) size animation must keep these ~0 on every anim tick —
     // only the commit frame is large. The reflow-per-tick defect (backdrop-effects-animation §5.8) is exactly a nonzero here.
     public int MeasureCount { get; init; }
@@ -66,6 +67,17 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     /// layout / scroll-catchup realize is charged to <see cref="RealizeCatchupMs"/> instead.</summary>
     public double VirtualRealizeMs { get; init; }
     public double LayoutMs { get; init; }
+    // LayoutMs sub-split (hitch attribution): the "layout" bucket is the whole phase-6/6.5 span, and three passengers ride
+    // it that are NOT the flex solve — layout effects, the connected-animation Tick65 (a per-tagged-node AbsoluteRect
+    // parent-chain walk, every frame), and the enter/exit reflow seeding loops. A 13→200 ms layout tail on IDENTICAL
+    // measure counts is one of those, not the solver, and could not be told apart until this split. The four sum to LayoutMs.
+    public double LayoutSolveMs { get; init; }
+    public double LayoutEffectsMs { get; init; }
+    public double ConnectedTickMs { get; init; }
+    public double ReflowSeedMs { get; init; }
+    /// <summary>Of <see cref="RootRelayoutEscapes"/>: escapes proven size-stable and re-solved in place — full-window
+    /// solves avoided. Equal to RootRelayoutEscapes ⇒ every escape was absorbed and no root solve ran.</summary>
+    public int LocalRelayoutResolves { get; init; }
     public double AnimMs { get; init; }
     public double RecordMs { get; init; }
     public double SubmitMs { get; init; }
@@ -181,6 +193,23 @@ public enum HostWaitKind : byte
     PaceSkipSubmit,  // AsyncDisplayPaceMs after an elided submit (sync path)
     PaceAsync,       // AsyncDisplayPaceMs — async present pace cap
     DisplayRate,     // 0: latency-sensitive / one-shot motion — sync present-throttled (panel rate)
+}
+
+/// <summary>How the ambient-animation pacing RATE is selected (the cap's rate, not whether it engages — that stays
+/// <see cref="AppHost.AnimIsAmbient"/> + the latency-sensitive/scroll-grace guards). Set via
+/// <see cref="AppHost.AmbientRate"/>; see that property for the precedence rules.</summary>
+public enum AmbientRateMode : byte
+{
+    /// <summary>Pace to the literal <see cref="AppHost.AmbientAnimationFps"/> value. A cap BELOW the panel rate that is
+    /// not an integer divisor of it beats against the vsync-locked present (see <see cref="AppHost.AmbientFrameWaitMs"/>),
+    /// so prefer <see cref="HalfRefresh"/> unless a specific number is the point (a diagnostic A/B).</summary>
+    ExplicitFps,
+    /// <summary>Pace to HALF the panel's CURRENT refresh — 120 Hz ⇒ 60, 90 Hz ⇒ 45, 60 Hz ⇒ 30 — re-derived every wait
+    /// from the measured refresh period, so a display change (or a drag to a different-rate monitor) is picked up with
+    /// no app involvement. Always an exact whole-vblank divisor, so it never beats against the present.</summary>
+    HalfRefresh,
+    /// <summary>No software cap: ambient loops run at the display rate (the old <c>AmbientAnimationFps = 0</c>).</summary>
+    Uncapped,
 }
 
 public sealed class AppHost : IDisposable
@@ -701,9 +730,11 @@ public sealed class AppHost : IDisposable
     // Ambient-animation frame-rate cap (FG_ANIM_FPS env, default 30 Hz). 0 is the explicit diagnostic/app override for
     // UNCAPPED/display-rate ambient motion; a positive cap paces perpetual loops (a spinner, skeleton shimmer,
     // equalizer/media playhead, reveal fade, implicit brush transition, caret blink) where a sub-refresh rate is
-    // imperceptible and idles the CPU. WARNING: a positive cap BELOW the panel's refresh BEATS against the vsync-locked
-    // present (the software wait stacks onto the vblank quantization), so e.g. a 60 cap on a 120 Hz panel reads ~40–60,
-    // not a clean 60. Latency-SENSITIVE motion (scroll/hover/press/drag/repeat — motion the user actively drives) is
+    // imperceptible and idles the CPU. WARNING: a positive FIXED cap BELOW the panel's refresh BEATS against the
+    // vsync-locked present (the software wait stacks onto the vblank quantization), so e.g. a 60 cap on a 120 Hz panel
+    // reads ~40–60, not a clean 60 — which is exactly why AmbientRateMode.HalfRefresh (a panel-DERIVED rate, always a
+    // whole-vblank divisor) exists and is what an app policy should prefer over a hard-coded number.
+    // Latency-SENSITIVE motion (scroll/hover/press/drag/repeat — motion the user actively drives) is
     // exempt and always runs at display rate; and input/worker-posts wake the loop instantly regardless of the wait, so
     // the cap NEVER adds input latency.
     private long _lastFrameStartTicks;
@@ -728,9 +759,88 @@ public sealed class AppHost : IDisposable
     private static readonly long SelfBlurHoldAfterScrollTicks = (long)(0.12 * Stopwatch.Frequency);
     private long _mainScrollHoldUntil;   // any-viewport user scroll — apps peek via Reconciler.PeekMainScrollBusy
     private static readonly long MainScrollHoldTicks = (long)(0.45 * Stopwatch.Frequency);
-    public int AmbientAnimationFps { get; set; } = s_ambientFpsDefault;
+    // Page-fill grace (same time base as the two scroll holds): a CLICK navigation arms no scroll hold, so without this
+    // the ambient cap engaged for the whole page-enter image reveal (measured: ~1.1s pinned at exactly 60fps after an
+    // album→artist nav) — the one case EffectiveLatencySensitiveWake's Image* demotion was never meant to catch. Armed
+    // off the flush's component-render count rather than `reconciled`: a mounted per-frame poller (the seek ticker) makes
+    // `reconciled` true on ordinary frames, which would hold the grace open forever and delete the demotion entirely.
+    private long _mountGraceUntil;
+    private static readonly long MountGraceTicks = (long)(0.5 * Stopwatch.Frequency);
+    // A structural page-level reconcile renders a whole subtree; a hover/ticker/single-row re-render renders a handful.
+    // 25 is the same "comps are high" line the render census already draws (Reconciler.MaybeDumpRenderCensus).
+    private const int MountGraceCompThreshold = 25;
+    /// <summary>The ambient cap's rate when <see cref="AmbientRate"/> is <see cref="AmbientRateMode.ExplicitFps"/>;
+    /// 0 means uncapped (kept as the historical spelling — assigning 0 also flips <see cref="AmbientRate"/> to
+    /// <see cref="AmbientRateMode.Uncapped"/>, and assigning a positive value flips it to
+    /// <see cref="AmbientRateMode.ExplicitFps"/>, so pre-mode app code keeps its exact old meaning).
+    /// <para><b>Precedence (highest first):</b> (1) the <c>FG_ANIM_FPS</c> env var — the diagnostic A/B knob, an explicit
+    /// fps including <c>0</c> = uncapped; when it is set, app writes to this property and to <see cref="AmbientRate"/>
+    /// are IGNORED so a capture can't be silently re-capped by app policy. (2) the app's own assignment (Wavee's
+    /// power/attention policy). (3) the engine default, <see cref="AmbientRateMode.ExplicitFps"/> at 30.</para>
+    /// Readable/writable from any thread (volatile scalar); apps set it from the UI thread.</summary>
+    public int AmbientAnimationFps
+    {
+        get => Volatile.Read(ref _ambientFps);
+        set => SetAmbientRate(value > 0 ? AmbientRateMode.ExplicitFps : AmbientRateMode.Uncapped, value);
+    }
+
+    /// <summary>How the ambient pacing rate is selected. Assigning <see cref="AmbientRateMode.ExplicitFps"/> keeps the
+    /// current <see cref="AmbientAnimationFps"/> value; <see cref="AmbientRateMode.HalfRefresh"/> derives the rate from
+    /// the live panel refresh every wait. Same precedence rules (and same env lock) as
+    /// <see cref="AmbientAnimationFps"/>; safe to flip at runtime from the UI thread.</summary>
+    public AmbientRateMode AmbientRate
+    {
+        get => (AmbientRateMode)Volatile.Read(ref _ambientRateMode);
+        set => SetAmbientRate(value, Volatile.Read(ref _ambientFps));
+    }
+
+    private int _ambientFps = s_ambientFpsDefault;
+    private int _ambientRateMode = (int)(s_ambientFpsDefault > 0 ? AmbientRateMode.ExplicitFps : AmbientRateMode.Uncapped);
+
+    /// <summary>The one write path for both ambient-rate properties: honours the FG_ANIM_FPS lock and publishes the pair
+    /// mode-first-consistent (each field is a volatile scalar; a reader that catches the pair mid-write still sees two
+    /// individually valid values, and the next wait — ≤ one frame later — sees the settled pair).</summary>
+    private void SetAmbientRate(AmbientRateMode mode, int fps)
+    {
+        if (s_ambientFpsFromEnv) return;   // the diagnostic override wins over app policy (documented on AmbientAnimationFps)
+        Volatile.Write(ref _ambientFps, fps < 0 ? 0 : fps);
+        Volatile.Write(ref _ambientRateMode, (int)mode);
+    }
+
+    private static readonly bool s_ambientFpsFromEnv =
+        int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var e) && e >= 0;
     private static readonly int s_ambientFpsDefault = ReadAmbientFps();
     private static int ReadAmbientFps() => int.TryParse(Environment.GetEnvironmentVariable("FG_ANIM_FPS"), out var v) && v >= 0 ? v : 30;
+
+    /// <summary>Half-refresh's answer when the panel's refresh period is not known yet (no present has completed, or a
+    /// headless device): the 60 Hz panel's answer, which is also the engine's historical default cap.</summary>
+    private const int HalfRefreshFallbackFps = 30;
+
+    /// <summary>Resolve the ambient pacing rate (fps) from the mode, the explicit-fps setting and the panel's CURRENT
+    /// refresh. Pure and static so the pacing policy is testable without a host (VerticalSlice
+    /// <c>gate.host.ambient-rate</c>): <see cref="AmbientRateMode.HalfRefresh"/> ⇒ <c>round(refreshHz / 2)</c>
+    /// (120 ⇒ 60, 90 ⇒ 45, 60 ⇒ 30), clamped to ≥1 and falling back to <see cref="HalfRefreshFallbackFps"/> when the
+    /// refresh is unknown (<paramref name="refreshHz"/> ≤ 0); <see cref="AmbientRateMode.ExplicitFps"/> ⇒ the explicit
+    /// value verbatim (refresh-independent); <see cref="AmbientRateMode.Uncapped"/> ⇒ 0.</summary>
+    /// <returns>The cap in fps, or 0 for "no cap".</returns>
+    public static int DeriveAmbientFps(AmbientRateMode mode, int explicitFps, double refreshHz) => mode switch
+    {
+        AmbientRateMode.Uncapped => 0,
+        AmbientRateMode.HalfRefresh => refreshHz > 0.0 ? Math.Max(1, (int)Math.Round(refreshHz / 2.0)) : HalfRefreshFallbackFps,
+        _ => explicitFps > 0 ? explicitFps : 0,
+    };
+
+    /// <summary>Is a software ambient cap in effect AT ALL? The mode-aware replacement for the old
+    /// <c>AmbientAnimationFps &gt; 0</c> test that gated both pacing branches: HalfRefresh is always engaged (its rate is
+    /// only known once the refresh is read, inside <see cref="AmbientFrameWaitMs"/>), ExplicitFps only for a positive
+    /// value, Uncapped never. Getting this wrong in either direction is a visible defect — false ⇒ the cap silently
+    /// disappears, true under Uncapped ⇒ ambient motion is throttled after the app explicitly asked for display rate.</summary>
+    private bool AmbientCapEngaged => AmbientRate switch
+    {
+        AmbientRateMode.Uncapped => false,
+        AmbientRateMode.HalfRefresh => true,
+        _ => AmbientAnimationFps > 0,
+    };
     // FG_ADAPTIVE_FPS governor (default off): when the GPU genuinely cannot sustain the panel rate at the current size
     // (smoothed fence-wait over the ~120Hz budget — e.g. a maximized frame that rasters in ~14ms), pace CONTINUOUS
     // animation (playhead/shimmer) to the ambient cap instead of free-running the loop into vblank-misses. A steady 60
@@ -781,12 +891,32 @@ public sealed class AppHost : IDisposable
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
         // Album-art reveals (decode → crossfade) fire DURING and right after a homepage scroll, and they are transient,
         // user-visible motion — keep them at the display rate instead of letting the ambient cap drop the reveal to 30 Hz
-        // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency). Both bits
-        // clear the moment decode/reveal finishes, so this never holds the loop awake the way a perpetual loop would.
+        // the instant the fling settles (a driver of the "scroll feels 24 fps then 120 fps" inconsistency).
+        // DEMOTED OUTSIDE INTERACTION (see EffectiveLatencySensitiveWake): the original claim that "both bits clear the
+        // moment decode/reveal finishes" does not hold for a PAGE FILL. ImageCrossfades is a global high-water deadline,
+        // so a trickle of arrivals holds it true continuously for seconds after a nav — with these bits in the mask the
+        // ambient cap could never engage and the loop ran at display rate through the whole fill. The intent above is
+        // preserved exactly where it was argued (during and right after a scroll); past the scroll holds the reveals
+        // keep running, at the 30 Hz ambient cadence, which is imperceptible for a crossfade.
         WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady |
         // Active video presentation is DISPLAY-rate motion (a playing video advances every refresh) — exempt it from the
         // 30 Hz ambient cap so playback runs at the panel's full frame rate, not the ambient-throttled cadence.
         WakeReasons.VideoPresenting;
+    // The image bits of LatencySensitiveWake — display-rate ONLY while an interaction is live or just ended.
+    private const WakeReasons ImageWake =
+        WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady;
+
+    /// <summary>The latency-sensitive mask to test THIS frame: the full <see cref="LatencySensitiveWake"/> while the
+    /// post-scroll holds OR the post-navigation page-fill grace are live (a reveal that fires during or right after a
+    /// fling — or during the page-enter fill a click navigation just started — stays at display rate: the original
+    /// intent), and the mask MINUS <see cref="ImageWake"/> once all three have expired (a background page fill that is
+    /// no longer an entrance is not an interaction, so its reveals pace at the ambient cap like any other autonomous
+    /// motion). Same time base as the holds the ambient branch already gates on — no allocation, three compares.</summary>
+    private WakeReasons EffectiveLatencySensitiveWake(long nowTicks)
+        => nowTicks < _scrollGraceUntil || nowTicks < _mainScrollHoldUntil || nowTicks < _mountGraceUntil
+             ? LatencySensitiveWake
+             : LatencySensitiveWake & ~ImageWake;
+
     // Modal-loop keep-alive paints must still run when any of these wake bits are set — even if ambient animation is
     // also live (playback seek ticker). Without this mask the InModalLoop+AnimIsAmbient bail swallowed warming virtual
     // lists mid-drag (detail-resize-flicker fix).
@@ -1198,20 +1328,42 @@ public sealed class AppHost : IDisposable
     /// timer keeps the loop from over-sleeping past its fire). A display-rate wait is left untouched: it already drains
     /// the timer next frame, and shortening it to a sub-frame value would spuriously trip the frame-clock step-up
     /// Resync (the frozen-one-shot-anim bug class). No armed timer ⇒ the wait is unchanged (a fully idle loop stays
-    /// -1 → 0% CPU). Classified by BRANCH, not by timeout value — see <see cref="IsDisplayRateWait"/>.</summary>
+    /// -1 → 0% CPU). Classified by BRANCH, not by timeout value — see <see cref="IsDisplayRateWait"/>.
+    /// <para>
+    /// The shortened wait is a REQUEST for the next frame to drain, never a guarantee that one will: <c>Paint</c> is the
+    /// only <c>HostTimerQueue.Drain</c> call site and three <see cref="RunFrame"/> early-outs skip it (device-lost
+    /// recovery, the minimize gate, a display-phase-gate decline). So an already-due timer must never shorten the wait
+    /// to 0 — that turns the loop into a pure poll for as long as the drain stays out of reach. Hence the two guards
+    /// below: minimized returns untouched, and every other clamp floors at 1 ms.
+    /// </para></summary>
     private int ClampWaitToTimers(int w, HostWaitKind kind)
     {
         if (IsDisplayRateWait(kind, w)) return w;
+        // Paint — the only drain site — is gated off while minimized, so no wait length can make a timer fire;
+        // shortening the idle block converts a 0%-CPU sleep into a spin. A message (restore, WM_ACTIVATE, a power
+        // broadcast) is what wakes a minimized loop, and the restore edge forces the frame that drains.
+        if (IsMinimized) return w;
         if (!_timers.TryPeekEarliest(out double due)) return w;
         int dueIn = (int)Math.Ceiling(Math.Max(0.0, due - _timers.NowMs));
+        // The drain is on the NEXT frame, which may be skipped — never return 0 (that is a spin, not a wait).
+        if (dueIn < 1) dueIn = 1;
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
     private int RecommendedWaitMsCore()
     {
-        // Feed the FG_ADAPTIVE_FPS governor: smooth the render-thread/UI GPU fence-wait so a sustained over-budget stretch
-        // (a maximized fill-bound frame) is detected without one-frame jitter flipping the pacing. Cheap; only when armed.
-        if (s_adaptiveFps) _gpuBoundEma = _gpuBoundEma * 0.85 + _device.LastFenceWaitMs * 0.15;
+        // Feed the FG_ADAPTIVE_FPS governor: smooth the true on-GPU raster time so a sustained over-budget stretch (a
+        // maximized fill-bound frame) is detected without one-frame jitter flipping the pacing. Cheap; only when armed.
+        // NOT the fence wait: that conflates raster with PACING — vblank/latency-waitable and buffer-release
+        // serialization land in it, so the moment the cap paces to 60 the wait inflates to a full 13-16ms refresh
+        // interval and the governor keeps itself engaged on its own output (a measured feedback loop). LastGpuRenderMs
+        // is the DXGI-timestamp raster time and carries none of that, but it is 0 unless FG_GPU_TIMING=1 — so fall back
+        // to the fence wait when the query heap is off, which is the pre-existing (contaminated) behavior, never worse.
+        if (s_adaptiveFps)
+        {
+            double renderMs = _device.LastGpuRenderMs;
+            _gpuBoundEma = _gpuBoundEma * 0.85 + (renderMs > 0 ? renderMs : _device.LastFenceWaitMs) * 0.15;
+        }
         if (IsMinimized) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // nothing to paint; only the restore message wakes us (see RunFrame's minimize gate)
         WakeReasons r = ComputeWakeReasons();
         if (r == WakeReasons.None) { MaybeTrimOnIdle(); _lastWaitKind = HostWaitKind.Idle; return -1; }   // fully idle: trim the slab tail once, then block until a message arrives
@@ -1236,7 +1388,7 @@ public sealed class AppHost : IDisposable
         // the hold each notch stepped 30Hz→display-rate→30Hz — the step-up Resync at ApplyProjections' frame-clock guard
         // then dropped a stale ~34ms delta per notch, felt as a cadence lurch. Holding display rate through the whole
         // interaction keeps the clock monotonic; the cap resumes ~0.45s after the last real user-scroll frame.
-        if (AmbientAnimationFps > 0 && (r & LatencySensitiveWake) == 0 && AnimIsAmbient()
+        if (AmbientCapEngaged && (r & EffectiveLatencySensitiveWake(now)) == 0 && AnimIsAmbient()
             && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
         {
             MaybeTrimOnIdle();   // #10: playback/ambient never reaches WakeReasons.None, so trim the slab tail here too (30s-cadence-gated)
@@ -1247,7 +1399,7 @@ public sealed class AppHost : IDisposable
         // playhead), but the GPU can't sustain the panel rate at this size — running full-rate just thrashes into
         // vblank-misses. Pace to the ambient cap for a STEADY sustainable cadence. Same latency-sensitive + scroll-hold
         // guards as the ambient branch (never touches interaction/scroll), and the same Resync-exempt wait.
-        if (s_adaptiveFps && AmbientAnimationFps > 0 && (r & GovernorNeverPace) == 0
+        if (s_adaptiveFps && AmbientCapEngaged && (r & GovernorNeverPace) == 0
             && _gpuBoundEma > GpuBoundBudgetMs && now >= _scrollGraceUntil && now >= _mainScrollHoldUntil)
         {
             _lastWaitKind = HostWaitKind.Ambient;
@@ -1288,16 +1440,22 @@ public sealed class AppHost : IDisposable
     /// cadence-lurch this guard exists to prevent. And it was stale: the gate wait was a mutable field read a frame
     /// later than it was written, so a refresh-rate change made a wait that WAS display-rate stop matching.
     ///
-    /// The <c>w == 0</c> clause is not redundant. <c>BakedBlurQueue.RecommendedWaitMs</c> returns 0 for "due now"
-    /// under <see cref="HostWaitKind.Baked"/>; no gap elapses, so resyncing there would reintroduce the lurch that
-    /// kind-only classification is meant to avoid.
+    /// The <c>w == 0</c> clause is not redundant, but it is SCOPED to the one kind that legitimately produces a 0:
+    /// <c>BakedBlurQueue.RecommendedWaitMs</c> returns 0 for "due now" under <see cref="HostWaitKind.Baked"/>; no gap
+    /// elapses, so resyncing there would reintroduce the lurch that kind-only classification is meant to avoid.
+    /// Unscoped, the clause aliased in the other direction — the exact hazard the paragraph above describes, just by
+    /// value 0 instead of 17: an Idle/Ambient wait that <see cref="ClampWaitToTimers"/> had rewritten down to 0 for a
+    /// due timer then read as display-rate, which suppressed the step-up Resync on precisely the frames that HAD
+    /// over-slept. The clamp no longer emits 0 (it floors at 1 ms), and this test no longer accepts one from any
+    /// branch but Baked — so the code now matches the intent documented here.
     ///
     /// Getting this wrong is a known, non-obvious breakage rather than a style point. The frame-clock step-up guard
     /// resyncs the animation clock whenever the previous wait was a stale throttle gap; if a display-rate wait is not
     /// recognised as one, EVERY animating async frame resyncs, NextDeltaMs() returns 0 every frame, and one-shot enter
     /// transitions freeze at their initial (invisible) state — animated content never appears while static chrome does.</summary>
     private static bool IsDisplayRateWait(HostWaitKind kind, int w) =>
-        kind is HostWaitKind.DisplayRate or HostWaitKind.PaceAsync or HostWaitKind.PaceSkipSubmit || w == 0;
+        kind is HostWaitKind.DisplayRate or HostWaitKind.PaceAsync or HostWaitKind.PaceSkipSubmit
+            || (kind is HostWaitKind.Baked && w == 0);
 
     /// <summary>True when capping the frame rate won't dull a one-shot transition: either no AnimEngine track is running,
     /// or every active track is a perpetual LOOP (an indeterminate spinner, skeleton shimmer). A one-shot transition
@@ -1309,12 +1467,20 @@ public sealed class AppHost : IDisposable
     // "connected animation is sometimes laggy." Keeping the whole transition at display rate mounts the dest ~4× faster.
     private bool AnimIsAmbient() => !_connected.HasActive && (!_anim.HasActive || (_anim.LoopTrackCount == _anim.TrackCount && !_anim.DisplayRateActive));
 
-    /// <summary>Milliseconds to wait before the next AMBIENT-animation frame so the loop holds ~<see cref="AmbientAnimationFps"/>
-    /// instead of free-running at the display refresh. = frame budget minus the time the just-finished frame took (this is
-    /// called right after <see cref="RunFrame"/>), clamped to ≥0. Returns the full budget on the first frame.</summary>
+    /// <summary>Milliseconds to wait before the next AMBIENT-animation frame so the loop holds the rate
+    /// <see cref="DeriveAmbientFps"/> resolves from <see cref="AmbientRate"/> (an explicit
+    /// <see cref="AmbientAnimationFps"/>, or half the live panel refresh) instead of free-running at the display refresh.
+    /// = frame budget minus the time the just-finished frame took (this is called right after <see cref="RunFrame"/>),
+    /// clamped to ≥0. Returns the full budget on the first frame.</summary>
     private int AmbientFrameWaitMs()
     {
-        double budgetMs = 1000.0 / AmbientAnimationFps;
+        // The panel's refresh, MEASURED (DWM qpcRefreshPeriod) and re-read every wait — so HalfRefresh follows a display
+        // change / a drag to a different-rate monitor with no app involvement, and no cached rate can go stale.
+        long refreshTicks = _device.LastPresentStats.RefreshPeriodQpc;
+        double refreshHz = refreshTicks > 0 ? Stopwatch.Frequency / (double)refreshTicks : 0.0;
+        int ambientFps = DeriveAmbientFps(AmbientRate, AmbientAnimationFps, refreshHz);
+        if (ambientFps <= 0) return 0;   // uncapped: display rate (AmbientCapEngaged already gates the branch; defensive)
+        double budgetMs = 1000.0 / ambientFps;
         // Vblank-ANCHORED pacing whenever the panel's refresh period is known. A wall-clock budget is a timer that
         // free-runs against the vblank: at a 60 cap on a 120 Hz panel the 16.67 ms wait drifts through the 8.33 ms
         // refresh window, so the frame actually shown alternates between one produced just before a vblank and one
@@ -1326,7 +1492,6 @@ public sealed class AppHost : IDisposable
         // number of refresh periods turns the cap into what it always meant: "show every Nth vblank". The modulo keeps
         // the result inside (0, period] no matter how stale the anchor is, so a stretch of skip-submitted (byte-
         // identical) ambient frames can never drive this to 0 and free-spin the loop.
-        long refreshTicks = _device.LastPresentStats.RefreshPeriodQpc;
         long lastPresent = Volatile.Read(ref _lastPresentQpc);
         if (refreshTicks > 0 && lastPresent != 0)
         {
@@ -2267,6 +2432,11 @@ public sealed class AppHost : IDisposable
             // rationale as the UI-post drain above). Skipped when nothing is armed → 0-alloc on every frame that uses no
             // timer, and 0-alloc on a quiet frame with an armed-but-not-due timer (Drain is one comparison then returns).
             if (_timers.Count > 0) _runtime.Batch(_drainTimers);
+            // Frame clock: publish BEFORE the flush so per-frame pollers (FrameClock.Tick subscribers — the seek ticker,
+            // overlay-close watchers) drain in THIS frame's flush and the runtime queue is EMPTY at frame end. Published
+            // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
+            // frame and the loop could never fall out of display rate. Only when watched — 0-alloc when nothing polls.
+            if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;
             // Drag epoch: while a typed drag is live, bump each frame so a DragPreviewLayer re-renders and follows the
             // cursor; bump once more when it ends so the preview tears down. Only the preview subtree re-renders.
             bool dragActive = _dispatcher.DragDrop.IsActive;
@@ -2308,6 +2478,10 @@ public sealed class AppHost : IDisposable
             int censusComps = _reconciler.PeekRenderCount();
             _reconciler.MaybeDumpRenderCensus(ToMs(tFlush - frameStart), reactiveFlushMs, virtualRealizeMs, censusComps,
                 _anyOffsetWroteLastFrame || Stopwatch.GetTimestamp() < _mainScrollHoldUntil);
+            // Page-fill grace: this flush rendered a page's worth of components (a nav / structural mount), so the image
+            // reveal it just kicked off is an ENTRANCE, not background churn — hold display-rate pacing across it. Reuses
+            // the census count already peeked above (no new state read) and the frame's own timestamp.
+            if (censusComps >= MountGraceCompThreshold) _mountGraceUntil = frameStart + MountGraceTicks;
             if (s_allocDiag) { db = Probe(SegFlush, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
 
             bool layoutNeeded = _needFullLayout || reconciled || _scene.AnyLayoutDirty;
@@ -2345,10 +2519,13 @@ public sealed class AppHost : IDisposable
                     _scene.ClearLayoutDirty();
                 }
             }
+            long tSolve = Stopwatch.GetTimestamp();            // of LayoutMs: the flex solve itself (full or scoped + realize catch-up)
 
             DrainLayoutEffects();                              // 6.5 layout effects (Bounds valid)
+            long tLayoutEffects = Stopwatch.GetTimestamp();
             _connected.ReducedMotion = Motion.ReducedMotion;   // 6.5 connected-animation: remember tag rects, seed flies to arrived dests, expire stale
             _connected.Tick65();
+            long tConnected = Stopwatch.GetTimestamp();
             // Responsive show/hide "make room": nodes that mounted with a SizeMode.Reflow enter now have their natural
             // size — ease the main-axis LAYOUT size 0→that so neighbours reflow as the entrant reveals. Seeded here
             // (post-layout, BEFORE the anim tick) so the first ticked size is ~0 and RunReflowLayout re-solves siblings
@@ -2404,10 +2581,14 @@ public sealed class AppHost : IDisposable
             // rate." Excluding AsyncDisplayPaceMs is load-bearing: without it EVERY async animating frame resynced →
             // NextDeltaMs()==0 every frame → one-shot enter transitions froze at their initial (invisible) state, so
             // animated content (sidebar sections, home cards) never appeared on-screen while non-animated chrome did.
+            // Same EFFECTIVE mask as the pacing decision that produced the throttled wait we are stepping up from: once
+            // the post-scroll holds expire, image reveals are ambient-paced, so a 33 ms gap between two of their frames is
+            // a REAL interval and resyncing it away would stall the crossfade instead of un-lurching it.
             if (!_lastWaitWasDisplayRate)
             {
                 WakeReasons stepUp = ComputeWakeReasons();
-                if ((stepUp & LatencySensitiveWake) != 0 || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive)
+                if ((stepUp & EffectiveLatencySensitiveWake(frameStart)) != 0
+                    || (_anim.HasActive && !AnimIsAmbient()) || _connected.HasActive)
                     _frameTime.Resync();
             }
             float dtMs = _frameTime.NextDeltaMs();
@@ -2726,6 +2907,11 @@ public sealed class AppHost : IDisposable
                 ReactiveFlushMs = reactiveFlushMs,
                 VirtualRealizeMs = virtualRealizeMs,
                 LayoutMs = ToMs(tLayout - tFlush),
+                LayoutSolveMs = ToMs(tSolve - tFlush),                 // of which: FlexLayout (full/scoped + D1 realize catch-up)
+                LayoutEffectsMs = ToMs(tLayoutEffects - tSolve),       // of which: DrainLayoutEffects
+                ConnectedTickMs = ToMs(tConnected - tLayoutEffects),   // of which: ConnectedAnimation.Tick65
+                ReflowSeedMs = ToMs(tLayout - tConnected),             // of which: enter/exit reflow seeding (+ scene dump)
+                LocalRelayoutResolves = _invalidator.LocalResolvesThisFrame,
                 AnimMs = ToMs(tAnim - tLayout),         // phase-7 ticks + projections
                 RecordMs = ToMs(tRecord - tAnim),       // image pump + SceneRecorder (+ text shaping) + dyntext
                 ImagePumpMs = ToMs(tImagePump - tAnim),            // of which: phase-7.5 decode apply/evict
@@ -2785,7 +2971,7 @@ public sealed class AppHost : IDisposable
             // FrameTiming row above is. The case this whole facility exists for ("cadence looks perfect, feel is bad")
             // produces no hitch rows at all, so a dt-gated sensor would go silent exactly when it is needed.
             if (FluentGpu.Foundation.ScrollTrace.On && scrollActive) EmitLatencyRow(dtMs);
-            if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;   // drive per-frame pollers (overlay close) only when watched
+            // (the frame-clock publish moved to phase 3, just before the flush — see the drain block there)
             if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
             return LastStats;
         }

@@ -327,7 +327,18 @@ sealed class AlbumTrailing : Component
         return tracks[best].Uri;
     }
 
-    // "Watch the official video" — a thumbnail (the cover) with a centered play badge + the release label/meta.
+    /// <summary>Does any track on this short release play a USER-ATTACHED video? An override always wins over the
+    /// source's own video, so the section's label must follow it (a short release is 1–2 tracks — a linear scan).</summary>
+    static bool HasCustomVideo(DetailModel m)
+    {
+        var tracks = m.Tracks;
+        for (int i = 0; i < tracks.Count; i++)
+            if (VideoPresence.HasOverride(tracks[i].Uri)) return true;
+        return false;
+    }
+
+    // "Watch the official video" (or "the custom video") — a thumbnail (the cover) with a centered play badge + the
+    // release label/meta.
     static Element WatchVideoSection(DetailModel m, DetailHandlers h) => new BoxEl
     {
         Direction = 1,
@@ -372,7 +383,8 @@ sealed class AlbumTrailing : Component
                         Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
-                            new TextEl(Loc.Get(Strings.Detail.WatchOfficialVideo)) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
+                            new TextEl(Loc.Get(HasCustomVideo(m) ? Strings.VideoOverride.CustomLabel : Strings.Detail.WatchOfficialVideo))
+                            { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
                             WaveeType.RailHeader(m.Title) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                             new TextEl(m.MetaLine) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         ],

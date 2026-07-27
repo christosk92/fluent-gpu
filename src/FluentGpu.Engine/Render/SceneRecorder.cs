@@ -180,6 +180,14 @@ public static class SceneRecorder
         };
     }
 
+    // Slop (DIP/device space) added to a plain opacity group's patched draw extent (see the PopLayer patch in Walk).
+    // SubtreeBounds below covers every node's device box + its shadow/self-blur halo + its focus ring exactly, but three
+    // things ride just outside a node's box: an SDF border ring straddles the edge by stroke/2, AA fringes by ~1px, and
+    // a glyph's INK can overshoot its layout box (accents/descenders/italic overhang — the only size-dependent one, a
+    // fraction of the em). The extent MUST be a superset of the drawn pixels (too small = the composite drops them; too
+    // large only costs fill), so pad generously — the win is full-canvas → group box; a handful of px back is free.
+    private const float OpacityGroupExtentPadDip = 8f;
+
     private struct SpanRecordResult
     {
         public bool HasBounds;
@@ -819,10 +827,16 @@ public static class SceneRecorder
         // rounded corners (the curve). Takes precedence over the opacity/self-blur groups — it composites once at the
         // group alpha and blurs via its own sigma. Explicit (BoxEl/ScrollEl.EdgeFade) or a scroller's AutoEdgeFade.
         EdgeFadeSpec edgeFade = default;
+        int opacityPushByteOffset = -1;   // set at the PushOpacityLayer emit; consumed by the extent back-patch at PopLayer
+        int opacityPushLayerCount = 0;    // DrawList PushLayer count at that emit — a nonzero delta at Pop = nested layers
         // Resolve PRESENCE independently of sharp visibility. A node carrying both effects remains an edge-fade node
         // even while only a hypothetical self-blur halo would overlap; otherwise the precedence would flip at the clip.
         bool hasEdgeFade = TryResolveEdgeFade(scene, node, flags, maybeSparsePaint, out edgeFade);
-        bool isEdgeFade = overlapsClip && hasEdgeFade;
+        // Skipped at alpha ≈ 0 for the same reason the blur/opacity groups below are: the composite multiplies by
+        // GroupAlpha and blends ONE/INV_SRC_ALPHA, so at alpha 0 it writes the destination back unchanged — an offscreen
+        // RT, a feather pass and a composite of exact dead work. Skipping also skips the `opacity = 1f` group reset, so
+        // the subtree keeps drawing at its true ≈0 alpha (pixel-identical), still walked for hit/anim state.
+        bool isEdgeFade = overlapsClip && hasEdgeFade && opacity > 0.001f;
         if (isEdgeFade) stats.EdgeFadeGroupCount++;
         // An opacity-zero stagger row still has a non-zero authored blur during its delay. It contributes no pixels, so
         // allocating/clearing an offscreen RT and running two Gaussian passes is exact dead work (and made several
@@ -843,7 +857,7 @@ public static class SceneRecorder
         if (holdBlur) stats.BlurHoldCandidateCount++;
         bool isBlurGroup = isBlurCandidate;
         if (isBlurGroup) stats.BlurGroupCount++;
-        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && overlapsClip;
+        bool isOpacityGroup = !isEdgeFade && !isBlurGroup && p.OpacityGroup && opacity < 0.999f && opacity > 0.001f && overlapsClip;
         RectF recordClip = clip;
         bool pushedBlurSourceClip = false;
         if (isEdgeFade)
@@ -879,7 +893,17 @@ public static class SceneRecorder
         }
         else if (isOpacityGroup)
         {
+            // Remember the PushLayerCmd byte offset: at PopLayer we back-patch this group's ACCUMULATED subtree draw
+            // extent into it, so the backend leases + clears + composites only those pixels instead of the whole canvas
+            // (a plain group cost 2× full-window pixel traffic). A local, not a pool slot — nesting IS the call stack.
+            opacityPushByteOffset = dl.BytePosition;
             dl.PushOpacityLayer(deviceBounds, p.Corners, opacity, key, layerId);
+            // Nested-layer counter (see the patch at PopLayer): a nested layer is the one thing inside the group that
+            // READS the group RT outside its own drawn box — a descendant acrylic snapshots the enclosing group's target
+            // over its rect inflated by the whole blur-chain support (AcrylicCompositor.SnapshotRegion), which can reach
+            // past the drawn extent into texels a bounded clear would leave as a previous lease's garbage. Copied spans
+            // fold their opcode stats in too, so this sees nested layers inside REUSED subtrees as well.
+            opacityPushLayerCount = dl.OpcodeStats.PushLayer;
             opacity = 1f;
         }
 
@@ -889,7 +913,17 @@ public static class SceneRecorder
         //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
         //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
         if (maybeSparsePaint && overlapsRecordClip && scene.TryGetShadow(node, out var sh) && !sh.IsNone)
+        {
             dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
+            // The halo paints OUTSIDE the node box — union its extent into the subtree bounds so anything that reads
+            // those bounds as "every pixel this subtree drew" (the off-screen span cull, clip-completeness, the opacity
+            // group's extent patch below) stays a SUPERSET. Same box the shadow quad spans: the node rect displaced by
+            // the offset and grown by spread + the 3σ gaussian tail (ShadowPipeline's VSMain, sigma = max(blur/2, ½)).
+            float shHalo = sh.Spread + 3f * MathF.Max(sh.Blur * 0.5f, 0.5f);
+            result.Include(world.TransformBounds(new RectF(
+                local.X + sh.OffsetX - shHalo, local.Y + sh.OffsetY - shHalo,
+                local.W + 2f * shHalo, local.H + 2f * shHalo)));
+        }
 
         // Circular-arc stroke (ProgressRing): a trimmed, round-capped ring drawn as its own SDF primitive. The ring node
         // carries no fill (the arc IS the visual), so its order vs the fill block below doesn't matter for its own node.
@@ -1448,7 +1482,15 @@ public static class SceneRecorder
         // node's own clip pops — the WinUI ring lives OUTSIDE the bounds (FocusVisualMargin −3), so a ClipsToBounds
         // control (a TextBox field) must not scissor its own ring away. Ancestor clips still apply (correct).
         if (focus.Enabled && (flags & NodeFlags.FocusVisual) != 0 && overlapsRecordClip)
+        {
             EmitFocusRing(dl, b, p.Corners, interaction.FocusVisualMargin, world, opacity, in focus, key | 0x10);
+            // The ring sits OUTSIDE the bounds (negative FocusVisualMargin) — union EmitFocusRing's own focus rect into
+            // the subtree bounds, same superset rationale as the shadow halo above.
+            var fvm = interaction.FocusVisualMargin;
+            float feL = MathF.Max(0f, -fvm.Left), feT = MathF.Max(0f, -fvm.Top);
+            float feR = MathF.Max(0f, -fvm.Right), feB = MathF.Max(0f, -fvm.Bottom);
+            result.Include(world.TransformBounds(new RectF(-feL, -feT, b.W + feL + feR, b.H + feT + feB)));
+        }
 
         // Auto-hiding scrollbar overlay: draw after popping the viewport's content clip so the expanded gutter/thumb
         // are not chopped at the viewport edge, while still positioning them inside the viewport bounds. EmitScrollbar
@@ -1484,7 +1526,22 @@ public static class SceneRecorder
         // focus ring, scrollbar) flattens into the offscreen RT and composites once (blurred, for the blur group) at the
         // group alpha. Exactly one of these was pushed (blur subsumes the opacity group).
         if (isEdgeFade) dl.PopLayer(deviceBounds, key);
-        if (isOpacityGroup) dl.PopLayer(deviceBounds, key);
+        if (isOpacityGroup)
+        {
+            // Bound the group (see the push site): `result` now holds this subtree's accumulated draw bounds — every
+            // walked node's device box, plus each self-blur halo / shadow halo / focus ring — which is a SUPERSET of the
+            // pixels the group emitted, NOT merely the node's own bounds (descendants legitimately paint outside those).
+            // Clamp to the enclosing clip (nothing past it can reach the canvas) and pad for sub-pixel ink overshoot.
+            // Degenerate/absent/nested-layer ⇒ leave the cmd unpatched, i.e. today's full-canvas clear + composite.
+            if (result.HasBounds && dl.OpcodeStats.PushLayer == opacityPushLayerCount)
+            {
+                RectF ext = new RectF(result.SubtreeBounds.X - OpacityGroupExtentPadDip, result.SubtreeBounds.Y - OpacityGroupExtentPadDip,
+                                      result.SubtreeBounds.W + 2f * OpacityGroupExtentPadDip, result.SubtreeBounds.H + 2f * OpacityGroupExtentPadDip)
+                    .Intersect(clip);
+                if (opacityPushByteOffset >= 0 && !ext.IsEmpty) dl.PatchOpacityLayerExtent(opacityPushByteOffset, in ext);
+            }
+            dl.PopLayer(deviceBounds, key);
+        }
         if (pushedBlurSourceClip) dl.PopClip(key);
         if (isBlurGroup) dl.PopLayer(deviceBounds, key);
 

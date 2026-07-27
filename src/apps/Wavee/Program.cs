@@ -267,20 +267,24 @@ static class Program
                         string app = Services.MemCensusHook?.Invoke() ?? "";
                         return app.Length == 0 ? gpu : gpu.Length == 0 ? app : gpu + " | " + app;
                     };
+                // Bind the ambient-cadence policy (power + attention) to the host — same rationale as the census hook:
+                // this is the only app-reachable point that holds the AppHost. AmbientPowerPolicy.Watcher (mounted in
+                // WaveeShell) feeds it the focus edges and the debounced power poll from there on.
+                AmbientPowerPolicy.Attach(h);
                 return WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             };
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
             // micaAlt:true → Mica BaseAlt (the flatter File-Explorer tint), matching WaveeMusic's MicaBackdrop Kind="BaseAlt".
-            // ambientFps: pace PERPETUAL ambient motion (the always-playing seek playhead, the now-playing equalizer,
-            // skeleton shimmer, buffering spinner, the karaoke lyrics wipe) to 60 Hz instead of the panel's full refresh.
-            // Wavee auto-starts playback, so the seek bar's per-frame playhead ticker would otherwise free-run the whole
-            // record+present pipeline at the full refresh forever for a bar that moves ~3 px/s. 60 (raised from 30) now
-            // that the per-frame cost is cheap (rect-bounded + linear-sampled blur + back-buffer-direct layers) — the
-            // lyrics wipe/scroll read smooth without quadrupling the idle pipeline. Latency-sensitive input
-            // (scroll/hover/drag) is exempt and always runs at the display rate; FG_ANIM_FPS overrides this (=30 to
-            // revert to the old cadence, =0 for uncapped / full display rate).
+            // NO AmbientFps here any more (it used to hard-code 60): the pacing of PERPETUAL ambient motion — the
+            // always-playing seek playhead, the now-playing equalizer, skeleton shimmer, buffering spinner, the karaoke
+            // lyrics wipe — is now AmbientPowerPolicy's call, attached above. A fixed 60 was wrong twice: it beat against
+            // the vblank on a 120 Hz panel (and was simply the wrong number on a 90 Hz one), and it capped the app even
+            // when the user was looking at it on mains power. The policy pays the cap only where it buys something —
+            // on battery or in the background — and takes the rate from the panel. Latency-sensitive input
+            // (scroll/hover/drag) is exempt in the engine and always runs at the display rate; FG_ANIM_FPS still
+            // overrides everything (=30 to pin the old cadence, =0 for uncapped / full display rate).
             FluentAppHarness.Run(() => new WaveeApp(settings, appLocale),
-                new AppOptions { Title = "Wavee Music", Width = 1180, Height = 760, CustomFrame = true, MicaAlt = true, AmbientFps = 60 },
+                new AppOptions { Title = "Wavee Music", Width = 1180, Height = 760, CustomFrame = true, MicaAlt = true },
                 new HarnessOptions { Frames = frames, Screenshot = screenshot });
         }
         catch (Exception ex)
