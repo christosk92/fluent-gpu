@@ -122,6 +122,11 @@ public interface IColdStore : IDisposable
     /// tables are never touched. Returns (rows, bytes) freed.</summary>
     (int Rows, long Bytes) ClearMetadataCache() => (0, 0);
 
+    /// <summary>The offline-search candidate corpus for one scope (Addendum A4): THIN rows (no payload) joined out of the
+    /// identity tables + `entity_refs`, so the library search is correct for a cold-but-not-resident library. The default
+    /// answers "no SQL corpus" — the in-memory test fakes then fall through to the resident-graph walk unchanged.</summary>
+    ColdCandidates LoadLibraryCandidates(ColdCandidateScope scope) => ColdCandidates.Empty;
+
     void Flush();   // block until queued writes are durable
 }
 

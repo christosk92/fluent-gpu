@@ -719,7 +719,19 @@ sealed class WaveeShell : Component
         _route.Value = new Route(key, arg);
         _canBack.Value = _history.Count > 0;
         _historyStore.Add(_route.Peek());
+        RecordRecentSurface(_route.Peek());
         SyncActiveTab(_route.Peek());
+    }
+
+    // Addendum A5 — the `recent_surfaces` pin reason. Hooked to FORWARD navigation only: Back/Forward re-visit a surface
+    // through history, which is not a new "open" and must not churn the 50-slot LRU (the surface is already in it).
+    // Runs on the UI thread, so nothing here may touch SQLite: RecordRecentSurface updates the in-memory pin mirror
+    // synchronously (the write gate has to see the new pin on the very next upsert) and lanes the row + the entity flush
+    // onto CachedStore's background writer. Null RealStore (fake/offline backend) ⇒ no-op.
+    void RecordRecentSurface(Route r)
+    {
+        if (!Wavee.Backend.Persistence.RecentSurfaceRoute.TryClassify(r.Name, out var uri, out var kind)) return;
+        if (_actions.Svc?.RealStore is Wavee.Backend.Persistence.CachedStore store) store.RecordRecentSurface(uri, (int)kind);
     }
 
     void Back()

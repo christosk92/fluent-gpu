@@ -1424,6 +1424,131 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         }
     }
 
+    // ── the offline-search candidate corpus (Addendum A4) ────────────────────────────────────────────────────────────
+    // At most THREE set-based statements per scope, all on the READ connection and all THIN: `payload` is the LAST column
+    // of an `entity` row and is never selected here, so streaming a whole library's candidates touches no overflow page.
+    // There is deliberately NO `LIKE`/`instr` pre-filter — SQLite `NOCASE` folds ASCII only, so it is NARROWER than the
+    // `OrdinalIgnoreCase` the UI matches with, and a pre-pass would silently DROP non-ASCII hits (Ω/ω, İ, ı). SQL answers
+    // "what is in scope"; C# answers "what matches, and where" (see LibrarySearchIndex).
+    const string SavedArtistsSql = "SELECT item_uri FROM collection_items WHERE account=$a AND set_id='artists'";
+    const string SavedAlbumsSql = "SELECT item_uri FROM collection_items WHERE account=$a AND set_id='albums'";
+    const string ThinColumnsSql = "SELECT uri,kind,title,subtitle,image_url,duration_ms,flags,album_uri FROM entity";
+
+    public ColdCandidates LoadLibraryCandidates(ColdCandidateScope scope)
+    {
+        int track = (int)EntityKind.Track, album = (int)EntityKind.Album, artist = (int)EntityKind.Artist;
+        switch (scope)
+        {
+            case ColdCandidateScope.LibraryTracks:
+            {
+                // Everything the offline QueryTracks may see: the liked set plus every adopted playlist's membership.
+                // `playlist_items` is scanned whole on purpose — the membership GC already bounds it to the playlists
+                // the user actually keeps, and a per-playlist fan-out would be thousands of statements per keystroke.
+                var rows = QueryThin($"""
+                    {ThinColumnsSql}
+                    WHERE locale=$l AND kind=$k AND (
+                        uri IN (SELECT item_uri FROM collection_items WHERE account=$a AND set_id='liked')
+                        OR uri IN (SELECT item_uri FROM playlist_items));
+                    """, track);
+                return new ColdCandidates(Array.Empty<ColdThinRow>(), Array.Empty<ColdThinRow>(), rows, Array.Empty<ColdRefEdge>());
+            }
+
+            case ColdCandidateScope.SavedAlbums:
+            {
+                var rows = QueryThin($"""
+                    WITH alb(uri) AS ({SavedAlbumsSql})
+                    {ThinColumnsSql}
+                      WHERE locale=$l AND kind={album} AND uri IN (SELECT uri FROM alb)
+                    UNION ALL
+                    {ThinColumnsSql}
+                      WHERE locale=$l AND kind=$k AND album_uri IN (SELECT uri FROM alb);
+                    """, track);
+                return Split(Array.Empty<ColdThinRow>(), rows, Array.Empty<ColdRefEdge>());
+            }
+
+            default:
+            {
+                // (1) the followed artists themselves — a saved artist with no `entity` row simply has no candidate here
+                //     (the caller still walks it through the store, whose cold fallback covers the row-exists case).
+                var roots = QueryThin($"""
+                    {ThinColumnsSql} WHERE locale=$l AND kind=$k AND uri IN ({SavedArtistsSql});
+                    """, artist);
+                // (2) the artist↔album edges, BOTH directions unioned and normalized artist-first: artist→albums comes
+                //     from the overview projection (ArtistSplit.ReferencedAlbums), album→artists from every album
+                //     persist, and either leg alone misses part of a saved artist's offline discography.
+                var edges = QueryEdges($"""
+                    SELECT parent_uri, child_uri FROM entity_refs WHERE parent_uri IN ({SavedArtistsSql})
+                    UNION
+                    SELECT child_uri, parent_uri FROM entity_refs WHERE child_uri IN ({SavedArtistsSql});
+                    """);
+                // (3) those albums ∪ those albums' tracks. The `kind={album}` wrapper is what keeps the reversed edge leg
+                //     honest (a track→artist edge also has a saved artist on its child side).
+                var rows = QueryThin($"""
+                    WITH art(uri) AS ({SavedArtistsSql}),
+                         alb(uri) AS (SELECT uri FROM entity WHERE locale=$l AND kind={album} AND uri IN (
+                             SELECT child_uri FROM entity_refs WHERE parent_uri IN (SELECT uri FROM art)
+                             UNION
+                             SELECT parent_uri FROM entity_refs WHERE child_uri IN (SELECT uri FROM art)))
+                    {ThinColumnsSql}
+                      WHERE locale=$l AND kind={album} AND uri IN (SELECT uri FROM alb)
+                    UNION ALL
+                    {ThinColumnsSql}
+                      WHERE locale=$l AND kind=$k AND album_uri IN (SELECT uri FROM alb);
+                    """, track);
+                return Split(roots, rows, edges);
+            }
+        }
+    }
+
+    // The UNION ALL leg returns albums and tracks interleaved by kind — fan them into the two lists the caller indexes.
+    static ColdCandidates Split(IReadOnlyList<ColdThinRow> roots, List<ColdThinRow> mixed, IReadOnlyList<ColdRefEdge> edges)
+    {
+        var albums = new List<ColdThinRow>(mixed.Count);
+        var tracks = new List<ColdThinRow>(mixed.Count);
+        for (int i = 0; i < mixed.Count; i++) (mixed[i].Kind == EntityKind.Track ? tracks : albums).Add(mixed[i]);
+        return new ColdCandidates(roots, albums, tracks, edges);
+    }
+
+    List<ColdThinRow> QueryThin(string sql, int kind)
+    {
+        var list = new List<ColdThinRow>(256);
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = sql;
+            c.Parameters.AddWithValue("$l", _localeKey);
+            c.Parameters.AddWithValue("$a", _account);
+            c.Parameters.AddWithValue("$k", kind);
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                list.Add(new ColdThinRow(
+                    r.GetString(0), (EntityKind)r.GetInt32(1),
+                    r.IsDBNull(2) ? null : r.GetString(2), r.IsDBNull(3) ? null : r.GetString(3),
+                    r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? 0 : r.GetInt64(5),
+                    r.IsDBNull(6) ? 0 : r.GetInt64(6), r.IsDBNull(7) ? null : r.GetString(7)));
+        }
+        return list;
+    }
+
+    List<ColdRefEdge> QueryEdges(string sql)
+    {
+        var list = new List<ColdRefEdge>(256);
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = sql;
+            c.Parameters.AddWithValue("$a", _account);
+            using var r = c.ExecuteReader();
+            while (r.Read())
+            {
+                var parent = r.IsDBNull(0) ? "" : r.GetString(0);
+                var child = r.IsDBNull(1) ? "" : r.GetString(1);
+                if (parent.Length > 0 && child.Length > 0) list.Add(new ColdRefEdge(parent, child));
+            }
+        }
+        return list;
+    }
+
     /// <summary>The running cache-tier byte counter (entity + artist_overview + extension payloads).</summary>
     public long GetCacheBytes()
     {

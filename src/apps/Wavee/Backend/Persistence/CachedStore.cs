@@ -25,7 +25,7 @@ namespace Wavee.Backend.Persistence;
 //     queue/radio/browse hydration stays HOT-ONLY, which is what stops the disk growing monotonically. Pin TRANSITIONS
 //     (like / add-to-playlist / attach-video) flush the hot record to cold on a background lane, so an entity that
 //     becomes pinned after its last write can never be stranded off-disk (critique #1).
-public sealed class CachedStore : IStore, IDisposable
+public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
 {
     readonly InMemoryStore _hot = new();
     readonly IColdStore _cold;
@@ -309,6 +309,12 @@ public sealed class CachedStore : IStore, IDisposable
         catch (JsonException) { return null; }
         catch (Exception) { return null; }
     }
+
+    /// <summary>The SQL-backed offline-search corpus (Addendum A4). Deliberately NOT routed through the hot tier: after
+    /// the redesign the hot tier is a bounded cache, so "what is in my library" can only be answered from the cold tier's
+    /// thin columns joined to the identity tables. The consumers overlay the resident records on top (a hot record is at
+    /// worst as fresh as its cold row, and may be fresher — the write-behind lane is asynchronous, Addendum A6).</summary>
+    public ColdCandidates LoadLibraryCandidates(ColdCandidateScope scope) => _cold.LoadLibraryCandidates(scope);
 
     public bool IsSaved(string setId, string uri) => _hot.IsSaved(setId, uri);
     public IReadOnlyList<string> SavedUris(string setId) => _hot.SavedUris(setId);

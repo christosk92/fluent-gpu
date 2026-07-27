@@ -343,7 +343,20 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.PlaylistTuning.Value = sync;
             sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));      // replay writes queued while logged out
             var hydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.InitialHydrate, Done: hydrated));
+            // Addendum A7 — InitialHydrate waits for the cold tier's WARM pass. It rewrites the saved sets and the
+            // rootlist wholesale; running it against a still-empty hot tier makes every fold a cache MISS and refetches a
+            // library that is already on disk. DrainWrites deliberately does NOT wait: local intent must send promptly,
+            // and it touches the outbox, not the entity cache. WarmComplete is guaranteed to complete even when the warm
+            // pass FAILS (Wave B's try/finally), so no timeout is needed to avoid a wedge.
+            var hydrate = new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.InitialHydrate, Done: hydrated);
+            if (store is Wavee.Backend.Persistence.CachedStore warmStore && !warmStore.WarmComplete.IsCompleted)
+                _ = Task.Run(async () =>
+                {
+                    try { await warmStore.WarmComplete.ConfigureAwait(false); } catch (Exception) { }
+                    sync.Enqueue(hydrate);
+                });
+            else
+                sync.Enqueue(hydrate);
             // Aggressive discography prefetch (artists → album cards → tracks) AFTER the saved sets land. Off the sync loop
             // (it must never block OpenPlaylist), cts-gated (logout cancels), SWR-skip makes re-login cheap.
             _ = Task.Run(async () =>

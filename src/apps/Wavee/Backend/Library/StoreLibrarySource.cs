@@ -286,7 +286,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             var online = await live(q, facet, offset, limit, ct).ConfigureAwait(false);
             return online ?? throw new InvalidOperationException("Spotify search returned no response.");
         }
-        var tracks = facet is SearchFacet.All or SearchFacet.Tracks ? _store.QueryTracks(q) : Array.Empty<Track>();
+        // Offline: the resident scan PLUS the cold library (liked ∪ playlist membership) — a saved track that is on disk
+        // but not resident must still be findable (Addendum A4). Facet gating and the 200-row cap are unchanged.
+        var tracks = facet is SearchFacet.All or SearchFacet.Tracks ? LibraryTrackSearch.Search(_store, q) : Array.Empty<Track>();
         return new SearchResults(tracks, Array.Empty<Album>(), Array.Empty<Artist>(), Array.Empty<Playlist>(),
             TracksTotal: tracks.Count);
     }
