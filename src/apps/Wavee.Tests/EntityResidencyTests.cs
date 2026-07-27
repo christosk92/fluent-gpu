@@ -136,7 +136,9 @@ public class EntityResidencyTests
     {
         var cold = new FakeCold();
         var store = new CachedStore(cold);
-        // A fat album (hydrated tracklist) upserts full into hot but THIN (Tracks=null) into cold.
+        // A fat album (hydrated tracklist) upserts full into hot but THIN (Tracks=null) into cold — once it is
+        // pin-reachable (the write gate is what decides a cold row now).
+        store.SetSaved("albums", "spotify:album:al", true, SyncState.Confirmed);
         var fat = new Album("al", "spotify:album:al", "Al", null, [], 2020, 2, new[] { Trk("t1"), Trk("t2") });
         store.UpsertAlbum(fat);
         Assert.NotNull(store.GetAlbum("spotify:album:al")!.Tracks);   // hot still has the fat copy
@@ -150,15 +152,23 @@ public class EntityResidencyTests
         Assert.NotNull(store.GetAlbum("spotify:album:al")!.Name);     // now resident again in hot (promoted)
     }
 
+    // The cold fallback is UNCONDITIONAL now (design §A.5): the deferred ctor starts the hot tier empty, so gating a miss
+    // on "something was evicted this session" would answer null for the whole catalog. A hot HIT still never touches disk.
     [Fact]
-    public void ColdFallback_NotConsulted_BeforeAnyEviction()
+    public async Task ColdFallback_IsUnconditional_NotGatedOnEviction()
     {
         var cold = new FakeCold();
         var store = new CachedStore(cold);
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
         store.UpsertTrack(Trk("t1"));
-        Assert.Equal(0, cold.GetEntityCalls);        // reads served from hot; no eviction yet
+        await store.WarmComplete;                    // let the (racy) background warm settle before counting probes
+        cold.GetEntityCalls = 0;
+
+        Assert.NotNull(store.GetTrack("spotify:track:t1"));
+        Assert.Equal(0, cold.GetEntityCalls);        // a hot hit is still disk-free
+        Assert.False(store.HasEvictedEntities);      // nothing was ever evicted…
         Assert.Null(store.GetTrack("spotify:track:missing"));
-        Assert.Equal(0, cold.GetEntityCalls);        // a genuine miss (nothing evicted) still never touches cold
+        Assert.True(cold.GetEntityCalls > 0);        // …yet the miss probed cold anyway (the old gate is gone)
     }
 
     // ── Pathfinder request-body hit-path cleanup ─────────────────────────────────────────────────────────────────────

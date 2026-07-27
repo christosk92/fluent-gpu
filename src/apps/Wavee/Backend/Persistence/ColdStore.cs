@@ -52,6 +52,16 @@ public interface IColdStore : IDisposable
         return null;
     }
 
+    /// <summary>Load a BATCH of persisted entities by uri (the Wave-B warm set: saved sets ∪ recent surfaces ∪ rootlist
+    /// headers). The default walks <see cref="GetEntity"/> per uri (fine for the in-memory test fake); SQLite overrides it
+    /// with chunked <c>IN (…)</c> reads on the read connection. Missing uris are simply absent from the result.</summary>
+    IEnumerable<ColdEntity> LoadEntities(IReadOnlyCollection<string> uris)
+    {
+        var list = new List<ColdEntity>(uris.Count);
+        foreach (var uri in uris) if (GetEntity(uri) is { } e) list.Add(e);
+        return list;
+    }
+
     IEnumerable<ColdSaved> LoadAllSaved();   // unordered library-set membership (collection_items), per active account
     void UpsertEntity(string uri, EntityKind kind, byte[] payload);   // non-blocking (write-behind)
     void UpsertSaved(string setId, string uri, bool saved, SyncState sync, long addedAtMs = 0);   // 0 = preserve stored added_at
@@ -85,6 +95,18 @@ public interface IColdStore : IDisposable
     // The rootlist (flat ordered marker stream → tree at read). Replace is synchronous + atomic.
     IReadOnlyList<ColdRootlistEntry> LoadRootlist();
     void ReplaceRootlist(IReadOnlyList<ColdRootlistEntry> entries);
+
+    // ── schema-v5 cache-tier surfaces (defaults keep the in-memory fakes compiling) ──────────────────────────────────
+    /// <summary>The recently-opened detail surfaces — a PIN REASON the write gate mirrors in memory.</summary>
+    IReadOnlyList<ColdRecentSurface> LoadRecentSurfaces() => Array.Empty<ColdRecentSurface>();
+    /// <summary>Record a detail-page open (LRU-capped at 50 rows by the implementation).</summary>
+    void UpsertRecentSurface(string uri, int kind, long nowUnixSeconds) { }
+    /// <summary>The fat artist facets split out of the Artist record at persist time (decoded JSON), or null.</summary>
+    ColdArtistOverview? GetArtistOverview(string uri) => null;
+    /// <summary>Persist the artist overview facets. <paramref name="locale"/> "" ⇒ the store's own launch locale.</summary>
+    void UpsertArtistOverview(string uri, string locale, byte[] payloadJson, long nowUnixSeconds) { }
+    /// <summary>Replace the pin-closure edges out of <paramref name="parentUri"/> (album→artists, artist→albums).</summary>
+    void ReplaceEntityRefs(string parentUri, IEnumerable<string> children) { }
 
     void Flush();   // block until queued writes are durable
 }

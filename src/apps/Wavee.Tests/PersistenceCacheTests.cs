@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
@@ -19,7 +20,18 @@ public class CachedStoreTests
         public readonly Dictionary<(string, string), SyncState> Saved = new();
         public IEnumerable<ColdEntity> LoadAllEntities() { foreach (var kv in Entities) yield return new ColdEntity(kv.Key, kv.Value.Kind, kv.Value.Payload); }
         public IEnumerable<ColdSaved> LoadAllSaved() { foreach (var kv in Saved) yield return new ColdSaved(kv.Key.Item1, kv.Key.Item2, kv.Value); }
-        public void UpsertEntity(string uri, EntityKind kind, byte[] payload) => Entities[uri] = (kind, payload);
+        public int EntityWrites;
+        public void UpsertEntity(string uri, EntityKind kind, byte[] payload) { EntityWrites++; Entities[uri] = (kind, payload); }
+        // schema-v5 cache-tier side tables the artist thin split uses (raw JSON — the fmt framing is SQLite-side).
+        public readonly Dictionary<string, byte[]> Overviews = new();
+        public readonly Dictionary<string, IReadOnlyList<string>> Refs = new();
+        public readonly List<ColdRecentSurface> Recent = new();
+        public ColdArtistOverview? GetArtistOverview(string uri)
+            => Overviews.TryGetValue(uri, out var p) ? new ColdArtistOverview(uri, "", p, 0) : null;
+        public void UpsertArtistOverview(string uri, string locale, byte[] payloadJson, long nowUnixSeconds) => Overviews[uri] = payloadJson;
+        public void ReplaceEntityRefs(string parentUri, IEnumerable<string> children) => Refs[parentUri] = new List<string>(children);
+        public IReadOnlyList<ColdRecentSurface> LoadRecentSurfaces() => Recent;
+        public void UpsertRecentSurface(string uri, int kind, long nowUnixSeconds) => Recent.Add(new ColdRecentSurface(uri, kind, nowUnixSeconds));
         public readonly Dictionary<string, byte[]> VideoAssoc = new();
         public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations() { foreach (var kv in VideoAssoc) yield return new ColdVideoAssoc(kv.Key, kv.Value); }
         public void UpsertVideoAssociation(string uri, byte[] payload) => VideoAssoc[uri] = payload;
@@ -49,21 +61,162 @@ public class CachedStoreTests
     {
         var cold = new MemCold();
         var store = new CachedStore(cold);
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);   // pin-reachable → the gate lets it through
         store.UpsertTrack(Trk("t1"));
         Assert.NotNull(store.GetTrack("spotify:track:t1"));        // in memory
         Assert.True(cold.Entities.ContainsKey("spotify:track:t1")); // and persisted
     }
 
+    // The pin-reachability write gate (§A.4.1): transient hydration (queue / radio / browse) is HOT-ONLY. That is the
+    // whole point of the redesign — the disk stops growing with everything the session ever touched.
     [Fact]
-    public void Reload_BulkLoadsColdIntoMemory_OnStartup()
+    public void Write_IsHotOnly_WhenNotPinReachable()
     {
         var cold = new MemCold();
-        new CachedStore(cold).UpsertTrack(Trk("t1"));     // instance 1 persists
+        var store = new CachedStore(cold);
+        store.UpsertTrack(Trk("t1"));
+        Assert.NotNull(store.GetTrack("spotify:track:t1"));          // memory: always
+        Assert.False(cold.Entities.ContainsKey("spotify:track:t1")); // disk: only if pin-reachable
+    }
+
+    [Fact]
+    public void Reload_ServesPersistedEntity_AfterRestart()
+    {
+        var cold = new MemCold();
+        var s1 = new CachedStore(cold);
+        s1.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        s1.UpsertTrack(Trk("t1"));                        // instance 1 persists
         var store2 = new CachedStore(cold);               // "restart" over the same cold tier
-        var t = store2.GetTrack("spotify:track:t1");
+        var t = store2.GetTrack("spotify:track:t1");      // deferred ctor ⇒ served by the (unconditional) cold fallback
         Assert.NotNull(t);
         Assert.Equal("Title t1", t!.Title);
         Assert.Equal("Artist", t.Artists[0].Name);        // full record round-trips
+    }
+
+    // The deferred ctor (§B step 4): NO entity replay, but the saved sets are loaded eagerly so IsSaved/SavedUris/counts
+    // are correct at first render. The entity itself arrives via the warm pass (or the cold fallback, whichever is first).
+    [Fact]
+    public async Task DeferredCtor_LoadsSavedSets_ThenWarmsTheEntities()
+    {
+        var cold = new MemCold();
+        var s1 = new CachedStore(cold);
+        s1.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        s1.UpsertTrack(Trk("t1"));
+
+        var s2 = new CachedStore(cold);
+        Assert.True(s2.IsSaved("liked", "spotify:track:t1"));   // identity tier: eager
+        await s2.WarmComplete;
+        Assert.False(s2.ColdNotFullyResident);
+        Assert.Equal("Title t1", Assert.Single(s2.QueryTracks(limit: 100)).Title);   // warmed into the hot mirror
+    }
+
+    // Pin-transition flush (critique #1): an entity hydrated hot-only that is LATER liked must reach disk — SetSaved is
+    // the only write in that path, and a payload-hash-only elision would strand it forever.
+    [Fact]
+    public void PinTransition_FlushesHotOnlyEntity_OnSetSaved()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.UpsertTrack(Trk("t1"));                                            // transient: hot-only
+        Assert.False(cold.Entities.ContainsKey("spotify:track:t1"));
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);   // …then liked
+        store.Flush();                                                            // drains the pin-transition lane
+        Assert.True(cold.Entities.ContainsKey("spotify:track:t1"));
+
+        using var restarted = new CachedStore(cold);                              // restart sim: it is really on disk
+        Assert.Equal("Title t1", restarted.GetTrack("spotify:track:t1")!.Title);
+    }
+
+    // No-op elision keyed on (payload hash, cold-presence): re-upserting identical bytes writes nothing; a real change does.
+    [Fact]
+    public void Elision_SkipsUnchangedRewrite_ButNotAChangedOne()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        store.UpsertTrack(Trk("t1"));
+        store.Flush();
+        int writes = cold.EntityWrites;
+
+        store.UpsertTrack(Trk("t1"));       // byte-identical → elided
+        store.Flush();
+        Assert.Equal(writes, cold.EntityWrites);
+
+        store.UpsertTrack(Trk("t1") with { PlayCount = 42 });   // a real change → written
+        store.Flush();
+        Assert.Equal(writes + 1, cold.EntityWrites);
+    }
+
+    // Membership adoption pins the playlist AND its members (§A.3 P0: `playlists` ∪ `playlist_items`).
+    [Fact]
+    public void PinTransition_FlushesMembers_OnMembershipAdoption()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.UpsertTrack(Trk("t1"));                                     // transient
+        store.UpsertPlaylist(new Playlist("p", "spotify:playlist:p", "Mix", null, "Me", null, 1));
+        Assert.False(cold.Entities.ContainsKey("spotify:track:t1"));
+        Assert.False(cold.Entities.ContainsKey("spotify:playlist:p"));
+
+        store.SetMembership("spotify:playlist:p",
+            new[] { new Wavee.Backend.Playlists.PlaylistMember("id1", "spotify:track:t1", null, 0) }, null);
+        store.Flush();
+
+        Assert.True(cold.Entities.ContainsKey("spotify:playlist:p"));     // the header the adopt wrote before the membership
+        Assert.True(cold.Entities.ContainsKey("spotify:track:t1"));       // …and every member
+    }
+
+    // The artist thin split (locked decision 17): the persisted core is small, the facets live in artist_overview, and a
+    // cold-fallback read re-fattens the record from them.
+    [Fact]
+    public void ArtistSplit_PersistsCoreAndOverview_ThenRefattensOnRead()
+    {
+        var cold = new MemCold();
+        const string uri = "spotify:artist:ar";
+        var fat = new Artist("ar", uri, "The Artist", null,
+            TopAlbums: [new Album("al1", "spotify:album:al1", "Debut", null, [], 2019, 10, Kind: AlbumKind.Album)],
+            MonthlyListeners: 1234, Followers: 99, Bio: "A long biography.", Verified: true,
+            TopTracks: [Trk("t1")], AlbumsTotal: 7);
+        using (var store = new CachedStore(cold))
+        {
+            store.SetSaved("artists", uri, true, SyncState.Confirmed);
+            store.UpsertArtist(fat);
+            Assert.NotNull(store.GetArtist(uri)!.TopAlbums);   // the HOT record stays fat
+            store.Flush();
+        }
+
+        Assert.True(cold.Overviews.ContainsKey(uri));                       // the facets went to artist_overview
+        var core = System.Text.Encoding.UTF8.GetString(cold.Entities[uri].Payload);
+        Assert.DoesNotContain("Debut", core);                               // …and NOT into the entity core
+        Assert.DoesNotContain("A long biography.", core);
+        Assert.Contains("The Artist", core);
+
+        using var restarted = new CachedStore(cold);
+        var got = restarted.GetArtist(uri);                                 // cold fallback → core + overview re-fatten
+        Assert.NotNull(got);
+        Assert.Equal("The Artist", got!.Name);
+        Assert.Equal(1234, got.MonthlyListeners);
+        Assert.Equal("A long biography.", got.Bio);
+        Assert.Equal(7, got.AlbumsTotal);
+        Assert.Equal("spotify:album:al1", Assert.Single(got.TopAlbums!).Uri);
+        Assert.Equal("spotify:track:t1", Assert.Single(got.TopTracks!).Uri);   // top tracks ride along with the artist
+    }
+
+    // A saved artist's discography is pin-reachable through its ArtistRefs (Addendum A2) — this is what keeps critique
+    // #7's "offline discography for saved artists" alive under the write gate.
+    [Fact]
+    public void PinGate_PersistsAlbumOfASavedArtist()
+    {
+        var cold = new MemCold();
+        using var store = new CachedStore(cold);
+        store.SetSaved("artists", "spotify:artist:a", true, SyncState.Confirmed);
+        store.UpsertAlbum(new Album("al", "spotify:album:al", "Al", null,
+            [new ArtistRef("a", "spotify:artist:a", "Artist")], 2020, 1));
+        store.UpsertAlbum(new Album("x", "spotify:album:x", "X", null,
+            [new ArtistRef("z", "spotify:artist:z", "Other")], 2020, 1));
+        store.Flush();
+        Assert.True(cold.Entities.ContainsKey("spotify:album:al"));    // saved artist → its releases persist
+        Assert.False(cold.Entities.ContainsKey("spotify:album:x"));    // an unrelated artist's album does not
     }
 
     [Fact]
@@ -97,6 +250,11 @@ public class CachedStoreTests
     {
         var cold = new MemCold();
         var s = new CachedStore(cold);
+        // Every kind is pinned through its own library set first — the write gate is what decides a cold row now.
+        s.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        s.SetSaved("albums", "spotify:album:al", true, SyncState.Confirmed);
+        s.SetSaved("artists", "spotify:artist:ar", true, SyncState.Confirmed);
+        s.SetSaved("playlists", "spotify:playlist:p", true, SyncState.Confirmed);
         s.UpsertTrack(Trk("t1"));
         s.UpsertAlbum(new Album("al", "spotify:album:al", "Album", null, [], 2020, 1));
         s.UpsertArtist(new Artist("ar", "spotify:artist:ar", "The Artist", null, Followers: 99));
@@ -137,7 +295,9 @@ public class CachedStoreTests
     {
         var cold = new MemCold();
         var pl = new Playlist("p", "spotify:playlist:p", "Mix", null, "Me", null, 2, new[] { Trk("t1"), Trk("t2") });
-        new CachedStore(cold).UpsertPlaylist(pl);
+        var writer = new CachedStore(cold);
+        writer.SetSaved("playlists", "spotify:playlist:p", true, SyncState.Confirmed);
+        writer.UpsertPlaylist(pl);
 
         var reloaded = new CachedStore(cold).GetPlaylist("spotify:playlist:p");   // re-deserialized from the persisted blob
         Assert.NotNull(reloaded);
@@ -150,7 +310,9 @@ public class CachedStoreTests
     {
         var cold = new MemCold();
         var al = new Album("al", "spotify:album:al", "Al", null, [], 2020, 2, new[] { Trk("t1"), Trk("t2") });
-        new CachedStore(cold).UpsertAlbum(al);
+        var writer = new CachedStore(cold);
+        writer.SetSaved("albums", "spotify:album:al", true, SyncState.Confirmed);
+        writer.UpsertAlbum(al);
 
         var reloaded = new CachedStore(cold).GetAlbum("spotify:album:al");
         Assert.NotNull(reloaded);
@@ -163,6 +325,8 @@ public class CachedStoreTests
     {
         var cold = new MemCold();
         var s = new CachedStore(cold);
+        s.SetSaved("shows", "spotify:show:sh", true, SyncState.Confirmed);
+        s.SetSaved("episodes", "spotify:episode:ep", true, SyncState.Confirmed);
         s.UpsertShow(new Show("sh", "spotify:show:sh", "My Show", "Acme Media", null));
         s.UpsertEpisode(new Episode("ep", "spotify:episode:ep", "Ep 1", "My Show", null, 5000, DateTimeOffset.UnixEpoch));
 
@@ -189,10 +353,11 @@ public class SqliteColdStoreTests
         {
             using (var store = new CachedStore(new SqliteColdStore(path)))
             {
-                store.UpsertTrack(Trk("t1"));
+                store.UpsertTrack(Trk("t1"));                                                  // hot-only at first…
                 store.UpsertAlbum(new Album("al", "spotify:album:al", "Al", null, [], 2020, 1));
-                store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
-                store.Flush();   // make the write-behind durable before we drop the instance
+                store.SetSaved("albums", "spotify:album:al", true, SyncState.Confirmed);
+                store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);        // …the like flushes both
+                store.Flush();   // make the pin-transition lane + write-behind durable before we drop the instance
             }   // Dispose drains + closes
 
             using var store2 = new CachedStore(new SqliteColdStore(path));   // reopen the same file
@@ -204,17 +369,22 @@ public class SqliteColdStoreTests
     }
 
     [Fact]
-    public void BulkDualWrite_10k_AllPersist()
+    public async Task BulkDualWrite_10k_AllPersist()
     {
         var path = TempDb();
         try
         {
             using (var store = new CachedStore(new SqliteColdStore(path)))
             {
-                for (int i = 0; i < 10_000; i++) store.UpsertTrack(Trk("t" + i));   // synchronous part: memory + enqueue
+                for (int i = 0; i < 10_000; i++)
+                {
+                    store.SetSaved("liked", "spotify:track:t" + i, true, SyncState.Confirmed);   // pin first…
+                    store.UpsertTrack(Trk("t" + i));                                             // …memory + enqueue
+                }
                 store.Flush();
             }
             using var store2 = new CachedStore(new SqliteColdStore(path));
+            await store2.WarmComplete;   // the deferred ctor replays nothing; the warm pass loads the saved head-set
             Assert.Equal(10_000, store2.QueryTracks(limit: 20_000).Count);   // write-behind persisted every one
         }
         finally { TryDelete(path); }

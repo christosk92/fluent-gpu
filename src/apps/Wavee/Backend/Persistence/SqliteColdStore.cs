@@ -537,6 +537,43 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         return list;
     }
 
+    /// <summary>Batched PK read for the Wave-B warm set. Chunked at <see cref="MaxInParams"/> so a 30k-uri warm is a
+    /// handful of statements, and the read lock is taken PER CHUNK — a UI-facing point read never waits for the whole
+    /// warm pass. Only the current locale is read: a stray cross-locale row still rehydrates through
+    /// <see cref="GetEntity"/>'s fallback probe on first access.</summary>
+    public IEnumerable<ColdEntity> LoadEntities(IReadOnlyCollection<string> uris)
+    {
+        var list = new List<ColdEntity>(uris.Count);
+        if (uris.Count == 0) return list;
+        var chunk = new List<string>(Math.Min(uris.Count, MaxInParams));
+        foreach (var uri in uris)
+        {
+            if (string.IsNullOrEmpty(uri)) continue;
+            chunk.Add(uri);
+            if (chunk.Count == MaxInParams) { LoadEntityChunk(chunk, list); chunk.Clear(); }
+        }
+        if (chunk.Count > 0) LoadEntityChunk(chunk, list);
+        return list;
+    }
+
+    void LoadEntityChunk(List<string> chunk, List<ColdEntity> into)
+    {
+        var sql = new System.Text.StringBuilder("SELECT uri,kind,payload FROM entity WHERE locale=$l AND uri IN (");
+        for (int i = 0; i < chunk.Count; i++) { if (i > 0) sql.Append(','); sql.Append("$u").Append(i); }
+        sql.Append(");");
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = sql.ToString();
+            c.Parameters.AddWithValue("$l", _localeKey);
+            for (int i = 0; i < chunk.Count; i++) c.Parameters.AddWithValue("$u" + i, chunk[i]);
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                into.Add(new ColdEntity(r.GetString(0), (EntityKind)r.GetInt32(1),
+                    PayloadCodec.Decode(r.IsDBNull(2) ? null : r.GetFieldValue<byte[]>(2))));
+        }
+    }
+
     // Indexed single-row rehydration (CachedStore cold-fallback): a PK point read on (uri, locale), with the rare
     // cross-locale probe behind it. Rides the READ connection, so it never queues behind the write-behind drain or GC.
     public ColdEntity? GetEntity(string uri)

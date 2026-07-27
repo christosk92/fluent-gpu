@@ -61,7 +61,9 @@ public sealed class ExtensionEtagCache
 
         if (_persistent is not null)
         {
-            var rows = new List<ColdExtension>(_persistent.LoadAllExtensions());
+            // Match the SQL LIMIT to the LIVE cap: the seed loop below discards everything past `maxEntries`, so reading
+            // the whole table was pure I/O waste (~26k rows / ~24 MB of BLOBs at go-live for a 2048-entry cache).
+            var rows = new List<ColdExtension>(_persistent.LoadAllExtensions(maxEntries));
             int keep = Math.Min(rows.Count, maxEntries > 0 ? maxEntries : rows.Count);
             long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             // Store returns newest-first; seed oldest-first so an LRU cap retains the newest rows.

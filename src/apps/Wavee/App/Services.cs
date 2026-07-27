@@ -294,6 +294,20 @@ public sealed class Services
         System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(accountDbPath)!);
         var cold = new Wavee.Backend.Persistence.SqliteColdStore(accountDbPath, Wavee.Backend.Persistence.SqliteColdStore.DefaultAccount, locale.SpotifyLanguage);
         var store = new Wavee.Backend.Persistence.CachedStore(cold);
+        // One-time post-migration reclaim: the v4→v5 migration leaves `vacuum_pending` set because it drops the legacy
+        // entity generation (tens of MB of freelist). Run it AFTER the warm pass has landed and the launch burst has
+        // settled — it takes the writer lock, so the write-behind drain simply waits behind it. Idempotent (Wave A gates
+        // it on the meta flag), so a crash before it runs just means the next launch reclaims instead.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            try
+            {
+                await store.WarmComplete.ConfigureAwait(false);
+                await System.Threading.Tasks.Task.Delay(System.TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+                cold.RunFullVacuumIfPending();
+            }
+            catch { /* best-effort housekeeping — never fail a launch over it */ }
+        });
 
         // The collection self-write echo registry (§7.1): the write strategy records accepted-write cuids; the sync loop
         // drops our own echoes. One instance shared between the write path and the read loop (wired below on go-live).

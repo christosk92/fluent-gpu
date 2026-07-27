@@ -568,6 +568,25 @@ public sealed class InMemoryStore : IStore
         lock (_gate) return _saved.ContainsKey((setId, uri));
     }
 
+    /// <summary>The library sets that have at least one member (the warm-set + pin-gate enumeration seam). A handful of
+    /// ids ("liked"/"albums"/"artists"/"shows"/"episodes"/…), so a copy is free.</summary>
+    public IReadOnlyList<string> SavedSetIds()
+    {
+        lock (_gate) return new List<string>(_savedBySet.Keys);
+    }
+
+    /// <summary>True when <paramref name="uri"/> is a member of ANY library set — the in-memory mirror of
+    /// <c>SELECT 1 FROM collection_items WHERE item_uri=?</c>, which is the first leg of the cold-write pin gate. O(number
+    /// of sets), not O(saved), because each set is its own hash set.</summary>
+    public bool IsSavedAnywhere(string uri)
+    {
+        lock (_gate)
+        {
+            foreach (var kv in _savedBySet) if (kv.Value.Contains(uri)) return true;
+            return false;
+        }
+    }
+
     public IReadOnlyList<string> SavedUris(string setId)
     {
         lock (_gate) return _savedBySet.TryGetValue(setId, out var set) ? new List<string>(set) : new List<string>();

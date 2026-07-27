@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.Tasks;
+using Channels = System.Threading.Channels;
 using Wavee.Backend;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Playlists;
@@ -9,10 +11,20 @@ using Wavee.Core;
 
 namespace Wavee.Backend.Persistence;
 
-// ── STEP 4 — durable, offline-first IStore ───────────────────────────────────────────────────────────────────────────
-// A FULL in-memory tier-1 (every entity — reads never touch disk) mirrored to a persistent cold tier via DUAL-WRITE:
-// each mutation updates memory synchronously and enqueues a write-behind, batched persist (the UI never blocks on disk).
-// On startup the whole cold tier bulk-loads into memory, including the persisted library (saved) state — that's offline.
+// ── the durable, offline-first IStore (schema v5 contract) ───────────────────────────────────────────────────────────
+// The cold tier is the SOURCE OF TRUTH; the hot tier (InMemoryStore) is a BOUNDED CACHE over it. That inversion is the
+// whole redesign, and it shows up here as four behaviors:
+//
+//  1. DEFERRED CTOR — the ctor loads only the IDENTITY tier (saved sets, the user's video curation, the video↔audio map,
+//     the recent-surface + rootlist pin mirrors). No entity replay: first paint no longer waits on the catalog.
+//  2. WARM TASK — a background pass replays the bounded PIN HEAD-SET (saved uris ∪ recent surfaces ∪ rootlist playlist
+//     headers) under one BeginBulk scope, then completes `WarmComplete`.
+//  3. UNCONDITIONAL COLD FALLBACK — every hot miss probes cold (one indexed PK read). This is the correctness backbone
+//     now that hot is never fully resident; the old `HasEvictedEntities` gate is gone.
+//  4. PIN-REACHABILITY WRITE GATE — a cold row is written only for entities the pin set can reach (§A.4.1). Transient
+//     queue/radio/browse hydration stays HOT-ONLY, which is what stops the disk growing monotonically. Pin TRANSITIONS
+//     (like / add-to-playlist / attach-video) flush the hot record to cold on a background lane, so an entity that
+//     becomes pinned after its last write can never be stranded off-disk (critique #1).
 public sealed class CachedStore : IStore, IDisposable
 {
     readonly InMemoryStore _hot = new();
@@ -30,16 +42,64 @@ public sealed class CachedStore : IStore, IDisposable
     long _residentTick;
     long _residentBytes;
 
+    // ── pin mirrors (the in-memory half of the §A.3 pin set) ─────────────────────────────────────────────────────────
+    // Everything the write gate consults must be O(1) and thread-safe: the gate runs on whichever thread projected the
+    // entity, and it must NEVER call Services.BuildPinSet (that snapshot is UI-thread-affine and belongs to GC, Wave C).
+    // `_memberUris` and `_pinReferenced` are ADD-ONLY: a stale entry can only make the gate more generous (one extra
+    // cold row that the GC's SQL-derived pin set will reclaim), never less — it can never strand an entity off disk.
+    const int PinMirrorCap = 200_000;
+    readonly object _pinGate = new();
+    readonly HashSet<string> _recentSurfaces = new(StringComparer.Ordinal);   // recent_surfaces mirror
+    readonly HashSet<string> _rootlistUris = new(StringComparer.Ordinal);     // rootlist playlist uris
+    readonly HashSet<string> _adopted = new(StringComparer.Ordinal);          // playlists with an adopted membership (`playlists`)
+    readonly HashSet<string> _memberUris = new(StringComparer.Ordinal);       // ∪ of every adopted playlist membership
+    readonly HashSet<string> _pinReferenced = new(StringComparer.Ordinal);    // closure: children of a persisted pinned parent
+
+    // ── cold-presence + no-op elision (critique #1b) ─────────────────────────────────────────────────────────────────
+    // ONE map does both jobs: the KEY set is "this uri has a row in cold" and the VALUE is the 64-bit hash of the bytes
+    // we last wrote for it. Skip the cold upsert iff the hash is unchanged AND the uri is cold-present — a payload-only
+    // hash would strand a pinned entity forever the first time its bytes happened to repeat (that is exactly the bug
+    // the critique found). Seeded from the warm read, every successful persist, and every cold-fallback hit — so it is
+    // always a SUBSET of the rows that actually exist on disk. Capped: on overflow it is cleared wholesale, which costs
+    // one redundant re-write per uri and can never lose data.
+    const int ColdPresenceCap = 250_000;
+    readonly object _coldGate = new();
+    readonly Dictionary<string, ulong> _coldRows = new(StringComparer.Ordinal);
+    readonly Dictionary<string, ulong> _coldOverviews = new(StringComparer.Ordinal);
+
+    // ── the background lanes ─────────────────────────────────────────────────────────────────────────────────────────
+    readonly Channels.Channel<FlushOp> _lane = Channels.Channel.CreateUnbounded<FlushOp>(new Channels.UnboundedChannelOptions { SingleReader = true });
+    readonly Task _laneLoop;
+    readonly Task _warm;
+    readonly TaskCompletionSource _warmDone = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    volatile bool _coldNotFullyResident = true;
+
     public CachedStore(IColdStore cold, int maxResidentPlaylists = 128, long maxResidentBytes = 24L * 1024 * 1024)
     {
         _cold = cold;
         _maxResidentPlaylists = maxResidentPlaylists;
         _maxResidentBytes = maxResidentBytes;
-        foreach (var e in _cold.LoadAllEntities()) Replay(e);                                  // entities → memory
-        foreach (var v in _cold.LoadAllVideoAssociations()) ReplayVideo(v);                     // + the video↔audio map
-        foreach (var o in _cold.LoadAllVideoOverrides()) _hot.UpsertVideoOverride(o);           // + the user's video curation
-        foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync, s.AddedAtMs);   // + library state
+        // IDENTITY tier only — tiny, and the very first render reads it. NO entity replay (that is WarmAsync's job).
+        // video_assoc stays EAGER (locked decision 8): GetVideoAssociation is a hot-only reader and the video-edge code
+        // is fragile — a false "no video" during the warm window flips the placement machine at a track edge.
+        foreach (var v in _cold.LoadAllVideoAssociations()) ReplayVideo(v);
+        foreach (var o in _cold.LoadAllVideoOverrides()) _hot.UpsertVideoOverride(o);          // the user's video curation
+        foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync, s.AddedAtMs);   // library state
+        // The two identity-tier pin mirrors. Both are uri-only scans of tiny tables (≤50 rows / the sidebar), and the
+        // gate needs them from the FIRST write, so they cannot wait for the warm pass.
+        foreach (var r in _cold.LoadRecentSurfaces()) _recentSurfaces.Add(r.Uri);
+        foreach (var e in _cold.LoadRootlist()) if (e.Kind == 0 && e.Uri.Length > 0) _rootlistUris.Add(e.Uri);
+        _laneLoop = Task.Run(LaneLoopAsync);
+        _warm = Task.Run(Warm);
     }
+
+    /// <summary>Completes when the background warm pass has replayed the pin head-set (or failed — it NEVER wedges a
+    /// consumer; a miss is served by the cold fallback). Consumers that need the warm set resident await this.</summary>
+    public Task WarmComplete => _warmDone.Task;
+
+    /// <summary>True until the warm pass lands: the hot tier is a strict subset of cold by construction, so a hot miss is
+    /// never proof of absence. (The cold fallback is unconditional either way — this is a diagnostic/readiness bit.)</summary>
+    public bool ColdNotFullyResident => _coldNotFullyResident;
 
     public int ResidentMembershipCount { get { lock (_lruGate) return _resident.Count; } }
     public long ResidentMembershipBytes { get { lock (_lruGate) return _residentBytes; } }
@@ -51,9 +111,45 @@ public sealed class CachedStore : IStore, IDisposable
     public long EstimatedEntityBytes => _hot.EstimatedEntityBytes;
     public bool HasEvictedEntities => _hot.HasEvictedEntities;
     /// <summary>Governor arena (priority 3): evict oldest-first unpinned entities down to <paramref name="maxResident"/>,
-    /// returning estimated bytes freed. The cold tier keeps every entity, so eviction is safe — a later read cold-falls-back.</summary>
+    /// returning estimated bytes freed. The cold tier keeps every PINNED entity, so eviction is safe — a later read
+    /// cold-falls-back (and an unpinned entity was memory-only by policy, so it re-fetches).</summary>
     public long ShedEntities(ISet<string> pinned, int maxResident) => _hot.EvictEntities(pinned, maxResident);
     public void CollectSavedHeads(ISet<string> pins, int perSet) => _hot.CollectSavedHeads(pins, perSet);
+
+    // ── the warm pass (design §B step 6) ─────────────────────────────────────────────────────────────────────────────
+    // The BOUNDED head-set, never the whole catalog: every saved-set member (all sets), every recently-opened surface,
+    // and the rootlist playlist headers. One batched cold read, one BeginBulk scope (so the 12k backstop cannot run its
+    // O(n log n) shed per upsert), one Bulk change signal at the end.
+    void Warm()
+    {
+        try
+        {
+            var uris = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var setId in _hot.SavedSetIds())
+                foreach (var u in _hot.SavedUris(setId)) if (u.Length > 0) uris.Add(u);
+            lock (_pinGate)
+            {
+                foreach (var u in _recentSurfaces) if (u.Length > 0) uris.Add(u);
+                foreach (var u in _rootlistUris) uris.Add(u);
+            }
+            if (uris.Count > 0)
+                using (_hot.BeginBulk())
+                    foreach (var e in _cold.LoadEntities(uris))
+                    {
+                        Replay(e);
+                        NoteColdRow(e.Uri, Hash(e.Payload));   // warm rows ARE cold rows — seed the presence set
+                    }
+        }
+        catch (Exception)
+        {
+            // A failed warm is a slower session, never a broken one: the cold fallback still serves every miss.
+        }
+        finally
+        {
+            _coldNotFullyResident = false;
+            _warmDone.TrySetResult();
+        }
+    }
 
     void TouchResident(string playlistUri, int itemCount)
     {
@@ -85,7 +181,15 @@ public sealed class CachedStore : IStore, IDisposable
             {
                 case EntityKind.Track: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Track); if (v != null) _hot.UpsertTrack(v); break; }
                 case EntityKind.Album: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Album); if (v != null) _hot.UpsertAlbum(v); break; }
-                case EntityKind.Artist: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Artist); if (v != null) _hot.UpsertArtist(v); break; }
+                // An artist row is only the CORE — re-fatten it from `artist_overview` on the way in, exactly like the
+                // cold fallback does, so a warmed saved artist is not a header with an empty discography (and so
+                // SpotifyArtistStatsService's TopTracks-presence gate doesn't refetch every launch).
+                case EntityKind.Artist:
+                {
+                    var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Artist);
+                    if (v != null) _hot.UpsertArtist(ReadOverview(v.Uri) is { } doc ? ArtistSplit.Refatten(v, doc, GetTrack) : v);
+                    break;
+                }
                 case EntityKind.Playlist: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Playlist); if (v != null) _hot.UpsertPlaylist(v); break; }
                 case EntityKind.Show: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Show); if (v != null) _hot.UpsertShow(v); break; }
                 case EntityKind.Episode: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Episode); if (v != null) _hot.UpsertEpisode(v); break; }
@@ -100,15 +204,14 @@ public sealed class CachedStore : IStore, IDisposable
         catch (JsonException) { /* skip a corrupt row — it's re-fetchable */ }
     }
 
-    // reads → the full in-memory mirror, with a COLD FALLBACK for entity kinds: once the entity evictor has demoted
-    // something (HasEvictedEntities), a hot miss may be a shed-but-recoverable entity, so read the cold tier, re-upsert the
-    // (thin) row back into hot (promoting + re-stamping its LRU recency), and return it. Before the first eviction hot ==
-    // cold, so a hot miss is a genuine miss and the read stays disk-free (the old semantics). Membership/rootlist keep
-    // their own lazy cold-promotion paths below.
+    // reads → the hot mirror first, with an UNCONDITIONAL cold fallback for entity kinds: the hot tier is a bounded cache
+    // over cold now (deferred ctor + warm head-set + eviction), so a hot miss is never proof of absence. One indexed PK
+    // read, one deserialize, promote back into hot (re-stamping its LRU recency). Membership/rootlist keep their own lazy
+    // cold-promotion paths below.
     public Track? GetTrack(string uri) => _hot.GetTrack(uri) ?? ColdFallback<Track>(uri, EntityKind.Track, EntityJson.Default.Track, static (h, v) => h.UpsertTrack(v));
     public IReadOnlyList<Track> QueryTracks(string? text = null, TrackSort sort = TrackSort.None, int limit = 200) => _hot.QueryTracks(text, sort, limit);
     public Album? GetAlbum(string uri) => _hot.GetAlbum(uri) ?? ColdFallback<Album>(uri, EntityKind.Album, EntityJson.Default.Album, static (h, v) => h.UpsertAlbum(v));
-    public Artist? GetArtist(string uri) => _hot.GetArtist(uri) ?? ColdFallback<Artist>(uri, EntityKind.Artist, EntityJson.Default.Artist, static (h, v) => h.UpsertArtist(v));
+    public Artist? GetArtist(string uri) => _hot.GetArtist(uri) ?? ColdFallbackArtist(uri);
     public Playlist? GetPlaylist(string uri) => _hot.GetPlaylist(uri) ?? ColdFallback<Playlist>(uri, EntityKind.Playlist, EntityJson.Default.Playlist, static (h, v) => h.UpsertPlaylist(v));
     public Show? GetShow(string uri) => _hot.GetShow(uri) ?? ColdFallback<Show>(uri, EntityKind.Show, EntityJson.Default.Show, static (h, v) => h.UpsertShow(v));
     public Episode? GetEpisode(string uri) => _hot.GetEpisode(uri) ?? ColdFallback<Episode>(uri, EntityKind.Episode, EntityJson.Default.Episode, static (h, v) => h.UpsertEpisode(v));
@@ -116,20 +219,67 @@ public sealed class CachedStore : IStore, IDisposable
     public VideoOverride? GetVideoOverride(string uri) => _hot.GetVideoOverride(uri);
     public IReadOnlyList<VideoOverride> VideoOverrides() => _hot.VideoOverrides();
 
-    // Deserialize one evicted entity from the cold tier and promote it back into hot. Gated on HasEvictedEntities so an
-    // un-evicted session never touches disk on a miss. The upsert re-Bumps (like the membership cold-promotion above),
-    // which is a benign no-value-change signal; consistent with the existing lazy-load precedent.
+    // Deserialize one entity from the cold tier and promote it back into hot. No gate: after the deferred ctor the hot
+    // tier starts EMPTY, so gating this on "something was evicted" would answer null for the whole catalog.
     T? ColdFallback<T>(string uri, EntityKind kind, System.Text.Json.Serialization.Metadata.JsonTypeInfo<T> json, Action<InMemoryStore, T> promote) where T : class
     {
-        if (!_hot.HasEvictedEntities) return null;
-        if (_cold.GetEntity(uri) is not { } ce || ce.Kind != kind) return null;
+        if (ReadCold(uri, kind) is not { } payload) return null;
         T? v;
-        try { v = JsonSerializer.Deserialize(ce.Payload, json); }
+        try { v = JsonSerializer.Deserialize(payload, json); }
         catch (JsonException) { return null; }   // a corrupt row is re-fetchable — treat as a miss
         if (v is null) return null;
         promote(_hot, v);
         return v;
     }
+
+    byte[]? ReadCold(string uri, EntityKind kind)
+    {
+        if (_cold.GetEntity(uri) is not { } ce || ce.Kind != kind) return null;
+        NoteColdRow(uri, Hash(ce.Payload));   // a hit PROVES cold-presence (and pins the elision hash to what is stored)
+        return ce.Payload;
+    }
+
+    // The artist read is the one that has to un-do the thin split: load the core, then re-fatten it from `artist_overview`
+    // (album REFS → stub cards, top-track uris → resident tracks) and hand the stubs to ArtistDiscography.Assemble, which
+    // is the EXISTING upgrade-stubs-from-standalone-album-rows logic — deliberately reused, never duplicated.
+    [ThreadStatic] static string? s_refattening;
+    Artist? ColdFallbackArtist(string uri)
+    {
+        if (ReadCold(uri, EntityKind.Artist) is not { } payload) return null;
+        Artist? core;
+        try { core = JsonSerializer.Deserialize(payload, EntityJson.Default.Artist); }
+        catch (JsonException) { return null; }
+        if (core is null) return null;
+
+        if (s_refattening == uri) { _hot.UpsertArtist(core); return core; }   // reentrancy guard (Assemble reads back)
+        var doc = ReadOverview(uri);
+        if (doc is null) { _hot.UpsertArtist(core); return core; }
+
+        var prev = s_refattening;
+        s_refattening = uri;
+        try
+        {
+            _hot.UpsertArtist(ArtistSplit.Refatten(core, doc, GetTrack));
+            ArtistDiscography.Assemble(this, uri);   // stubs → hydrated standalone album rows (DATE_DESC), the existing path
+        }
+        catch (Exception) { /* a broken overview must never make the artist unreadable */ }
+        finally { s_refattening = prev; }
+        return _hot.GetArtist(uri) ?? core;
+    }
+
+    ArtistOverviewDoc? ReadOverview(string uri)
+    {
+        try
+        {
+            if (_cold.GetArtistOverview(uri) is not { } row || row.Payload.Length == 0) return null;
+            var doc = JsonSerializer.Deserialize(row.Payload, EntityJson.Default.ArtistOverviewDoc);
+            if (doc is not null) NoteOverview(uri, Hash(row.Payload));
+            return doc;
+        }
+        catch (JsonException) { return null; }
+        catch (Exception) { return null; }
+    }
+
     public bool IsSaved(string setId, string uri) => _hot.IsSaved(setId, uri);
     public IReadOnlyList<string> SavedUris(string setId) => _hot.SavedUris(setId);
 
@@ -140,6 +290,15 @@ public sealed class CachedStore : IStore, IDisposable
         _hot.SetMembership(playlistUri, rows, baseRev);
         _cold.ReplaceMembership(playlistUri, ToCold(rows), baseRev);
         TouchResident(playlistUri, rows.Count);
+        NoteAdopted(playlistUri);
+        NoteMembers(rows);
+        // PIN TRANSITION: adopting a membership pins the playlist itself (`playlists` gets a row) AND every member. Any
+        // of them already hot but not yet on disk (hydrated as transient browse/queue metadata) must be flushed, or the
+        // post-restart membership × entity join silently drops it. AdoptSnapshot writes the HEADER before the membership,
+        // so the header write itself was gate-rejected — this is what rescues it. Batched onto the lane, never
+        // synchronous on the caller (this path runs on the UI thread).
+        EnqueueFlush(playlistUri);
+        for (int i = 0; i < rows.Count; i++) EnqueueFlush(rows[i].ItemUri);
     }
     public IReadOnlyList<PlaylistMember> Membership(string playlistUri)
     {
@@ -150,6 +309,8 @@ public sealed class CachedStore : IStore, IDisposable
         var rows = FromCold(cold);
         _hot.SetMembership(playlistUri, rows, _cold.GetPlaylistRevision(playlistUri));   // promote into the resident mirror
         TouchResident(playlistUri, rows.Count);
+        NoteAdopted(playlistUri);
+        NoteMembers(rows);   // these came FROM the pin tables — mirror them, but nothing to flush
         return rows;
     }
     public bool HasMembership(string playlistUri)
@@ -164,12 +325,14 @@ public sealed class CachedStore : IStore, IDisposable
     {
         _hot.SetRootlist(entries);   // preserve the stored revision (header hydration path)
         _cold.ReplaceRootlist(ToColdRoot(entries));
+        NoteRootlist(entries);
     }
     public void SetRootlist(IReadOnlyList<RootlistEntry> entries, byte[]? rev)
     {
         _hot.SetRootlist(entries, rev);
         _cold.ReplaceRootlist(ToColdRoot(entries));
         _cold.SetRootlistRevision(rev);   // dual-write the rev to meta
+        NoteRootlist(entries);
     }
     public byte[]? RootlistRevision() => _hot.RootlistRevision() ?? _cold.GetRootlistRevision();
     public IReadOnlyList<RootlistEntry> Rootlist()
@@ -177,8 +340,18 @@ public sealed class CachedStore : IStore, IDisposable
         var r = _hot.Rootlist();
         if (r.Count > 0) return r;
         var mapped = FromColdRoot(_cold.LoadRootlist());
-        if (mapped.Count > 0) _hot.SetRootlist(mapped);
+        if (mapped.Count > 0) { _hot.SetRootlist(mapped); NoteRootlist(mapped); }
         return mapped;
+    }
+
+    /// <summary>Record a detail-page open (the `recent_surfaces` pin reason). Updates the in-memory mirror synchronously —
+    /// the write gate must see the new pin immediately — and writes the row + flushes the surface entity on the lane.</summary>
+    public void RecordRecentSurface(string uri, int kind)
+    {
+        if (string.IsNullOrEmpty(uri)) return;
+        lock (_pinGate) _recentSurfaces.Add(uri);
+        _lane.Writer.TryWrite(FlushOp.Recent(uri, kind));
+        EnqueueFlush(uri);
     }
 
     static IReadOnlyList<ColdPlaylistItem> ToCold(IReadOnlyList<PlaylistMember> rows)
@@ -211,12 +384,15 @@ public sealed class CachedStore : IStore, IDisposable
     public void Bump(string uri, CollectionKind? kind = null) => _hot.Bump(uri, kind);
     public IDisposable BeginBulk() => _hot.BeginBulk();   // the cold tier is already write-behind batched
 
-    // writes → DUAL: memory (synchronous) + cold (write-behind, batched)
+    // ── writes → hot ALWAYS, cold IFF PIN-REACHABLE ──────────────────────────────────────────────────────────────────
+    // The six chokepoints keep their signatures, so no caller changes: the gate is entirely inside them. A non-pinned
+    // write is memory-only and bounded by the existing 4000-entity governor arena + the 12k→8k upsert backstop, which is
+    // exactly the intent — transient queue/radio/autoplay/browse hydration stops reaching disk from this wave on.
     public void UpsertTrack(Track t)
     {
         _hot.UpsertTrack(t);
         var merged = _hot.GetTrack(t.Uri) ?? t;
-        _cold.UpsertEntity(t.Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.Track));
+        if (PinnedTrack(merged)) PersistTrack(merged);
     }
     // Persist the entity HEADER thin: a container's hydrated tracklist is a read-model (joined from membership × shared
     // entities at read), never baked into the entity blob — that would re-serialize a multi-MB LOH blob per edit and
@@ -225,22 +401,34 @@ public sealed class CachedStore : IStore, IDisposable
     {
         _hot.UpsertAlbum(a);
         var merged = _hot.GetAlbum(a.Uri) ?? a;
-        var thin = merged.Tracks is null ? merged : merged with { Tracks = null };
-        _cold.UpsertEntity(a.Uri, EntityKind.Album, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Album));
+        if (PinnedAlbum(a.Uri, merged.Artists)) PersistAlbum(merged);
     }
     public void UpsertArtist(Artist a)
     {
         _hot.UpsertArtist(a);
         var merged = _hot.GetArtist(a.Uri) ?? a;
-        _cold.UpsertEntity(a.Uri, EntityKind.Artist, JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.Artist));
+        if (PinnedArtist(a.Uri)) PersistArtist(merged);
     }
-    public void UpsertPlaylist(Playlist p) { _hot.UpsertPlaylist(p); var thin = p.Tracks is null ? p : p with { Tracks = null }; _cold.UpsertEntity(p.Uri, EntityKind.Playlist, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Playlist)); }
-    public void UpsertShow(Show s) { _hot.UpsertShow(s); _cold.UpsertEntity(s.Uri, EntityKind.Show, JsonSerializer.SerializeToUtf8Bytes(s, EntityJson.Default.Show)); }
+    public void UpsertPlaylist(Playlist p)
+    {
+        _hot.UpsertPlaylist(p);
+        if (PinnedPlaylist(p.Uri)) PersistPlaylist(p);
+    }
+    public void UpsertShow(Show s)
+    {
+        _hot.UpsertShow(s);
+        if (PinnedShowOrEpisode(s.Uri)) PersistShow(s);
+    }
+    public void UpsertEpisode(Episode e)
+    {
+        _hot.UpsertEpisode(e);
+        if (PinnedShowOrEpisode(e.Uri)) PersistEpisode(e);
+    }
     public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
-    // The user's video curation: typed columns, not a JSON blob (the roster UI queries them by field), so no serializer hop.
-    public void UpsertVideoOverride(VideoOverride o) { _hot.UpsertVideoOverride(o); _cold.UpsertVideoOverride(o); }
+    // The user's video curation: typed columns, not a JSON blob (the roster UI queries them by field), so no serializer
+    // hop. Attaching an override is a PIN TRANSITION — flush the playable it points at.
+    public void UpsertVideoOverride(VideoOverride o) { _hot.UpsertVideoOverride(o); _cold.UpsertVideoOverride(o); EnqueueFlush(o.Uri); }
     public void RemoveVideoOverride(string uri) { _hot.RemoveVideoOverride(uri); _cold.DeleteVideoOverride(uri); }
-    public void UpsertEpisode(Episode e) { _hot.UpsertEpisode(e); _cold.UpsertEntity(e.Uri, EntityKind.Episode, JsonSerializer.SerializeToUtf8Bytes(e, EntityJson.Default.Episode)); }
     // Ask the hot tier whether the write actually changed state (§7.4 no-op elision) and skip the cold dual-write when it
     // didn't — so an idempotent echo/delta-overlap costs neither a change signal nor a SQLite round-trip. added_at rides
     // both tiers (0 = preserve-existing, resolved per tier); a pure timestamp refinement still reaches the cold tier.
@@ -249,11 +437,305 @@ public sealed class CachedStore : IStore, IDisposable
     {
         bool changed = _hot.SetSavedCore(setId, uri, saved, sync, addedAtMs);
         if (changed || (saved && addedAtMs != 0)) _cold.UpsertSaved(setId, uri, saved, sync, addedAtMs);
+        // PIN TRANSITION (critique #1): liking writes collection_items only — no Upsert* fires — so an entity hydrated
+        // hot-only would never reach disk, and the payload-hash elision would block the retry forever. Flush it here.
+        if (saved && changed) EnqueueFlush(uri);
     }
     public IReadOnlyList<SavedItem> SavedItems(string setId) => _hot.SavedItems(setId);
 
-    public void Flush() => _cold.Flush();
-    public void Dispose() => _cold.Dispose();
+    // ── pin reachability (all O(1)/cheap, thread-safe, no UI-thread pin-set snapshot) ────────────────────────────────
+    // "Already a cold row" counts as pinned: the write gate decides what ENTERS the cache tier, and the GC decides what
+    // LEAVES it. Refusing to refresh a row that is already on disk would just serve stale offline data.
+    bool PinnedTrack(Track t)
+    {
+        if (ColdPresent(t.Uri) || _hot.IsSavedAnywhere(t.Uri)) return true;              // collection_items (incl. "liked")
+        if (_hot.GetVideoOverride(t.Uri) is not null) return true;                       // video_override
+        lock (_pinGate)
+            if (_memberUris.Contains(t.Uri) || _recentSurfaces.Contains(t.Uri) || _pinReferenced.Contains(t.Uri)) return true;
+        // outbox.entity_key needs no mirror: every outbox intent is written alongside its OPTIMISTIC hot state (a save
+        // does SetSaved(Pending) first, a playlist edit rewrites membership first), so its target is already covered by
+        // the saved/membership legs above.
+        return t.Album.Uri.Length > 0 && PinnedAlbum(t.Album.Uri, null);
+    }
+
+    bool PinnedAlbum(string uri, IReadOnlyList<ArtistRef>? artists)
+    {
+        if (uri.Length == 0) return false;
+        if (ColdPresent(uri) || _hot.IsSavedAnywhere(uri)) return true;
+        lock (_pinGate) if (_recentSurfaces.Contains(uri) || _pinReferenced.Contains(uri)) return true;
+        // Addendum A2 — this leg is what keeps a SAVED ARTIST's discography offline: the prefetcher's album cards are in
+        // no collection and referenced by no pinned track, so without it critique #7's regression is real.
+        artists ??= _hot.GetAlbum(uri)?.Artists;
+        if (artists is not null)
+            for (int i = 0; i < artists.Count; i++)
+                if (artists[i].Uri.Length > 0 && _hot.IsSaved("artists", artists[i].Uri)) return true;
+        return false;
+    }
+
+    bool PinnedArtist(string uri)
+    {
+        if (uri.Length == 0) return false;
+        if (ColdPresent(uri) || _hot.IsSavedAnywhere(uri)) return true;
+        lock (_pinGate) return _recentSurfaces.Contains(uri) || _pinReferenced.Contains(uri);
+    }
+
+    bool PinnedPlaylist(string uri)
+    {
+        if (uri.Length == 0) return false;
+        if (ColdPresent(uri) || _hot.IsSavedAnywhere(uri)) return true;
+        // `_adopted` is the mirror of `SELECT uri FROM playlists` — a playlist whose membership was adopted is pinned by
+        // the canonical §A.3 pin set even when it is not in the rootlist (an opened foreign/editorial playlist).
+        lock (_pinGate)
+            return _rootlistUris.Contains(uri) || _adopted.Contains(uri) || _recentSurfaces.Contains(uri) || _pinReferenced.Contains(uri);
+    }
+
+    // Shows and episodes share a rule; an Episode carries no show REF in the model, so its show closure arrives the other
+    // way round — a persisted pinned Show notes its episode uris as pin-referenced.
+    bool PinnedShowOrEpisode(string uri)
+    {
+        if (uri.Length == 0) return false;
+        if (ColdPresent(uri) || _hot.IsSavedAnywhere(uri)) return true;
+        lock (_pinGate) return _recentSurfaces.Contains(uri) || _pinReferenced.Contains(uri);
+    }
+
+    // ── persist (post-gate): serialize, elide, enqueue ───────────────────────────────────────────────────────────────
+    void PersistTrack(Track t)
+    {
+        NoteRefs(t.Album.Uri);
+        for (int i = 0; i < t.Artists.Count; i++) NoteRefs(t.Artists[i].Uri);
+        PersistEntity(t.Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(t, EntityJson.Default.Track));
+    }
+
+    void PersistAlbum(Album a)
+    {
+        for (int i = 0; i < a.Artists.Count; i++) NoteRefs(a.Artists[i].Uri);
+        var thin = a.Tracks is null ? a : a with { Tracks = null };
+        if (PersistEntity(a.Uri, EntityKind.Album, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Album)))
+            _lane.Writer.TryWrite(FlushOp.Refs(a.Uri, ArtistUris(a.Artists)));   // album→artists edges (Addendum A3)
+    }
+
+    // The THIN SPLIT (locked decision 17): the core goes to `entity`, the fat facets to `artist_overview`. Both sides are
+    // derived from the MERGED hot record, so StoreEntityMerge.Artist's SWR/clobber gates have already run — a thin write
+    // can never clobber a fat record here. The overview write itself is folded onto the STORED document on the lane, so
+    // the same "absent facet keeps the stored one" rule also survives a restart (when hot holds only the core).
+    void PersistArtist(Artist a)
+    {
+        var doc = ArtistSplit.Project(a);
+        foreach (var uri in ArtistSplit.ReferencedAlbums(doc)) NoteRefs(uri);
+        if (doc.TopTracks is { } tops) foreach (var uri in tops) NoteRefs(uri);
+        PersistEntity(a.Uri, EntityKind.Artist, JsonSerializer.SerializeToUtf8Bytes(ArtistSplit.Core(a), EntityJson.Default.Artist));
+        // The artist's own Popular list rides along: it is ≤10 rows already in hand, and without it the re-fatten hands
+        // back an artist with no TopTracks — which trips SpotifyArtistStatsService's TopTracks-presence gate every launch.
+        if (a.TopTracks is { Count: > 0 } topTracks)
+            for (int i = 0; i < topTracks.Count; i++)
+                PersistEntity(topTracks[i].Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(topTracks[i], EntityJson.Default.Track));
+        if (ArtistSplit.HasContent(doc)) _lane.Writer.TryWrite(FlushOp.Overview(a.Uri, doc));
+    }
+
+    void PersistPlaylist(Playlist p)
+    {
+        var thin = p.Tracks is null ? p : p with { Tracks = null };
+        PersistEntity(p.Uri, EntityKind.Playlist, JsonSerializer.SerializeToUtf8Bytes(thin, EntityJson.Default.Playlist));
+    }
+
+    void PersistShow(Show s)
+    {
+        if (s.Episodes is { } eps) for (int i = 0; i < eps.Count; i++) NoteRefs(eps[i].Uri);   // show → episode closure
+        PersistEntity(s.Uri, EntityKind.Show, JsonSerializer.SerializeToUtf8Bytes(s, EntityJson.Default.Show));
+    }
+
+    void PersistEpisode(Episode e)
+        => PersistEntity(e.Uri, EntityKind.Episode, JsonSerializer.SerializeToUtf8Bytes(e, EntityJson.Default.Episode));
+
+    /// <summary>The single cold-write chokepoint: elide when the bytes are unchanged AND the row is known-present, then
+    /// enqueue on the store's write-behind lane. Returns whether a write was actually issued.</summary>
+    bool PersistEntity(string uri, EntityKind kind, byte[] payload)
+    {
+        if (uri.Length == 0) return false;
+        ulong hash = Hash(payload);
+        lock (_coldGate) if (_coldRows.TryGetValue(uri, out var prev) && prev == hash) return false;
+        _cold.UpsertEntity(uri, kind, payload);
+        NoteColdRow(uri, hash);
+        return true;
+    }
+
+    // ── the pin-transition flush lane ────────────────────────────────────────────────────────────────────────────────
+    // One serialized background consumer for everything that must not run on the caller's thread: the "this just became
+    // pinned — is it on disk?" flush, the artist-overview read-merge-write, the entity_refs replaces, and the
+    // recent_surfaces row (all three of the latter take the cold store's WRITER lock synchronously).
+    void EnqueueFlush(string uri)
+    {
+        if (string.IsNullOrEmpty(uri) || ColdPresent(uri)) return;
+        _lane.Writer.TryWrite(FlushOp.Entity(uri));
+    }
+
+    async Task LaneLoopAsync()
+    {
+        while (await _lane.Reader.WaitToReadAsync().ConfigureAwait(false))
+            while (_lane.Reader.TryRead(out var op))
+            {
+                try
+                {
+                    switch (op.Kind)
+                    {
+                        case FlushKind.Entity: FlushPinned(op.Uri); break;
+                        case FlushKind.Overview: WriteOverview(op.Uri, op.Doc!); break;
+                        case FlushKind.Refs: _cold.ReplaceEntityRefs(op.Uri, op.Children!); break;
+                        case FlushKind.Recent: _cold.UpsertRecentSurface(op.Uri, op.N, DateTimeOffset.UtcNow.ToUnixTimeSeconds()); break;
+                    }
+                }
+                catch (Exception) { /* a cache write is non-fatal: the data is in memory + re-fetchable */ }
+                op.Done?.TrySetResult();
+            }
+    }
+
+    // "Pinned now, but was it persisted?" — resolve the uri against the hot tier by kind and persist it if cold lacks it.
+    // Deliberately bypasses the pin GATE (the caller already established the pin) but keeps the elision/presence bookkeeping.
+    void FlushPinned(string uri)
+    {
+        if (ColdPresent(uri)) return;
+        if (_hot.GetTrack(uri) is { } t)
+        {
+            PersistTrack(t);
+            // A pinned track drags its album + artists onto disk with it (the §A.3 P1 closure) — otherwise the restored
+            // row renders with no album art and no artist link until an online refetch.
+            EnqueueFlush(t.Album.Uri);
+            for (int i = 0; i < t.Artists.Count; i++) EnqueueFlush(t.Artists[i].Uri);
+            return;
+        }
+        if (_hot.GetAlbum(uri) is { } al) { PersistAlbum(al); return; }
+        if (_hot.GetArtist(uri) is { } ar) { PersistArtist(ar); return; }
+        if (_hot.GetPlaylist(uri) is { } p) { PersistPlaylist(p); return; }
+        if (_hot.GetShow(uri) is { } sh) { PersistShow(sh); return; }
+        if (_hot.GetEpisode(uri) is { } ep) { PersistEpisode(ep); return; }
+        // Not resident: nothing to flush. Either it is already cold (a later ColdFallback marks presence) or it will be
+        // written by the hydration that follows the pin — the gate now sees the pin, so that write lands.
+    }
+
+    void WriteOverview(string uri, ArtistOverviewDoc incoming)
+    {
+        var merged = ArtistSplit.Merge(ReadOverview(uri), incoming);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(merged, EntityJson.Default.ArtistOverviewDoc);
+        ulong hash = Hash(bytes);
+        lock (_coldGate) if (_coldOverviews.TryGetValue(uri, out var prev) && prev == hash) return;
+        _cold.UpsertArtistOverview(uri, "", bytes, DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+        NoteOverview(uri, hash);
+        _cold.ReplaceEntityRefs(uri, ArtistSplit.ReferencedAlbums(merged));   // artist→albums edges (Addendum A3)
+    }
+
+    static List<string> ArtistUris(IReadOnlyList<ArtistRef> artists)
+    {
+        var list = new List<string>(artists.Count);
+        for (int i = 0; i < artists.Count; i++) if (artists[i].Uri.Length > 0) list.Add(artists[i].Uri);
+        return list;
+    }
+
+    // ── mirrors + presence bookkeeping ───────────────────────────────────────────────────────────────────────────────
+    void NoteMembers(IReadOnlyList<PlaylistMember> rows)
+    {
+        lock (_pinGate)
+        {
+            if (_memberUris.Count + rows.Count > PinMirrorCap) _memberUris.Clear();
+            for (int i = 0; i < rows.Count; i++) if (rows[i].ItemUri.Length > 0) _memberUris.Add(rows[i].ItemUri);
+        }
+    }
+
+    void NoteAdopted(string playlistUri)
+    {
+        if (playlistUri.Length == 0) return;
+        lock (_pinGate)
+        {
+            if (_adopted.Count >= PinMirrorCap) _adopted.Clear();
+            _adopted.Add(playlistUri);
+        }
+    }
+
+    void NoteRootlist(IReadOnlyList<RootlistEntry> entries)
+    {
+        lock (_pinGate)
+        {
+            _rootlistUris.Clear();   // the rootlist replace IS authoritative (unlike membership, it is one small list)
+            for (int i = 0; i < entries.Count; i++) if (entries[i].Kind == 0 && entries[i].Uri.Length > 0) _rootlistUris.Add(entries[i].Uri);
+        }
+    }
+
+    void NoteRefs(string? uri)
+    {
+        if (string.IsNullOrEmpty(uri)) return;
+        lock (_pinGate)
+        {
+            if (_pinReferenced.Count >= PinMirrorCap) _pinReferenced.Clear();
+            _pinReferenced.Add(uri);
+        }
+    }
+
+    bool ColdPresent(string uri) { lock (_coldGate) return _coldRows.ContainsKey(uri); }
+
+    void NoteColdRow(string uri, ulong hash)
+    {
+        lock (_coldGate)
+        {
+            if (_coldRows.Count >= ColdPresenceCap && !_coldRows.ContainsKey(uri)) _coldRows.Clear();
+            _coldRows[uri] = hash;
+        }
+    }
+
+    void NoteOverview(string uri, ulong hash)
+    {
+        lock (_coldGate)
+        {
+            if (_coldOverviews.Count >= ColdPresenceCap && !_coldOverviews.ContainsKey(uri)) _coldOverviews.Clear();
+            _coldOverviews[uri] = hash;
+        }
+    }
+
+    /// <summary>FNV-1a 64 over the serialized payload — the elision key. No new package dependency (the repo references
+    /// no System.IO.Hashing), and a collision costs at most one skipped refresh of an identical-sized row.</summary>
+    static ulong Hash(ReadOnlySpan<byte> bytes)
+    {
+        ulong h = 14695981039346656037UL;
+        for (int i = 0; i < bytes.Length; i++) { h ^= bytes[i]; h *= 1099511628211UL; }
+        return h;
+    }
+
+    /// <summary>Block until every queued write is durable — drains the pin-transition lane FIRST (its writes feed the
+    /// cold store's own queue), then the cold write-behind queue.</summary>
+    public void Flush()
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (_lane.Writer.TryWrite(FlushOp.Barrier(done)))
+            try { done.Task.Wait(TimeSpan.FromSeconds(30)); } catch { }
+        _cold.Flush();
+    }
+
+    public void Dispose()
+    {
+        _lane.Writer.TryComplete();
+        try { _warm.Wait(TimeSpan.FromSeconds(10)); } catch { }
+        try { _laneLoop.Wait(TimeSpan.FromSeconds(10)); } catch { }
+        _cold.Dispose();
+    }
+
+    enum FlushKind : byte { Entity, Overview, Refs, Recent, Barrier }
+
+    readonly struct FlushOp
+    {
+        public readonly FlushKind Kind;
+        public readonly string Uri;
+        public readonly int N;
+        public readonly ArtistOverviewDoc? Doc;
+        public readonly IReadOnlyList<string>? Children;
+        public readonly TaskCompletionSource? Done;
+
+        FlushOp(FlushKind kind, string uri, int n, ArtistOverviewDoc? doc, IReadOnlyList<string>? children, TaskCompletionSource? done)
+        { Kind = kind; Uri = uri; N = n; Doc = doc; Children = children; Done = done; }
+
+        public static FlushOp Entity(string uri) => new(FlushKind.Entity, uri, 0, null, null, null);
+        public static FlushOp Overview(string uri, ArtistOverviewDoc doc) => new(FlushKind.Overview, uri, 0, doc, null, null);
+        public static FlushOp Refs(string uri, IReadOnlyList<string> children) => new(FlushKind.Refs, uri, 0, null, children, null);
+        public static FlushOp Recent(string uri, int kind) => new(FlushKind.Recent, uri, kind, null, null, null);
+        public static FlushOp Barrier(TaskCompletionSource done) => new(FlushKind.Barrier, "", 0, null, null, done);
+    }
 }
 
 // AOT-clean source-gen serialization for the persisted entities (the generator pulls in the nested refs automatically).
@@ -265,4 +747,5 @@ public sealed class CachedStore : IStore, IDisposable
 [JsonSerializable(typeof(Show))]
 [JsonSerializable(typeof(Episode))]
 [JsonSerializable(typeof(VideoAssociation))]
+[JsonSerializable(typeof(ArtistOverviewDoc))]
 internal partial class EntityJson : JsonSerializerContext { }
