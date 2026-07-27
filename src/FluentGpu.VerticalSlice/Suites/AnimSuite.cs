@@ -1056,6 +1056,40 @@ static class AnimSuite
                 representative, $"nodes={pendingNodes} text={CountText(scene, scene.Root)} h={scene.Bounds(scene.Root).H:0}");
         }
 
+        // SK.j2 nested region: a whole-page content(seed) can contain a streaming list whose own row source must remain
+        // representative under the outer derivation.
+        {
+            // A derived whole-page seed may contain its own streaming-list region. The outer derivation must walk the
+            // nested region's real row source instead of replacing that entire list with one opaque fallback bar.
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var page = Loadable<int>.Pending(1);
+            var rows = Loadable<int>.Pending(0);
+            var rowSeed = new Element[4];
+            for (int i = 0; i < rowSeed.Length; i++) rowSeed[i] = SkRow(null);
+            recon.ReconcileRoot(
+                Skel.Region(page, _ => new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        new TextEl("Heading") { Size = 24f },
+                        Skel.Region(rows,
+                            shimmerSource: () => new BoxEl { Direction = 1, Children = rowSeed },
+                            content: _ => new BoxEl()),
+                    ],
+                }),
+                null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var derivedPage = Child(scene, scene.Root, 0);
+            var derivedRows = Child(scene, derivedPage, 1);
+            int rowCount = 0;
+            for (var c = scene.FirstChild(derivedRows); !c.IsNull; c = scene.NextSibling(c)) rowCount++;
+            Check("SK.j2 content(seed) derives through a nested Skel.Region using its real row source",
+                rowCount == 4 && CountText(scene, scene.Root) == 0,
+                $"rows={rowCount} text={CountText(scene, scene.Root)}");
+        }
+
         // SK.k is the end-to-end regression for Wavee Home being blank until Alt+Tab. Pending must occupy the viewport
         // immediately, and a worker-style HostDispatch.Post of Ready must mount, realize, lay out and record real virtual
         // rows in that SAME next frame. No focus, resize, extra signal write or second frame is allowed to unstick it.

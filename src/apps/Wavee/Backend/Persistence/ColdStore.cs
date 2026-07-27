@@ -29,6 +29,14 @@ public readonly record struct ColdPlaylistItem(string ItemId, string ItemUri, st
 /// <summary>One rootlist row: a playlist uri or a start/end-group marker. <paramref name="Kind"/> 0=item, 1=start-group, 2=end-group.</summary>
 public readonly record struct ColdRootlistEntry(int Position, int Kind, string Uri, string? GroupName, int Depth);
 
+/// <summary>One recently-opened detail surface (schema v5, `recent_surfaces`). A pin REASON: the newest 50 opened
+/// surfaces are exempt from the cache-tier TTL/budget so a restart repaints them offline.</summary>
+public readonly record struct ColdRecentSurface(string Uri, int Kind, long LastOpenedUnixSeconds);
+
+/// <summary>The fat artist facets split out of the Artist record (schema v5, `artist_overview`). <paramref name="Payload"/>
+/// is the DECODED raw JSON (the store owns the fmt framing). Its own TTL: disposable, re-derived by an ArtistV4 SWR pass.</summary>
+public readonly record struct ColdArtistOverview(string Uri, string Locale, byte[] Payload, long FetchedAtUnixSeconds);
+
 public interface IColdStore : IDisposable
 {
     IEnumerable<ColdEntity> LoadAllEntities();
@@ -86,6 +94,10 @@ public interface IColdStore : IDisposable
 public interface IExtensionCacheStore
 {
     string? MetadataLocale { get; }
-    IEnumerable<ColdExtension> LoadAllExtensions();
+
+    /// <summary>Newest-first extension rows, capped at <paramref name="limit"/>. The seed loop only keeps its own
+    /// <c>maxEntries</c> (2048) rows, so reading the whole table was pure I/O waste — the cap belongs in the SQL.
+    /// <c>limit &lt;= 0</c> = no cap.</summary>
+    IEnumerable<ColdExtension> LoadAllExtensions(int limit = 2048);
     void UpsertExtension(ColdExtension extension);
 }

@@ -184,6 +184,24 @@ static class ControlsSuite
             return NodeHandle.Null;
         }
 
+        // gate.ctx.identity-header — optional entity identity is a non-command strip above the menu rows.
+        {
+            using var app = new HeadlessPlatformApp();
+            var w = new HeadlessWindow(new WindowDesc("ctx-header", new Size2(480, 400), 1f)); w.Show();
+            var probe = new ContextMenuProbe { WithHeader = true };
+            using var host = new AppHost(app, w, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            Right(w, CenterOf(host.Scene, probe.RowA)); RunN(host, 3);
+            var title = FindTextNode(host.Scene, strings, host.Scene.Root, "Header title");
+            var subtitle = FindTextNode(host.Scene, strings, host.Scene.Root, "Header subtitle");
+            var first = FindTextNode(host.Scene, strings, host.Scene.Root, "A1");
+            bool ordered = !title.IsNull && !first.IsNull
+                && host.Scene.AbsoluteRect(title).Y < host.Scene.AbsoluteRect(first).Y;
+            Check("gate.ctx.identity-header an optional artwork/title/subtitle strip renders above the actionable menu rows",
+                probe.Service!.AnyOpen && ordered && !subtitle.IsNull,
+                $"open={probe.Service!.AnyOpen} title={title.Raw.Index} subtitle={subtitle.Raw.Index} ordered={ordered}");
+        }
+
         // gate.ctx.open-at-pointer — a right press+release on an attached row opens ONE menu whose first row lands ON the
         // right-tap point (OpenAtLocal: owner rect + local − FlyoutMargin ⇒ presenter top-left at the point), light-dismiss.
         {
@@ -723,6 +741,51 @@ static class ControlsSuite
             bool clickWrote = sel.Value == 2 && rN == 2;
             Check("gate.ctl.bind.radio RadioButtons: arrow roving updates the index signal; a click writes the selected index (onChange each)",
                 roved && clickWrote, $"afterDown={(roved ? 1 : sel.Value)}@{rN} afterClick={sel.Value}");
+        }
+
+        // gate.ctl.bind.segmented-options — the required item content stays first, while selection follows the canonical
+        // Signal<int>? + onChange + options contract. AutoSelection initializes quietly; user selection writes then
+        // notifies; a programmatic write re-skins without echoing.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bind-segmented", new Size2(360, 180), 1f)); window.Show();
+            var selected = new Signal<int>(-1);
+            int changes = 0;
+            NodeHandle pill = default;
+            var parts = new TemplateParts
+            {
+                [Segmented.PartSelectionPill] = e => e with { OnRealized = h => pill = h },
+            };
+            using var host = new AppHost(app, window, device, fonts, strings,
+                new W0fStaticProbe { Build = () => new BoxEl { Padding = Edges4.All(12),
+                    Children = [Segmented.Create(
+                    [
+                        new SegmentedItem("All"),
+                        new SegmentedItem("Hide"),
+                        new SegmentedItem("Only"),
+                    ],
+                    selected,
+                    onChange: _ => changes++,
+                    options: new Segmented.SegmentedOptions { AutoSelection = true, Parts = parts })] } });
+            host.RunFrame();
+            host.RunFrame();
+            bool initializedQuietly = selected.Value == 0 && changes == 0;
+            var items = Roles(host.Scene, AutomationRole.RadioButton);
+            var item0 = host.Scene.AbsoluteRect(items[0]);
+            var pill0 = host.Scene.AbsoluteRect(pill);
+            bool initialPillCentered = Near(pill0.X + pill0.W * 0.5f, item0.X + item0.W * 0.5f, 0.5f);
+            ClickNode(host, window, items[2]);
+            bool userWrote = selected.Value == 2 && changes == 1;
+            host.RunFrame();
+            var item2 = host.Scene.AbsoluteRect(items[2]);
+            var pill2 = host.Scene.AbsoluteRect(pill);
+            bool movedPillCentered = Near(pill2.X + pill2.W * 0.5f, item2.X + item2.W * 0.5f, 0.5f);
+            selected.Value = 1;
+            host.RunFrame();
+            bool programmaticQuiet = selected.Value == 1 && changes == 1;
+            Check("gate.ctl.bind.segmented-options Segmented.Create(items, signal, onChange, options): auto-select is quiet; user writes then notifies; programmatic write has no echo; indicator remains centered",
+                initializedQuietly && userWrote && programmaticQuiet && initialPillCentered && movedPillCentered,
+                $"init={initializedQuietly} selected={selected.Value} changes={changes} centered={initialPillCentered}/{movedPillCentered}");
         }
 
         // gate.ctl.bind.naming — the closed callback-name set is enforced: NO public control factory (Create/Group)

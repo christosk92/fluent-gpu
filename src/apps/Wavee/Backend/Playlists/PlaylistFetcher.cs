@@ -40,9 +40,7 @@ public sealed class PlaylistFetcher
     public async Task FetchPlaylistAsync(string playlistUri, CancellationToken ct = default)
     {
         var slc = await GetAsync(playlistUri, ct).ConfigureAwait(false);
-        var (members, rev) = PlaylistWireMapper.ParseContents(slc);
-        if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
-        _store.SetMembership(playlistUri, members, rev);
+        var members = AdoptSnapshot(playlistUri, slc);
         await HydrateAsync(members, ct).ConfigureAwait(false);
         _store.Bump(playlistUri);
     }
@@ -136,9 +134,7 @@ public sealed class PlaylistFetcher
 
         if (slc.Contents is not null)   // some responses carry the full contents instead of ops — treat as a full refresh
         {
-            var (members, newRev) = PlaylistWireMapper.ParseContents(slc);
-            if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
-            _store.SetMembership(playlistUri, members, newRev ?? rev);
+            var members = AdoptSnapshot(playlistUri, slc, rev);
             await HydrateAsync(members, ct).ConfigureAwait(false);
             _store.Bump(playlistUri);
             return DiffOutcome.FellBackToFull;
@@ -164,6 +160,27 @@ public sealed class PlaylistFetcher
         }
         if (filtered.Count > 0) await _hydrate(filtered, ct).ConfigureAwait(false);
     }
+
+    /// <summary>Atomically adopts a full playlist response. Revision, header, and membership land before metadata
+    /// hydration, so a failed hydrator cannot roll back an accepted server mutation.</summary>
+    public IReadOnlyList<PlaylistMember> AdoptSnapshot(
+        string playlistUri,
+        Pl.SelectedListContent slc,
+        byte[]? fallbackRevision = null)
+    {
+        var (members, revision) = PlaylistWireMapper.ParseContents(slc);
+        using (_store.BeginBulk())
+        {
+            if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
+            _store.SetMembership(playlistUri, members, revision ?? fallbackRevision);
+            _store.Bump(playlistUri);
+        }
+        return members;
+    }
+
+    /// <summary>Hydrates the current authoritative membership; safe to retry after another snapshot has landed.</summary>
+    public Task HydrateMembershipAsync(string playlistUri, CancellationToken ct = default)
+        => HydrateAsync(_store.Membership(playlistUri), ct);
 
     async Task<Pl.SelectedListContent> GetAsync(string uri, CancellationToken ct)
     {
@@ -209,7 +226,43 @@ public sealed class PlaylistFetcher
         Owner? ownerChip = owner.Length > 0 ? new Owner(owner, owner, null) : null;
         return new Playlist(IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
             Owner: ownerChip,
-            Capabilities: CapabilitiesOf(attr, slc, owner));
+            Capabilities: CapabilitiesOf(attr, slc, owner),
+            Format: attr.HasFormat ? attr.Format : null,
+            Source: "spotify",
+            Tuning: TuningOf(attr, slc));
+    }
+
+    internal static PlaylistTuning? TuningOf(Pl.ListAttributes attr, Pl.SelectedListContent slc)
+    {
+        if (!slc.HasRevision || slc.Revision.Length != 24 || slc.Contents is not { } contents
+            || contents.AvailableSignals.Count == 0) return null;
+
+        var format = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (int i = 0; i < attr.FormatAttributes.Count; i++)
+        {
+            var item = attr.FormatAttributes[i];
+            if (item.HasKey && item.HasValue) format[item.Key] = item.Value;
+        }
+        format.TryGetValue("session_control.selected_signals", out var selected);
+        if (string.IsNullOrWhiteSpace(selected)) selected = null;
+
+        var options = new List<PlaylistTuningOption>(contents.AvailableSignals.Count);
+        for (int i = 0; i < contents.AvailableSignals.Count; i++)
+        {
+            var signal = contents.AvailableSignals[i];
+            if (!signal.HasIdentifier || string.IsNullOrWhiteSpace(signal.Identifier)) continue;
+            string id = signal.Identifier;
+            var kind = string.Equals(id, "session-control-reset", StringComparison.Ordinal)
+                ? PlaylistTuningOptionKind.Reset : PlaylistTuningOptionKind.Choice;
+            string? label = null;
+            int split = id.LastIndexOf('$');
+            if (kind == PlaylistTuningOptionKind.Choice && split >= 0 && split + 1 < id.Length)
+                format.TryGetValue("session_control_display.displayName." + id[(split + 1)..], out label);
+            options.Add(new PlaylistTuningOption(id, string.IsNullOrWhiteSpace(label) ? null : label, kind));
+        }
+        return options.Count == 0
+            ? null
+            : new PlaylistTuning(slc.Revision.ToByteArray(), options, selected);
     }
 
     PlaylistCapabilities CapabilitiesOf(Pl.ListAttributes attr, Pl.SelectedListContent slc, string ownerUsername)

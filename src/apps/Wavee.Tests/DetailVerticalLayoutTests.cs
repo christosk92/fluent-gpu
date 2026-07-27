@@ -15,9 +15,15 @@ public class DetailVerticalLayoutTests
     [Theory]
     [InlineData(579f)]
     [InlineData(540f)]
-    [InlineData(340f)]
     public void OrientationFor_Narrow_Immersive(float w)
         => Assert.Equal(DetailHeroOrientation.Immersive, DetailVerticalLayout.OrientationFor(w));
+
+    [Theory]
+    [InlineData(419f)]
+    [InlineData(340f)]
+    [InlineData(280f)]
+    public void OrientationFor_UltraNarrow_Compact(float w)
+        => Assert.Equal(DetailHeroOrientation.Compact, DetailVerticalLayout.OrientationFor(w));
 
     [Fact]
     public void OrientationFor_Unmeasured_UsesFallbackSideBySide()
@@ -40,15 +46,23 @@ public class DetailVerticalLayoutTests
     [Theory]
     [InlineData(579f, 579f)]
     [InlineData(420f, 420f)]
-    [InlineData(300f, 300f)]
     public void ArtworkFor_Immersive_IsFullWidthSquare(float w, float expected)
         => Assert.Equal(expected, DetailVerticalLayout.ArtworkFor(w, DetailHeroOrientation.Immersive));
+
+    [Theory]
+    [InlineData(419f, 96f)]
+    [InlineData(340f, 96f)]
+    [InlineData(339f, 64f)]
+    [InlineData(280f, 64f)]
+    public void ArtworkFor_Compact_UsesThumbnailNotFullWidth(float w, float expected)
+        => Assert.Equal(expected, DetailVerticalLayout.ArtworkFor(w, DetailHeroOrientation.Compact));
 
     [Fact]
     public void DescriptionMaxLines_SideBySide3_Immersive4()
     {
         Assert.Equal(3, DetailVerticalLayout.DescriptionMaxLines(DetailHeroOrientation.SideBySide));
         Assert.Equal(4, DetailVerticalLayout.DescriptionMaxLines(DetailHeroOrientation.Immersive));
+        Assert.Equal(0, DetailVerticalLayout.DescriptionMaxLines(DetailHeroOrientation.Compact));
     }
 
     [Fact]
@@ -62,6 +76,19 @@ public class DetailVerticalLayoutTests
             DetailVerticalLayout.OrientationFor(599f, DetailHeroOrientation.Immersive, initialized: true));
         Assert.Equal(DetailHeroOrientation.SideBySide,
             DetailVerticalLayout.OrientationFor(600f, DetailHeroOrientation.Immersive, initialized: true));
+    }
+
+    [Fact]
+    public void CompactOrientation_Uses400To440ResizeHysteresis()
+    {
+        Assert.Equal(DetailHeroOrientation.Immersive,
+            DetailVerticalLayout.OrientationFor(419f, DetailHeroOrientation.Immersive, initialized: true));
+        Assert.Equal(DetailHeroOrientation.Compact,
+            DetailVerticalLayout.OrientationFor(400f, DetailHeroOrientation.Immersive, initialized: true));
+        Assert.Equal(DetailHeroOrientation.Compact,
+            DetailVerticalLayout.OrientationFor(439f, DetailHeroOrientation.Compact, initialized: true));
+        Assert.Equal(DetailHeroOrientation.Immersive,
+            DetailVerticalLayout.OrientationFor(440f, DetailHeroOrientation.Compact, initialized: true));
     }
 
     [Fact]
@@ -101,6 +128,18 @@ public class DetailVerticalLayoutTests
 
         Assert.Equal(526.08f, enter, 2);
         Assert.Equal(502.08f, DetailVerticalLayout.IdentityMorphExitOffset(enter), 2);
+    }
+
+    [Fact]
+    public void CompactIdentityMorph_UsesThumbnailGeometry()
+    {
+        float enter = DetailVerticalLayout.IdentityMorphEnterOffset(
+            DetailHeroOrientation.Compact,
+            DetailVerticalLayout.CompactHeroArtworkSize,
+            collapseDistance: 240f);
+
+        Assert.Equal(72f, enter);
+        Assert.Equal(48f, DetailVerticalLayout.IdentityMorphExitOffset(enter));
     }
 
     [Theory]

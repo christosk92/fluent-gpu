@@ -49,6 +49,15 @@ public static class SpotifyHeaders
             ["spotify-dsa-mode-enabled"] = "false",
         }.AlsoOrigin(spclientBaseUrl);
 
+    /// <summary>Captured desktop header tuple for POST <c>/playlist/v2/playlist/{id}/signals</c>.</summary>
+    public static Dictionary<string, string> PlaylistSignals(string language, string? spclientBaseUrl = null)
+    {
+        var headers = PlaylistV2Mutation(language, spclientBaseUrl);
+        headers["Accept"] = "application/x-protobuf";
+        headers["spotify-playlist-sync-reason"] = "CA8QAQ==";
+        return headers;
+    }
+
     static Dictionary<string, string> AlsoOrigin(this Dictionary<string, string> h, string? baseUrl)
     {
         if (!string.IsNullOrEmpty(baseUrl)) h["Origin"] = baseUrl.TrimEnd('/');

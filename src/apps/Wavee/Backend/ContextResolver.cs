@@ -34,7 +34,8 @@ public readonly record struct QueuedTrack(
 public readonly record struct ContextSpec(
     string Uri, string? Url,
     IReadOnlyList<QueuedRef>? EmbeddedPages,
-    string? SkipToTrackUri, string? SkipToTrackUid, int? SkipToIndex)
+    string? SkipToTrackUri, string? SkipToTrackUid, int? SkipToIndex,
+    IReadOnlyDictionary<string, string>? Metadata = null)
 {
     /// <summary>A UI/local play intent: just a context uri + an optional start index (no remote skip_to/pages).</summary>
     public static ContextSpec ForUri(string uri, int startIndex = 0) => new(uri, null, null, null, null, startIndex);

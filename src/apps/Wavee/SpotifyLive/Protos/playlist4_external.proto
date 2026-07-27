@@ -30,6 +30,17 @@ message ListItems {
 
 message AvailableSignal {
     optional string identifier = 1;
+    optional PlaylistSignalInteraction interaction = 3;
+}
+
+// Wire names are Wavee-local; field numbers are capture-derived from desktop /signals requests.
+message PlaylistSignalInteraction {
+    optional string uuid = 1;
+}
+
+message ApplyPlaylistSignals {
+    optional bytes revision = 1;
+    repeated AvailableSignal signals = 2;
 }
 
 message FormatListAttribute {

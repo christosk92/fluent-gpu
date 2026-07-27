@@ -1757,7 +1757,7 @@ sealed class ContextMenuProbe : Component
     /// click on it must re-enter the context-request funnel and open row B's menu anchored at the BUTTON rect.</summary>
     public NodeHandle MoreB, MoreBDisabled;
     public int BuildsA, BuildsB;
-    public bool ReturnNull, AllDisabled;
+    public bool ReturnNull, AllDisabled, WithHeader;
     /// <summary>Value-copied from the last ContextRequestEventArgs row B's own handler saw (the attach chains the
     /// element handler FIRST) — gate.ctx.invoke-source-field asserts Trigger/Node/Source per trigger kind.</summary>
     public ContextRequestTrigger LastTrigger;
@@ -1779,7 +1779,12 @@ sealed class ContextMenuProbeInner : Component
         if (_p.ReturnNull) return null;
         if (_p.AllDisabled)
             return new ContextMenuModel(new[] { new MenuFlyoutItem("Disabled", Enabled: false), MenuFlyoutItem.Separator });
-        return new ContextMenuModel(new[] { new MenuFlyoutItem("A1", Invoke: () => { }), new MenuFlyoutItem("A2", Invoke: () => { }) });
+        var rows = new[] { new MenuFlyoutItem("A1", Invoke: () => { }), new MenuFlyoutItem("A2", Invoke: () => { }) };
+        return _p.WithHeader
+            ? new ContextMenuModel(rows, new ContextMenuHeader(
+                new BoxEl { Width = 38f, Height = 38f, Fill = ColorF.FromRgba(70, 90, 120) },
+                "Header title", "Header subtitle"))
+            : new ContextMenuModel(rows);
     }
     ContextMenuModel? BuildB()
     {

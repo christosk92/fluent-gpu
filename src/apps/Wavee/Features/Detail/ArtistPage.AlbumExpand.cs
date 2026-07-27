@@ -485,7 +485,7 @@ sealed class DiscoGrid : Component
             onPlay: () => _play(al.Uri),
             onNavigate: () => _go("album:" + al.Uri, al.Name),
             accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null,
-            menu: _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, al.Uri, al.Name) : null);
+            menu: _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, al.Uri, al.Name, al.Cover, subtitle) : null);
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.

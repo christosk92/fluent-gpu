@@ -1,5 +1,6 @@
 using System.Linq;
 using FluentGpu.Hooks;
+using FluentGpu.Signals;
 using Wavee.Core;
 
 namespace Wavee;
@@ -49,6 +50,8 @@ public sealed class Services
     /// <summary>The single library-sync writer loop (REAL backend only, after go-live) — the on-open SWR + DetailPage
     /// live-refresh hooks reach it here. Null offline / fake backend.</summary>
     public Wavee.Backend.Sync.LibrarySync? RealSync { get; internal set; }
+    /// <summary>Reactive live capability for server-driven automatic-playlist tuning.</summary>
+    public Signal<IPlaylistTuningSource?> PlaylistTuning { get; } = new(null);
     /// <summary>The engine-backed Mutations seam adapter (REAL backend only) — exposed so go-live can route its post-write
     /// drains through the sync loop (§6, <c>ScheduleDrain</c>) and GoOffline can reset them to inline.</summary>
     public Wavee.Backend.EngineMutationSource? RealMutationSource { get; private set; }
@@ -415,6 +418,7 @@ public sealed class Services
         if (RealSpclientBaseUrl is { } baseUrl) baseUrl.Value = "";   // no spclient until the next go-live
         LiveHttp = null;
         RealSync = null;
+        PlaylistTuning.Value = null;
         LiveHost = null;
         CredStore = null;
         PlayPlayProvisioner = null;

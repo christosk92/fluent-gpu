@@ -1,8 +1,15 @@
+using System.Collections.Generic;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 
 namespace FluentGpu.Controls;
+
+/// <summary>Optional non-interactive identity strip shown above a context menu's commands.</summary>
+public readonly record struct ContextMenuHeader(
+    Element? Leading,
+    string Title,
+    string? Subtitle = null);
 
 /// <summary>The content of a context menu, built lazily at open time. A non-empty <see cref="Primary"/> icon strip
 /// selects the Win11 Explorer <b>command-bar</b> body (a horizontal quick-action row over the <see cref="Rows"/>); an
@@ -12,10 +19,11 @@ namespace FluentGpu.Controls;
 /// non-separator entry, opens nothing.</summary>
 public readonly record struct ContextMenuModel(
     IReadOnlyList<AppBarCommand> Primary,
-    IReadOnlyList<MenuFlyoutItem> Rows)
+    IReadOnlyList<MenuFlyoutItem> Rows,
+    ContextMenuHeader? Header = null)
 {
     /// <summary>A plain vertical menu (no primary strip).</summary>
-    public ContextMenuModel(IReadOnlyList<MenuFlyoutItem> rows) : this([], rows) { }
+    public ContextMenuModel(IReadOnlyList<MenuFlyoutItem> rows, ContextMenuHeader? header = null) : this([], rows, header) { }
 }
 
 /// <summary>Tunables for an attached context menu. <c>TouchInputMode</c> is not a knob — it is derived from the
@@ -134,6 +142,7 @@ public static class ContextMenu
     // Build the inner body: the Explorer command-bar shape when a primary strip is present, else a plain menu.
     private static Element Body(ContextMenuModel model, ContextMenuOptions opts, Action close, Ref<Action?> fadeSlot, bool focusFirst, bool touch)
     {
+        Element? header = model.Header is { } identity ? Header(identity, touch) : null;
         if (model.Primary.Count > 0)
         {
             // Map the menu rows onto the command-bar overflow (AppBarCommand secondary). AlwaysExpanded = the Explorer
@@ -142,10 +151,76 @@ public static class ContextMenu
             return CommandBarFlyout.BuildBody(
                 model.Primary, secondary, close, fadeSlot,
                 parts: null, alwaysExpanded: true, overflowMinWidth: opts.MinWidth, touchInputMode: touch,
-                labeledPrimary: true);   // Win11 Explorer shell-menu shape: icon-over-label strip, no accent-pill toggles
+                labeledPrimary: true, header: header);   // Win11 Explorer shell-menu shape: icon-over-label strip
         }
-        return MenuFlyout.Build(model.Rows, close, opts.MinWidth, parts: null, focusFirst: focusFirst);
+        Element menu = MenuFlyout.Build(model.Rows, close, opts.MinWidth, parts: null, focusFirst: focusFirst);
+        if (header is null) return menu;
+        return new BoxEl
+        {
+            Direction = 1,
+            MinWidth = opts.MinWidth,
+            Children = [header, HeaderDivider(), menu],
+        };
     }
+
+    private static Element Header(in ContextMenuHeader header, bool touch)
+    {
+        var children = new List<Element>(2);
+        if (header.Leading is { } leading)
+        {
+            children.Add(new BoxEl
+            {
+                Width = touch ? 42f : 38f,
+                Height = touch ? 42f : 38f,
+                Shrink = 0f,
+                AlignItems = FlexAlign.Center,
+                Justify = FlexJustify.Center,
+                HitTestVisible = false,
+                Children = [leading],
+            });
+        }
+        children.Add(new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            Basis = 0f,
+            MinWidth = 0f,
+            Gap = 2f,
+            Justify = FlexJustify.Center,
+            Children =
+            [
+                new TextEl(header.Title)
+                {
+                    Size = 13f, Weight = 650, Color = Tok.TextPrimary,
+                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+                new TextEl(header.Subtitle ?? "")
+                {
+                    Size = 11f, Color = Tok.TextSecondary,
+                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+            ],
+        });
+        return new BoxEl
+        {
+            Direction = 0,
+            Height = touch ? 60f : 54f,
+            MinWidth = 0f,
+            Gap = 10f,
+            Padding = new Edges4(12f, 8f, 12f, 8f),
+            AlignItems = FlexAlign.Center,
+            HitTestVisible = false,
+            Children = children.ToArray(),
+        };
+    }
+
+    private static Element HeaderDivider() => new BoxEl
+    {
+        Height = 1f,
+        Margin = new Edges4(8f, 0f, 8f, 0f),
+        Fill = Tok.StrokeDividerDefault,
+        HitTestVisible = false,
+    };
 
     // MenuFlyoutItem → AppBarCommand for the command-bar overflow. Radio maps to a toggle (AppBarCommandKind has no
     // Radio kind — a documented v1 limitation); a SubMenu keeps its nested items on AppBarCommand.Flyout.

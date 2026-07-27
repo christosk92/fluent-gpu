@@ -827,7 +827,7 @@ sealed class LibraryDetailPane : Component
     // model's ReleaseKind inside TrackList, so a compilation in the library shows artists just like its detail page would.
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);
     readonly Signal<string> _query = new("");
-    readonly Signal<TrackFilterFlags> _flags = new(TrackFilterFlags.None);
+    readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);
     readonly Signal<int> _density = new(1);
     readonly Signal<Route> _trackRoute = new(new Route("album:lib"));
     public LibraryDetailPane(Loadable<DetailModel> model, bool show, Services svc, PlaybackBridge? bridge)
@@ -893,7 +893,7 @@ sealed class LibraryDetailPane : Component
             });
         }
         return new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, Tok.AccentDefault,
-            _sort, s => _sort.Value = s, _query, _flags, f => _flags.Value = f, _density, d => _density.Value = d,
+            _sort, s => _sort.Value = s, _query, _filters, f => _filters.Value = f, _density, d => _density.Value = d,
             PlayNext, AddToQueue, AddToPlaylist,
             // The embedded TrackList has no trailing shelves, so these are never invoked here; route through DetailNav
             // (no preview/morph store) so behaviour stays a plain nav if that ever changes.

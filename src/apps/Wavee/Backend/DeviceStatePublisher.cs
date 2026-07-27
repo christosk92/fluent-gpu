@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Core;
 
@@ -21,7 +22,14 @@ public readonly record struct LocalPlaybackSnapshot(
     string InteractionId, string PageInstanceId, string QueueRevision,
     string SessionId, string PlaybackId, long HasBeenPlayingForMs, long StartedPlayingAtMs, double Volume01 = 0.0);
 
-public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
+public readonly record struct ConnectCommandAttribution(string SenderDeviceId, uint MessageId, string CommandId);
+
+public interface IConnectCommandAttributionSink
+{
+    void NoteCommand(in ConnectCommandAttribution attribution);
+}
+
+public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandAttributionSink, IDisposable
 {
     const int MaxWirePrevTracks = 50;
     const int MaxWireNextTracks = 50;
@@ -30,12 +38,13 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
     readonly string _deviceId;
     readonly IPlaybackState _state;
     readonly Func<string?> _connectionId;
-    readonly Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, byte[]> _build;
+    readonly Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, ConnectCommandAttribution, byte[]> _build;
     readonly Action<byte[]>? _onCluster;
     readonly WaveeLogger _log;
     readonly Func<long> _now;
     readonly IDisposable _connSub;
     readonly object _gate = new();
+    readonly SemaphoreSlim _publishGate = new(1, 1);
     uint _messageId;
     string _sessionId = "";
     string _playbackId = "";
@@ -46,6 +55,8 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
     string? _sessionContextUri;
     long _startedPlayingAtMs;
     bool _transportPaused;
+    bool _ownershipRetired;
+    ConnectCommandAttribution _lastCommand;
     string _lastPublishKey = "";
     readonly TrailingCoalescer _volumeTx;
 
@@ -53,6 +64,18 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         ITransport transport, string deviceId, IPlaybackState state,
         IObservable<string?> connectionId, Func<string?> currentConnectionId,
         Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, byte[]> build,
+        Action<byte[]>? onCluster = null, WaveeLogger log = default, Func<long>? clock = null,
+        int volumePublishWindowMs = 400, Func<int, CancellationToken, Task>? delay = null)
+        : this(transport, deviceId, state, connectionId, currentConnectionId,
+            (reason, snap, mid, active, _) => build(reason, snap, mid, active),
+            onCluster, log, clock, volumePublishWindowMs, delay)
+    {
+    }
+
+    public DeviceStatePublisher(
+        ITransport transport, string deviceId, IPlaybackState state,
+        IObservable<string?> connectionId, Func<string?> currentConnectionId,
+        Func<PutStateReasonKind, LocalPlaybackSnapshot?, uint, bool, ConnectCommandAttribution, byte[]> build,
         Action<byte[]>? onCluster = null, WaveeLogger log = default, Func<long>? clock = null,
         int volumePublishWindowMs = 400, Func<int, CancellationToken, Task>? delay = null)
     {
@@ -82,17 +105,29 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 
     public void OnEvent(in PlaybackEvent e)
     {
+        lock (_gate)
+        {
+            if (_ownershipRetired)
+            {
+                bool startsNewOwnership = (e.Kind is EvKind.Started or EvKind.TrackChanged or EvKind.Resumed)
+                    && _state.CurrentTrack is not null;
+                if (startsNewOwnership) _ownershipRetired = false;
+                else if (e.Kind is not EvKind.BecameInactive) return;
+            }
+        }
+
         if (e.Kind is EvKind.Paused)
             lock (_gate) _transportPaused = true;
         else if (e.Kind is EvKind.Started or EvKind.Resumed or EvKind.TrackChanged or EvKind.Ended or EvKind.BecameInactive)
             lock (_gate) _transportPaused = false;
 
-        if (e.Kind is EvKind.Started or EvKind.TrackChanged)
+        bool pausedFirst = e.Kind == EvKind.Paused && string.IsNullOrEmpty(_sessionId) && _state.CurrentTrack is not null;
+        if (e.Kind is EvKind.Started or EvKind.TrackChanged || pausedFirst)
         {
             lock (_gate)
             {
                 var ctx = _state.ContextUri;
-                if (e.Kind == EvKind.Started || ctx != _sessionContextUri)
+                if (e.Kind == EvKind.Started || pausedFirst || ctx != _sessionContextUri)
                 {
                     _sessionId = e.Ids?.SessionId ?? NewId();
                     _sessionContextUri = ctx;
@@ -110,7 +145,11 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
         }
         else if (e.Kind is EvKind.Ended or EvKind.BecameInactive)
         {
-            lock (_gate) _startedPlayingAtMs = 0;
+            lock (_gate)
+            {
+                _startedPlayingAtMs = 0;
+                if (e.Kind == EvKind.BecameInactive) _ownershipRetired = true;
+            }
         }
 
         bool isActive = _state.CurrentTrack is not null && e.Kind is not (EvKind.Ended or EvKind.BecameInactive);
@@ -126,7 +165,16 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
             _ = PublishAsync(reason, isActive);
     }
 
-    public void PublishInactive() => _ = PublishAsync(PutStateReasonKind.BecameInactive, false);
+    public void PublishInactive()
+    {
+        lock (_gate) _ownershipRetired = true;
+        _ = PublishAsync(PutStateReasonKind.BecameInactive, false);
+    }
+
+    public void NoteCommand(in ConnectCommandAttribution attribution)
+    {
+        lock (_gate) _lastCommand = attribution;
+    }
 
     bool IsLocallyPlaying() => _state.CurrentTrack is not null && _state.IsPlaying;
 
@@ -137,6 +185,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
 
         var snap = BuildSnapshot();
         uint mid;
+        ConnectCommandAttribution attribution;
         lock (_gate)
         {
             string key = reason + "|" + isActive + "|" + (snap?.Track.Uri ?? "") + "|" + (snap?.Track.Uid ?? "")
@@ -146,11 +195,13 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
                 && key == _lastPublishKey) return;
             _lastPublishKey = key;
             mid = ++_messageId;
+            attribution = _lastCommand;
         }
 
+        await _publishGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            var bytes = _build(reason, snap, mid, isActive);
+            var bytes = _build(reason, snap, mid, isActive, attribution);
             var resp = await _transport.Publish(_deviceId, connId!, bytes).ConfigureAwait(false);
             if (resp.Ok)
             {
@@ -159,16 +210,28 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
                 // change-gate above (_lastPublishKey) already collapses steady-state republishes, so this is ~1 line per
                 // real state change — and without it a "why did the server correct us?" question has no input side.
                 _log.Info($"put-state {reason} active={isActive} track={snap?.Track.Uri ?? "-"} pos={snap?.PositionMs ?? 0} " +
-                    $"playing={snap?.IsPlaying ?? false} paused={snap?.IsPaused ?? false} ctx={snap?.ContextUri ?? "-"} cluster={resp.Body.Length}B");
+                    $"playing={snap?.IsPlaying ?? false} paused={snap?.IsPaused ?? false} ctx={snap?.ContextUri ?? "-"} " +
+                    $"msgId={mid} commandId={WaveeLogRedaction.HashLike(attribution.CommandId)} cluster={resp.Body.Length}B");
                 if (resp.Body.Length > 0) _onCluster?.Invoke(resp.Body);
             }
             else
             {
-                _log.Warn($"put-state failed ({resp.Status})");
-                WaveeLog.Instance.Warn("connect", "put-state.rejected", "connect-state PUT rejected by server",
+                bool inactiveSoftAck = resp.Status == 422 && reason == PutStateReasonKind.BecameInactive;
+                if (inactiveSoftAck)
+                    _log.Debug("put-state 422 after BecameInactive (soft acknowledgement)");
+                else
+                    _log.Warn($"put-state failed ({resp.Status})");
+                var fields = new[]
+                {
                     WaveeLogField.Of("status", resp.Status),
                     WaveeLogField.Of("reason", reason.ToString()),
-                    WaveeLogField.Of("track", snap?.Track.Uri ?? "-"));
+                    WaveeLogField.Of("messageId", mid),
+                    WaveeLogField.Of("track", snap?.Track.Uri ?? "-"),
+                };
+                if (inactiveSoftAck)
+                    WaveeLog.Instance.Debug("connect", "put-state.rejected", "inactive state already superseded server-side", fields);
+                else
+                    WaveeLog.Instance.Warn("connect", "put-state.rejected", "connect-state PUT rejected by server", fields);
             }
         }
         catch (Exception ex)
@@ -181,6 +244,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IDisposable
                 WaveeLogField.Of("active", isActive),
                 WaveeLogField.Of("track", snap?.Track.Uri ?? "-"));
         }
+        finally { _publishGate.Release(); }
     }
 
     LocalPlaybackSnapshot? BuildSnapshot()

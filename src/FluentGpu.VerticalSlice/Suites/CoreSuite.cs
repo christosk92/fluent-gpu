@@ -39,6 +39,11 @@ static class CoreSuite
         using var app = new HeadlessPlatformApp();
         var window = new HeadlessWindow(new WindowDesc("FluentGpu slice", new Size2(480, 320), 1f));
         window.Show();
+        var narrowOptIn = new HeadlessWindow(new WindowDesc(
+            "narrow opt-in", new Size2(480, 320), 1f, MinClientSizeDip: new Size2(360f, 0f)));
+        Check("gate.window.min-client-opt-in is per-window and preserves an unspecified axis",
+            window.MinClientSizeDip.Equals(default(Size2))
+            && narrowOptIn.MinClientSizeDip.Equals(new Size2(360f, 0f)));
         var device = new HeadlessGpuDevice();
         var fonts = new HeadlessFontSystem(strings);
         var root = new Counter();

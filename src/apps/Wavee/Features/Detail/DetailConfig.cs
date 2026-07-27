@@ -34,10 +34,6 @@ public readonly record struct TrackSort(SortColumn Column, bool Descending)
     public static readonly TrackSort Default = new(SortColumn.Index, false);
 }
 
-/// <summary>Combinable quick-filter toggles for the track list (the search query is tracked separately).</summary>
-[Flags]
-public enum TrackFilterFlags { None = 0, HideExplicit = 1, VideosOnly = 2 }
-
 /// <summary>
 /// The unified detail view model — one shape the rail, the track rows, and the trailing sections all read. The loader
 /// maps each <see cref="IMusicLibrary"/> domain record (Album / Playlist / liked-songs) onto this, so the view code is
@@ -75,7 +71,8 @@ public sealed record DetailModel(
     string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null,
     // Playlist-only read model: resolved collaborators plus a lookup used by Added-by cells. Tracks keep the raw wire id.
     IReadOnlyList<Owner>? Collaborators = null, IReadOnlyDictionary<string, Owner>? UserProfilesById = null,
-    bool IsPublic = true, string? BasePermissionRevision = null)
+    bool IsPublic = true, string? BasePermissionRevision = null,
+    PlaylistTuning? Tuning = null)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>

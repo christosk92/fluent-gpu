@@ -39,6 +39,7 @@ sealed class TrackList : Component
     const int VerticalChromeIndex = 1;
     const int VerticalTrackStart = 2;
     const float VerticalHeaderFallbackHeight = 420f;
+    const float CompactVerticalHeaderFallbackHeight = 200f;
     const int TrackOverscanItems = 8;
 
     // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
@@ -74,6 +75,7 @@ sealed class TrackList : Component
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
     bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
+    int _initialTierSeed;                                      // viewport-derived pre-measure tier (first-frame safety)
     readonly Signal<int> _visibleCount = new(0);
     readonly Signal<int> _verticalItemCount = new(VerticalTrackStart + 1);
 
@@ -96,8 +98,9 @@ sealed class TrackList : Component
     // change. That matters because _rowShape is a lazily-evaluated memo — it can recompute before this component's
     // render body would have had a chance to invalidate a tier-keyed cache.
     readonly Dictionary<ColumnSet, TrackSize[]> _tracksBySet = new();
-    (TrackSort Sort, string Query, TrackFilterFlags Flags) _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);   // invalid sentinel
+    (TrackSort Sort, string Query, TrackFilterState Filters) _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);   // invalid sentinel
     IReadOnlyList<Track>? _viewTrackSet;                       // source-list identity paired with the sort/filter cache key
+    IReadOnlySet<string>? _viewSavedSet;                       // only populated by Liked-only; reference change invalidates the cached map
     int[] _view = Array.Empty<int>();                          // filtered + sorted → original track-index map (rows read via this)
     Memo<TrackRowsSnapshot>? _rowsSnapshot;                    // atomic model/config/handlers/sort/filter value for persistent rows
     Memo<RowShape>? _rowShape;                                 // (column set + tracks) for the ACTIVE tier — the one thing a breakpoint cross changes
@@ -144,8 +147,39 @@ sealed class TrackList : Component
     Services? _svc;                                            // cached in Render → the header/add handlers reach the extender + the post seam
     Action<Action>? _post;
     readonly HashSet<string> _recAdding = new(StringComparer.Ordinal);
+    Memo<int>? _selectedCount;                                  // valid selected track rows (display-space selection)
     Memo<bool>? _checksVisible;                                 // equality-gated: checkbox lane visible (toggle OR selection)
+    Memo<bool>? _selectionCommandsVisible;                      // contextual command-bar mode (never for a plain single click)
     Func<bool> _checksVisibleRead = static () => false;        // stable thunk for bound row lanes (repointed each render)
+
+    // The shared detail-track command bar measures its own pane and promotes labeled commands only when they genuinely
+    // fit. Search disclosure is shared with the compact sticky projection so both surfaces tell the same story.
+    readonly Signal<bool> _searchExpanded = new(false);
+    readonly Signal<bool> _searchFocused = new(false);
+    readonly Signal<int> _toolbarMetricsEpoch = new(0);
+    readonly float[] _toolbarWidths = [120f, 92f, 96f, 156f, 144f, 82f]; // conservative first-frame localized budgets
+    DetailTrackCommandBarFit? _toolbarFit;
+    NodeHandle _searchButtonNode;
+    bool _restoreSearchFocus;
+
+    static readonly LayoutTransition ToolbarCommandMotion = new(
+        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionDynamics.Tween(220f, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: 8f, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dx: 8f, Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(150f, Easing.FluentAccelerate));
+
+    static readonly LayoutTransition SearchDisclosureMotion = new(
+        TransitionChannels.Position | TransitionChannels.Size,
+        TransitionDynamics.Tween(260f, Easing.SmoothOut),
+        Size: SizeMode.Reflow, Axes: SizeAxes.Width);
+
+    static readonly LayoutTransition ToolbarModeMotion = new(
+        TransitionChannels.Position | TransitionChannels.Opacity,
+        TransitionDynamics.Tween(210f, Easing.SmoothOut),
+        Enter: new EnterExit(Dx: 10f, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dx: -8f, Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(150f, Easing.FluentAccelerate));
 
     public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h,
                      bool showToolbar = true, bool embedded = false, bool verticalHeader = false,
@@ -166,7 +200,7 @@ sealed class TrackList : Component
 
     readonly record struct TrackRowsSnapshot(
         DetailModel Model, DetailConfig Config, DetailHandlers Handlers,
-        TrackSort Sort, string Query, TrackFilterFlags Flags,
+        TrackSort Sort, string Query, TrackFilterState Filters, IReadOnlySet<string>? Saved,
         bool MarqueeDisabled, string? TopTrackId);
 
     // The row/header column geometry for the active tier. Equality-gated: ColumnSet is a value record and the
@@ -188,20 +222,20 @@ sealed class TrackList : Component
     {
         var s = snapshot.Sort;
         string q = snapshot.Query;
-        var flags = snapshot.Flags;
-        var key = (s, q, flags);
+        var filters = snapshot.Filters;
+        var key = (s, q, filters);
         var tracks = snapshot.Model.Tracks;
-        if (!ReferenceEquals(_viewTrackSet, tracks) || !key.Equals(_viewKey))
+        if (!ReferenceEquals(_viewTrackSet, tracks) || !ReferenceEquals(_viewSavedSet, snapshot.Saved) || !key.Equals(_viewKey))
         {
-            bool hideX = (flags & TrackFilterFlags.HideExplicit) != 0;
-            bool vidOnly = (flags & TrackFilterFlags.VideosOnly) != 0;
             var list = new List<int>(tracks.Count);
+            var now = DateTimeOffset.Now;
             for (int i = 0; i < tracks.Count; i++)
             {
                 var t = tracks[i];
-                if (hideX && t.IsExplicit) continue;
-                if (vidOnly && !VideoPresence.HasVideo(t)) continue;   // override-only videos pass the filter too
-                if (q.Length > 0 && !MatchesQuery(t, q)) continue;
+                if (!TrackFilterModel.Matches(t, q, in filters,
+                    hasVideo: VideoPresence.HasVideo(t),               // override-only videos pass the filter too
+                    isSaved: snapshot.Saved?.Contains(t.Uri) ?? false,
+                    now)) continue;
                 list.Add(i);
             }
             Comparison<int> baseCmp = s.Column switch
@@ -216,7 +250,7 @@ sealed class TrackList : Component
             };
             // Stable: ties break by original index (ascending), so descending only flips the primary key.
             list.Sort((a, b) => { int c = baseCmp(a, b); if (s.Descending) c = -c; return c != 0 ? c : a.CompareTo(b); });
-            _view = list.ToArray(); _viewKey = key; _viewTrackSet = tracks;
+            _view = list.ToArray(); _viewKey = key; _viewTrackSet = tracks; _viewSavedSet = snapshot.Saved;
         }
         return _view;
     }
@@ -231,12 +265,6 @@ sealed class TrackList : Component
         var tracks = snapshot.Model.Tracks;
         return (uint)original < (uint)tracks.Count ? tracks[original] : EmptyTrack;
     }
-
-    // A track matches the search query if any of title / artist(s) / album contains it (case-insensitive).
-    static bool MatchesQuery(Track t, string q) =>
-        t.Title.Contains(q, StringComparison.OrdinalIgnoreCase)
-        || DetailFormat.ArtistNames(t.Artists).Contains(q, StringComparison.OrdinalIgnoreCase)
-        || t.Album.Name.Contains(q, StringComparison.OrdinalIgnoreCase);
 
     // The most-played track's id (gets the star), or null when there's no play data — so the star stays album-only.
     static string? TopTrack(IReadOnlyList<Track> tracks)
@@ -299,7 +327,7 @@ sealed class TrackList : Component
     // the shimmer can never disagree about which tier they are drawing.
     int ClampTier(int tier)
     {
-        if (_lastRightW <= 0f) return tier;
+        if (_lastRightW <= 0f) return Math.Max(tier, _initialTierSeed);
         int fit = TierFor(_lastRightW, tier);
         return fit > tier ? fit : tier;
     }
@@ -333,6 +361,14 @@ sealed class TrackList : Component
         _acts = UseContext(ActionServices.Slot); // the action system behind the row context menus + the batch bar
         _menuOverlay = UseContext(Overlay.Service);   // the overlay service the rows' attached menus open through
         var svc = UseContext(Services.Slot);     // extender client (recommended songs) + gate on live edits
+        var viewport = UseContextSignal(Viewport.Size);
+        if (_lastRightW <= 0f)
+        {
+            float seedW = viewport.Peek().Width;
+            _initialTierSeed = DetailLayoutBreakpoints.InitialTierForViewport(seedW);
+            if (_verticalHeader && !_verticalHeroOrientationInitialized)
+                _verticalHeroOrientation = DetailVerticalLayout.OrientationFor(seedW);
+        }
         _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
         Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
         UseEffect(() =>
@@ -343,6 +379,9 @@ sealed class TrackList : Component
             _verticalCompactInteractive.Value = false;
             _verticalIdentityCollapsed.Value = false;
             _verticalToolsVisible.Value = false;
+            _searchExpanded.Value = false;
+            _searchFocused.Value = false;
+            _restoreSearchFocus = false;
         }, _route.Value.Name);
         // One stable reactive snapshot owns every non-slot input a persistent row can observe. The memo reads the real
         // sources directly, so child rows never depend on this parent publishing mutable fields first.
@@ -359,9 +398,11 @@ sealed class TrackList : Component
             // snapshot would recompute here, compare equal, and silently never reach the rows.
             _ = AppearancePrefs.Epoch.Value;
             bool noMarquee = svc?.Settings.Get(WaveeSettings.DisableMarquee) ?? false;
+            var filters = handlers.Filters.Value;
+            IReadOnlySet<string>? saved = filters.LikedOnly ? _lib?.Saved.Value : null;
             return new TrackRowsSnapshot(
                 currentModel, config, handlers,
-                handlers.Sort.Value, handlers.Query.Value.Trim(), handlers.Flags.Value,
+                handlers.Sort.Value, handlers.Query.Value.Trim(), filters, saved,
                 noMarquee, TopTrack(currentModel.Tracks));
         });
         var rowItems = UseMemo(() => BoundItems.Project(
@@ -402,7 +443,8 @@ sealed class TrackList : Component
         if (model.ContextUri != _lastCtxUri)
         {
             _lastCtxUri = model.ContextUri;
-            _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);
+            _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);
+            _viewSavedSet = null;
             _tracksBySet.Clear();   // bound the cache across navigations (correctness comes from the set-keying, not this)
             _selection.ClearSelection();
             // §4.6 — navigation is not an edit: never choreograph across a context swap.
@@ -439,7 +481,8 @@ sealed class TrackList : Component
         if (trackSetChanged)
         {
             _lastTrackSet = model.Tracks;
-            _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterFlags.None);
+            _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);
+            _viewSavedSet = null;
         }
 
         int tier = ClampTier(_tier.Value);       // subscribe → re-render (new header/chrome) on a breakpoint cross
@@ -449,22 +492,25 @@ sealed class TrackList : Component
         var sort = _h.Sort.Value;                // subscribe → re-render (header carets) on sort change
         int density = _h.Density.Value;          // subscribe → remount with the new row height on density change
         string query = _h.Query.Value;           // subscribe → remount with the filtered set on query change
-        var flags = _h.Flags.Value;              // subscribe → remount on a quick-filter toggle
+        var filters = _h.Filters.Value;          // subscribe → update on local advanced-filter changes
         float rowH = TrackRow.RowHeightFor(density);
         var verticalLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
         float verticalHeroH = _verticalHeader ? VerticalHeaderHeight(subscribe: true) : VerticalHeaderFallbackHeight;
         float verticalCollapse = DetailVerticalLayout.CollapseDistance(verticalHeroH);
-        _checksVisible = UseComputed(() =>
+        _selectedCount = UseComputed(() =>
         {
-            if (_h.MultiSelect?.Value == true) return true;
-            // Auto-show only for a MULTI-selection (2+): a plain single click selects a row constantly during normal
-            // browsing and must not flip the whole list into checkbox mode.
             _ = _selection.Version.Value;
             int n = 0;
-            for (int i = 0; i < _selection.ItemCount && n < 2; i++)
+            for (int i = 0; i < _selection.ItemCount; i++)
                 if (_selection.IsSelected(i) && DisplayTrack(i, TrackStart) is not null)
                     n++;
-            return n >= 2;
+            return n;
+        });
+        _checksVisible = UseComputed(() => _h.MultiSelect?.Value == true || _selectedCount.Value >= 2);
+        _selectionCommandsVisible = UseComputed(() =>
+        {
+            int count = _selectedCount.Value;
+            return count > 0 && (_h.MultiSelect?.Value == true || count >= 2);
         });
         _checksVisibleRead = () => _checksVisible.Value;
         bool checkInset = _checksVisible.Value;
@@ -647,7 +693,7 @@ sealed class TrackList : Component
         // half deliberately stays out: it flips when the full model lands mid-navigation, and folding it in remounted
         // every bound slot in the viewport for nothing. A capable page mounts the recommendations template up front and
         // simply carries a total of `visible` until the gate goes live.
-        string filterKey = _verticalHeader ? "" : ":q" + query + ":f" + (int)flags;
+        string filterKey = _verticalHeader ? "" : ":q" + query + ":f" + filters.GetHashCode();
         Element listKeyed = new BoxEl { Key = "list:" + _route.Value.Name + ":" + (_verticalHeader ? "vh:" : "") + "d" + density + filterKey + ":r" + _resetEpoch + (recsCapable ? ":rec" : ""), Grow = listGrow, Shrink = 1f, MinHeight = 0f, Direction = 1, Children = [list] };
 
         Element rightBody = _cfg.HasTrailing
@@ -686,17 +732,6 @@ sealed class TrackList : Component
             },
             Children = _verticalHeader ? [rightBody] : [chrome, rightBody],
         };
-        // A component anchor does not mirror HitTestPassThrough from its rendered child. Keep a PLAIN full-bleed
-        // pass-through positioner as the ZStack child so wheel/pointer input reaches the ItemsView below. Stretching the
-        // component inside that positioner still gives SelectionCommandBar the real pane width for its responsive fit.
-        int selectionTrackStart = TrackStart;
-        Element selectionOverlay = new BoxEl
-        {
-            Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
-            HitTestPassThrough = true,
-            AlignItems = FlexAlign.Stretch, Justify = FlexJustify.End,
-            Children = [Embed.Comp(() => new SelectionCommandBar(_selection, i => DisplayTrack(i, selectionTrackStart), host: HostInfo))],
-        };
         // The per-frame reveal clock: mounted ONLY while a cold ramp is in flight (Flow.Show gated on _rampActive), so it
         // advances _reveal once per frame and then unmounts — the frame loop quiesces (no forever-loop). Copies the
         // FrameClock.Tick idiom (TickerClock / CountTicker). Hidden 0×0 node → no layout/hit-test footprint.
@@ -710,7 +745,7 @@ sealed class TrackList : Component
             Children = [Flow.Show(() => _rampActive.Value,
                 Embed.Comp(() => new TickerClock { OnFrame = _ => AdvanceReveal() }))],
         };
-        return ZStack(column, selectionOverlay, revealClock) with { Grow = 1f, Shrink = 1f, MinHeight = 0f };
+        return ZStack(column, revealClock) with { Grow = 1f, Shrink = 1f, MinHeight = 0f };
     }
 
     // Resolve a display row index (what the SelectionModel stores) → the track, through the current filtered+sorted view.
@@ -918,7 +953,10 @@ sealed class TrackList : Component
     float VerticalHeaderHeight(bool subscribe = false)
     {
         float h = subscribe ? _verticalHeaderHeight.Value : _verticalHeaderHeight.Peek();
-        return h > 1f ? h : VerticalHeaderFallbackHeight;
+        if (h > 1f) return h;
+        return _verticalHeroOrientation == DetailHeroOrientation.Compact
+            ? CompactVerticalHeaderFallbackHeight
+            : VerticalHeaderFallbackHeight;
     }
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) SwipeCloseObserver()
@@ -989,7 +1027,7 @@ sealed class TrackList : Component
         float artSize = DetailVerticalLayout.ArtworkFor(availW, orientation);
         float expandedHeight = VerticalHeaderHeight(subscribe: true);
         float collapseDistance = DetailVerticalLayout.CollapseDistance(expandedHeight);
-        int tier = _tier.Value;
+        int tier = ClampTier(_tier.Value);
         float compactLeft = TrackRow.PadXFor(tier);
         bool toolbarLabeled = tier <= 1;
         _verticalMorphEnter = DetailVerticalLayout.IdentityMorphEnterOffset(orientation, artSize, collapseDistance);
@@ -1001,6 +1039,7 @@ sealed class TrackList : Component
         if (!string.Equals(_verticalMorphKey, nextMorphKey, StringComparison.Ordinal)) _verticalMorphKey = nextMorphKey;
         Element toolbar = Toolbar(toolbarLabeled, tier);
         Element compactSearch = CompactSearch(tier);
+        Element compactSelection = CompactSelectionToolbar();
         Element header = new BoxEl
         {
             Key = "vhero:header",
@@ -1008,7 +1047,8 @@ sealed class TrackList : Component
             OnBoundsChanged = MeasureVerticalHeader,
             Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, orientation, artSize, availW,
                 compactLeft, _verticalIdentityCollapsed, _verticalCompactInteractive,
-                _verticalToolsVisible, _verticalMorphKey, toolbar, compactSearch)],
+                _verticalToolsVisible, _searchExpanded, _selectionCommandsVisible!,
+                _verticalMorphKey, toolbar, compactSearch, compactSelection)],
         };
         return new BoxEl
         {
@@ -1080,13 +1120,45 @@ sealed class TrackList : Component
     Element Chrome(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier, bool checkInset,
                    float padX = PadX, float? padRight = null)
     {
+        Element header = Header(set, tracks, sort, checkInset);
+        Element[] chromeChildren;
+        if (_verticalHeader)
+        {
+            chromeChildren = [header];
+        }
+        else if (_showToolbar)
+        {
+            // One Fluent command surface owns both action commands and the sortable column projection. Keeping the
+            // header inside the same clipped border removes the false "second toolbar" seam while preserving the exact
+            // row-grid tracks shared with TrackRow.
+            chromeChildren =
+            [
+                new BoxEl
+                {
+                    Direction = 1,
+                    MinWidth = 0f,
+                    Corners = CornerRadius4.All(Radii.Control),
+                    Fill = Tok.FillControlDefault,
+                    HoverFill = Tok.FillControlDefault,
+                    BorderWidth = 1f,
+                    BorderColor = Tok.StrokeControlDefault,
+                    HoverBorderColor = Tok.StrokeControlDefault,
+                    ClipToBounds = true,
+                    Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
+                    Children = [Toolbar(labeled, tier), header],
+                },
+            ];
+        }
+        else
+        {
+            chromeChildren = [header];
+        }
+
         Element content = new BoxEl
         {
             Key = "chrome", Direction = 1,
             Padding = new Edges4(padX, _verticalHeader ? 0f : Spacing.S, padRight ?? padX, 0f),
-            Children = _verticalHeader
-                ? [Header(set, tracks, sort, checkInset)]
-                : _showToolbar ? [Toolbar(labeled, tier), Header(set, tracks, sort, checkInset)] : [Header(set, tracks, sort, checkInset)],
+            Children = chromeChildren,
         };
 
         if (!_verticalHeader) return content;
@@ -1111,60 +1183,310 @@ sealed class TrackList : Component
         return ZStack(content, shadow) with { Direction = 1 };
     }
 
-    Element Toolbar(bool labeled, int tier)
-    {
-        // Play / Shuffle: labeled (icon + text) at wide tiers, icon-only when the list narrows — the same collapse as the
-        // view controls. Plain action buttons (no flyout) so they take the no-op NoAnchor.
-        Element Cmd(string glyph, string label, Action onClick) => labeled
-            ? ToolFx.LabeledButton(glyph, label, false, onClick, NoAnchor)
-            : ToolFx.Button(glyph, false, onClick, NoAnchor);
+    Element Toolbar(bool labeled, int tier) =>
+        Responsive.Of(BuildToolbar, fallback: _lastRightW > 0f ? _lastRightW : 760f)
+            with { Key = "detail-track-commandbar" };
 
-        // The Hero carries the primary Play + Shuffle actions, so the list toolbar drops them (and
-        // the leading separator) and keeps only the view controls: Sort · density · multi-select.
-        var leftKids = new List<Element>(6);
+    Element BuildToolbar(float available)
+    {
+        _ = _toolbarMetricsEpoch.Value; // measured labeled widths refine the conservative first-frame budgets
+        var h = _liveHandlers?.Value ?? _initialH;
+        var model = _full.Value.Value;
+        var cfg = DetailPage.ResolveConfig(DetailPage.ParseDetail(_route.Value).Kind, model);
+        bool selectionMode = _selectionCommandsVisible?.Value == true;
+        int selectionTrackStart = TrackStart;
+        if (selectionMode)
+        {
+            Element selection = Embed.Comp(() => new SelectionCommandBar(
+                _selection, i => DisplayTrack(i, selectionTrackStart), ExitSelection, host: HostInfo));
+            return CommandBarSurface("selection", selection);
+        }
+
+        var tuningSource = _svc?.PlaylistTuning;
+        bool showTune = PlaylistTuneMenuModel.IsEligible(model.Tuning, tuningSource?.Value is not null);
+        bool hasSelect = h.MultiSelect is not null && h.SetMultiSelect is not null;
+        bool explicitSearch = _searchExpanded.Value;
+
+        var widths = new DetailTrackCommandWidths(
+            _toolbarWidths[0], _toolbarWidths[1], _toolbarWidths[2],
+            _toolbarWidths[3], _toolbarWidths[4], _toolbarWidths[5]);
+        var fit = DetailTrackCommandBarLayout.Resolve(
+            MathF.Max(0f, available - 12f), in widths, _verticalHeader, showTune, hasSelect, explicitSearch, _toolbarFit);
+        _toolbarFit = fit;
+
+        var kids = new List<Element>(9);
         if (!_verticalHeader)
         {
-            leftKids.Add(Cmd(Icons.Play, Loc.Get(Strings.Detail.Play), _h.PlayAll));
-            leftKids.Add(Cmd(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), _h.Shuffle));
-            leftKids.Add(ToolFx.Separator());
+            IReadOnlyList<MenuFlyoutItem> playItems =
+            [
+                new(Loc.Get(Strings.Detail.AddToQueue),
+                    new IconRef { Glyph = WaveeIcons.PlayAfter, Font = WaveeIcons.Font },
+                    Invoke: h.AddToQueue),
+            ];
+            Element playNextContent = new BoxEl
+            {
+                Direction = 0,
+                Gap = 6f,
+                AlignItems = FlexAlign.Center,
+                Children =
+                [
+                    new TextEl(WaveeIcons.PlayNext)
+                    {
+                        Size = 14f,
+                        FontFamily = WaveeIcons.Font,
+                        Color = Tok.TextSecondary,
+                    },
+                    new TextEl(Loc.Get(Strings.Detail.PlayNext))
+                    {
+                        Size = 12f,
+                        Weight = 600,
+                        Color = Tok.TextSecondary,
+                    },
+                ],
+            };
+            kids.Add(MeasuredCommand(0, "cmd:play-next:" + (model.ContextUri ?? ""),
+                SplitButton.Create(playNextContent, h.PlayNext, playItems,
+                    parts: ToolFx.CommandBarSplitParts)));
         }
-        // The Sort button opens the "sort by" flyout — the only way to sort by Artist (no column of its own).
-        leftKids.Add(Embed.Comp(() => new SortMenuButton(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, _hasDate, labeled)));
-        leftKids.Add(Embed.Comp(() => new ListButton(_h.Density, _h.SetDensity, labeled)));
-        if (_h.MultiSelect is not null && _h.SetMultiSelect is not null)
-            leftKids.Add(Embed.Comp(() => new MultiSelectButton(_h.MultiSelect!, _h.SetMultiSelect!, _selection, labeled)));
+        if (fit.Has(DetailTrackInlineCommand.Shuffle))
+            kids.Add(MeasuredCommand(2, "cmd:shuffle",
+                ToolFx.LabeledButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), false, h.Shuffle, NoAnchor)));
+        if (showTune)
+            kids.Add(MeasuredCommand(1, "cmd:tune",
+                Embed.Comp(() => new PlaylistTuneButton(_full, tuningSource!, labeled: true))));
 
-        Element leftVisual = new BoxEl
+        bool hasViewInline = fit.Has(DetailTrackInlineCommand.Sort)
+            || fit.Has(DetailTrackInlineCommand.Density)
+            || fit.Has(DetailTrackInlineCommand.Select);
+        if (hasViewInline && kids.Count > 0) kids.Add(ToolFx.Separator() with { Key = "cmd:separator" });
+
+        if (fit.Has(DetailTrackInlineCommand.Sort))
+            kids.Add(MeasuredCommand(3, "cmd:sort",
+                Embed.Comp(() => new SortMenuButton(h.Sort, h.SetSort, cfg.ShowAlbumColumn, model.HasDateAdded, labeled: true))));
+        if (fit.Has(DetailTrackInlineCommand.Density))
+            kids.Add(MeasuredCommand(4, "cmd:density",
+                Embed.Comp(() => new ListButton(h.Density, h.SetDensity, labeled: true))));
+        if (fit.Has(DetailTrackInlineCommand.Select) && h.MultiSelect is not null && h.SetMultiSelect is not null)
+            kids.Add(MeasuredCommand(5, "cmd:select",
+                Embed.Comp(() => new MultiSelectButton(h.MultiSelect, h.SetMultiSelect, _selection, labeled: true))));
+
+        PlaylistInlineForOverflow(fit, hasSelect, out var overflow);
+        kids.Add(Embed.Comp(() => new DetailTrackMoreButton(
+            _full, h, cfg, overflow, _selection, _verticalHeader))
+            with { Key = "cmd:more:" + (int)overflow + ":" + (model.ContextUri ?? "") });
+
+        var caps = FilterCapabilities(model);
+        Element search = SearchHost(h, caps, fit.SearchExpanded, fit.SearchWidth, compact: false);
+        Element normal = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 2f,
-            Children = leftKids.ToArray(),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = DetailTrackCommandBarLayout.Gap,
+            Grow = 1f, MinWidth = 0f,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = DetailTrackCommandBarLayout.Gap,
+                    Shrink = 0f, Children = kids.ToArray(),
+                },
+                new BoxEl { Grow = 1f, MinWidth = 0f },
+                search,
+            ],
         };
-        Element left = leftVisual;
-        // The "Find" box, docked alone on the right — a plain search field (no suggestions flyout), two-way bound to the
-        // live filter query (View() matches case-insensitively on title / artist / album). Its trailing affix is the
-        // filter funnel, so the "advanced filter" (hide explicit / videos only) folds into the search box itself.
-        Element search = SearchControl(labeled, tier);
+        return CommandBarSurface("normal", normal);
+    }
+
+    Element CommandBarSurface(string mode, Element content)
+    {
+        // In the desktop list this is the first row of Chrome's unified command+column surface, so Chrome owns the
+        // border/corners. The vertical sticky projection has no column row beside it and therefore retains standalone
+        // Flyout/CommandBar chrome.
+        bool standalone = _verticalHeader;
         return new BoxEl
         {
-            Key = labeled ? "cmdbar:lbl" : "cmdbar:icon",
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
-            Margin = _verticalHeader ? default : new Edges4(0f, 0f, 0f, Spacing.XS),
-            Children = [left, new BoxEl { Grow = 1f }, search],
+            Direction = 1,
+            Height = 44f,
+            MinWidth = 0f,
+            Padding = new Edges4(6f, 5f, 6f, 5f),
+            Corners = standalone ? CornerRadius4.All(Radii.Control) : default,
+            Fill = standalone ? Tok.FillControlDefault : ColorF.Transparent,
+            HoverFill = standalone ? Tok.FillControlDefault : ColorF.Transparent,
+            BorderWidth = standalone ? 1f : 0f,
+            BorderColor = standalone ? Tok.StrokeControlDefault : ColorF.Transparent,
+            HoverBorderColor = standalone ? Tok.StrokeControlDefault : ColorF.Transparent,
+            ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "commandbar-mode:" + mode,
+                    Direction = 1,
+                    Grow = 1f,
+                    MinWidth = 0f,
+                    Animate = ToolbarModeMotion,
+                    Children = [content],
+                },
+            ],
         };
     }
 
-    Element CompactSearch(int tier) => SearchControl(tier <= 1, tier);
-
-    Element SearchControl(bool labeled, int tier)
+    void ExitSelection()
     {
-        float searchWidth = ToolbarSearchWidth(labeled, tier);
-        return Embed.Comp(() => new EditableText
+        _selection.ClearSelection();
+        var h = _liveHandlers?.Peek() ?? _initialH;
+        if (h.MultiSelect?.Peek() == true) h.SetMultiSelect?.Invoke(false);
+    }
+
+    static void PlaylistInlineForOverflow(DetailTrackCommandBarFit fit, bool hasSelect,
+                                          out DetailTrackInlineCommand overflow)
+    {
+        overflow = DetailTrackInlineCommand.Shuffle | DetailTrackInlineCommand.Sort | DetailTrackInlineCommand.Density;
+        if (hasSelect) overflow |= DetailTrackInlineCommand.Select;
+        overflow &= ~fit.Inline;
+    }
+
+    Element MeasuredCommand(int slot, string key, Element command) => new BoxEl
+    {
+        Key = key, Direction = 1, Shrink = 0f, Animate = ToolbarCommandMotion,
+        OnBoundsChanged = r => MeasureToolbarCommand(slot, r.W),
+        Children = [command],
+    };
+
+    void MeasureToolbarCommand(int slot, float width)
+    {
+        if ((uint)slot >= (uint)_toolbarWidths.Length || width <= 1f) return;
+        if (MathF.Abs(_toolbarWidths[slot] - width) <= 0.5f) return;
+        _toolbarWidths[slot] = width;
+        _toolbarMetricsEpoch.Value = _toolbarMetricsEpoch.Peek() + 1;
+    }
+
+    Element CompactSearch(int tier)
+    {
+        var h = _liveHandlers?.Value ?? _initialH;
+        var model = _full.Value.Value;
+        bool expanded = _searchExpanded.Value;
+        return SearchHost(h, FilterCapabilities(model), expanded,
+            expanded ? 196f : DetailTrackCommandBarLayout.SearchIconWidth, compact: true);
+    }
+
+    Element CompactSelectionToolbar()
+    {
+        int trackStart = TrackStart;
+        return Responsive.Of(_ =>
         {
-            Placeholder = Loc.Get(Strings.Detail.Filter.SearchThisList),
-            Width = searchWidth, Height = 32f,
-            Text = _h.Query,
-            RightAffix = Embed.Comp(() => new FilterButton(_h.Flags, _h.SetFlags, _model.HasVideo)),
-        });
+            Element selection = Embed.Comp(() => new SelectionCommandBar(
+                _selection, i => DisplayTrack(i, trackStart), ExitSelection, host: HostInfo));
+            return CommandBarSurface("compact-selection", selection);
+        }, fallback: DetailVerticalLayout.FallbackW);
+    }
+
+    Element SearchHost(DetailHandlers h, TrackFilterCapabilities caps, bool expanded, float width, bool compact)
+    {
+        bool queryActive = h.Query.Value.Length > 0;
+        bool focused = expanded && _searchFocused.Value;
+        Element query;
+        if (expanded)
+        {
+            query = Embed.Comp(() => new DetailTrackSearchField(
+                h.Query, _searchFocused, focusOnMount: true, canCollapse: true, CollapseSearch))
+                with { Key = "search:field" };
+        }
+        else
+        {
+            void Open() => _searchExpanded.Value = true;
+            void Capture(NodeHandle node)
+            {
+                _searchButtonNode = node;
+                if (!_restoreSearchFocus) return;
+                _restoreSearchFocus = false;
+                _post?.Invoke(() => InputHooks.Current.Default.FocusNode?.Invoke(node, true));
+            }
+            query = ToolTip.Wrap(
+                ToolFx.Button(Icons.Search, queryActive, Open, Capture),
+                Loc.Get(Strings.Detail.Filter.SearchThisList));
+        }
+
+        float gap = expanded ? 0f : DetailTrackCommandBarLayout.Gap;
+        float queryWidth = MathF.Max(32f, width - gap - 32f);
+        var row = new BoxEl
+        {
+            Direction = 0,
+            Gap = gap,
+            Width = width,
+            Height = 32f,
+            AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "search-query-region",
+                    Direction = 1,
+                    Width = queryWidth,
+                    Height = 32f,
+                    ClipToBounds = true,
+                    Children = [query],
+                },
+                Embed.Comp(() => new FilterButton(h.Filters, h.SetFilters, caps))
+                    with { Key = "search-filter:" + caps.GetHashCode() },
+            ],
+        };
+        Element[] layers = focused
+            ?
+            [
+                row,
+                new BoxEl
+                {
+                    Width = width,
+                    Height = 2f,
+                    OffsetY = 30f,
+                    Fill = Tok.AccentDefault,
+                    HitTestVisible = false,
+                },
+            ]
+            : [row];
+
+        return new BoxEl
+        {
+            Key = compact ? "compact-search-host" : "search-host",
+            ZStack = true,
+            Width = width,
+            Height = 32f,
+            Shrink = 0f,
+            Corners = expanded ? Radii.ControlAll : default,
+            Fill = expanded
+                ? (focused ? Tok.FillControlInputActive : Tok.FillControlDefault)
+                : ColorF.Transparent,
+            BorderWidth = expanded ? 1f : 0f,
+            BorderBrush = expanded ? Tok.ControlElevationBorder : null,
+            BrushTransitionMs = Motion.ControlFaster,
+            Animate = SearchDisclosureMotion,
+            ClipToBounds = true,
+            Children = layers,
+        };
+    }
+
+    void CollapseSearch(bool restoreFocus)
+    {
+        _restoreSearchFocus |= restoreFocus;
+        _searchFocused.Value = false;
+        _searchExpanded.Value = false;
+    }
+
+    TrackFilterCapabilities FilterCapabilities(DetailModel model)
+    {
+        bool local = false, streamed = false, unavailable = false;
+        for (int i = 0; i < model.Tracks.Count; i++)
+        {
+            var track = model.Tracks[i];
+            if (track.Origin == TrackOrigin.Local) local = true; else streamed = true;
+            if (track.Availability != Availability.Playable) unavailable = true;
+            if (local && streamed && unavailable) break;
+        }
+        return new TrackFilterCapabilities(
+            HasVideo: model.HasVideo,
+            HasDateAdded: model.HasDateAdded,
+            HasMixedOrigin: local && streamed,
+            HasUnavailable: unavailable,
+            HasLibrary: _lib is not null);
     }
 
     // A no-op OnRealized for the plain action buttons (Play / Shuffle) — they open no flyout, so they need no anchor.
@@ -1272,9 +1594,6 @@ sealed class TrackList : Component
             ],
         };
     }
-
-    static float ToolbarSearchWidth(bool labeled, int tier)
-        => labeled ? 220f : tier >= 4 ? 120f : 150f;
 
     // A clickable column header: click to sort by this column (toggles asc/desc on repeat), with a caret on the active
     // column (before the content for the right-aligned duration, after it otherwise). The default Index/# column shows
@@ -1836,7 +2155,7 @@ sealed class TrackList : Component
     static bool IsNaturalContextOrder(TrackRowsSnapshot snapshot, int[] v)
     {
         if (snapshot.Sort != TrackSort.Default) return false;
-        if (snapshot.Query.Length != 0 || snapshot.Flags != TrackFilterFlags.None) return false;
+        if (snapshot.Query.Length != 0 || !snapshot.Filters.IsDefault) return false;
         if (v.Length != snapshot.Model.Tracks.Count) return false;
         for (int i = 0; i < v.Length; i++)
             if (v[i] != i) return false;
@@ -1919,7 +2238,7 @@ sealed class TrackList : Component
             : null;
         // Apple's immersive/stacked track list uses plain rows (no per-row pill/border) — only in that mode; wide
         // side-by-side keeps the WinUI zebra-pill treatment below.
-        bool plainRows = _verticalHeader && _verticalHeroOrientation == DetailHeroOrientation.Immersive;
+        bool plainRows = _verticalHeader && _verticalHeroOrientation != DetailHeroOrientation.SideBySide;
         var skin = new BoxEl
         {
             ZStack = true, MinHeight = rowH, ClipToBounds = true,    // ZStack → the left accent bar overlays the content
@@ -2088,6 +2407,201 @@ sealed class SortLabel : Component
 // ShellToolbar — listing the sort FIELDS as a radio group (Custom order / Title / Artist / Album / Date added /
 // Duration, each gated by what the context actually has) plus an Ascending/Descending pair. This is the only way to sort
 // by Artist (no column header of its own). Used in both the chrome toolbar and the vertical-header toolbar.
+sealed class PlaylistTuneButton : Component
+{
+    readonly Loadable<DetailModel> _full;
+    readonly IReadSignal<IPlaylistTuningSource?> _source;
+    readonly bool _labeled;
+
+    public PlaylistTuneButton(
+        Loadable<DetailModel> full,
+        IReadSignal<IPlaylistTuningSource?> source,
+        bool labeled)
+    {
+        _full = full;
+        _source = source;
+        _labeled = labeled;
+    }
+
+    public override Element Render()
+    {
+        var overlay = UseContext(Overlay.Service);
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var command = UseAsyncCommand();
+        var post = Context.UsePost();
+        var model = _full.Value.Value;
+        var source = _source.Value;
+        if (!PlaylistTuneMenuModel.IsEligible(model.Tuning, source is not null)
+            || model.ContextUri is not { Length: > 0 })
+            return new BoxEl();
+
+        bool busy = command.IsRunning;
+        bool active = model.Tuning!.SelectedIdentifier is not null;
+
+        void Apply(string identifier)
+        {
+            var currentSource = _source.Peek();
+            var current = _full.Value.Peek();
+            if (currentSource is null || current.ContextUri is not { Length: > 0 } uri) return;
+            command.Run(
+                async ct =>
+                {
+                    await currentSource.ApplyAsync(uri, identifier, ct).ConfigureAwait(false);
+                    post(() => Toast.Show(Loc.Get(Strings.Detail.Tuning.Applied),
+                        new ToastOptions { Severity = InfoBarSeverity.Success }));
+                },
+                _ => Toast.Show(Loc.Get(Strings.Detail.Tuning.ApplyFailed),
+                    new ToastOptions { Severity = InfoBarSeverity.Error }));
+        }
+
+        IReadOnlyList<MenuFlyoutItem> Items()
+        {
+            var tuning = _full.Value.Peek().Tuning;
+            if (tuning is null) return Array.Empty<MenuFlyoutItem>();
+            var choices = PlaylistTuneMenuModel.VisibleChoices(tuning);
+            var items = new List<MenuFlyoutItem>(choices.Count + 2);
+            for (int i = 0; i < choices.Count; i++)
+            {
+                var choice = choices[i];
+                bool selected = string.Equals(tuning.SelectedIdentifier, choice.Identifier, StringComparison.Ordinal);
+                items.Add(MenuFlyoutItem.RadioItem(
+                    choice.DisplayName!,
+                    selected,
+                    () => Apply(choice.Identifier),
+                    enabled: !selected) with
+                {
+                    AcceleratorText = selected ? Loc.Get(Strings.Detail.Tuning.Current) : null,
+                });
+            }
+            if (PlaylistTuneMenuModel.ResetOption(tuning) is { } reset)
+            {
+                items.Add(MenuFlyoutItem.Separator);
+                items.Add(new MenuFlyoutItem(
+                    Loc.Get(Strings.Detail.Tuning.Reset),
+                    Invoke: () => Apply(reset.Identifier)));
+            }
+            return items;
+        }
+
+        void Toggle()
+        {
+            if (busy || overlay is null) return;
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            handle.Value = overlay.Open(
+                () => anchor.Value,
+                () => TuneFlyout(Items(), () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedRight,
+                ToolFx.MenuPopup);
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        Element TuneFlyout(IReadOnlyList<MenuFlyoutItem> items, Action close)
+        {
+            ColorF iconColor = Tok.AccentTextPrimary;
+            return new BoxEl
+            {
+                Direction = 1,
+                MinWidth = 336f,
+                MaxWidth = 336f,
+                Padding = new Edges4(0f, 8f, 0f, 6f),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Direction = 0,
+                        Gap = 12f,
+                        AlignItems = FlexAlign.Center,
+                        Padding = new Edges4(14f, 9f, 14f, 11f),
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Width = 36f,
+                                Height = 36f,
+                                AlignItems = FlexAlign.Center,
+                                Justify = FlexJustify.Center,
+                                Corners = CornerRadius4.All(10f),
+                                Fill = iconColor with { A = 0.13f },
+                                Children =
+                                [
+                                    Icon(
+                                        OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)
+                                            ? Icons.RefineSparkle : Icons.Edit,
+                                        18f,
+                                        iconColor),
+                                ],
+                            },
+                            new BoxEl
+                            {
+                                Direction = 1,
+                                Gap = 2f,
+                                Grow = 1f,
+                                Basis = 0f,
+                                Children =
+                                [
+                                    new TextEl(Loc.Get(Strings.Detail.Tuning.FlyoutTitle))
+                                    { Size = 14f, Weight = 650, Color = Tok.TextPrimary },
+                                    new TextEl(Loc.Get(Strings.Detail.Tuning.FlyoutSubtitle))
+                                    { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
+                                ],
+                            },
+                        ],
+                    },
+                    new BoxEl
+                    {
+                        Height = 1f,
+                        Margin = new Edges4(8f, 3f, 8f, 4f),
+                        Fill = Tok.StrokeDividerDefault,
+                    },
+                    MenuFlyout.Create(items, close, 336f),
+                ],
+            };
+        }
+
+        ColorF accent = Tok.AccentTextPrimary;
+        Element leading = busy
+            ? ProgressRing.Indeterminate(16f, true, accent)
+            : Icon(
+                OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) ? Icons.RefineSparkle : Icons.Edit,
+                16f,
+                active ? accent : Tok.TextSecondary);
+        Element button = new BoxEl
+        {
+            Direction = 0,
+            Width = _labeled ? float.NaN : 32f,
+            Height = 32f,
+            Padding = _labeled ? new Edges4(9f, 0f, 10f, 0f) : default,
+            Gap = 6f,
+            AlignItems = FlexAlign.Center,
+            Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(Radii.Control),
+            Fill = active ? accent with { A = 0.11f } : ColorF.Transparent,
+            HoverFill = active ? accent with { A = 0.17f } : Tok.FillSubtleSecondary,
+            PressedFill = active ? accent with { A = 0.08f } : Tok.FillSubtleTertiary,
+            HoverDurationMs = Motion.ControlFaster,
+            PressDurationMs = Motion.ControlFaster,
+            IsEnabled = !busy,
+            Role = AutomationRole.Button,
+            Focusable = true,
+            Cursor = busy ? CursorId.Arrow : CursorId.Hand,
+            OnClick = Toggle,
+            OnRealized = h => anchor.Value = h,
+            Children = _labeled
+                ?
+                [
+                    leading,
+                    new TextEl(Loc.Get(Strings.Detail.Tuning.Tune))
+                    { Size = 12f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
+                    Icon(Icons.ChevronDown, 9f, active ? accent : Tok.TextTertiary),
+                ]
+                : [leading],
+        };
+        return _labeled ? button : ToolTip.Wrap(button, Loc.Get(Strings.Detail.Tuning.Tooltip));
+    }
+
+}
+
 sealed class SortMenuButton : Component
 {
     readonly IReadSignal<TrackSort> _sort;
@@ -2096,7 +2610,7 @@ sealed class SortMenuButton : Component
     public SortMenuButton(IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate, bool labeled = false)
     { _sort = sort; _setSort = setSort; _hasAlbum = hasAlbum; _hasDate = hasDate; _labeled = labeled; }
 
-    static string Label(SortColumn c) => c switch
+    internal static string Label(SortColumn c) => c switch
     {
         SortColumn.Index => Loc.Get(Strings.Detail.Sort.CustomOrder),
         SortColumn.Title => Loc.Get(Strings.Detail.Sort.Title),
@@ -2107,27 +2621,30 @@ sealed class SortMenuButton : Component
         _ => "",
     };
 
-    IReadOnlyList<MenuFlyoutItem> Items()
+    internal static IReadOnlyList<MenuFlyoutItem> ItemsFor(
+        IReadSignal<TrackSort> sort, Action<TrackSort> setSort, bool hasAlbum, bool hasDate)
     {
-        var cur = _sort.Peek();
+        var cur = sort.Peek();
         var fields = new List<SortColumn>(6) { SortColumn.Index, SortColumn.Title, SortColumn.Artist };
-        if (_hasAlbum) fields.Add(SortColumn.Album);
-        if (_hasDate) fields.Add(SortColumn.DateAdded);
+        if (hasAlbum) fields.Add(SortColumn.Album);
+        if (hasDate) fields.Add(SortColumn.DateAdded);
         fields.Add(SortColumn.Duration);
 
         var items = new List<MenuFlyoutItem>(fields.Count + 3);
         foreach (var col in fields)
             items.Add(MenuFlyoutItem.RadioItem(Label(col), cur.Column == col,
-                () => _setSort(col == SortColumn.Index ? TrackSort.Default : new TrackSort(col, cur.Descending))));
+                () => setSort(col == SortColumn.Index ? TrackSort.Default : new TrackSort(col, cur.Descending))));
 
         // Direction applies to original/custom order too: descending is the explicit "invert this list" operation.
         items.Add(MenuFlyoutItem.Separator);
         items.Add(MenuFlyoutItem.RadioItem(Loc.Get(Strings.Detail.Sort.Ascending), !cur.Descending,
-            () => _setSort(_sort.Peek() with { Descending = false })));
+            () => setSort(sort.Peek() with { Descending = false })));
         items.Add(MenuFlyoutItem.RadioItem(Loc.Get(Strings.Detail.Sort.Descending), cur.Descending,
-            () => _setSort(_sort.Peek() with { Descending = true })));
+            () => setSort(sort.Peek() with { Descending = true })));
         return items;
     }
+
+    IReadOnlyList<MenuFlyoutItem> Items() => ItemsFor(_sort, _setSort, _hasAlbum, _hasDate);
 
     public override Element Render()
     {
@@ -2149,11 +2666,18 @@ sealed class SortMenuButton : Component
             handle.Value.ClosedAction = () => handle.Value = null;
         }
 
+        Element trailing = new BoxEl
+        {
+            Direction = 0, Gap = 3f, AlignItems = FlexAlign.Center,
+            Children = active
+                ? [Embed.Comp(() => new SortCaret(_sort)), Icon(Icons.ChevronDown, 8f, Tok.TextTertiary)]
+                : [Icon(Icons.ChevronDown, 8f, Tok.TextTertiary)],
+        };
         return _labeled
             ? ToolFx.LabeledButton(Icons.Sort,
                 Label(current.Column),
                 active, Toggle, h => anchor.Value = h,
-                trailing: active ? Embed.Comp(() => new SortCaret(_sort)) : null)
+                trailing)
             : ToolFx.Button(Icons.Sort, active, Toggle, h => anchor.Value = h);
     }
 }
@@ -2162,6 +2686,42 @@ sealed class SortMenuButton : Component
 // flyout panel surface. Keeps Filter/Sort/More/List visually identical.
 static class ToolFx
 {
+    // Real SplitButton behavior with AppBar/CommandBar visuals: two hit targets and keyboard chords remain intact, but
+    // the joined root is ghosted at rest instead of painting the boxed form-control surface.
+    public static readonly TemplateParts CommandBarSplitParts = new()
+    {
+        [SplitButton.PartRoot] = static e => e with
+        {
+            AlignSelf = FlexAlign.Center,
+            MinHeight = 32f,
+            Fill = ColorF.Transparent,
+            BorderWidth = 0f,
+            BorderBrush = null,
+            Corners = Radii.ControlAll,
+        },
+        [SplitButton.PartPrimaryButton] = static e => e with
+        {
+            Grow = 0f,
+            MinWidth = 0f,
+            Height = 32f,
+            Padding = new Edges4(9f, 0f, 8f, 0f),
+        },
+        [SplitButton.PartSecondaryButton] = static e => e with
+        {
+            Width = 24f,
+            Height = 32f,
+            Padding = default,
+            Justify = FlexJustify.Center,
+        },
+        [SplitButton.PartDivider] = static e => e with
+        {
+            Width = 1f,
+            Height = 20f,
+            AlignSelf = FlexAlign.Center,
+            Fill = Tok.StrokeDividerDefault,
+        },
+    };
+
     // The toolbar icon button. Active → a subtle accent pill + accent glyph (the WinUI ToggleButton "on" look); idle → ghost.
     public static Element Button(string glyph, bool active, Action onClick, Action<NodeHandle> onRealized)
     {
@@ -2169,10 +2729,11 @@ static class ToolFx
         return new BoxEl
         {
             Width = 32f, Height = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(16f),
-            Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
-            HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleTertiary,
-            PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
+            Corners = CornerRadius4.All(Radii.Control),
+            Fill = active ? accent with { A = 0.11f } : ColorF.Transparent,
+            HoverFill = active ? accent with { A = 0.17f } : Tok.FillSubtleSecondary,
+            PressedFill = active ? accent with { A = 0.08f } : Tok.FillSubtleTertiary,
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             OnClick = onClick, OnRealized = onRealized,
             Children = [Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary)],
         };
@@ -2187,22 +2748,23 @@ static class ToolFx
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Height = 32f,
-            Padding = new Edges4(10f, 0f, 12f, 0f),
-            Corners = CornerRadius4.All(16f),
-            Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
-            HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleTertiary,
-            PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
+            Padding = new Edges4(9f, 0f, 10f, 0f),
+            Corners = CornerRadius4.All(Radii.Control),
+            Fill = active ? accent with { A = 0.11f } : ColorF.Transparent,
+            HoverFill = active ? accent with { A = 0.17f } : Tok.FillSubtleSecondary,
+            PressedFill = active ? accent with { A = 0.08f } : Tok.FillSubtleTertiary,
+            HoverDurationMs = Motion.ControlFaster, PressDurationMs = Motion.ControlFaster,
             OnClick = onClick, OnRealized = onRealized,
             Children = trailing is null
                 ?
                 [
                     Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary),
-                    new TextEl(label) { Size = 13f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
+                    new TextEl(label) { Size = 12f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
                 ]
                 :
                 [
                     Ui.Icon(glyph, 14f, active ? accent : Tok.TextSecondary),
-                    new TextEl(label) { Size = 13f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
+                    new TextEl(label) { Size = 12f, Weight = 600, Color = active ? accent : Tok.TextSecondary },
                     trailing,
                 ],
         };
@@ -2221,67 +2783,252 @@ static class ToolFx
     { ConstrainToRootBounds = false };
 }
 
-// The search box's trailing filter funnel (mounted as the EditableText RightAffix — so "advanced filter" lives INSIDE
-// the Find box). Opens a light CHECKABLE MenuFlyout of the quick-filter toggles (Hide explicit / Videos only) — the same
-// lightweight menu style as Sort, replacing the old heavy titled Layer panel. Shows an accent pill + glyph when a
-// filter is set.
-sealed class FilterButton : Component
-{
-    readonly IReadSignal<TrackFilterFlags> _flags;
-    readonly Action<TrackFilterFlags> _setFlags;
-    readonly bool _hasVideo;
-    public FilterButton(IReadSignal<TrackFilterFlags> flags, Action<TrackFilterFlags> setFlags, bool hasVideo)
-    { _flags = flags; _setFlags = setFlags; _hasVideo = hasVideo; }
+// Search and Filter share one outer field surface. The editor is chromeless and the stable FilterButton occupies the
+// trailing 32-DIP lane, so expanding/collapsing never remounts or visually ejects the funnel from the control.
+readonly record struct TrackFilterCapabilities(
+    bool HasVideo, bool HasDateAdded, bool HasMixedOrigin, bool HasUnavailable, bool HasLibrary);
 
-    // Checkable menu items (WinUI AppBarToggleButton-in-menu): the ✓ shows the live flag; clicking toggles it.
-    IReadOnlyList<MenuFlyoutItem> Items()
+sealed class DetailTrackSearchField : Component
+{
+    readonly Signal<string> _query;
+    readonly Signal<bool> _focused;
+    readonly bool _focusOnMount;
+    readonly bool _canCollapse;
+    readonly Action<bool> _collapse;
+
+    public DetailTrackSearchField(Signal<string> query, Signal<bool> focused,
+        bool focusOnMount, bool canCollapse, Action<bool> collapse)
     {
-        var f = _flags.Peek();
-        var items = new List<MenuFlyoutItem>(2)
-        {
-            MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.Filter.HideExplicit), (f & TrackFilterFlags.HideExplicit) != 0,
-                () => _setFlags(_flags.Peek() ^ TrackFilterFlags.HideExplicit)),
-        };
-        if (_hasVideo)
-            items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.Filter.VideosOnly), (f & TrackFilterFlags.VideosOnly) != 0,
-                () => _setFlags(_flags.Peek() ^ TrackFilterFlags.VideosOnly)));
-        return items;
+        _query = query; _focused = focused; _focusOnMount = focusOnMount;
+        _canCollapse = canCollapse; _collapse = collapse;
     }
 
+    public override Element Render()
+    {
+        var hooks = UseContext(InputHooks.Current);
+        var post = UsePost();
+        bool hasQuery = _query.Value.Length > 0;
+        var hadQuery = UseRef(hasQuery);
+        var parts = new TemplateParts();
+        if (_focusOnMount)
+            parts[EditableText.PartRoot] = b => b with
+            {
+                OnRealized = h => post(() => hooks.FocusNode?.Invoke(h, false)),
+            };
+
+        UseEffect(() =>
+        {
+            bool hadText = hadQuery.Value;
+            hadQuery.Value = hasQuery;
+            if (hadText && !hasQuery && _canCollapse)
+                post(() => _collapse(true));
+        }, hasQuery);
+
+        Element AffixButton(string glyph, string tip, Action click) => ToolTip.Wrap(new BoxEl
+        {
+            Width = 26f, Height = 26f, AlignSelf = FlexAlign.Center,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(Radii.Control),
+            OnClick = click, Focusable = true, Role = AutomationRole.Button,
+            Children = [Icon(glyph, 12f, Tok.TextSecondary)],
+        }.Interactive(Interaction.Subtle), tip);
+
+        var affix = new List<Element>(1);
+        if (hasQuery)
+            affix.Add(AffixButton(Icons.ClearText, Loc.Get(Strings.Detail.Filter.Clear), () => _query.Value = ""));
+
+        return Embed.Comp(() => new EditableText
+        {
+            Text = _query,
+            Width = float.NaN,
+            Height = 32f,
+            Chromeless = true,
+            Placeholder = Loc.Get(Strings.Detail.Filter.SearchThisList),
+            LeftAffix = new BoxEl
+            {
+                Width = 28f, Height = 32f, Shrink = 0f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                HitTestVisible = false,
+                Children = [Icon(Icons.Search, 13f, Tok.TextTertiary)],
+            },
+            RightAffix = new BoxEl
+            {
+                Direction = 0, Gap = 1f, Height = 32f, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(0f, 0f, 3f, 0f), Children = affix.ToArray(),
+            },
+            OnCancel = _canCollapse ? () => _collapse(true) : null,
+            OnFocusChanged = focused =>
+            {
+                _focused.Value = focused;
+                if (!focused && _canCollapse && _query.Peek().Length == 0)
+                    post(() => _collapse(false));
+            },
+            Parts = parts,
+        });
+    }
+}
+
+sealed class FilterButton : Component
+{
+    readonly IReadSignal<TrackFilterState> _filters;
+    readonly Action<TrackFilterState> _setFilters;
+    readonly TrackFilterCapabilities _caps;
+    public FilterButton(IReadSignal<TrackFilterState> filters, Action<TrackFilterState> setFilters,
+        TrackFilterCapabilities caps)
+    { _filters = filters; _setFilters = setFilters; _caps = caps; }
+
+    // Checkable menu items (WinUI AppBarToggleButton-in-menu): the ✓ shows the live flag; clicking toggles it.
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
-        bool active = _flags.Value != TrackFilterFlags.None;   // subscribe → accent when a quick-filter toggle is on
+        var current = _filters.Value;
+        bool active = !current.IsDefault;
+        int activeCount = current.ActiveCount;
         ColorF accent = Tok.AccentTextPrimary;
 
         void Toggle()
         {
             if (svc is null) return;
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(() => anchor.Value, () => MenuFlyout.Create(Items(), () => handle.Value?.Close()),
-                FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.MenuPopup);
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => Embed.Comp(() => new TrackFilterFlyout(_filters, _setFilters, _caps)),
+                FlyoutPlacement.BottomEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                { ConstrainToRootBounds = true });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
         // Mirror the WinUI TextControlButton affix (EditableText.InnerButton): Width 30 + the inner-button margin 0,4,4,4,
         // and NO explicit height / AlignSelf — the field's affix row (AlignItems=Stretch) fills it to full height, while
         // AlignItems/Justify=Center vertically centers the glyph. Accent pill + glyph when a filter is active.
-        return new BoxEl
+        Element glyph = new BoxEl
         {
-            Width = 30f, Margin = new Edges4(0f, 4f, 4f, 4f),
+            // Segoe Fluent's funnel has more ink above its em-box midpoint than below it. The one-DIP optical offset
+            // aligns the visible funnel with the adjacent Search glyph, whose outline is vertically symmetrical.
+            Width = 14f,
+            Height = 14f,
+            AlignItems = FlexAlign.Center,
+            Justify = FlexJustify.Center,
+            Transform = Affine2D.Translation(0f, 1f),
+            Children = [Icon(Icons.Filter, 14f, active ? accent : Tok.TextSecondary)],
+        };
+        Element[] visual = activeCount > 0
+            ?
+            [
+                glyph,
+                new BoxEl
+                {
+                    Width = 14f,
+                    Height = 14f,
+                    AlignItems = FlexAlign.Center,
+                    Justify = FlexJustify.Center,
+                    Corners = CornerRadius4.All(7f),
+                    Fill = Tok.AccentDefault,
+                    BorderWidth = 1f,
+                    BorderColor = Tok.FillSolidBase,
+                    Transform = Affine2D.Translation(8f, -8f),
+                    Children =
+                    [
+                        new TextEl(activeCount.ToString())
+                        { Size = 8f, Weight = 700, Color = Tok.TextOnAccentPrimary },
+                    ],
+                },
+            ]
+            : [glyph];
+
+        return ToolTip.Wrap(new BoxEl
+        {
+            ZStack = true,
+            Width = 32f, Height = 32f, AlignSelf = FlexAlign.Center,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(Radii.Control),
             Fill = active ? accent with { A = 0.16f } : ColorF.Transparent,
             HoverFill = active ? accent with { A = 0.24f } : Tok.FillSubtleSecondary,
             PressedFill = active ? accent with { A = 0.12f } : Tok.FillSubtleTertiary,
             OnClick = Toggle, OnRealized = h => anchor.Value = h,
-            Children = [Icon(Icons.Filter, 14f, active ? accent : Tok.TextSecondary)],
-        };
+            Children = visual,
+        }, Loc.Get(Strings.Detail.Filter.Title));
     }
+
 }
 
 // The List button: opens a flyout with a stepped slider (Compact · Default · Cozy · Comfortable) controlling row height.
+sealed class DetailTrackMoreButton : Component
+{
+    readonly Loadable<DetailModel> _full;
+    readonly DetailHandlers _h;
+    readonly DetailConfig _cfg;
+    readonly DetailTrackInlineCommand _overflow;
+    readonly SelectionModel _selection;
+
+    public DetailTrackMoreButton(Loadable<DetailModel> full, DetailHandlers h, DetailConfig cfg,
+        DetailTrackInlineCommand overflow, SelectionModel selection, bool vertical)
+    {
+        _full = full; _h = h; _cfg = cfg; _overflow = overflow; _selection = selection;
+    }
+
+    public override Element Render()
+    {
+        var overlay = UseContext(Overlay.Service);
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var pickerHandle = UseRef<OverlayHandle?>(null);
+
+        IReadOnlyList<MenuFlyoutItem> Items()
+        {
+            var model = _full.Value.Peek();
+            var items = new List<MenuFlyoutItem>(10);
+            if ((_overflow & DetailTrackInlineCommand.Shuffle) != 0)
+                items.Add(new MenuFlyoutItem(Loc.Get(Strings.Detail.Shuffle), Icons.Shuffle, Invoke: _h.Shuffle));
+            if ((_overflow & DetailTrackInlineCommand.Sort) != 0)
+                items.Add(MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.Sort.Title),
+                    SortMenuButton.ItemsFor(_h.Sort, _h.SetSort, _cfg.ShowAlbumColumn, model.HasDateAdded),
+                    new IconRef { Glyph = Icons.Sort }));
+            if ((_overflow & DetailTrackInlineCommand.Density) != 0)
+                items.Add(MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.Density.RowSize),
+                    ListButton.ItemsFor(_h.Density, _h.SetDensity), new IconRef { Glyph = Icons.List }));
+            if ((_overflow & DetailTrackInlineCommand.Select) != 0
+                && _h.MultiSelect is not null && _h.SetMultiSelect is not null)
+            {
+                bool selected = _h.MultiSelect.Peek();
+                items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.Select), selected, () =>
+                {
+                    if (selected) _selection.ClearSelection();
+                    _h.SetMultiSelect(!selected);
+                }));
+            }
+            if (items.Count > 0) items.Add(MenuFlyoutItem.Separator);
+
+            bool copy = _cfg.Heart == HeartMode.Follow || LikedSongsArtwork.IsLikedUri(model.ContextUri);
+            items.Add(new MenuFlyoutItem(Loc.Get(copy ? Strings.Detail.CopyToPlaylist : Strings.Detail.AddToPlaylist),
+                new IconRef { Glyph = Icons.Add },
+                Invoke: () =>
+                {
+                    if (overlay is not null)
+                        PlaylistPickerLauncher.OpenFlyout(
+                            overlay, () => anchor.Value, () => _full.Value.Peek().Tracks, pickerHandle);
+                }));
+            return items;
+        }
+
+        void Toggle()
+        {
+            if (overlay is null) return;
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            handle.Value = overlay.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Create(Items(), () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedRight, ToolFx.MenuPopup);
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        return ToolTip.Wrap(ToolFx.Button(Icons.More, false, Toggle, h => anchor.Value = h),
+            Loc.Get(Strings.Common.More));
+    }
+}
+
 sealed class ListButton : Component
 {
     readonly IReadSignal<int> _density;
@@ -2291,11 +3038,24 @@ sealed class ListButton : Component
 
     internal static string Label(int d) => d switch { 0 => Loc.Get(Strings.Detail.Density.Compact), 2 => Loc.Get(Strings.Detail.Density.Cozy), 3 => Loc.Get(Strings.Detail.Density.Comfortable), _ => Loc.Get(Strings.Detail.Density.Default) };
 
+    internal static IReadOnlyList<MenuFlyoutItem> ItemsFor(IReadSignal<int> density, Action<int> setDensity)
+    {
+        int current = density.Peek();
+        var items = new List<MenuFlyoutItem>(4);
+        for (int i = 0; i < 4; i++)
+        {
+            int value = i;
+            items.Add(MenuFlyoutItem.RadioItem(Label(value), current == value, () => setDensity(value)));
+        }
+        return items;
+    }
+
     public override Element Render()
     {
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
+        int current = _density.Value;
 
         Element Content() => Embed.Comp(() => new DensityPanel(_density, _setDensity));
 
@@ -2308,8 +3068,13 @@ sealed class ListButton : Component
         }
         // Never accent — density is a view preference, not an active filter/sort (matches the reasoning in the design).
         return _labeled
-            ? ToolFx.LabeledButton(Icons.List, Loc.Get(Strings.Detail.Density.RowSize), false, Toggle, h => anchor.Value = h)
-            : ToolFx.Button(Icons.List, false, Toggle, h => anchor.Value = h);
+            ? ToolFx.LabeledButton(
+                OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) ? Icons.RowSize : Icons.List,
+                Label(current), false, Toggle, h => anchor.Value = h,
+                Icon(Icons.ChevronDown, 8f, Tok.TextTertiary))
+            : ToolFx.Button(
+                OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000) ? Icons.RowSize : Icons.List,
+                false, Toggle, h => anchor.Value = h);
     }
 }
 

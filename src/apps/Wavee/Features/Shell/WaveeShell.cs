@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -62,6 +63,10 @@ sealed class WaveeShell : Component
     // Sidebar state. Width + collapsed are seeded (in the ctor, from the injected settings) so the FIRST layout already
     // uses the saved width — no startup animation; written back on change via SaveSidebar.
     readonly IAppSettings _settings;
+    readonly Signal<bool> _drawerExpanded = new(false);
+    Signal<bool>? _narrowShellState;
+    Signal<bool>? _narrowDrawerState;
+    Signal<bool>? _presentedCompactState;
     readonly Signal<bool> _sidebarCompact;
     readonly Signal<float> _sidebarWidth;                       // expanded width (drag-resizable, persisted)
     readonly Signal<bool> _sidebarDragging = new(false);       // ON during a seam drag → snaps all layout transitions (1:1 resize)
@@ -242,6 +247,21 @@ sealed class WaveeShell : Component
         _settings.Set(WaveeSettings.SidebarCollapsed, _sidebarCompact.Peek());
     }
 
+    void ToggleSidebar()
+    {
+        if (_narrowShellState?.Peek() == true)
+        {
+            if (_narrowDrawerState is { } drawer) drawer.Value = !drawer.Peek();
+            return;
+        }
+
+        bool compact = !_sidebarCompact.Peek();
+        _sidebarCompact.Value = compact;
+        _presentedCompactState?.SetIfChanged(compact);
+    }
+
+    void CloseNarrowDrawer() => _narrowDrawerState?.SetIfChanged(false);
+
     public override Element Render()
     {
         _requestTheme = UseContext(ThemeControl.Request);   // host's live re-theme trigger (animated in-place; no remount)
@@ -255,6 +275,26 @@ sealed class WaveeShell : Component
         // BOUND prop, not a stale literal — it re-fires on resize) so the column is exactly window-tall and its Shrink=1 /
         // MinHeight=0 content region yields instead of overflowing. UI-thread signal; the binding re-lays-out on resize.
         var vpSig = UseContextSignal(Viewport.Size);
+        var narrowShell = UseSignal(ShellResponsiveLayout.NarrowFor(
+            vpSig.Peek().Width, current: false, initialized: false));
+        var narrowDrawer = UseSignal(false);
+        var presentedCompact = UseSignal(narrowShell.Peek() || _sidebarCompact.Peek());
+        _narrowShellState = narrowShell;
+        _narrowDrawerState = narrowDrawer;
+        _presentedCompactState = presentedCompact;
+
+        // Width is hot while the OS resize loop is active, but these structural signals only write when a hysteretic
+        // band flips. Interactive window sizing suppresses layout projection, so the rail tracks the pointer 1:1.
+        UseSignalEffect(() =>
+        {
+            bool current = narrowShell.Peek();
+            bool next = ShellResponsiveLayout.NarrowFor(vpSig.Value.Width, current, initialized: true);
+            if (next == current) return;
+            narrowShell.Value = next;
+            if (!next) narrowDrawer.SetIfChanged(false);
+        });
+        UseSignalEffect(() =>
+            presentedCompact.SetIfChanged(narrowShell.Value || _sidebarCompact.Value));
         bool compact = _sidebarCompact.Value;    // subscribe → re-persist on a collapse/expand toggle (infrequent)
         bool dragging = _sidebarDragging.Value;  // subscribe → snap all layout transitions while resizing the sidebar
         // Persist the collapse toggle here; the grip's drag-end (OnReleased → SaveSidebar) persists the width. The
@@ -297,7 +337,7 @@ sealed class WaveeShell : Component
         UseSignalEffect(() =>
         {
             float vpW = vpSig.Value.Width;
-            float sbW = _sidebarCompact.Value ? 56f : _sidebarWidth.Value;
+            float sbW = presentedCompact.Value ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value;
             bool fits = ShellUi.CanFitRail(vpW, sbW, _shellUi.RailWidth.Value);
             _shellUi.RailFits.SetIfChanged(fits);
         });
@@ -316,7 +356,8 @@ sealed class WaveeShell : Component
                     Tabs = () => Embed.Comp(BuildTabStrip),
                     TabsVersion = TitleBarTabsVersion,
                 }),
-                Embed.Comp(() => new ShellToolbar(_route, _canBack, _canForward, GoNav, Back, Forward, Home, _searchText, _sidebarCompact, ToggleTheme, _history, _forwardHistory)),
+                Embed.Comp(() => new ShellToolbar(_route, _canBack, _canForward, GoNav, Back, Forward, Home,
+                    _searchText, ToggleSidebar, ToggleTheme, _history, _forwardHistory)),
                 Ui.ZStack(
                     // The sidebar + content row. The sidebar PANE (SidebarPane) is the row's DIRECT child, so ITS width
                     // is what the row distributes — the content column re-solves and tiles against it gap-free. The width
@@ -342,7 +383,8 @@ sealed class WaveeShell : Component
                         new BoxEl
                         {
                             Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
-                            Width = Prop.Of(() => _sidebarCompact.Value ? 56f : _sidebarWidth.Value),
+                            Width = Prop.Of(() => presentedCompact.Value
+                                ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value),
                             // SidebarPaneAnim eases the COLLAPSE toggle (56↔expanded) as a clip+translate reveal — the pane
                             // is ClipToBounds so the reveal scissors its content. During a drag the suppression arbiter
                             // snaps every layout transition (this pane AND the sidebar sections) to the laid-out width 1:1.
@@ -355,7 +397,7 @@ sealed class WaveeShell : Component
                                 {
                                     Direction = 1, Grow = 1f,
                                     Opacity = Prop.Of(() => _sidebarFade.Value),
-                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, GoNav, _sidebarCompact, _sidebarWidth)) ],
+                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, GoNav, presentedCompact, _sidebarWidth)) ],
                                 },
                             ],
                         },
@@ -374,9 +416,9 @@ sealed class WaveeShell : Component
                                 Direction = 1, ZStack = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f,
                                 Children =
                                 [
-                                    // The page's cut-away top-left corner must reveal the sidebar material, not raw
-                                    // backdrop. The full backing handles the trailing gap; the narrow strip makes the
-                                    // rail visually continue underneath the sheet's left curve.
+                                    // Uniform chrome behind the translucent page and its rounded top-left cut-away.
+                                    // Do not add a sidebar-colored seam strip here: it remains visible through the
+                                    // page surface as a full-height opaque rail and squares off the rounded corner.
                                     new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.Toolbar) },
                                     // Static final-geometry underlay. WinUI translates ContentRoot but does not animate
                                     // its width; while that translated card moves, this matching surface prevents the
@@ -387,7 +429,6 @@ sealed class WaveeShell : Component
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
                                         Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
                                     },
-                                    new BoxEl { Width = Radii.Card, Grow = 1f, Fill = Prop.Of(() => WaveeColors.Sidebar) },
                                     new BoxEl
                                     {
                                         // MinHeight=0 (the flex `min-height:0` override): this card CLIPS its content, so it
@@ -470,8 +511,9 @@ sealed class WaveeShell : Component
                     // the sidebar ScrollView instead of a non-scrollable overlay branch.
                     new BoxEl
                     {
-                        Width = 16f, Direction = 1,
-                        Transform = Prop.Of(() => Affine2D.Translation(_sidebarCompact.Value ? 56f : _sidebarWidth.Value, 0f)),
+                        Width = Prop.Of(() => narrowShell.Value ? 0f : 16f), Direction = 1, ClipToBounds = true,
+                        Transform = Prop.Of(() => Affine2D.Translation(presentedCompact.Value
+                            ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value, 0f)),
                         Children =
                         [
                             // The strip is entirely on the content side of the seam to avoid covering the sidebar's
@@ -524,7 +566,11 @@ sealed class WaveeShell : Component
                                 ],
                             },
                         ],
-                    }
+                    },
+                    // In narrow mode the 56-DIP rail remains inline. Hamburger opens this separately-retained full pane
+                    // over the page, so the saved desktop expanded/collapsed preference is never overwritten.
+                    Embed.Comp(() => new ShellNarrowDrawer(
+                        narrowShell, narrowDrawer, vpSig, _sidebarWidth, _drawerExpanded, _route, GoNav))
                 // Bounded fill: Grow=1 takes the free space, Shrink=1 makes this the ONE region that yields when the
                 // window is shorter than the column's natural height. MinHeight=0 (the flex `min-height:0` override on the
                 // SHRINKING element itself — the engine otherwise floors a flex item at its CONTENT's natural min) is what
@@ -664,6 +710,7 @@ sealed class WaveeShell : Component
     // ── navigation (the single source of truth the chrome reads) ─────────────────────────────────
     void Go(string key, string? arg, NavTransitionKind motion = NavTransitionKind.Forward)
     {
+        CloseNarrowDrawer();
         _history.Add(_route.Peek());
         if (_history.Count > MaxBackStack) _history.RemoveAt(0);   // bound the in-memory back-stack
         _forwardHistory.Clear();
@@ -678,6 +725,7 @@ sealed class WaveeShell : Component
     void Back()
     {
         if (_history.Count == 0) return;
+        CloseNarrowDrawer();
         _forwardHistory.Add(_route.Peek());
         if (_forwardHistory.Count > MaxBackStack) _forwardHistory.RemoveAt(0);
         _canForward.Value = true;
@@ -692,6 +740,7 @@ sealed class WaveeShell : Component
     void Forward()
     {
         if (_forwardHistory.Count == 0) return;
+        CloseNarrowDrawer();
         _history.Add(_route.Peek());
         _canBack.Value = true;
         _navMotion.Value = NavTransitionKind.Forward;
@@ -752,5 +801,148 @@ sealed class WaveeShell : Component
         Tok.Use(WaveeTheme.ResolvePalette(_settings.Get(WaveeSettings.PaletteId)), next);
         _settings.Set(WaveeSettings.ThemeMode, next == ThemeKind.Dark ? 2 : 1);
         _requestTheme?.Invoke(250f);
+    }
+}
+
+/// <summary>Narrow-shell light-dismissible pane. It stays mounted while closed so its sidebar state and scene nodes are
+/// retained; open/close is compositor-only (scrim opacity + pane translation).</summary>
+sealed class ShellNarrowDrawer : Component
+{
+    readonly IReadSignal<bool> _narrow;
+    readonly Signal<bool> _open;
+    readonly IReadSignal<Size2> _viewport;
+    readonly Signal<float> _expandedWidth;
+    readonly Signal<bool> _drawerCompact;
+    readonly Signal<Route> _route;
+    readonly Action<string, string?> _go;
+
+    public ShellNarrowDrawer(IReadSignal<bool> narrow, Signal<bool> open, IReadSignal<Size2> viewport,
+        Signal<float> expandedWidth, Signal<bool> drawerCompact, Signal<Route> route, Action<string, string?> go)
+    {
+        _narrow = narrow; _open = open; _viewport = viewport; _expandedWidth = expandedWidth;
+        _drawerCompact = drawerCompact; _route = route; _go = go;
+    }
+
+    public override Element Render()
+    {
+        bool open = _narrow.Value && _open.Value;
+        var hooks = UseContext(InputHooks.Current);
+        var savedPreview = UseRef<Func<int, bool>?>(null);
+        var escPreview = UseRef<Func<int, bool>?>(null);
+        var escInstalled = UseRef(false);
+
+        escPreview.Value ??= key =>
+        {
+            if ((key == Keys.Escape || key == Keys.GamepadB) && _open.Peek())
+            {
+                _open.Value = false;
+                return true;
+            }
+            return savedPreview.Value?.Invoke(key) ?? false;
+        };
+        UseEffect(() =>
+        {
+            if (open && !escInstalled.Value)
+            {
+                escInstalled.Value = true;
+                savedPreview.Value = hooks.KeyPreview;
+                hooks.KeyPreview = escPreview.Value;
+            }
+            else if (!open && escInstalled.Value)
+            {
+                escInstalled.Value = false;
+                if (ReferenceEquals(hooks.KeyPreview, escPreview.Value)) hooks.KeyPreview = savedPreview.Value;
+                savedPreview.Value = null;
+            }
+        }, open);
+
+        return new BoxEl
+        {
+            Grow = 1f, ZStack = true, HitTestVisible = open,
+            Children =
+            [
+                Embed.Comp(() => new ShellNarrowDrawerScrim(_open)),
+                new BoxEl
+                {
+                    Grow = 1f, Direction = 0, Justify = FlexJustify.Start, HitTestPassThrough = true,
+                    Children =
+                    [
+                        Embed.Comp(() => new ShellNarrowDrawerPane(
+                            _open, _viewport, _expandedWidth, _drawerCompact, _route, _go)),
+                    ],
+                },
+            ],
+        };
+    }
+}
+
+sealed class ShellNarrowDrawerScrim : Component
+{
+    readonly Signal<bool> _open;
+    public ShellNarrowDrawerScrim(Signal<bool> open) => _open = open;
+
+    public override Element Render()
+    {
+        bool open = _open.Value;
+        var mounted = UseRef(false);
+        float ms = Motion.ReducedMotion ? 0f : WaveeMotion.Fast;
+        float target = ShellResponsiveLayout.DrawerRestingOpacity(open);
+        UseTransition(AnimChannel.Opacity, mounted.Value ? 1f - target : target, target,
+            ms, Easing.Linear, open);
+        mounted.Value = true;
+        return new BoxEl
+        {
+            Grow = 1f, Fill = ColorF.FromRgba(0, 0, 0, 0x33), Opacity = target,
+            HitTestVisible = open, OnClick = () => _open.Value = false,
+        };
+    }
+}
+
+sealed class ShellNarrowDrawerPane : Component
+{
+    readonly Signal<bool> _open;
+    readonly IReadSignal<Size2> _viewport;
+    readonly Signal<float> _expandedWidth;
+    readonly Signal<bool> _drawerCompact;
+    readonly Signal<Route> _route;
+    readonly Action<string, string?> _go;
+
+    public ShellNarrowDrawerPane(Signal<bool> open, IReadSignal<Size2> viewport, Signal<float> expandedWidth,
+        Signal<bool> drawerCompact, Signal<Route> route, Action<string, string?> go)
+    {
+        _open = open; _viewport = viewport; _expandedWidth = expandedWidth; _drawerCompact = drawerCompact;
+        _route = route; _go = go;
+    }
+
+    public override Element Render()
+    {
+        bool open = _open.Value;
+        var mounted = UseRef(false);
+        float width = ShellResponsiveLayout.DrawerWidth(_viewport.Peek().Width, _expandedWidth.Peek());
+        float ms = Motion.ReducedMotion ? 0f : 300f;
+        float target = ShellResponsiveLayout.DrawerRestingTranslateX(open, width);
+        UseTransition(AnimChannel.TranslateX, mounted.Value ? (open ? -width : 0f) : target, target,
+            ms, Easing.SmoothOut, open);
+        mounted.Value = true;
+
+        return new BoxEl
+        {
+            Direction = 1, Shrink = 0f, Grow = 0f, AlignSelf = FlexAlign.Stretch, ClipToBounds = true,
+            // Keep the resting position coupled to the live width. A closed drawer can grow while the viewport is
+            // resized inside the narrow band; retaining the old static translation would expose the newly-added strip.
+            // The transition channel owns the in-flight value, then this binding supplies the exact settled geometry.
+            Transform = Prop.Of(() => Affine2D.Translation(
+                ShellResponsiveLayout.DrawerRestingTranslateX(
+                    _open.Value,
+                    ShellResponsiveLayout.DrawerWidth(_viewport.Value.Width, _expandedWidth.Value)),
+                0f)),
+            Width = Prop.Of(() => ShellResponsiveLayout.DrawerWidth(
+                _viewport.Value.Width, _expandedWidth.Value)),
+            Fill = Prop.Of(() => WaveeColors.Sidebar),
+            BorderWidth = 1f, BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
+            Corners = new CornerRadius4(0f, Radii.Card, Radii.Card, 0f),
+            Shadow = Elevation.Dialog, HitTestVisible = open,
+            Children = [Embed.Comp(() => new WaveeSidebar(_route, _go, _drawerCompact, _expandedWidth))],
+        };
     }
 }

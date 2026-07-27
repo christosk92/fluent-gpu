@@ -24,6 +24,7 @@ internal static class PlaybackBucketDiagnostics
     public static void QueueIfChanged(ref string? lastSignature, string reason, IReadOnlyList<QueueEntry> queue,
         string? contextUri = null, string? currentUri = null, int remainingInContext = -1, long revision = -1)
     {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Trace)) return;
         string sig = QueueSignature(queue, contextUri, currentUri, remainingInContext, revision);
         if (string.Equals(sig, lastSignature, StringComparison.Ordinal)) return;
         lastSignature = sig;
@@ -33,6 +34,7 @@ internal static class PlaybackBucketDiagnostics
     public static void Queue(string reason, IReadOnlyList<QueueEntry> queue,
         string? contextUri = null, string? currentUri = null, int remainingInContext = -1, long revision = -1)
     {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Trace)) return;
         CountEntries(queue, out int now, out int user, out int nextContext, out int nextAutoplay, out int history);
         string rows = Rows(queue);
         // Trace: embeds the full per-row queue dump (~3 KB) — far too voluminous for the Info file. The compact reason/counts
@@ -69,6 +71,7 @@ internal static class PlaybackBucketDiagnostics
     /// via <paramref name="lastSignature"/> so steady re-renders log nothing.</summary>
     public static void UiIfChanged(ref string? lastSignature, string eventId, string message)
     {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Trace)) return;
         if (string.Equals(message, lastSignature, StringComparison.Ordinal)) return;
         lastSignature = message;
         // Trace: the caller (queue panel) passes a full per-row dump here.
@@ -77,6 +80,7 @@ internal static class PlaybackBucketDiagnostics
 
     public static void RemoteClusterIfChanged(ref string? lastSignature, string reason, in ClusterDelta c)
     {
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Trace)) return;
         string sig = RemoteSignature(c);
         if (string.Equals(sig, lastSignature, StringComparison.Ordinal)) return;
         lastSignature = sig;

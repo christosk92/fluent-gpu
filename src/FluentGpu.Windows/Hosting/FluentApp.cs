@@ -114,7 +114,13 @@ public static class FluentApp
         using var app = new Win32App();
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
         // an explicit opt-in (the gallery): apps without a TitleBar keep the standard OS frame.
-        var window = (Win32Window)app.CreateWindow(new WindowDesc(o.Title, new Size2(o.Width, o.Height), 1f, o.Mica, CustomFrame: o.CustomFrame));
+        var window = (Win32Window)app.CreateWindow(new WindowDesc(
+            o.Title,
+            new Size2(o.Width, o.Height),
+            1f,
+            o.Mica,
+            CustomFrame: o.CustomFrame,
+            MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight)));
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
@@ -463,6 +469,10 @@ public sealed record AppOptions
     public int Width { get; init; } = 800;
     /// <summary>Initial client height (DIP).</summary>
     public int Height { get; init; } = 600;
+    /// <summary>Optional minimum client width while interactively resizing, in DIP. 0 keeps the platform default.</summary>
+    public int MinWidth { get; init; }
+    /// <summary>Optional minimum client height while interactively resizing, in DIP. 0 keeps the platform default.</summary>
+    public int MinHeight { get; init; }
     /// <summary>Apply the DWM Mica system backdrop (window becomes transparent to it). False = an opaque window.</summary>
     public bool Mica { get; init; } = true;
     /// <summary>Use Mica BaseAlt (the flatter File-Explorer tint) instead of the default Mica Base.</summary>

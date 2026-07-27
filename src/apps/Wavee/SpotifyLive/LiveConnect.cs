@@ -72,8 +72,10 @@ public sealed class LiveConnect : IDisposable
         // The SINGLE PutState writer: NewConnection announce on the connection-id + our local player_state on playback
         // changes (so other devices/controllers see us as the active player). Re-injects the response cluster.
         _publisher = new DeviceStatePublisher(transport, deviceId, Projection, _connect.ConnectionId, () => _connect.CurrentConnectionId,
-            (reason, snap, mid, isActive) => builder.BuildPutState(reason, snap, mid, isActive,
-                currentKind: currentMediaKind is null ? PlayableKind.Audio : currentMediaKind()),
+            (reason, snap, mid, isActive, attribution) => builder.BuildPutState(reason, snap, mid, isActive,
+                currentKind: currentMediaKind is null ? PlayableKind.Audio : currentMediaKind(),
+                lastCommandSentByDeviceId: attribution.SenderDeviceId,
+                lastCommandMessageId: attribution.MessageId),
             onCluster: _ingest.OnAnnounceResponse, log: log);
 
         _host = audio is not null ? audio.Host : new SilentAudioHost();
@@ -113,7 +115,8 @@ public sealed class LiveConnect : IDisposable
             contexts ?? EmptyContextResolver.Instance,
             deviceId, outbound, new IPlaybackProjection[] { _gabo, _resume, _publisher }, playbackLog,
             SpotifyClientIdentity.XpuiSnapshotVersion,   // play_origin.feature_version
-            fast: (IFastTrackResolver?)media ?? fast, videoHost: _videoHost);
+            fast: (IFastTrackResolver?)media ?? fast, videoHost: _videoHost,
+            transferDecoder: new ProtoTransferStateDecoder());
         currentMediaKind = () => Controller.CurrentMediaKind;   // close the late-bound `track_player` loop (see above)
         Controller.EpisodeResumeMicros = (uri, ct) => herodotus.TryGetEpisodeResumeMicrosAsync(uri, ct);
         if (media is not null)
@@ -127,7 +130,11 @@ public sealed class LiveConnect : IDisposable
             _publisher.PublishUriMask = ConnectUriMask.For(media);
         }
 
-        _commands = new ConnectCommandRouter(transport, cmd => Controller.HandleRemoteCommand(cmd), log);
+        _commands = new ConnectCommandRouter(
+            transport,
+            (cmd, ct) => Controller.HandleRemoteCommandAsync(cmd, ct),
+            (volume, ct) => Controller.HandleInboundVolumeAsync(volume, ct),
+            log);
         Devices.TransferHandler = (id, c) => Controller.TransferToAsync(id, c);
         _clock.Start();
     }

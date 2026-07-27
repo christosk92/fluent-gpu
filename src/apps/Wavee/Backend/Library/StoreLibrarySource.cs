@@ -94,6 +94,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         if (EnsurePlaylistPalette is { } ensurePalette) _ = ensurePalette(uri, CancellationToken.None);
         var header = _store.GetPlaylist(uri);
         if (header is null) return null;
+        var revision = _store.PlaylistRevision(uri);
+        if (header.Tuning is { } tuning && (revision is null || !BytesEqual(tuning.Revision, revision)))
+            header = header with { Tuning = null };
         var members = _store.Membership(uri);
         PrefetchPlaylistUsers(uri, header, members);
         var owner = OverlayOwner(uri, header, collectionDependency: false);
@@ -561,6 +564,13 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         uri.StartsWith("spotify:show:", StringComparison.Ordinal) || uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? CollectionKind.Shows :
         uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) || uri == "rootlist" ? CollectionKind.Playlists :
         null;
+
+    static bool BytesEqual(byte[] a, byte[] b)
+    {
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++) if (a[i] != b[i]) return false;
+        return true;
+    }
 
     sealed class ChangeObserver(StoreLibrarySource owner) : IObserver<StoreChange>
     {

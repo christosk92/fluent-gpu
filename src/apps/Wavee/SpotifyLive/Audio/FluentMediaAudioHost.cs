@@ -268,7 +268,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     readonly MediaSignalSink _sink;
     readonly PcmAudioPlayer _backend;
 
-    readonly SimpleSubject<AudioHostSignal> _signals = new();
+    readonly SimpleEvent<AudioHostSignal> _signals = new();
     readonly object _gate = new();
     Task _tail = Task.CompletedTask;                 // serializes session transitions (Load → Play → SupplyBody order)
     readonly Timer _ticker;
@@ -295,7 +295,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     bool _disposed;
 
     // ── prepared-next / real overlapping crossfade (IPreparedAudioHost) ──────────────────────────────────────────────
-    readonly SimpleSubject<AudioTransitionSignal> _transitions = new();
+    readonly SimpleEvent<AudioTransitionSignal> _transitions = new();
     // the prepared slot (track B) — built/attached ahead of the active track's natural end
     string? _prepToken;
     SpotifyAudioStream? _prepStream;

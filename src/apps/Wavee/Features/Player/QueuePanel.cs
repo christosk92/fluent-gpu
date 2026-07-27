@@ -126,7 +126,7 @@ sealed class QueuePanel : Component
         if (autoplay && autoUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.Autoplay), autoUp.Count, null, sub: Loc.Get(Strings.Player.AutoplayHint)));
-            content.Add(Rows("a", autoUp, b, lib, go, display, removable: false, dim: true, _autoPages, acts, menuOverlay, _swipeGroup));
+            content.Add(Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, _autoPages, acts, menuOverlay, _swipeGroup));
         }
         if (track is null && userQueue.Count == 0 && ctxUp.Count == 0)
             content.Add(new BoxEl
@@ -323,7 +323,7 @@ sealed class QueuePanel : Component
             display.Value = cur;
         }
 
-        bool canMove = removable && entry.Bucket == QueueBucket.UserQueue && !entry.ItemId.IsNone;
+        bool canMove = removable && !entry.ItemId.IsNone;
         void Move(int delta)
         {
             if (!canMove) return;
@@ -332,11 +332,14 @@ sealed class QueuePanel : Component
             _ = b.Player.MoveQueueItemAsync(entry.ItemId, target);
 
             var cur = new List<QueueEntry>(display.Peek());
-            var userPositions = new List<int>();
+            var sectionPositions = new List<int>();
             for (int i = 0; i < cur.Count; i++)
-                if (cur[i].Bucket == QueueBucket.UserQueue) userPositions.Add(i);
-            if ((uint)bucketIndex >= (uint)userPositions.Count || (uint)target >= (uint)userPositions.Count) return;
-            int from = userPositions[bucketIndex], to = userPositions[target];
+                if (entry.Bucket == QueueBucket.UserQueue
+                    ? cur[i].Bucket == QueueBucket.UserQueue
+                    : cur[i].Bucket == QueueBucket.NextUp && cur[i].Provider == entry.Provider)
+                    sectionPositions.Add(i);
+            if ((uint)bucketIndex >= (uint)sectionPositions.Count || (uint)target >= (uint)sectionPositions.Count) return;
+            int from = sectionPositions[bucketIndex], to = sectionPositions[target];
             (cur[from], cur[to]) = (cur[to], cur[from]);
             display.Value = cur;
         }

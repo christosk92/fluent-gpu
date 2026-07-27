@@ -22,8 +22,8 @@ namespace Wavee;
 readonly record struct DetailHandlers(
     Action<int> Play, Action PlayAll, Action Shuffle, Action<string> PlayContext, Action<string, string?> Go, ColorF Accent,
     IReadSignal<TrackSort> Sort, Action<TrackSort> SetSort,
-    // List-view controls surfaced by the chrome / header toolbar (search query, quick-filter flags, row density).
-    Signal<string> Query, IReadSignal<TrackFilterFlags> Flags, Action<TrackFilterFlags> SetFlags,
+    // List-view controls surfaced by the chrome / header toolbar (search query, advanced local filters, row density).
+    Signal<string> Query, IReadSignal<TrackFilterState> Filters, Action<TrackFilterState> SetFilters,
     IReadSignal<int> Density, Action<int> SetDensity,
     // Playlist/queue mutations for THIS context (insert next / append to the queue / add to a user playlist).
     Action PlayNext, Action AddToQueue, Action AddToPlaylist,
@@ -65,7 +65,7 @@ sealed class DetailShell : Component
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
-    readonly Signal<TrackFilterFlags> _filterFlags = new(TrackFilterFlags.None);   // quick-filter toggles (transient)
+    readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);   // local advanced filters (transient)
     readonly Signal<int> _density = new(1);                      // row density 0..3 (app-wide, persisted)
     readonly Signal<bool> _multiSelect = new(false);             // ephemeral multi-select mode (clears on navigation)
     readonly IAppSettings? _settings;
@@ -222,9 +222,9 @@ sealed class DetailShell : Component
         UseEffect(() =>
         {
             // Re-keyed per context: on a detail-route swap (reused slot) load THIS page's persisted sort + density and
-            // clear the transient search/quick-filters so they never bleed across pages.
+            // clear transient search/filters so they never bleed across pages.
             _query.Value = "";
-            _filterFlags.Value = TrackFilterFlags.None;
+            _filters.Value = TrackFilterState.Default;
             _multiSelect.Value = false;
             if (settings is null) { _sort.Value = _defaultSort; return; }
             int col = settings.Get(SortColKey());   // −1 sentinel = never chosen → the per-kind default (Liked: DateAdded desc)
@@ -258,7 +258,7 @@ sealed class DetailShell : Component
         var playAllOverride = UseRef(new Action?[1]).Value;
         live.Current = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
             Shuffle, PlayContext, go, accent, _sort, SetSort,
-            _query, _filterFlags, f => _filterFlags.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
+            _query, _filters, f => _filters.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
             a => DetailNav.OpenAlbum(navPreview, go, a),
             p => DetailNav.OpenPlaylist(navPreview, go, p),
             playAllOverride,
@@ -275,7 +275,7 @@ sealed class DetailShell : Component
             (uri, name) => live.Current.Go(uri, name),
             accent,
             _sort, s => live.Current.SetSort(s),
-            _query, _filterFlags, f => _filterFlags.Value = f,
+            _query, _filters, f => _filters.Value = f,
             _density, d => live.Current.SetDensity(d),
             () => live.Current.PlayNext(),
             () => live.Current.AddToQueue(),
@@ -299,7 +299,7 @@ sealed class DetailShell : Component
         // Single-column fallback: just the track table, full width, no rail / no wash.
         if (!_cfg.TwoColumn)
             return Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, liveHandlers: _liveHandlers))
-                with { Key = "tracks:single:" + route.Name };
+                with { Key = "tracks:single:" + route.Name, DeriveRenderedOutput = true };
 
         // Adaptive two-column / vertical: measure the page width → mode. Value-gated → re-render only on a breakpoint cross.
         void Measure(RectF r)
@@ -311,6 +311,8 @@ sealed class DetailShell : Component
             if (md != _mode.Peek()) _mode.Value = md;
         }
         int mode = _mode.Value;   // subscribe → re-render on mode change
+        if (!_modeInitialized && _measuredW <= 0f)
+            mode = Math.Max(mode, DetailLayoutBreakpoints.InitialModeForViewport(viewportSig.Peek().Width));
         // Self-heal (fail-safe #2, mirroring TrackList's tier clamp): never RENDER a mode wider than the last measured
         // width supports — a stale mode signal would keep the two-column layout at a width where its rail + tracks
         // cannot coexist. Narrower-than-needed is fine; the next Measure widens it.
@@ -330,24 +332,22 @@ sealed class DetailShell : Component
         // on for tracks; the rail owns the context actions); the podcast episode toolbar stays in the episode column on
         // wide layouts.
         bool showToolbar = _cfg.Content == DetailContent.Tracks || mode != Vertical;
+        float rightMinWidth = DetailLayoutBreakpoints.ContentMinWidthForMode(mode);
         // Right column = the track table OR the episode list (podcast shows). Distinct Keys so an album↔show swap in the
         // reused detail slot remounts the column cleanly instead of reconciling TrackList against EpisodeList.
-        // MinWidth = 300 (the narrowest FUNCTIONAL track table, just under the tier-5 minimum): the pane may shrink but
-        // never below the width the column system can actually lay out. Steady state never gets here (ModeFor flips to
-        // Vertical below 560px), so the floor only bites on TRANSIENT frames — a mid-spring rail reflow or a stale
-        // breakpoint — where an unfloored pane fed the grid a width far below the active column set's fixed sum and the
-        // overflow guard crushed columns into overlapping glyphs. With the floor the worst transient is a clean edge
-        // clip at the card boundary, never glyph soup.
+        // Two-column/transient modes retain the 300-DIP guard because their active fixed-column sets can otherwise
+        // overlap during a mid-spring/stale-breakpoint frame. Vertical deliberately uses 0: its tier-6 table is the real
+        // ultra-narrow layout and must receive the full available width below 300 DIP instead of forcing an edge clip.
         Element right = _cfg.Content == DetailContent.Episodes
             ? new BoxEl
             {
-                Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = 300f, Direction = 1,
+                Key = "right:eps", Grow = 1f, Shrink = 1f, MinWidth = rightMinWidth, Direction = 1,
                 Children = [Embed.Comp(() => new EpisodeList(_route, _model, bridge, handlers, showToolbar))
-                    with { Key = "episodes:" + route.Name }],
+                    with { Key = "episodes:" + route.Name, DeriveRenderedOutput = true }],
             }
             : new BoxEl
             {
-                Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = 300f, MinHeight = 0f, Direction = 1,
+                Key = "right:tracks", Grow = 1f, Shrink = 1f, MinWidth = rightMinWidth, MinHeight = 0f, Direction = 1,
                 Children =
                 [
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
@@ -358,6 +358,7 @@ sealed class DetailShell : Component
                         // A route is a new scroll/hero identity. Remounting prevents an album→album swap from painting
                         // the previous page's collapsed-header signals for one async frame (the blank/clipped hero bug).
                         Key = (verticalTracks ? "tracks:vertical:" : "tracks:standard:") + route.Name,
+                        DeriveRenderedOutput = true,
                     },
                 ],
             };

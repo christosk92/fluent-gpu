@@ -314,6 +314,8 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
 
     static long RequireEdit(long id) => id > 0 ? id : throw new InvalidOperationException("Playlist editing is not available.");
 
-    static bool IsLocal(string uri) => uri.StartsWith("wavee:playlist:", StringComparison.Ordinal);
+    // Every wavee:* URI is virtual/local and must stop before a Spotify playlist endpoint. In particular,
+    // wavee:local:all used to slip past the narrower wavee:playlist:* check and produce permission/extender 400s.
+    static bool IsLocal(string uri) => uri.StartsWith("wavee:", StringComparison.Ordinal);
     static string IdOf(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
 }

@@ -11,7 +11,8 @@ namespace FluentGpu.Controls;
 //  In-app Toast host (WS3 P6). A top-Z lane auto-mounted by every OverlayHost + registered as the process-default
 //  service for the static Toast API. Toasts are InfoBar-shaped cards over Elevation.Flyout, stacked newest-nearest-edge
 //  with an 8px gap, auto-dismissing on the host frame-clock HostTimerQueue (0 = sticky), PAUSED while the pointer hovers
-//  the strip. Enter/Exit ride the declarative Standard motion tokens (translate-from-edge + fade).
+//  the strip (cleared when the strip unmounts — a dead hovered leaf does not fire OnPointerExit). Enter/Exit ride the
+//  declarative Standard motion tokens (translate-from-edge + fade).
 //
 //  NAMING: this Controls.Toast is the IN-APP toast (a card in the app window). It is DISTINCT from
 //  FluentGpu.WindowsApi Toast, which raises an OS notification (Action Center). Different namespaces, different
@@ -155,6 +156,9 @@ internal sealed class ToastController
         item.Gen++;                 // invalidate any pending fire
         item.Armed = false;
         _items.RemoveAt(idx);
+        // Strip unmounts with no PointerExit when the last hovered toast is destroyed (dispatcher drops dead
+        // _hovered silently) — clear a stuck hover-pause so the next Show can arm its auto-dismiss.
+        if (_items.Count == 0) _paused = false;
         Bump();
         ReconcileTimers();          // a queued toast may now be visible → start its countdown
     }
@@ -164,6 +168,7 @@ internal sealed class ToastController
         if (_items.Count == 0) return;
         foreach (var it in _items) { it.Handle.IsOpen = false; it.Gen++; it.Armed = false; }
         _items.Clear();
+        _paused = false;            // same stuck-pause guard as Close (strip gone ⇒ no PointerExit)
         Bump();
     }
 
@@ -212,8 +217,13 @@ internal sealed class ToastController
         int max = MaxVisible < 1 ? 1 : MaxVisible;
         int visible = count < max ? count : max;
         if (visible == 0)
+        {
             // Dormant: a full-bleed, hit-test-transparent nothing (no strip, no hover handlers, no timers).
+            // Drop a stuck hover-pause here too — BuildLane is the strip's unmount chokepoint (Close/CloseAll
+            // already clear it; this covers any other empty-path that skipped those).
+            _paused = false;
             return new BoxEl { Grow = 1, HitTestVisible = false, HitTestPassThrough = true };
+        }
 
         bool bottom = Placement is ToastPlacement.BottomRight or ToastPlacement.BottomLeft or ToastPlacement.BottomCenter;
         bool right = Placement is ToastPlacement.BottomRight or ToastPlacement.TopRight;
@@ -270,17 +280,7 @@ internal sealed class ToastController
             : null;
 
         Element body = o.CustomContent is { } custom
-            ? new BoxEl
-            {
-                Direction = 1,
-                MinHeight = 48f,
-                Padding = Edges4.All(16f),
-                Corners = Radii.ControlAll,
-                Fill = SeverityVisuals.For(o.Severity).Background,
-                BorderWidth = 1f,
-                BorderColor = Tok.StrokeCardDefault,
-                Children = [custom()],
-            }
+            ? BuildCustomBody(o.Severity, custom)
             : InfoBar.Create(
                 o.Severity,
                 o.Title ?? "",
@@ -289,9 +289,13 @@ internal sealed class ToastController
                 isClosable: o.Closable,
                 actionButton: action);
 
+        // Column + default AlignItems=Stretch so the InfoBar/custom body fills the MinWidth frame. A row frame
+        // (Direction default 0) only stretches children on the VERTICAL cross-axis — short messages then left a
+        // transparent gap on the right of the severity tint (MinWidth 300 with a content-sized InfoBar).
         return new BoxEl
         {
             Key = "toast:" + it.Id,
+            Direction = 1,
             AlignSelf = FlexAlign.Stretch,
             MinWidth = 300f,
             MaxWidth = 380f,
@@ -301,6 +305,25 @@ internal sealed class ToastController
             Exit = new EnterExit(Dx: dx, Dy: dy, Opacity: 0f, Active: true),
             Transition = MotionTok.StandardEnter,
             Children = [body],
+        };
+    }
+
+    // Custom-content toast frame: severity tint + identity hover (strip HoverWithin must not wash the fill).
+    private static Element BuildCustomBody(InfoBarSeverity severity, Func<Element> custom)
+    {
+        var bg = SeverityVisuals.For(severity).Background;
+        return new BoxEl
+        {
+            Direction = 1,
+            MinHeight = 48f,
+            Padding = Edges4.All(16f),
+            Corners = Radii.ControlAll,
+            Fill = bg,
+            HoverFill = bg,
+            BorderWidth = 1f,
+            BorderColor = Tok.StrokeCardDefault,
+            HoverBorderColor = Tok.StrokeCardDefault,
+            Children = [custom()],
         };
     }
 }

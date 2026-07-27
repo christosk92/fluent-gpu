@@ -52,10 +52,13 @@ public sealed class HeadlessWindow : IPlatformWindow
         Scale = desc.Scale <= 0 ? 1f : desc.Scale;
         CustomFrame = desc.CustomFrame;
         Composited = desc.Composited;
+        MinClientSizeDip = desc.MinClientSizeDip;
     }
 
     /// <summary>The <see cref="WindowDesc.CustomFrame"/> opt-in, recorded for assertions (no real NC concept headless).</summary>
     public bool CustomFrame { get; }
+    /// <summary>The descriptor's opt-in minimum client size, retained for headless contract assertions.</summary>
+    public Size2 MinClientSizeDip { get; }
 
     public NativeHandle Handle => new(0, NativeHandleKind.Headless);
     /// <summary>Settable (test seam): simulate a window resize / per-monitor DPI change (WM_DPICHANGED) mid-session —

@@ -348,6 +348,36 @@ public class VideoLoadSupersessionTests
     }
 
     [Fact]
+    public async Task LegacyTransferWithoutSessionId_MarksPlaybackConnectOriginated_AndAllowsAudioFallback()
+    {
+        var audio = new FakeAudioHost();
+        var video = new FakeVideoHost();
+        var projection = new NowPlayingProjection("us", () => 0);
+        var errors = new List<PlaybackErrorInfo>();
+        using var controller = new PlaybackController(audio, new StubTrackResolver(), projection,
+            new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: video);
+        controller.ShouldPlayAsVideo = _ => true;
+        controller.LoadCurrentVideoAsync = (_, _) => Task.FromResult(true);
+        controller.OnPlaybackError = e => { lock (errors) errors.Add(e); };
+
+        await controller.PlayAsync("spotify:playlist:p");
+        Assert.Equal(PlayableKind.Video, controller.CurrentMediaKind);
+
+        // Legacy/bare transfer has neither session_id nor inner data. It resumes from the cluster but is still a Connect
+        // playback intent, so a subsequent video fault may fail soft to audio.
+        var transfer = new ConnectCommand(
+            ConnectCmd.Transfer, "transfer", "legacy-transfer", 9, "spotify-controller",
+            0, false, "{}"u8.ToArray());
+        await controller.HandleRemoteCommandAsync(transfer);
+        video.Sig.Emit(AudioHostSignal.Fault(
+            12_000, AudioKeyFailureReason.None, "legacy Connect video failed"));
+
+        await WaitUntilAsync(() => controller.CurrentMediaKind == PlayableKind.Audio);
+
+        lock (errors) Assert.Empty(errors);
+    }
+
+    [Fact]
     public async Task WatchdogFault_WithARecoveryHook_ReloadsInsteadOfLeavingTheTransportStuck()
     {
         var audio = new FakeAudioHost();

@@ -290,8 +290,12 @@ public static class InfoBar
             Padding = ContentRootPadding,                       // InfoBarContentRootPadding 16,0,0,0
             Corners = Radii.ControlAll,                         // CornerRadius = ControlCornerRadius (4)
             Fill = ts.Background,                               // InfoBar*SeverityBackgroundBrush
+            // Identity hover/border: WinUI InfoBar has no pointer-over tint. Without these, ResolveSurface's
+            // Hovered-flag auto-lighten (8%) washes the severity background whenever the bar is the hit leaf.
+            HoverFill = ts.Background,
             BorderWidth = 1f,                                   // InfoBarBorderThickness = 1
             BorderColor = Tok.StrokeCardDefault,               // InfoBarBorderBrush = CardStrokeColorDefaultBrush
+            HoverBorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.InfoBar,
             Children = children.ToArray(),
         };

@@ -118,12 +118,14 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     readonly IFastTrackResolver? _fast;   // when set, local play uses instant-start (head before key); else the plain resolve
     readonly NowPlayingProjection _projection;
     readonly IContextResolver _contexts;
+    readonly ITransferStateDecoder? _transferDecoder;
     readonly IOutboundControl? _outbound;
     readonly IReadOnlyList<IPlaybackProjection> _extra;
     readonly string _ourDeviceId;
     readonly string _featureVersion;
     readonly WaveeLogger _log;
     IDisposable _hostSub;                   // reassigned when the current-media host is swapped (audio ↔ video)
+    int _hostGeneration;
     readonly IPreparedAudioHost? _preparedHost;
     readonly IDisposable? _transitionSub;
     readonly IDisposable _projSub;
@@ -151,13 +153,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     QueueItemId _preparedItemId;
     long _prepareSequence;
     PlaybackFailureCheckpoint? _failureCheckpoint;
+    long _contextGeneration;
+    string _remoteSessionId = "";
+    string _remoteInteractionId = "";
+    string _remotePageInstanceId = "";
+    bool _connectOriginatedPlayback;
 
     readonly record struct PlaybackFailureCheckpoint(string TrackUri, long PositionMs);
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
         string ourDeviceId, IOutboundControl? outbound = null, IReadOnlyList<IPlaybackProjection>? extraProjections = null, WaveeLogger log = default,
-        string? playFeatureVersion = null, IFastTrackResolver? fast = null, IMediaHost? videoHost = null)
+        string? playFeatureVersion = null, IFastTrackResolver? fast = null, IMediaHost? videoHost = null,
+        ITransferStateDecoder? transferDecoder = null)
     {
         _audioHost = host;
         _currentHost = host;                 // audio is the current media until a video boundary swaps it
@@ -167,12 +175,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _fast = fast;
         _projection = projection;
         _contexts = contexts;
+        _transferDecoder = transferDecoder;
         _ourDeviceId = ourDeviceId;
         _outbound = outbound;
         _extra = extraProjections ?? Array.Empty<IPlaybackProjection>();
         _log = log;
         _featureVersion = playFeatureVersion ?? OutboundEnvelope.DefaultFeatureVersion;
-        _hostSub = _currentHost.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
+        _hostSub = SubscribeHost(_currentHost, _hostGeneration);
         _preparedHost = host as IPreparedAudioHost;   // prepared-next/crossfade is an AUDIO-host capability only
         _transitionSub = _preparedHost?.Transitions.Subscribe(Observers.From<AudioTransitionSignal>(OnAudioTransition));
         _projSub = projection.Changes.Subscribe(Observers.From<IPlaybackState>(OnProjectionChanged));
@@ -239,6 +248,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // playable loads, never by the recovery's own reload — otherwise the fallback could ping-pong forever. The (uri, source
     // key) half lives in the hook's own quarantine, which is what makes the retry resolve to something different.
     string? _videoRecoveryUri;
+    string? _videoAudioFallbackUri;
 
     /// <summary>The kind the ONE current media is playing as right now (Audio until a video boundary swaps it). The single
     /// truth Connect's <c>track_player</c> derives from via <see cref="MediaSwitchLogic.TrackPlayer"/> — never a bare
@@ -250,6 +260,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // a throwing predicate (it reads app signals) degrades to AUDIO rather than breaking playback.
     PlayableKind KindFor(Track t)
     {
+        // Connect play/transfer is audio-first even when the user has a standing local video preference.
+        // Explicit local playback clears these remote session ids before resolving its media kind.
+        if (_connectOriginatedPlayback)
+            return MediaSwitchLogic.KindOf(false, t.Origin == TrackOrigin.Local);
+        if (string.Equals(_videoAudioFallbackUri, t.Uri, StringComparison.Ordinal))
+            return MediaSwitchLogic.KindOf(false, t.Origin == TrackOrigin.Local);
         bool isVideo = false;
         if (ShouldPlayAsVideo is { } predicate)
         {
@@ -266,22 +282,45 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void SwitchHost(IMediaHost target, bool stopOutgoing = true)
     {
         if (ReferenceEquals(_currentHost, target)) return;
+        // Recovery/fault state belongs to the retiring host and must not leak across an audio/video boundary.
+        _videoRecoveryUri = null;
+        _videoAudioFallbackUri = null;
+        _failureCheckpoint = null;
+        var outgoing = _currentHost;
+        int generation = Interlocked.Increment(ref _hostGeneration);
+        _hostSub.Dispose();
         if (stopOutgoing)
         {
             // Pause THEN Stop, both BEFORE the incoming host is loaded/played by the caller — that ordering is the
             // one-audio-stream guarantee (PlaybackControllerHostSwapTests asserts stop-before-play on a shared call log).
-            _currentHost.Pause();
-            _currentHost.Stop();
+            outgoing.Pause();
+            outgoing.Stop();
         }
         _currentHost = target;
-        _hostSub.Dispose();
         // Disposing the outgoing subscription orphans any BUFFERING state that host had published: it can no longer
         // deliver the Playing/Ended edge that would clear it, so the spinner would latch over the incoming media (the
         // observed "closed the video, audio played, buffering spun forever"). Retire it at the swap — the incoming host
         // republishes its own buffering state on its first signal.
         _projection.ClearTransientBuffering();
-        _hostSub = _currentHost.Signals.Subscribe(Observers.From<AudioHostSignal>(OnHostSignal));
+        _hostSub = SubscribeHost(target, generation);
     }
+
+    IDisposable SubscribeHost(IMediaHost host, int generation) =>
+        host.Signals.Subscribe(Observers.From<AudioHostSignal>(signal =>
+        {
+            if (generation != Volatile.Read(ref _hostGeneration) || !ReferenceEquals(host, _currentHost))
+            {
+                _log.Event(WaveeLogLevel.Debug, "media.signal.dropped", "retired media-host signal ignored",
+                    fields:
+                    [
+                        WaveeLogField.Of("signal", signal.Kind.ToString()),
+                        WaveeLogField.Of("generation", generation),
+                        WaveeLogField.Of("activeGeneration", Volatile.Read(ref _hostGeneration)),
+                    ]);
+                return;
+            }
+            OnHostSignal(signal);
+        }));
 
     IMediaHost HostFor(PlayableKind kind) => kind == PlayableKind.Video && _videoHost is not null ? _videoHost : _audioHost;
 
@@ -299,9 +338,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             bool stopOutgoing = MediaSwitchLogic.ShouldStopOutgoingHost(_currentKind, next);
             _log.Info($"media swap {_currentKind}→{next} host={(ReferenceEquals(target, _videoHost) ? "video" : "audio")} " +
                 $"stopOutgoing={stopOutgoing} track={track.Uri}");
+            _currentKind = next;
             SwitchHost(target, stopOutgoing);
         }
-        _currentKind = next;
+        else _currentKind = next;
         return next;
     }
 
@@ -318,6 +358,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (ShouldPlayAsVideo is null) return;   // hooks unwired → the kind can never be anything but audio
         if (!RouteLocal()) return;               // a remote device owns playback — never reload locally
+        ClearRemotePlaybackIds();                // explicit local media intent ends Connect's audio-first preference
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
@@ -552,6 +593,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         }
 
         LogPlayIntent("play-track-uri", trackUri, 0, trackUri, null, 0, local: true);
+        ClearRemotePlaybackIds();
+        MintCommand("playbtn");
         var track = await HydrateOneAsync(trackUri, ct).ConfigureAwait(false);
         await LocalPlayTracksAsync(trackUri, new[] { track }, 0, ct).ConfigureAwait(false);
     }
@@ -560,6 +603,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (!RouteLocal()) return ExecutePlayAsync(PlayRequest.Default(track.Uri, 0), "play-track", ct);
         LogPlayIntent("play-track", track.Uri, 0, track.Uri, null, 0, local: true);
+        ClearRemotePlaybackIds();
+        MintCommand("playbtn");
         return LocalPlayTracksAsync(track.Uri, new[] { new QueuedTrack(track, "") }, 0, ct);
     }
 
@@ -796,7 +841,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (!RouteLocal()) { _log.Info("queue move ignored — another device is active"); return; }   // the active device owns its queue
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try { if (_session.MoveUserItem(id, newPos) is { } snap) EmitSnap(snap, EvKind.QueueChanged); }
+        try { if (_session.MoveItem(id, newPos) is { } snap) EmitSnap(snap, EvKind.QueueChanged); }
         finally { _lock.Release(); }
     }
 
@@ -847,27 +892,82 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     // ── Inbound remote commands (WE are the target) — ALWAYS local, regardless of the routing rule ───────────────────
     public void HandleRemoteCommand(in ConnectCommand cmd)
+        => _ = HandleRemoteCommandAsync(cmd, CancellationToken.None);
+
+    /// <summary>Ordered Dealer command entry point. The router awaits this method so no command handler is unobserved.</summary>
+    public async Task<ConnectCommandOutcome> HandleRemoteCommandAsync(ConnectCommand cmd, CancellationToken ct = default)
     {
-        switch (cmd.Kind)
+        try
         {
-            case ConnectCmd.Pause: _currentHost.Pause(); EmitState(EvKind.Paused); break;
-            case ConnectCmd.Resume: _ = LocalResumeAsync(); break;
-            case ConnectCmd.SkipNext: _ = HandleInboundSkipNextAsync(cmd); break;   // next_track w/ a row payload → skip-to-uid; bare → advance one (F7)
-            case ConnectCmd.SkipPrev: _ = LocalPrevAsync(); break;
-            case ConnectCmd.SeekTo: EmitSeeked(cmd.SeekToMs); break;
-            // Session mutations off the dealer thread MUST take _lock (they rebuild the context list; a bare toggle would
-            // race a lock-holding local AutoAdvance) — route through the locked async helpers (F: one lock per mutation).
-            case ConnectCmd.SetShufflingContext: { bool on = cmd.BoolArg; _ = RemoteSetShuffleAsync(on); } break;
-            case ConnectCmd.SetRepeatingContext: { var m = cmd.BoolArg ? RepeatMode.Context : RepeatMode.Off; _ = RemoteSetRepeatAsync(m); } break;
-            case ConnectCmd.SetRepeatingTrack: { var m = cmd.BoolArg ? RepeatMode.Track : RepeatMode.Off; _ = RemoteSetRepeatAsync(m); } break;
-            case ConnectCmd.Play:
-            case ConnectCmd.Transfer: _ = HandleInboundPlayOrTransferAsync(cmd); break;
-            case ConnectCmd.AddToQueue: _ = HandleAddToQueueAsync(cmd); break;
-            case ConnectCmd.SetQueue: _ = HandleSetQueueAsync(cmd); break;
-            case ConnectCmd.UpdateContext: _ = HandleUpdateContextAsync(cmd); break;
-            case ConnectCmd.SetOptions: { var payload = cmd.Payload; _ = HandleSetOptionsAsync(payload); } break;
-            default: _log.Info("controller: unhandled remote command " + cmd.Kind); break;
+            if (!string.IsNullOrEmpty(cmd.CommandId)) _commandIdHex = cmd.CommandId;
+            else MintCommand();
+            var attribution = new ConnectCommandAttribution(
+                cmd.SenderDeviceId, unchecked((uint)Math.Max(0, cmd.MessageId)), _commandIdHex);
+            foreach (var projection in _extra)
+                if (projection is IConnectCommandAttributionSink sink) sink.NoteCommand(attribution);
+
+            switch (cmd.Kind)
+            {
+                case ConnectCmd.Pause:
+                    await _lock.WaitAsync(ct).ConfigureAwait(false);
+                    try { _currentHost.Pause(); EmitState(EvKind.Paused); }
+                    finally { _lock.Release(); }
+                    break;
+                case ConnectCmd.Resume: await LocalResumeAsync(ct).ConfigureAwait(false); break;
+                case ConnectCmd.SkipNext: await HandleInboundSkipNextAsync(cmd).ConfigureAwait(false); break;
+                case ConnectCmd.SkipPrev: await LocalPrevAsync(ct).ConfigureAwait(false); break;
+                case ConnectCmd.SeekTo:
+                    await _lock.WaitAsync(ct).ConfigureAwait(false);
+                    try { EmitSeeked(cmd.SeekToMs); }
+                    finally { _lock.Release(); }
+                    break;
+                case ConnectCmd.SetShufflingContext: await RemoteSetShuffleAsync(cmd.BoolArg).ConfigureAwait(false); break;
+                case ConnectCmd.SetRepeatingContext:
+                    await RemoteSetRepeatAsync(cmd.BoolArg ? RepeatMode.Context : RepeatMode.Off).ConfigureAwait(false);
+                    break;
+                case ConnectCmd.SetRepeatingTrack:
+                    await RemoteSetRepeatAsync(cmd.BoolArg ? RepeatMode.Track : RepeatMode.Off).ConfigureAwait(false);
+                    break;
+                case ConnectCmd.Play:
+                case ConnectCmd.Transfer: await HandleInboundPlayOrTransferAsync(cmd).ConfigureAwait(false); break;
+                case ConnectCmd.AddToQueue: await HandleAddToQueueAsync(cmd).ConfigureAwait(false); break;
+                case ConnectCmd.SetQueue: await HandleSetQueueAsync(cmd).ConfigureAwait(false); break;
+                case ConnectCmd.UpdateContext: await HandleUpdateContextAsync(cmd).ConfigureAwait(false); break;
+                case ConnectCmd.SetOptions: await HandleSetOptionsAsync(cmd.Payload).ConfigureAwait(false); break;
+                default:
+                    _log.Info("controller: unhandled remote command " + cmd.Kind);
+                    return ConnectCommandOutcome.NoOp;
+            }
+            return ConnectCommandOutcome.Applied;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { return ConnectCommandOutcome.Superseded; }
+        catch (Exception ex)
+        {
+            _log.Warn($"controller inbound {cmd.Endpoint} failed: {ex.Message}", ex);
+            return ConnectCommandOutcome.Failed;
+        }
+    }
+
+    /// <summary>Apply an inbound connect/volume MESSAGE to this device without echoing it as an outbound command.</summary>
+    public async Task<ConnectCommandOutcome> HandleInboundVolumeAsync(int volume0_65535, CancellationToken ct = default)
+    {
+        double volume01 = Math.Clamp(volume0_65535, 0, 65535) / 65535.0;
+        await _lock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (Math.Abs(_projection.Volume - volume01) < 0.000001) return ConnectCommandOutcome.NoOp;
+            _currentHost.SetVolume(volume01);
+            _projection.SetLocalVolume(volume01, _currentHost.PositionMs);
+            EmitState(EvKind.VolumeChanged);
+            _log.Event(WaveeLogLevel.Info, "connect.volume.applied", "inbound Connect volume applied",
+                fields:
+                [
+                    WaveeLogField.Of("volume", Math.Clamp(volume0_65535, 0, 65535)),
+                    WaveeLogField.Of("normalized", volume01),
+                ]);
+            return ConnectCommandOutcome.Applied;
+        }
+        finally { _lock.Release(); }
     }
 
     // Inbound next_track / skip_next (F7): a payload (command.track {uri,uid}) is a row-jump → skip-to-uid + play; a bare
@@ -894,22 +994,201 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     async Task HandleInboundPlayOrTransferAsync(ConnectCommand cmd)
     {
+        bool previousConnectOrigin = _connectOriginatedPlayback;
         try
         {
-            if (ExtractPlaySpec(cmd.Payload) is { } spec)
+            _connectOriginatedPlayback = true;
+            if (cmd.Kind == ConnectCmd.Transfer)
             {
+                await HandleInboundTransferAsync(cmd).ConfigureAwait(false);
+                return;
+            }
+
+            if (ExtractPlayIntent(cmd.Payload) is { } intent)
+            {
+                long generation = Interlocked.Increment(ref _contextGeneration);
+                string previousSession = _remoteSessionId;
+                string previousInteraction = _remoteInteractionId;
+                string previousPage = _remotePageInstanceId;
+                _remoteSessionId = string.IsNullOrEmpty(intent.SessionId) ? Guid.NewGuid().ToString("N") : intent.SessionId;
+                _remoteInteractionId = intent.InteractionId;
+                _remotePageInstanceId = intent.PageInstanceId;
                 LogPlayIntent("remote-" + cmd.Kind + "-from-" + (string.IsNullOrEmpty(cmd.SenderDeviceId) ? "?" : cmd.SenderDeviceId),
-                    spec.Uri, spec.SkipToIndex ?? 0, spec.SkipToTrackUri, spec.SkipToTrackUid, spec.EmbeddedPages?.Count ?? 0, local: true);
-                await LocalPlaySpecAsync(spec, default).ConfigureAwait(false);
+                    intent.Context.Uri, intent.Context.SkipToIndex ?? 0, intent.Context.SkipToTrackUri,
+                    intent.Context.SkipToTrackUid, intent.Context.EmbeddedPages?.Count ?? 0, local: true);
+                if (!await LocalPlaySpecAsync(intent.Context, default, generation, intent.InitiallyPaused, intent.Shuffle)
+                    .ConfigureAwait(false))
+                {
+                    _connectOriginatedPlayback = previousConnectOrigin;
+                    _remoteSessionId = previousSession;
+                    _remoteInteractionId = previousInteraction;
+                    _remotePageInstanceId = previousPage;
+                }
             }
             else
             {
-                _log.Info($"remote {cmd.Kind} carried no play spec — resuming from the cluster (from={(string.IsNullOrEmpty(cmd.SenderDeviceId) ? "-" : cmd.SenderDeviceId)})");
-                await LocalResumeAsync(default).ConfigureAwait(false);   // bare transfer → ghost-resume the cluster state here
+                _connectOriginatedPlayback = previousConnectOrigin;
+                _log.Info("remote play carried no context spec");
             }
         }
-        catch (Exception ex) { _log.Info("controller inbound play/transfer error: " + ex.Message); }
+        catch (Exception ex)
+        {
+            _connectOriginatedPlayback = previousConnectOrigin;
+            _log.Info("controller inbound play/transfer error: " + ex.Message);
+        }
     }
+
+    async Task HandleInboundTransferAsync(ConnectCommand cmd)
+    {
+        if (_transferDecoder is null || !TryExtractTransfer(cmd.Payload, out var encoded, out var modes))
+        {
+            _log.Info("remote transfer has no decodable inner data; falling back to cluster resume");
+            await LocalResumeAsync(default).ConfigureAwait(false);
+            return;
+        }
+
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(encoded); }
+        catch (FormatException)
+        {
+            _log.Warn("remote transfer data was not valid base64; falling back to cluster resume");
+            await LocalResumeAsync(default).ConfigureAwait(false);
+            return;
+        }
+        if (!_transferDecoder.TryDecode(bytes, out var state))
+        {
+            _log.Warn($"remote transfer protobuf could not be decoded ({bytes.Length} bytes); falling back to cluster resume");
+            await LocalResumeAsync(default).ConfigureAwait(false);
+            return;
+        }
+
+        var selected = state.IsPlayingQueue && state.Queue.Count > 0 ? state.Queue[0] : state.CurrentTrack;
+        string currentUri = selected.Uri;
+        if (string.IsNullOrEmpty(currentUri) && selected.Gid.Length == 16)
+            currentUri = "spotify:track:" + Base62.Encode(selected.Gid);
+
+        long generation = Interlocked.Increment(ref _contextGeneration);
+        string contextUri = string.IsNullOrEmpty(state.ContextUri) ? currentUri : state.ContextUri;
+        ResolvedContext resolved = ResolvedContext.Empty;
+        if (!string.IsNullOrEmpty(contextUri))
+        {
+            var contextSpec = new ContextSpec(contextUri, state.ContextUrl, null,
+                currentUri, string.IsNullOrEmpty(selected.Uid) ? state.CurrentUid : selected.Uid, null,
+                state.ContextMetadata);
+            try { resolved = await _contexts.ResolveAsync(contextSpec, default).ConfigureAwait(false); }
+            catch (Exception ex) { _log.Warn("transfer context resolve failed; retaining transferred current only: " + ex.Message, ex); }
+        }
+        if (generation != Volatile.Read(ref _contextGeneration)) return;
+
+        string currentUid = string.IsNullOrEmpty(selected.Uid) ? state.CurrentUid : selected.Uid;
+        QueuedTrack current = default;
+        int currentIndex = ContextResolve.FindStartIndex(resolved.Tracks, currentUri, currentUid);
+        if (currentIndex >= 0) current = resolved.Tracks[currentIndex];
+        else if (!string.IsNullOrEmpty(currentUri)) current = await HydrateOneAsync(currentUri, default).ConfigureAwait(false);
+        else if (resolved.Count > 0 && modes.RestoreTrack == "always_play_something") current = resolved.Tracks[0];
+        else
+        {
+            _log.Warn("transfer inner state contained no usable current track; falling back to cluster resume");
+            await LocalResumeAsync(default).ConfigureAwait(false);
+            return;
+        }
+        if (!string.IsNullOrEmpty(currentUid) && string.IsNullOrEmpty(current.Uid))
+            current = current with { Uid = currentUid };
+
+        var queueRefs = new List<QueuedRef>();
+        int queueStart = state.IsPlayingQueue && state.Queue.Count > 0 ? 1 : 0;
+        for (int i = queueStart; i < state.Queue.Count; i++)
+        {
+            var q = state.Queue[i];
+            string uri = q.Uri;
+            if (string.IsNullOrEmpty(uri) && q.Gid.Length == 16) uri = "spotify:track:" + Base62.Encode(q.Gid);
+            if (!string.IsNullOrEmpty(uri)) queueRefs.Add(new QueuedRef(uri, q.Uid, "queue", q.Metadata));
+        }
+        var transferredQueue = queueRefs.Count == 0
+            ? Array.Empty<QueuedTrack>()
+            : await _contexts.HydrateAsync(queueRefs, default).ConfigureAwait(false);
+
+        long position = Math.Max(0, state.PositionMs);
+        bool paused = modes.RestorePaused == "restore" && state.Paused;
+        if (!paused && modes.RestorePosition == "extrapolate" && state.TimestampMs > 0)
+        {
+            long age = Math.Max(0, Now() - state.TimestampMs);
+            position += (long)Math.Round(age * Math.Max(0, state.Speed));
+        }
+        if (current.Track.DurationMs > 0) position = Math.Min(position, current.Track.DurationMs);
+
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (generation != Volatile.Read(ref _contextGeneration)) return;
+            _remoteSessionId = modes.RetainSession == "do_not_retain" || string.IsNullOrEmpty(_remoteSessionId)
+                ? Guid.NewGuid().ToString("N")
+                : _remoteSessionId;
+            _projection.SetContextMetadata(resolved.Metadata ?? state.ContextMetadata);
+            _snap = _session.SetTransferredContext(contextUri, resolved.Tracks, current, clearUserQueue: true);
+            if (transferredQueue.Count > 0) _snap = _session.EnqueueUser(transferredQueue);
+            _snap = _session.SetShuffle(state.Shuffle);
+            _snap = _session.SetRepeat(state.Repeat);
+            _nextPageUrl = string.IsNullOrEmpty(resolved.NextPageUrl) ? null : resolved.NextPageUrl;
+            _contextIsInfinite = resolved.IsInfinite || ContextResolve.IsInfinite(contextUri);
+            _autoplayLatchedFor = null;
+            _continuationFetch = null;
+            await LoadAndPlayCurrentAsync(paused ? EvKind.Paused : EvKind.Started, default, position, paused)
+                .ConfigureAwait(false);
+        }
+        finally { _lock.Release(); }
+
+        _log.Event(WaveeLogLevel.Info, "connect.transfer.applied", "TransferState applied",
+            fields:
+            [
+                WaveeLogField.Of("dataBytes", bytes.Length),
+                WaveeLogField.Of("context", WaveeLogRedaction.HashLike(contextUri)),
+                WaveeLogField.Of("current", WaveeLogRedaction.HashLike(current.Uri)),
+                WaveeLogField.Of("resolvedTracks", resolved.Count),
+                WaveeLogField.Of("queueTracks", transferredQueue.Count),
+                WaveeLogField.Of("positionMs", position),
+                WaveeLogField.Of("paused", paused),
+                WaveeLogField.Of("restorePosition", modes.RestorePosition),
+                WaveeLogField.Of("restoreTrack", modes.RestoreTrack),
+            ]);
+    }
+
+    readonly record struct TransferModes(
+        string RestorePaused,
+        string RestorePosition,
+        string RestoreTrack,
+        string RetainSession);
+
+    static bool TryExtractTransfer(byte[] payload, out string data, out TransferModes modes)
+    {
+        data = "";
+        modes = default;
+        try
+        {
+            using var doc = JsonDocument.Parse(payload);
+            if (!doc.RootElement.TryGetProperty("command", out var command)
+                || !command.TryGetProperty("data", out var encoded)
+                || encoded.ValueKind != JsonValueKind.String)
+                return false;
+            data = encoded.GetString() ?? "";
+            string paused = "", position = "", track = "", retain = "";
+            if (command.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Object)
+            {
+                paused = StringProperty(options, "restore_paused");
+                position = StringProperty(options, "restore_position");
+                track = StringProperty(options, "restore_track");
+                retain = StringProperty(options, "retain_session");
+            }
+            modes = new TransferModes(paused, position, track, retain);
+            return data.Length > 0;
+        }
+        catch { return false; }
+    }
+
+    static string StringProperty(JsonElement parent, string property) =>
+        parent.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString() ?? ""
+            : "";
 
     // add_to_queue: append one track to the user queue — or, if nothing is loaded, start playing it (the idle-start rule).
     async Task HandleAddToQueueAsync(ConnectCommand cmd)
@@ -958,17 +1237,83 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         try
         {
-            if (ExtractPlaySpec(cmd.Payload) is not { } spec) return;
+            if (ExtractPlayIntent(cmd.Payload) is not { } intent) return;
+            var spec = intent.Context;
+            string incomingSession = string.IsNullOrEmpty(cmd.SessionId) ? intent.SessionId : cmd.SessionId;
+            if (!string.IsNullOrEmpty(_remoteSessionId) && !string.IsNullOrEmpty(incomingSession)
+                && !string.Equals(_remoteSessionId, incomingSession, StringComparison.Ordinal))
+            {
+                _log.Event(WaveeLogLevel.Debug, "connect.update_context.stale-session",
+                    "UpdateContext ignored because its session is no longer active",
+                    fields:
+                    [
+                        WaveeLogField.Of("incomingSession", WaveeLogRedaction.HashLike(incomingSession)),
+                        WaveeLogField.Of("activeSession", WaveeLogRedaction.HashLike(_remoteSessionId)),
+                        WaveeLogField.Of("context", WaveeLogRedaction.HashLike(spec.Uri)),
+                    ]);
+                return;
+            }
+            if (string.IsNullOrEmpty(_remoteSessionId)
+                && !string.Equals(_session.ContextUri, spec.Uri, StringComparison.Ordinal))
+            {
+                _log.Event(WaveeLogLevel.Debug, "connect.update_context.orphan",
+                    "UpdateContext ignored because no matching active context exists",
+                    fields: [WaveeLogField.Of("context", WaveeLogRedaction.HashLike(spec.Uri))]);
+                return;
+            }
+
+            long generation = Interlocked.Increment(ref _contextGeneration);
             var resolved = await _contexts.ResolveAsync(spec, default).ConfigureAwait(false);
-            if (resolved.Count == 0) return;
+            if (generation != Volatile.Read(ref _contextGeneration))
+            {
+                _log.Debug("update_context resolution superseded before apply");
+                return;
+            }
+            if (resolved.Count == 0)
+            {
+                _log.Warn($"update_context resolved no tracks; preserving current context ({WaveeLogRedaction.HashLike(spec.Uri)})");
+                return;
+            }
             await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                string? curUri = _session.Current?.Uri;
-                int found = curUri is null ? -1 : IndexOfUri(resolved.Tracks, curUri);
-                SetQueueContext(resolved.ContextUri ?? spec.Uri, resolved.Tracks, found < 0 ? 0 : found,
-                    resolved.NextPageUrl, resolved.IsInfinite, resolved.Metadata);
-                EmitSnap(_snap, EvKind.QueueChanged);
+                if (generation != Volatile.Read(ref _contextGeneration)) return;
+                string contextUri = resolved.ContextUri ?? spec.Uri;
+                bool sameRows = _session.HasSameContextRows(contextUri, resolved.Tracks);
+                _nextPageUrl = string.IsNullOrEmpty(resolved.NextPageUrl) ? null : resolved.NextPageUrl;
+                _contextIsInfinite = resolved.IsInfinite || ContextResolve.IsInfinite(contextUri);
+                _autoplayLatchedFor = null;
+                _continuationFetch = null;
+                _projection.SetContextMetadata(resolved.Metadata ?? spec.Metadata);
+
+                if (sameRows)
+                {
+                    Emit(BuildEvent(EvKind.QueueChanged, _snap.Current?.Track, _currentHost.PositionMs));
+                    _log.Event(WaveeLogLevel.Debug, "connect.update_context.noop",
+                        "UpdateContext resolved to the active row sequence",
+                        fields:
+                        [
+                            WaveeLogField.Of("tracks", resolved.Count),
+                            WaveeLogField.Of("context", WaveeLogRedaction.HashLike(contextUri)),
+                            WaveeLogField.Of("generation", generation),
+                        ]);
+                }
+                else
+                {
+                    _snap = _session.ReplaceContextPreservingCurrent(contextUri, resolved.Tracks);
+                    EmitSnap(_snap, EvKind.QueueChanged);
+                    _log.Event(WaveeLogLevel.Info, "connect.update_context.applied",
+                        "UpdateContext replaced context rows while preserving the current playable",
+                        fields:
+                        [
+                            WaveeLogField.Of("tracks", resolved.Count),
+                            WaveeLogField.Of("current", WaveeLogRedaction.HashLike(_session.Current?.Uri ?? "")),
+                            WaveeLogField.Of("context", WaveeLogRedaction.HashLike(contextUri)),
+                            WaveeLogField.Of("generation", generation),
+                        ]);
+                }
+                if (string.IsNullOrEmpty(_remoteSessionId) && !string.IsNullOrEmpty(incomingSession))
+                    _remoteSessionId = incomingSession;
             }
             finally { _lock.Release(); }
         }
@@ -1032,6 +1377,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void SetQueueContext(string uri, IReadOnlyList<QueuedTrack> tracks, int startIndex,
         string? nextPageUrl = null, bool isInfinite = false, IReadOnlyDictionary<string, string>? metadata = null)
     {
+        Interlocked.Increment(ref _contextGeneration);
         _snap = _session.SetContext(uri, tracks, startIndex);
         _nextPageUrl = string.IsNullOrEmpty(nextPageUrl) ? null : nextPageUrl;
         _contextIsInfinite = isInfinite || ContextResolve.IsInfinite(uri);
@@ -1045,10 +1391,17 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // blind index fallback is gone, F2). While hunting the skip target we page deeper than MaxEagerPages (bounded); on a
     // final miss (a regenerated dynamic context) we patch the clicked track in as current rather than play an unrelated row.
     const int SkipHuntMaxPages = 40;
-    async Task LocalPlaySpecAsync(ContextSpec spec, CancellationToken ct)
+    async Task<bool> LocalPlaySpecAsync(
+        ContextSpec spec,
+        CancellationToken ct,
+        long expectedGeneration = 0,
+        bool initiallyPaused = false,
+        bool? shuffle = null)
     {
+        long generation = expectedGeneration == 0 ? Interlocked.Increment(ref _contextGeneration) : expectedGeneration;
         var resolved = await _contexts.ResolveAsync(spec, ct).ConfigureAwait(false);
-        if (resolved.Count == 0) { _log.Info("play: context resolved to 0 tracks: " + spec.Uri); return; }
+        if (generation != Volatile.Read(ref _contextGeneration)) return false;
+        if (resolved.Count == 0) { _log.Info("play: context resolved to 0 tracks: " + spec.Uri); return false; }
 
         IReadOnlyList<QueuedTrack> tracks = resolved.Tracks;
         int start = resolved.StartIndex;
@@ -1094,8 +1447,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         // two-line story — including HOW LONG the resolve took, which is what makes a play look spontaneous.
         _log.Info($"play resolved ctx={resolved.ContextUri ?? spec.Uri} tracks={tracks.Count} start={start} " +
             $"current={(start < tracks.Count ? tracks[start].Uri : "-")}");
-        await LocalPlayTracksAsync(resolved.ContextUri ?? spec.Uri, tracks, start, ct,
-            nextPage, resolved.IsInfinite, resolved.Metadata).ConfigureAwait(false);
+        return await LocalPlayTracksAsync(resolved.ContextUri ?? spec.Uri, tracks, start, ct,
+            nextPage, resolved.IsInfinite, resolved.Metadata ?? spec.Metadata, generation, initiallyPaused, shuffle)
+            .ConfigureAwait(false);
     }
 
     // Build the clicked track as a context row patched in as current (§7.3.2): hydrate for display, tag context_patched.
@@ -1108,14 +1462,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return new QueuedTrack(q.Track, spec.SkipToTrackUid ?? "", "context", meta);
     }
 
-    async Task LocalPlayTracksAsync(string contextUri, IReadOnlyList<QueuedTrack> tracks, int startIndex, CancellationToken ct,
-        string? nextPageUrl = null, bool isInfinite = false, IReadOnlyDictionary<string, string>? metadata = null)
+    async Task<bool> LocalPlayTracksAsync(string contextUri, IReadOnlyList<QueuedTrack> tracks, int startIndex, CancellationToken ct,
+        string? nextPageUrl = null, bool isInfinite = false, IReadOnlyDictionary<string, string>? metadata = null,
+        long expectedGeneration = 0, bool initiallyPaused = false, bool? shuffle = null)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
+            if (expectedGeneration != 0 && expectedGeneration != Volatile.Read(ref _contextGeneration)) return false;
             SetQueueContext(contextUri, tracks, startIndex, nextPageUrl, isInfinite, metadata);
-            await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
+            if (shuffle is { } shuffleValue) _snap = _session.SetShuffle(shuffleValue);
+            await LoadAndPlayCurrentAsync(initiallyPaused ? EvKind.Paused : EvKind.Started, ct,
+                initiallyPaused: initiallyPaused).ConfigureAwait(false);
+            return true;
         }
         finally { _lock.Release(); }
     }
@@ -1250,6 +1609,17 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _reasonStart = reasonStart;
     }
 
+    void ClearRemotePlaybackIds()
+    {
+        _remoteSessionId = "";
+        _remoteInteractionId = "";
+        _remotePageInstanceId = "";
+        _connectOriginatedPlayback = false;
+        _videoRecoveryUri = null;
+        _videoAudioFallbackUri = null;
+        _failureCheckpoint = null;
+    }
+
     PlaybackIds MintPlaybackIds(Track track, byte[]? mediaId = null)
     {
         var ctx = _session.ContextUri;
@@ -1257,7 +1627,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         {
             _idsSessionContext = ctx;
         }
-        return PlaybackIds.Mint(_commandIdHex, mediaId);
+        return PlaybackIds.Mint(_commandIdHex, mediaId,
+            string.IsNullOrEmpty(_remoteSessionId) ? null : _remoteSessionId,
+            string.IsNullOrEmpty(_remoteInteractionId) ? null : _remoteInteractionId,
+            string.IsNullOrEmpty(_remotePageInstanceId) ? null : _remotePageInstanceId);
     }
 
     PlaybackEvent BuildEvent(EvKind kind, Track? track, long atMs, byte[]? mediaId = null,
@@ -1285,7 +1658,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return parts.Length >= 3 ? parts[1] : "playlist";
     }
 
-    async Task LoadAndPlayCurrentAsync(EvKind kind, CancellationToken ct, long resumePositionMs = -1)
+    async Task LoadAndPlayCurrentAsync(
+        EvKind kind,
+        CancellationToken ct,
+        long resumePositionMs = -1,
+        bool initiallyPaused = false)
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
         var cur = _session.Current;
@@ -1295,6 +1672,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         // deliberately does NOT re-arm — that is what caps the fallback at one attempt per playable.
         if (_videoRecoveryUri is not null && !string.Equals(_videoRecoveryUri, cur.Uri, StringComparison.Ordinal))
             _videoRecoveryUri = null;
+        if (_videoAudioFallbackUri is not null && !string.Equals(_videoAudioFallbackUri, cur.Uri, StringComparison.Ordinal))
+            _videoAudioFallbackUri = null;
 
         byte[]? mediaId = null;
         byte[]? fileId = null;
@@ -1324,7 +1703,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         var mediaKind = SwitchCurrentMedia(cur);
         if (mediaKind == PlayableKind.Video)
         {
-            if (await LoadAndPlayVideoAsync(cur, kind, mediaId, bitrateKbps, audioFormat, durationMs, fileId, resumePositionMs, ct).ConfigureAwait(false))
+            if (await LoadAndPlayVideoAsync(cur, kind, mediaId, bitrateKbps, audioFormat, durationMs, fileId,
+                resumePositionMs, initiallyPaused, ct).ConfigureAwait(false))
                 return;
             // No playable video source for this track (the account isn't served one, the manifest resolve failed, or the hooks
             // are unwired). Fall back to AUDIO for this playable rather than leaving the user in silence: re-point the host at
@@ -1346,7 +1726,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             catch (Exception ex) { ReportPlaybackError(ex); return; }
             var loadStartedTicks = Stopwatch.GetTimestamp();
             _audioHost.LoadFastStart(plan.Start);   // audio-specific loading (guarded: current kind is audio/local here)
-            _currentHost.Play();
+            if (!initiallyPaused) _currentHost.Play();
             if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
             else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
             WarmUpcomingFastTrack("after-start");
@@ -1362,7 +1742,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
         _audioHost.Load(handle);   // audio-specific loading (only reached when the current kind is audio/local)
-        _currentHost.Play();
+        if (!initiallyPaused) _currentHost.Play();
         if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
         else await MaybeSeekEpisodeResumeAsync(cur, ct).ConfigureAwait(false);
         WarmUpcomingFastTrack("after-start");
@@ -1380,7 +1760,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // surfaced) and FALSE when there is simply no playable video source, so the caller falls back to audio.
     // Caller holds _lock.
     async Task<bool> LoadAndPlayVideoAsync(Track cur, EvKind kind, byte[]? mediaId, int bitrateKbps, string audioFormat,
-        long durationMs, byte[]? fileId, long resumePositionMs, CancellationToken ct)
+        long durationMs, byte[]? fileId, long resumePositionMs, bool initiallyPaused, CancellationToken ct)
     {
         if (LoadCurrentVideoAsync is not { } loadVideo)
         {
@@ -1397,7 +1777,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         catch (OperationCanceledException) { throw; }
         catch (Exception ex) { ReportPlaybackError(ex); return true; }   // handled (surfaced) — do not also start audio
 
-        _currentHost.Play();
+        if (!initiallyPaused) _currentHost.Play();
         // The video starts at ITS OWN 0 and a resume position is honored only when the caller explicitly asked for one (a
         // retry checkpoint on the same video). A kind SWITCH never passes one — see RefreshCurrentMediaKindAsync: the audio
         // and video timelines are different edits and are not comparable, so we deliberately do not seek across the boundary.
@@ -1509,7 +1889,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             return _continuationFetch = FetchNextPageAsync(page, _contextIsInfinite);
         }
 
-        if (!CanAutoplay(ctx))
+        if (!CanAutoplay(ctx, ignoreLatch: forceAutoplay))
         {
             PlaybackBucketDiagnostics.Continuation("continuation.none", "autoplay not eligible",
                 WaveeLogField.Of("ctx", ctx),
@@ -1530,10 +1910,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         return _continuationFetch = FetchAutoplayAsync(ctx, recent);
     }
 
-    bool CanAutoplay(string contextUri)
+    bool CanAutoplay(string contextUri, bool ignoreLatch = false)
     {
         if (_contextIsInfinite || ContextResolve.IsInfinite(contextUri)) return false;
-        if (_autoplayLatchedFor == contextUri) return false;
+        if (!ignoreLatch && _autoplayLatchedFor == contextUri) return false;
         return AutoplayEnabled?.Invoke() ?? true;
     }
 
@@ -1702,7 +2082,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     void Publish(QueueSnapshot snap, in PlaybackEvent e)
     {
         _snap = snap;
-        if (e.Kind is EvKind.Started or EvKind.Resumed or EvKind.TrackChanged && e.Track is not null) SetActiveOwner(true);
+        if (e.Kind is EvKind.Started or EvKind.Resumed or EvKind.TrackChanged or EvKind.Paused && e.Track is not null) SetActiveOwner(true);
         else if (e.Kind is EvKind.Ended or EvKind.BecameInactive) SetActiveOwner(false);
         DiagnoseQueue("controller.publish." + e.Kind);
         _projection.ApplyLocalSnapshot(snap, e);
@@ -1974,12 +2354,19 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             // fallback). Fire-and-forget, holding no lock — exactly like AutoAdvanceAsync above; taking _lock inside a
             // host-signal callback is what deadlocked track-end. The scheduled task reports the error itself when the
             // hook declines, so the non-video / unwired / already-attempted paths stay byte-identical to today.
-            if (TryRecoverVideoAsync is not null && _currentKind == PlayableKind.Video
-                && _session.Current is { } videoTrack
-                && !string.Equals(_videoRecoveryUri, videoTrack.Uri, StringComparison.Ordinal))
+            if (_currentKind == PlayableKind.Video && _session.Current is { } videoTrack)
             {
-                _videoRecoveryUri = videoTrack.Uri;
-                _ = RecoverVideoAsync(videoTrack, s);
+                bool connectOriginated = _connectOriginatedPlayback;
+                if (TryRecoverVideoAsync is not null
+                    && !string.Equals(_videoRecoveryUri, videoTrack.Uri, StringComparison.Ordinal))
+                {
+                    _videoRecoveryUri = videoTrack.Uri;
+                    _ = RecoverVideoAsync(videoTrack, s, connectOriginated);
+                }
+                else if (connectOriginated)
+                    _ = FallbackVideoToAudioAsync(videoTrack, s.PositionMs);
+                else
+                    ReportHostError(s);
                 return;
             }
             ReportHostError(s);
@@ -2009,16 +2396,39 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     // The scheduled half of the video-open recovery: ask the hook, and either re-run the load (the resolver now walks past
     // whatever failed) or report the original error. _lock is taken HERE, never in the signal callback.
-    async Task RecoverVideoAsync(Track track, AudioHostSignal s)
+    async Task RecoverVideoAsync(Track track, AudioHostSignal s, bool allowAudioFallback)
     {
         bool recovered = false;
         try { recovered = await TryRecoverVideoAsync!(track, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception ex) { _log.Info($"video recovery hook failed for {track.Uri}: {ex.GetType().Name}: {ex.Message}"); }
-        if (!recovered) { ReportHostError(s); return; }
+        if (!recovered)
+        {
+            if (allowAudioFallback)
+                await FallbackVideoToAudioAsync(track, s.PositionMs).ConfigureAwait(false);
+            else
+                ReportHostError(s);
+            return;
+        }
         _log.Info($"video open failed for {track.Uri} — recovered; reloading the playable");
         await _lock.WaitAsync().ConfigureAwait(false);
         try { await LoadAndPlayCurrentAsync(EvKind.Started, CancellationToken.None).ConfigureAwait(false); }
         catch (Exception ex) { _log.Info("video recovery reload failed: " + ex.Message); }
+        finally { _lock.Release(); }
+    }
+
+    async Task FallbackVideoToAudioAsync(Track track, long positionMs)
+    {
+        _videoAudioFallbackUri = track.Uri;
+        NotifyVideoUnavailable(track);
+        _log.Info($"video failed for {track.Uri} — falling back to audio at {Math.Max(0, positionMs)}ms");
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!string.Equals(_session.Current?.Uri, track.Uri, StringComparison.Ordinal)) return;
+            await LoadAndPlayCurrentAsync(
+                EvKind.Started, CancellationToken.None, Math.Max(0, positionMs)).ConfigureAwait(false);
+        }
+        catch (Exception ex) { _log.Info("video-to-audio fallback failed: " + ex.Message); }
         finally { _lock.Release(); }
     }
 
@@ -2051,6 +2461,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         LogPlayIntent(origin, request.ContextUri, request.StartIndex, request.SkipTrackUri, request.SkipTrackUid,
             request.OrderedTracks?.Count ?? 0, local);
         if (!local) { await ForwardPlayAsync(request, ct).ConfigureAwait(false); return; }
+        ClearRemotePlaybackIds();
         MintCommand("playbtn");
         if (request.OrderedTracks is { Count: > 0 })
         {
@@ -2147,7 +2558,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // carries an opaque context uri + skip_to, NOT a track list — that's resolved server-side), so JsonDocument is fine
     // here; the LARGE context-resolve RESPONSE is streamed via Utf8JsonReader in LiveContextResolver. Returns null when
     // there's no context to play (a bare transfer → the caller ghost-resumes the cluster snapshot instead).
-    static ContextSpec? ExtractPlaySpec(byte[] payload)
+    readonly record struct PlayIntent(
+        ContextSpec Context,
+        string SessionId,
+        bool InitiallyPaused,
+        bool? Shuffle,
+        string InteractionId,
+        string PageInstanceId);
+
+    static PlayIntent? ExtractPlayIntent(byte[] payload)
     {
         try
         {
@@ -2155,11 +2574,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             if (!doc.RootElement.TryGetProperty("command", out var c)) return null;
 
             string? uri = null, url = null;
+            IReadOnlyDictionary<string, string>? contextMetadata = null;
             List<QueuedRef>? pages = null;
             if (c.TryGetProperty("context", out var ctx))
             {
                 if (ctx.TryGetProperty("uri", out var u)) uri = u.GetString();
                 if (ctx.TryGetProperty("url", out var ur)) url = ur.GetString();
+                contextMetadata = TrackMetadata(ctx);
                 if (ctx.TryGetProperty("pages", out var pg) && pg.ValueKind == JsonValueKind.Array)
                 {
                     foreach (var page in pg.EnumerateArray())
@@ -2186,9 +2607,46 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 if (skipTo.TryGetProperty("track_uid", out var sd)) skUid = sd.GetString();
                 if (skipTo.TryGetProperty("track_index", out var si) && si.TryGetInt32(out var sidx)) skIdx = sidx;
             }
-            return new ContextSpec(uri!, url, pages, skUri, skUid, skIdx);
+
+            string sessionId = "";
+            bool initiallyPaused = false;
+            bool? shuffle = null;
+            if (c.TryGetProperty("session_id", out var directSession) && directSession.ValueKind == JsonValueKind.String)
+                sessionId = directSession.GetString() ?? "";
+            if (c.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Object)
+            {
+                if (string.IsNullOrEmpty(sessionId) && options.TryGetProperty("session_id", out var session)
+                    && session.ValueKind == JsonValueKind.String)
+                    sessionId = session.GetString() ?? "";
+                if (options.TryGetProperty("initially_paused", out var paused)
+                    && paused.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    initiallyPaused = paused.GetBoolean();
+                if (options.TryGetProperty("player_options_override", out var playerOptions)
+                    && playerOptions.ValueKind == JsonValueKind.Object
+                    && playerOptions.TryGetProperty("shuffling_context", out var shuffling)
+                    && shuffling.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    shuffle = shuffling.GetBoolean();
+            }
+
+            string interactionId = "", pageInstanceId = "";
+            if (c.TryGetProperty("logging_params", out var logging) && logging.ValueKind == JsonValueKind.Object)
+            {
+                interactionId = FirstString(logging, "interaction_ids");
+                pageInstanceId = FirstString(logging, "page_instance_ids");
+            }
+            return new PlayIntent(
+                new ContextSpec(uri!, url, pages, skUri, skUid, skIdx, contextMetadata),
+                sessionId, initiallyPaused, shuffle, interactionId, pageInstanceId);
         }
         catch { return null; }
+    }
+
+    static string FirstString(JsonElement parent, string property)
+    {
+        if (!parent.TryGetProperty(property, out var array) || array.ValueKind != JsonValueKind.Array) return "";
+        foreach (var value in array.EnumerateArray())
+            if (value.ValueKind == JsonValueKind.String) return value.GetString() ?? "";
+        return "";
     }
 
     // skip_to lives under prepare_play_options.skip_to (desktop envelope) or options.skip_to (legacy/bare form).

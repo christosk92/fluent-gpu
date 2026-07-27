@@ -281,31 +281,30 @@ public class VideoOverrideTests
     // ── the controller: open-failure recovery ────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task VideoError_WithNoRecoveryHook_ReportsTheErrorExactlyAsItDoesToday()
+    public async Task VideoError_WithNoRecoveryHook_FallsBackToAudio()
     {
         using var h = new Harness { VideoIntent = true };
         await h.Controller.PlayAsync("spotify:playlist:p");
 
         h.Video!.Sig.Emit(AudioHostSignal.Fault(0, AudioKeyFailureReason.None, "decode failed"));
-        await Task.Delay(60);
+        await WaitUntilAsync(() => h.Log.Exists(x => x.StartsWith("audio:load:", StringComparison.Ordinal)));
 
-        Assert.Single(h.Errors);
-        Assert.Equal(AudioKeyFailureReason.EmulationFault, h.Errors[0].Reason);
+        Assert.Empty(h.Errors);
+        Assert.Equal(PlayableKind.Audio, h.Controller.CurrentMediaKind);
     }
 
     [Fact]
-    public async Task VideoError_RecoveryDeclines_ReportsTheError_AfterAskingOnce()
+    public async Task VideoError_RecoveryDeclines_FallsBackToAudio_AfterAskingOnce()
     {
         using var h = new Harness { VideoIntent = true };
         await h.Controller.PlayAsync("spotify:playlist:p");
         h.Controller.TryRecoverVideoAsync = (t, _) => { h.RecoveryAsks.Add(t.Uri); return Task.FromResult(false); };
 
         h.Video!.Sig.Emit(AudioHostSignal.Fault(0, AudioKeyFailureReason.None, "decode failed"));
-        await WaitUntilAsync(() => h.Errors.Count > 0);
+        await WaitUntilAsync(() => h.Controller.CurrentMediaKind == PlayableKind.Audio);
 
         Assert.Equal(new[] { "spotify:track:a" }, h.RecoveryAsks.ToArray());
-        Assert.Single(h.Errors);
-        Assert.Equal(AudioKeyFailureReason.EmulationFault, h.Errors[0].Reason);
+        Assert.Empty(h.Errors);
     }
 
     [Fact]
@@ -335,10 +334,10 @@ public class VideoOverrideTests
         await Task.Delay(60);                         // let the recovery reload settle (it keeps the same playable)
 
         h.Video.Sig.Emit(AudioHostSignal.Fault(0, AudioKeyFailureReason.None, "decode failed again"));
-        await WaitUntilAsync(() => h.Errors.Count > 0);
+        await WaitUntilAsync(() => h.Controller.CurrentMediaKind == PlayableKind.Audio);
 
-        Assert.Single(h.RecoveryAsks);                // the guard: a second failure on the same uri REPORTS
-        Assert.Single(h.Errors);
+        Assert.Single(h.RecoveryAsks);                // one video recovery, then a deterministic audio fail-over
+        Assert.Empty(h.Errors);
     }
 
     [Fact]

@@ -106,7 +106,8 @@ public sealed class ConnectStateBuilder
     /// video host is what is actually playing. Null (the default) keeps the legacy per-track wire heuristic, for callers that
     /// genuinely do not know the kind.</summary>
     public byte[] BuildPutState(PutStateReasonKind reason, LocalPlaybackSnapshot? snap, uint messageId, bool isActive,
-        long? nowMs = null, PlayableKind? currentKind = null)
+        long? nowMs = null, PlayableKind? currentKind = null,
+        string? lastCommandSentByDeviceId = null, uint lastCommandMessageId = 0)
     {
         long ts = nowMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (snap is { } sv) SetVolume((int)Math.Round(Math.Clamp(sv.Volume01, 0, 1) * MaxVolume));   // DeviceInfo.Volume from our live volume
@@ -135,6 +136,10 @@ public sealed class ConnectStateBuilder
         {
             if (s2.StartedPlayingAtMs > 0) req.StartedPlayingAt = (ulong)s2.StartedPlayingAtMs;
         }
+        if (!string.IsNullOrEmpty(lastCommandSentByDeviceId))
+            req.LastCommandSentByDeviceId = lastCommandSentByDeviceId;
+        if (lastCommandMessageId != 0)
+            req.LastCommandMessageId = lastCommandMessageId;
         return req.ToByteArray();
     }
 

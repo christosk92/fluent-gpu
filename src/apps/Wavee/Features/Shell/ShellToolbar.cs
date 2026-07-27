@@ -28,20 +28,20 @@ sealed class ShellToolbar : Component
     readonly Action _back;
     readonly Action _forward;
     readonly Action _home;
+    readonly Action _toggleSidebar;
     readonly Signal<string> _searchText;
-    readonly Signal<bool> _sidebarCompact;
     readonly Action _toggleTheme;
     readonly List<Route> _backHistory;
     readonly List<Route> _forwardHistory;
 
     public ShellToolbar(Signal<Route> route, Signal<bool> canBack, Signal<bool> canForward,
                         Action<string, string?> go, Action back, Action forward, Action home,
-                        Signal<string> searchText, Signal<bool> sidebarCompact, Action toggleTheme,
+                        Signal<string> searchText, Action toggleSidebar, Action toggleTheme,
                         List<Route> backHistory, List<Route> forwardHistory)
     {
         _route = route; _canBack = canBack; _canForward = canForward;
         _go = go; _back = back; _forward = forward; _home = home;
-        _searchText = searchText; _sidebarCompact = sidebarCompact; _toggleTheme = toggleTheme;
+        _searchText = searchText; _toggleSidebar = toggleSidebar; _toggleTheme = toggleTheme;
         _backHistory = backHistory; _forwardHistory = forwardHistory;
     }
 
@@ -54,7 +54,7 @@ sealed class ShellToolbar : Component
         // Band-gate: recompute on every viewport move but only push a new value (→ re-render) when a threshold flips.
         UseSignalEffect(() =>
         {
-            var next = ToolbarLayout.FromWidth(viewport.Value.Width);
+            var next = ToolbarLayout.Resolve(viewport.Value.Width, layout.Peek(), initialized: true);
             if (!next.Equals(layout.Peek())) layout.Value = next;
         });
         return Embed.Comp(() => new ShellToolbarContent(this, layout, b, ui));
@@ -62,8 +62,9 @@ sealed class ShellToolbar : Component
 
     internal static IconButton.Style NavStyle => IconButton.DefaultStyle with { Size = 36f, Height = 32f };
 
-    internal Element Bar(ToolbarLayout L, PlaybackBridge? b, ShellUi? ui)
+    internal Element Bar(IReadSignal<ToolbarLayout> layout, PlaybackBridge? b, ShellUi? ui)
     {
+        ToolbarLayout L = layout.Value;
         bool onHome = _route.Value.Name == "home";        // subscribe (home pill)
         var nav = NavStyle;
 
@@ -74,16 +75,20 @@ sealed class ShellToolbar : Component
             // The compact rail is centred at x=28 while the toolbar's 6-DIP inset put this 36-DIP button at x=24.
             // Shift only the hamburger's painted slot four DIPs; the negative trailing margin keeps every later item
             // (back/forward/home/search) at its existing position.
-            IconButton.Create(Icons.Menu, () => _sidebarCompact.Value = !_sidebarCompact.Peek(), nav) with
+            IconButton.Create(Icons.Menu, _toggleSidebar, nav) with
             {
                 Margin = new Edges4(4f, 0f, -4f, 0f),
             },
             Embed.Comp(() => new NavHistoryButton(Icons.Back,    _back,    _canBack,    _backHistory,    _go)),
-            Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go)),
-            HomeButton(nav, onHome),
+        };
+        if (L.ShowPrimaryNav)
+        {
+            kids.Add(Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go)));
+            kids.Add(HomeButton(nav, onHome));
+        }
 
             // ── centre: omnibar (left-aligned right after Home, like WaveeMusic — not centred) ──
-            new BoxEl
+        kids.Add(new BoxEl
             {
                 // Right margin keeps a clear gap between the omnibar and the account cluster — without it the search box's
                 // trailing icon butts right up against the profile avatar at narrower widths (reads as overlap).
@@ -96,11 +101,10 @@ sealed class ShellToolbar : Component
                     // suggestions come from the Omnibar component (online searchSuggestions).
                     Embed.Comp(() => new FluentRichOmnibar(_searchText, _go)),
                 ],
-            },
+            });
 
             // ── right: account · friends · bell · theme (collapses by threshold) ──
-            ProfileChip(b, L.ShowProfileName),
-        };
+        kids.Add(ProfileChip(b, L.ShowProfileName));
         if (L.ShowFriends) kids.Add(IconButton.Create(Icons.Friends, () => ui?.Toggle(RailMode.Friends), nav));
         if (L.ShowBell) kids.Add(Embed.Comp(() => new NotificationBell()));
         if (L.ShowThemeToggle)
@@ -113,7 +117,8 @@ sealed class ShellToolbar : Component
         // overflow-expand clip on top, which made the menu pop the empty chrome then fill in (two out-of-sync clips).
         var overflow = OverflowItems(L, ui);
         bool overflowBell = !L.ShowBell;   // when the bell collapses, the notification center folds into the ⋯ menu
-        if (overflow.Count > 0 || overflowBell) kids.Add(Embed.Comp(() => new OverflowMenu(overflow, overflowBell)));
+        if (overflow.Count > 0 || overflowBell)
+            kids.Add(Embed.Comp(() => new OverflowMenu(this, layout, ui)));
 
         return new BoxEl
         {
@@ -146,9 +151,16 @@ sealed class ShellToolbar : Component
     }
 
     // The items currently dropped from the bar (by threshold), as plain MenuFlyout items. They stay reachable here.
-    List<MenuFlyoutItem> OverflowItems(ToolbarLayout L, ShellUi? ui)
+    internal List<MenuFlyoutItem> OverflowItems(ToolbarLayout L, ShellUi? ui)
     {
-        var items = new List<MenuFlyoutItem>(3);
+        var items = new List<MenuFlyoutItem>(6);
+        if (!L.ShowPrimaryNav)
+        {
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Nav.Forward), Icons.Forward,
+                Enabled: _canForward.Value, Invoke: _forward));
+            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Nav.Home), Icons.Home, Invoke: _home));
+            items.Add(MenuFlyoutItem.Separator);
+        }
         if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Icons.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
         // Notifications, when collapsed, are handled by OverflowMenu (it anchors the panel to the ⋯ button) — not a plain item.
         if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Icons.Sun : Icons.Moon, Invoke: _toggleTheme));
@@ -167,19 +179,28 @@ sealed class ShellToolbarContent : Component
     readonly ShellUi? _ui;
     public ShellToolbarContent(ShellToolbar owner, IReadSignal<ToolbarLayout> layout, PlaybackBridge? b, ShellUi? ui)
     { _owner = owner; _layout = layout; _b = b; _ui = ui; }
-    public override Element Render() => _owner.Bar(_layout.Value, _b, _ui);
+    public override Element Render() => _owner.Bar(_layout, _b, _ui);
 }
 
 // Width thresholds for the right cluster (DIP). Drop least-essential first as the window narrows, so the omnibar keeps
 // usable room: friends → profile name → bell → theme. Avatar always stays. Equality-comparable
 // (record struct) so the band-gate only re-renders on a real threshold flip.
-readonly record struct ToolbarLayout(bool ShowFriends, bool ShowProfileName, bool ShowBell, bool ShowThemeToggle)
+readonly record struct ToolbarLayout(bool ShowFriends, bool ShowProfileName, bool ShowBell, bool ShowThemeToggle,
+    bool ShowPrimaryNav)
 {
     public static ToolbarLayout FromWidth(float w) => new(
         ShowFriends:     w >= 1000f,
         ShowProfileName: w >= 900f,
         ShowBell:        w >= 800f,
-        ShowThemeToggle: w >= 720f);
+        ShowThemeToggle: w >= 720f,
+        ShowPrimaryNav: !ShellResponsiveLayout.ToolbarNarrowFor(w, current: false, initialized: false));
+
+    public static ToolbarLayout Resolve(float w, ToolbarLayout current, bool initialized) => new(
+        ShowFriends:     w >= 1000f,
+        ShowProfileName: w >= 900f,
+        ShowBell:        w >= 800f,
+        ShowThemeToggle: w >= 720f,
+        ShowPrimaryNav: !ShellResponsiveLayout.ToolbarNarrowFor(w, !current.ShowPrimaryNav, initialized));
 }
 
 // A toolbar nav button (Back or Forward) that fires its primary action on click and opens a history flyout on
@@ -245,10 +266,11 @@ sealed class NavHistoryButton : Component
 // so it gets the engine's clean MenuPopupThemeTransition clip-reveal (NOT CommandBarFlyout's extra overflow-expand clip).
 sealed class OverflowMenu : Component
 {
-    readonly IReadOnlyList<MenuFlyoutItem> _items;
-    readonly bool _showNotifications;
-    public OverflowMenu(IReadOnlyList<MenuFlyoutItem> items, bool showNotifications = false)
-    { _items = items; _showNotifications = showNotifications; }
+    readonly ShellToolbar _owner;
+    readonly IReadSignal<ToolbarLayout> _layout;
+    readonly ShellUi? _ui;
+    public OverflowMenu(ShellToolbar owner, IReadSignal<ToolbarLayout> layout, ShellUi? ui)
+    { _owner = owner; _layout = layout; _ui = ui; }
 
     public override Element Render()
     {
@@ -273,14 +295,16 @@ sealed class OverflowMenu : Component
 
         List<MenuFlyoutItem> BuildItems()
         {
-            var list = new List<MenuFlyoutItem>(_items.Count + 1);
-            if (_showNotifications)
+            ToolbarLayout layout = _layout.Peek();
+            var current = _owner.OverflowItems(layout, _ui);
+            var list = new List<MenuFlyoutItem>(current.Count + 1);
+            if (!layout.ShowBell)
             {
                 int unread = nc?.UnreadCount.Peek() ?? 0;
                 string label = unread > 0 ? Strings.Notifications.OverflowTitle(unread) : Loc.Get(Strings.Notifications.Title);
                 list.Add(new MenuFlyoutItem(label, Icons.Bell, Invoke: OpenNotifications));
             }
-            list.AddRange(_items);
+            list.AddRange(current);
             return list;
         }
 
@@ -410,7 +434,8 @@ sealed class FluentRichOmnibar : Component
         var presenter = new AutoSuggestBoxPresenter(
             Build: context => Embed.Comp(() => new OmnibarSuggestionsPopup(
                 _text, _suggestions, _loading, context.Width, _highlight,
-                selection => { if (InvokeSelection(selection)) context.Close(); })),
+                selection => { if (InvokeSelection(selection)) context.Close(); },
+                close: context.Close)),
             MoveSelection: MoveSelection,
             SubmitSelection: () => InvokeSelection(_highlight.Peek()),
             ResetSelection: () => _highlight.Value = -1);
@@ -599,10 +624,10 @@ sealed class OmnibarSuggestionsPopup : Component
     }
 
     public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
-        IReadSignal<float> width, IReadSignal<int> highlight, Action<int> choose)
+        IReadSignal<float> width, IReadSignal<int> highlight, Action<int> choose, Action? close = null)
     {
         _text = text; _suggestions = suggestions; _loading = loading; _width = width;
-        _highlight = highlight; _choose = choose;
+        _highlight = highlight; _choose = choose; _close = close;
     }
 
     public override Element Render()
@@ -612,6 +637,12 @@ sealed class OmnibarSuggestionsPopup : Component
         bool loading = _loading.Value;
         int highlighted = _highlight?.Value ?? -1;
         float width = _width.Value > 0f ? _width.Value : 720f;
+        // Live path (FluentRichOmnibar) does not pass Services/go — resolve them from ambient context so row actions
+        // (Play / Like / context menu) work the same as the retained RichOmnibar constructor.
+        var svc = _svc ?? UseContext(Services.Slot);
+        var acts = UseContext(ActionServices.Slot);
+        var overlay = UseContext(Overlay.Service);
+        var lib = UseContext(LibraryBridge.Slot);
 
         // No client-side re-filter: the server's fuzzy matching (apostrophes, word order) is authoritative;
         // a literal Contains() check would drop most of its hits. Staleness is handled at publish time.
@@ -629,7 +660,7 @@ sealed class OmnibarSuggestionsPopup : Component
         foreach (var item in s.Items)
         {
             if (richCount == 0 && rows.Count > 0) rows.Add(Divider());
-            rows.Add(RichRow(item, selectionIndex, highlighted == selectionIndex));
+            rows.Add(RichRow(item, selectionIndex, highlighted == selectionIndex, svc, acts, overlay, lib));
             selectionIndex++;
             if (++richCount >= 10) break;
         }
@@ -696,11 +727,33 @@ sealed class OmnibarSuggestionsPopup : Component
         Children = QueryContent(query, typed),
     };
 
-    Element RichRow(SearchSuggestionItem item, int selectionIndex, bool selected)
+    Element RichRow(SearchSuggestionItem item, int selectionIndex, bool selected,
+                    Services? svc, ActionServices? acts, IOverlayService? overlay, LibraryBridge? lib)
     {
         bool circular = item.Kind == SearchSuggestionKind.Artist;
         float radius = circular ? 22f : 5f;
-        return new BoxEl
+        bool saved = lib?.IsSaved(item.Uri) ?? false;
+        Action play = () => PlayItem(item, svc);
+        Action open = () =>
+        {
+            if (_choose is not null) { _choose(selectionIndex); return; }
+            Invoke(item, svc);
+        };
+        // Trailing cluster: Play · Like · More — always visible (fills the empty gap before the type pill). More raises
+        // the same context menu as right-click (ClickRequestsContext → WithContextMenu ancestor).
+        var trailing = new BoxEl
+        {
+            Direction = 0, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 2f,
+            Children =
+            [
+                IconButton(Icons.Play, play),
+                TrackRow.Heart(saved, () => lib?.ToggleSaved(item.Uri, item.Title)),
+                MoreButton(acts is not null && overlay is not null),
+                TypePill(TypeLabel(item.Kind)),
+            ],
+        };
+
+        var row = new BoxEl
         {
             Direction = 0,
             Height = 58f,
@@ -713,11 +766,7 @@ sealed class OmnibarSuggestionsPopup : Component
             Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
             HoverFill = Tok.FillSubtleSecondary,
             PressedFill = Tok.FillSubtleTertiary,
-            OnClick = () =>
-            {
-                if (_choose is not null) { _choose(selectionIndex); return; }
-                Invoke(item);
-            },
+            OnClick = open,
             Children =
             [
                 new BoxEl
@@ -735,17 +784,29 @@ sealed class OmnibarSuggestionsPopup : Component
                         new TextEl(item.Subtitle ?? TypeLabel(item.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     ],
                 },
-                TypePill(TypeLabel(item.Kind)),
+                trailing,
             ],
         };
+        return acts is not null && overlay is not null
+            ? row.WithContextMenu(overlay, () => Menus.Card(acts, item.Uri, item.Title))
+            : row;
     }
 
-    void Invoke(SearchSuggestionItem item)
+    void PlayItem(SearchSuggestionItem item, Services? svc)
     {
+        if (svc is null) return;
+        if (item.Kind == SearchSuggestionKind.Track) _ = svc.Player.PlayTrackAsync(item.Uri);
+        else _ = svc.Player.PlayAsync(item.Uri, 0);
+        _close?.Invoke();
+    }
+
+    void Invoke(SearchSuggestionItem item, Services? svc = null)
+    {
+        svc ??= _svc;
         switch (item.Kind)
         {
             case SearchSuggestionKind.Track:
-                if (_svc is not null) _ = _svc.Player.PlayTrackAsync(item.Uri);
+                if (svc is not null) _ = svc.Player.PlayTrackAsync(item.Uri);
                 break;
             case SearchSuggestionKind.Artist:
                 _go?.Invoke("artist:" + item.Uri, item.Title);
@@ -759,6 +820,28 @@ sealed class OmnibarSuggestionsPopup : Component
         }
         _close?.Invoke();
     }
+
+    static Element IconButton(string glyph, Action onClick) => new BoxEl
+    {
+        Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(14f),
+        HoverScale = 1.06f, PressScale = 0.94f,
+        Cursor = CursorId.Hand, OnClick = onClick, Role = AutomationRole.Button,
+        Children = [Icon(glyph, 14f, Tok.TextSecondary)],
+    }.Interactive(Interaction.Subtle);
+
+    // Always-visible "…" — same ClickRequestsContext contract as TrackRow.MoreButton, without the hover-only fade
+    // (omnibar rows are transient; the affordance needs to read at rest).
+    static Element MoreButton(bool enabled) => new BoxEl
+    {
+        Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(14f),
+        HoverScale = 1.06f, PressScale = 0.94f,
+        Cursor = enabled ? CursorId.Hand : (CursorId?)null,
+        ClickRequestsContext = enabled,
+        Role = AutomationRole.Button,
+        Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
+    }.Interactive(Interaction.Subtle);
 
     static Element Divider() => new BoxEl
     {

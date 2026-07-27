@@ -51,6 +51,20 @@ public class LiveContextResolverTests
         Assert.Equal(2, r2.StartIndex);
     }
 
+    [Fact]
+    public async Task PopularReleaseListUri_RoutesThroughArtistListResolver()
+    {
+        var transport = new ArtistCountingTransport(() => new Resp(true, ArtistListBody(), 200));
+        var resolver = MakeResolver(transport);
+
+        var result = await resolver.ResolveAsync(ContextSpec.ForUri(
+            "spotify:list:popular-release-segments-main-roles:artist_abc", 1));
+
+        Assert.Equal(3, result.Count);
+        Assert.Equal(1, result.StartIndex);
+        Assert.Contains("/artist_abc", transport.LastRoute, StringComparison.Ordinal);
+    }
+
     // ── inspiredby-mix/v2/seed_to_playlist (explicit "Start radio" seed → radio playlist uri) ─────────────────────────
     static LiveContextResolver MakeResolver(ITransport transport)
     {
@@ -115,9 +129,11 @@ public class LiveContextResolverTests
 
     sealed class ArtistCountingTransport(Func<Resp> respond) : ITransport
     {
+        public string LastRoute { get; private set; } = "";
         public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
             string? method = null, IReadOnlyDictionary<string, string>? headers = null)
         {
+            LastRoute = route;
             if (route.Contains("popular-release-segments", StringComparison.Ordinal))
                 return Task.FromResult(respond());
             return Task.FromResult(new Resp(false, Array.Empty<byte>(), 404));

@@ -145,6 +145,13 @@ public sealed unsafe partial class Win32App : IPlatformApp
     public void Dispose() { }
 }
 
+/// <summary>Pure logical-to-physical minimum-size conversion shared by the Win32 message path and unit tests.</summary>
+internal static class MinTrackSizing
+{
+    public static int DipToPx(float dip, uint dpi)
+        => dip <= 0f ? 0 : (int)MathF.Ceiling(dip * (dpi == 0 ? 96u : dpi) / 96f);
+}
+
 public sealed unsafe partial class Win32Window : IPlatformWindow
 {
     // Win32 ABI constants (stable; defined locally to avoid TerraFX's per-prefix constant classes).
@@ -495,6 +502,8 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool _closed;
     // Detached-window minimum CLIENT size (physical px); (0,0) = no clamp (the primary window is untouched). Converted to
     // a window (outer) minimum in the WM_GETMINMAXINFO handler via AdjustWindowRectExForDpi (client → window rect).
+    // Descriptor minimum CLIENT size (logical DIP) is resolved against the live per-monitor DPI on each query.
+    private readonly Size2 _minClientDip;
     private Size2 _minClientPx;
     private DropRegistration? _dropReg;   // OS file/folder drop registration (Win32DropTarget IDropTarget); null = not registered
     // The DirectManipulation touchpad producer (scroll-feel-rework-v2 §7, Phase D). null = unavailable (MTA thread /
@@ -547,6 +556,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _h = (int)requestedH;
         _customFrame = desc.CustomFrame;   // must be set BEFORE CreateWindowExW: WM_NCCALCSIZE fires during creation
         _composited = desc.Composited;     // gates the WM_MOVE per-step repaint: DWM relocates the DComp surface on a pure move
+        _minClientDip = desc.MinClientSizeDip; // WM_GETMINMAXINFO may run inside CreateWindowExW
         _self = GCHandle.Alloc(this);
 
         HINSTANCE hinst = GetModuleHandleW(null);
@@ -802,20 +812,25 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // client (physical px) → window (outer) size, adding the current frame for this window's style/exstyle/DPI. Standard
     // frame ⇒ AdjustWindowRectExForDpi; a custom frame reclaims the caption as client (WM_NCCALCSIZE keeps the top inset
     // at 0), so only the L/R/B thin frame is added — mirroring AdjustForFrame.
-    private void ClientToWindowPx(int clientW, int clientH, out int windowW, out int windowH)
+    private void ClientToWindowPx(HWND hWnd, int clientW, int clientH, out int windowW, out int windowH)
     {
         RECT rc = new() { left = 0, top = 0, right = clientW, bottom = clientH };
         if (!_customFrame)
         {
-            uint style = (uint)GetWindowLongPtrW(_hwnd, GWL_STYLE);
-            uint exStyle = (uint)GetWindowLongPtrW(_hwnd, GWL_EXSTYLE);
-            uint dpi = GetDpiForWindow(_hwnd);
+            uint style = (uint)GetWindowLongPtrW(hWnd, GWL_STYLE);
+            uint exStyle = (uint)GetWindowLongPtrW(hWnd, GWL_EXSTYLE);
+            uint dpi = GetDpiForWindow(hWnd);
             if (dpi == 0) dpi = 96u;
             AdjustWindowRectExForDpi(&rc, style, false, exStyle, dpi);
         }
         else
         {
-            AdjustForFrame(&rc);
+            uint dpi = GetDpiForWindow(hWnd);
+            if (dpi == 0) dpi = 96u;
+            int padded = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            int fx = padded + GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi);
+            int fy = padded + GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi);
+            rc.left -= fx; rc.right += fx; rc.bottom += fy;
         }
         windowW = rc.right - rc.left;
         windowH = rc.bottom - rc.top;
@@ -1231,14 +1246,27 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 return false;
             case WM_ERASEBKGND: result = (LRESULT)1; return true;   // we paint every pixel — suppress the flicker-erase
             case WM_GETMINMAXINFO:
-                // Clamp the minimum tracking size only when a detached window requested a floor (default (0,0) = no clamp,
-                // so the primary window keeps the OS default). Convert the min CLIENT px → min WINDOW px for the live frame.
-                if (_minClientPx.Width > 0f && _minClientPx.Height > 0f)
+                // Clamp only opted-in axes. A primary window requests a logical-DIP floor through WindowDesc; detached
+                // windows retain the dynamic physical-px setter. No request keeps USER32's default for that axis.
+                bool clampW = _minClientPx.Width > 0f || _minClientDip.Width > 0f;
+                bool clampH = _minClientPx.Height > 0f || _minClientDip.Height > 0f;
+                if (clampW || clampH)
                 {
-                    ClientToWindowPx((int)_minClientPx.Width, (int)_minClientPx.Height, out int minW, out int minH);
+                    // Preserve USER32's unrequested axis/limits, but explicitly replace opted-in axes: a responsive app
+                    // may deliberately support a width below the generic top-level minimum.
+                    result = DefWindowProcW(hWnd, msg, wParam, lParam);
+                    uint dpi = GetDpiForWindow(hWnd);
+                    if (dpi == 0) dpi = 96u;
+                    int clientW = _minClientPx.Width > 0f
+                        ? (int)MathF.Ceiling(_minClientPx.Width)
+                        : MinTrackSizing.DipToPx(_minClientDip.Width, dpi);
+                    int clientH = _minClientPx.Height > 0f
+                        ? (int)MathF.Ceiling(_minClientPx.Height)
+                        : MinTrackSizing.DipToPx(_minClientDip.Height, dpi);
+                    ClientToWindowPx(hWnd, clientW, clientH, out int minW, out int minH);
                     MINMAXINFO* mmi = (MINMAXINFO*)(nint)lParam;
-                    mmi->ptMinTrackSize.x = minW;
-                    mmi->ptMinTrackSize.y = minH;
+                    if (clampW) mmi->ptMinTrackSize.x = minW;
+                    if (clampH) mmi->ptMinTrackSize.y = minH;
                     return true;
                 }
                 return false;

@@ -120,12 +120,24 @@ public sealed class EditableText : Component
     /// <summary>PasswordBox Peek/Visible: show the REAL text while keeping the <see cref="Mask"/> password semantics
     /// (copy/cut stay blocked — WinUI never allows copying out of a PasswordBox, revealed or not).</summary>
     public bool Revealed;
+    /// <summary>Optional left-edge affix (search/query glyphs and other non-text leading content). Laid out before the
+    /// text lane and stretched to the field's inner height. Static composition may assign the field directly; a live
+    /// mounted instance must use <see cref="SetLeftAffix"/> so the affix epoch re-renders the lane.</summary>
+    public Element? LeftAffix = null;
     /// <summary>Optional right-edge affix (PasswordBox reveal "eye", NumberBox spin column). Laid out at the right of the
     /// field, stretched to the inner height; the text area grows to fill the rest. When set, it REPLACES the WinUI
     /// DeleteButton lane (in WinUI the spin/reveal buttons take the affix slot instead of the delete button).
     /// Composers that mount/unmount the affix on a LIVE instance must go through <see cref="SetRightAffix"/> —
     /// a bare field write does not re-render the field.</summary>
     public Element? RightAffix = null;
+
+    /// <summary>Replace the left-affix element on the live instance.</summary>
+    internal void SetLeftAffix(Element? affix)
+    {
+        if (ReferenceEquals(LeftAffix, affix)) return;
+        LeftAffix = affix;
+        if (_affixEpoch is { } ep) ep.Value = ep.Peek() + 1;
+    }
 
     /// <summary>Replace the right-affix element on the LIVE instance (the PasswordBox reveal eye mounts/unmounts per
     /// the WinUI ButtonStates rule mid-typing, when no focus flip re-renders this component). Props freeze at mount,
@@ -349,7 +361,9 @@ public sealed class EditableText : Component
             };
         }
 
-        var rowChildren = new List<Element> { lane };
+        var rowChildren = new List<Element>(3);
+        if (LeftAffix is not null) rowChildren.Add(LeftAffix);
+        rowChildren.Add(lane);
         if (RightAffix is not null)
         {
             rowChildren.Add(RightAffix);

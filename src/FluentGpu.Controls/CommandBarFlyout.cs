@@ -163,7 +163,8 @@ public sealed class CommandBarFlyout : Component
         bool alwaysExpanded = true,
         float overflowMinWidth = 136f,
         bool touchInputMode = false,
-        bool labeledPrimary = false)
+        bool labeledPrimary = false,
+        Element? header = null)
         => Embed.Comp(() => new CommandBarFlyoutBody
         {
             Primary = primary,
@@ -176,6 +177,7 @@ public sealed class CommandBarFlyout : Component
             TouchInputMode = touchInputMode,
             OverflowMinWidth = overflowMinWidth,
             LabeledPrimary = labeledPrimary,
+            Header = header,
         });
 
     static readonly AppBarCommand[] DefaultPrimary =
@@ -299,6 +301,8 @@ internal sealed class CommandBarFlyoutBody : Component
     /// stack per button (20px icon + a Caption-size label, min-width 64, taller row), and a checked toggle drops the
     /// WinUI accent pill for an accent-tinted glyph on a transparent plate. Off = the WinUI icon-only parity control.</summary>
     public bool LabeledPrimary;
+    /// <summary>Optional non-focusable identity strip composed above the primary/overflow regions.</summary>
+    public Element? Header;
 
     // Dim constants from CommandBarFlyout_themeresources.xaml.
     const float PrimaryRowHeight = 40f;        // PrimaryItemsControl Height (:1043)
@@ -608,6 +612,24 @@ internal sealed class CommandBarFlyoutBody : Component
 
         Action<NodeHandle> rootCapture = h => _rootNode = h;
 
+        Element[] WithHeader(List<Element> body)
+        {
+            if (Header is null) return body.ToArray();
+            var all = new List<Element>(body.Count + 2)
+            {
+                Header,
+                new BoxEl
+                {
+                    Height = 1f,
+                    Margin = new Edges4(8f, 0f, 8f, 0f),
+                    Fill = Tok.StrokeDividerDefault,
+                    HitTestVisible = false,
+                },
+            };
+            all.AddRange(body);
+            return all.ToArray();
+        }
+
         // The 83ms closing-fade clock: fires the real Close() once the ClosingOpacityStoryboard settles.
         Element? closeClock = closingNow
             ? Embed.Comp(() => new ToolTipClock { DurationMs = Motion.ControlFaster, OnElapsed = Close }) with { Key = "cbf-close" }
@@ -624,7 +646,7 @@ internal sealed class CommandBarFlyoutBody : Component
                 AlignSelf = FlexAlign.Start,
                 MaxWidth = FlyoutMaxWidth,
                 OnRealized = rootCapture,
-                Children = menuChildren.ToArray(),
+                Children = WithHeader(menuChildren),
             };
             var mm = Parts.Apply(CommandBarFlyout.PartRoot, menuRoot);
             return mm with { Children = menuRoot.Children, OnRealized = TemplateParts.Chain(rootCapture, mm.OnRealized) };
@@ -684,7 +706,7 @@ internal sealed class CommandBarFlyoutBody : Component
                 MaxWidth = FlyoutMaxWidth,
                 MinWidth = rootMinWidth,   // widen to fit the labeled strip's clamped columns (NaN = natural, icon-only)
                 OnRealized = rootCapture,
-                Children = collapsedChildren.ToArray(),
+                Children = WithHeader(collapsedChildren),
             };
             var cm = Parts.Apply(CommandBarFlyout.PartRoot, collapsedRoot);
             return cm with { Children = collapsedRoot.Children, OnRealized = TemplateParts.Chain(rootCapture, cm.OnRealized) };
@@ -719,7 +741,7 @@ internal sealed class CommandBarFlyoutBody : Component
             MinWidth = rootMinWidth,   // widen to fit the labeled strip's clamped columns (NaN = natural, icon-only)
             ClipToBounds = true,   // the expand clips must never paint past the popup's rounded corners
             OnRealized = rootCapture,
-            Children = children.ToArray(),
+            Children = WithHeader(children),
         };
         var rm = Parts.Apply(CommandBarFlyout.PartRoot, root);
         return rm with { ClipToBounds = true, Children = root.Children, OnRealized = TemplateParts.Chain(rootCapture, rm.OnRealized) };

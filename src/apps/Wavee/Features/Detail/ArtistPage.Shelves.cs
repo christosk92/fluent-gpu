@@ -59,7 +59,7 @@ sealed partial class ArtistPage : Component
                 Math.Min(videos.Count, 16),
                 cardAt: (i, w) => MediaCard.VideoCard(videos[i].Thumbnail, videos[i].Title, Dur(videos[i].DurationMs),
                     videos[i].TrackUri, () => play(videos[i].TrackUri), () => play(videos[i].TrackUri), w,
-                    menu: CardMenu(videos[i].TrackUri, videos[i].Title)),
+                    menu: CardMenu(videos[i].TrackUri, videos[i].Title, videos[i].Thumbnail, Dur(videos[i].DurationMs))),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.MusicVideos))),
         ],
     };
@@ -74,7 +74,7 @@ sealed partial class ArtistPage : Component
                 Math.Min(pls.Count, 16),
                 cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].Subtitle, pls[i].Uri,
                     () => go("pl:" + pls[i].Uri, pls[i].Name), () => play(pls[i].Uri), w,
-                    menu: CardMenu(pls[i].Uri, pls[i].Name)),
+                    menu: CardMenu(pls[i].Uri, pls[i].Name, pls[i].Cover, pls[i].Subtitle)),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.PlaylistsDiscovery))),
         ],
     };
@@ -189,7 +189,8 @@ sealed partial class ArtistPage : Component
                 related.Count,
                 cardAt: (i, w) => MediaCard.Shelf(related[i].Image, related[i].Name, Loc.Get(Strings.Search.TypeArtist), related[i].Uri,
                     () => go("artist:" + related[i].Uri, related[i].Name), () => play(related[i].Uri), w, circular: true,
-                    menu: CardMenu(related[i].Uri, related[i].Name)),
+                    menu: CardMenu(related[i].Uri, related[i].Name, related[i].Image,
+                        Loc.Get(Strings.Search.TypeArtist), circular: true)),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Detail.FansAlsoLike))),
         ],
     };
@@ -203,7 +204,8 @@ sealed partial class ArtistPage : Component
                 fans.Count,
                 cardAt: (i, w) => MediaCard.Shelf(fans[i].Image, fans[i].Name, Loc.Get(Strings.Search.TypeArtist), fans[i].Uri,
                     () => go("artist:" + fans[i].Uri, fans[i].Name), () => play(fans[i].Uri), w, circular: true,
-                    menu: CardMenu(fans[i].Uri, fans[i].Name)),
+                    menu: CardMenu(fans[i].Uri, fans[i].Name, fans[i].Image,
+                        Loc.Get(Strings.Search.TypeArtist), circular: true)),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Detail.FansAlsoLike))),
         ],
     };

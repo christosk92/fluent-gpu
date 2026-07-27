@@ -146,6 +146,113 @@ public sealed class PlaybackSession
         return Bump();
     }
 
+    /// <summary>
+    /// Refresh a context without replacing the playing item. History, user queue, options and the current host/timeline
+    /// remain owned by the controller. If the current row disappeared it stays current outside the refreshed context and
+    /// the first resolved row becomes the next item.
+    /// </summary>
+    public QueueSnapshot ReplaceContextPreservingCurrent(string uri, IReadOnlyList<QueuedTrack> tracks)
+    {
+        var priorCurrent = _current;
+        _naturalOrder.Clear();
+        _context.Clear();
+        _autoplayContextUri = null;
+        _contextUri = uri;
+
+        int matched = -1;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var q = tracks[i];
+            bool same = priorCurrent is { } current
+                && ((!string.IsNullOrEmpty(current.Uid) && current.Uid == q.Uid)
+                    || current.Track.Uri == q.Uri);
+            var item = same && matched < 0
+                ? new SessionItem(priorCurrent!.Id, q.Track, q.Uid, QueueProviderExtensions.FromWire(q.Provider),
+                    q.RowKind, uri, q.Metadata)
+                : new SessionItem(MintId(), q.Track, q.Uid, QueueProviderExtensions.FromWire(q.Provider),
+                    q.RowKind, uri, q.Metadata);
+            if (same && matched < 0) matched = i;
+            _naturalOrder.Add(item);
+            _context.Add(item);
+        }
+
+        if (matched >= 0)
+        {
+            _cursor = matched;
+            _current = _context[matched];
+            if (_shuffle) ReshuffleAnchoringCurrent();
+        }
+        else
+        {
+            _cursor = -1;
+            _current = priorCurrent;
+            if (_shuffle) ShuffleWithoutAnchor();
+        }
+        return Bump();
+    }
+
+    /// <summary>Seed a transferred context while allowing its current track to live outside the resolved row set.</summary>
+    public QueueSnapshot SetTransferredContext(
+        string uri,
+        IReadOnlyList<QueuedTrack> tracks,
+        in QueuedTrack transferredCurrent,
+        bool clearUserQueue)
+    {
+        _naturalOrder.Clear();
+        _context.Clear();
+        _history.Clear();
+        _autoplayContextUri = null;
+        _contextUri = uri;
+        if (clearUserQueue) _userQueue.Clear();
+
+        int matched = -1;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var q = tracks[i];
+            var item = new SessionItem(MintId(), q.Track, q.Uid, QueueProviderExtensions.FromWire(q.Provider),
+                q.RowKind, uri, q.Metadata);
+            _naturalOrder.Add(item);
+            _context.Add(item);
+            if (matched < 0
+                && ((!string.IsNullOrEmpty(transferredCurrent.Uid) && transferredCurrent.Uid == q.Uid)
+                    || transferredCurrent.Uri == q.Uri))
+                matched = i;
+        }
+
+        if (matched >= 0)
+        {
+            _cursor = matched;
+            _current = _context[matched];
+            if (_shuffle) ReshuffleAnchoringCurrent();
+        }
+        else
+        {
+            _cursor = -1;
+            _current = new SessionItem(MintId(), transferredCurrent.Track, transferredCurrent.Uid,
+                QueueProviderExtensions.FromWire(transferredCurrent.Provider), transferredCurrent.RowKind, uri,
+                transferredCurrent.Metadata);
+            if (_shuffle) ShuffleWithoutAnchor();
+        }
+        return Bump();
+    }
+
+    /// <summary>Linear identity comparison; context sizes are data-driven and never capped by captured playlist lengths.</summary>
+    public bool HasSameContextRows(string uri, IReadOnlyList<QueuedTrack> tracks)
+    {
+        if (!string.Equals(_contextUri, uri, StringComparison.Ordinal) || _naturalOrder.Count != tracks.Count) return false;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var left = _naturalOrder[i];
+            var right = tracks[i];
+            if (!string.Equals(left.Track.Uri, right.Uri, StringComparison.Ordinal)
+                || !string.Equals(left.Uid, right.Uid, StringComparison.Ordinal)
+                || left.Kind != right.RowKind
+                || !string.Equals(left.Provider.ToWire(), right.Provider, StringComparison.Ordinal))
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>Relabel the context uri (server-side context patch / rename) without touching the resolved rows.</summary>
     public QueueSnapshot RelabelContext(string uri) { _contextUri = uri; return Bump(); }
 
@@ -320,16 +427,55 @@ public sealed class PlaybackSession
         return null;
     }
 
-    /// <summary>Reorder a user-queue row (drag-to-reorder; the UI ships later). Null if the id isn't a user-queue row.</summary>
-    public QueueSnapshot? MoveUserItem(QueueItemId id, int newPos)
+    /// <summary>Reorder an upcoming row within its own provider section. <paramref name="newPos"/> is section-relative:
+    /// user-queue rows move within the user queue; context and autoplay rows move only among upcoming playable rows
+    /// with the same provider. Markers, the cursor/current row, history, and provider boundaries remain fixed.</summary>
+    public QueueSnapshot? MoveItem(QueueItemId id, int newPos)
     {
         int from = _userQueue.FindIndex(x => x.Id == id);
-        if (from < 0) return null;
-        var it = _userQueue[from];
-        _userQueue.RemoveAt(from);
-        _userQueue.Insert(Math.Clamp(newPos, 0, _userQueue.Count), it);
+        if (from >= 0)
+        {
+            var it = _userQueue[from];
+            _userQueue.RemoveAt(from);
+            _userQueue.Insert(Math.Clamp(newPos, 0, _userQueue.Count), it);
+            return Bump();
+        }
+
+        int rawFrom = _context.FindIndex(x => x.Id == id);
+        if (rawFrom <= _cursor || rawFrom >= _context.Count) return null;
+        var source = _context[rawFrom];
+        if (source.Kind != QueueRowKind.Playable || source.Provider == QueueProvider.Queue) return null;
+
+        var slots = new List<int>();
+        for (int i = _cursor + 1; i < _context.Count; i++)
+        {
+            var item = _context[i];
+            if (item.Kind == QueueRowKind.Playable && item.Provider == source.Provider) slots.Add(i);
+        }
+        int sectionFrom = slots.IndexOf(rawFrom);
+        if (sectionFrom < 0) return null;
+        int sectionTo = Math.Clamp(newPos, 0, slots.Count - 1);
+        if (sectionFrom == sectionTo) return null;
+
+        int step = sectionTo > sectionFrom ? 1 : -1;
+        for (int i = sectionFrom; i != sectionTo; i += step)
+        {
+            int left = slots[i], right = slots[i + step];
+            var leftItem = _context[left];
+            var rightItem = _context[right];
+            (_context[left], _context[right]) = (rightItem, leftItem);
+
+            int naturalLeft = _naturalOrder.FindIndex(x => x.Id == leftItem.Id);
+            int naturalRight = _naturalOrder.FindIndex(x => x.Id == rightItem.Id);
+            if (naturalLeft >= 0 && naturalRight >= 0)
+                (_naturalOrder[naturalLeft], _naturalOrder[naturalRight]) =
+                    (_naturalOrder[naturalRight], _naturalOrder[naturalLeft]);
+        }
         return Bump();
     }
+
+    /// <summary>Compatibility alias for callers that still address only the user queue.</summary>
+    public QueueSnapshot? MoveUserItem(QueueItemId id, int newPos) => MoveItem(id, newPos);
 
     /// <summary>Drop the whole user queue (the panel's "Clear" affordance, §10.1) — one revision bump; the context cursor,
     /// current and history are untouched. Local-session only (no wire verb exists).</summary>
@@ -615,6 +761,25 @@ public sealed class PlaybackSession
         _context.AddRange(tail);
         _cursor = 0;
         if (_current is { } cur && cur.Id == anchor.Id) _current = anchor;
+    }
+
+    void ShuffleWithoutAnchor()
+    {
+        var playable = new List<SessionItem>();
+        var tail = new List<SessionItem>();
+        foreach (var item in _naturalOrder)
+        {
+            if (item.Provider == QueueProvider.Context && item.Kind == QueueRowKind.Playable) playable.Add(item);
+            else tail.Add(item);
+        }
+        for (int i = playable.Count - 1; i > 0; i--)
+        {
+            int j = NextSeed(i);
+            (playable[i], playable[j]) = (playable[j], playable[i]);
+        }
+        _context.Clear();
+        _context.AddRange(playable);
+        _context.AddRange(tail);
     }
 
     void RestoreOriginalOrder()

@@ -5,9 +5,13 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Google.Protobuf;
 using Wavee.Backend;
 using Wavee.Backend.Audio;
+using Wavee.Backend.Spotify;
 using Wavee.Core;
+using Wavee.Protocol.Transfer;
+using Wavee.SpotifyLive;
 using Xunit;
 
 namespace Wavee.Tests;
@@ -86,6 +90,13 @@ public class ConnectControllerTests
         public int Count(EvKind kind) => Events.Count(e => e.Kind == kind);
     }
 
+    sealed class RecordingAttributionProjection : IPlaybackProjection, IConnectCommandAttributionSink
+    {
+        public ConnectCommandAttribution Last;
+        public void OnEvent(in PlaybackEvent e) { }
+        public void NoteCommand(in ConnectCommandAttribution attribution) => Last = attribution;
+    }
+
     static ClusterDelta Cluster(string active, RemoteTrack? track = null, long pos = 0, bool playing = false) =>
         new(active, track is not null, track ?? default, "spotify:playlist:ctx",
             playing, !playing, false, pos, 0, 0, track?.DurationMs ?? 0, false, RepeatMode.Off,
@@ -94,12 +105,15 @@ public class ConnectControllerTests
     static RemoteTrack Remote(string uri, long dur = 200000) => new(uri, "G", "A", "spotify:artist:a", "Al", "spotify:album:al", null, dur);
 
     PlaybackController Make(out RecordingAudioHost host, out NowPlayingProjection proj, out RecordingOutbound outbound,
-        IContextResolver? ctx = null, Func<long>? clock = null, IReadOnlyList<IPlaybackProjection>? extra = null)
+        IContextResolver? ctx = null, Func<long>? clock = null, IReadOnlyList<IPlaybackProjection>? extra = null,
+        ITransferStateDecoder? transferDecoder = null)
     {
         host = new RecordingAudioHost();
         proj = new NowPlayingProjection("us", clock ?? (() => 0));
         outbound = new RecordingOutbound();
-        return new PlaybackController(host, new StubTrackResolver(), proj, ctx ?? Ctx("spotify:track:a", "spotify:track:b"), "us", outbound, extra);
+        return new PlaybackController(host, new StubTrackResolver(), proj,
+            ctx ?? Ctx("spotify:track:a", "spotify:track:b"), "us", outbound, extra,
+            transferDecoder: transferDecoder);
     }
 
     [Fact]
@@ -110,6 +124,41 @@ public class ConnectControllerTests
         Assert.Contains("load:spotify:track:a", host.Calls);
         Assert.Contains("play", host.Calls);
         Assert.Empty(outbound.Sent);
+    }
+
+    [Fact]
+    public async Task InboundCommand_CapturesSenderMessageAndCommandIds_ForPutState()
+    {
+        var attribution = new RecordingAttributionProjection();
+        using var controller = Make(out _, out _, out _, extra: [attribution]);
+        var command = new ConnectCommand(
+            ConnectCmd.Pause, "pause", "k", 604162001, "controller-device",
+            0, false, [], CommandId: "command-intent-id");
+
+        await controller.HandleRemoteCommandAsync(command);
+
+        Assert.Equal("controller-device", attribution.Last.SenderDeviceId);
+        Assert.Equal(604162001u, attribution.Last.MessageId);
+        Assert.Equal("command-intent-id", attribution.Last.CommandId);
+    }
+
+    [Fact]
+    public async Task InboundPauseThenResume_AppliesInDealerOrder_ToLocalHost()
+    {
+        using var controller = Make(out var host, out _, out _);
+        await controller.PlayAsync("spotify:playlist:p");
+        host.Calls.Clear();
+
+        var pause = new ConnectCommand(
+            ConnectCmd.Pause, "pause", "pause-key", 604162002, "spotify-controller",
+            0, false, [], CommandId: "pause-command");
+        var resume = new ConnectCommand(
+            ConnectCmd.Resume, "resume", "resume-key", 604162003, "spotify-controller",
+            0, false, [], CommandId: "resume-command");
+
+        Assert.Equal(ConnectCommandOutcome.Applied, await controller.HandleRemoteCommandAsync(pause));
+        Assert.Equal(ConnectCommandOutcome.Applied, await controller.HandleRemoteCommandAsync(resume));
+        Assert.Equal(["pause", "play"], host.Calls);
     }
 
     [Fact]
@@ -458,6 +507,103 @@ public class ConnectControllerTests
         await Task.Delay(30);
         Assert.Contains("load:spotify:track:e1", host.Calls);          // embedded pages win
         Assert.DoesNotContain("load:spotify:track:x", host.Calls);
+    }
+
+    [Fact]
+    public async Task InboundPlay_LargeEmbeddedPlaylist_IsDataDrivenAndUntruncated()
+    {
+        const int count = 1600; // deliberately differs from every captured playlist length
+        var json = new StringBuilder("{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:large\",\"pages\":[{\"tracks\":[");
+        for (int i = 0; i < count; i++)
+        {
+            if (i > 0) json.Append(',');
+            json.Append("{\"uri\":\"spotify:track:t").Append(i).Append("\",\"uid\":\"u").Append(i).Append("\"}");
+        }
+        json.Append("]}]},\"prepare_play_options\":{\"skip_to\":{\"track_uid\":\"u")
+            .Append(count - 1).Append("\"}}}}");
+
+        using var c = Make(out var host, out _, out _, ctx: new FakeContextResolver("spotify:track:wrong"));
+        ConnectCommand.TryParse(new WireRequest("large", "hm://connect-state/v1/player/command",
+            Encoding.UTF8.GetBytes(json.ToString()), NoHeaders), out var command);
+        await c.HandleRemoteCommandAsync(command);
+
+        Assert.Contains($"load:spotify:track:t{count - 1}", host.Calls);
+        Assert.DoesNotContain("load:spotify:track:wrong", host.Calls);
+    }
+
+    [Fact]
+    public async Task InboundPlay_IsAudioFirst_AndExplicitLocalMediaIntentCanRestoreVideo()
+    {
+        var audio = new RecordingAudioHost();
+        var video = new RecordingAudioHost();
+        var projection = new NowPlayingProjection("us", () => 0);
+        int videoLoads = 0;
+        using var controller = new PlaybackController(
+            audio, new StubTrackResolver(), projection, Ctx("spotify:track:a"), "us", videoHost: video);
+        controller.ShouldPlayAsVideo = _ => true;
+        controller.LoadCurrentVideoAsync = (_, _) =>
+        {
+            Interlocked.Increment(ref videoLoads);
+            return Task.FromResult(true);
+        };
+        byte[] payload = Encoding.UTF8.GetBytes(
+            "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"}}}");
+        var command = new ConnectCommand(
+            ConnectCmd.Play, "play", "remote-play", 8, "spotify-controller",
+            0, false, payload);
+
+        await controller.HandleRemoteCommandAsync(command);
+
+        Assert.Equal(PlayableKind.Audio, controller.CurrentMediaKind);
+        Assert.Equal(0, Volatile.Read(ref videoLoads));
+        Assert.Contains("load:spotify:track:a", audio.Calls);
+
+        await controller.RefreshCurrentMediaKindAsync();
+
+        Assert.Equal(PlayableKind.Video, controller.CurrentMediaKind);
+        Assert.Equal(1, Volatile.Read(ref videoLoads));
+    }
+
+    [Fact]
+    public async Task InboundTransfer_DecodesInnerState_DerivesGid_AndStartsPausedAtPosition()
+    {
+        byte[] gid = [0x12, 0x8a, 0x44, 0x9c, 0x22, 0x71, 0x08, 0x5e, 0xa1, 0x04, 0xe8, 0x95, 0x33, 0x07, 0x61, 0xf0];
+        string expectedUri = "spotify:track:" + Base62.Encode(gid);
+        var transfer = new TransferState
+        {
+            Options = new TransferPlayerOptions(),
+            Playback = new TransferPlayback
+            {
+                Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                PositionAsOfTimestamp = 30_000,
+                Speed = 1.0,
+                Paused = true,
+                CurrentTrack = new TransferContextTrack { Uri = "", Uid = "current", Gid = ByteString.CopyFrom(gid) },
+            },
+            CurrentSession = new TransferSession
+            {
+                CurrentUid = "current",
+                Context = new TransferContext { Uri = "spotify:playlist:transfer", Url = "context://transfer" },
+            },
+            Queue = new TransferQueue(),
+        };
+        string body = "{\"message_id\":77,\"sent_by_device_id\":\"desktop\",\"command\":{" +
+            "\"endpoint\":\"transfer\",\"data\":\"" + Convert.ToBase64String(transfer.ToByteArray()) + "\"," +
+            "\"options\":{\"restore_paused\":\"restore\",\"restore_position\":\"extrapolate\"," +
+            "\"restore_track\":\"always_play_something\",\"retain_session\":\"do_not_retain\"}}}";
+
+        using var c = Make(out var host, out var projection, out _, ctx: new FakeContextResolver("spotify:track:other"),
+            transferDecoder: new ProtoTransferStateDecoder());
+        ConnectCommand.TryParse(new WireRequest("transfer", "hm://connect-state/v1/player/command",
+            Encoding.UTF8.GetBytes(body), NoHeaders), out var command);
+        var outcome = await c.HandleRemoteCommandAsync(command);
+
+        Assert.Equal(ConnectCommandOutcome.Applied, outcome);
+        Assert.Equal(expectedUri, projection.CurrentTrack?.Uri);
+        Assert.Contains("load:" + expectedUri, host.Calls);
+        Assert.Contains("seek:30000", host.Calls);
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.False(projection.IsPlaying);
     }
 
     // ── Phase B: the queue verbs (add_to_queue / set_queue / set_options) + prev<3s ──────────────────────────────────

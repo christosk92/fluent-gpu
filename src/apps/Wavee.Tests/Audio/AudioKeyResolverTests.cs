@@ -143,6 +143,26 @@ public class AudioKeyResolverTests
     }
 
     [Fact]
+    public async Task ConcurrentDifferentFiles_ShareTheFailingApProbe()
+    {
+        var ap = new FakeApKeySource
+        {
+            Throw = new IOException("audio key error (code 1)"),
+            DelayMs = 80,
+        };
+        var lic = new FakeLicense { Obf = new byte[16] };
+        var der = new FakeDeriver { Key = A.Key16(7) };
+        var r = Make(ap, der, lic, A.Asset, new AudioRuntimeStatusService());
+
+        var keys = await Task.WhenAll(
+            r.GetKeyAsync(A.Bytes(1, 20), A.Bytes(1, 16)),
+            r.GetKeyAsync(A.Bytes(2, 20), A.Bytes(2, 16)));
+
+        Assert.Equal(1, ap.Calls);
+        Assert.All(keys, key => Assert.Equal(A.Key16(7), key.ToArray()));
+    }
+
+    [Fact]
     public async Task ConcurrentRequests_ForSameFile_Coalesce_ToOneApCall()
     {
         var ap = new FakeApKeySource { Key = A.Key16(3), DelayMs = 80 };

@@ -28,6 +28,7 @@ namespace Wavee.Backend.Sync;
 public enum SyncKind : byte
 {
     InitialHydrate, RootlistPush, PlaylistPush, CollectionPush, OpenPlaylist, PlaylistRevalidate, DrainWrites, ReconnectResync,
+    ApplyPlaylistSignal, HydratePlaylist,
 }
 
 /// <summary>A queued command for the sync loop. A readonly record struct through the unbounded channel (no boxing).
@@ -39,9 +40,11 @@ public readonly record struct SyncCommand(
     byte[]? NewRev = null,
     IReadOnlyList<PlaylistOp>? Ops = null,
     byte[]? Payload = null,                           // raw collection-push payload (§2.3 — passed through, unused in Phase 1)
-    TaskCompletionSource? Done = null);
+    TaskCompletionSource? Done = null,
+    string? OptionIdentifier = null,
+    int Attempt = 0);
 
-public sealed class LibrarySync : IAsyncDisposable
+public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
 {
     static readonly string[] Sets = { "liked", "albums", "artists", "shows", "episodes" };   // same list as SpotifyLibrarySync
     const int SettleMs = 250;                                                                 // dealer-burst settle (§2.2)
@@ -54,6 +57,7 @@ public sealed class LibrarySync : IAsyncDisposable
     readonly MutationEngine _mutations;
     readonly ITransport _mutationTransport;
     readonly CollectionEchoRing? _echoRing;   // §7.1 — drop our own accepted-write echoes before any store work
+    readonly PlaylistSignalsClient? _signals;
     readonly Func<SessionContext> _ctx;
     readonly Func<string> _username;
     readonly WaveeLogger _log;
@@ -63,6 +67,7 @@ public sealed class LibrarySync : IAsyncDisposable
 
     readonly object _gate = new();
     readonly HashSet<string> _dirtyPlaylists = new(StringComparer.Ordinal);            // pushed-while-cold → revalidate on open
+    readonly HashSet<string> _fullRefreshPlaylists = new(StringComparer.Ordinal);
     readonly HashSet<string> _attrHealForced = new(StringComparer.Ordinal);           // uris force-refetched once for attr-less rows (loop guard)
     readonly Dictionary<string, DateTime> _lastRevalidatedAt = new(StringComparer.Ordinal);
     readonly Dictionary<string, TaskCompletionSource> _openInFlight = new(StringComparer.Ordinal);  // per-uri open dedup
@@ -81,9 +86,11 @@ public sealed class LibrarySync : IAsyncDisposable
     public int DiffApplied, DiffUpToDate, DiffFellBack;   // §2.6 revalidation outcomes (Applied / 304-or-up-to-date / full-fetch fallback)
     public int ReconnectResyncs, ReconnectResyncsRateLimited;                         // §6.2
 
+    public int SignalApplies, SignalReconciles, SignalPushes, SignalHydrateRetries;
+
     public LibrarySync(IStore store, PlaylistFetcher playlists, CollectionFetcher collections, MutationEngine mutations,
         ITransport mutationTransport, Func<SessionContext> ctx, Func<string> username, WaveeLogger log, CancellationToken ct,
-        CollectionEchoRing? echoRing = null)
+        CollectionEchoRing? echoRing = null, PlaylistSignalsClient? signals = null)
     {
         _store = store;
         _playlists = playlists;
@@ -91,6 +98,7 @@ public sealed class LibrarySync : IAsyncDisposable
         _mutations = mutations;
         _mutationTransport = mutationTransport;
         _echoRing = echoRing;
+        _signals = signals;
         _ctx = ctx;
         _username = username;
         _log = log;
@@ -168,6 +176,19 @@ public sealed class LibrarySync : IAsyncDisposable
         return ct.CanBeCanceled ? tcs.Task.WaitAsync(ct) : tcs.Task;
     }
 
+    /// <summary>Queues a server-advertised playlist tuning choice on the single-writer loop.</summary>
+    public Task ApplyAsync(string playlistUri, string optionIdentifier, CancellationToken ct = default)
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_queue.Writer.TryWrite(new SyncCommand(
+                SyncKind.ApplyPlaylistSignal,
+                playlistUri,
+                Done: tcs,
+                OptionIdentifier: optionIdentifier)))
+            return Task.FromException(new InvalidOperationException("The library sync loop is not available."));
+        return ct.CanBeCanceled ? tcs.Task.WaitAsync(ct) : tcs.Task;
+    }
+
     /// <summary>Test/probe barrier: a no-op that completes only after all previously-queued commands are processed
     /// (the channel is FIFO single-reader). A PlaylistRevalidate with an empty uri is the idle sentinel.</summary>
     public Task WaitForIdleAsync()
@@ -211,6 +232,8 @@ public sealed class LibrarySync : IAsyncDisposable
         SyncKind.PlaylistRevalidate => PlaylistRevalidateAsync(cmd.Uri),
         SyncKind.DrainWrites => DrainWritesAsync(),
         SyncKind.ReconnectResync => ReconnectResyncAsync(),
+        SyncKind.ApplyPlaylistSignal => ApplyPlaylistSignalAsync(cmd),
+        SyncKind.HydratePlaylist => HydratePlaylistAsync(cmd.Uri, cmd.Attempt),
         _ => Task.CompletedTask,
     };
 
@@ -282,6 +305,141 @@ public sealed class LibrarySync : IAsyncDisposable
         Interlocked.Increment(ref RootlistFullFetch);
     }
 
+    const string ResetSignalIdentifier = "session-control-reset";
+
+    async Task ApplyPlaylistSignalAsync(SyncCommand cmd)
+    {
+        bool sent = false;
+        long started = Environment.TickCount64;
+        try
+        {
+            if (_signals is null) throw new InvalidOperationException("Playlist tuning is not available in this session.");
+            if (cmd.Uri.Length == 0 || string.IsNullOrWhiteSpace(cmd.OptionIdentifier))
+                throw new ArgumentException("A playlist and tuning option are required.");
+
+            var revision = _store.PlaylistRevision(cmd.Uri);
+            if (revision is null || revision.Length != 24)
+                throw new InvalidOperationException("The playlist tuning revision is stale.");
+            var tuning = _store.GetPlaylist(cmd.Uri)?.Tuning;
+            if (tuning is null || !BytesEqual(tuning.Revision, revision))
+                throw new InvalidOperationException("The playlist tuning roster is stale.");
+
+            PlaylistTuningOption? requested = null;
+            for (int i = 0; i < tuning.Available.Count; i++)
+                if (string.Equals(tuning.Available[i].Identifier, cmd.OptionIdentifier, StringComparison.Ordinal))
+                { requested = tuning.Available[i]; break; }
+            if (requested is null) throw new InvalidOperationException("That playlist tuning option is no longer available.");
+            if (requested.Kind == PlaylistTuningOptionKind.Reset
+                    ? tuning.SelectedIdentifier is null
+                    : string.Equals(tuning.SelectedIdentifier, requested.Identifier, StringComparison.Ordinal))
+                return;
+
+            _log.Event(WaveeLogLevel.Info, "playlist.signal.apply.start", "Applying playlist tuning signal",
+                fields:
+                [
+                    WaveeLogField.Of("playlist", cmd.Uri),
+                    WaveeLogField.Of("signal", requested.Identifier),
+                ]);
+            sent = true;
+            var snapshot = await _signals.ApplyAsync(cmd.Uri, revision, requested.Identifier, _ct).ConfigureAwait(false);
+            _playlists.AdoptSnapshot(cmd.Uri, snapshot);
+            ClearFullRefresh(cmd.Uri);
+            MarkRevalidated(cmd.Uri);
+            try
+            {
+                await _playlists.HydrateMembershipAsync(cmd.Uri, _ct).ConfigureAwait(false);
+                _store.Bump(cmd.Uri);
+            }
+            catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+            catch (Exception ex)
+            {
+                _log.Info("sync: playlist signal metadata hydration deferred: " + ex.Message);
+                ScheduleHydrationRetry(cmd.Uri, 0);
+            }
+            Interlocked.Increment(ref SignalApplies);
+            _log.Event(WaveeLogLevel.Info, "playlist.signal.apply.ok", "Playlist tuning signal applied",
+                elapsedMs: Environment.TickCount64 - started,
+                fields:
+                [
+                    WaveeLogField.Of("playlist", cmd.Uri),
+                    WaveeLogField.Of("signal", requested.Identifier),
+                    WaveeLogField.Of("tracks", snapshot.Length),
+                ]);
+        }
+        catch (OperationCanceledException) when (_ct.IsCancellationRequested)
+        {
+            cmd.Done?.TrySetCanceled(_ct);
+        }
+        catch (Exception ex)
+        {
+            if (sent && await ReconcilePlaylistSignalAsync(cmd.Uri, cmd.OptionIdentifier!).ConfigureAwait(false))
+            {
+                Interlocked.Increment(ref SignalReconciles);
+                _log.Event(WaveeLogLevel.Info, "playlist.signal.apply.reconciled",
+                    "Playlist tuning signal reconciled after an ambiguous response",
+                    elapsedMs: Environment.TickCount64 - started,
+                    fields:
+                    [
+                        WaveeLogField.Of("playlist", cmd.Uri),
+                        WaveeLogField.Of("signal", cmd.OptionIdentifier!),
+                    ]);
+                return;
+            }
+            _log.Event(WaveeLogLevel.Error, "playlist.signal.apply.failed", "Playlist tuning signal failed",
+                elapsedMs: Environment.TickCount64 - started,
+                ex: ex,
+                fields:
+                [
+                    WaveeLogField.Of("playlist", cmd.Uri),
+                    WaveeLogField.Of("signal", cmd.OptionIdentifier ?? ""),
+                    WaveeLogField.Of("sent", sent),
+                ]);
+            cmd.Done?.TrySetException(ex);
+        }
+    }
+
+    async Task<bool> ReconcilePlaylistSignalAsync(string uri, string optionIdentifier)
+    {
+        try { await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+        catch (Exception ex) { _log.Info("sync: playlist signal reconciliation fetch failed: " + ex.Message); }
+
+        var tuning = _store.GetPlaylist(uri)?.Tuning;
+        var revision = _store.PlaylistRevision(uri);
+        if (tuning is null || revision is null || !BytesEqual(tuning.Revision, revision)) return false;
+        return string.Equals(optionIdentifier, ResetSignalIdentifier, StringComparison.Ordinal)
+            ? tuning.SelectedIdentifier is null
+            : string.Equals(tuning.SelectedIdentifier, optionIdentifier, StringComparison.Ordinal);
+    }
+
+    async Task HydratePlaylistAsync(string uri, int attempt)
+    {
+        if (uri.Length == 0) return;
+        try
+        {
+            await _playlists.HydrateMembershipAsync(uri, _ct).ConfigureAwait(false);
+            _store.Bump(uri);
+        }
+        catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log.Info("sync: playlist signal metadata hydration retry failed: " + ex.Message);
+            if (attempt < 2) ScheduleHydrationRetry(uri, attempt + 1);
+        }
+    }
+
+    void ScheduleHydrationRetry(string uri, int attempt)
+    {
+        int seconds = attempt switch { 0 => 2, 1 => 10, _ => 30 };
+        Interlocked.Increment(ref SignalHydrateRetries);
+        _ = Task.Run(async () =>
+        {
+            try { await Task.Delay(TimeSpan.FromSeconds(seconds), _ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { return; }
+            Enqueue(new SyncCommand(SyncKind.HydratePlaylist, uri, Attempt: attempt));
+        });
+    }
+
     async Task PlaylistPushAsync(string uri, byte[]? parentRev, byte[]? newRev, IReadOnlyList<PlaylistOp>? ops)
     {
         if (uri.Length == 0) return;
@@ -289,6 +447,22 @@ public sealed class LibrarySync : IAsyncDisposable
 
         // gate 1 — echo of our own write (we advanced the revision from the /changes response): stored == newRev → drop.
         if (stored is not null && newRev is not null && BytesEqual(stored, newRev)) { Interlocked.Increment(ref EchoDropped); return; }
+
+        // Signal regenerations announce only a new head: no parent and no ops. A /diff does not reliably carry the next
+        // signal roster/format attributes, so this shape always converges through a full snapshot.
+        if (newRev is { Length: 24 } && (parentRev is null || parentRev.Length == 0) && (ops is null || ops.Count == 0))
+        {
+            MarkFullRefresh(uri);
+            Interlocked.Increment(ref SignalPushes);
+            if (IsOpen(uri))
+            {
+                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
+                MarkRevalidated(uri);
+                ClearFullRefresh(uri);
+            }
+            else Interlocked.Increment(ref PushMarkedDirty);
+            return;
+        }
 
         var membership = _store.Membership(uri);
 
@@ -441,6 +615,13 @@ public sealed class LibrarySync : IAsyncDisposable
         try
         {
             if (uri.Length == 0) return;
+            if (NeedsFullRefresh(uri))
+            {
+                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
+                MarkRevalidated(uri);
+                ClearFullRefresh(uri);
+                return;
+            }
             var members = _store.Membership(uri);
             if (members.Count == 0)
             {
@@ -556,7 +737,16 @@ public sealed class LibrarySync : IAsyncDisposable
         {
             _ct.ThrowIfCancellationRequested();
             if (_store.Membership(uri).Count == 0) continue;   // cold stays lazy (revalidates on open)
-            try { await PlaylistRevalidateAsync(uri).ConfigureAwait(false); }
+            try
+            {
+                if (NeedsFullRefresh(uri))
+                {
+                    await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
+                    MarkRevalidated(uri);
+                    ClearFullRefresh(uri);
+                }
+                else await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
+            }
             catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
             catch (Exception ex) { _log.Info("sync: reconnect playlist '" + uri + "' failed: " + ex.Message); }
         }
@@ -634,6 +824,9 @@ public sealed class LibrarySync : IAsyncDisposable
     void MarkDirty(string uri) { lock (_gate) _dirtyPlaylists.Add(uri); }
     void ClearDirty(string uri) { lock (_gate) _dirtyPlaylists.Remove(uri); }
     bool IsDirty(string uri) { lock (_gate) return _dirtyPlaylists.Contains(uri); }
+    void MarkFullRefresh(string uri) { lock (_gate) { _fullRefreshPlaylists.Add(uri); _dirtyPlaylists.Add(uri); } }
+    bool NeedsFullRefresh(string uri) { lock (_gate) return _fullRefreshPlaylists.Contains(uri); }
+    void ClearFullRefresh(string uri) { lock (_gate) { _fullRefreshPlaylists.Remove(uri); _dirtyPlaylists.Remove(uri); } }
     void MarkRevalidated(string uri) { lock (_gate) _lastRevalidatedAt[uri] = DateTime.UtcNow; }
     bool TryGetLastRevalidated(string uri, out DateTime t) { lock (_gate) return _lastRevalidatedAt.TryGetValue(uri, out t); }
 

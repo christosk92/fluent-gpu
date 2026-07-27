@@ -99,6 +99,7 @@ public class SessionVolumeSyncTests
         await PrimeLocalPlaybackWithStaleProjection(c, host, proj);
         var positions = new List<long>();
         using var sub = proj.Changes.Subscribe(ConnectHarness.Obs<IPlaybackState>(s => positions.Add(s.PositionMs)));
+        positions.Clear(); // SimpleSubject intentionally replays setup state; assert only this volume intent.
 
         await c.SetVolumeAsync(0.42);
 
@@ -116,6 +117,7 @@ public class SessionVolumeSyncTests
         await PrimeLocalPlaybackWithStaleProjection(c, host, proj);
         var positions = new List<long>();
         using var sub = proj.Changes.Subscribe(ConnectHarness.Obs<IPlaybackState>(s => positions.Add(s.PositionMs)));
+        positions.Clear(); // SimpleSubject intentionally replays setup state; assert only this volume intent.
 
         c.OnExternalVolumeChanged(0.55);
 

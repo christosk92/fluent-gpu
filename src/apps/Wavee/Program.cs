@@ -284,7 +284,11 @@ static class Program
             // (scroll/hover/drag) is exempt in the engine and always runs at the display rate; FG_ANIM_FPS still
             // overrides everything (=30 to pin the old cadence, =0 for uncapped / full display rate).
             FluentAppHarness.Run(() => new WaveeApp(settings, appLocale),
-                new AppOptions { Title = "Wavee Music", Width = 1180, Height = 760, CustomFrame = true, MicaAlt = true },
+                new AppOptions
+                {
+                    Title = "Wavee Music", Width = 1180, Height = 760,
+                    MinWidth = 360, CustomFrame = true, MicaAlt = true,
+                },
                 new HarnessOptions { Frames = frames, Screenshot = screenshot });
         }
         catch (Exception ex)

@@ -249,7 +249,7 @@ public class SqliteColdStoreTests
             using var r = q.ExecuteReader();
             Assert.True(r.Read());
             Assert.Equal(0L, r.GetInt64(0));        // `saved` dropped
-            Assert.Equal("4", r.GetString(1));      // schema_version = 4 after the user video-override table lands
+            Assert.Equal("5", r.GetString(1));      // schema_version = 5 after the one-`entity`-table consolidation lands
         }
         finally { TryDelete(path); }
     }
@@ -283,7 +283,7 @@ public class SqliteColdStoreTests
             verify.Open();
             using var q = verify.CreateCommand();
             q.CommandText = "SELECT value FROM meta WHERE key='schema_version';";
-            Assert.Equal("4", q.ExecuteScalar() as string);   // the runner walks the whole ladder: v1 → v2 → v3 → v4
+            Assert.Equal("5", q.ExecuteScalar() as string);   // the runner walks the whole ladder: v1 → v2 → v3 → v4 → v5
         }
         finally { TryDelete(path); }
     }
@@ -342,7 +342,17 @@ public class SqliteColdStoreTests
 
             using var dutchRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "nl");
             var restored = Assert.Single(dutchRead.LoadAllExtensions());
-            Assert.Equal(saved, restored);
+            // Member-wise, NOT Assert.Equal(saved, restored): ColdExtension is a record struct, so its synthesized equality
+            // compares `byte[] Payload` by REFERENCE — a round-tripped row can never satisfy it, which used to make the
+            // rest of this test (the cross-locale isolation assertion below) unreachable.
+            Assert.Equal(saved.EntityUri, restored.EntityUri);
+            Assert.Equal(saved.ExtensionKind, restored.ExtensionKind);
+            Assert.Equal(saved.Payload, restored.Payload);
+            Assert.Equal(saved.Etag, restored.Etag);
+            Assert.Equal(saved.OfflineTtlSeconds, restored.OfflineTtlSeconds);
+            Assert.Equal(saved.Missing, restored.Missing);
+            Assert.Equal(saved.ExpiresAtUnixSeconds, restored.ExpiresAtUnixSeconds);
+            Assert.Equal(saved.UpdatedAtUnixSeconds, restored.UpdatedAtUnixSeconds);
 
             using var englishRead = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "en-US");
             Assert.Empty(englishRead.LoadAllExtensions());

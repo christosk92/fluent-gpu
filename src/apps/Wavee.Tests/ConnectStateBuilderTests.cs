@@ -11,6 +11,24 @@ namespace Wavee.Tests;
 public class ConnectStateBuilderTests
 {
     [Fact]
+    public void BuildPutState_EmitsInboundCommandAttribution()
+    {
+        var builder = new ConnectStateBuilder("device", "Wavee");
+
+        var req = PutStateRequest.Parser.ParseFrom(builder.BuildPutState(
+            PutStateReasonKind.PlayerStateChanged,
+            snap: null,
+            messageId: 9,
+            isActive: false,
+            nowMs: 10_000,
+            lastCommandSentByDeviceId: "controller-device",
+            lastCommandMessageId: 604162001));
+
+        Assert.Equal("controller-device", req.LastCommandSentByDeviceId);
+        Assert.Equal(604162001u, req.LastCommandMessageId);
+    }
+
+    [Fact]
     public void BuildPutState_PreservesVideoMetadataAndSynthesizesAudioContextMetadata()
     {
         var builder = new ConnectStateBuilder("device", "Wavee");

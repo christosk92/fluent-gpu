@@ -1832,17 +1832,34 @@ public static class SceneRecorder
         if (TryResolveInteractionProgress(in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT, out float hoverT, out float pressT)
             && (hoverT > 0.001f || pressT > 0.001f))
         {
-            ColorF hov = p.HoverFill.A > 0f ? p.HoverFill : Lighten(p.Fill, 0.08f);
-            ColorF prs = p.PressedFill.A > 0f ? p.PressedFill : Darken(p.Fill, 0.12f);
+            // Inherited progress from a hovered container must NOT auto-lighten descendant fills — only an explicit
+            // HoverFill/PressedFill opts in (matches FollowsContainerHover: reveal/scale only; pure-fill tracks the
+            // actual pointer). Local interactive nodes keep the auto-lighten default when HoverFill is unset.
             // Cross-fade in LINEAR light (color canon: linear-blend / premultiplied) — not straight sRGB.
-            fill = ColorF.LerpLinear(p.Fill, hov, hoverT);
-            fill = ColorF.LerpLinear(fill, prs, pressT);
+            bool local = hasLocalProgress;
+            if (hoverT > 0.001f && (p.HoverFill.A > 0f || local))
+            {
+                ColorF hov = p.HoverFill.A > 0f ? p.HoverFill : Lighten(p.Fill, 0.08f);
+                fill = ColorF.LerpLinear(p.Fill, hov, hoverT);
+            }
+            if (pressT > 0.001f && (p.PressedFill.A > 0f || local))
+            {
+                ColorF prs = p.PressedFill.A > 0f ? p.PressedFill : Darken(p.Fill, 0.12f);
+                fill = ColorF.LerpLinear(fill, prs, pressT);
+            }
             // Border eases to its explicit per-state token when set (e.g. CheckBox unchecked-pressed stroke →
-            // ControlStrongStrokeColorDisabled), else falls back to a lighten/darken of the resting border.
-            ColorF hb = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(p.BorderColor, 0.08f);
-            ColorF pb = p.PressedBorderColor.A > 0f ? p.PressedBorderColor : Darken(p.BorderColor, 0.12f);
-            border = ColorF.LerpLinear(p.BorderColor, hb, hoverT);
-            border = ColorF.LerpLinear(border, pb, pressT);
+            // ControlStrongStrokeColorDisabled), else falls back to a lighten/darken of the resting border —
+            // same local-vs-inherited rule as fill (a toast strip's HoverWithin must not wash every card stroke).
+            if (hoverT > 0.001f && (p.HoverBorderColor.A > 0f || local))
+            {
+                ColorF hb = p.HoverBorderColor.A > 0f ? p.HoverBorderColor : Lighten(p.BorderColor, 0.08f);
+                border = ColorF.LerpLinear(p.BorderColor, hb, hoverT);
+            }
+            if (pressT > 0.001f && (p.PressedBorderColor.A > 0f || local))
+            {
+                ColorF pb = p.PressedBorderColor.A > 0f ? p.PressedBorderColor : Darken(p.BorderColor, 0.12f);
+                border = ColorF.LerpLinear(border, pb, pressT);
+            }
         }
         else if ((flags & NodeFlags.Pressed) != 0)
         {

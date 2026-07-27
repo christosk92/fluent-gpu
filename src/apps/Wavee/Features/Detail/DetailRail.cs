@@ -114,9 +114,6 @@ static class DetailRail
             ],
         });
 
-        if (cfg.Content == DetailContent.Tracks)
-            kids.Add(ContextActions(m, cfg, h));
-
         if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             kids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
 
@@ -201,8 +198,6 @@ static class DetailRail
         };
 
         var headerKids = new List<Element>(4) { coverRow, PlayRow(h, m) };
-        if (cfg.Content == DetailContent.Tracks)
-            headerKids.Add(ContextActions(m, cfg, h));
         if (includeReleasePanel && cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             headerKids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
 
@@ -229,33 +224,6 @@ static class DetailRail
             Fab(Icons.Share, () => { if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url); }),
         ],
     };
-
-    // The promoted context actions that replaced the old filter/sort/density pill in the rail: an add/copy-to-playlist
-    // button + an "Add to queue" split button whose dropdown chooses Play next (front of queue) or Play after (end).
-    // Read-only contexts (followed playlists, Liked) copy; an editable playlist adds. Wraps as a unit on a narrow rail.
-    static Element ContextActions(DetailModel m, DetailConfig cfg, DetailHandlers h)
-    {
-        bool copy = cfg.Heart == HeartMode.Follow || LikedSongsArtwork.IsLikedUri(m.ContextUri);
-        string addLabel = Loc.Get(copy ? Strings.Detail.CopyToPlaylist : Strings.Detail.AddToPlaylist);
-        return new BoxEl
-        {
-            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Wrap = true,
-            Margin = new Edges4(0f, 2f, 0f, 0f),
-            Children =
-            [
-                // The "Copy/Add to playlist" trigger opens the searchable playlist picker (owned + collaborator +
-                // "New playlist"). Keyed per context so GetTracks freezes fresh for THIS page (component-props rule).
-                Embed.Comp(() => new PlaylistPickerButton { Label = addLabel, GetTracks = () => m.Tracks }) with { Key = "plpick:" + m.ContextUri },
-                SplitButton.Create(
-                    Loc.Get(Strings.Detail.AddToQueue),
-                    h.AddToQueue,
-                    [
-                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayNext), new IconRef { Glyph = WaveeIcons.PlayNext, Font = WaveeIcons.Font }, Invoke: h.PlayNext),
-                        new MenuFlyoutItem(Loc.Get(Strings.Detail.PlayAfter), new IconRef { Glyph = WaveeIcons.PlayAfter, Font = WaveeIcons.Font }, Invoke: h.AddToQueue),
-                    ]),
-            ],
-        };
-    }
 
     // The billed-artist control: a stacked face-pile (the album's primary artists' avatars, overlapping, capped at 3) +
     // a "+N" badge folding in the rest of the DISTINCT artists across the album's tracks + the billed name. Clickable to

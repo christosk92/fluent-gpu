@@ -11,7 +11,12 @@ using Wavee.Backend.Spotify;
 namespace Wavee.Backend.Persistence;
 
 // The SQLite cold tier. WAL mode + a single-reader WRITE-BEHIND queue that batches upserts into transactions, so the
-// caller (UI thread) never blocks on disk. Disk reads happen ONLY at startup (LoadAll bulk into the in-memory tier-1).
+// caller (UI thread) never blocks on disk.
+//
+// TWO CONNECTIONS (schema v5): the WRITER connection (guarded by _connLock) owns every mutation — the write-behind drain,
+// the coarse membership/rootlist replaces, the outbox, GC/vacuum. A second READ-ONLY connection (guarded by _readLock,
+// opened AFTER Migrate() so the schema exists) serves every point/bulk read. WAL means the reader sees the latest
+// committed snapshot without ever queueing behind a background write batch, a GC delete run, or a vacuum slice.
 //
 // Schema is versioned through meta(schema_version) + an ordered migration runner that runs once on open, BEFORE the writer
 // task starts (so it never races the queue). The account column is carried on every per-account table for the (deferred)
@@ -20,10 +25,29 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 {
     public const string DefaultAccount = "default";
 
+    /// <summary>The end-state schema version (v5 = the one `entity` table + entity_refs/artist_overview/recent_surfaces,
+    /// fmt-framed payloads, thin columns, cache accounting; legacy `entities`/`localized_entities` dropped).</summary>
+    public const int CurrentSchemaVersion = 5;
+
+    /// <summary>Matches ExtensionEtagCache's live <c>maxEntries</c> — the seed loop discards everything past it.</summary>
+    public const int DefaultExtensionLimit = 2048;
+
+    // meta keys owned by the cache tier.
+    public const string MetaCacheBytes = "cache_bytes";
+    public const string MetaVacuumPending = "vacuum_pending";
+
+    const int MigrationBatchRows = 2000;    // chunked migrate: a 30k-row v4 db must never ride one giant transaction
+    const int MaxInParams = 900;            // SQLITE_MAX_VARIABLE_NUMBER headroom for IN (...) lists
+    const int RecentSurfaceCap = 50;
+    const long ExtensionGraceSeconds = 7 * 24 * 60 * 60;   // +7d past expires_at keeps ETag 304-revalidation working
+
     readonly SqliteConnection _conn;
     readonly object _connLock = new();
+    readonly SqliteConnection _read;        // read-only, WAL: UI-facing reads never queue behind background writer work
+    readonly object _readLock = new();
     readonly string _account;
     readonly string? _spotifyLocale;
+    readonly string _localeKey;             // the `entity.locale` value for this store ("" for a locale-less open)
     readonly Channels.Channel<WriteOp> _queue = Channels.Channel.CreateUnbounded<WriteOp>(new Channels.UnboundedChannelOptions { SingleReader = true });
     readonly Task _writer;
 
@@ -31,7 +55,13 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     // commands + parameters every drain re-compiles statements and allocates per batch (and the steady-state drain often
     // processes a batch of 1).
     SqliteCommand? _entityCmd, _savedUpCmd, _savedDelCmd, _revCmd, _videoCmd, _extensionCmd, _ovrUpCmd, _ovrDelCmd;
+    SqliteCommand? _sizeProbeCmd, _extSizeProbeCmd, _refDelCmd, _refInsCmd, _cacheDeltaCmd;
     SqliteParameter _eu = null!, _ek = null!, _ep = null!, _el = null!, _et = null!;
+    SqliteParameter _eti = null!, _esu = null!, _eim = null!, _edu = null!, _efl = null!, _eal = null!, _efm = null!, _esz = null!, _ela = null!;
+    SqliteParameter _zpu = null!, _zpl = null!;
+    SqliteParameter _zxu = null!, _zxk = null!;
+    SqliteParameter _rdp = null!, _rip = null!, _ric = null!;
+    SqliteParameter _cbd = null!;
     SqliteParameter _vu = null!, _vp = null!;
     SqliteParameter _ou = null!, _op = null!, _oi = null!, _od = null!, _os = null!, _om = null!, _oa = null!, _oxu = null!;
     SqliteParameter _sa = null!, _ss = null!, _su = null!, _sy = null!, _st = null!;
@@ -47,11 +77,13 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     {
         _account = account;
         _spotifyLocale = string.IsNullOrWhiteSpace(spotifyLocale) ? null : SpotifyHeaders.NormalizeLanguage(spotifyLocale);
+        _localeKey = _spotifyLocale ?? "";
         _conn = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
         _conn.Open();
         Exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;");
-        Exec("CREATE TABLE IF NOT EXISTS entities(uri TEXT PRIMARY KEY, kind INTEGER NOT NULL, payload BLOB NOT NULL);");
-        // Video↔audio associations: own table (shares the track uri with `entities`, so it can't reuse that PK).
+        // NOTE: the legacy `entities` table is deliberately NOT created here any more — v5 drops it, and re-creating it on
+        // every open would resurrect it forever. Migrate() guards every legacy read on sqlite_master.
+        // Video↔audio associations: own table (shares the track uri with the entity tables, so it can't reuse that PK).
         Exec("CREATE TABLE IF NOT EXISTS video_assoc(uri TEXT PRIMARY KEY, payload BLOB NOT NULL);");
         Exec("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);");
         Exec("CREATE TABLE IF NOT EXISTS collection_items(account TEXT NOT NULL, set_id TEXT NOT NULL, item_uri TEXT NOT NULL, " +
@@ -68,7 +100,29 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         Exec("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, type TEXT NOT NULL, entity_key TEXT NOT NULL, set_id TEXT, target_saved INTEGER, op BLOB, base_rev BLOB, attempts INTEGER NOT NULL DEFAULT 0);");
         Exec("CREATE TABLE IF NOT EXISTS dead_letter(id INTEGER PRIMARY KEY, type TEXT, entity_key TEXT, reason TEXT, created_at INTEGER);");
         Migrate();
+        SweepExpiredExtensions();
+        // The reader opens only AFTER Migrate() + the open-time sweep: the schema (and the v5 DDL) must exist first, and a
+        // read-only connection can only attach to the WAL once the writer has created it.
+        _read = OpenReader(path);
         _writer = Task.Run(WriteLoopAsync);
+    }
+
+    static SqliteConnection OpenReader(string path)
+    {
+        try
+        {
+            var ro = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path, Mode = SqliteOpenMode.ReadOnly }.ToString());
+            ro.Open();
+            return ro;
+        }
+        catch (SqliteException)
+        {
+            // Read-only attach can fail on exotic filesystems (no -shm creation rights). A second read/write connection is
+            // still the point — it just isn't enforced by the driver.
+            var rw = new SqliteConnection(new SqliteConnectionStringBuilder { DataSource = path }.ToString());
+            rw.Open();
+            return rw;
+        }
     }
 
     public string Account => _account;
@@ -82,6 +136,23 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             c.CommandText = sql;
             c.ExecuteNonQuery();
         }
+    }
+
+    // Writer-side, caller already holds _connLock.
+    void ExecLocked(string sql, SqliteTransaction? tx = null)
+    {
+        using var c = _conn.CreateCommand();
+        c.Transaction = tx;
+        c.CommandText = sql;
+        c.ExecuteNonQuery();
+    }
+
+    bool TableExistsLocked(string name)
+    {
+        using var c = _conn.CreateCommand();
+        c.CommandText = "SELECT 1 FROM sqlite_master WHERE type='table' AND name=$n;";
+        c.Parameters.AddWithValue("$n", name);
+        return c.ExecuteScalar() is not null;
     }
 
     // Ordered, one-time schema migrations. Runs in the ctor before the writer starts, so there is no queue contention.
@@ -187,79 +258,331 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 tx.Commit();
                 ver = "4";
             }
+
+            if (ver == "4") { MigrateToV5(); ver = "5"; }
         }
     }
 
+    // ── v4 → v5: the end-state cache tier ────────────────────────────────────────────────────────────────────────────
+    // Creates `entity` (thin columns + payload LAST + fmt framing + cache accounting), `entity_refs`, `artist_overview`
+    // and `recent_surfaces`; migrates ONLY the PIN-REACHABLE rows out of the legacy `entities` ∪ `localized_entities`
+    // generation (plus the album/artist closure of the migrated tracks) and drops the legacy tables. Not migrating the
+    // rest IS the one-time GC — every unmigrated row is re-fetchable cache by construction.
+    //
+    // Chunked: the DDL, each ~2000-row batch, and the final drop/accounting each commit separately, so a 30k-row migrate
+    // never holds one giant transaction. A crash mid-migration leaves schema_version at 4 and the whole pass re-runs
+    // idempotently (ON CONFLICT DO NOTHING + a recomputed cache_bytes).
+    void MigrateToV5()
+    {
+        ExecLocked("""
+            CREATE TABLE IF NOT EXISTS entity(
+                uri         TEXT NOT NULL,
+                locale      TEXT NOT NULL,
+                kind        INTEGER NOT NULL,
+                title       TEXT,
+                subtitle    TEXT,
+                image_url   TEXT,
+                duration_ms INTEGER,
+                flags       INTEGER NOT NULL DEFAULT 0,
+                album_uri   TEXT,
+                fmt         INTEGER NOT NULL DEFAULT 0,
+                size        INTEGER NOT NULL,
+                updated_at  INTEGER NOT NULL,
+                last_access INTEGER NOT NULL,
+                payload     BLOB,
+                PRIMARY KEY(uri, locale));
+            CREATE INDEX IF NOT EXISTS ix_entity_gc ON entity(kind, last_access);
+            CREATE TABLE IF NOT EXISTS entity_refs(
+                parent_uri TEXT NOT NULL,
+                child_uri  TEXT NOT NULL,
+                PRIMARY KEY(parent_uri, child_uri)) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS artist_overview(
+                uri         TEXT PRIMARY KEY,
+                locale      TEXT NOT NULL,
+                fmt         INTEGER NOT NULL DEFAULT 1,
+                payload     BLOB,
+                size        INTEGER NOT NULL,
+                fetched_at  INTEGER NOT NULL,
+                last_access INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS recent_surfaces(
+                uri TEXT PRIMARY KEY, kind INTEGER, last_opened INTEGER);
+            -- Belt-and-braces: the extension cache is part of the v5 end state (it is swept, capped and accounted here),
+            -- but a db that skipped the v2→v3 rung (hand-seeded fixtures) would not have it. Same DDL as v3, IF NOT EXISTS.
+            CREATE TABLE IF NOT EXISTS localized_extension_cache(
+                entity_uri     TEXT NOT NULL,
+                locale         TEXT NOT NULL,
+                extension_kind INTEGER NOT NULL,
+                payload        BLOB,
+                etag           TEXT,
+                offline_ttl    INTEGER NOT NULL DEFAULT 0,
+                missing        INTEGER NOT NULL DEFAULT 0,
+                expires_at     INTEGER NOT NULL,
+                updated_at     INTEGER NOT NULL,
+                PRIMARY KEY(entity_uri, locale, extension_kind));
+            CREATE INDEX IF NOT EXISTS ix_localized_extension_expiry ON localized_extension_cache(expires_at);
+            """);
+
+        bool legacyBase = TableExistsLocked("entities");
+        bool legacyLocalized = TableExistsLocked("localized_entities");
+        if (legacyBase || legacyLocalized)
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var migrated = new HashSet<string>(StringComparer.Ordinal);
+
+            BuildPinTempTable();
+            MigrateLegacyRows("pin_uri", legacyBase, legacyLocalized, now, migrated);
+            // Closure: albums/artists referenced by the pinned tracks we just migrated, even if not directly pinned.
+            BuildClosureTempTable();
+            MigrateLegacyRows("pin_closure", legacyBase, legacyLocalized, now, migrated);
+            ExecLocked("DROP TABLE IF EXISTS temp.pin_uri; DROP TABLE IF EXISTS temp.pin_closure;");
+        }
+
+        using var final = _conn.BeginTransaction();
+        ExecLocked("""
+            DROP TABLE IF EXISTS entities;
+            DROP TABLE IF EXISTS localized_entities;
+            DROP INDEX IF EXISTS ix_localized_entities_locale;
+            DROP INDEX IF EXISTS ix_localized_entities_updated;
+            DROP INDEX IF EXISTS ix_localized_extension_locale;
+            """, final);   // ix_localized_extension_expiry is KEPT — the TTL sweep is its first real consumer
+        ExecLocked($"""
+            INSERT INTO meta(key,value) VALUES('{MetaCacheBytes}', CAST(
+                (SELECT IFNULL(SUM(size),0) FROM entity)
+              + (SELECT IFNULL(SUM(size),0) FROM artist_overview)
+              + (SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache) AS TEXT))
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+            INSERT OR REPLACE INTO meta(key,value) VALUES('{MetaVacuumPending}','1');
+            INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','5');
+            """, final);
+        final.Commit();
+    }
+
+    // The pin set, in pure SQL over the identity tables (never a stored boolean — §A.3). recent_surfaces is deliberately
+    // absent here: at migration time it is empty by construction.
+    void BuildPinTempTable()
+    {
+        ExecLocked("DROP TABLE IF EXISTS temp.pin_uri; CREATE TEMP TABLE pin_uri(uri TEXT PRIMARY KEY);");
+        ExecLocked($"""
+            INSERT OR IGNORE INTO temp.pin_uri(uri) {PinSetSql};
+            DELETE FROM temp.pin_uri WHERE uri IS NULL OR uri='';
+            """);
+    }
+
+    void BuildClosureTempTable()
+    {
+        ExecLocked("""
+            DROP TABLE IF EXISTS temp.pin_closure;
+            CREATE TEMP TABLE pin_closure(uri TEXT PRIMARY KEY);
+            INSERT OR IGNORE INTO temp.pin_closure(uri)
+                SELECT DISTINCT child_uri FROM entity_refs
+                WHERE child_uri<>'' AND child_uri NOT IN (SELECT uri FROM temp.pin_uri);
+            """);
+    }
+
+    // The three legacy legs in the SAME precedence order the old 3-leg UNION + ROW_NUMBER query used: current-locale
+    // localized rows win, then the base `entities` generation, then any other locale (newest first).
+    void MigrateLegacyRows(string pinTable, bool legacyBase, bool legacyLocalized, long now, HashSet<string> migrated)
+    {
+        if (legacyLocalized && _spotifyLocale is not null)
+            MigrateLegacyPass($"SELECT uri,kind,payload FROM localized_entities WHERE locale=$loc AND uri>$last " +
+                              $"AND uri IN (SELECT uri FROM temp.{pinTable}) ORDER BY uri LIMIT $n;", true, now, migrated);
+        if (legacyBase)
+            MigrateLegacyPass($"SELECT uri,kind,payload FROM entities WHERE uri>$last " +
+                              $"AND uri IN (SELECT uri FROM temp.{pinTable}) ORDER BY uri LIMIT $n;", false, now, migrated);
+        if (legacyLocalized)
+            MigrateLegacyPass(_spotifyLocale is not null
+                ? $"SELECT uri,kind,payload FROM localized_entities WHERE locale<>$loc AND uri>$last " +
+                  $"AND uri IN (SELECT uri FROM temp.{pinTable}) ORDER BY uri, updated_at DESC LIMIT $n;"
+                : $"SELECT uri,kind,payload FROM localized_entities WHERE uri>$last " +
+                  $"AND uri IN (SELECT uri FROM temp.{pinTable}) ORDER BY uri, updated_at DESC LIMIT $n;",
+                _spotifyLocale is not null, now, migrated);
+    }
+
+    // Keyset-paged by uri (never OFFSET), one transaction per batch. Because the ordering groups a uri's rows together and
+    // the winner is that group's first row, advancing the cursor past the page's last uri can only skip already-beaten rows.
+    void MigrateLegacyPass(string sql, bool bindLocale, long now, HashSet<string> migrated)
+    {
+        string last = "";
+        var rows = new List<(string Uri, int Kind, byte[] Payload)>(MigrationBatchRows);
+        while (true)
+        {
+            rows.Clear();
+            using (var c = _conn.CreateCommand())
+            {
+                c.CommandText = sql;
+                c.Parameters.AddWithValue("$last", last);
+                c.Parameters.AddWithValue("$n", MigrationBatchRows);
+                if (bindLocale) c.Parameters.AddWithValue("$loc", _spotifyLocale!);
+                using var r = c.ExecuteReader();
+                while (r.Read())
+                    rows.Add((r.GetString(0), r.GetInt32(1), r.IsDBNull(2) ? Array.Empty<byte>() : r.GetFieldValue<byte[]>(2)));
+            }
+            if (rows.Count == 0) return;
+            last = rows[rows.Count - 1].Uri;
+
+            using (var tx = _conn.BeginTransaction())
+            {
+                using var ins = _conn.CreateCommand();
+                ins.Transaction = tx;
+                ins.CommandText =
+                    "INSERT INTO entity(uri,locale,kind,title,subtitle,image_url,duration_ms,flags,album_uri,fmt,size,updated_at,last_access,payload) " +
+                    "VALUES($u,$l,$k,$ti,$sub,$img,$dur,$fl,$al,$fmt,$sz,$t,$la,$p) ON CONFLICT(uri,locale) DO NOTHING;";
+                var pu = ins.Parameters.Add("$u", SqliteType.Text);
+                var pl = ins.Parameters.Add("$l", SqliteType.Text); pl.Value = _localeKey;
+                var pk = ins.Parameters.Add("$k", SqliteType.Integer);
+                var pti = ins.Parameters.Add("$ti", SqliteType.Text);
+                var psub = ins.Parameters.Add("$sub", SqliteType.Text);
+                var pimg = ins.Parameters.Add("$img", SqliteType.Text);
+                var pdur = ins.Parameters.Add("$dur", SqliteType.Integer);
+                var pfl = ins.Parameters.Add("$fl", SqliteType.Integer);
+                var pal = ins.Parameters.Add("$al", SqliteType.Text);
+                var pfmt = ins.Parameters.Add("$fmt", SqliteType.Integer);
+                var psz = ins.Parameters.Add("$sz", SqliteType.Integer);
+                var pt = ins.Parameters.Add("$t", SqliteType.Integer); pt.Value = now;
+                var pla = ins.Parameters.Add("$la", SqliteType.Integer); pla.Value = now;
+                var pp = ins.Parameters.Add("$p", SqliteType.Blob);
+
+                using var refIns = _conn.CreateCommand();
+                refIns.Transaction = tx;
+                refIns.CommandText = "INSERT OR IGNORE INTO entity_refs(parent_uri,child_uri) VALUES($p,$c);";
+                var rp = refIns.Parameters.Add("$p", SqliteType.Text);
+                var rc = refIns.Parameters.Add("$c", SqliteType.Text);
+
+                foreach (var row in rows)
+                {
+                    if (!migrated.Add(row.Uri)) continue;
+                    var kind = (EntityKind)row.Kind;
+                    // A row whose JSON will not parse is copied VERBATIM as fmt=0 with null thin columns — a pinned row is
+                    // never thrown away, and one bad payload never fails the migration.
+                    bool parsed = EntityThinExtractor.TryExtract(row.Payload, kind, out var thin);
+                    int fmt = parsed ? PayloadCodec.FmtZstd : PayloadCodec.FmtRawJson;
+                    var stored = PayloadCodec.Encode(row.Payload, fmt);
+
+                    pu.Value = row.Uri;
+                    pk.Value = row.Kind;
+                    pti.Value = (object?)thin.Title ?? DBNull.Value;
+                    psub.Value = (object?)thin.Subtitle ?? DBNull.Value;
+                    pimg.Value = (object?)thin.ImageUrl ?? DBNull.Value;
+                    pdur.Value = thin.DurationMs is { } d ? d : DBNull.Value;
+                    pfl.Value = thin.Flags;
+                    pal.Value = (object?)thin.AlbumUri ?? DBNull.Value;
+                    pfmt.Value = fmt;
+                    psz.Value = stored.Length;
+                    pp.Value = stored;
+                    ins.ExecuteNonQuery();
+
+                    if (kind == EntityKind.Track && thin.Refs is { Count: > 0 } refs)
+                    {
+                        rp.Value = row.Uri;
+                        for (int i = 0; i < refs.Count; i++) { rc.Value = refs[i]; refIns.ExecuteNonQuery(); }
+                    }
+                }
+                tx.Commit();
+            }
+            if (rows.Count < MigrationBatchRows) return;
+        }
+    }
+
+    // ── the pin set (§A.3 P0) ────────────────────────────────────────────────────────────────────────────────────────
+    // Derived at read time, never stored: a persisted pin bit drifts on unlike/unfollow/account switch. recent_surfaces
+    // joins the union post-v5 (it is a pin REASON: the last 50 opened detail pages must survive a restart offline).
+    const string PinSetSql = """
+        SELECT item_uri AS uri FROM collection_items
+        UNION SELECT item_uri FROM playlist_items
+        UNION SELECT uri FROM playlists
+        UNION SELECT uri FROM rootlist WHERE uri IS NOT NULL
+        UNION SELECT entity_key FROM outbox
+        UNION SELECT uri FROM video_override
+        """;
+
+    const string PinSetWithRecentSql = PinSetSql + """
+
+        UNION SELECT uri FROM recent_surfaces
+        """;
+
+    // One table, one predicate (the v4 3-leg UNION + ROW_NUMBER ranking is gone). The cross-locale leg survives only as a
+    // covering-index probe over the (uri,locale) PK — in the single-locale steady state it reads no table pages at all.
     public IEnumerable<ColdEntity> LoadAllEntities()
     {
         var list = new List<ColdEntity>(4096);   // the app targets 10k+ entities — pre-size, skip the doubling-realloc chain
-        lock (_connLock)
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
-            if (_spotifyLocale is null)
-                c.CommandText = "SELECT uri, kind, payload FROM entities;";
-            else
+            using (var c = _read.CreateCommand())
             {
-                c.CommandText = """
-                    WITH candidates AS (
-                        SELECT uri,kind,payload,0 AS priority,updated_at FROM localized_entities WHERE locale=$locale
-                        UNION ALL
-                        SELECT uri,kind,payload,1 AS priority,0 AS updated_at FROM entities
-                        UNION ALL
-                        SELECT uri,kind,payload,2 AS priority,updated_at FROM localized_entities WHERE locale<>$locale
-                    ), ranked AS (
-                        SELECT uri,kind,payload,ROW_NUMBER() OVER(PARTITION BY uri ORDER BY priority,updated_at DESC) AS rn
-                        FROM candidates
-                    )
-                    SELECT uri,kind,payload FROM ranked WHERE rn=1;
-                    """;
-                c.Parameters.AddWithValue("$locale", _spotifyLocale);
+                c.CommandText = "SELECT uri, kind, payload FROM entity WHERE locale=$l;";
+                c.Parameters.AddWithValue("$l", _localeKey);
+                using var r = c.ExecuteReader();
+                while (r.Read())
+                {
+                    var uri = r.GetString(0);
+                    seen.Add(uri);
+                    list.Add(new ColdEntity(uri, (EntityKind)r.GetInt32(1),
+                        PayloadCodec.Decode(r.IsDBNull(2) ? null : r.GetFieldValue<byte[]>(2))));
+                }
             }
-            using var r = c.ExecuteReader();
-            while (r.Read())
-                list.Add(new ColdEntity(r.GetString(0), (EntityKind)r.GetInt32(1), r.GetFieldValue<byte[]>(2)));
+
+            List<string>? strays = null;
+            using (var c = _read.CreateCommand())
+            {
+                c.CommandText = "SELECT DISTINCT uri FROM entity WHERE locale<>$l;";
+                c.Parameters.AddWithValue("$l", _localeKey);
+                using var r = c.ExecuteReader();
+                while (r.Read()) { var u = r.GetString(0); if (!seen.Contains(u)) (strays ??= new List<string>()).Add(u); }
+            }
+            if (strays is not null)
+                foreach (var u in strays)
+                    if (ReadCrossLocaleLocked(u) is { } e) list.Add(e);
         }
         return list;
     }
 
-    // Indexed single-row rehydration (CachedStore cold-fallback): the entities table is keyed by uri, so this is a PK
-    // lookup, not the LoadAllEntities table scan the default interface method would do.
+    // Indexed single-row rehydration (CachedStore cold-fallback): a PK point read on (uri, locale), with the rare
+    // cross-locale probe behind it. Rides the READ connection, so it never queues behind the write-behind drain or GC.
     public ColdEntity? GetEntity(string uri)
     {
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
-            if (_spotifyLocale is null)
-                c.CommandText = "SELECT kind,payload FROM entities WHERE uri=$u;";
-            else
+            using (var c = _read.CreateCommand())
             {
-                c.CommandText = """
-                    SELECT kind,payload FROM (
-                        SELECT kind,payload,0 AS priority,updated_at FROM localized_entities WHERE uri=$u AND locale=$locale
-                        UNION ALL
-                        SELECT kind,payload,1 AS priority,0 AS updated_at FROM entities WHERE uri=$u
-                        UNION ALL
-                        SELECT kind,payload,2 AS priority,updated_at FROM localized_entities WHERE uri=$u AND locale<>$locale
-                    ) ORDER BY priority,updated_at DESC LIMIT 1;
-                    """;
-                c.Parameters.AddWithValue("$locale", _spotifyLocale);
+                c.CommandText = "SELECT kind,payload FROM entity WHERE uri=$u AND locale=$l;";
+                c.Parameters.AddWithValue("$u", uri);
+                c.Parameters.AddWithValue("$l", _localeKey);
+                using var r = c.ExecuteReader();
+                if (r.Read())
+                    return new ColdEntity(uri, (EntityKind)r.GetInt32(0),
+                        PayloadCodec.Decode(r.IsDBNull(1) ? null : r.GetFieldValue<byte[]>(1)));
             }
-            c.Parameters.AddWithValue("$u", uri);
-            using var r = c.ExecuteReader();
-            return r.Read() ? new ColdEntity(uri, (EntityKind)r.GetInt32(0), r.GetFieldValue<byte[]>(1)) : null;
+            return ReadCrossLocaleLocked(uri);
         }
     }
 
-    public IEnumerable<ColdExtension> LoadAllExtensions()
+    // Same precedence the v4 UNION gave a locale miss: the locale-less ("canonical") row first, then the freshest other
+    // locale. Caller holds _readLock.
+    ColdEntity? ReadCrossLocaleLocked(string uri)
+    {
+        using var c = _read.CreateCommand();
+        c.CommandText = "SELECT kind,payload FROM entity WHERE uri=$u AND locale<>$l ORDER BY (locale='') DESC, updated_at DESC LIMIT 1;";
+        c.Parameters.AddWithValue("$u", uri);
+        c.Parameters.AddWithValue("$l", _localeKey);
+        using var r = c.ExecuteReader();
+        return r.Read()
+            ? new ColdEntity(uri, (EntityKind)r.GetInt32(0), PayloadCodec.Decode(r.IsDBNull(1) ? null : r.GetFieldValue<byte[]>(1)))
+            : null;
+    }
+
+    public IEnumerable<ColdExtension> LoadAllExtensions(int limit = DefaultExtensionLimit)
     {
         var list = new List<ColdExtension>();
         if (_spotifyLocale is null) return list;
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT entity_uri,extension_kind,payload,etag,offline_ttl,missing,expires_at,updated_at " +
-                            "FROM localized_extension_cache WHERE locale=$locale ORDER BY updated_at DESC;";
+                            "FROM localized_extension_cache WHERE locale=$locale ORDER BY updated_at DESC" +
+                            (limit > 0 ? " LIMIT $n;" : ";");
             c.Parameters.AddWithValue("$locale", _spotifyLocale);
+            if (limit > 0) c.Parameters.AddWithValue("$n", limit);
             using var r = c.ExecuteReader();
             while (r.Read())
                 list.Add(new ColdExtension(
@@ -268,6 +591,37 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                     r.GetInt64(6), r.GetInt64(7)));
         }
         return list;
+    }
+
+    // Open-time hygiene: drop extension rows whose TTL lapsed more than the +7d ETag-revalidation grace ago. Writer-side
+    // (it is a DELETE), before the reader opens, and it keeps `cache_bytes` honest.
+    void SweepExpiredExtensions()
+    {
+        long cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ExtensionGraceSeconds;
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            long freed;
+            using (var c = _conn.CreateCommand())
+            {
+                c.Transaction = tx;
+                // expires_at>0 keeps a hand-seeded 0 ("no TTL recorded") row out of the sweep; every real row is now+ttl.
+                c.CommandText = "SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache WHERE expires_at IS NOT NULL AND expires_at>0 AND expires_at<$c;";
+                c.Parameters.AddWithValue("$c", cutoff);
+                freed = Convert.ToInt64(c.ExecuteScalar());
+            }
+            int deleted;
+            using (var d = _conn.CreateCommand())
+            {
+                d.Transaction = tx;
+                d.CommandText = "DELETE FROM localized_extension_cache WHERE expires_at IS NOT NULL AND expires_at>0 AND expires_at<$c;";
+                d.Parameters.AddWithValue("$c", cutoff);
+                deleted = d.ExecuteNonQuery();
+            }
+            if (deleted == 0) { tx.Rollback(); return; }
+            if (freed > 0) ApplyCacheBytesDeltaLocked(-freed, tx);
+            tx.Commit();
+        }
     }
 
     public void UpsertExtension(ColdExtension extension)
@@ -279,9 +633,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public IEnumerable<ColdVideoAssoc> LoadAllVideoAssociations()
     {
         var list = new List<ColdVideoAssoc>(256);
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT uri, payload FROM video_assoc;";
             using var r = c.ExecuteReader();
             while (r.Read())
@@ -293,9 +647,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public IEnumerable<VideoOverride> LoadAllVideoOverrides()
     {
         var list = new List<VideoOverride>(32);   // a curation list, not a catalog — tens, not thousands
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT uri, path, id, duration_ms, size, mtime, added_at FROM video_override;";
             using var r = c.ExecuteReader();
             while (r.Read())
@@ -308,9 +662,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public IEnumerable<ColdSaved> LoadAllSaved()
     {
         var list = new List<ColdSaved>(512);
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT set_id, item_uri, sync, added_at FROM collection_items WHERE account=$a;";
             c.Parameters.AddWithValue("$a", _account);
             using var r = c.ExecuteReader();
@@ -322,9 +676,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
     public string? GetCollectionRevision(string setId)
     {
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT revision FROM collection_rev WHERE account=$a AND set_id=$s;";
             c.Parameters.AddWithValue("$a", _account);
             c.Parameters.AddWithValue("$s", setId);
@@ -336,9 +690,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     // on the rootlist table). Synchronous, like ReplaceRootlist — a rootlist sync is a coarse op, not a hot per-item write.
     public byte[]? GetRootlistRevision()
     {
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT value FROM meta WHERE key='rootlist_rev';";
             return c.ExecuteScalar() is string s && s.Length > 0 ? Convert.FromHexString(s) : null;
         }
@@ -363,9 +717,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public IReadOnlyList<ColdPlaylistItem> LoadMembership(string playlistUri)
     {
         var list = new List<ColdPlaylistItem>(64);
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT item_id, item_uri, added_by, added_at FROM playlist_items WHERE playlist_uri=$p ORDER BY position;";
             c.Parameters.AddWithValue("$p", playlistUri);
             using var r = c.ExecuteReader();
@@ -379,9 +733,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
     public byte[]? GetPlaylistRevision(string playlistUri)
     {
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT base_rev FROM playlists WHERE uri=$p;";
             c.Parameters.AddWithValue("$p", playlistUri);
             return c.ExecuteScalar() as byte[];
@@ -433,9 +787,9 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public IReadOnlyList<ColdRootlistEntry> LoadRootlist()
     {
         var list = new List<ColdRootlistEntry>(64);
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT position, kind, uri, group_name, depth FROM rootlist WHERE account=$a ORDER BY position;";
             c.Parameters.AddWithValue("$a", _account);
             using var r = c.ExecuteReader();
@@ -508,17 +862,56 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     {
         if (_entityCmd != null) return;
         _entityCmd = _conn.CreateCommand();
-        _entityCmd.CommandText = _spotifyLocale is null
-            ? "INSERT INTO entities(uri,kind,payload) VALUES($u,$k,$p) ON CONFLICT(uri) DO UPDATE SET kind=excluded.kind, payload=excluded.payload;"
-            : "INSERT INTO localized_entities(uri,locale,kind,payload,updated_at) VALUES($u,$l,$k,$p,$t) " +
-              "ON CONFLICT(uri,locale) DO UPDATE SET kind=excluded.kind,payload=excluded.payload,updated_at=excluded.updated_at;";
+        _entityCmd.CommandText =
+            "INSERT INTO entity(uri,locale,kind,title,subtitle,image_url,duration_ms,flags,album_uri,fmt,size,updated_at,last_access,payload) " +
+            "VALUES($u,$l,$k,$ti,$sub,$img,$dur,$fl,$al,$fmt,$sz,$t,$la,$p) " +
+            "ON CONFLICT(uri,locale) DO UPDATE SET kind=excluded.kind,title=excluded.title,subtitle=excluded.subtitle," +
+            "image_url=excluded.image_url,duration_ms=excluded.duration_ms,flags=excluded.flags,album_uri=excluded.album_uri," +
+            "fmt=excluded.fmt,size=excluded.size,updated_at=excluded.updated_at,last_access=excluded.last_access,payload=excluded.payload;";
         _eu = _entityCmd.Parameters.Add("$u", SqliteType.Text);
+        _el = _entityCmd.Parameters.Add("$l", SqliteType.Text); _el.Value = _localeKey;
         _ek = _entityCmd.Parameters.Add("$k", SqliteType.Integer);
+        _eti = _entityCmd.Parameters.Add("$ti", SqliteType.Text);
+        _esu = _entityCmd.Parameters.Add("$sub", SqliteType.Text);
+        _eim = _entityCmd.Parameters.Add("$img", SqliteType.Text);
+        _edu = _entityCmd.Parameters.Add("$dur", SqliteType.Integer);
+        _efl = _entityCmd.Parameters.Add("$fl", SqliteType.Integer);
+        _eal = _entityCmd.Parameters.Add("$al", SqliteType.Text);
+        _efm = _entityCmd.Parameters.Add("$fmt", SqliteType.Integer);
+        _esz = _entityCmd.Parameters.Add("$sz", SqliteType.Integer);
+        _et = _entityCmd.Parameters.Add("$t", SqliteType.Integer);
+        _ela = _entityCmd.Parameters.Add("$la", SqliteType.Integer);
         _ep = _entityCmd.Parameters.Add("$p", SqliteType.Blob);
+
+        // cache_bytes is a RUNNING counter maintained in the same transaction as the row it accounts for: the delta needs
+        // the row's previous size, and `size` sits before `payload` so this probe never touches an overflow page.
+        _sizeProbeCmd = _conn.CreateCommand();
+        _sizeProbeCmd.CommandText = "SELECT size FROM entity WHERE uri=$u AND locale=$l;";
+        _zpu = _sizeProbeCmd.Parameters.Add("$u", SqliteType.Text);
+        _zpl = _sizeProbeCmd.Parameters.Add("$l", SqliteType.Text); _zpl.Value = _localeKey;
+
+        _refDelCmd = _conn.CreateCommand();
+        _refDelCmd.CommandText = "DELETE FROM entity_refs WHERE parent_uri=$p;";
+        _rdp = _refDelCmd.Parameters.Add("$p", SqliteType.Text);
+
+        _refInsCmd = _conn.CreateCommand();
+        _refInsCmd.CommandText = "INSERT OR IGNORE INTO entity_refs(parent_uri,child_uri) VALUES($p,$c);";
+        _rip = _refInsCmd.Parameters.Add("$p", SqliteType.Text);
+        _ric = _refInsCmd.Parameters.Add("$c", SqliteType.Text);
+
+        _cacheDeltaCmd = _conn.CreateCommand();
+        _cacheDeltaCmd.CommandText =
+            $"INSERT INTO meta(key,value) VALUES('{MetaCacheBytes}', CAST(MAX(0,$d) AS TEXT)) " +
+            "ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(0, CAST(meta.value AS INTEGER) + $d) AS TEXT);";
+        _cbd = _cacheDeltaCmd.Parameters.Add("$d", SqliteType.Integer);
+
         if (_spotifyLocale is not null)
         {
-            _el = _entityCmd.Parameters.Add("$l", SqliteType.Text);
-            _et = _entityCmd.Parameters.Add("$t", SqliteType.Integer);
+            _extSizeProbeCmd = _conn.CreateCommand();
+            _extSizeProbeCmd.CommandText = "SELECT IFNULL(length(payload),0) FROM localized_extension_cache WHERE entity_uri=$u AND locale=$l AND extension_kind=$k;";
+            _zxu = _extSizeProbeCmd.Parameters.Add("$u", SqliteType.Text);
+            _extSizeProbeCmd.Parameters.Add("$l", SqliteType.Text).Value = _spotifyLocale;
+            _zxk = _extSizeProbeCmd.Parameters.Add("$k", SqliteType.Integer);
 
             _extensionCmd = _conn.CreateCommand();
             _extensionCmd.CommandText = "INSERT INTO localized_extension_cache(entity_uri,locale,extension_kind,payload,etag,offline_ttl,missing,expires_at,updated_at) " +
@@ -592,23 +985,32 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             EnsureCommands();
             using var tx = _conn.BeginTransaction();
             _entityCmd!.Transaction = tx;
+            _sizeProbeCmd!.Transaction = tx;
+            _refDelCmd!.Transaction = tx;
+            _refInsCmd!.Transaction = tx;
+            _cacheDeltaCmd!.Transaction = tx;
             if (_extensionCmd is not null) _extensionCmd.Transaction = tx;
+            if (_extSizeProbeCmd is not null) _extSizeProbeCmd.Transaction = tx;
             _videoCmd!.Transaction = tx;
             _ovrUpCmd!.Transaction = tx;
             _ovrDelCmd!.Transaction = tx;
             _savedUpCmd!.Transaction = tx;
             _savedDelCmd!.Transaction = tx;
             _revCmd!.Transaction = tx;
+            long cacheDelta = 0;
             foreach (var op in batch)
             {
                 switch (op.Op)
                 {
                     case OpKind.Entity:
-                        _eu.Value = op.A; _ek.Value = op.Kind; _ep.Value = op.Payload!;
-                        if (_spotifyLocale is not null) { _el.Value = _spotifyLocale; _et.Value = op.L; }
-                        _entityCmd.ExecuteNonQuery();
+                        cacheDelta += WriteEntityRowLocked(op.A, (EntityKind)op.Kind, op.Payload!, op.L);
                         break;
                     case OpKind.Extension when _extensionCmd is not null && op.Extension is { } x:
+                        if (_extSizeProbeCmd is not null)
+                        {
+                            _zxu.Value = x.EntityUri; _zxk.Value = x.ExtensionKind;
+                            cacheDelta += (x.Payload?.Length ?? 0) - Convert.ToInt64(_extSizeProbeCmd.ExecuteScalar() ?? 0L);
+                        }
                         _xu.Value = x.EntityUri;
                         _xl.Value = _spotifyLocale!;
                         _xk.Value = x.ExtensionKind;
@@ -633,17 +1035,76 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                     case OpKind.Flush: break;
                 }
             }
+            if (cacheDelta != 0) ApplyCacheBytesDeltaLocked(cacheDelta, tx);
             tx.Commit();
         }
+    }
+
+    // One entity upsert: thin-column extraction, fmt=1 framing, cache accounting, and the pin-closure refs for a track.
+    // Returns the cache_bytes delta. Caller holds _connLock and has attached the batch transaction to the commands.
+    long WriteEntityRowLocked(string uri, EntityKind kind, byte[] payload, long now)
+    {
+        _zpu.Value = uri;
+        long oldSize = Convert.ToInt64(_sizeProbeCmd!.ExecuteScalar() ?? 0L);
+
+        bool parsed = EntityThinExtractor.TryExtract(payload, kind, out var thin);
+        var stored = PayloadCodec.Encode(payload, PayloadCodec.FmtZstd);
+
+        _eu.Value = uri;
+        _ek.Value = (int)kind;
+        _eti.Value = (object?)thin.Title ?? DBNull.Value;
+        _esu.Value = (object?)thin.Subtitle ?? DBNull.Value;
+        _eim.Value = (object?)thin.ImageUrl ?? DBNull.Value;
+        _edu.Value = thin.DurationMs is { } d ? d : DBNull.Value;
+        _efl.Value = thin.Flags;
+        _eal.Value = (object?)thin.AlbumUri ?? DBNull.Value;
+        _efm.Value = PayloadCodec.FormatOf(stored);   // read back off the frame, so the column can never disagree with it
+        _esz.Value = stored.Length;
+        _et.Value = now;
+        _ela.Value = now;
+        _ep.Value = stored;
+        _entityCmd!.ExecuteNonQuery();
+
+        // The pin closure (pinned track → its album/artists) is REPLACED per track write, so a re-hydration that changes
+        // the album never leaves a stale edge behind. Non-track kinds own no outgoing edges.
+        if (kind == EntityKind.Track && parsed)
+        {
+            _rdp.Value = uri;
+            _refDelCmd!.ExecuteNonQuery();
+            if (thin.Refs is { Count: > 0 } refs)
+            {
+                _rip.Value = uri;
+                for (int i = 0; i < refs.Count; i++) { _ric.Value = refs[i]; _refInsCmd!.ExecuteNonQuery(); }
+            }
+        }
+        return stored.Length - oldSize;
+    }
+
+    void ApplyCacheBytesDeltaLocked(long delta, SqliteTransaction? tx)
+    {
+        if (delta == 0) return;
+        if (_cacheDeltaCmd is null)
+        {
+            using var c = _conn.CreateCommand();
+            c.Transaction = tx;
+            c.CommandText = $"INSERT INTO meta(key,value) VALUES('{MetaCacheBytes}', CAST(MAX(0,$d) AS TEXT)) " +
+                            "ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(0, CAST(meta.value AS INTEGER) + $d) AS TEXT);";
+            c.Parameters.AddWithValue("$d", delta);
+            c.ExecuteNonQuery();
+            return;
+        }
+        _cacheDeltaCmd.Transaction = tx;
+        _cbd.Value = delta;
+        _cacheDeltaCmd.ExecuteNonQuery();
     }
 
     // ── IMutationOutbox (durable, synchronous — pending intents must be on disk before the call returns) ──
     public IReadOnlyList<OutboxOp> Load()
     {
         var list = new List<OutboxOp>();
-        lock (_connLock)
+        lock (_readLock)
         {
-            using var c = _conn.CreateCommand();
+            using var c = _read.CreateCommand();
             c.CommandText = "SELECT id, type, entity_key, set_id, target_saved, op, base_rev, attempts FROM outbox ORDER BY id;";
             using var r = c.ExecuteReader();
             while (r.Read())
@@ -714,15 +1175,253 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         }
     }
 
+    // ── schema v5 APIs (wired by the later waves: GC, warm set, recent surfaces, artist split) ───────────────────────
+
+    /// <summary>Batched last-access stamp (DAY granularity — §C.5). Writer-side, chunked under the SQLite parameter cap
+    /// so a 10k-uri flush is a handful of statements in one transaction rather than 10k round-trips.</summary>
+    public void TouchEntities(IReadOnlyCollection<string> uris, long day)
+    {
+        if (uris is null || uris.Count == 0) return;
+        var buffer = new List<string>(Math.Min(uris.Count, MaxInParams));
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            foreach (var uri in uris)
+            {
+                if (string.IsNullOrEmpty(uri)) continue;
+                buffer.Add(uri);
+                if (buffer.Count == MaxInParams) { TouchChunkLocked(buffer, day, tx); buffer.Clear(); }
+            }
+            if (buffer.Count > 0) TouchChunkLocked(buffer, day, tx);
+            tx.Commit();
+        }
+    }
+
+    void TouchChunkLocked(List<string> chunk, long day, SqliteTransaction tx)
+    {
+        var sql = new System.Text.StringBuilder("UPDATE entity SET last_access=$d WHERE locale=$l AND uri IN (");
+        for (int i = 0; i < chunk.Count; i++) { if (i > 0) sql.Append(','); sql.Append("$u").Append(i); }
+        sql.Append(");");
+        using var c = _conn.CreateCommand();
+        c.Transaction = tx;
+        c.CommandText = sql.ToString();
+        c.Parameters.AddWithValue("$d", day);
+        c.Parameters.AddWithValue("$l", _localeKey);
+        for (int i = 0; i < chunk.Count; i++) c.Parameters.AddWithValue("$u" + i, chunk[i]);
+        c.ExecuteNonQuery();
+    }
+
+    /// <summary>Record a detail-page open. LRU-capped at 50 rows IN the same transaction as the insert, so the pin reason
+    /// can never grow unbounded.</summary>
+    public void UpsertRecentSurface(string uri, int kind, long nowUnixSeconds)
+    {
+        if (string.IsNullOrEmpty(uri)) return;
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            using (var c = _conn.CreateCommand())
+            {
+                c.Transaction = tx;
+                c.CommandText = "INSERT INTO recent_surfaces(uri,kind,last_opened) VALUES($u,$k,$t) " +
+                                "ON CONFLICT(uri) DO UPDATE SET kind=excluded.kind,last_opened=excluded.last_opened;";
+                c.Parameters.AddWithValue("$u", uri);
+                c.Parameters.AddWithValue("$k", kind);
+                c.Parameters.AddWithValue("$t", nowUnixSeconds);
+                c.ExecuteNonQuery();
+            }
+            using (var trim = _conn.CreateCommand())
+            {
+                trim.Transaction = tx;
+                trim.CommandText = "DELETE FROM recent_surfaces WHERE uri NOT IN " +
+                                   "(SELECT uri FROM recent_surfaces ORDER BY last_opened DESC, uri ASC LIMIT $n);";
+                trim.Parameters.AddWithValue("$n", RecentSurfaceCap);
+                trim.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+    }
+
+    /// <summary>The recently-opened surfaces, newest first (at most 50).</summary>
+    public IReadOnlyList<ColdRecentSurface> LoadRecentSurfaces()
+    {
+        var list = new List<ColdRecentSurface>(RecentSurfaceCap);
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = "SELECT uri, kind, last_opened FROM recent_surfaces ORDER BY last_opened DESC, uri ASC;";
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                list.Add(new ColdRecentSurface(r.GetString(0), r.IsDBNull(1) ? 0 : r.GetInt32(1), r.IsDBNull(2) ? 0 : r.GetInt64(2)));
+        }
+        return list;
+    }
+
+    /// <summary>The fat artist facets for <paramref name="uri"/> (decoded JSON), or null when never fetched.</summary>
+    public ColdArtistOverview? GetArtistOverview(string uri)
+    {
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = "SELECT locale, payload, fetched_at FROM artist_overview WHERE uri=$u;";
+            c.Parameters.AddWithValue("$u", uri);
+            using var r = c.ExecuteReader();
+            if (!r.Read()) return null;
+            return new ColdArtistOverview(uri, r.GetString(0),
+                PayloadCodec.Decode(r.IsDBNull(1) ? null : r.GetFieldValue<byte[]>(1)), r.GetInt64(2));
+        }
+    }
+
+    /// <summary>Persist the artist overview facets (fmt=1). Synchronous on the writer — an overview write is a page-open
+    /// event, not a hot per-row write.</summary>
+    public void UpsertArtistOverview(string uri, string locale, byte[] payloadJson, long nowUnixSeconds)
+    {
+        if (string.IsNullOrEmpty(uri)) return;
+        var stored = PayloadCodec.Encode(payloadJson ?? Array.Empty<byte>(), PayloadCodec.FmtZstd);
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            long oldSize;
+            using (var probe = _conn.CreateCommand())
+            {
+                probe.Transaction = tx;
+                probe.CommandText = "SELECT size FROM artist_overview WHERE uri=$u;";
+                probe.Parameters.AddWithValue("$u", uri);
+                oldSize = Convert.ToInt64(probe.ExecuteScalar() ?? 0L);
+            }
+            using (var c = _conn.CreateCommand())
+            {
+                c.Transaction = tx;
+                c.CommandText = "INSERT INTO artist_overview(uri,locale,fmt,payload,size,fetched_at,last_access) " +
+                                "VALUES($u,$l,$f,$p,$s,$t,$t) ON CONFLICT(uri) DO UPDATE SET locale=excluded.locale," +
+                                "fmt=excluded.fmt,payload=excluded.payload,size=excluded.size,fetched_at=excluded.fetched_at," +
+                                "last_access=excluded.last_access;";
+                c.Parameters.AddWithValue("$u", uri);
+                c.Parameters.AddWithValue("$l", string.IsNullOrEmpty(locale) ? _localeKey : locale);
+                c.Parameters.AddWithValue("$f", PayloadCodec.FormatOf(stored));
+                c.Parameters.AddWithValue("$p", stored);
+                c.Parameters.AddWithValue("$s", stored.Length);
+                c.Parameters.AddWithValue("$t", nowUnixSeconds);
+                c.ExecuteNonQuery();
+            }
+            ApplyCacheBytesDeltaLocked(stored.Length - oldSize, tx);
+            tx.Commit();
+        }
+    }
+
+    /// <summary>Replace the pin-closure edges out of <paramref name="parentUri"/> (delete-all + reinsert, atomic).</summary>
+    public void ReplaceEntityRefs(string parentUri, IEnumerable<string> children)
+    {
+        if (string.IsNullOrEmpty(parentUri)) return;
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            using (var del = _conn.CreateCommand())
+            {
+                del.Transaction = tx;
+                del.CommandText = "DELETE FROM entity_refs WHERE parent_uri=$p;";
+                del.Parameters.AddWithValue("$p", parentUri);
+                del.ExecuteNonQuery();
+            }
+            if (children is not null)
+            {
+                using var ins = _conn.CreateCommand();
+                ins.Transaction = tx;
+                ins.CommandText = "INSERT OR IGNORE INTO entity_refs(parent_uri,child_uri) VALUES($p,$c);";
+                var pp = ins.Parameters.Add("$p", SqliteType.Text); pp.Value = parentUri;
+                var pc = ins.Parameters.Add("$c", SqliteType.Text);
+                foreach (var child in children)
+                {
+                    if (string.IsNullOrEmpty(child)) continue;
+                    pc.Value = child;
+                    ins.ExecuteNonQuery();
+                }
+            }
+            tx.Commit();
+        }
+    }
+
+    /// <summary>The running cache-tier byte counter (entity + artist_overview + extension payloads).</summary>
+    public long GetCacheBytes()
+    {
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = $"SELECT value FROM meta WHERE key='{MetaCacheBytes}';";
+            return c.ExecuteScalar() is string s && long.TryParse(s, out var v) ? v : 0;
+        }
+    }
+
+    /// <summary>Reclaim up to <paramref name="pages"/> freelist pages. A no-op until auto_vacuum=INCREMENTAL is active
+    /// (which <see cref="RunFullVacuumIfPending"/> turns on).</summary>
+    public void RunIncrementalVacuum(int pages)
+    {
+        if (pages <= 0) return;
+        lock (_connLock)
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = $"PRAGMA incremental_vacuum({Math.Min(pages, 1_000_000)});";   // PRAGMA args cannot be bound
+            c.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>One-time post-migration compaction, gated on the `vacuum_pending` meta flag: switch the file to
+    /// auto_vacuum=INCREMENTAL and VACUUM once (the mode change only takes effect THROUGH a full vacuum), then clear the
+    /// flag. Safe to call from a background thread — it rides the writer lock, so the write-behind drain simply waits.
+    /// Returns true when it actually vacuumed.</summary>
+    public bool RunFullVacuumIfPending()
+    {
+        lock (_connLock)
+        {
+            using (var probe = _conn.CreateCommand())
+            {
+                probe.CommandText = $"SELECT value FROM meta WHERE key='{MetaVacuumPending}';";
+                if (probe.ExecuteScalar() is not string pending || pending != "1") return false;
+            }
+            using (var c = _conn.CreateCommand())
+            {
+                // Must NOT run inside a transaction, and the auto_vacuum change is only realized by the VACUUM itself.
+                c.CommandText = "PRAGMA auto_vacuum=INCREMENTAL; VACUUM;";
+                c.ExecuteNonQuery();
+            }
+            using (var clear = _conn.CreateCommand())
+            {
+                clear.CommandText = $"INSERT OR REPLACE INTO meta(key,value) VALUES('{MetaVacuumPending}','0');";
+                clear.ExecuteNonQuery();
+            }
+            return true;
+        }
+    }
+
+    /// <summary>The derived pin set (§A.3 P0 + recent_surfaces). One indexed union over the identity tables — no stored
+    /// pin bit, so an unlike/unfollow/account switch can never leave a stale pin behind.</summary>
+    public IReadOnlyList<string> EnumeratePinnedUris()
+    {
+        var list = new List<string>(4096);
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = $"SELECT uri FROM ({PinSetWithRecentSql}) WHERE uri IS NOT NULL AND uri<>'';";
+            using var r = c.ExecuteReader();
+            while (r.Read()) list.Add(r.GetString(0));
+        }
+        return list;
+    }
+
     public void Dispose()
     {
         _queue.Writer.TryComplete();   // no more writes — the writer drains the backlog then exits
         bool drained;
         try { drained = _writer.Wait(TimeSpan.FromSeconds(30)); } catch { drained = true; }   // faulted → already stopped
+        lock (_readLock) { _read.Dispose(); }   // the reader is independent of the writer task — always safe to close
         // If the writer is STILL running (pathological backlog / stuck), do NOT dispose the connection + commands under it —
         // a mid-ExecuteNonQuery dispose corrupts/crashes. Leaking on shutdown is the safer choice (the process is exiting).
         if (!drained) return;
         _entityCmd?.Dispose();
+        _sizeProbeCmd?.Dispose();
+        _extSizeProbeCmd?.Dispose();
+        _refDelCmd?.Dispose();
+        _refInsCmd?.Dispose();
+        _cacheDeltaCmd?.Dispose();
         _extensionCmd?.Dispose();
         _videoCmd?.Dispose();
         _ovrUpCmd?.Dispose();

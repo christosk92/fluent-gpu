@@ -86,3 +86,9 @@ public interface IPlaylistMutationSource
     Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default);
     Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default);
 }
+
+/// <summary>Applies one server-advertised automatic-playlist tuning option.</summary>
+public interface IPlaylistTuningSource
+{
+    Task ApplyAsync(string playlistUri, string optionIdentifier, CancellationToken ct = default);
+}

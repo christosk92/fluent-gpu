@@ -108,6 +108,13 @@ internal static class SkeletonDeriver
             case ScrollEl sc:
                 return sc with { Content = Derive(sc.Content, s) };
 
+            case SkelRegionEl region:
+                // A content(seed) subtree may itself contain an async region (Wavee's detail track list is the
+                // canonical case). Derive through that boundary instead of collapsing the nested region to one bar.
+                // An explicit source is still the nested region's real row/template source; otherwise Content() reads
+                // that region's pending seed, exactly as its own reconciler edge would.
+                return Derive(region.ShimmerSource?.Invoke() ?? region.Content(), s);
+
             case VirtualListEl v when v.RowBind is null && v.ItemCount > 0:
             {
                 // A virtual viewport has no authored Children for the generic recursion above, but its RenderItem is

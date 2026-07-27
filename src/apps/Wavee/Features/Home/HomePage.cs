@@ -99,7 +99,8 @@ sealed class HomePage : Component
                 diagnostics: url is { Length: > 0 }
                     ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
                     : null,
-                menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title));
+                menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
+                    circular: c.Kind == HomeCardKind.Artist));
             return tile is BoxEl box ? box with { Key = "home-quick:" + c.Uri, Animate = MotionRecipes.CardRefit } : tile;
         }
 
@@ -119,7 +120,8 @@ sealed class HomePage : Component
                 return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri,
                     () => NavCard(c), () => PlayCard(c), w,
                     circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri,
-                    menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title));
+                    menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
+                        circular: c.Kind == HomeCardKind.Artist));
             },
             measured: true,
             header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
@@ -138,7 +140,8 @@ sealed class HomePage : Component
                 var c = g.Cards[i];
                 return MediaCard.EditorialCard(c.Image, c.Eyebrow, c.Title, c.Subtitle ?? "", c.Uri, c.Kind,
                     () => NavCard(c), () => PlayCard(c), w,
-                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title),
+                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
+                        circular: c.Kind == HomeCardKind.Artist),
                     // Hover peek: preview tracks from the batched feedBaselineLookup cache (primed when the feed lands).
                     previewsOf: Wavee.SpotifyLive.HomeBaselinePreviews.For,
                     previewsEpoch: Wavee.SpotifyLive.HomeBaselinePreviews.Epoch);
@@ -168,7 +171,8 @@ sealed class HomePage : Component
                 var c = g.Cards[i];
                 Element compact = MediaCard.Compact(c.Image, c.Title, c.Subtitle ?? "", c.Uri, c.Kind,
                     () => NavCard(c), () => PlayCard(c), art, cardH,
-                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title));
+                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
+                        circular: c.Kind == HomeCardKind.Artist));
                 cards[i] = compact is BoxEl b
                     ? b with { Key = "home-compact:" + c.Uri, Animate = MotionRecipes.CardRefit }
                     : compact;

@@ -1,12 +1,13 @@
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 
 namespace Wavee.Backend;
-
-// ── Connect remote commands (proto-free; the REQUEST → dispatch → ack path) ───────────────────────────────────────────
-// A REQUEST frame's command is JSON: { message_id, sent_by_device_id, command: { endpoint, ...args } } for the real
-// hm://connect-state/v1/player/command ident (a legacy form puts the endpoint in the ident tail). The dealer frame `key`
-// IS the reply key. Parsed into a flat POD; the full payload bytes ride along so the controller can deep-parse play/transfer.
 
 public enum ConnectCmd
 {
@@ -15,12 +16,17 @@ public enum ConnectCmd
     Transfer, AddToQueue, SetQueue, UpdateContext, SetOptions,
 }
 
+public enum ConnectCommandOutcome { Applied, NoOp, Superseded, Failed }
+
+/// <summary>
+/// Parsed Dealer REQUEST envelope. The complete payload remains available for typed command-specific parsing; the
+/// frequently needed routing and correlation values are extracted once at the boundary.
+/// </summary>
 public readonly record struct ConnectCommand(
     ConnectCmd Kind, string Endpoint, string Key, int MessageId, string SenderDeviceId,
     long SeekToMs, bool BoolArg, byte[] Payload,
-    // The optional command.track payload a next_track / skip_next carries (F7): the row the sender is jumping to, uid-first
-    // identity + uri fallback. Empty for a bare skip_next (advance one). Trailing defaults so other constructions are unaffected.
-    string TrackUri = "", string TrackUid = "")
+    string TrackUri = "", string TrackUid = "",
+    string SessionId = "", string CommandId = "")
 {
     public static bool TryParse(in WireRequest req, out ConnectCommand cmd)
     {
@@ -28,21 +34,19 @@ public readonly record struct ConnectCommand(
         try
         {
             var parts = req.MessageIdent.Split('/');
-            if (parts.Length < 5) return false;   // need hm://connect-state/v1/{endpoint}
-            if (req.Command is null || req.Command.Length == 0) return false;
+            if (parts.Length < 5 || req.Command is null || req.Command.Length == 0) return false;
 
             using var doc = JsonDocument.Parse(req.Command);
             var root = doc.RootElement;
             int messageId = root.TryGetProperty("message_id", out var mid) ? IntLoose(mid) : 0;
-            string sender = root.TryGetProperty("sent_by_device_id", out var sd) ? (sd.GetString() ?? "") : "";
+            string sender = root.TryGetProperty("sent_by_device_id", out var sd) ? sd.GetString() ?? "" : "";
 
-            string endpoint;
             JsonElement inner = root;
             string urlEndpoint = parts[^1];
+            string endpoint;
             if (urlEndpoint == "command" && parts.Length >= 6 && parts[^2] == "player")
             {
-                if (!root.TryGetProperty("command", out inner)) return false;
-                if (!inner.TryGetProperty("endpoint", out var ep)) return false;
+                if (!root.TryGetProperty("command", out inner) || !inner.TryGetProperty("endpoint", out var ep)) return false;
                 endpoint = ep.GetString()?.ToLowerInvariant() ?? "";
             }
             else endpoint = urlEndpoint.ToLowerInvariant();
@@ -60,11 +64,11 @@ public readonly record struct ConnectCommand(
                 case ConnectCmd.SetShufflingContext:
                 case ConnectCmd.SetRepeatingContext:
                 case ConnectCmd.SetRepeatingTrack:
-                    if (inner.TryGetProperty("value", out var bv) && bv.ValueKind is JsonValueKind.True or JsonValueKind.False)
+                    if (inner.TryGetProperty("value", out var bv) &&
+                        bv.ValueKind is JsonValueKind.True or JsonValueKind.False)
                         boolArg = bv.GetBoolean();
                     break;
                 case ConnectCmd.SkipNext:
-                    // next_track (and, rarely, skip_next) carries command.track {uri,uid} — the row being jumped to (F7).
                     if (inner.TryGetProperty("track", out var trk) && trk.ValueKind == JsonValueKind.Object)
                     {
                         if (trk.TryGetProperty("uri", out var tu)) trackUri = tu.GetString() ?? "";
@@ -73,20 +77,32 @@ public readonly record struct ConnectCommand(
                     break;
             }
 
-            cmd = new ConnectCommand(kind, endpoint, req.RequestId, messageId, sender, seekMs, boolArg, req.Command, trackUri, trackUid);
+            string sessionId = "";
+            if (inner.TryGetProperty("session_id", out var sid) && sid.ValueKind == JsonValueKind.String)
+                sessionId = sid.GetString() ?? "";
+            else if (inner.TryGetProperty("options", out var options) && options.ValueKind == JsonValueKind.Object
+                     && options.TryGetProperty("session_id", out sid) && sid.ValueKind == JsonValueKind.String)
+                sessionId = sid.GetString() ?? "";
+
+            string commandId = "";
+            if (inner.TryGetProperty("logging_params", out var logging) && logging.ValueKind == JsonValueKind.Object
+                && logging.TryGetProperty("command_id", out var cid) && cid.ValueKind == JsonValueKind.String)
+                commandId = cid.GetString() ?? "";
+
+            cmd = new ConnectCommand(kind, endpoint, req.RequestId, messageId, sender, seekMs, boolArg, req.Command,
+                trackUri, trackUid, sessionId, commandId);
             return kind != ConnectCmd.Unknown;
         }
         catch { return false; }
     }
 
-    static ConnectCmd Map(string e) => e switch
+    static ConnectCmd Map(string endpoint) => endpoint switch
     {
         "play" => ConnectCmd.Play,
         "pause" => ConnectCmd.Pause,
         "resume" => ConnectCmd.Resume,
         "seek_to" => ConnectCmd.SeekTo,
-        "skip_next" => ConnectCmd.SkipNext,
-        "next_track" => ConnectCmd.SkipNext,   // official desktop sends next_track (+ the target row) for a queue-row jump (F7)
+        "skip_next" or "next_track" => ConnectCmd.SkipNext,
         "skip_prev" => ConnectCmd.SkipPrev,
         "set_shuffling_context" => ConnectCmd.SetShufflingContext,
         "set_repeating_context" => ConnectCmd.SetRepeatingContext,
@@ -99,53 +115,286 @@ public readonly record struct ConnectCommand(
         _ => ConnectCmd.Unknown,
     };
 
-    // The wire sends numbers sometimes as JSON strings ("12345"); accept both.
-    static int IntLoose(JsonElement e) => e.ValueKind == JsonValueKind.Number ? e.GetInt32() : (int.TryParse(e.GetString(), out var v) ? v : 0);
-    static long LongLoose(JsonElement e) => e.ValueKind == JsonValueKind.Number ? e.GetInt64() : (long.TryParse(e.GetString(), out var v) ? v : 0);
+    static int IntLoose(JsonElement element) =>
+        element.ValueKind == JsonValueKind.Number ? element.GetInt32()
+        : int.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
+
+    static long LongLoose(JsonElement element) =>
+        element.ValueKind == JsonValueKind.Number ? element.GetInt64()
+        : long.TryParse(element.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : 0;
 }
 
-// Subscribes the REQUEST firehose, parses each command, dispatches to the controller, and ACKS within the 10 s SLA.
-// Policy: ack-on-dispatch (locked decision) — the dealer ack means "received + dispatched", so we ALWAYS reply promptly;
-// a dispatch failure surfaces later via the cluster/PutState, never by withholding the ack (that would mark us unhealthy).
+/// <summary>
+/// Owns the inbound Connect command queue. A Dealer ACK confirms validation and queue admission, not audible completion.
+/// The single worker preserves command order and observes every handler task.
+/// </summary>
 public sealed class ConnectCommandRouter : IDisposable
 {
+    const int DedupeCapacity = 1024;
+    static readonly long DedupeTicks = (long)(Stopwatch.Frequency * TimeSpan.FromMinutes(10).TotalSeconds);
+
     readonly ITransport _transport;
-    readonly Action<ConnectCommand> _dispatch;
+    readonly Func<ConnectCommand, CancellationToken, Task<ConnectCommandOutcome>> _dispatch;
+    readonly Func<int, CancellationToken, Task<ConnectCommandOutcome>>? _volumeDispatch;
     readonly WaveeLogger _log;
-    readonly IDisposable _sub;
+    readonly IDisposable _requestSub;
+    readonly IDisposable _volumeSub;
+    readonly System.Threading.Channels.Channel<ConnectWork> _queue;
+    readonly CancellationTokenSource _cts = new();
+    readonly Task _worker;
+    readonly object _dedupeGate = new();
+    readonly Dictionary<string, long> _seen = new(StringComparer.Ordinal);
+    readonly Queue<(string Key, long At)> _seenOrder = new();
 
     public ConnectCommandRouter(ITransport transport, Action<ConnectCommand> dispatch, WaveeLogger log = default)
+        : this(transport, (command, _) =>
+        {
+            dispatch(command);
+            return Task.FromResult(ConnectCommandOutcome.Applied);
+        }, null, log)
+    {
+    }
+
+    public ConnectCommandRouter(
+        ITransport transport,
+        Func<ConnectCommand, CancellationToken, Task<ConnectCommandOutcome>> dispatch,
+        Func<int, CancellationToken, Task<ConnectCommandOutcome>>? volumeDispatch = null,
+        WaveeLogger log = default,
+        int capacity = 256)
     {
         _transport = transport;
         _dispatch = dispatch;
+        _volumeDispatch = volumeDispatch;
         _log = log;
-        _sub = transport.Requests("hm://connect-state/v1/").Subscribe(Observers.From<WireRequest>(OnRequest));
+        _queue = System.Threading.Channels.Channel.CreateBounded<ConnectWork>(new BoundedChannelOptions(Math.Max(1, capacity))
+        {
+            SingleReader = true,
+            SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
+        });
+        _worker = Task.Run(WorkerAsync);
+        _requestSub = transport.Requests("hm://connect-state/v1/")
+            .Subscribe(Observers.From<WireRequest>(OnRequest));
+        _volumeSub = transport.Events("hm://connect-state/v1/connect/volume")
+            .Subscribe(Observers.From<WireEvent>(OnVolume));
     }
 
-    void OnRequest(WireRequest req)
+    void OnRequest(WireRequest request)
     {
         RequestResult result;
-        if (ConnectCommand.TryParse(req, out var cmd))
+        if (!ConnectCommand.TryParse(request, out var command))
         {
-            // The sender + endpoint + message id are already parsed and free; without them a `connect command: Play` in
-            // the log cannot be told from a LOCAL play, nor attributed to the device that sent it — which is exactly the
-            // question a playback change nobody asked for raises.
-            try
-            {
-                _dispatch(cmd);
-                result = RequestResult.Success;
-                _log.Info($"connect command: {cmd.Kind} endpoint={cmd.Endpoint} from={(string.IsNullOrEmpty(cmd.SenderDeviceId) ? "-" : cmd.SenderDeviceId)} msgId={cmd.MessageId} payload={cmd.Payload?.Length ?? 0}B");
-            }
-            catch (Exception ex) { result = RequestResult.ContextPlayerError; _log.Info("connect command dispatch error: " + ex.Message); }
+            result = RequestResult.DeviceDoesNotSupportCommand;
+            _log.Info("connect command unsupported: " + request.MessageIdent);
         }
         else
         {
-            result = RequestResult.DeviceDoesNotSupportCommand;
-            _log.Info("connect command unsupported: " + req.MessageIdent);
+            string dedupeKey = DedupeKey(command);
+            if (dedupeKey.Length > 0 && IsDuplicate(dedupeKey))
+            {
+                result = RequestResult.Success;
+                _log.Event(WaveeLogLevel.Debug, "connect.command.duplicate", "exact Connect command replay ignored",
+                    fields:
+                    [
+                        WaveeLogField.Of("endpoint", command.Endpoint),
+                        WaveeLogField.Of("messageId", command.MessageId),
+                        WaveeLogField.Of("sender", Fingerprint(command.SenderDeviceId)),
+                    ]);
+            }
+            else if (_queue.Writer.TryWrite(ConnectWork.ForCommand(command, Stopwatch.GetTimestamp())))
+            {
+                if (dedupeKey.Length > 0) Remember(dedupeKey);
+                result = RequestResult.Success;
+                _log.Event(WaveeLogLevel.Info, "connect.command.received", "Connect command accepted",
+                    fields:
+                    [
+                        WaveeLogField.Of("endpoint", command.Endpoint),
+                        WaveeLogField.Of("messageId", command.MessageId),
+                        WaveeLogField.Of("sender", Fingerprint(command.SenderDeviceId)),
+                        WaveeLogField.Of("commandId", Fingerprint(command.CommandId)),
+                        WaveeLogField.Of("session", Fingerprint(command.SessionId)),
+                        WaveeLogField.Of("payloadBytes", command.Payload?.Length ?? 0),
+                    ]);
+            }
+            else
+            {
+                result = RequestResult.ContextPlayerError;
+                _log.Warn($"connect command queue full: endpoint={command.Endpoint}");
+            }
         }
-        // Always reply (sync ack-on-dispatch trivially meets the 10 s SLA; a parse/dispatch failure still acks a code).
-        _ = _transport.Reply(req.RequestId, result);
+        _ = _transport.Reply(request.RequestId, result);
     }
 
-    public void Dispose() => _sub.Dispose();
+    void OnVolume(WireEvent wire)
+    {
+        if (_volumeDispatch is null) return;
+        if (!TryParseSetVolume(wire.Payload, out int volume))
+        {
+            _log.Warn("connect volume MESSAGE had an invalid SetVolumeCommand body");
+            return;
+        }
+        if (!_queue.Writer.TryWrite(ConnectWork.ForVolume(volume, Stopwatch.GetTimestamp())))
+            _log.Warn("connect command queue full: inbound volume dropped");
+    }
+
+    async Task WorkerAsync()
+    {
+        try
+        {
+            await foreach (var work in _queue.Reader.ReadAllAsync(_cts.Token).ConfigureAwait(false))
+            {
+                var outcome = ConnectCommandOutcome.NoOp;
+                Exception? error = null;
+                try
+                {
+                    outcome = work.IsVolume
+                        ? (_volumeDispatch is null ? ConnectCommandOutcome.NoOp
+                            : await _volumeDispatch(work.Volume, _cts.Token).ConfigureAwait(false))
+                        : await _dispatch(work.Command, _cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (_cts.IsCancellationRequested) { break; }
+                catch (Exception ex) { outcome = ConnectCommandOutcome.Failed; error = ex; }
+
+                long durationMs = (long)Stopwatch.GetElapsedTime(work.ReceivedAt).TotalMilliseconds;
+                if (work.IsVolume)
+                {
+                    _log.Event(error is null ? WaveeLogLevel.Info : WaveeLogLevel.Warning,
+                        "connect.volume.completed", "inbound Connect volume completed", elapsedMs: durationMs, ex: error,
+                        fields:
+                        [
+                            WaveeLogField.Of("volume", work.Volume),
+                            WaveeLogField.Of("outcome", outcome.ToString()),
+                        ]);
+                }
+                else
+                {
+                    _log.Event(error is null ? WaveeLogLevel.Info : WaveeLogLevel.Warning,
+                        "connect.command.completed", "Connect command completed", elapsedMs: durationMs, ex: error,
+                        fields:
+                        [
+                            WaveeLogField.Of("endpoint", work.Command.Endpoint),
+                            WaveeLogField.Of("messageId", work.Command.MessageId),
+                            WaveeLogField.Of("sender", Fingerprint(work.Command.SenderDeviceId)),
+                            WaveeLogField.Of("commandId", Fingerprint(work.Command.CommandId)),
+                            WaveeLogField.Of("outcome", outcome.ToString()),
+                        ]);
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex) { _log.Warn("connect command worker fault: " + ex.Message, ex); }
+    }
+
+    bool IsDuplicate(string key)
+    {
+        lock (_dedupeGate)
+        {
+            PruneSeen(Stopwatch.GetTimestamp());
+            return _seen.ContainsKey(key);
+        }
+    }
+
+    void Remember(string key)
+    {
+        lock (_dedupeGate)
+        {
+            long now = Stopwatch.GetTimestamp();
+            PruneSeen(now);
+            if (_seen.ContainsKey(key)) return;
+            _seen[key] = now;
+            _seenOrder.Enqueue((key, now));
+            while (_seenOrder.Count > DedupeCapacity)
+            {
+                var old = _seenOrder.Dequeue();
+                if (_seen.TryGetValue(old.Key, out long at) && at == old.At) _seen.Remove(old.Key);
+            }
+        }
+    }
+
+    void PruneSeen(long now)
+    {
+        while (_seenOrder.TryPeek(out var first) && now - first.At > DedupeTicks)
+        {
+            _seenOrder.Dequeue();
+            if (_seen.TryGetValue(first.Key, out long at) && at == first.At) _seen.Remove(first.Key);
+        }
+    }
+
+    static string DedupeKey(in ConnectCommand command) =>
+        command.MessageId == 0 || string.IsNullOrEmpty(command.SenderDeviceId)
+            ? ""
+            : command.SenderDeviceId + "\n" + command.MessageId.ToString(CultureInfo.InvariantCulture);
+
+    static string Fingerprint(string value) =>
+        string.IsNullOrEmpty(value) ? "-" : WaveeLogRedaction.HashLike(value);
+
+    internal static bool TryParseSetVolume(ReadOnlySpan<byte> payload, out int volume)
+    {
+        volume = 0;
+        int offset = 0;
+        while (offset < payload.Length)
+        {
+            if (!TryReadVarint(payload, ref offset, out ulong key)) return false;
+            int field = (int)(key >> 3);
+            int wire = (int)(key & 7);
+            if (field == 1 && wire == 0)
+            {
+                if (!TryReadVarint(payload, ref offset, out ulong raw) || raw > int.MaxValue) return false;
+                volume = Math.Clamp((int)raw, 0, 65535);
+                return true;
+            }
+            if (!SkipField(payload, ref offset, wire)) return false;
+        }
+        return false;
+    }
+
+    static bool TryReadVarint(ReadOnlySpan<byte> bytes, ref int offset, out ulong value)
+    {
+        value = 0;
+        for (int shift = 0; shift < 64 && offset < bytes.Length; shift += 7)
+        {
+            byte b = bytes[offset++];
+            value |= (ulong)(b & 0x7f) << shift;
+            if ((b & 0x80) == 0) return true;
+        }
+        return false;
+    }
+
+    static bool SkipField(ReadOnlySpan<byte> bytes, ref int offset, int wire)
+    {
+        switch (wire)
+        {
+            case 0: return TryReadVarint(bytes, ref offset, out _);
+            case 1: offset += 8; return offset <= bytes.Length;
+            case 2:
+                if (!TryReadVarint(bytes, ref offset, out ulong length) || length > int.MaxValue) return false;
+                offset += (int)length;
+                return offset <= bytes.Length;
+            case 5: offset += 4; return offset <= bytes.Length;
+            default: return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _requestSub.Dispose();
+        _volumeSub.Dispose();
+        _queue.Writer.TryComplete();
+        try
+        {
+            if (!_worker.Wait(TimeSpan.FromSeconds(2)))
+            {
+                _cts.Cancel();
+                _worker.Wait(TimeSpan.FromSeconds(1));
+            }
+        }
+        catch { }
+        _cts.Dispose();
+    }
+
+    readonly record struct ConnectWork(ConnectCommand Command, int Volume, bool IsVolume, long ReceivedAt)
+    {
+        public static ConnectWork ForCommand(ConnectCommand command, long at) => new(command, 0, false, at);
+        public static ConnectWork ForVolume(int volume, long at) => new(default, volume, true, at);
+    }
 }

@@ -2960,6 +2960,86 @@ static class OverlaySuite
                 Toast.CloseAll();
             }
 
+            // gate.toast.pause-unstick — dismissing the last toast WHILE the strip is hover-paused (the X click /
+            // dead-node path: InputDispatcher drops a freed _hovered without firing OnPointerExit) must clear the
+            // stuck pause so the NEXT toast can arm its auto-dismiss.
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-pu", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+                host.Paint(0);
+                var h1 = Toast.Show("first", new ToastOptions { DurationMs = 200f });
+                var ctl = Toast.Default!;
+                ctl.SetPaused(true);            // strip hover while the toast is up
+                h1.Close();                     // last toast destroyed under the pointer — no PointerExit
+                host.Paint(0);
+                bool unstuck = !ctl.Paused;
+                var h2 = Toast.Show("second", new ToastOptions { DurationMs = 200f });
+                bool armed = ctl.Items.Count == 1 && ctl.Items[0].Armed;
+                for (int i = 0; i < 25; i++) host.Paint(0);
+                bool closed = ctl.Items.Count == 0 && !h2.IsOpen;
+                Check("gate.toast.pause-unstick", unstuck && armed && closed,
+                    $"unstuck={unstuck} armed={armed} closed={closed}");
+                Toast.CloseAll();
+            }
+
+            // gate.toast.hover-isolate — the strip's hover-pause (OnHoverMove → HoverWithin on the interactive
+            // container) must NOT auto-lighten sibling toast fills. Inherited progress is for reveal/scale only;
+            // pure-fill descendants keep their resting severity tint (the "all toasts wash on one hover" bug).
+            {
+                ColorF tint = ColorF.FromRgba(0x5C, 0x2B, 0x2B);   // distinct resting fill
+                ColorF washed = new(tint.R + (1f - tint.R) * 0.08f, tint.G + (1f - tint.G) * 0.08f,
+                                    tint.B + (1f - tint.B) * 0.08f, tint.A);   // ResolveSurface Lighten(, 0.08)
+                Element Tree() => new BoxEl
+                {
+                    Width = 120f, Direction = 1, Gap = 8f,
+                    OnHoverMove = static _ => { },   // interactive strip (toast pause shape)
+                    Children =
+                    [
+                        new BoxEl { Key = "t0", Width = 100f, Height = 40f, Fill = tint },
+                        new BoxEl { Key = "t1", Width = 100f, Height = 40f, Fill = tint },
+                    ],
+                };
+                var fonts = new HeadlessFontSystem(strings);
+                var scene = new SceneStore();
+                new TreeReconciler(scene, strings).ReconcileRoot(Tree(), null);
+                new FlexLayout(scene, fonts).Run(scene.Root);
+                scene.Flags(scene.Root) |= NodeFlags.HoverWithin;   // pointer anywhere in the strip
+                var dl = new DrawList();
+                SceneRecorder.Record(scene, dl);
+                bool resting = FindFillCommand(dl, tint).Order >= 0;
+                bool noWash = FindFillCommandNear(dl, washed, tol: 0.01f).Order < 0;
+                Check("gate.toast.hover-isolate", resting && noWash,
+                    $"resting={resting} noWash={noWash} (strip HoverWithin must not Lighten sibling fills)");
+            }
+
+            // gate.toast.fill-minwidth — a short message still paints the severity tint across the full MinWidth
+            // frame (no transparent gap to the right of the InfoBar). The card is a column so AlignItems=Stretch
+            // hands the InfoBar the frame's width.
+            {
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("g5f-toast-w", new Size2(640, 480), 1f));
+                window.Show();
+                var probe = new OverlayProbe();
+                var clock = new ManualFrameTimeSource();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe, frameTime: clock);
+                host.RunFrame();
+                Toast.Show("hi", new ToastOptions { Severity = InfoBarSeverity.Success });
+                for (int i = 0; i < 8; i++) { clock.Advance(16f); host.RunFrame(); }
+                var bars = Roles(host.Scene, AutomationRole.InfoBar);
+                bool hasBar = bars.Count == 1;
+                var bar = hasBar ? bars[0] : default;
+                var frame = hasBar ? host.Scene.Parent(bar) : default;
+                float barW = hasBar ? host.Scene.AbsoluteRect(bar).W : 0f;
+                float frameW = !frame.IsNull ? host.Scene.AbsoluteRect(frame).W : 0f;
+                bool fills = hasBar && !frame.IsNull && frameW >= 299f && Near(barW, frameW, 1f);
+                Check("gate.toast.fill-minwidth", fills,
+                    $"barW={barW:0.#} frameW={frameW:0.#} hasBar={hasBar}");
+                Toast.CloseAll();
+            }
+
             // gate.toast.severity — the toast severity visuals ARE InfoBar's (the shared SeverityVisuals helper), so they
             // cannot drift.
             {

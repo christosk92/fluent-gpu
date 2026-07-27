@@ -57,6 +57,7 @@
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\media.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\player.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\connect.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\transfer_state.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\autoplay.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
 
   </ItemGroup>
@@ -79,8 +80,13 @@
     <Compile Include="..\Wavee\Components\MembershipDiff.cs" />
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
+    <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
     <!-- progressive-reveal ramp progression (BCL only) — DetailRevealRampTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailRevealRamp.cs" />
+    <Compile Include="..\Wavee\Features\Detail\PlaylistTuneMenuModel.cs" />
+    <!-- shared detail-track command-bar fit + query/facet predicate (engine-free) -->
+    <Compile Include="..\Wavee\Features\Detail\DetailTrackCommandBarLayout.cs" />
+    <Compile Include="..\Wavee\Features\Detail\TrackFilterModel.cs" />
     <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
     <Compile Include="..\Wavee\Features\Concerts\ConcertRoutes.cs" />
@@ -171,6 +177,7 @@
          dispatch through the real provider, so the source-agnostic routing contract is pinned against production code -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyMediaProvider.cs" />
     <Compile Include="..\Wavee\SpotifyLive\LiveContextResolver.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\TransferStateDecoder.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyClientIdentity.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConnectStateBuilder.cs" />
   </ItemGroup>

@@ -57,13 +57,21 @@ public sealed class SplitButton : Component
     /// <see cref="TemplateParts"/> for the contract.</summary>
     public TemplateParts? Parts;
 
-    public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, string? glyph = null, bool isEnabled = true)
-        => Embed.Comp(() => new SplitButton { Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph, IsEnabled = isEnabled });
+    public static Element Create(string label, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items,
+        string? glyph = null, bool isEnabled = true, TemplateParts? parts = null)
+        => Embed.Comp(() => new SplitButton
+        {
+            Label = label, OnInvoke = onInvoke, Items = items, Glyph = glyph, IsEnabled = isEnabled, Parts = parts,
+        });
 
     // PrimaryContent is a deliberate mount-time slot ([MountOnceContent]; the ReuseGuard tripwire below documents the
     // freeze) — callers pass static custom content. Dynamic content should be reached via a signal/context inside the slot.
-    public static Element Create([MountOnceContent] Element primaryContent, Action onInvoke, IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true)
-        => Embed.Comp(() => new SplitButton { PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled });
+    public static Element Create([MountOnceContent] Element primaryContent, Action onInvoke,
+        IReadOnlyList<MenuFlyoutItem> items, bool isEnabled = true, TemplateParts? parts = null)
+        => Embed.Comp(() => new SplitButton
+        {
+            PrimaryContent = primaryContent, OnInvoke = onInvoke, Items = items, IsEnabled = isEnabled, Parts = parts,
+        });
 
     // Frozen-props tripwire (ReuseGuard): Label/Glyph/IsEnabled freeze at mount (PrimaryContent/Items are element/list
     // slots — deliver those via a provider). A reused instance whose scalar caller-data changed is the frozen-props bug.

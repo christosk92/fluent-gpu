@@ -167,6 +167,58 @@ public class QueueSessionTests
 
     // ── §4.2 / §7.4 — q-uids minted "q{n}" at add; existing uids preserved; mint cursor stays ahead ──
     [Fact]
+    public void MoveContextItem_IsSectionLocal_AndPersistsAsNaturalOrder()
+    {
+        var s = new PlaybackSession();
+        s.SetContext("spotify:playlist:p", Ctx("a", "b", "c"), 0);
+        s.AppendContextPage(new[] { Q("s1", "us1", "autoplay"), Q("s2", "us2", "autoplay") },
+            QueueProvider.Autoplay, "spotify:station:x");
+        var before = s.Snapshot();
+        var idC = before.Upcoming.Single(e => IsTrack(e, "c")).ItemId;
+
+        var moved = s.MoveItem(idC, 0);
+
+        Assert.NotNull(moved);
+        Assert.Equal(before.Current!.ItemId, moved!.Current!.ItemId);
+        Assert.Equal(new[] { "c", "b" }, moved.Upcoming
+            .Where(e => e.Provider == QueueProvider.Context).Select(e => e.Track.Id));
+        Assert.Equal(new[] { "s1", "s2" }, moved.Upcoming
+            .Where(e => e.Provider == QueueProvider.Autoplay).Select(e => e.Track.Id));
+        Assert.Empty(moved.History);
+
+        s.SetShuffle(true);
+        var restored = s.SetShuffle(false);
+        Assert.Equal(new[] { "c", "b" }, restored.Upcoming
+            .Where(e => e.Provider == QueueProvider.Context).Select(e => e.Track.Id));
+    }
+
+    [Fact]
+    public void MoveAndRemoveAutoplayItem_StayInsideAutoplayTail()
+    {
+        var s = new PlaybackSession();
+        s.SetContext("spotify:playlist:p", Ctx("a", "b", "c"), 0);
+        s.AppendContextPage(new[] { Q("s1", "us1", "autoplay"), Q("s2", "us2", "autoplay") },
+            QueueProvider.Autoplay, "spotify:station:x");
+        var before = s.Snapshot();
+        var idS2 = before.Upcoming.Single(e => IsTrack(e, "s2")).ItemId;
+        var idS1 = before.Upcoming.Single(e => IsTrack(e, "s1")).ItemId;
+
+        var moved = s.MoveItem(idS2, 0);
+        Assert.NotNull(moved);
+        Assert.Equal(new[] { "b", "c" }, moved!.Upcoming
+            .Where(e => e.Provider == QueueProvider.Context).Select(e => e.Track.Id));
+        Assert.Equal(new[] { "s2", "s1" }, moved.Upcoming
+            .Where(e => e.Provider == QueueProvider.Autoplay).Select(e => e.Track.Id));
+
+        var removed = s.RemoveItem(idS1);
+        Assert.NotNull(removed);
+        Assert.Equal(before.Current!.ItemId, removed!.Current!.ItemId);
+        Assert.Single(removed.Upcoming.Where(e => e.Provider == QueueProvider.Autoplay));
+        Assert.True(IsTrack(removed.Upcoming.Single(e => e.Provider == QueueProvider.Autoplay), "s2"));
+        Assert.Empty(removed.History);
+    }
+
+    [Fact]
     public void QueueUids_MintedSequentially_ExistingPreserved()
     {
         var s = new PlaybackSession();
@@ -304,5 +356,35 @@ public class QueueSessionTests
         }, QueueProvider.Context, null);
         Assert.Null(stopped.PreviewNext());
         Assert.Null(stopped.Next()!.Current);
+    }
+
+    [Fact]
+    public void UpdateContext_PreservesCurrentIdentity_AndAcceptsAnyRowCount()
+    {
+        var session = new PlaybackSession();
+        session.SetContext("spotify:playlist:p", Ctx("a", "b", "c"), 1);
+        var currentId = session.Snapshot().Current!.ItemId;
+        var refreshed = Enumerable.Range(0, 1600)
+            .Select(i => Q(i == 900 ? "b" : "n" + i, i == 900 ? "u-b" : "u-n" + i))
+            .ToArray();
+
+        var snapshot = session.ReplaceContextPreservingCurrent("spotify:playlist:p", refreshed);
+
+        Assert.Equal(1600, refreshed.Length);
+        Assert.Equal(currentId, snapshot.Current!.ItemId);
+        Assert.True(IsTrack(snapshot.Current, "b"));
+    }
+
+    [Fact]
+    public void UpdateContext_WhenCurrentDisappears_KeepsItExternalUntilAdvance()
+    {
+        var session = new PlaybackSession();
+        session.SetContext("spotify:playlist:p", Ctx("a", "b", "c"), 1);
+
+        var snapshot = session.ReplaceContextPreservingCurrent(
+            "spotify:playlist:p", new[] { Q("x"), Q("y") });
+
+        Assert.True(IsTrack(snapshot.Current!, "b"));
+        Assert.True(IsTrack(session.Next()!.Current!, "x"));
     }
 }

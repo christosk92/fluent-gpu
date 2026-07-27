@@ -74,13 +74,24 @@ public sealed class GaboBatcher : IAsyncDisposable
             {
                 if (item.IsFlush)
                 {
-                    await FlushAsync().ConfigureAwait(false);
+                    try { await FlushAsync().ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (_cts.IsCancellationRequested) { break; }
+                    catch (Exception ex) { _log.Warn("gabo flush trigger failed; worker continuing: " + ex.Message, ex); }
                     continue;
                 }
-                _pending.Add(item.Envelope!);
+                if (item.Envelope is not { } envelope)
+                {
+                    _log.Warn("gabo dropped malformed event work item with no envelope");
+                    continue;
+                }
+                _pending.Add(envelope);
                 _pendingBytes += item.PayloadBytes;
                 if (_pending.Count >= MaxEvents || _pendingBytes >= MaxUncompressedBytes)
-                    await FlushAsync().ConfigureAwait(false);
+                {
+                    try { await FlushAsync().ConfigureAwait(false); }
+                    catch (OperationCanceledException) when (_cts.IsCancellationRequested) { break; }
+                    catch (Exception ex) { _log.Warn("gabo threshold flush failed; worker continuing: " + ex.Message, ex); }
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -148,10 +159,17 @@ public sealed class GaboBatcher : IAsyncDisposable
 
     readonly struct GaboWorkItem
     {
-        public static GaboWorkItem Flush => default;
+        public static GaboWorkItem Flush => new(isFlush: true);
         public readonly EventEnvelope? Envelope;
         public readonly int PayloadBytes;
         public readonly bool IsFlush;
-        public GaboWorkItem(EventEnvelope env, int payloadBytes) { Envelope = env; PayloadBytes = payloadBytes; IsFlush = false; }
+        GaboWorkItem(bool isFlush) { Envelope = null; PayloadBytes = 0; IsFlush = isFlush; }
+        public GaboWorkItem(EventEnvelope env, int payloadBytes)
+        {
+            ArgumentNullException.ThrowIfNull(env);
+            Envelope = env;
+            PayloadBytes = payloadBytes;
+            IsFlush = false;
+        }
     }
 }

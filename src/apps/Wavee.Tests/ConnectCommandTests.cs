@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Wavee.Backend;
 using Xunit;
 
@@ -51,13 +53,13 @@ public class ConnectCommandTests
         => Assert.False(ConnectCommand.TryParse(Req("{\"command\":{\"endpoint\":\"frobnicate\"}}"), out _));
 
     [Fact]
-    public void Router_KnownCommand_Dispatches_AndAcksSuccess()
+    public async Task Router_KnownCommand_Dispatches_AndAcksSuccess()
     {
         var t = new StubTransport();
-        var got = new List<ConnectCmd>();
-        using var r = new ConnectCommandRouter(t, c => got.Add(c.Kind));
+        var dispatched = new TaskCompletionSource<ConnectCmd>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var r = new ConnectCommandRouter(t, c => dispatched.TrySetResult(c.Kind));
         t.PushRequest(Req("{\"command\":{\"endpoint\":\"skip_next\"}}", "k1"));
-        Assert.Equal(new[] { ConnectCmd.SkipNext }, got);
+        Assert.Equal(ConnectCmd.SkipNext, await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5)));
         Assert.Equal(RequestResult.Success, t.LastReply);
     }
 
@@ -71,11 +73,56 @@ public class ConnectCommandTests
     }
 
     [Fact]
-    public void Router_DispatchThrows_StillAcks_ContextPlayerError()
+    public void Router_DispatchThrows_AcksQueueAdmission()
     {
         var t = new StubTransport();
         using var r = new ConnectCommandRouter(t, _ => throw new InvalidOperationException("boom"));
         t.PushRequest(Req("{\"command\":{\"endpoint\":\"pause\"}}", "k3"));
-        Assert.Equal(RequestResult.ContextPlayerError, t.LastReply);   // never withhold the ack
+        Assert.Equal(RequestResult.Success, t.LastReply);   // execution is observed by the worker after prompt admission ACK
+    }
+
+    [Fact]
+    public async Task Router_VolumeMessage_DecodesInnerProtobufBody()
+    {
+        var t = new StubTransport();
+        var applied = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var r = new ConnectCommandRouter(
+            t,
+            (_, _) => Task.FromResult(ConnectCommandOutcome.NoOp),
+            (volume, _) =>
+            {
+                applied.TrySetResult(volume);
+                return Task.FromResult(ConnectCommandOutcome.Applied);
+            });
+
+        t.PushEvent(new WireEvent(
+            "hm://connect-state/v1/connect/volume",
+            [0x08, 0xA6, 0x8D, 0x01, 0x1A, 0x00, 0x22, 0x04, 0x77, 0x6C, 0x61, 0x6E]));
+
+        Assert.Equal(18086, await applied.Task.WaitAsync(TimeSpan.FromSeconds(2)));
+    }
+
+    [Fact]
+    public async Task Router_ExactReplay_IsAcknowledgedButDispatchedOnce()
+    {
+        var t = new StubTransport();
+        int calls = 0;
+        var applied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var r = new ConnectCommandRouter(t, (command, _) =>
+        {
+            if (Interlocked.Increment(ref calls) == 1) applied.TrySetResult();
+            return Task.FromResult(ConnectCommandOutcome.Applied);
+        });
+        var req = Req(
+            "{\"message_id\":77,\"sent_by_device_id\":\"phone\",\"command\":{\"endpoint\":\"pause\"}}",
+            "77/phone");
+
+        t.PushRequest(req);
+        t.PushRequest(req with { RequestId = "77/phone/replay" });
+        await applied.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await Task.Delay(30);
+
+        Assert.Equal(1, calls);
+        Assert.Equal(RequestResult.Success, t.LastReply);
     }
 }

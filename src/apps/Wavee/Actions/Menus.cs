@@ -30,7 +30,7 @@ public static class Menus
             TrackActions.AddToQueue.ToBarCommand(ctx),
             TrackActions.ToggleLike.ToBarCommand(ctx),
         };
-        return new ContextMenuModel(primary, TrackRows(in ctx, showGoToAlbum));
+        return new ContextMenuModel(primary, TrackRows(in ctx, showGoToAlbum), TrackHeader(ctx.Target.Tracks));
     }
 
     /// <summary>The track menu's vertical rows only (also the batch bar's overflow source).</summary>
@@ -214,10 +214,11 @@ public static class Menus
     /// <summary>A media-card menu inferred from the card's uri (cards carry only uri + title). Albums/artists/playlists
     /// get Primary [Play · Save/Follow] + rows [Follow/Unfollow (artist only), Open, Share ▸]; a track uri gets the thin
     /// track shape (no Track object → no album/artist rows); unknown schemes get no menu.</summary>
-    public static ContextMenuModel? Card(ActionServices s, string uri, string name)
+    public static ContextMenuModel? Card(ActionServices s, string uri, string name,
+        Image? image = null, string? subtitle = null, bool circular = false)
     {
         if (uri is not { Length: > 0 }) return null;
-        if (uri.Contains(":track:", StringComparison.Ordinal)) return TrackUriCard(s, uri, name);
+        if (uri.Contains(":track:", StringComparison.Ordinal)) return TrackUriCard(s, uri, name, image, subtitle);
 
         bool liked = uri == "spotify:collection:tracks";
         ActionTarget target =
@@ -240,12 +241,20 @@ public static class Menus
         }
         rows.Add(ContainerActions.OpenItem.ToMenuItem(ctx));
         rows.Add(ShareItem(in ctx));
-        return new ContextMenuModel(primary, rows);
+        string kind = target.Kind switch
+        {
+            TargetKind.Album => "Album",
+            TargetKind.Artist => "Artist",
+            TargetKind.Playlist => "Playlist",
+            _ => "",
+        };
+        return new ContextMenuModel(primary, rows,
+            Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : kind, circular));
     }
 
     /// <summary>A card that is a bare track URI (search top-hits): Play + Like + Copy link — no album/artist rows
     /// (the card model carries no Track).</summary>
-    static ContextMenuModel TrackUriCard(ActionServices s, string uri, string name)
+    static ContextMenuModel TrackUriCard(ActionServices s, string uri, string name, Image? image, string? subtitle)
     {
         var target = ActionTarget.ForTracks(new[]
         {
@@ -263,12 +272,13 @@ public static class Menus
         {
             AddToPlaylistItem(in ctx),
             ShareItem(in ctx),
-        });
+        }, Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : "Song"));
     }
 
     /// <summary>The card attach helper for shared element factories: null when the action system isn't provided.</summary>
-    public static MenuAttach? CardAttach(ActionServices? s, IOverlayService overlay, string uri, string name)
-        => s is null ? null : new MenuAttach(overlay, () => Card(s, uri, name));
+    public static MenuAttach? CardAttach(ActionServices? s, IOverlayService overlay, string uri, string name,
+        Image? image = null, string? subtitle = null, bool circular = false)
+        => s is null ? null : new MenuAttach(overlay, () => Card(s, uri, name, image, subtitle, circular));
 
     /// <summary>A single-track attach (eager rows that DO carry the full Track — search "Songs", fallbacks).</summary>
     public static MenuAttach? TrackAttach(ActionServices? s, IOverlayService overlay, Track track)
@@ -307,7 +317,8 @@ public static class Menus
             rows.Add(MenuFlyoutItem.Separator);
             rows.Add(ContainerActions.DeletePlaylist.ToMenuItem(ctx));
         }
-        return new ContextMenuModel(rows);
+        return new ContextMenuModel(rows,
+            header: Header(p.Cover, p.Uri, p.Name, p.OwnerName is { Length: > 0 } ? p.OwnerName : "Playlist"));
     }
 
     // Explicit absolute-state rows (not a toggle): the sidebar summary carries no live IsPublic, and a mis-checked
@@ -344,18 +355,60 @@ public static class Menus
         else if (t.Artists.Count > 1)
             rows.Add(GoToArtistsItem(s, t.Artists));
         rows.Add(TrackActions.CopyLink.ToMenuItem(ctx));
-        rows.Add(MenuFlyoutItem.Separator);
-        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
-            new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, moveUp is not null, moveUp ?? (() => { })));
-        rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
-            new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, moveDown is not null, moveDown ?? (() => { })));
-        rows.Add(MenuFlyoutItem.Separator);
-        rows.Add(TrackActions.RemoveFromQueue.ToMenuItem(ctx));
-        return new ContextMenuModel(primary, rows);
+        if (moveUp is not null || moveDown is not null)
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            if (moveUp is not null)
+                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
+                    new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, true, moveUp));
+            if (moveDown is not null)
+                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
+                    new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, true, moveDown));
+        }
+        if (removeFromDisplay is not null)
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            rows.Add(TrackActions.RemoveFromQueue.ToMenuItem(ctx));
+        }
+        string section = entry.Provider switch
+        {
+            QueueProvider.Queue => "Next in queue",
+            QueueProvider.Autoplay => "Autoplay",
+            _ => "Next up",
+        };
+        string artists = DetailFormat.ArtistNames(t.Artists);
+        return new ContextMenuModel(primary, rows,
+            Header(t.Image, t.Uri, t.Title,
+                artists.Length > 0 ? $"{artists} · {section}" : section));
     }
 
     // ── Player-bar now playing ───────────────────────────────────────────────────────────────────────────────────────
     /// <summary>The track menu for the now-playing cluster: Host = null → no Remove rows.</summary>
     public static ContextMenuModel NowPlaying(ActionServices s, Track track)
         => Tracks(new ActionContext(ActionTarget.ForNowPlaying(track), s));
+
+    static ContextMenuHeader TrackHeader(IReadOnlyList<Track> tracks)
+    {
+        if (tracks.Count == 1)
+        {
+            var track = tracks[0];
+            string artists = DetailFormat.ArtistNames(track.Artists);
+            string subtitle = track.Album is { Name.Length: > 0 } album && artists.Length > 0
+                ? $"{artists} · {album.Name}"
+                : artists;
+            return Header(track.Image, track.Uri, track.Title, subtitle);
+        }
+
+        var first = tracks.Count > 0 ? tracks[0] : null;
+        string summary = first is null ? "" : first.Title;
+        if (tracks.Count > 1) summary += $"  +{tracks.Count - 1} more";
+        return Header(first?.Image, first?.Uri ?? "", $"{tracks.Count} songs selected", summary);
+    }
+
+    static ContextMenuHeader Header(Image? image, string key, string title, string? subtitle, bool circular = false)
+    {
+        Element? leading = image is null ? null : Surfaces.Artwork(
+            image, key.GetHashCode() & 0x7fffffff, 38f, 38f, circular ? 19f : 6f, decodePx: 76);
+        return new ContextMenuHeader(leading, title, subtitle);
+    }
 }

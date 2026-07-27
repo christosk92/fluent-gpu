@@ -57,13 +57,16 @@ public sealed class LiveContextResolver : IContextResolver
         {
             var hydratedEmbedded = await HydrateAsync(embedded, ct).ConfigureAwait(false);
             int s = ContextResolve.ResolveStartIndex(hydratedEmbedded, spec);
-            return new ResolvedContext(hydratedEmbedded, s, null, null, ContextResolve.IsInfinite(spec.Uri));
+            return new ResolvedContext(hydratedEmbedded, s, null, null, ContextResolve.IsInfinite(spec.Uri),
+                spec.Metadata, spec.Uri);
         }
 
         // 2) An artist play does NOT use context-resolve — it resolves via the playlist-v2 "popular release segments"
         // list (a zstd SelectedListContent), while the top-level context_uri/feature stay the original spotify:artist:*.
         if (IsArtistUri(spec.Uri))
             return await ResolveArtistAsync(spec, ct).ConfigureAwait(false);
+        if (TryArtistIdFromListUri(spec.Uri, out var artistId))
+            return await ResolveArtistAsync(spec with { Uri = "spotify:artist:" + artistId }, ct).ConfigureAwait(false);
 
         // 3) Resolve via the unified context-resolve endpoint, eager-loading a bounded number of pages.
         var refs = new List<QueuedRef>();
@@ -278,6 +281,18 @@ public sealed class LiveContextResolver : IContextResolver
     }
 
     static bool IsArtistUri(string uri) => uri.StartsWith("spotify:artist:", StringComparison.Ordinal);
+
+    static bool TryArtistIdFromListUri(string uri, out string artistId)
+    {
+        artistId = "";
+        if (!uri.StartsWith("spotify:list:popular-release-segments", StringComparison.Ordinal)) return false;
+        int marker = uri.LastIndexOf("artist_", StringComparison.Ordinal);
+        if (marker < 0) return false;
+        artistId = uri[(marker + "artist_".Length)..];
+        int separator = artistId.IndexOfAny(':', '?', '#');
+        if (separator >= 0) artistId = artistId[..separator];
+        return artistId.Length > 0;
+    }
 
     // Artist play: GET /playlist/v2/list/popular-release-segments-main-roles/artist_<id> → a zstd SelectedListContent
     // (playlist4_external.proto), NOT the JSON context-resolve shape. play_origin.feature_identifier stays "artist"

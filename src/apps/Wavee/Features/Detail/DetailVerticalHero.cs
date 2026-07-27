@@ -16,8 +16,8 @@ namespace Wavee;
 // The Apple-Music-inspired hero for the VERTICAL (narrow) track-detail layout — virtual item 0 of the track list. Built
 // per-render from live values (BuildHeader's pattern → the hero re-derives on every re-render, so no frozen-prop hazard
 // for the plain elements; Embed.Comp children freeze exactly as BuildHeader's do). Composition adapts to the resolved
-// orientation: fixed artwork BESIDE a flexing info column, or full-width artwork carrying its centered identity/actions
-// in the lower edge fade (immersive, matching Apple Music's album/playlist hierarchy). The side cover, or the immersive
+// orientation: fixed artwork BESIDE a flexing info column, full-width artwork carrying its identity/actions in the
+// lower edge fade, or an ultra-compact 96/64-DIP thumbnail row. The inline cover (desktop or compact), or the immersive
 // hero's small lower-edge token, morphs into the shy header; the full-bleed immersive media itself stays static.
 static class DetailVerticalHero
 {
@@ -42,14 +42,28 @@ static class DetailVerticalHero
     static readonly MotionTokenDef ExpandedCrossfade =
         MotionTokenDef.Eased(210f, Easing.FluentStandard, ReducedMotionPolicy.KeepFade);
 
+    static readonly LayoutTransition HeroGeometryMotion = new(
+        TransitionChannels.Bounds,
+        TransitionDynamics.Tween(280f, Easing.SmoothOut),
+        SizeMode.ScaleCorrect);
+
+    static readonly LayoutTransition HeroReflowMotion = new(
+        TransitionChannels.Position | TransitionChannels.Size,
+        TransitionDynamics.Tween(280f, Easing.SmoothOut),
+        SizeMode.Reveal);
+
     public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> full,
                                 DetailHeroOrientation o, float artSize, float availW,
                                 float compactLeft, IReadSignal<bool> collapsed,
                                 IReadSignal<bool> compactInteractive, IReadSignal<bool> toolsVisible,
-                                string morphKey, Element toolbar, Element compactSearch)
+                                IReadSignal<bool> searchExpanded, IReadSignal<bool> selectionCommandsVisible,
+                                string morphKey, Element toolbar, Element compactSearch, Element compactSelection)
     {
         bool side = o == DetailHeroOrientation.SideBySide;
-        bool immersive = !side;
+        bool compact = o == DetailHeroOrientation.Compact;
+        bool immersive = o == DetailHeroOrientation.Immersive;
+        bool inlineArtwork = side || compact;
+        bool minimal = compact && artSize <= DetailVerticalLayout.MinimalHeroArtworkSize;
         bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
 
         // Bucket the available width to 8 DIP before deriving the content width, so the InlineEdit facades' width-folding
@@ -57,11 +71,14 @@ static class DetailVerticalHero
         float viewportW = availW > 0f ? availW : DetailVerticalLayout.FallbackW;
         float bw = MathF.Round(viewportW / 8f) * 8f;
         if (bw <= 0f) bw = DetailVerticalLayout.FallbackW;
-        float pad = 2f * DetailVerticalLayout.HeroPad;
+        float heroPad = compact ? DetailVerticalLayout.CompactHeroPad : DetailVerticalLayout.HeroPad;
+        float heroGap = compact ? DetailVerticalLayout.CompactHeroGap : DetailVerticalLayout.HeroGap;
+        float pad = 2f * heroPad;
         // Cap the text column: with the "Hero" page layout the hero now renders at ANY width, and an uncapped title/
         // description would sprawl into 150-char lines on a wide window. 640 keeps the measure readable; the block stays
         // leading-aligned (the cap never affects the < 580 vertical band, where the geometry is width-limited anyway).
-        float contentW = MathF.Min(640f, MathF.Max(160f, side ? bw - pad - artSize - DetailVerticalLayout.HeroGap : bw - pad));
+        float contentW = MathF.Min(640f, MathF.Max(compact ? 80f : 160f,
+            inlineArtwork ? bw - pad - artSize - heroGap : bw - pad));
         int descLines = DetailVerticalLayout.DescriptionMaxLines(o);
         Element Fade(Element e) => new BoxEl
         {
@@ -71,32 +88,33 @@ static class DetailVerticalHero
         };
 
         // Artwork — a shadowed rounded box; editable playlists get the click-to-change cover facade.
-        float fullArtX = side
+        float fullArtX = inlineArtwork
             ? DetailVerticalLayout.HeroPad
             : 0f;
-        float fullArtY = side ? DetailVerticalLayout.HeroPad : 0f;
+        float fullArtY = inlineArtwork ? DetailVerticalLayout.HeroPad : 0f;
         // Side-by-side: pin Opacity/Trans to identity and morph in place. (In-flow cover — no overlay.)
         // connected:false avoids a Hero-fly dest that can leave the slot empty if the fly handoff glitches.
-        int heroDecodePx = side ? 256 : DetailVerticalLayout.ImmersiveArtworkDecodePx(artSize);
+        int heroDecodePx = immersive ? DetailVerticalLayout.ImmersiveArtworkDecodePx(artSize) : 256;
         Element artworkBox = new BoxEl
         {
             Width = artSize, Height = artSize, Shrink = 0f,
             HitTestVisible = true,
-            Corners = CornerRadius4.All(side ? Radii.Card : 0f),
-            Shadow = side ? Elevation.Card : default,
+            Corners = CornerRadius4.All(inlineArtwork ? Radii.Card : 0f),
+            Shadow = inlineArtwork ? Elevation.Card : default,
             ClipToBounds = true,
+            Animate = HeroGeometryMotion,
             // Apple melts the lower ~⅓ of the bitmap into the opaque page wash (longer melt = less hard plate).
             EdgeFade = immersive ? new EdgeFadeSpec(EdgeMask.Bottom, MathF.Min(260f, artSize * 0.34f)) : null,
             TransformOriginX = 0f, TransformOriginY = 0f,
             Children =
             [
                 editable
-                    ? PlaylistInlineEdit.Cover(full, artSize, side ? Radii.Card : 0f, shadow: side,
-                        morphKey: side ? morphKey : null, decodePx: heroDecodePx, preferLargest: immersive)
+                    ? PlaylistInlineEdit.Cover(full, artSize, inlineArtwork ? Radii.Card : 0f, shadow: inlineArtwork,
+                        morphKey: inlineArtwork ? morphKey : null, decodePx: heroDecodePx, preferLargest: immersive)
                     // Apple oversaturates album art for a punchier look under the hero scrim — applied in both hero
                     // layouts (immersive/stacked and the wide side-by-side rail).
-                    : DetailRail.HeroArtwork(m, artSize, side ? Radii.Card : 0f, connected: false,
-                        saturation: 1.18f, morphKey: side ? morphKey : null, decodePx: heroDecodePx,
+                    : DetailRail.HeroArtwork(m, artSize, inlineArtwork ? Radii.Card : 0f, connected: false,
+                        saturation: 1.18f, morphKey: inlineArtwork ? morphKey : null, decodePx: heroDecodePx,
                         preferLargest: immersive)
             ],
         };
@@ -123,11 +141,23 @@ static class DetailVerticalHero
         // Immersive type is Apple Music display hierarchy — NOT the Fluent Title ramp (Semibold + 36 LH). Short titles
         // punch larger; long titles stay Bold but step down so two lines still read as one cluster. Tracking is slight
         // negative (1/1000 em). Side-by-side keeps Wavee's desktop Title voice.
-        float titleSize = immersive ? ImmersiveTitleSize(m.Title) : 32f;
-        ushort titleWeight = immersive ? (ushort)700 : (ushort)600;
+        float titleSize = compact
+            ? artSize <= DetailVerticalLayout.MinimalHeroArtworkSize ? 18f : 22f
+            : immersive ? ImmersiveTitleSize(m.Title) : 32f;
+        ushort titleWeight = immersive || compact ? (ushort)700 : (ushort)600;
         Element title = editable
             ? PlaylistInlineEdit.Title(full, contentW, titleSize, titleWeight, onMedia: immersive)
-            : immersive
+            : compact
+                ? new TextEl(m.Title)
+                {
+                    FontFamily = "Segoe UI Variable Display",
+                    Size = titleSize, Weight = titleWeight,
+                    LineHeight = titleSize * 1.08f, CharSpacing = -12f,
+                    MaxWidth = contentW,
+                    Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+                    Color = Tok.TextPrimary,
+                }
+                : immersive
                 ? new TextEl(m.Title)
                 {
                     // Display optical size when available (SF Pro Display analogue on Windows).
@@ -151,14 +181,14 @@ static class DetailVerticalHero
             Children = [title],
         };
 
-        Element? attribution = Attribution(m, h, contentW, immersive, full);
+        Element? attribution = minimal ? null : Attribution(m, h, contentW, immersive, full);
 
         // Identity copy. Side-by-side keeps the prose-first desktop order; immersive follows the Apple Music stack:
         // tight identity cluster → actions → quieter prose.
         Element? description = null;
-        if (editable)
+        if (!compact && editable)
             description = Fade(PlaylistInlineEdit.Description(full, contentW, descLines, h, onMedia: immersive));
-        else if (m.Description is { Length: > 0 })
+        else if (!compact && m.Description is { Length: > 0 })
             description = Fade(RichText.Expandable(m.Description, immersive ? 13f : 12f,
                 immersive ? ColorF.FromRgba(255, 255, 255) with { A = 0.58f } : Tok.TextSecondary,
                 immersive ? Tok.OnMediaPrimary : Tok.AccentTextPrimary,
@@ -179,7 +209,7 @@ static class DetailVerticalHero
                     MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 };
 
-        if (side)
+        if (inlineArtwork)
         {
             infoKids.Add(new BoxEl
             {
@@ -188,7 +218,7 @@ static class DetailVerticalHero
                 Children = [expandedTitle],
             });
             if (attribution is not null) infoKids.Add(Fade(attribution));
-            if (description is not null) infoKids.Add(description);
+            if (side && description is not null) infoKids.Add(description);
             if (meta is not null) infoKids.Add(Fade(meta));
         }
         else
@@ -211,17 +241,24 @@ static class DetailVerticalHero
         ColorF glass = ImmersiveGlass;
         ColorF glassHover = ImmersiveGlassHover;
         ColorF glassPress = ImmersiveGlassPress;
-        float actionSize = side ? 32f : 40f;
+        float actionSize = compact ? 36f : side ? 32f : 40f;
         // Immersive Play is a plain white pill in the Apple 3-control row (no morph slot → no 48-DIP wrapper offset).
         // Side-by-side keeps the morphing Play that compositor-transforms into the compact header control.
         Element playButton = ActionButton(Icons.Play, Loc.Get(Strings.Detail.Play), actionSize,
             immersive ? Tok.OnMediaPrimary : h.Accent,
             immersive ? ColorF.FromRgba(0, 0, 0) : onAccent,
-            h.PlayAll, pill: immersive, width: immersive ? 132f : float.NaN,
+            h.PlayAll, pill: immersive || compact,
+            width: immersive ? 132f : compact ? 92f : float.NaN,
             labelSize: immersive ? 15f : 13f);
         Element expandedPlay = Fade(playButton);
         var actions = new List<Element>(5);
-        if (immersive)
+        if (compact)
+        {
+            actions.Add(expandedPlay);
+            actions.Add(Fade(Embed.Comp(() => new DetailHeroMoreButton(full, cfg, h, actionSize))
+                with { Key = $"vhero-more-compact:{m.ContextUri}:{(int)actionSize}" }));
+        }
+        else if (immersive)
         {
             actions.Add(Fade(ActionButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), actionSize,
                 glass, Tok.OnMediaPrimary, h.Shuffle, iconOnly: true, pill: true,
@@ -234,7 +271,7 @@ static class DetailVerticalHero
             actions.Add(Fade(ActionButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), actionSize,
                 Tok.FillSubtleSecondary, Tok.TextPrimary, h.Shuffle)));
         }
-        if (m.ContextUri is { Length: > 0 } saveUri && cfg.Heart != HeartMode.None)
+        if (!compact && m.ContextUri is { Length: > 0 } saveUri && cfg.Heart != HeartMode.None)
             actions.Add(Fade(immersive
                 ? Embed.Comp(() => new DetailHeroSaveButton(saveUri, m.Title, actionSize))
                     with { Key = $"vhero-save-media:{saveUri}:{(int)actionSize}" }
@@ -249,7 +286,7 @@ static class DetailVerticalHero
         if (immersive) infoKids.Add(new BoxEl { Height = 12f, HitTestVisible = false });
         infoKids.Add(new BoxEl
         {
-            Direction = 0, Gap = side ? Spacing.S : 12f, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = compact ? Spacing.S : side ? Spacing.S : 12f, AlignItems = FlexAlign.Center,
             Justify = FlexJustify.Start,
             Children = actions.ToArray(),
         });
@@ -263,17 +300,18 @@ static class DetailVerticalHero
         // Side-by-side: keep the cover IN FLOW (not a ZStack overlay). The overlay path left a transparent spacer when
         // compositor opacity/transform leftover from immersive, or when scroll binds failed to resolve — the classic
         // "empty hero with floating text" failure. Morph still runs on the in-flow node; layout space stays reserved.
-        Element hero = side
+        Element hero = inlineArtwork
             ? new BoxEl
             {
-                Direction = 0, Gap = DetailVerticalLayout.HeroGap, AlignItems = FlexAlign.Start,
+                Direction = 0, Gap = heroGap, AlignItems = FlexAlign.Start,
+                Animate = HeroReflowMotion,
                 Children =
                 [
                     Flow.Show(() => !collapsed.Value, artworkBox, artworkPlaceholder),
                     new BoxEl
                     {
                         Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
-                        Gap = Spacing.M, AlignItems = FlexAlign.Stretch,
+                        Gap = compact ? Spacing.S : Spacing.M, AlignItems = FlexAlign.Stretch,
                         Children = infoKids.ToArray(),
                     },
                 ],
@@ -282,6 +320,7 @@ static class DetailVerticalHero
             {
                 ZStack = true, Width = viewportW, Height = artSize,
                 AlignItems = FlexAlign.Center, ClipToBounds = true,
+                Animate = HeroReflowMotion,
                 Children =
                 [
                     artworkPlaceholder,
@@ -302,18 +341,20 @@ static class DetailVerticalHero
         Element expanded = new BoxEl
         {
             Direction = 1,
+            Animate = HeroReflowMotion,
             // Keep the measured tree mounted so the virtual prefix height cannot collapse into a blank band. One
             // equality-gated compositor binding hides the whole expanded presentation at the identity edge.
             Opacity = Prop.Of(() => collapsed.Value ? 0f : 1f),
             Transition = ExpandedCrossfade,
             Children =
             [
-                side
+                inlineArtwork
                     ? new BoxEl
                     {
                         Direction = 1,
-                        Padding = new Edges4(DetailVerticalLayout.HeroPad, DetailVerticalLayout.HeroPad,
-                            DetailVerticalLayout.HeroPad, DetailVerticalLayout.SideHeroBottomPad),
+                        Padding = new Edges4(heroPad, heroPad,
+                            heroPad, side ? DetailVerticalLayout.SideHeroBottomPad : heroPad),
+                        Animate = HeroReflowMotion,
                         Children = [hero],
                     }
                     : hero,
@@ -321,7 +362,8 @@ static class DetailVerticalHero
                 {
                     Direction = 1,
                     Padding = new Edges4(compactLeft,
-                        side ? DetailVerticalLayout.SideToolbarTopPad : DetailVerticalLayout.ExpandedToolbarTopPad,
+                        side ? DetailVerticalLayout.SideToolbarTopPad
+                            : compact ? 0f : DetailVerticalLayout.ExpandedToolbarTopPad,
                         compactLeft, DetailVerticalLayout.ExpandedToolbarBottomPad),
                     Children = [toolbar],
                 },
@@ -490,16 +532,36 @@ static class DetailVerticalHero
             AlignItems = FlexAlign.Center, Animate = CompactToolPresence,
             Children = [compactSearchHost, compactPlay],
         };
-        Element compactIdentityContent = new BoxEl
+        Element normalCompactIdentity = new BoxEl
         {
             Direction = 0, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
             Padding = new Edges4(compactLeft, 0f, compactLeft, 0f), Gap = Spacing.M,
             AlignItems = FlexAlign.Center, HitTestPassThrough = true,
             Children =
             [
-                Flow.Show(() => collapsed.Value, compactPill),
+                Flow.Show(() => collapsed.Value && !searchExpanded.Value, compactPill),
                 new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
                 Flow.Show(() => toolsVisible.Value, compactTools),
+            ],
+        };
+        Element selectionCompactIdentity = new BoxEl
+        {
+            Direction = 1,
+            Width = viewportW,
+            Height = DetailVerticalLayout.CompactIdentityHeight,
+            Padding = new Edges4(compactLeft, 4f, compactLeft, 4f),
+            Justify = FlexJustify.Center,
+            Children = [compactSelection],
+        };
+        Element compactIdentityContent = new BoxEl
+        {
+            ZStack = true,
+            Width = viewportW,
+            Height = DetailVerticalLayout.CompactIdentityHeight,
+            Children =
+            [
+                Flow.Show(() => !selectionCommandsVisible.Value, normalCompactIdentity),
+                Flow.Show(() => selectionCommandsVisible.Value, selectionCompactIdentity),
             ],
         };
         Element compactIdentity = new BoxEl

@@ -488,8 +488,11 @@ sealed class SearchAllList : Component
     }
 
     // A uri-only card menu (top hits carry uri + name, no domain object); null when the action system isn't provided.
-    static MenuAttach? CardMenu(ActionServices? acts, IOverlayService? overlay, string uri, string name)
-        => acts is null || overlay is null ? null : Menus.CardAttach(acts, overlay, uri, name);
+    static MenuAttach? CardMenu(ActionServices? acts, IOverlayService? overlay, string uri, string name,
+        Image? image = null, string? subtitle = null, bool circular = false)
+        => acts is null || overlay is null
+            ? null
+            : Menus.CardAttach(acts, overlay, uri, name, image, subtitle, circular);
 
     // A full-track menu (fallback rows DO carry the Track — album/artist rows included).
     static MenuAttach? TrackMenu(ActionServices? acts, IOverlayService? overlay, Track t)
@@ -551,7 +554,7 @@ sealed class SearchAllList : Component
             typeChip: large ? null : h.TypeLabel, detail: large ? null : h.Detail, trailing: trailing, large: large,
             meta: large ? null : h.Meta, detailBelowArt: h.Kind == SearchHitKind.Audiobook,
             onSubtitleNav: key => model.Go(key, null),   // artist/album names in the subtitle are individually clickable
-            menu: CardMenu(acts, menuOverlay, h.Uri, h.Name));
+            menu: CardMenu(acts, menuOverlay, h.Uri, h.Name, h.Image, h.Subtitle, h.RoundImage));
     }
 
     static List<Element> FallbackRows(SearchResults r, LibraryBridge? lib, Model model,
@@ -603,21 +606,22 @@ sealed class SearchAllList : Component
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
         trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large,
-        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name));
+        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Image, Loc.Get(Strings.Search.TypeArtist), circular: true));
 
     static Element AlbumRow(Album a, Model model, bool large,
                             ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         a.Cover, a.Name, Loc.Get(Strings.Search.TypeAlbum) + (a.Artists.Count > 0 ? " • " + a.Artists[0].Name : ""), a.Uri, false,
         () => model.Go("album:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeAlbum), large: large,
-        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name));
+        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Cover,
+            a.Artists.Count > 0 ? a.Artists[0].Name : Loc.Get(Strings.Search.TypeAlbum)));
 
     static Element PlaylistRow(Playlist p, Model model, bool large,
                                ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         p.Cover, p.Name, Loc.Get(Strings.Search.TypePlaylist), p.Uri, false,
         () => model.Go("pl:" + p.Uri, p.Name), () => model.PlayContext(p.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypePlaylist), large: large,
-        menu: CardMenu(acts, menuOverlay, p.Uri, p.Name));
+        menu: CardMenu(acts, menuOverlay, p.Uri, p.Name, p.Cover, Loc.Get(Strings.Search.TypePlaylist)));
 
     static Action OpenFor(Model model, SearchHitKind kind, string uri, string name) => kind switch
     {

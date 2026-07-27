@@ -22,10 +22,6 @@ namespace Wavee;
 sealed class DetailPage : Component
 {
     readonly Signal<Route> _route;   // the (per-pane) navigation route, read reactively so ONE instance serves successive detail pages
-    // Deep-link skeleton orientation (0 two-column · 1 Hero side-by-side · 2 Hero immersive) + the measured width,
-    // so the loading shimmer matches the geometry the Ready reveal will use (no rail→hero jump). Value-gated.
-    readonly Signal<int> _skelKind = new(0);
-    float _skelW;
     public DetailPage(Signal<Route> route) { _route = route; }
 
     // Route → (kind, id): album:/pl: carry the uri after the prefix; "liked" is the saved-tracks collection.
@@ -60,7 +56,7 @@ sealed class DetailPage : Component
         // Stable per-instance loadable, re-driven by the route dep key — DetailShell freezes the model at construction,
         // so the loadable INSTANCE must be stable across route swaps (a fresh store-cache instance per route would leave
         // the reused shell pinned to the first item — the master-detail reactivity bug). KeepAlive caches the parked page.
-        var model = UseResource(ct => LoadAsync(svc, kind, id, ct), preview ?? DetailModel.Empty, route.Name).Loadable;
+        var model = UseResource(ct => LoadAsync(svc, kind, id, ct), preview ?? PendingSeed(kind), route.Name).Loadable;
 
         // §4.1 — open-playlist LIVE in-place refresh (kills the skeleton flash). Subscribe the REAL store; when a push lands
         // for THIS playlist (or a Bulk), debounce the burst 150ms, re-run the SAME load off-thread, and SetReady the SAME
@@ -128,46 +124,28 @@ sealed class DetailPage : Component
         if (preview is not null)
             return Embed.Comp(() => new DetailShell(_route, model, preview.Cover, svc.Settings));
 
-        // No data at click (deep link): the full-page skeleton until the model lands, then the loadable-driven shell.
-        // The content is wrapped in a plain Grow=1 BoxEl (NOT a bare component): the SkelRegion boundary mirrors its active
-        // child's layout participation, and a plain BoxEl's Grow is written synchronously (WriteColumns) — a bare component's
-        // Grow is mirrored from ITS output only after its async render effect runs, so the boundary would mirror a stale Grow=0
-        // and detail pages whose virtualized list has little intrinsic height would collapse to 0 rows.
-        // Measure the page width so the shimmer matches the orientation the Ready reveal will use (vertical hero vs the
-        // two-column rail). First frame is two-column; the first bounds pass corrects the kind, re-rendering the shimmer
-        // once, so the reveal lands on matching geometry (kills the rail→hero jump). Value-gated on the KIND only.
-        int skelKind = _skelKind.Value;   // subscribe → re-render the shimmer on a kind change
+        // No data at click (deep link): Skel.Region derives the full-page shimmer from the real responsive shell rendered
+        // against PendingSeed(kind). The plain Grow=1 wrapper gives the boundary synchronous layout participation.
         return new BoxEl
         {
             Grow = 1f, Direction = 1,
-            OnBoundsChanged = r =>
-            {
-                if (r.W <= 0f) return;
-                _skelW = r.W;
-                var cfg = SkeletonConfig(kind);
-                int k = 0;
-                // The vertical hero skeleton stands in for a TWO-COLUMN TRACK page (album/playlist/liked) whenever the page
-                // will use the hero SYSTEM at reveal: either the window is narrow enough to enter it, or the page-layout
-                // setting is Hero (always-hero, every width). A podcast (Episodes) deep link keeps the two-column
-                // skeleton regardless of the setting. The Hero's own orientation remains width-driven.
-                bool forceHero = svc.Settings?.Get(WaveeSettings.DetailPageLayout) == DetailVerticalLayout.PageHero;
-                if (cfg.TwoColumn && cfg.Content == DetailContent.Tracks
-                    && (r.W < DetailLayoutBreakpoints.VerticalEnterW || forceHero))
-                    k = DetailVerticalLayout.OrientationFor(r.W) == DetailHeroOrientation.Immersive ? 2 : 1;
-                _skelKind.Value = k;
-            },
             Children =
             [
                 Skel.Region(
                     model,
-                    shimmerSource: () => skelKind == 0
-                        ? DetailSkeleton.Build(SkeletonConfig(kind))
-                        : DetailSkeleton.BuildVertical(SkeletonConfig(kind), immersive: skelKind == 2, _skelW),
                     onFailed: () => ErrorState.Build(model.Error),
                     // Pass the SHARED loadable (Ready when content runs), not a fresh Loadable.Ready(m): the shell is REUSED
                     // across detail routes, so it must read the one re-driven loadable — a per-render wrapper would leave the
                     // reused shell pinned to the first album's value.
-                    content: _ => new BoxEl { Grow = 1f, Direction = 0, Children = [ Embed.Comp(() => new DetailShell(_route, model, settings: svc.Settings)) ] },
+                    content: _ => new BoxEl
+                    {
+                        Grow = 1f, Direction = 0,
+                        Children =
+                        [
+                            Embed.Comp(() => new DetailShell(_route, model, settings: svc.Settings))
+                                with { DeriveRenderedOutput = true },
+                        ],
+                    },
                     smoothResize: false),
             ],
         };
@@ -187,14 +165,42 @@ sealed class DetailPage : Component
         },
     };
 
-    // A coarse config just for sizing the loading skeleton (the single-vs-album split doesn't matter pre-load).
-    static DetailConfig SkeletonConfig(DetailKind kind) => kind switch
+    // Representative DATA for content(seed) derivation. Eight blank records give the real track/episode components a
+    // useful viewport shape without encoding any playlist length (1494, 1600, or otherwise) into loading geometry.
+    internal static DetailModel PendingSeed(DetailKind kind)
     {
-        DetailKind.Playlist => DetailConfig.Playlist,
-        DetailKind.Liked => DetailConfig.Liked,
-        DetailKind.Show => DetailConfig.Show,
-        _ => DetailConfig.Album,
-    };
+        if (kind == DetailKind.Show)
+        {
+            var episodes = new Episode[8];
+            for (int i = 0; i < episodes.Length; i++)
+                episodes[i] = new Episode($"pending-episode-{i}", $"pending:episode:{i}", "", "", null,
+                    180_000, DateTimeOffset.UnixEpoch);
+            return DetailModel.Empty with
+            {
+                ContextUri = "pending:show",
+                BadgeType = " ",
+                MetaLine = " ",
+                Episodes = episodes,
+                Publisher = " ",
+            };
+        }
+
+        var tracks = new Track[8];
+        for (int i = 0; i < tracks.Length; i++)
+            tracks[i] = new Track(
+                $"pending-track-{i}", $"pending:track:{i}", "",
+                Array.Empty<ArtistRef>(), new AlbumRef("", "", ""),
+                180_000, false, null);
+
+        return DetailModel.Empty with
+        {
+            ContextUri = kind == DetailKind.Liked ? "spotify:collection:tracks" : "pending:detail",
+            BadgeType = kind == DetailKind.Album ? " " : null,
+            OwnerName = kind == DetailKind.Playlist ? " " : null,
+            MetaLine = " ",
+            Tracks = tracks,
+        };
+    }
 
     internal static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
     {
@@ -264,6 +270,7 @@ sealed class DetailPage : Component
             UserProfilesById: UserProfileMap(p),
             IsPublic: p.IsPublic,
             BasePermissionRevision: p.BasePermissionRevision,
+            Tuning: p.Tuning,
             ShareUrl: SpotifyPlaylistWebUrl(p.Uri));
     }
 
@@ -346,139 +353,4 @@ sealed class DetailPage : Component
     // (a caller passing a raw playlist id — no spotify: prefix — still gets a playlist url).
     internal static string SpotifyPlaylistWebUrl(string uri)
         => SpotifyLink.WebUrl(uri) ?? $"https://open.spotify.com/playlist/{uri}";
-}
-
-// The loading skeleton, matched to the real layout (rail block + N row bars) so the reveal doesn't jump.
-static class DetailSkeleton
-{
-    public static Element Build(DetailConfig cfg)
-    {
-        var rows = new Element[8];
-        for (int i = 0; i < rows.Length; i++) rows[i] = RowBar();
-        var tracks = new BoxEl
-        {
-            Direction = 1, Gap = Spacing.S, Grow = 1f,
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.L),
-            Children = rows,
-        };
-
-        if (!cfg.TwoColumn)
-            return new BoxEl { Direction = 1, Grow = 1f, Children = [tracks] };
-
-        float cover = DetailRail.CoverEdge(cfg.RailWidth);
-        var rail = new BoxEl
-        {
-            Direction = 1, Gap = 14f, Shrink = 0f, Width = cfg.RailWidth,
-            Padding = new Edges4(Spacing.L, Spacing.XXL, Spacing.S, Spacing.XXL),
-            Children =
-            [
-                // The reserved cover slot doubles as the connected-animation dest while the album loads — the flying card
-                // art lands here immediately (no wait for the fetch); the real cover cross-fades in underneath when ready.
-                new BoxEl { Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault },
-                Bar(cover * 0.5f, 12f), Bar(cover * 0.85f, 30f), Bar(cover * 0.6f, 13f),
-                new BoxEl { Height = Spacing.S },
-                Bar(120f, 40f),
-            ],
-        };
-
-        return new BoxEl { Direction = 0, Grow = 1f, Children = [rail, tracks] };
-    }
-
-    // The deep-link Hero skeleton: a 24-pad side-by-side block or edge-to-edge immersive artwork, followed by
-    // title/meta bars and one compact action row over the same
-    // 8 track RowBar()s. Reuses Bar(...) so the shimmer shape can't drift from the real bars.
-    public static Element BuildVertical(DetailConfig cfg, bool immersive, float w)
-    {
-        var o = immersive ? DetailHeroOrientation.Immersive : DetailHeroOrientation.SideBySide;
-        float art = DetailVerticalLayout.ArtworkFor(w, o);
-        float pad = DetailVerticalLayout.HeroPad;
-        float inner = MathF.Max(160f, (w > 0f ? w : DetailVerticalLayout.FallbackW) - 2f * pad);
-        float infoW = immersive ? inner : MathF.Max(120f, inner - art - DetailVerticalLayout.HeroGap);
-
-        Element artBox = new BoxEl
-        {
-            Width = art, Height = art, Shrink = 0f,
-            Corners = CornerRadius4.All(immersive ? 0f : Radii.Card), Fill = Tok.FillCardDefault,
-            AlignSelf = immersive ? FlexAlign.Center : FlexAlign.Start,
-            EdgeFade = immersive ? new EdgeFadeSpec(EdgeMask.Bottom, MathF.Min(220f, art * 0.28f)) : null,
-        };
-        Element PillBar() => new BoxEl
-        {
-            Width = immersive ? 40f : float.NaN,
-            Grow = immersive ? 0f : 1f, Basis = immersive ? float.NaN : 0f,
-            MaxWidth = immersive ? 120f : 120f, Height = immersive ? 40f : 32f,
-            Corners = CornerRadius4.All(immersive ? 20f : Radii.Control), Fill = Tok.FillCardDefault,
-        };
-        Element PlayPill() => new BoxEl
-        {
-            Width = immersive ? 120f : float.NaN, Grow = immersive ? 0f : 1f, Basis = immersive ? float.NaN : 0f,
-            MaxWidth = 120f, Height = immersive ? 40f : 32f,
-            Corners = CornerRadius4.All(immersive ? 20f : Radii.Control), Fill = Tok.FillCardDefault,
-        };
-        Element[] infoKids = immersive
-            ?
-            [
-                Bar(infoW * 0.72f, 34f),  // title (Apple display scale)
-                Bar(infoW * 0.36f, 17f),  // artist
-                Bar(infoW * 0.48f, 12f),  // meta
-                new BoxEl { Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Children = [PillBar(), PlayPill(), PillBar()] },
-                Bar(infoW * 0.88f, 12f),  // description
-            ]
-            :
-            [
-                Bar(infoW * 0.4f, 14f),   // badges / owner
-                Bar(infoW * 0.82f, 30f),  // title
-                Bar(infoW * 0.5f, 12f),   // meta
-                new BoxEl { Direction = 0, Gap = Spacing.M, Children = [PillBar(), PillBar()] },
-            ];
-        Element info = immersive
-            ? new BoxEl { Direction = 1, Width = infoW, Gap = 6f, AlignItems = FlexAlign.Center, Children = infoKids }
-            : new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.M, AlignItems = FlexAlign.Stretch, Children = infoKids };
-        Element hero = immersive
-            ? new BoxEl
-            {
-                ZStack = true, Width = w > 0f ? w : DetailVerticalLayout.FallbackW, Height = art,
-                AlignItems = FlexAlign.Center, ClipToBounds = true,
-                Children =
-                [
-                    artBox,
-                    new BoxEl
-                    {
-                        Direction = 1, Width = w > 0f ? w : DetailVerticalLayout.FallbackW, Height = art,
-                        Justify = FlexJustify.End,
-                        Padding = new Edges4(pad, pad, pad, 20f),
-                        AlignItems = FlexAlign.Center, Children = [info],
-                    },
-                ],
-            }
-            : new BoxEl { Direction = 0, Gap = DetailVerticalLayout.HeroGap, AlignItems = FlexAlign.Start, Children = [artBox, info] };
-
-        var rows = new Element[8];
-        for (int i = 0; i < rows.Length; i++) rows[i] = RowBar();
-        var tracks = new BoxEl
-        {
-            Direction = 1, Gap = Spacing.S, Grow = 1f,
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.L),
-            Children = rows,
-        };
-
-        return new BoxEl
-        {
-            Direction = 1, Grow = 1f,
-            Children =
-            [
-                immersive ? hero : new BoxEl { Direction = 1, Padding = Edges4.All(pad), Children = [hero] },
-                tracks,
-            ],
-        };
-    }
-
-    static Element RowBar() => new BoxEl
-    {
-        Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-        Children = [Bar(20f, 14f), new BoxEl { Grow = 1f, Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, Bar(40f, 12f)],
-    };
-
-    static Element Bar(float w, float h) =>
-        new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault };
 }

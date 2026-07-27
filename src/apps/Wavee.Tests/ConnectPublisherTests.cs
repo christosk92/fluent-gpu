@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using Wavee.Backend;
 using Wavee.Core;
@@ -14,6 +15,12 @@ public class ConnectPublisherTests
 {
     static Track T(string uri) => new(uri[(uri.LastIndexOf(':') + 1)..], uri, uri,
         Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 1000, false, null);
+
+    static async Task WaitUntilAsync(Func<bool> predicate)
+    {
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        while (!predicate()) await Task.Delay(10, timeout.Token);
+    }
 
     static ClusterDelta ContextCluster(string contextUri) =>
         new("us", false, default, contextUri, false, true, false, 0, 0, 0, 0, false, RepeatMode.Off,
@@ -63,6 +70,49 @@ public class ConnectPublisherTests
         public void SetQueue(params QueueEntry[] q) => Proj.SetLocalQueue(q);
     }
 
+    sealed class BlockingTransport : ITransport
+    {
+        readonly SimpleSubject<WireEvent> _events = new();
+        readonly SimpleSubject<WireRequest> _requests = new();
+        readonly TaskCompletionSource _releaseFirst = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        readonly TaskCompletionSource _firstEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int _calls;
+        int _inflight;
+        int _maxInflight;
+
+        public int Calls => Volatile.Read(ref _calls);
+        public int MaxInflight => Volatile.Read(ref _maxInflight);
+        public Task FirstEntered => _firstEntered.Task;
+        public void ReleaseFirst() => _releaseFirst.TrySetResult();
+
+        public Task<Resp> Request(Channel ch, string route, ReadOnlyMemory<byte> body, CancellationToken ct = default,
+            string? method = null, IReadOnlyDictionary<string, string>? headers = null)
+            => Task.FromResult(new Resp(true, [], 200));
+        public IObservable<WireEvent> Events(string topicPrefix) => _events;
+        public IObservable<WireRequest> Requests(string identPrefix) => _requests;
+        public Task Reply(string requestId, RequestResult result) => Task.CompletedTask;
+
+        public async Task<Resp> Publish(
+            string deviceId, string connectionId, ReadOnlyMemory<byte> putState, CancellationToken ct = default)
+        {
+            int call = Interlocked.Increment(ref _calls);
+            int inflight = Interlocked.Increment(ref _inflight);
+            int observed;
+            while (inflight > (observed = Volatile.Read(ref _maxInflight)))
+                if (Interlocked.CompareExchange(ref _maxInflight, inflight, observed) == observed) break;
+            try
+            {
+                if (call == 1)
+                {
+                    _firstEntered.TrySetResult();
+                    await _releaseFirst.Task.WaitAsync(ct);
+                }
+                return new Resp(true, [], 200);
+            }
+            finally { Interlocked.Decrement(ref _inflight); }
+        }
+    }
+
     [Fact]
     public async Task OnConnectionId_AnnouncesNewConnection()
     {
@@ -80,6 +130,34 @@ public class ConnectPublisherTests
         h.Play("spotify:track:a");   // no connection id yet → can't PUT
         await Task.Delay(20);
         Assert.Equal(0, h.Transport.PublishCount);
+    }
+
+    [Fact]
+    public async Task Publishes_AreSerialized_InMessageOrder()
+    {
+        var transport = new BlockingTransport();
+        var projection = new NowPlayingProjection("us", () => 0);
+        var connection = new SimpleSubject<string?>(null);
+        string? currentConnection = null;
+        using var publisher = new DeviceStatePublisher(
+            transport, "us", projection, connection, () => currentConnection,
+            (reason, _, mid, _) => Encoding.UTF8.GetBytes(reason + "|" + mid));
+
+        currentConnection = "c1";
+        connection.OnNext("c1");
+        await transport.FirstEntered.WaitAsync(TimeSpan.FromSeconds(2));
+
+        var started = new PlaybackEvent(EvKind.Started, T("spotify:track:a"), 0);
+        projection.OnEvent(started);
+        publisher.OnEvent(started);
+        await Task.Delay(40);
+
+        Assert.Equal(1, transport.Calls);
+        Assert.Equal(1, transport.MaxInflight);
+
+        transport.ReleaseFirst();
+        await WaitUntilAsync(() => transport.Calls == 2);
+        Assert.Equal(1, transport.MaxInflight);
     }
 
     [Fact]
@@ -128,6 +206,20 @@ public class ConnectPublisherTests
         h.Connect("c1"); h.Play("spotify:track:a"); h.Emit(EvKind.Paused);
         await Task.Delay(20);
         Assert.Equal(3, h.Transport.PublishCount);   // NewConnection + Started + Paused
+    }
+
+    [Fact]
+    public async Task InitiallyPausedTransfer_MintsPlaybackIds()
+    {
+        var h = new Harness();
+        h.Connect("c1");
+        h.Play("spotify:track:a", EvKind.Paused);
+        await Task.Delay(20);
+
+        var snapshot = Assert.IsType<LocalPlaybackSnapshot>(h.LastSnapshot);
+        Assert.False(string.IsNullOrEmpty(snapshot.SessionId));
+        Assert.False(string.IsNullOrEmpty(snapshot.PlaybackId));
+        Assert.True(snapshot.IsPaused);
     }
 
     [Fact]

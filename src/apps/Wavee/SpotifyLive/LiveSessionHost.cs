@@ -334,10 +334,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
                 (uris, c) => md.SyncAllAsync(uris, c),
                 (s, u) => svc.RealMutations!.HasPending(s, u));
+            var signalClient = new Wavee.Backend.Playlists.PlaylistSignalsClient(
+                live.Pipeline, () => live.BaseUrl, () => live.Session.Locale);
             var sync = new Wavee.Backend.Sync.LibrarySync(store, fetcher, collections, svc.RealMutations!, svc.MutTransport!,
-                () => svc.RealSessionHost!.Current, () => live.Username, syncLog, cts.Token, svc.EchoRing);
+                () => svc.RealSessionHost!.Current, () => live.Username, syncLog, cts.Token, svc.EchoRing, signalClient);
             var router = new Wavee.Backend.Realtime.DealerRouter(transport, sync);
             svc.RealSync = sync;
+            svc.PlaylistTuning.Value = sync;
             sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.DrainWrites));      // replay writes queued while logged out
             var hydrated = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             sync.Enqueue(new Wavee.Backend.Sync.SyncCommand(Wavee.Backend.Sync.SyncKind.InitialHydrate, Done: hydrated));

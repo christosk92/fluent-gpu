@@ -21,6 +21,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
     readonly ConcurrentDictionary<string, LatchState> _latch = new();
     readonly LicenseKeyDiskCache? _licenseDisk;
     readonly WaveeLogger _log;
+    readonly SemaphoreSlim _apProbeGate = new(1, 1);
     volatile bool _apDisabled;   // AP audio-key is account-wide: one failure means it won't serve any track this session
 
     sealed record CachedKey(byte[] Key);
@@ -106,8 +107,10 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
         // session and, on the first failure/empty, latch it off — every later track goes straight to PlayPlay (no re-probe).
         if (!_apDisabled)
         {
+            await _apProbeGate.WaitAsync(CancellationToken.None).ConfigureAwait(false);
             try
             {
+                if (_apDisabled) goto PlayPlay;
                 var key = await _ap.GetKeyAsync(fileId, trackGid, CancellationToken.None).ConfigureAwait(false);
                 if (!key.IsEmpty)
                 {
@@ -121,6 +124,7 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
                 _log.Info($"key {fileHex}: AP returned empty → AP disabled for this session; PlayPlay from now on");
                 Event(WaveeLogLevel.Warning, "key.ap.empty", "AP audio-key path returned empty; disabling AP for this session",
                     WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)));
+                _apDisabled = true;
             }
             catch (Exception ex)
             {
@@ -129,10 +133,12 @@ public sealed class AudioKeyResolver : IAudioKeySource, IPlayPlayNativeSeedSourc
                     WaveeLogField.Of("file", WaveeLogRedaction.HashLike(fileHex)),
                     WaveeLogField.Of("error", ex.GetType().Name),
                     WaveeLogField.Of("detail", ex.Message));
+                _apDisabled = true;
             }
-            _apDisabled = true;
+            finally { _apProbeGate.Release(); }
         }
 
+    PlayPlay:
         var asset = _runtime();
         var deriver = _playPlay();
         if (asset is null || deriver is null || _license is null)

@@ -410,8 +410,16 @@ public interface IPlatformPopupWindow : IDisposable
 /// DirectComposition swapchain can show the DWM Mica backdrop through transparent pixels. <paramref name="CustomFrame"/> =
 /// the engine draws the ENTIRE titlebar (WinUI ExtendsContentIntoTitleBar): the platform strips the OS caption
 /// (WM_NCCALCSIZE) but keeps the resize frame/shadow, answers WM_NCHITTEST from the engine-reported
-/// <see cref="TitleBarRegion"/>s, and synthesizes pointer input for the engine-drawn caption buttons.</summary>
-public readonly record struct WindowDesc(string Title, Size2 SizePx, float Scale, bool Composited = false, bool CustomFrame = false);
+/// <see cref="TitleBarRegion"/>s, and synthesizes pointer input for the engine-drawn caption buttons.
+/// <paramref name="MinClientSizeDip"/> is an opt-in minimum tracking size in logical DIP; an empty axis leaves that
+/// axis at the platform default.</summary>
+public readonly record struct WindowDesc(
+    string Title,
+    Size2 SizePx,
+    float Scale,
+    bool Composited = false,
+    bool CustomFrame = false,
+    Size2 MinClientSizeDip = default);
 
 public interface IPlatformWindow : IDisposable
 {

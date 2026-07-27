@@ -2,8 +2,8 @@ using System;
 
 namespace Wavee.Features.Detail;
 
-/// <summary>Which way the track-detail Hero composes: fixed artwork beside the info column, or immersive full-width art.</summary>
-public enum DetailHeroOrientation { SideBySide, Immersive }
+/// <summary>Which way the track-detail Hero composes: desktop side-by-side, immersive full-width, or compact thumbnail.</summary>
+public enum DetailHeroOrientation { SideBySide, Immersive, Compact }
 
 /// <summary>Pure width→layout rules for the Apple-Music-inspired vertical track-detail hero. BCL-only (no FluentGpu
 /// types) so it is source-included by Wavee.Tests. The persisted page-layout preference is an int (<see cref="PageAuto"/> ·
@@ -41,6 +41,14 @@ public static class DetailVerticalLayout
     public const float ImmersiveNominalW = 580f;
     public const float ImmersiveEnterW = 560f;
     public const float ImmersiveLeaveW = 600f;
+    public const float CompactNominalW = 420f;
+    public const float CompactEnterW = 400f;
+    public const float CompactLeaveW = 440f;
+    public const float CompactHeroPad = 16f;
+    public const float CompactHeroGap = 14f;
+    public const float CompactHeroArtworkSize = 96f;
+    public const float MinimalHeroArtworkSize = 64f;
+    public const float MinimalHeroEnterW = 340f;
     public const float SideArtworkSize = 200f;
     public const float FallbackW = ImmersiveNominalW;
 
@@ -48,28 +56,50 @@ public static class DetailVerticalLayout
     public static DetailHeroOrientation OrientationFor(float availableW)
     {
         float w = availableW > 0f ? availableW : FallbackW;
-        return w < ImmersiveNominalW ? DetailHeroOrientation.Immersive : DetailHeroOrientation.SideBySide;
+        return w < CompactNominalW ? DetailHeroOrientation.Compact
+            : w < ImmersiveNominalW ? DetailHeroOrientation.Immersive
+            : DetailHeroOrientation.SideBySide;
     }
 
-    /// <summary>Resize-hysteretic composition: enter immersive below 560 DIP and leave it at 600 DIP.</summary>
+    /// <summary>Resize-hysteretic composition: side/immersive uses 560–600 DIP; immersive/compact uses 400–440 DIP.</summary>
     public static DetailHeroOrientation OrientationFor(float availableW, DetailHeroOrientation current, bool initialized)
     {
         if (!initialized) return OrientationFor(availableW);
         float w = availableW > 0f ? availableW : FallbackW;
-        return current == DetailHeroOrientation.Immersive
-            ? w >= ImmersiveLeaveW ? DetailHeroOrientation.SideBySide : DetailHeroOrientation.Immersive
-            : w <= ImmersiveEnterW ? DetailHeroOrientation.Immersive : DetailHeroOrientation.SideBySide;
+        return current switch
+        {
+            DetailHeroOrientation.Compact => w >= CompactLeaveW
+                ? w >= ImmersiveLeaveW ? DetailHeroOrientation.SideBySide : DetailHeroOrientation.Immersive
+                : DetailHeroOrientation.Compact,
+            DetailHeroOrientation.Immersive => w <= CompactEnterW
+                ? DetailHeroOrientation.Compact
+                : w >= ImmersiveLeaveW ? DetailHeroOrientation.SideBySide : DetailHeroOrientation.Immersive,
+            _ => w <= CompactEnterW
+                ? DetailHeroOrientation.Compact
+                : w <= ImmersiveEnterW ? DetailHeroOrientation.Immersive : DetailHeroOrientation.SideBySide,
+        };
     }
 
-    /// <summary>The wide Hero uses a fixed 200-DIP cover; immersive art is a full-width square.</summary>
+    /// <summary>Artwork steps from 200 DIP, to a full-width immersive square, to a 96/64-DIP compact thumbnail.</summary>
     public static float ArtworkFor(float availableW, DetailHeroOrientation o)
     {
         float w = availableW > 0f ? availableW : FallbackW;
-        return o == DetailHeroOrientation.Immersive ? MathF.Max(1f, w) : SideArtworkSize;
+        return o switch
+        {
+            DetailHeroOrientation.Immersive => MathF.Max(1f, w),
+            DetailHeroOrientation.Compact => w < MinimalHeroEnterW
+                ? MinimalHeroArtworkSize : CompactHeroArtworkSize,
+            _ => SideArtworkSize,
+        };
     }
 
     /// <summary>Description line cap: a touch shorter beside the artwork, a touch taller when immersive.</summary>
-    public static int DescriptionMaxLines(DetailHeroOrientation o) => o == DetailHeroOrientation.Immersive ? 4 : 3;
+    public static int DescriptionMaxLines(DetailHeroOrientation o) => o switch
+    {
+        DetailHeroOrientation.Immersive => 4,
+        DetailHeroOrientation.Compact => 0,
+        _ => 3,
+    };
 
     /// <summary>Scroll distance over which the expanded hero becomes the 56-DIP compact identity.</summary>
     public static float CollapseDistance(float expandedHeight)
@@ -79,9 +109,12 @@ public static class DetailVerticalLayout
     /// it yields to the shy pill; immersive uses its 44-DIP bottom token, never the full-bleed background.</summary>
     public static float IdentityMorphEnterOffset(DetailHeroOrientation orientation, float artworkSize, float collapseDistance)
     {
-        float raw = orientation == DetailHeroOrientation.SideBySide
-            ? HeroPad + artworkSize * (1f - IdentityVisibleFraction)
-            : artworkSize - HeroPad - ImmersiveIdentityTokenSize * IdentityVisibleFraction;
+        float raw = orientation switch
+        {
+            DetailHeroOrientation.SideBySide => HeroPad + artworkSize * (1f - IdentityVisibleFraction),
+            DetailHeroOrientation.Compact => CompactHeroPad + artworkSize * (1f - IdentityVisibleFraction),
+            _ => artworkSize - HeroPad - ImmersiveIdentityTokenSize * IdentityVisibleFraction,
+        };
         float hi = MathF.Max(1f, collapseDistance - 48f);
         float lo = MathF.Min(72f, hi);
         return Math.Clamp(raw, lo, hi);

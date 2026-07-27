@@ -255,6 +255,20 @@ public readonly record struct PlaylistBasePermission(PlaylistPermissionLevel Lev
     public bool IsPublic => Level != PlaylistPermissionLevel.Blocked;
 }
 
+/// <summary>A server-advertised playlist session-control choice. Identifiers are opaque provider values.</summary>
+public enum PlaylistTuningOptionKind : byte { Choice, Reset }
+
+public sealed record PlaylistTuningOption(
+    string Identifier,
+    string? DisplayName,
+    PlaylistTuningOptionKind Kind);
+
+/// <summary>Revision-coherent playlist session controls carried by a full playlist snapshot.</summary>
+public sealed record PlaylistTuning(
+    byte[] Revision,
+    IReadOnlyList<PlaylistTuningOption> Available,
+    string? SelectedIdentifier);
+
 public sealed record Playlist(
     string Id, string Uri, string Name, string? Description, string OwnerName,
     Image? Cover, int TrackCount, IReadOnlyList<Track>? Tracks = null,
@@ -266,7 +280,9 @@ public sealed record Playlist(
     // Playlist-context user overlay, projected at read time from owner + added_by values. The store wire rows keep raw ids.
     IReadOnlyList<Owner>? Collaborators = null,
     // Owner visibility from permission/base (authoritative; default true until fetched).
-    bool IsPublic = true, string? BasePermissionRevision = null);
+    bool IsPublic = true, string? BasePermissionRevision = null,
+    // Server-driven automatic-playlist controls. Exposed only while this revision matches membership.
+    PlaylistTuning? Tuning = null);
 
 /// <summary>Album-art-derived palette. Plain ARGB <see cref="uint"/> channels keep Core
 /// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>

@@ -46,7 +46,7 @@ namespace Wavee.SpotifyLive.Audio;
 public sealed class FluentVideoMediaHost : IMediaHost
 {
     readonly WaveeLogger _log;
-    readonly SimpleSubject<AudioHostSignal> _signals = new();
+    readonly SimpleEvent<AudioHostSignal> _signals = new();
     readonly object _gate = new();
     readonly Timer _ticker;
 

@@ -29,7 +29,8 @@ sealed partial class ArtistPage : Component
 
     /// <summary>The lazy card-menu attach for this page's shelves (albums / playlists / artists / video tracks — the
     /// model is inferred from the uri by Menus.Card). Null when the action system / overlay isn't provided (fake shell).</summary>
-    MenuAttach? CardMenu(string uri, string name) => _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, uri, name) : null;
+    MenuAttach? CardMenu(string uri, string name, Image? image = null, string? subtitle = null, bool circular = false)
+        => _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, uri, name, image, subtitle, circular) : null;
 
     internal static string? UriOf(Route r) =>
         r.Name.StartsWith("artist:", StringComparison.Ordinal) ? r.Name["artist:".Length..] : null;

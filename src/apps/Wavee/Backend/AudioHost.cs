@@ -191,7 +191,7 @@ public interface IAudioOutputDeviceControl
 public sealed class SilentAudioHost : IAudioHost
 {
     readonly Func<long> _now;
-    readonly SimpleSubject<AudioHostSignal> _signals = new();
+    readonly SimpleEvent<AudioHostSignal> _signals = new();
     readonly object _gate = new();
     long _anchorWall, _anchorPos, _durationMs;
     bool _playing, _buffering;

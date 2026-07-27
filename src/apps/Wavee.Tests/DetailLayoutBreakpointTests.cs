@@ -6,6 +6,23 @@ namespace Wavee.Tests;
 public class DetailLayoutBreakpointTests
 {
     [Fact]
+    public void ContentWidthFloor_IsRemovedOnlyForVerticalMode()
+    {
+        Assert.Equal(0f, DetailLayoutBreakpoints.ContentMinWidthForMode(DetailLayoutBreakpoints.VerticalMode));
+        Assert.Equal(300f, DetailLayoutBreakpoints.ContentMinWidthForMode(0));
+        Assert.Equal(300f, DetailLayoutBreakpoints.ContentMinWidthForMode(2));
+    }
+
+    [Fact]
+    public void FirstFrameAt360_SeedsVerticalCompactTierBeforeMeasurement()
+    {
+        Assert.Equal(DetailLayoutBreakpoints.VerticalMode,
+            DetailLayoutBreakpoints.InitialModeForViewport(360f));
+        Assert.Equal(4, DetailLayoutBreakpoints.InitialTierForViewport(360f));
+        Assert.Equal(DetailHeroOrientation.Compact, DetailVerticalLayout.OrientationFor(360f));
+    }
+
+    [Fact]
     public void TierFor_Oscillates860PlusMinus24_HoldsTier1Until884()
     {
         int tier = DetailLayoutBreakpoints.TierFor(850f, 1);
