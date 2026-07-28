@@ -165,20 +165,24 @@ public class EntityCacheGcTests
             Age(path, "spotify:track:p0", now - 90 * Day, now - 90 * Day);
             for (int i = 1; i <= 6; i++) Age(path, "spotify:track:u" + i, now - (10 - i) * Day, now - 90 * Day);
 
-            long total = cold.GetCacheBytes();
             long rowSize = Count(path, "SELECT size FROM entity WHERE uri='spotify:track:u1';");
             Assert.True(rowSize > 0);
-            // Ask for a ceiling whose 0.9 watermark sits two rows below the current total.
-            long budget = (long)((total - 2 * rowSize) / 0.9);
-            long watermark = (long)(budget * 0.9);
 
             cold.GcBeginPass(Array.Empty<string>());
+            // The budget governs the EVICTABLE bytes (Wave F / K1) — the pinned row and the extension cache are not
+            // reclaimable, so measuring them against the ceiling could never converge. Ask for a ceiling whose 0.9
+            // watermark sits two rows below what is actually evictable.
+            long evictable = cold.GcEvictableBytes();
+            Assert.True(evictable > 0 && evictable < cold.GetCacheBytes());   // the pinned row is excluded
+            long budget = (long)((evictable - 2 * rowSize) / 0.9);
+            long watermark = (long)(budget * 0.9);
             var (rows, bytes) = cold.GcEnforceBudget(budget, now - SqliteColdStore.GcNewRowGraceSeconds, CancellationToken.None, batchRows: 1);
+            long after = cold.GcEvictableBytes();
             cold.GcEndPass();
 
             Assert.True(rows > 0);
             Assert.True(bytes > 0);
-            Assert.True(cold.GetCacheBytes() <= watermark);
+            Assert.True(after <= watermark);
             Assert.Equal(1, Count(path, "SELECT count(*) FROM entity WHERE uri='spotify:track:p0';"));   // pin exempt
 
             // Oldest-first: the survivors must be a SUFFIX of the last_access ordering (u1 is oldest … u6 newest).

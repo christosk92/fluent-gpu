@@ -68,6 +68,10 @@ sealed partial class SettingsPage
     string MetadataCacheDescription()
     {
         if (_metaStats is not { } s) return Loc.Get(Strings.Settings.Storage.MetadataCacheSub);
+        // The budget governs the EVICTABLE slice only (Wave F / K1): `cache` also carries the extension cache and every
+        // pinned row, none of which the GC may delete, so showing the budget against the gross number would promise a
+        // reclaim that can never happen. Developer-facing suffix, deliberately un-localized (same as the entity census
+        // in ResidentCacheDescription below).
         return Loc.Format("settings.storage.metadataCacheStats",
             ("db", FmtBytes(s.DbBytes)),
             ("cache", FmtBytes(s.CacheBytes)),
@@ -75,7 +79,8 @@ sealed partial class SettingsPage
             ("rows", s.EntityRows),
             ("pinnedRows", s.PinnedRows),
             ("overviews", s.OverviewRows),
-            ("extensions", s.ExtensionRows));
+            ("extensions", s.ExtensionRows))
+            + $" · evictable {FmtBytes(s.EvictableBytes)} of {FmtBytes(s.BudgetBytes)} budget";
     }
 
     Element MetadataBudgetControl(Services? svc, IAppSettings? settings)

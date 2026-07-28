@@ -926,7 +926,8 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     public void Flush()
     {
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (_queue.Writer.TryWrite(WriteOp.FlushMarker(done))) done.Task.Wait();
+        // Bounded: a pathological backlog (or a writer task that stopped) must never wedge app shutdown on this call.
+        if (_queue.Writer.TryWrite(WriteOp.FlushMarker(done))) { try { done.Task.Wait(TimeSpan.FromSeconds(30)); } catch { } }
     }
 
     async Task WriteLoopAsync()
@@ -1735,31 +1736,63 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     /// the tests shrink it (together with <paramref name="maxBatches"/>) to reproduce an aborted-mid-sweep database.</param>
     /// <param name="maxBatches">Stop after this many batches — the deterministic stand-in for a shutdown cancellation
     /// landing between two batches.</param>
+    /// <param name="evicted">Optional sink receiving every uri whose row was deleted. The caller (EntityCacheGc) feeds it
+    /// back to <c>CachedStore.OnEntitiesEvicted</c> so the in-memory COLD-PRESENCE map cannot keep claiming a row that
+    /// this sweep just removed — a stale presence bit would make the pin-transition flush and the payload-hash elision
+    /// BOTH skip the row forever (critique #1, re-armed by the GC).</param>
     public (int Rows, long Bytes) GcSweepUnpinnedEntities(long accessBefore, long updatedBefore, System.Threading.CancellationToken ct,
-                                                          int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue)
+                                                          int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue,
+                                                          ICollection<string>? evicted = null)
         => GcDeleteLoop(
             "SELECT DISTINCT uri FROM entity WHERE last_access<$a AND updated_at<$u " +
             "AND uri NOT IN (SELECT uri FROM temp.gc_pin) LIMIT $n;",
-            accessBefore, updatedBefore, budget: 0, ct, batchRows, maxBatches);
+            accessBefore, updatedBefore, budget: 0, ct, batchRows, maxBatches, evicted);
 
-    /// <summary>Byte-budget LRU (§C.4): while `cache_bytes` &gt; budget, delete unpinned entities oldest-`last_access`
-    /// first until ≤ 0.9 × budget. Same atomic bounded batches.</summary>
+    /// <summary>Byte-budget LRU (§C.4): while the EVICTABLE cache bytes exceed the budget, delete unpinned entities
+    /// oldest-`last_access` first until ≤ 0.9 × budget. Same atomic bounded batches.
+    ///
+    /// The trigger is <see cref="GcEvictableBytes"/>, NOT the whole `cache_bytes` counter (Wave F / K1): `cache_bytes`
+    /// also carries the extension cache and every PINNED entity row, none of which this sweep is allowed to delete. A
+    /// budget below that floor could therefore never be reached — the loop would evict the ENTIRE unpinned tier and still
+    /// be "over budget". Counting only what is actually evictable makes the sweep converge exactly and makes the number
+    /// the Settings readout shows mean what it says.</summary>
     public (int Rows, long Bytes) GcEnforceBudget(long budget, long updatedBefore, System.Threading.CancellationToken ct,
-                                                  int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue)
+                                                  int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue,
+                                                  ICollection<string>? evicted = null)
         => budget <= 0
             ? (0, 0)
             : GcDeleteLoop(
                 "SELECT DISTINCT uri FROM entity WHERE updated_at<$u AND uri NOT IN (SELECT uri FROM temp.gc_pin) " +
                 "ORDER BY last_access ASC LIMIT $n;",
-                accessBefore: 0, updatedBefore, budget, ct, batchRows, maxBatches);
+                accessBefore: 0, updatedBefore, budget, ct, batchRows, maxBatches, evicted);
 
-    // One loop for both sweeps. `budget > 0` ⇒ stop as soon as cache_bytes ≤ 0.9 × budget (the Chromium watermark);
-    // otherwise run until the predicate stops matching. Each iteration is ONE transaction: pick ≤batchRows victims into
-    // temp.gc_batch, sum their bytes, delete entity + entity_refs + video_assoc rows, apply the cache_bytes delta.
+    /// <summary>The bytes this pass could actually reclaim: `entity` rows the current `temp.gc_pin` does NOT protect.
+    /// Only valid between <see cref="GcBeginPass"/> and <see cref="GcEndPass"/>; outside a pass it degrades to the whole
+    /// cache counter.</summary>
+    public long GcEvictableBytes() { lock (_connLock) return GcEvictableBytesLocked(); }
+
+    long GcEvictableBytesLocked()
+    {
+        try
+        {
+            using var c = _conn.CreateCommand();
+            c.CommandText = "SELECT IFNULL(SUM(size),0) FROM entity WHERE uri NOT IN (SELECT uri FROM temp.gc_pin);";
+            return Convert.ToInt64(c.ExecuteScalar() ?? 0L);
+        }
+        catch (SqliteException) { return GetCacheBytesLocked(null); }   // no pass open — fall back to the gross counter
+    }
+
+    // One loop for both sweeps. `budget > 0` ⇒ stop as soon as the EVICTABLE bytes are ≤ 0.9 × budget (the Chromium
+    // watermark); otherwise run until the predicate stops matching. Each iteration is ONE transaction: pick ≤batchRows
+    // victims into temp.gc_batch, sum their bytes, delete entity + entity_refs + video_assoc rows, apply the cache_bytes
+    // delta. The evictable total is seeded once and decremented by each batch's exact freed bytes — O(1) per batch, and
+    // exact because the pick predicate can only ever choose unpinned rows.
     (int Rows, long Bytes) GcDeleteLoop(string pickSql, long accessBefore, long updatedBefore, long budget,
-                                        System.Threading.CancellationToken ct, int batchRows, int maxBatches)
+                                        System.Threading.CancellationToken ct, int batchRows, int maxBatches,
+                                        ICollection<string>? evicted)
     {
         long watermark = budget > 0 ? (long)(budget * 0.9) : 0;
+        long evictable = -1;
         int total = 0;
         long freed = 0;
         int batches = 0;
@@ -1768,7 +1801,11 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         {
             lock (_connLock)
             {
-                if (budget > 0 && GetCacheBytesLocked(null) <= watermark) return (total, freed);
+                if (budget > 0)
+                {
+                    if (evictable < 0) evictable = GcEvictableBytesLocked();
+                    if (evictable <= watermark) return (total, freed);
+                }
                 using var tx = _conn.BeginTransaction();
                 ExecLocked("DELETE FROM temp.gc_batch;", tx);
                 using (var pick = _conn.CreateCommand())
@@ -1800,9 +1837,20 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 ExecLocked("DELETE FROM entity_refs WHERE parent_uri IN (SELECT uri FROM temp.gc_batch);", tx);
                 ExecLocked("DELETE FROM video_assoc WHERE uri IN (SELECT uri FROM temp.gc_batch);", tx);
                 if (bytes > 0) ApplyCacheBytesDeltaLocked(-bytes, tx);
+                // Report the victims BEFORE the commit's scope ends — temp.gc_batch is this pass's own table, so it is
+                // exactly the set that just left the disk.
+                if (evicted is not null)
+                {
+                    using var pickBack = _conn.CreateCommand();
+                    pickBack.Transaction = tx;
+                    pickBack.CommandText = "SELECT uri FROM temp.gc_batch;";
+                    using var rr = pickBack.ExecuteReader();
+                    while (rr.Read()) evicted.Add(rr.GetString(0));
+                }
                 tx.Commit();
                 total += rows;
                 freed += bytes;
+                if (budget > 0) evictable -= bytes;
             }
         }
         return (total, freed);
@@ -1882,24 +1930,29 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
     /// <summary>"Clear metadata cache": every UNPINNED `entity` row (plus its refs), every `artist_overview` row and
     /// every extension row. IDENTITY TABLES ARE NEVER TOUCHED (collection_items / playlists / playlist_items / rootlist /
     /// outbox / dead_letter / video_override / collection_rev), and neither is `video_assoc` (the video-edge map is
-    /// eagerly loaded and fragile). Pinned entity rows survive, so the app stays offline-capable. Returns rows freed.</summary>
+    /// eagerly loaded and fragile). Pinned entity rows survive, so the app stays offline-capable. Returns rows freed.
+    ///
+    /// It builds its pin table under its OWN name (`temp.clear_pin`, Wave F): both this and a GC pass run on the writer
+    /// connection, where temp tables are connection-scoped — sharing `temp.gc_pin` let a settings-triggered clear DROP
+    /// and rebuild the table out from under an interleaved GC batch, which both aborted that pass and (worse) swapped in
+    /// a pin table WITHOUT the GC's UI-thread exempt snapshot.</summary>
     public (int Rows, long Bytes) ClearMetadataCache()
     {
         long before, after;
         int rows;
         lock (_connLock)
         {
-            ExecLocked("DROP TABLE IF EXISTS temp.gc_pin; CREATE TEMP TABLE gc_pin(uri TEXT PRIMARY KEY);");
-            ExecLocked($"INSERT OR IGNORE INTO temp.gc_pin(uri) {PinSetWithRecentSql};");
+            ExecLocked("DROP TABLE IF EXISTS temp.clear_pin; CREATE TEMP TABLE clear_pin(uri TEXT PRIMARY KEY);");
+            ExecLocked($"INSERT OR IGNORE INTO temp.clear_pin(uri) {PinSetWithRecentSql};");
             ExecLocked("""
-                DROP TABLE IF EXISTS temp.gc_kids;
-                CREATE TEMP TABLE gc_kids(uri TEXT PRIMARY KEY);
-                INSERT OR IGNORE INTO temp.gc_kids(uri)
+                DROP TABLE IF EXISTS temp.clear_kids;
+                CREATE TEMP TABLE clear_kids(uri TEXT PRIMARY KEY);
+                INSERT OR IGNORE INTO temp.clear_kids(uri)
                     SELECT DISTINCT child_uri FROM entity_refs
-                    WHERE parent_uri IN (SELECT uri FROM temp.gc_pin) AND child_uri IS NOT NULL AND child_uri<>'';
-                INSERT OR IGNORE INTO temp.gc_pin(uri) SELECT uri FROM temp.gc_kids;
-                DROP TABLE IF EXISTS temp.gc_kids;
-                DELETE FROM temp.gc_pin WHERE uri IS NULL OR uri='';
+                    WHERE parent_uri IN (SELECT uri FROM temp.clear_pin) AND child_uri IS NOT NULL AND child_uri<>'';
+                INSERT OR IGNORE INTO temp.clear_pin(uri) SELECT uri FROM temp.clear_kids;
+                DROP TABLE IF EXISTS temp.clear_kids;
+                DELETE FROM temp.clear_pin WHERE uri IS NULL OR uri='';
                 """);
             before = GetCacheBytesLocked(null);
             using (var tx = _conn.BeginTransaction())
@@ -1907,11 +1960,11 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 using (var c = _conn.CreateCommand())
                 {
                     c.Transaction = tx;
-                    c.CommandText = "DELETE FROM entity WHERE uri NOT IN (SELECT uri FROM temp.gc_pin);";
+                    c.CommandText = "DELETE FROM entity WHERE uri NOT IN (SELECT uri FROM temp.clear_pin);";
                     rows = c.ExecuteNonQuery();
                 }
                 ExecLocked("""
-                    DELETE FROM entity_refs WHERE parent_uri NOT IN (SELECT uri FROM temp.gc_pin);
+                    DELETE FROM entity_refs WHERE parent_uri NOT IN (SELECT uri FROM temp.clear_pin);
                     DELETE FROM artist_overview;
                     DELETE FROM localized_extension_cache;
                     """, tx);
@@ -1919,7 +1972,7 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 tx.Commit();
             }
             after = GetCacheBytesLocked(null);
-            ExecLocked("DROP TABLE IF EXISTS temp.gc_pin;");
+            ExecLocked("DROP TABLE IF EXISTS temp.clear_pin;");
         }
         RunIncrementalVacuum(2000);
         return (rows, Math.Max(0, before - after));
@@ -1960,12 +2013,14 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             long pinnedBytes = ScalarLongLocked($"SELECT IFNULL(SUM(size),0) FROM entity WHERE uri IN ({PinSetWithRecentSql});");
             long pinnedRows = ScalarLongLocked($"SELECT count(*) FROM entity WHERE uri IN ({PinSetWithRecentSql});");
             long budget = ScalarLongLocked($"SELECT CAST(value AS INTEGER) FROM meta WHERE key='{MetaCacheBudget}';");
+            long entityBytes = ScalarLongLocked("SELECT IFNULL(SUM(size),0) FROM entity;");
             return new EntityCacheStats(
                 DbBytes: pageCount * pageSize,
                 ReclaimableBytes: freelist * pageSize,
                 CacheBytes: GetCacheBytesLocked(null),
                 PinnedBytes: pinnedBytes,
                 BudgetBytes: budget > 0 ? budget : DefaultCacheBudgetBytes,
+                EntityBytes: entityBytes,
                 EntityRows: ScalarLongLocked("SELECT count(*) FROM entity;"),
                 PinnedRows: pinnedRows,
                 OverviewRows: ScalarLongLocked("SELECT count(*) FROM artist_overview;"),

@@ -157,10 +157,20 @@ public sealed class EntityCacheGc : IDisposable
     /// cancellable between every step.</summary>
     public EntityGcReport RunPass(IReadOnlyCollection<string> exempt, CancellationToken ct)
     {
+        // The pass's temp tables (`temp.gc_pin` / `temp.gc_batch`) are CONNECTION-scoped, so two overlapping passes on
+        // the same cold store would rebuild each other's pin table mid-sweep. One pass at a time, always.
+        lock (_passGate) return RunPassCore(exempt, ct);
+    }
+
+    readonly object _passGate = new();
+
+    EntityGcReport RunPassCore(IReadOnlyCollection<string> exempt, CancellationToken ct)
+    {
         long startTicks = Environment.TickCount64;
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         long graceBefore = now - SqliteColdStore.GcNewRowGraceSeconds;
         var r = new EntityGcReport();
+        var evicted = new EvictedSink();
         try
         {
             _store.FlushTouches();   // step 0 — recency before staleness
@@ -193,12 +203,13 @@ public sealed class EntityCacheGc : IDisposable
                 var (rows, bytes) = _cold.GcSweepArtistOverviews(now - OverviewTtlSeconds);
                 r.TtlRows += rows;
                 r.BytesFreed += bytes;
+                if (rows > 0) _store.OnOverviewsEvicted();
             }
 
             // 5. unpinned entity TTL
             if (!ct.IsCancellationRequested)
             {
-                var (rows, bytes) = _cold.GcSweepUnpinnedEntities(now - EntityTtlSeconds, graceBefore, ct);
+                var (rows, bytes) = _cold.GcSweepUnpinnedEntities(now - EntityTtlSeconds, graceBefore, ct, evicted: evicted);
                 r.TtlRows += rows;
                 r.BytesFreed += bytes;
             }
@@ -206,7 +217,7 @@ public sealed class EntityCacheGc : IDisposable
             // 6. byte-budget LRU
             if (!ct.IsCancellationRequested)
             {
-                var (rows, bytes) = _cold.GcEnforceBudget(BudgetBytes, graceBefore, ct);
+                var (rows, bytes) = _cold.GcEnforceBudget(BudgetBytes, graceBefore, ct, evicted: evicted);
                 r.BudgetRows += rows;
                 r.BytesFreed += bytes;
             }
@@ -219,6 +230,9 @@ public sealed class EntityCacheGc : IDisposable
         finally
         {
             try { _cold.GcEndPass(); } catch (Exception) { }
+            // ALWAYS resync the store's cold-presence map, even on a failed/cancelled pass: whatever DID get deleted is
+            // gone, and a presence bit that outlives its row strands the entity off disk forever (see OnEntitiesEvicted).
+            try { if (evicted.Any) _store.OnEntitiesEvicted(evicted.Overflowed ? null : evicted.Uris); } catch (Exception) { }
         }
 
         // 7. reclaim — slices, never a routine full VACUUM (§C.7: the Spotify SSD-wear incident).
@@ -266,6 +280,33 @@ public sealed class EntityCacheGc : IDisposable
     /// <summary>Startup marks measured by the composition root around the two ctors (§G). Set before <see cref="Start"/>.</summary>
     public long OpenMillis { get; set; }
     public long IdentityLoadMillis { get; set; }
+
+    // The evicted-uri sink handed to the cold sweeps. BOUNDED: past the cap it stops collecting and flips
+    // `Overflowed`, which the caller turns into "clear the whole presence map" — cheaper and just as correct as
+    // holding a hundred thousand strings alive for a pass that is already deleting that much.
+    sealed class EvictedSink : ICollection<string>
+    {
+        public const int Cap = 20_000;
+        public readonly HashSet<string> Uris = new(StringComparer.Ordinal);
+        public bool Overflowed { get; private set; }
+        public bool Any => Overflowed || Uris.Count > 0;
+
+        public void Add(string item)
+        {
+            if (Overflowed) return;
+            if (Uris.Count >= Cap) { Overflowed = true; Uris.Clear(); return; }
+            Uris.Add(item);
+        }
+
+        public int Count => Uris.Count;
+        public bool IsReadOnly => false;
+        public void Clear() { Uris.Clear(); Overflowed = false; }
+        public bool Contains(string item) => Uris.Contains(item);
+        public void CopyTo(string[] array, int index) => Uris.CopyTo(array, index);
+        public bool Remove(string item) => Uris.Remove(item);
+        public IEnumerator<string> GetEnumerator() => Uris.GetEnumerator();
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => Uris.GetEnumerator();
+    }
 
     public void Dispose()
     {

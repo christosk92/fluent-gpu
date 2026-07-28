@@ -6,8 +6,13 @@ using Wavee.Backend.Metadata;
 namespace Wavee.Backend.Persistence;
 
 // ── STEP 4 — the durable (cold) tier seam ────────────────────────────────────────────────────────────────────────────
-// The persistent source of truth (offline-first). SQLite is the production impl; a memory fake backs unit tests. The
-// in-memory tier-1 (CachedStore) bulk-loads from here on startup and dual-writes every mutation back, write-behind.
+// The persistent source of truth (offline-first). SQLite is the production impl; a memory fake backs unit tests.
+//
+// SINCE THE v5 REDESIGN THE COLD TIER IS THE SOURCE OF TRUTH AND THE IN-MEMORY TIER IS A BOUNDED CACHE OVER IT — the
+// startup bulk-load is GONE. CachedStore's ctor reads only the IDENTITY tier, a background warm pass replays the
+// bounded pin head-set, and every hot miss cold-falls-back through <see cref="IColdStore.GetEntity"/>. Nothing may
+// assume full residency (that is why the offline search binds to LoadLibraryCandidates, not to the resident graph).
+// Mutations still dual-write back, write-behind.
 
 public readonly record struct ColdEntity(string Uri, EntityKind Kind, byte[] Payload);
 public readonly record struct ColdExtension(
@@ -39,10 +44,17 @@ public readonly record struct ColdArtistOverview(string Uri, string Locale, byte
 
 /// <summary>One cheap cache-tier diagnostics snapshot (§G metrics) — the Settings → Storage readout and the GC report.
 /// <paramref name="DbBytes"/>/<paramref name="ReclaimableBytes"/> are the whole file (identity tables included);
-/// <paramref name="CacheBytes"/>/<paramref name="PinnedBytes"/> are the cache tier only.</summary>
+/// <paramref name="CacheBytes"/>/<paramref name="PinnedBytes"/> are the cache tier only.
+/// <paramref name="EntityBytes"/> is SUM(size) over `entity` alone, so <see cref="EvictableBytes"/> — what the byte
+/// budget actually governs (Wave F / K1) — is the part of the cache tier a GC pass is allowed to reclaim.</summary>
 public readonly record struct EntityCacheStats(
     long DbBytes, long ReclaimableBytes, long CacheBytes, long PinnedBytes, long BudgetBytes,
-    long EntityRows, long PinnedRows, long OverviewRows, long ExtensionRows);
+    long EntityBytes, long EntityRows, long PinnedRows, long OverviewRows, long ExtensionRows)
+{
+    /// <summary>The cache bytes the budget sweep can actually reclaim: unpinned `entity` rows. (Slightly conservative
+    /// versus a live pass — this uses the direct pin union without the one-level `entity_refs` closure.)</summary>
+    public long EvictableBytes => Math.Max(0, EntityBytes - PinnedBytes);
+}
 
 public interface IColdStore : IDisposable
 {

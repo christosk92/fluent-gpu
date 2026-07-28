@@ -162,8 +162,8 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
                 using (_hot.BeginBulk())
                     foreach (var e in _cold.LoadEntities(uris))
                     {
-                        Replay(e);
-                        NoteColdRow(e.Uri, Hash(e.Payload));   // warm rows ARE cold rows — seed the presence set
+                        NoteColdRow(e.Uri, Hash(e.Payload));   // warm rows ARE cold rows — seed the presence set FIRST,
+                        Replay(e);                             // so a heal inside Replay owns the final elision hash
                         rows++;
                     }
         }
@@ -216,7 +216,17 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
                 case EntityKind.Artist:
                 {
                     var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Artist);
-                    if (v != null) _hot.UpsertArtist(ReadOverview(v.Uri) is { } doc ? ArtistSplit.Refatten(v, doc, GetTrack) : v);
+                    if (v is null) break;
+                    if (ReadOverview(v.Uri) is { } doc) { _hot.UpsertArtist(ArtistSplit.Refatten(v, doc, GetTrack)); break; }
+                    _hot.UpsertArtist(v);
+                    // MIGRATION HEAL (Wave F / K2). The v4→v5 migration copies an Artist payload VERBATIM — the thin
+                    // split is a WRITE-path transform, so a saved artist that is never re-fetched online would keep its
+                    // fat core (up to ~360 KB of JSON) on disk forever, and `artist_overview` would stay empty for it.
+                    // The warm replay is the one place that already holds the fat record AND knows the row is
+                    // pin-reachable (it came out of the pin head-set), so it splits it once, offline, for free. A row
+                    // that is already thin projects to an empty document and writes nothing.
+                    var projected = ArtistSplit.Project(v);
+                    if (ArtistSplit.HasContent(projected)) PersistArtist(v);
                     break;
                 }
                 case EntityKind.Playlist: { var v = JsonSerializer.Deserialize(e.Payload, EntityJson.Default.Playlist); if (v != null) _hot.UpsertPlaylist(v); break; }
@@ -814,6 +824,29 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
         lock (_lruGate) for (int i = 0; i < playlistUris.Count; i++)
             if (_resident.Remove(playlistUris[i], out var gone)) _residentBytes -= gone.Bytes;
     }
+
+    /// <summary>GC resync (Wave F): the cache GC just DELETED these entity rows, so the cold-PRESENCE map must forget
+    /// them. Without this the map keeps claiming a row that no longer exists, and both guards that depend on it fail
+    /// closed: <see cref="EnqueueFlush"/> short-circuits ("already on disk") so a later pin transition — liking the
+    /// track, adding it to a playlist, attaching a video — never re-persists it, AND the payload-hash elision in
+    /// <see cref="PersistEntity"/> skips the ordinary re-write because the bytes are unchanged. The entity is then
+    /// stranded off disk permanently and vanishes from the liked/membership join after the next restart. That is exactly
+    /// critique #1, re-armed by the collector instead of by the write gate.
+    ///
+    /// <paramref name="uris"/> null (the GC evicted more rows than it is willing to track) ⇒ drop the whole map: the map
+    /// is a pure optimization, so clearing it only costs one redundant re-write per uri and can never lose data.</summary>
+    public void OnEntitiesEvicted(IReadOnlyCollection<string>? uris)
+    {
+        lock (_coldGate)
+        {
+            if (uris is null) { _coldRows.Clear(); return; }
+            foreach (var u in uris) _coldRows.Remove(u);
+        }
+    }
+
+    /// <summary>GC resync for `artist_overview` (Wave F): same argument as <see cref="OnEntitiesEvicted"/> for the
+    /// overview elision map. Overviews are bounded by the followed-artist count, so the sweep clears wholesale.</summary>
+    public void OnOverviewsEvicted() { lock (_coldGate) _coldOverviews.Clear(); }
 
     /// <summary>Escape hatch (§G): drop the whole unpinned cache tier + every artist overview + every extension row.
     /// The presence/elision maps MUST be cleared with it — otherwise the FNV-1a elision would refuse to re-persist a row
