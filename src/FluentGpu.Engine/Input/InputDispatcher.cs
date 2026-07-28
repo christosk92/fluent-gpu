@@ -504,6 +504,15 @@ public sealed class InputDispatcher
     /// only on a TOUCH focus (WinUI InputPaneHandler.cpp keys the panel off the focus pointer's type). Defaults to Mouse.</summary>
     public PointerKind LastPointerKind => _lastPointerKind;
 
+    /// <summary>Latches TRUE the first time this process dispatches a TOUCH pointer event, and never clears. A digitizer's
+    /// PRESENCE (<c>GetSystemMetrics(SM_MAXIMUMTOUCHES)</c>) says only that a finger COULD arrive — on a touch-capable
+    /// laptop or convertible driven by mouse and trackpad it never does, yet a touch-only affordance built on the
+    /// presence test still pays its per-item mount and re-render cost on every list in the app. Gating such an affordance
+    /// on THIS signal keeps it out of the tree until a finger actually shows up, then materializes it reactively.
+    /// One-way and process-wide on purpose: once a session has seen touch, every touch affordance stays armed for good,
+    /// so the arming can never flap in the middle of a gesture.</summary>
+    public static readonly FluentGpu.Signals.Signal<bool> TouchObserved = new(false);
+
     /// <summary>The last mouse/pen pointer position (window DIP), or null while there is none to trust (the cursor left
     /// the client area / the window blurred — the same validity the stationary-hover re-resolve uses). Host-exposed via
     /// <c>InputHooks.GetPointerPosition</c>; the ToolTip safe-zone poll reads it (the WinUI IsToolTipInSafeZone global
@@ -866,6 +875,9 @@ public sealed class InputDispatcher
             // fires OnFocusChanged → the EditableText SIP policy reads LastPointerWasTouch). PointerCancel is capture LOSS,
             // not a focus-moving input, so it never rewrites the kind (a touch-up's cancel must not look like a mouse).
             if (e.Kind is InputKind.PointerDown or InputKind.PointerMove or InputKind.PointerUp) _lastPointerKind = e.Pointer;
+            // One-way arming of the touch-only affordances (see TouchObserved). Peek-guarded so this writes exactly once
+            // per process — every later touch event sees the latch already set and costs a single load.
+            if (pointerEvent && e.Pointer == PointerKind.Touch && !TouchObserved.Peek()) TouchObserved.Value = true;
             // §5.4: remember the last mouse/pen position so a phase-7 scroll can re-resolve hover at this point when the
             // cursor is stationary. Mouse/pen only — a touch contact never latches a resting hover (the kind gate below).
             if (e.Pointer != PointerKind.Touch && e.Kind is InputKind.PointerDown or InputKind.PointerMove or InputKind.PointerUp)

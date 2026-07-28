@@ -101,6 +101,19 @@ public sealed class LazyGrid : Component
     static long PackKey(in LazyGridMath.View v)
         => ((long)(uint)(v.FirstRow + 1) << 40) ^ ((long)(uint)(v.LastRow + 1) << 8) ^ (v.DrawerVisible ? 1L : 0L);
 
+    // Pre-layout, Geometry() reports the 1e9 "viewport unknown yet" sentinel. Windowing against THAT realizes the entire
+    // collection on the mount frame — every card, its cover, its overlay and its shimmer in one reconcile. That is the
+    // measured page-activation avalanche (a 120.8 ms flush, 198 component renders on the artist page), and the cells past
+    // the real viewport are unmounted again one frame later, so nearly all of it is pure waste.
+    //
+    // Capping the FIRST band is structurally free: the scroll extent is reserved by the spacers (totalRows × rowH), never
+    // by the realized cells, so the page scrollbar and everything below the grid are correct either way. Real geometry
+    // lands on the very next frame and widens the window through the normal path. Deliberately generous — under-realizing
+    // only defers a cell by one frame, while over-realizing is exactly the cost being removed. The raw sentinel is left
+    // intact for callers that legitimately test it (the one-shot initial scroll waits for real geometry).
+    const float PreLayoutBandH = 1400f;
+    static float RealizeBandH(float viewportH) => viewportH > 1e8f ? PreLayoutBandH : viewportH;
+
     public LazyGrid(Func<int> count, Func<int, float, Element> cell, Action<int, int> ensureRange,
                     float minColWidth = 180f, float gap = 12f, float rowExtra = 56f, int overscanRows = 2,
                     Signal<int>? expanded = null, Func<int, GridDrawerInfo, Element>? drawer = null, Func<int, float>? drawerHeight = null,
@@ -138,7 +151,7 @@ public sealed class LazyGrid : Component
                 int expRow = expIdx >= 0 ? expIdx / cols : -1;
                 float drawerH = expIdx >= 0 && _drawerHeight is { } dh ? dh(expIdx) : 0f;
                 (float sectionTop, float viewportH) = Geometry();
-                var v = LazyGridMath.Compute(off - sectionTop, viewportH, rowH, totalRows, _overscanRows, expRow, drawerH);
+                var v = LazyGridMath.Compute(off - sectionTop, RealizeBandH(viewportH), rowH, totalRows, _overscanRows, expRow, drawerH);
                 _win.Value = PackKey(v);
             });
         });
@@ -156,7 +169,7 @@ public sealed class LazyGrid : Component
         int expandedRow = expandedIndex >= 0 ? expandedIndex / cols : -1;
         float drawerH = expandedIndex >= 0 && _drawerHeight is { } dh ? dh(expandedIndex) : 0f;
 
-        var view = LazyGridMath.Compute(scrollOffset - sectionTop, viewportH, rowH, totalRows, _overscanRows, expandedRow, drawerH);
+        var view = LazyGridMath.Compute(scrollOffset - sectionTop, RealizeBandH(viewportH), rowH, totalRows, _overscanRows, expandedRow, drawerH);
         int ensureFirst = totalRows == 0 ? 0 : view.FirstRow * cols;
         int ensureLastExclusive = totalRows == 0 ? 1 : Math.Min(count, (view.LastRow + 1) * cols);
 

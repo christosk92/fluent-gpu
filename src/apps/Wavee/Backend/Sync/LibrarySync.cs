@@ -610,54 +610,66 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         if (first) _log.Info("sync: ignoring collection push for unknown wire set '" + wireSet + "'");
     }
 
+    /// <summary>Set at go-live: fired with the playlist uri once an open has hydrated/revalidated its tracklist. An
+    /// opaque hook on purpose — the sync loop stays agnostic of what consumes it (today: music-video detection).</summary>
+    public Action<string>? OnPlaylistHydrated { get; set; }
+
     async Task OpenPlaylistHandlerAsync(string uri)
     {
         try
         {
             if (uri.Length == 0) return;
-            if (NeedsFullRefresh(uri))
-            {
-                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
-                MarkRevalidated(uri);
-                ClearFullRefresh(uri);
-                return;
-            }
-            var members = _store.Membership(uri);
-            if (members.Count == 0)
-            {
-                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);   // first open — the skeleton path
-                MarkRevalidated(uri); ClearDirty(uri);
-                return;
-            }
-            // Attribute-aware heal gate. Membership can be resident yet attribute-less — every row has no added_at and no
-            // added_by, so the Date-added / Added-by columns render blank forever: the /diff revalidate path (the only path
-            // a NON-empty baseline takes) never re-reads item attributes for existing rows, so once a playlist was cached
-            // without Item.attributes it stays that way. Treat that as still-cold and run the full, attribute-bearing
-            // FetchPlaylistAsync instead — the same spirit as StoreLibrarySource.IsAlbumComplete ("unnamed track ⇒ cold").
-            // ALSO heals historically-poisoned caches written before this gate existed (recovery is lazy, per-open — no
-            // SQLite migration). Force at most ONCE per session (_attrHealForced): a playlist whose server data genuinely
-            // carries no attributes stays attribute-less after the fetch, and this guard stops it re-forcing a full GET on
-            // every open — it falls through to the normal dirty/stale /diff path from the second open on.
-            if (IsAttributeLess(members) && TryMarkAttrHealForced(uri))
-            {
-                await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
-                MarkRevalidated(uri); ClearDirty(uri);
-                return;
-            }
-            // Heal headers stripped or capability-stale after a partial LIST_METADATA_V2 upsert (membership stayed resident).
-            var header = _store.GetPlaylist(uri);
-            if (header is not null && (header.Capabilities == default
-                || (header.Capabilities.CanEditMetadata && !header.Capabilities.CanAdministratePermissions)))
-            {
-                try { await _playlists.FetchPlaylistHeaderAsync(uri, _ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
-                catch { }
-            }
-            bool dirty = IsDirty(uri);
-            bool stale = !TryGetLastRevalidated(uri, out var last) || (DateTime.UtcNow - last) > OpenRevalidateWindow;
-            if (dirty || stale) await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
+            await OpenPlaylistCoreAsync(uri).ConfigureAwait(false);
+            // The membership is resident now. This is the ONLY path a live playlist open takes (StoreLibrarySource
+            // returns before OnDemandFetch when the sync loop is attached), so it is where detection must hang off.
+            try { OnPlaylistHydrated?.Invoke(uri); } catch { }
         }
         finally { lock (_gate) _openInFlight.Remove(uri); }
+    }
+
+    async Task OpenPlaylistCoreAsync(string uri)
+    {
+        if (NeedsFullRefresh(uri))
+        {
+            await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
+            MarkRevalidated(uri);
+            ClearFullRefresh(uri);
+            return;
+        }
+        var members = _store.Membership(uri);
+        if (members.Count == 0)
+        {
+            await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);   // first open — the skeleton path
+            MarkRevalidated(uri); ClearDirty(uri);
+            return;
+        }
+        // Attribute-aware heal gate. Membership can be resident yet attribute-less — every row has no added_at and no
+        // added_by, so the Date-added / Added-by columns render blank forever: the /diff revalidate path (the only path
+        // a NON-empty baseline takes) never re-reads item attributes for existing rows, so once a playlist was cached
+        // without Item.attributes it stays that way. Treat that as still-cold and run the full, attribute-bearing
+        // FetchPlaylistAsync instead — the same spirit as StoreLibrarySource.IsAlbumComplete ("unnamed track ⇒ cold").
+        // ALSO heals historically-poisoned caches written before this gate existed (recovery is lazy, per-open — no
+        // SQLite migration). Force at most ONCE per session (_attrHealForced): a playlist whose server data genuinely
+        // carries no attributes stays attribute-less after the fetch, and this guard stops it re-forcing a full GET on
+        // every open — it falls through to the normal dirty/stale /diff path from the second open on.
+        if (IsAttributeLess(members) && TryMarkAttrHealForced(uri))
+        {
+            await _playlists.FetchPlaylistAsync(uri, _ct).ConfigureAwait(false);
+            MarkRevalidated(uri); ClearDirty(uri);
+            return;
+        }
+        // Heal headers stripped or capability-stale after a partial LIST_METADATA_V2 upsert (membership stayed resident).
+        var header = _store.GetPlaylist(uri);
+        if (header is not null && (header.Capabilities == default
+            || (header.Capabilities.CanEditMetadata && !header.Capabilities.CanAdministratePermissions)))
+        {
+            try { await _playlists.FetchPlaylistHeaderAsync(uri, _ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) when (_ct.IsCancellationRequested) { throw; }
+            catch { }
+        }
+        bool dirty = IsDirty(uri);
+        bool stale = !TryGetLastRevalidated(uri, out var last) || (DateTime.UtcNow - last) > OpenRevalidateWindow;
+        if (dirty || stale) await PlaylistRevalidateAsync(uri).ConfigureAwait(false);
     }
 
     // Revision-gated /diff (§2.6, fixes RC5): an unchanged playlist costs one up-to-date round-trip (usually a 304); a

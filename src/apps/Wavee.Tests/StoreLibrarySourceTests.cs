@@ -36,6 +36,38 @@ public class StoreLibrarySourceTests
         Assert.Equal("Tt1", Assert.Single(await src.GetLikedSongsAsync()).Title);
     }
 
+    // Liked Songs never routes through OnDemandFetch (EnsureFetchedAsync gates playlist/album/artist only), so the read
+    // itself is the only place music-video detection can hang off — pin that the hook fires with the joined uris.
+    [Fact]
+    public async Task GetLikedSongs_FiresTheVideoDetectHook_WithTheJoinedUris()
+    {
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertTrack(Trk("t2"));
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        store.SetSaved("liked", "spotify:track:t2", true, SyncState.Confirmed);
+        store.SetSaved("liked", "spotify:track:missing", true, SyncState.Confirmed);   // unhydrated → not detected
+
+        List<string>? detected = null;
+        var src = new StoreLibrarySource(store) { DetectVideos = u => { detected = new List<string>(u); return Task.CompletedTask; } };
+        await src.GetLikedSongsAsync();
+
+        Assert.NotNull(detected);
+        Assert.Equal(2, detected!.Count);
+        Assert.Contains("spotify:track:t1", detected);
+        Assert.Contains("spotify:track:t2", detected);
+    }
+
+    [Fact]
+    public async Task GetLikedSongs_EmptyCollection_DoesNotFireTheDetectHook()
+    {
+        var store = new InMemoryStore();
+        bool fired = false;
+        var src = new StoreLibrarySource(store) { DetectVideos = _ => { fired = true; return Task.CompletedTask; } };
+        Assert.Empty(await src.GetLikedSongsAsync());
+        Assert.False(fired);
+    }
+
     [Fact]
     public async Task GetShows_JoinsSavedShows()
     {

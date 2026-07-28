@@ -126,4 +126,37 @@ public class SearchSuggestionMapperTests
         Assert.Equal("Playlist • Spotify", hits[4].Subtitle);
         Assert.True(hits[4].MatchedLyrics);
     }
+
+    [Fact]
+    public void SearchFromV2_ProjectsVideoAssociationCount()
+    {
+        var results = SpotifyExportMapper.SearchFromV2(Root("""
+        { "data": { "searchV2": { "tracksV2": { "items": [
+          { "item": { "data": {
+            "uri": "spotify:track:withvideo",
+            "name": "Has A Video",
+            "duration": { "totalMilliseconds": 180000 },
+            "associationsV3": { "videoAssociations": { "totalCount": 1 } },
+            "albumOfTrack": { "uri": "spotify:album:A", "name": "Album A" },
+            "artists": { "items": [ { "profile": { "name": "Art" }, "uri": "spotify:artist:A" } ] }
+          } } },
+          { "item": { "data": {
+            "uri": "spotify:track:zerocount",
+            "name": "Zero Count",
+            "associationsV3": { "videoAssociations": { "totalCount": 0 } },
+            "albumOfTrack": { "uri": "spotify:album:A", "name": "Album A" }
+          } } },
+          { "item": { "data": {
+            "uri": "spotify:track:nofield",
+            "name": "Field Omitted",
+            "albumOfTrack": { "uri": "spotify:album:A", "name": "Album A" }
+          } } }
+        ] } } } }
+        """));
+
+        Assert.Equal(3, results.Tracks.Count);
+        Assert.True(results.Tracks[0].HasVideo);
+        Assert.False(results.Tracks[1].HasVideo);
+        Assert.False(results.Tracks[2].HasVideo);   // facet hash omits the field entirely → Long() → 0
+    }
 }

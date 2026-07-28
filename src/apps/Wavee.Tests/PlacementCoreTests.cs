@@ -516,6 +516,112 @@ public class PlacementCoreTests
     public void DegenerateGeometry_IsNotEvenWritten()
         => Assert.Equal("", PlacementPersistence.SaveRect(10f, 10f, 0f, 0f));
 
+    // ── the deferred upgrade: an association landing MID-TRACK never swaps the media (VideoUpgradeGate) ──────────────
+    // The bridge folds these two: RecomputeHasVideo always writes the badge, then asks DeferUpgrade whether it may also
+    // commit the surface. A commit is a media-kind edge, and a media-kind edge reloads the playing track from 0.
+
+    /// <summary>THE fix: the user is watching (standing intent ON), the track started as audio because nothing knew it
+    /// had a video, and the association lands seconds later. The badge lights; the surface — and therefore playback —
+    /// must not move.</summary>
+    [Fact]
+    public void AssociationLandingMidTrack_IsDeferred_SoThePlayingTrackIsNeverReloaded()
+    {
+        var playingAsAudio = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);
+        Assert.False(PlacementCore.IsActive(playingAsAudio));
+
+        var target = VideoUpgradeGate.FoldAvailability(playingAsAudio, hasVideo: true);
+
+        Assert.True(PlacementCore.IsActive(target));                                             // it WOULD turn on…
+        Assert.True(VideoUpgradeGate.DeferUpgrade(playingAsAudio, target, commitUpgrade: false)); // …and is withheld
+    }
+
+    /// <summary>The track BOUNDARY is the entitled caller (PushState's already-computed uri-changed bool), as is an
+    /// explicit user action (the override paths) — both pass commitUpgrade: true and the upgrade lands.</summary>
+    [Fact]
+    public void ATrackBoundary_OrAnExplicitUserAction_CommitsTheUpgrade()
+    {
+        var playingAsAudio = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);
+        var target = VideoUpgradeGate.FoldAvailability(playingAsAudio, hasVideo: true);
+
+        Assert.False(VideoUpgradeGate.DeferUpgrade(playingAsAudio, target, commitUpgrade: true));
+    }
+
+    /// <summary>DOWNGRADES are never deferred: a video-less track, the proven-dead latch and the ✕ must unmount the
+    /// surface (and route the media back to audio) the instant they happen.</summary>
+    [Fact]
+    public void ADowngrade_AlwaysCommits_EvenOnTheDeferredPath()
+    {
+        var watching = At(SurfacePlacement.Floating);
+        var target = VideoUpgradeGate.FoldAvailability(watching, hasVideo: false);
+
+        Assert.False(PlacementCore.IsActive(target));
+        Assert.False(VideoUpgradeGate.DeferUpgrade(watching, target, commitUpgrade: false));
+    }
+
+    [Fact]
+    public void NothingIsDeferred_WhenTheUserHasVideoTurnedOff()
+    {
+        // No intent ⇒ the fold resolves to None ⇒ there is no upgrade to withhold (and committing it is inert).
+        var off = PlacementCore.WithAvailability(Off(), PlacementSet.None);
+        var target = VideoUpgradeGate.FoldAvailability(off, hasVideo: true);
+
+        Assert.False(PlacementCore.IsActive(target));
+        Assert.False(VideoUpgradeGate.DeferUpgrade(off, target, commitUpgrade: false));
+    }
+
+    /// <summary>The companion the deferral REQUIRES: a deferred upgrade leaves Available stale at None, and both Resolve
+    /// and IsActive consult it — so the click behind the freshly-lit badge has to re-fold this track's availability, or
+    /// it would resolve to None and do nothing at all.</summary>
+    [Fact]
+    public void ClickingAfterADeferredLand_StartsTheVideo_BecauseTheIntentPathRefoldsAvailability()
+    {
+        var stale = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);   // badge lit, surface untouched
+
+        Assert.False(PlacementCore.IsActive(PlacementCore.TogglePrimary(stale)));                      // the bug, if the fold is dropped
+        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true)));
+        Assert.Equal(SurfacePlacement.Floating, PlacementCore.Resolve(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true)));
+    }
+
+    /// <summary>…and it must take ONE click, not two: the standing Requested intent is still ON under a deferred upgrade,
+    /// so a naive TogglePrimary over the folded state would read "already watching" and turn video OFF.</summary>
+    [Fact]
+    public void ClickingAfterADeferredLand_NeverReadsTheStandingIntentAsAlreadyWatching()
+    {
+        var stale = PlacementCore.WithAvailability(At(SurfacePlacement.Floating), PlacementSet.None);
+
+        Assert.False(PlacementCore.IsActive(PlacementCore.TogglePrimary(VideoUpgradeGate.FoldAvailability(stale, true))));   // the two-click bug
+        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(stale, hasVideo: true)));
+    }
+
+    [Fact]
+    public void PrimaryClick_StillTogglesNormally_WhenNothingWasDeferred()
+    {
+        var watching = At(SurfacePlacement.Floating);
+        Assert.False(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(watching, hasVideo: true)));   // lit → off
+
+        var off = PlacementCore.TurnOff(watching);
+        Assert.True(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(off, hasVideo: true)));         // unlit → on
+
+        // …and a track with no video at all cannot be turned on by any number of clicks.
+        Assert.False(PlacementCore.IsActive(VideoUpgradeGate.PrimaryClick(off, hasVideo: false)));
+    }
+
+    [Fact]
+    public void ShowVideoAt_AfterADeferredLand_AlsoRefolds()
+    {
+        var stale = PlacementCore.WithAvailability(Off(), PlacementSet.None);
+        var opened = PlacementCore.OpenAt(VideoUpgradeGate.FoldAvailability(stale, hasVideo: true), SurfacePlacement.Detached);
+
+        Assert.Equal(SurfacePlacement.Detached, PlacementCore.Resolve(opened));
+    }
+
+    [Fact]
+    public void AvailabilityFor_IsTheOneContentChannel()
+    {
+        Assert.Equal(PlacementPolicy.Video.Allowed, VideoUpgradeGate.AvailabilityFor(true));
+        Assert.Equal(PlacementSet.None, VideoUpgradeGate.AvailabilityFor(false));
+    }
+
     // ── property tests ──────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Property 1: the invariants hold after EVERY command in EVERY order — a resolved placement is always

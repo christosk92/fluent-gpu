@@ -3,14 +3,21 @@ using System.Runtime.InteropServices;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Input;
 using FluentGpu.Signals;
 
 namespace Wavee;
 
-/// <summary>Process-constant touch-digitizer probe. The per-row swipe belt is <c>touchOnly</c>, so on a machine with no
-/// touchscreen every row's <see cref="SwipeControl"/> is inert weight (35+ per list realize — a measured nav/scroll-mount
-/// cost). Skipping the wrapper there is look-identical (an untouchable touch-only swipe reveals nothing) and cuts that
-/// mount cost. Fails SAFE: any probe failure assumes touch present, so a feature is never removed on uncertainty.</summary>
+/// <summary>Arming gate for the per-row swipe belt. The belt is <c>touchOnly</c>, so until a finger actually arrives
+/// every row's <see cref="SwipeControl"/> is inert weight — and it is not cheap weight: because its props record carries
+/// the freshly-built row <c>Element</c>, the equality gate can never coalesce, so the ~470-line core re-renders 1:1 with
+/// every virtualized row recycle (29–84 per scroll flush, measured) for a control that cannot activate. Two conditions
+/// gate it, cheapest first: the machine must HAVE a digitizer, and this session must have actually SEEN a touch contact
+/// (<see cref="InputDispatcher.TouchObserved"/>). The second is what matters on a touch-capable laptop or convertible
+/// driven by mouse and trackpad, where the digitizer probe alone says "yes" forever and nothing ever pans. Reading the
+/// latch subscribes the calling row render, so the first finger-down anywhere in the app re-renders the lists once and
+/// every row grows its wrapper from then on. Skipping the wrapper is look-identical — an untouchable touch-only swipe
+/// reveals nothing. The digitizer probe still fails SAFE (a probe error assumes touch present).</summary>
 static partial class TouchInput
 {
     private const int SM_MAXIMUMTOUCHES = 95;   // winuser.h: simultaneous touch points; 0 ⇒ no touch digitizer
@@ -29,6 +36,10 @@ static partial class TouchInput
             return _cached != 0;
         }
     }
+
+    /// <summary>Digitizer present AND a touch contact seen this session — the condition for putting a touch-only swipe
+    /// wrapper in the tree. See the class remarks for why presence alone is not enough.</summary>
+    public static bool SwipeArmed => Available && InputDispatcher.TouchObserved.Value;
 
     [LibraryImport("user32.dll")]
     private static partial int GetSystemMetrics(int nIndex);
@@ -60,7 +71,7 @@ public static class RowSwipe
                                AppAction? leading = null, AppAction? trailing = null,
                                IReadSignal<int>? resetKey = null)
     {
-        if (!TouchInput.Available) return row;   // touchOnly swipe can't fire without a touch digitizer → skip the per-row wrapper
+        if (!TouchInput.SwipeArmed) return row;   // no finger has touched this session → the wrapper cannot fire, so skip it
         var left = Project(leading, ctx);      // leading  → swipe right → left-revealed
         var right = Project(trailing, ctx);    // trailing → swipe left  → right-revealed
         if (left is null && right is null) return row;
@@ -81,7 +92,7 @@ public static class RowSwipe
                                     AppAction? leading = null, AppAction? trailing = null,
                                     IReadSignal<int>? resetKey = null)
     {
-        if (!TouchInput.Available) return row;   // see Wrap: no touch digitizer ⇒ the SwipeControl is inert, skip it
+        if (!TouchInput.SwipeArmed) return row;   // see Wrap: until a finger arrives the SwipeControl is inert, skip it
         var left = ProjectBound(leading, context);
         var right = ProjectBound(trailing, context);
         if (left is null && right is null) return row;

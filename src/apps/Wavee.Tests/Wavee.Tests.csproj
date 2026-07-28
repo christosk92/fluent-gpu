@@ -102,6 +102,8 @@
     <Compile Include="..\Wavee\Features\Detail\DetailVerticalLayout.cs" />
     <!-- the pure surface-placement state machine (System only; moves to FluentGpu.Engine/Surfaces/ with SurfaceHost) — PlacementCoreTests -->
     <Compile Include="..\Wavee\App\PlacementCore.cs" Link="PlacementCore.cs" />
+    <!-- the pure "no mid-track auto-swap" rule over that machine (System only) — PlacementCoreTests' deferred-upgrade section -->
+    <Compile Include="..\Wavee\App\VideoUpgradeGate.cs" Link="VideoUpgradeGate.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
     <!-- the local video-override curation: the warm map, the per-session quarantine, the PURE tier-1 decision, and the
@@ -147,6 +149,8 @@
     <!-- the live notification feeds (gander + what's-new) — Gander/WhatsNew tests drive them -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyNotificationsService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyWhatsNewService.cs" />
+    <!-- the artist chart's step two (spclient extensions + MetadataService + IStore; engine-free) — ArtistPopularTracksTests -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistPopularTracksService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConcertPathfinderRequests.cs" />

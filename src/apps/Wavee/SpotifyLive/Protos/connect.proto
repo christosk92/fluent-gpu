@@ -93,6 +93,9 @@ message DeviceInfo {
 message AudioOutputDeviceInfo {
     optional AudioOutputDeviceType audio_output_device_type = 1;
     optional string device_name = 2;
+    // UNNAMED (desktop 1.2.94.583). Always varint 3 in 24/24 captured PUTs; never varies with the output endpoint,
+    // the playback state or the session, so it is not an alternate device-type enum on that evidence.
+    optional uint32 unknown_field_5 = 5;
 }
 
 message Capabilities {
@@ -128,6 +131,13 @@ message Capabilities {
     bool supports_rooms = 28;
     bool supports_dj = 29;
     AudioQuality supported_audio_quality = 30;
+    // UNNAMED (desktop 1.2.94.583). All five are wt=0 value 1 in 24/24 captured PUTs (37 is never emitted). The bool shape
+    // is inferred from the wire — an enum/int32 of 1 is equally consistent and NOT excluded.
+    bool unknown_capability_33 = 33;
+    bool unknown_capability_34 = 34;
+    bool unknown_capability_35 = 35;
+    bool unknown_capability_36 = 36;
+    bool unknown_capability_38 = 38;
 }
 
 message CapabilitySupportDetails {

@@ -119,6 +119,19 @@ public sealed class LocalAudioDeviceService : IDisposable
             await _transferHome(_ourDeviceId, CancellationToken.None).ConfigureAwait(false);   // then transfer home (ghost-resume locally)
     }
 
+    /// <summary>The friendly name of the endpoint we are currently rendering to — the explicitly selected one, else the
+    /// system default. Feeds Connect's <c>DeviceInfo.audio_output_device_info.device_name</c> (desktop parity). Returns null
+    /// before the first enumeration, or when the selected id is no longer in the roster.</summary>
+    public string? CurrentOutputDeviceName()
+    {
+        string? selected = SelectedOutputId.Value;
+        var devices = Devices.Value;
+        foreach (var d in devices)
+            if (selected is null ? d.IsDefault : string.Equals(d.Id, selected, StringComparison.OrdinalIgnoreCase))
+                return d.Name;
+        return null;
+    }
+
     /// <summary>Mute/unmute the Windows session (Phase B4). Our own set is filtered by the engine's context guard, so the
     /// caller updates its optimistic UI directly.</summary>
     public void SetMuted(bool muted) => _output.SetOutputMuted(muted);

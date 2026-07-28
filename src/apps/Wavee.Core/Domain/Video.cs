@@ -15,7 +15,9 @@ public sealed record VideoFileRef(string FileIdHex, int Variant, int Width, int 
 /// entity (the video track for an audio track, or vice-versa); <paramref name="Files"/> are the counterpart's file
 /// id variants. <paramref name="Etag"/> drives 304 revalidation; <paramref name="FetchedAt"/> +
 /// <paramref name="OfflineTtlSeconds"/> drive freshness/offline reuse. A negative result (no video) is cached too,
-/// so we stop re-asking.</summary>
+/// so we stop re-asking. <paramref name="VideoGidHex"/> is the counterpart video's 32-hex gid (= the video
+/// manifest_id, and Connect's <c>associated_video_id</c>) when a decode produced it; null when unknown — it is
+/// OPTIONAL and trails the record on purpose so persisted rows written before it deserialize unchanged.</summary>
 public sealed record VideoAssociation(
     string Uri,
     bool HasVideo,
@@ -23,7 +25,8 @@ public sealed record VideoAssociation(
     System.Collections.Generic.IReadOnlyList<VideoFileRef> Files,
     string? Etag,
     System.DateTimeOffset FetchedAt,
-    long OfflineTtlSeconds)
+    long OfflineTtlSeconds,
+    string? VideoGidHex = null)
 {
     public static readonly System.Collections.Generic.IReadOnlyList<VideoFileRef> NoFiles = System.Array.Empty<VideoFileRef>();
 

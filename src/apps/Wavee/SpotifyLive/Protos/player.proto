@@ -35,6 +35,19 @@ message PlayerState {
     repeated ProvidedTrack reverse = 27;
     repeated ProvidedTrack future = 28;
     PlaybackQuality playback_quality = 32;
+    // The offered mode signals. Carries "switch-to-video" while an associated music video is known (desktop pairs it with
+    // track.metadata["associated_video_id"]); the always-present "interact"/preview entries are unrelated to video.
+    repeated string signals = 33;
+    // Per-playback-session opaque 32-hex id; changes iff session_id changes (24/24 captured desktop PUTs). Generator UNPROVEN.
+    string session_command_id = 35;
+    // UNNAMED (desktop 1.2.94.583): always the 5 bytes `c2 02 02 0a 00` in 24/24 captured PUTs, i.e. {1: ""}.
+    PlayerStateUnknown38 unknown_field_38 = 38;
+}
+
+// UNNAMED placeholder for PlayerState field 38. `optional` = explicit presence, so setting "" still emits `0a 00`
+// (a plain proto3 string would be omitted and the message would come out empty).
+message PlayerStateUnknown38 {
+    optional string unknown_1 = 1;
 }
 
 message ProvidedTrack {
@@ -80,6 +93,24 @@ message Restrictions {
     repeated string disallow_updating_context_reasons = 21;
     repeated string disallow_playing_reasons = 22;
     repeated string disallow_stopping_reasons = 23;
+    // Names/numbers verbatim from librespot player.proto (extracted from Spotify 1.2.52.442 windows).
+    // 24 is defined for completeness only — it is absent in 24/24 captured desktop PUTs, so nothing emits it.
+    repeated string disallow_add_to_queue_reasons = 24;
+    repeated string disallow_setting_playback_speed_reasons = 25;
+    map<string, ModeRestrictions> disallow_setting_modes = 28;
+    // Why a mode signal is NOT offered — "switch-to-video"/"switch-to-audio" -> ["no_associated_track"].
+    map<string, RestrictionReasons> disallow_signals = 29;
+    // UNNAMED (desktop 1.2.94.583): always exactly ["already_set"] in 24/24 captured PUTs, on PlayerState.restrictions only.
+    // Neither defined nor reserved by librespot; the name here is a placeholder and the semantics are unknown.
+    repeated string unknown_disallow_reasons_31 = 31;
+}
+
+message RestrictionReasons {
+    repeated string reasons = 1;
+}
+
+message ModeRestrictions {
+    map<string, RestrictionReasons> values = 1;
 }
 
 message PlayOrigin {
@@ -96,6 +127,18 @@ message ContextPlayerOptions {
     bool shuffling_context = 1;
     bool repeating_context = 2;
     bool repeating_track = 3;
+    // Desktop always publishes exactly three: context_enhancement="NONE", media="", jam="off" (24/24 captured PUTs).
+    // librespot declares this `map<string, string> modes = 5;`. We model it as the wire-identical repeated map-entry
+    // message instead, for ONE reason: desktop explicitly serializes the empty `media` value (`12 00`), and Google.Protobuf's
+    // map codec drops default-valued entries — a proto3 map here would emit the key with no value tag. Parsers see the same
+    // thing either way; the repeated form additionally reproduces desktop's bytes.
+    repeated ModeEntry modes = 5;
+}
+
+// Wire-identical to a `map<string, string>` entry. `optional` on the value = explicit presence, so "" is serialized.
+message ModeEntry {
+    string key = 1;
+    optional string value = 2;
 }
 
 message Suppressions {

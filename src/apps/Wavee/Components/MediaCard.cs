@@ -27,10 +27,17 @@ public static class MediaCard
     internal const float FabInset = 8f;
     const float Pad      = Spacing.S;
 
+    // The hover signal rides the PROPS channel, not the factory closure. These card builders are STATIC element
+    // factories, so every parent re-render (a shelf refit, a LazyGrid window move, a page re-render) allocates a FRESH
+    // `hovered` Signal and rewires the card's pointer handlers to it — but a reused ComponentEl never re-runs its
+    // factory, so a frozen ctor field left the overlay subscribed to the DEAD signal while the live handlers wrote the
+    // new one, and hover silently stopped revealing the FAB until the card remounted (the component-props contract:
+    // data reaching a child must travel by props/context/Key, never a ctor arg). Re-pushed props are equality-gated and
+    // the overlay reads them through a Memo on the VALUE, so a swap that carries the same hover state costs no render.
     static Element LazyOverlay(Signal<bool> hovered, string uri, Action onPlay, float fab, bool cover, float inner,
                                Action? onNavigate = null, bool centered = false)
-        => Embed.Comp(() => new LazyNowPlayingOverlay(
-                hovered, uri, onPlay, fab, cover, inner, onNavigate, centered))
+        => Embed.Comp(new LazyNowPlayingOverlay.Props(hovered),
+                      () => new LazyNowPlayingOverlay(uri, onPlay, fab, cover, inner, onNavigate, centered))
             .Skeletonized(false);
 
     /// <summary>Wide Home destination used by the concert feature. It keeps one responsive layered tree and avoids the
@@ -983,7 +990,10 @@ sealed class CardLibraryAction : Component
 // equalizer, and icon tree in the first flush.
 sealed class LazyNowPlayingOverlay : Component
 {
-    readonly IReadSignal<bool> _hovered;
+    /// <summary>The one prop that must stay LIVE: the card's hover signal, re-allocated by every parent re-render of the
+    /// static card builders. Everything else below is genuinely per-card-identity and frozen at mount.</summary>
+    internal sealed record Props(IReadSignal<bool> Hovered);
+
     readonly string _uri;
     readonly Action _onPlay;
     readonly Action? _onNavigate;
@@ -992,10 +1002,9 @@ sealed class LazyNowPlayingOverlay : Component
     readonly float _inner;
     readonly bool _centered;
 
-    public LazyNowPlayingOverlay(IReadSignal<bool> hovered, string uri, Action onPlay, float fab, bool cover, float inner,
+    public LazyNowPlayingOverlay(string uri, Action onPlay, float fab, bool cover, float inner,
                                  Action? onNavigate, bool centered)
     {
-        _hovered = hovered;
         _uri = uri;
         _onPlay = onPlay;
         _fab = fab;
@@ -1028,7 +1037,14 @@ sealed class LazyNowPlayingOverlay : Component
             return NowPlayingOverlay.Matches(_uri, identity.ContextUri, identity.Track);
         });
 
-        if (!_hovered.Value && !active.Value)
+        // Hover, read through the props channel and gated on the VALUE. UseProps is non-positional (it just reads the
+        // injected props signal), so calling it INSIDE the memo subscribes the MEMO to the re-push rather than this
+        // render: a parent rebuild that hands over a fresh-but-same-state hover signal recomputes the memo, finds the
+        // same bool, and resolves CLEAN — no re-render, so the cold-card laziness this component exists for is intact.
+        // A Memo also re-links its sources on every recompute, so the read always lands on the CURRENT signal.
+        var hovered = UseComputed(() => UseProps<Props>().Hovered.Value);
+
+        if (!hovered.Value && !active.Value)
         {
             if (_cover)
                 return _centered

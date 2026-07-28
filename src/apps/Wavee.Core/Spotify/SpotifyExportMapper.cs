@@ -339,7 +339,8 @@ public static class SpotifyExportMapper
                 MapUnionArtists(Dig(d, "artists", "items")),
                 new AlbumRef(IdFromUri(Str(alb, "uri") ?? ""), Str(alb, "uri") ?? "", Str(alb, "name") ?? ""),
                 Long(d, "duration", "totalMilliseconds"), Str(d, "contentRating", "label") == "EXPLICIT",
-                PickImage(Dig(alb, "coverArt", "sources"))));
+                PickImage(Dig(alb, "coverArt", "sources")),
+                HasVideo: Long(d, "associationsV3", "videoAssociations", "totalCount") > 0));
         }
 
         var albums = new List<Album>();

@@ -147,6 +147,20 @@ static class Program
             Environment.Exit(code);
         }
 
+        // LIVE has-video signal probe: fetch extended-metadata kinds 99 (VIDEO_ASSOCIATIONS), 85 (ORIGINAL_VIDEO),
+        // 182 (CONSUMPTION_EXPERIENCE_TRAIT), 212 (PLAYBACK_TRAIT) for known SAZ hit/miss tracks (+ optional CLI URIs),
+        // dump wire fields, and print concordance vs kind-99. Settles whether 182/212 are usable has-video signals.
+        // Usage: --spotify-video-traits [spotify:track:... ...]
+        int traitsIdx = Array.IndexOf(args, "--spotify-video-traits");
+        if (traitsIdx >= 0)
+        {
+            var extra = new System.Collections.Generic.List<string>();
+            for (int i = traitsIdx + 1; i < args.Length && !args[i].StartsWith("--"); i++) extra.Add(args[i]);
+            using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromMinutes(8));
+            int code = Wavee.SpotifyLive.SpotifyVideoTraitProbe.RunAsync(extra, CliLog("probe"), cts.Token, appLocale.SpotifyLanguage).GetAwaiter().GetResult();
+            Environment.Exit(code);
+        }
+
         // LIVE playlist membership round-trip: login -> GET /playlist/v2 -> thin header + ordered membership -> hydrate -> print.
         // Usage: --spotify-playlist spotify:playlist:<id>
         int plIdx = Array.IndexOf(args, "--spotify-playlist");

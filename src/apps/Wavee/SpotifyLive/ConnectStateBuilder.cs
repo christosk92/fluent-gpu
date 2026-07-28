@@ -22,17 +22,37 @@ public sealed class ConnectStateBuilder
     public const int MaxVolume = 65535;
     public const int DefaultVolumeSteps = 64;
 
+    // The desktop client's 15 supported_types, verbatim from the captured PUT bodies (24/24 identical).
     static readonly string[] DesktopSupportedTypes =
     {
-        "audio/ad", "audio/episode", "audio/episode+track", "audio/interruption", "audio/local", "audio/media",
-        "audio/podcast-chapter", "audio/track", "audio/user-highlight", "video/ad", "video/episode",
+        "audio/ad", "audio/audio", "audio/episode", "audio/episode+track", "audio/interruption", "audio/local",
+        "audio/media", "audio/podcast-chapter", "audio/track", "audio/user-highlight", "video/ad", "video/episode",
         "video/podcast-chapter", "video/track", "video/user-highlight",
     };
+
+    // ── PutState parity constants, all proven byte-exact over the 24 decoded desktop PUT bodies ──────────────────────
+    // The baseline `signals` set: present unconditionally in 24/24 PUTs (playing / paused / buffering, every context).
+    // Emission order is NOT stable on the wire (the middle two swap on buffering PUTs) — only "switch-to-video first,
+    // when present" is invariant, so this fixed order is within observed desktop behavior.
+    internal static readonly string[] BaselineSignals = { "interact", "automix-preview", "speed-preview", "stop-speed-preview" };
+    const string NotSupportedByContentType = "not_supported_by_content_type";
+    internal const string ContextEnhancementMode = "context_enhancement";
+    internal const string RecommendationMode = "RECOMMENDATION";
+    // UNNAMED restriction reason on Restrictions#31 — always exactly this one entry, 24/24.
+    internal const string AlreadySetReason = "already_set";
+    // The three ContextPlayerOptions.modes entries; values constant in 24/24 (media stays "" even on video-offer PUTs).
+    internal const string MediaMode = "media";
+    internal const string JamMode = "jam";
+    // AudioOutputDeviceInfo#5 — UNNAMED, always varint 3.
+    internal const uint AudioOutputDeviceUnknown5 = 3;
 
     readonly string _deviceId;
     readonly string _deviceName;
     readonly string _clientId;
     readonly Func<bool> _isPrivateSession;
+    readonly object _sessionCommandGate = new();
+    string _sessionCommandSessionId = "";
+    string _sessionCommandId = "";
     int _volume;
 
     public ConnectStateBuilder(string deviceId, string deviceName, string? clientId = null, int volume = MaxVolume / 2,
@@ -47,6 +67,20 @@ public sealed class ConnectStateBuilder
 
     public string DeviceId => _deviceId;
     public void SetVolume(int spotifyVolume) => _volume = Math.Clamp(spotifyVolume, 0, MaxVolume);
+
+    /// <summary>Track uri → the associated music video's 32-hex gid (the video manifest id), or null when none is known.
+    /// Wired at go-live to the video-association store. This is the ONE input behind the connect-state video parity: the
+    /// current track's <c>associated_video_id</c> metadata entry and the <c>switch-to-video</c>/<c>switch-to-audio</c>
+    /// signal/disallow pair. A bare has-video badge is deliberately NOT enough — the reference client only ever offers the
+    /// switch together with the gid, so until a resolve/decode produces one we publish "no_associated_track".</summary>
+    public Func<string, string?>? AssociatedVideoGid { get; set; }
+
+    /// <summary>The OS render-endpoint friendly name we are currently outputting to, for <c>DeviceInfo
+    /// .audio_output_device_info.device_name</c> (desktop publishes it in 24/24 PUTs). Wired at go-live to the local-output
+    /// picker service; null / unwired / throwing degrades to an empty name — the submessage itself is still emitted with the
+    /// constants desktop always sends ({type: UNKNOWN, #5: 3}), because those never varied with the endpoint. We deliberately
+    /// do NOT ship the captured machine's endpoint string as a fallback: that would publish another box's hardware.</summary>
+    public Func<string?>? AudioOutputDeviceName { get; set; }
 
     public DeviceInfo BuildDeviceInfo()
     {
@@ -68,7 +102,24 @@ public sealed class ConnectStateBuilder
         };
         info.MetadataMap["debug_level"] = "1";
         info.MetadataMap["tier1_port"] = "0";
+        // audio_output_device_info(24): desktop emits it in 24/24 PUTs as {1: UNKNOWN (explicitly serialized), 2: the OS
+        // endpoint friendly name, 5: 3}. Both numeric fields are `optional` in the proto so the zero/const values are
+        // written rather than defaulted away.
+        info.AudioOutputDeviceInfo = new AudioOutputDeviceInfo
+        {
+            AudioOutputDeviceType = AudioOutputDeviceType.UnknownAudioOutputDeviceType,
+            DeviceName = CurrentAudioOutputDeviceName(),
+            UnknownField5 = AudioOutputDeviceUnknown5,
+        };
         return info;
+    }
+
+    string CurrentAudioOutputDeviceName()
+    {
+        if (AudioOutputDeviceName is not { } lookup) return "";
+        // A picker/enumeration fault must degrade to a nameless endpoint, never break the PUT (which takes us off the cluster).
+        try { return lookup() ?? ""; }
+        catch { return ""; }
     }
 
     static Capabilities BuildCapabilities(int volumeSteps = DefaultVolumeSteps)
@@ -94,6 +145,13 @@ public sealed class ConnectStateBuilder
             SupportsHifi = new CapabilitySupportDetails { FullySupported = true, UserEligible = true, DeviceSupported = true },
             SupportsDj = true,
             SupportedAudioQuality = AudioQuality.VeryHigh,   // 320 kbps OGG (claiming HIFI would lie about FLAC)
+            // UNNAMED capability bits 33/34/35/36/38 — varint 1 in 24/24 captured desktop PUTs (37 is never emitted).
+            // Anti-fraud surface: matching desktop exactly is the goal, so we send the same five constants.
+            UnknownCapability33 = true,
+            UnknownCapability34 = true,
+            UnknownCapability35 = true,
+            UnknownCapability36 = true,
+            UnknownCapability38 = true,
         };
         foreach (var t in DesktopSupportedTypes) c.SupportedTypes.Add(t);
         return c;
@@ -143,9 +201,10 @@ public sealed class ConnectStateBuilder
         return req.ToByteArray();
     }
 
-    static ProtoPlayerState BuildPlayerState(LocalPlaybackSnapshot s, long ts, PlayableKind? currentKind = null)
+    ProtoPlayerState BuildPlayerState(LocalPlaybackSnapshot s, long ts, PlayableKind? currentKind = null)
     {
         string contextUri = s.ContextUri ?? "";
+        string? videoGid = LookupVideoGid(s.Track.Uri);
         string feature = FeatureOf(contextUri, s.ContextMetadata);
         var ps = new ProtoPlayerState
         {
@@ -168,7 +227,7 @@ public sealed class ConnectStateBuilder
             SessionId = s.SessionId,
             QueueRevision = s.QueueRevision ?? "",
             // Only the CURRENT track carries the live media kind — prev/next are not the current media.
-            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId, currentKind),
+            Track = ToProvided(s.Track, contextUri, s.InteractionId, s.PageInstanceId, currentKind, videoGid),
             Index = new ContextIndex { Track = (uint)Math.Max(0, s.ContextIndex) },
             Options = new ContextPlayerOptions
             {
@@ -177,6 +236,15 @@ public sealed class ConnectStateBuilder
                 RepeatingTrack = s.Repeat == RepeatMode.Track,
             },
             Restrictions = new Restrictions(),
+            // Empty-but-present submessages: desktop emits both tags with no content in 24/24 PUTs.
+            ContextRestrictions = new Restrictions(),
+            Suppressions = new Suppressions(),
+            // Per-session opaque id — the same value for every PUT of a playback session, a fresh one when session_id turns
+            // over. The generator is UNPROVEN (nothing in the capture derives it), so we mint 128 random bits.
+            SessionCommandId = SessionCommandIdFor(s.SessionId),
+            // UNNAMED PlayerState#38 — always the bytes `c2 02 02 0a 00`, i.e. {1: ""}. The inner field is proto3-`optional`
+            // so the empty string is explicitly serialized instead of being defaulted away.
+            UnknownField38 = new PlayerStateUnknown38 { Unknown1 = "" },
             PlaybackQuality = new PlaybackQuality
             {
                 BitrateLevel = BitrateLevel.High,
@@ -197,13 +265,103 @@ public sealed class ConnectStateBuilder
         }
         else if (s.IsPlaying)
             ps.Restrictions.DisallowResumingReasons.Add("not_paused");
+        // ORDER MATTERS: the mode signal goes in FIRST — when "switch-to-video" is present desktop always puts it first
+        // (7/7 captured video PUTs), ahead of the four unconditional baseline entries.
+        StampModeSignals(ps, videoGid, currentKind);
+        StampDesktopBaseline(ps, contextUri);
         foreach (var t in s.PrevTracks) ps.PrevTracks.Add(ToProvided(t, contextUri, s.InteractionId, s.PageInstanceId));
         foreach (var t in s.NextTracks) ps.NextTracks.Add(ToProvided(t, contextUri, s.InteractionId, s.PageInstanceId));
         return ps;
     }
 
+    // Everything the reference desktop client publishes on EVERY PutState regardless of playback state, proven constant over
+    // the 24 decoded PUT bodies. All of it is truthful for us as well: we support neither playback-speed change nor automix
+    // nor jam, so desktop's disallow reasons are our reasons too, and the preview signals ride with those disallows.
+    static void StampDesktopBaseline(ProtoPlayerState ps, string contextUri)
+    {
+        foreach (var signal in BaselineSignals) ps.Signals.Add(signal);
+
+        // 25: playback speed is a podcast feature; every captured (music) PUT carries this one reason.
+        ps.Restrictions.DisallowSettingPlaybackSpeedReasons.Add(NotSupportedByContentType);
+        // 31: UNNAMED, always exactly ["already_set"] — never varies, so there is no state to key it off.
+        ps.Restrictions.UnknownDisallowReasons31.Add(AlreadySetReason);
+        // 28: Enhance ("context_enhancement" / RECOMMENDATION) is a playlist feature — desktop publishes it as disallowed on
+        // album / album-radio / autoplay contexts and omits the field entirely on playlist contexts. Correlates with context
+        // type only: independent of video and of playback state.
+        if (!contextUri.Contains(":playlist:", StringComparison.Ordinal))
+        {
+            var reasons = new RestrictionReasons();
+            reasons.Reasons.Add(NotSupportedByContentType);
+            var mode = new ModeRestrictions();
+            mode.Values[RecommendationMode] = reasons;
+            ps.Restrictions.DisallowSettingModes[ContextEnhancementMode] = mode;
+        }
+        // 24 (disallow_add_to_queue_reasons) is deliberately NOT emitted: absent in 24/24 PUTs, no observed key or reason.
+
+        // options.modes: exactly three entries, values constant in 24/24 (media stays "" even on the video-offer PUTs, so it
+        // is not a current-media indicator). Desktop's own emission order varies across all six permutations — not
+        // load-bearing — so we pin one.
+        ps.Options.Modes.Add(new ModeEntry { Key = ContextEnhancementMode, Value = "NONE" });
+        ps.Options.Modes.Add(new ModeEntry { Key = MediaMode, Value = "" });
+        ps.Options.Modes.Add(new ModeEntry { Key = JamMode, Value = "off" });
+    }
+
+    /// <summary>The per-playback-session <c>session_command_id</c>: a fresh opaque 32-hex value iff <c>session_id</c> turns
+    /// over, otherwise the one already minted. Proven over 24 PUTs to be stable across track changes, autoplay hand-offs,
+    /// seeks, playback_id / queue_revision changes and pause — and NOT derived from any command id. The generator itself is
+    /// UNPROVEN, so we treat it as an opaque random 128-bit id minted with the session.</summary>
+    internal string SessionCommandIdFor(string? sessionId)
+    {
+        if (string.IsNullOrEmpty(sessionId)) return "";
+        lock (_sessionCommandGate)
+        {
+            if (!string.Equals(_sessionCommandSessionId, sessionId, StringComparison.Ordinal))
+            {
+                _sessionCommandSessionId = sessionId;
+                Span<byte> bytes = stackalloc byte[16];
+                System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+                _sessionCommandId = Convert.ToHexString(bytes).ToLowerInvariant();
+            }
+            return _sessionCommandId;
+        }
+    }
+
+    string? LookupVideoGid(string? trackUri)
+    {
+        if (AssociatedVideoGid is not { } lookup || string.IsNullOrEmpty(trackUri)) return null;
+        // The lookup reaches into the association store from the publish path — a fault there must degrade to "no video
+        // offer", never break the whole PUT (which would take the device off the cluster).
+        try { return lookup(trackUri) is { Length: > 0 } gid ? gid : null; }
+        catch { return null; }
+    }
+
+    // The mode-switch offer, in the exact shape the reference desktop client publishes: the mode we are ALREADY hosting is
+    // always disallowed with "no_associated_track", and the other one is either offered in `signals` (gid known) or
+    // disallowed with the same reason. Only the current track can carry an offer — next_tracks never do.
+    static void StampModeSignals(ProtoPlayerState ps, string? videoGid, PlayableKind? currentKind)
+    {
+        const string NoAssociatedTrack = "no_associated_track";
+        // The video-host half is symmetric-by-construction, not capture-proven (every captured session was audio-hosted).
+        bool videoHost = currentKind == PlayableKind.Video;
+        string hosted = videoHost ? "switch-to-video" : "switch-to-audio";
+        string other = videoHost ? "switch-to-audio" : "switch-to-video";
+        var reasons = new RestrictionReasons();
+        reasons.Reasons.Add(NoAssociatedTrack);
+        ps.Restrictions.DisallowSignals[hosted] = reasons;
+        if (!string.IsNullOrEmpty(videoGid))
+        {
+            ps.Signals.Add(other);
+        }
+        else
+        {
+            var otherReasons = new RestrictionReasons();
+            otherReasons.Reasons.Add(NoAssociatedTrack);
+            ps.Restrictions.DisallowSignals[other] = otherReasons;
+        }
+    }
+
     static ProvidedTrack ToProvided(in SnapshotTrack t, string contextUri, string interactionId, string pageInstanceId,
-        PlayableKind? currentKind = null)
+        PlayableKind? currentKind = null, string? associatedVideoGid = null)
     {
         var pt = new ProvidedTrack
         {
@@ -252,6 +410,9 @@ public sealed class ConnectStateBuilder
         // Without a kind (prev/next rows, the empty NewConnection announce) we fall back to the per-track wire heuristic.
         // LocalFile can't be distinguished from Audio on the wire snapshot, and both play through the audio host, so mapping
         // non-video → Audio is exact.
+        // The associated music video's manifest gid (Connect's `associated_video_id`). Authoritative over anything the wire
+        // snapshot carried, and stamped on the CURRENT track only — the reference client never puts it on next_tracks.
+        if (!string.IsNullOrEmpty(associatedVideoGid)) meta["associated_video_id"] = associatedVideoGid;
         if (currentKind is { } kind) meta["track_player"] = MediaSwitchLogic.TrackPlayer(kind);
         else AddIfMissing(meta, "track_player", MediaSwitchLogic.TrackPlayer(isVideo ? PlayableKind.Video : PlayableKind.Audio));
         // A video also carries media.manifest_id so remotes know which manifest is playing. The resolved id

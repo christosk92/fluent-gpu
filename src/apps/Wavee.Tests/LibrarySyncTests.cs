@@ -313,6 +313,27 @@ public class LibrarySyncTests
         Assert.Single(h.Store.Membership("spotify:playlist:p"));
     }
 
+    // A LIVE playlist open never reaches StoreLibrarySource.OnDemandFetch (the sync loop returns first), so music-video
+    // detection hangs off this hook instead. The loop itself stays video-agnostic — it just reports "tracklist resident".
+    [Fact]
+    public async Task OpenPlaylistAsync_FiresTheHydratedHook_AfterTheTracklistLands()
+    {
+        var slc = new Pl.SelectedListContent { Revision = ByteString.CopyFrom(3) };
+        var contents = new Pl.ListItems { Pos = 0, Truncated = false };
+        contents.Items.Add(new Pl.Item { Uri = "spotify:track:x" });
+        slc.Contents = contents;
+        await using var h = new SyncHarness(_ => Ok(slc.ToByteArray()));
+
+        var hydrated = new List<string>();
+        int membersAtHook = -1;
+        h.Sync.OnPlaylistHydrated = uri => { hydrated.Add(uri); membersAtHook = h.Store.Membership(uri).Count; };
+
+        await h.Sync.OpenPlaylistAsync("spotify:playlist:p", CancellationToken.None);
+
+        Assert.Equal("spotify:playlist:p", Assert.Single(hydrated));
+        Assert.Equal(1, membersAtHook);   // fires AFTER the tracklist is resident, never before
+    }
+
     [Fact]
     public async Task PlaylistPush_AddHydratesThenEmitsPlaylistBump()
     {

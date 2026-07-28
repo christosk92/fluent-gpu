@@ -19,18 +19,24 @@ namespace Wavee;
 // now-playing track), TrackRow.Heart, zebra by track ordinal. Hard 5-row height; a single column pages ‹1/2›.
 sealed class ArtistPopular : Component
 {
-    readonly IReadOnlyList<Track> _tracks;
+    readonly IReadOnlyList<Track> _tracks;   // the overview seed, frozen at mount (component-props contract)
     readonly string _ctx, _title;
     readonly PlaybackBridge? _bridge;
     readonly Services _svc;
     readonly Func<ColorF> _accent;
+    // The list actually being charted: the seed until the extended fetch lands, then the merged one. Render writes it
+    // BEFORE building the row children, so the frozen-prop ChartRows read the current list at their own render.
+    IReadOnlyList<Track> _live;
 
     public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, Func<ColorF> accent)
     {
-        _tracks = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent;
+        _tracks = tracks; _live = tracks; _ctx = ctx; _bridge = bridge; _svc = svc; _title = title; _accent = accent;
     }
 
-    const int MaxTracks = 10;
+    // The chart shows the FULL extended popular list (overview seed ∪ artist-top-tracks-extensions), not just the
+    // overview's ten — the 5-row cap and the column pager already absorb the extra rows.
+    const int MaxTracks = ArtistPopularTracks.ExtendedCap;
+    const int SeedTracks = ArtistPopularTracks.OverviewSeedCap;   // the pre-extension skeleton can never exceed this
     const int MaxRows = 5;          // the band is NEVER taller than five rows — a single column pages via ‹1/2›
     const int MaxColumns = 3;
     const float MinColW = 260f;     // prototype --chart-min-col
@@ -47,7 +53,13 @@ sealed class ArtistPopular : Component
         var measuredW = UseMeasuredWidth(1f);
         var page = UseSignal(0);
 
-        int total = Math.Min(_tracks.Count, MaxTracks);
+        // Step two of the chart, owned here rather than by the page: the overview seed paints immediately, and the
+        // extended list (up to 50, play counts preserved on the head) revalidates into the SAME component — so the pager
+        // simply grows instead of the whole band re-mounting. Offline / failure returns the seed, so this never blanks.
+        var extended = UseResource(ct => _svc.ArtistPopularTracks.EnsureExtendedAsync(_ctx, _tracks, ct), _tracks, _ctx);
+        _live = extended.Loadable.Value.Value is { Count: > 0 } merged ? merged : _tracks;
+
+        int total = Math.Min(_live.Count, MaxTracks);
         float width = measuredW.Value > 0.5f ? measuredW.Value : 600f;
         // Prototype fit: floor((w+gap)/(minCol+gap)) capped at 3, but prefer 2 over a cramped 3 until 860px.
         int cols = Math.Clamp((int)((width + ColGap) / (MinColW + ColGap)), 1, MaxColumns);
@@ -55,11 +67,14 @@ sealed class ArtistPopular : Component
         cols = Math.Min(cols, Math.Max(1, (total + MaxRows - 1) / MaxRows));
         float cellW = (width - (cols - 1) * ColGap) / cols;
         // Pressure tiers (prototype): shrink art < 220, drop duration < 200; full play counts from 300.
+        // Below 340 the subtitle stacks (feat / plays on their own lines) so the feat name isn't crushed.
         float art = cellW < 220f ? 40f : 44f;
         bool showDuration = cellW >= 200f;
         bool fullPlays = cellW >= 300f;
+        bool stackSub = cellW < 340f;
 
-        // Column-first pagination at the 5-row cap: 2–3 columns show all 10; 1 column pages 1–5 / 6–10.
+        // Column-first pagination at the 5-row cap: with the overview's ten, 2–3 columns show them all and one column
+        // pages 1–5 / 6–10; once the extended list lands, `pages` simply grows and the clamp below keeps `page` in range.
         int perPage = cols * MaxRows;
         int pages = Math.Max(1, (total + perPage - 1) / perPage);
         int pg = Math.Min(page.Value, pages - 1);
@@ -68,7 +83,7 @@ sealed class ArtistPopular : Component
         int pageCount = Math.Min(total - pageStart, perPage);
         int rowsPerCol = Math.Max(1, (pageCount + cols - 1) / cols);   // balanced: 10 across 3 cols → 4/4/2
 
-        string tier = "|" + (int)art + (showDuration ? "d" : "-") + (fullPlays ? "p" : "-");
+        string tier = "|" + (int)art + (showDuration ? "d" : "-") + (fullPlays ? "p" : "-") + (stackSub ? "s" : "-");
         var colEls = new Element[cols];
         for (int c = 0; c < cols; c++)
         {
@@ -77,10 +92,10 @@ sealed class ArtistPopular : Component
             {
                 int i = pageStart + c * rowsPerCol + r;
                 if (i >= pageStart + pageCount) break;
-                var t = _tracks[i];
+                var t = _live[i];
                 // Density/position props freeze at mount (component-props contract) — key by tier + track index
                 // so a width/column-count change remounts the row instead of leaving stale frozen props.
-                Element row = Embed.Comp(() => new ChartRow(this, i, i, go, lib, art, showDuration, fullPlays))
+                Element row = Embed.Comp(() => new ChartRow(this, i, i, go, lib, art, showDuration, fullPlays, stackSub))
                     with { Key = "chart:" + t.Uri + "|" + i + tier };
                 if (acts is { } a && menuOverlay is { } ov)
                 {
@@ -133,7 +148,8 @@ sealed class ArtistPopular : Component
 
     public static Element SkeletonShape(IReadOnlyList<Track> tracks, string title)
     {
-        int total = Math.Min(tracks.Count, MaxTracks);
+        // The skeleton stands in for the FIRST paint, which is always the overview seed — never the extended list.
+        int total = Math.Min(tracks.Count, SeedTracks);
         int cols = total > MaxRows ? 2 : 1;
         int rowsPerCol = Math.Min(MaxRows, Math.Max(1, (total + cols - 1) / cols));
         var colEls = new Element[cols];
@@ -146,7 +162,7 @@ sealed class ArtistPopular : Component
                 int index = c * rowsPerCol + r;
                 rows[r] = Row(tracks[index], index, index,
                     new TrackRow.State(false, false, false, false, false),
-                    art: 44f, showDuration: true, fullPlays: false, featLine: null,
+                    art: 44f, showDuration: true, fullPlays: false, stackSub: false, featLine: null,
                     onPlay: static () => { }, onLike: null);
             }
             colEls[c] = new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = RowVGap, Children = rows };
@@ -168,9 +184,13 @@ sealed class ArtistPopular : Component
 
     // ── the prototype row (shared by live rows and the skeleton) ────────────────────────────────────────────
     static Element Row(Track t, int index, int zebraIndex, in TrackRow.State st, float art, bool showDuration,
-                       bool fullPlays, Element? featLine, Action onPlay, Action? onLike)
+                       bool fullPlays, bool stackSub, Element? featLine, Action onPlay, Action? onLike)
     {
         bool shaded = zebraIndex % 2 != 0;   // zero-based odd = displayed tracks 2, 4, 6, 8, 10
+
+        // Tight cells: feat and plays stop competing for one line — feat keeps line 2, plays moves to line 3
+        // (where the full count always fits). Rows without a feat line never cramped, so they stay 2-line.
+        bool stacked = stackSub && featLine is not null && t.PlayCount > 0;
 
         var sub = new List<Element>(5);
         if (t.IsExplicit) sub.Add(TrackRow.ExplicitBadge());
@@ -179,7 +199,7 @@ sealed class ArtistPopular : Component
             if (sub.Count > 0) sub.Add(Dot());
             sub.Add(featLine);
         }
-        if (t.PlayCount > 0)
+        if (t.PlayCount > 0 && !stacked)
         {
             if (sub.Count > 0) sub.Add(Dot());
             sub.Add(new TextEl((fullPlays ? t.PlayCount.ToString("N0") : TrackRow.PlaysLabel(t.PlayCount)) + " plays")
@@ -222,18 +242,7 @@ sealed class ArtistPopular : Component
                 new BoxEl
                 {
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f, Justify = FlexJustify.Center,
-                    Children =
-                    [
-                        new TextEl(t.Title)
-                        {
-                            Size = 14f, Weight = 600,
-                            Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                        sub.Count > 0
-                            ? new BoxEl { Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center, MinWidth = 0f, Children = sub.ToArray() }
-                            : new BoxEl(),
-                    ],
+                    Children = MidColumn(t, st, sub, stacked),
                 },
                 new BoxEl
                 {
@@ -242,6 +251,30 @@ sealed class ArtistPopular : Component
                 },
             ],
         };
+    }
+
+    // Title + subtitle lines. Stacked (tight) rows get a third line: the full play count, which owns the
+    // whole lane so it never needs the abbreviated form. Three 12/14px lines + 2×Gap(1) ≈ 53px < RowH 56.
+    static Element[] MidColumn(Track t, in TrackRow.State st, List<Element> sub, bool stacked)
+    {
+        var title = new TextEl(t.Title)
+        {
+            Size = 14f, Weight = 600,
+            Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+        };
+        Element subLine = sub.Count > 0
+            ? new BoxEl { Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center, MinWidth = 0f, Children = sub.ToArray() }
+            : new BoxEl();
+        if (!stacked) return [title, subLine];
+        return
+        [
+            title, subLine,
+            new TextEl(t.PlayCount.ToString("N0") + " plays")
+            {
+                Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Shrink = 0f,   // plays never disappear
+            },
+        ];
     }
 
     static Element Dot() => new TextEl("·") { Size = 12f, Color = Tok.TextTertiary, Shrink = 0f };
@@ -274,24 +307,42 @@ sealed class ArtistPopular : Component
         readonly Action<string, string?> _go;
         readonly LibraryBridge? _lib;
         readonly float _art;
-        readonly bool _showDuration, _fullPlays;
+        readonly bool _showDuration, _fullPlays, _stackSub;
 
         public ChartRow(ArtistPopular o, int index, int zebraIndex, Action<string, string?> go, LibraryBridge? lib,
-                        float art, bool showDuration, bool fullPlays)
+                        float art, bool showDuration, bool fullPlays, bool stackSub)
         {
             _o = o; _index = index; _zebraIndex = zebraIndex; _go = go; _lib = lib;
-            _art = art; _showDuration = showDuration; _fullPlays = fullPlays;
+            _art = art; _showDuration = showDuration; _fullPlays = fullPlays; _stackSub = stackSub;
         }
+
+        // This row's own track + visual state, equality-gated. TrackRow.StateOf reads the bridge Identity/IsPlaying/
+        // IsBuffering signals and the library saved-set; read bare at render scope those subscribe the WHOLE row to
+        // every playback event, so a skip between two OTHER tracks re-rendered all ten charted rows (measured:
+        // ChartRow×10 per play/pause/skip/save, each rebuilding a full row grid + the FeatLine allocations). Behind a
+        // Memo the recompute still runs, but a render is scheduled only when THIS row's tuple actually changed — the
+        // same shape DetailTracks.BoundRowContent already uses for its presentation record.
+        readonly record struct Presentation(Track? Track, TrackRow.State State);
 
         public override Element Render()
         {
-            int total = Math.Min(_o._tracks.Count, MaxTracks);
-            if ((uint)_index >= (uint)total) return new BoxEl();
-            var t = _o._tracks[_index];
-            var st = TrackRow.StateOf(_o._bridge, _lib, t);
-            return Row(t, _index, _zebraIndex, st, _art, _showDuration, _fullPlays,
+            var presentation = UseComputed(() =>
+            {
+                int n = Math.Min(_o._live.Count, MaxTracks);
+                if ((uint)_index >= (uint)n) return default(Presentation);
+                var track = _o._live[_index];
+                return new Presentation(track, TrackRow.StateOf(_o._bridge, _lib, track));
+            });
+            if (presentation.Value.Track is not { } t) return new BoxEl();
+            var st = presentation.Value.State;
+            return Row(t, _index, _zebraIndex, st, _art, _showDuration, _fullPlays, _stackSub,
                 featLine: FeatLine(t, _o._ctx, _go),
-                onPlay: () => TrackRow.Invoke(_o._bridge, t, () => _ = _o._svc.Player.PlayAsync(_o._ctx, _index)),
+                // Start BY URI, not by index. The artist context is a server list (popular-release-segments-main-roles)
+                // whose order is its own — with an extended chart, this row's ordinal is not that list's ordinal, and
+                // ContextResolve deliberately refuses a blind index across divergent orderings (F2). The index rides
+                // along only as the fallback for a uri the server list doesn't carry.
+                onPlay: () => TrackRow.Invoke(_o._bridge, t, () => _ = _o._svc.Player.PlayContextTrackAsync(
+                    _o._ctx, new PlaybackContextTrack(t.Uri), _index)),
                 onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null);
         }
     }

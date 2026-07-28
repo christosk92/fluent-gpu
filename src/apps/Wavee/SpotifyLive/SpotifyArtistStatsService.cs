@@ -11,7 +11,7 @@ namespace Wavee.SpotifyLive;
 // / top-track play counts / related / pinned / header image / palette. Absorbs the old LiveSessionHost.FetchArtistAsync
 // + the 12h TTL that used to live in StoreLibrarySource. Deliberately NOT hung off GetArtistAsync (the shared read the
 // Library master-detail also uses) — only the standalone ArtistPage calls this, so the Library surface stays 100% V4.
-sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store) : IArtistStatsService
+sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store, WaveeLogger log = default) : IArtistStatsService
 {
     static readonly TimeSpan Ttl = TimeSpan.FromHours(12);   // artist stats change slowly; revalidate on a generous window
 
@@ -40,7 +40,13 @@ sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store) : IA
                 });
         }
         catch (OperationCanceledException) { throw; }
-        catch { /* best-effort — a stale hash / network error still returns the store artist below */ }
+        catch (Exception ex)
+        {
+            // Best-effort — a stale hash / network error still returns the store artist below. But it must be VISIBLE:
+            // a silently-swallowed overview failure is indistinguishable from "this artist has no stats", and it also
+            // leaves the chart on its cold seed with no trace of why.
+            log.Event(WaveeLogLevel.Warning, "stats.overview.fail", "queryArtistOverview failed", artistUri, ex: ex);
+        }
         return store.GetArtist(artistUri);
     }
 }

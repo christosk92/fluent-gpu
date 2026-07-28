@@ -29,8 +29,26 @@ public sealed class LiveConnect : IDisposable
     public IObservable<string?> ConnectionId => _connect.ConnectionId;
     /// <summary>The current dealer connection id, or null if none has been captured yet.</summary>
     public string? CurrentConnectionId => _connect.CurrentConnectionId;
+    /// <summary>Track uri → associated music-video gid, for the connect-state video parity (see
+    /// <see cref="ConnectStateBuilder.AssociatedVideoGid"/>). Wired at go-live to the video-association store.</summary>
+    public Func<string, string?>? AssociatedVideoGid
+    {
+        get => _stateBuilder.AssociatedVideoGid;
+        set => _stateBuilder.AssociatedVideoGid = value;
+    }
+    /// <summary>The current OS render-endpoint friendly name for <c>DeviceInfo.audio_output_device_info</c> (see
+    /// <see cref="ConnectStateBuilder.AudioOutputDeviceName"/>). Wired at go-live to the local-output picker service.</summary>
+    public Func<string?>? AudioOutputDeviceName
+    {
+        get => _stateBuilder.AudioOutputDeviceName;
+        set => _stateBuilder.AudioOutputDeviceName = value;
+    }
+    /// <summary>Re-publish the player state for a wire-visible change that produced no playback event (a music-video
+    /// association landing under the playing track). One PutState, no host/kind change.</summary>
+    public void RepublishPlayerState() => _publisher.PublishStateChanged();
     readonly ConnectService _connect;
     readonly DeviceStatePublisher _publisher;
+    readonly ConnectStateBuilder _stateBuilder;
     readonly ClusterIngest _ingest;
     readonly ConnectCommandRouter _commands;
     readonly IAudioHost _host;
@@ -64,6 +82,7 @@ public sealed class LiveConnect : IDisposable
         _ingest = new ClusterIngest(transport, Projection, Devices, deviceId, log, _clock.ObservePassive);
 
         var builder = new ConnectStateBuilder(deviceId, "Wavee", isPrivateSession: () => Projection.IsPrivateSession);
+        _stateBuilder = builder;
         _connect = new ConnectService(transport);   // connection-id capture only
         // bug 6 / M0: the current track's Connect `track_player` must come from the controller's LIVE media kind (the ONE
         // truth about which host is playing), not from a bare has-video flag on the wire snapshot. The controller does not
@@ -196,9 +215,10 @@ public sealed class LiveConnect : IDisposable
         // 4. Every writer of the video INTENT asks the controller to re-evaluate the CURRENT playable's kind, so "watch video",
         //    "switch to audio", and the surface ✕ swap the media host for the track already playing — not only at the next
         //    track boundary. Fire-and-forget: it is a locked backend operation, never awaited from a UI handler.
-        //    The bool is forceReloadIfVideo: an override attach/replace/remove changes the video SOURCE without changing the
-        //    KIND, so the same-kind early return has to be overridden for that one case.
-        bridge.RequestMediaKindRefresh = forced => _ = RefreshMediaKindAsync(forced);
+        //    forceReloadIfVideo: an override attach/replace/remove changes the video SOURCE without changing the KIND, so the
+        //    same-kind early return has to be overridden for that one case. clearConnectAudioFirst is ORTHOGONAL and travels
+        //    separately: only an explicit user media intent may drop the remote playback ids (see the controller's remarks).
+        bridge.RequestMediaKindRefresh = (forced, clearConnect) => _ = RefreshMediaKindAsync(forced, clearConnect);
 
         // 5. MP4-AUTHORITATIVE DURATION. A user-attached local video is a different edit with its own length; the moment the
         //    media engine knows it, it becomes the projection's truth for that playable (seek bar + the PutState duration
@@ -232,9 +252,9 @@ public sealed class LiveConnect : IDisposable
         };
     }
 
-    async Task RefreshMediaKindAsync(bool forceReloadIfVideo = false)
+    async Task RefreshMediaKindAsync(bool forceReloadIfVideo = false, bool clearConnectAudioFirst = true)
     {
-        try { await Controller.RefreshCurrentMediaKindAsync(forceReloadIfVideo).ConfigureAwait(false); }
+        try { await Controller.RefreshCurrentMediaKindAsync(forceReloadIfVideo, clearConnectAudioFirst).ConfigureAwait(false); }
         catch (Exception ex) { _playbackLog.Info("media-kind refresh failed: " + ex.Message); }
     }
 

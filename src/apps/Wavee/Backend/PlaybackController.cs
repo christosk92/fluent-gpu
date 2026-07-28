@@ -347,18 +347,25 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     /// <summary>Re-evaluate the CURRENT playable's media kind and, if it changed, swap the host and reload the current track
     /// on it. This is what makes the user's "watch video" / "switch to audio" toggle take effect NOW instead of at the next
-    /// track boundary — and what picks up the music-video association when it lands asynchronously after the track already
-    /// started. A no-op when nothing is playing, when the kind already matches, when the hooks are unwired (kill switch), or
-    /// when another Connect device owns playback. Wired to <c>PlaybackBridge.RequestMediaKindRefresh</c>.
+    /// track boundary. A no-op when nothing is playing, when the kind already matches, when the hooks are unwired (kill
+    /// switch), or when another Connect device owns playback. Wired to <c>PlaybackBridge.RequestMediaKindRefresh</c>.
+    /// <para>It is deliberately NOT what picks up a music-video association that lands asynchronously mid-track: that
+    /// upgrade is deferred to the badge (see <c>PlaybackBridge.RecomputeHasVideo</c>), because reloading a playing track
+    /// restarts it at position 0.</para>
     /// <para><paramref name="forceReloadIfVideo"/> closes the same-kind gap: a mid-playback video-SOURCE change (the user
     /// attached / replaced / removed a local override) leaves the kind at Video on both sides, so the same-kind early
     /// return would swallow it. Forcing falls through to the same <c>LoadAndPlayCurrentAsync</c> under <c>_lock</c>;
-    /// an unchanged source Key is still a no-op inside the video host, so forcing is safe.</para></summary>
-    public async Task RefreshCurrentMediaKindAsync(bool forceReloadIfVideo = false, CancellationToken ct = default)
+    /// an unchanged source Key is still a no-op inside the video host, so forcing is safe.</para>
+    /// <para><paramref name="clearConnectAudioFirst"/> is ORTHOGONAL to it: only an EXPLICIT local media intent may drop
+    /// the remote playback ids, because <see cref="ClearRemotePlaybackIds"/> also wipes <c>_connectOriginatedPlayback</c>
+    /// (the audio-first rule a Connect-originated session depends on) plus the per-playable video-recovery and
+    /// audio-fallback latches. A refresh triggered by a mere availability edge passes false.</para></summary>
+    public async Task RefreshCurrentMediaKindAsync(bool forceReloadIfVideo = false, bool clearConnectAudioFirst = true,
+        CancellationToken ct = default)
     {
         if (ShouldPlayAsVideo is null) return;   // hooks unwired → the kind can never be anything but audio
         if (!RouteLocal()) return;               // a remote device owns playback — never reload locally
-        ClearRemotePlaybackIds();                // explicit local media intent ends Connect's audio-first preference
+        if (clearConnectAudioFirst) ClearRemotePlaybackIds();   // explicit local media intent ends Connect's audio-first preference
         await _lock.WaitAsync(ct).ConfigureAwait(false);
         try
         {

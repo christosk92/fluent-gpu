@@ -98,6 +98,11 @@ public sealed class Services
     /// via the lazy <c>queryArtistOverview</c>. Stable wrapper; the live provider is installed after login, offline/fake
     /// it is the permanently-offline <see cref="NullArtistStatsService"/>. The Library artist surface never reads it.</summary>
     public SwitchableArtistStatsService ArtistStats { get; }
+    /// <summary>The artist chart's step two: the SpClient <c>artist-top-tracks-extensions</c> list (up to 50) enriched over
+    /// the shared extended-metadata transport and merged onto the overview seed. Same page scope as <see cref="ArtistStats"/>
+    /// — only the standalone <c>ArtistPage</c> chart drives it. Offline/fake it is <see cref="NullArtistPopularTracksService"/>,
+    /// which hands the seed straight back.</summary>
+    public SwitchableArtistPopularTracksService ArtistPopularTracks { get; }
     /// <summary>Music-video detection + the video↔audio file-id map (extended-metadata, etag-cached). Stable wrapper; the
     /// live Spotify implementation is installed after login. Offline it is a no-op (<see cref="NoVideoService"/>).</summary>
     public SwitchableVideoService Video { get; }
@@ -170,6 +175,7 @@ public sealed class Services
         Lyrics = lyrics;
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
         ArtistStats = new SwitchableArtistStatsService(new NullArtistStatsService());
+        ArtistPopularTracks = new SwitchableArtistPopularTracksService(new NullArtistPopularTracksService());
         Video = new SwitchableVideoService(new NoVideoService());
         UserProfiles = new SwitchableUserProfileService(new NullUserProfileService());
         Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
@@ -436,6 +442,7 @@ public sealed class Services
         WhatsNew.SetInner(new NullWhatsNewService());
         Concerts.SetInner(new NullConcertService());   // concert discovery back offline until the next live login
         ArtistStats.SetInner(new NullArtistStatsService());   // drop the session-bound overview provider until the next live login
+        ArtistPopularTracks.SetInner(new NullArtistPopularTracksService());   // …and its spclient/metadata-bound step two
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host
         if (RealPlaylistMutations is { } pmSrc)

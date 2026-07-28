@@ -165,6 +165,20 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             _ = PublishAsync(reason, isActive);
     }
 
+    /// <summary>Publish the current player state because something OUTSIDE the playback-event stream changed what the wire
+    /// says — today: a music-video association landing under an already-playing track (the badge-only upgrade), which adds
+    /// the track's <c>associated_video_id</c> + the <c>switch-to-video</c> offer without any host/kind change. No playback
+    /// event fires for that, and the steady-state change gate below would swallow it (its key covers transport state only),
+    /// so this publishes UNGATED — callers must therefore only invoke it on a real edge.</summary>
+    public void PublishStateChanged()
+    {
+        if (_state.CurrentTrack is null) return;
+        // Retired ownership (we handed playback to another device) mutes the event path too — republishing here would
+        // re-announce us as active on the cluster, stealing it back over a badge.
+        lock (_gate) { if (_ownershipRetired) return; }
+        _ = PublishAsync(PutStateReasonKind.PlayerStateChanged, true, force: true);
+    }
+
     public void PublishInactive()
     {
         lock (_gate) _ownershipRetired = true;
@@ -178,7 +192,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
 
     bool IsLocallyPlaying() => _state.CurrentTrack is not null && _state.IsPlaying;
 
-    async Task PublishAsync(PutStateReasonKind reason, bool isActive)
+    async Task PublishAsync(PutStateReasonKind reason, bool isActive, bool force = false)
     {
         var connId = _connectionId();
         if (string.IsNullOrEmpty(connId)) return;
@@ -191,7 +205,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
             string key = reason + "|" + isActive + "|" + (snap?.Track.Uri ?? "") + "|" + (snap?.Track.Uid ?? "")
                 + "|" + (snap?.IsPlaying ?? false) + "|" + (snap?.IsPaused ?? false) + "|" + (snap?.Shuffle ?? false) + "|" + (snap?.Repeat ?? RepeatMode.Off)
                 + "|" + ((snap?.PositionMs ?? 0) / 1000) + "|" + (int)Math.Round((snap?.Volume01 ?? 0) * 100) + "|" + NextSig(snap);
-            if (reason is PutStateReasonKind.PlayerStateChanged or PutStateReasonKind.VolumeChanged
+            if (!force && reason is PutStateReasonKind.PlayerStateChanged or PutStateReasonKind.VolumeChanged
                 && key == _lastPublishKey) return;
             _lastPublishKey = key;
             mid = ++_messageId;

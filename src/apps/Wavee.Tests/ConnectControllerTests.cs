@@ -564,6 +564,37 @@ public class ConnectControllerTests
         Assert.Equal(1, Volatile.Read(ref videoLoads));
     }
 
+    /// <summary>The Connect guard: a refresh that is NOT an explicit local media intent (the availability edge behind a
+    /// music-video association landing) must not clear the remote playback ids — doing so wipes _connectOriginatedPlayback
+    /// and silently defeats the audio-first rule for a Connect-originated session. The user's own click still does.</summary>
+    [Fact]
+    public async Task AvailabilityEdgeRefresh_KeepsConnectAudioFirst_UnlikeAnExplicitMediaIntent()
+    {
+        var audio = new RecordingAudioHost();
+        var video = new RecordingAudioHost();
+        var projection = new NowPlayingProjection("us", () => 0);
+        int videoLoads = 0;
+        using var controller = new PlaybackController(
+            audio, new StubTrackResolver(), projection, Ctx("spotify:track:a"), "us", videoHost: video);
+        controller.ShouldPlayAsVideo = _ => true;
+        controller.LoadCurrentVideoAsync = (_, _) => { Interlocked.Increment(ref videoLoads); return Task.FromResult(true); };
+        byte[] payload = Encoding.UTF8.GetBytes(
+            "{\"command\":{\"endpoint\":\"play\",\"context\":{\"uri\":\"spotify:playlist:p\"}}}");
+        await controller.HandleRemoteCommandAsync(new ConnectCommand(
+            ConnectCmd.Play, "play", "remote-play", 8, "spotify-controller", 0, false, payload));
+        Assert.Equal(PlayableKind.Audio, controller.CurrentMediaKind);
+
+        await controller.RefreshCurrentMediaKindAsync(clearConnectAudioFirst: false);
+
+        Assert.Equal(PlayableKind.Audio, controller.CurrentMediaKind);   // still audio-first — the ids survived
+        Assert.Equal(0, Volatile.Read(ref videoLoads));
+
+        await controller.RefreshCurrentMediaKindAsync();                 // an explicit intent still restores video
+
+        Assert.Equal(PlayableKind.Video, controller.CurrentMediaKind);
+        Assert.Equal(1, Volatile.Read(ref videoLoads));
+    }
+
     [Fact]
     public async Task InboundTransfer_DecodesInnerState_DerivesGid_AndStartsPausedAtPosition()
     {

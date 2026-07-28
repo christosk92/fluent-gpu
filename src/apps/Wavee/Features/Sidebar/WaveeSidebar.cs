@@ -622,15 +622,19 @@ sealed class SidebarCreateButton : Component
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
 
-        var items = new MenuFlyoutItem[]
-        {
-            new(Loc.Get(Strings.Sidebar.CreatePlaylist), Invoke: _onPlaylist),
-            new(Loc.Get(Strings.Sidebar.CreateFolder),   Invoke: _onFolder),
-        };
-
+        // The menu labels are built at OPEN time, not at render time. Loc.Get reads Localization.CultureEpoch, so
+        // resolving them here would subscribe this otherwise-static button to the culture epoch and re-render it on
+        // every flush that touches it — ×4, since the sidebar keeps both the expanded and compact bodies mounted and
+        // the shell mounts a second sidebar for the narrow drawer. Deferring also picks up a culture change that
+        // happened while the flyout was closed.
         void Toggle()
         {
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            var items = new MenuFlyoutItem[]
+            {
+                new(Loc.Get(Strings.Sidebar.CreatePlaylist), Invoke: _onPlaylist),
+                new(Loc.Get(Strings.Sidebar.CreateFolder),   Invoke: _onFolder),
+            };
             handle.Value = svc.Open(
                 () => anchor.Value,
                 () => MenuFlyout.Create(items, () => handle.Value?.Close()),

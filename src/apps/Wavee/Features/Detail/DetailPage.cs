@@ -82,6 +82,9 @@ sealed class DetailPage : Component
                 {
                     DetailKind.Playlist when pid is not null => c.IsBulk || c.Uri == pid,
                     DetailKind.Liked => c.IsBulk || c.Kind == Wavee.Core.CollectionKind.Liked,
+                    // An open ALBUM refreshes on a Bulk only: the async music-video detection folds its per-track
+                    // HasVideo flips into one bulk change, which would otherwise stay invisible until re-navigation.
+                    DetailKind.Album => c.IsBulk,
                     _ => false,
                 };
                 if (!relevant) return;

@@ -127,3 +127,27 @@ docs/plans/wavee/wavee-playplay-*.md
 # On-demand junction helper for the private package (machine-local).
 link-playplay.ps1
 .playplay-link
+
+# Next/Vite prototype site parked under app/ (NOT Wavee — Wavee lives in app/Wavee*
+# and/or src/apps/Wavee*). Ignore site build/deps/logs only.
+app/.next/
+app/node_modules/
+app/dist/
+app/.openai/
+app/.claude/
+app/app/
+app/package.json
+app/package-lock.json
+app/tsconfig.json
+app/next-env.d.ts
+app/.prototype-server*.log
+app/commandbar-*.png
+
+# Local scratchpads / throwaway captures (not design canon, not product code).
+ops/scratch/
+docs/prototypes/
+docs/plans/*.html
+tmp/
+tmp_*/
+tmp_saz_*/
+*.saz

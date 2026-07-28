@@ -34,6 +34,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// rootlist + collection sync stores headers only). Null offline/in tests → reads stay pure store lookups.</summary>
     public Func<string, CancellationToken, Task>? OnDemandFetch { get; set; }
 
+    /// <summary>Set by the live bootstrap: batch music-video detection for a track list this source just served. Liked
+    /// Songs is the caller that needs it — it never routes through <see cref="OnDemandFetch"/> (<c>EnsureFetchedAsync</c>
+    /// gates playlist/album/artist only), so nothing else would ever detect its rows. Fire-and-forget; null in tests.</summary>
+    public Func<IReadOnlyList<string>, Task>? DetectVideos { get; set; }
+
     /// <summary>Best-effort cover-palette hydration for playlist reads. Unlike <see cref="OnDemandFetch"/>, this runs
     /// for warm/resident playlists too; the live implementation is fire-and-forget safe and publishes through Store.</summary>
     public Func<string, CancellationToken, Task>? EnsurePlaylistPalette { get; set; }
@@ -268,6 +273,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             var t = _store.GetTrack(items[i].Uri);
             if (t is null) continue;   // offline-first inner join: a not-yet-hydrated member has no row until it lands
             list.Add(items[i].AddedAtMs > 0 ? t with { AddedAt = DateTimeOffset.FromUnixTimeMilliseconds(items[i].AddedAtMs) } : t);
+        }
+        if (DetectVideos is { } detect && list.Count > 0)
+        {
+            var uris = new List<string>(list.Count);
+            for (int i = 0; i < list.Count; i++) uris.Add(list[i].Uri);
+            try { _ = detect(uris); } catch { }   // fire-and-forget: the read never waits on (or fails from) detection
         }
         return Task.FromResult<IReadOnlyList<Track>>(list);
     }

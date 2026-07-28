@@ -91,9 +91,12 @@ public class VideoAssociationTests
 
         Assert.NotNull(captured);
         var req = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(captured!.Body));
-        var query = Assert.Single(Assert.Single(req.EntityRequest).Query);
-        Assert.Equal(Xm.ExtensionKind.VideoAssociations, query.ExtensionKind);
+        // One EntityRequest, two kinds: 99 (etag-conditional) and the co-batched 182 hint.
+        var queries = Assert.Single(req.EntityRequest).Query;
+        Assert.Equal(2, queries.Count);
+        var query = Assert.Single(queries, q => q.ExtensionKind == Xm.ExtensionKind.VideoAssociations);
         Assert.Equal("prevtag", query.Etag);   // the etag rode the ExtensionQuery
+        Assert.Contains(queries, q => q.ExtensionKind == Xm.ExtensionKind.ConsumptionExperienceTrait);
     }
 
     [Fact]
@@ -121,6 +124,117 @@ public class VideoAssociationTests
         Assert.True(DateTimeOffset.UtcNow - a.FetchedAt < TimeSpan.FromMinutes(1));   // freshness bumped
     }
 
+    // ── the ≤300-uri batch slice ─────────────────────────────────────────────────────────────────────────────────────
+    // Nothing below the service bounds a batch (MetadataChunking splits by BYTES, ExtensionEtagCache takes the whole
+    // list), so a big container must be sliced HERE or it goes out as one 10k-entity request body.
+    [Fact]
+    public async Task Detect_SlicesLargeBatches_At300UrisPerRequest()
+    {
+        var store = new InMemoryStore();
+        var uris = new List<string>(701);
+        for (int i = 0; i < 701; i++) uris.Add($"spotify:track:{i:D22}");
+
+        var counts = new List<int>();
+        var svc = Service(store, (req, _) =>
+        {
+            var parsed = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body));
+            counts.Add(parsed.EntityRequest.Count);   // one EntityRequest per entity (kinds are grouped INSIDE it)
+            return new HttpResp(200, new Dictionary<string, string>(), new Xm.BatchedExtensionResponse().ToByteArray());
+        });
+        await svc.DetectAsync(uris, CT);
+
+        Assert.Equal(new[] { 300, 300, 101 }, counts);
+    }
+
+    [Fact]
+    public async Task Detect_UnderTheCap_StaysOneRequest()
+    {
+        var store = new InMemoryStore();
+        var uris = new List<string>(300);
+        for (int i = 0; i < 300; i++) uris.Add($"spotify:track:{i:D22}");
+
+        int posts = 0;
+        var svc = Service(store, (_, _) => { posts++; return new HttpResp(200, new Dictionary<string, string>(), new Xm.BatchedExtensionResponse().ToByteArray()); });
+        await svc.DetectAsync(uris, CT);
+
+        Assert.Equal(1, posts);
+    }
+
+    // ── canonical-id recovery (alias/relinked ids 404 on kind 99) ─────────────────────────────────────────────────────
+    const string GidHex = "3c14b1c9a7d94f0e9d2b8a6f5e4c3b2a";
+
+    [Fact]
+    public async Task Detect_AliasId_RecoversThroughCanonicalUri_AndStoresUnderTheAlias()
+    {
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("ALIAS"));
+
+        var posts = new List<HashSet<Xm.ExtensionKind>>();
+        var svc = Service(store, (req, _) =>
+        {
+            var kinds = KindsOf(req);
+            posts.Add(kinds);
+            var resp = new Xm.BatchedExtensionResponse();
+            if (kinds.Contains(Xm.ExtensionKind.TrackV4))
+            {
+                resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.TrackV4,
+                    Entry("spotify:track:ALIAS", 200, null, TrackV4Payload("spotify:track:CANON"))));
+                resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.PlaybackTrait,
+                    Entry("spotify:track:ALIAS", 200, null, PlaybackTraitPayload(GidHex))));
+            }
+            else if (kinds.Contains(Xm.ExtensionKind.ConsumptionExperienceTrait))
+            {
+                resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.VideoAssociations, Entry("spotify:track:ALIAS", 404, null, null)));
+                resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.ConsumptionExperienceTrait,
+                    Entry("spotify:track:ALIAS", 200, null, CePayload(hasVideo: true))));
+            }
+            else   // the recovery batch: kind 99 on the CANONICAL id
+            {
+                resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.VideoAssociations, Entry("spotify:track:CANON", 200, "etagCANON",
+                    VaPayload("spotify:track:VID", ("ab6742d3000053b751ab106a1c8edd63fa934530", 0, 2560, 1440)))));
+            }
+            return new HttpResp(200, new Dictionary<string, string>(), resp.ToByteArray());
+        });
+        await svc.DetectAsync(new[] { "spotify:track:ALIAS" }, CT);
+
+        Assert.Equal(3, posts.Count);   // detect (99+182) → canonical lookup (TrackV4+212) → kind 99 on the canonical id
+
+        var a = store.GetVideoAssociation("spotify:track:ALIAS");   // keyed by the REQUESTED uri, not the canonical one
+        Assert.NotNull(a);
+        Assert.True(a!.HasVideo);
+        Assert.Equal("spotify:track:VID", a.CounterpartUri);
+        Assert.Equal("ab6742d3000053b751ab106a1c8edd63fa934530", Assert.Single(a.Files).FileIdHex);
+        Assert.Equal(GidHex, a.VideoGidHex);        // kind 212 field 2 → Connect's associated_video_id
+        Assert.Null(a.Etag);                        // the canonical entity's etag must never ride the alias row
+        Assert.True(store.GetTrack("spotify:track:ALIAS")!.HasVideo);
+        Assert.Null(store.GetVideoAssociation("spotify:track:CANON"));
+    }
+
+    [Fact]
+    public async Task Detect_404_WithoutTheConsumptionHint_DoesNotAskForACanonical()
+    {
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("NONE"));
+
+        int posts = 0;
+        var svc = Service(store, (req, _) =>
+        {
+            posts++;
+            var kinds = KindsOf(req);
+            Assert.DoesNotContain(Xm.ExtensionKind.TrackV4, kinds);   // no canonical lookup may be attempted
+            var resp = new Xm.BatchedExtensionResponse();
+            resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.VideoAssociations, Entry("spotify:track:NONE", 404, null, null)));
+            resp.ExtendedMetadata.Add(Arr(Xm.ExtensionKind.ConsumptionExperienceTrait,
+                Entry("spotify:track:NONE", 200, null, CePayload(hasVideo: false))));
+            return new HttpResp(200, new Dictionary<string, string>(), resp.ToByteArray());
+        });
+        await svc.DetectAsync(new[] { "spotify:track:NONE" }, CT);
+
+        Assert.Equal(1, posts);
+        Assert.False(store.GetVideoAssociation("spotify:track:NONE")!.HasVideo);
+        Assert.False(store.GetTrack("spotify:track:NONE")!.HasVideo);
+    }
+
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────────────────────────
     static SpotifyVideoService Service(IStore store, Func<HttpReq, int, HttpResp> responder)
         => new(new ExtendedMetadataSource(new FakeExchange(responder), () => "https://spclient.test", () => Ctx), store);
@@ -136,6 +250,42 @@ public class VideoAssociationTests
         if (payload != null) d.ExtensionData = new Any { Value = payload };   // type_url is ignored by the source
         return d;
     }
+
+    static Xm.EntityExtensionDataArray Arr(Xm.ExtensionKind kind, Xm.EntityExtensionData entry)
+    {
+        var array = new Xm.EntityExtensionDataArray { ExtensionKind = kind };
+        array.ExtensionData.Add(entry);
+        return array;
+    }
+
+    static HashSet<Xm.ExtensionKind> KindsOf(HttpReq req)
+    {
+        var parsed = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body));
+        var kinds = new HashSet<Xm.ExtensionKind>();
+        foreach (var er in parsed.EntityRequest)
+            foreach (var q in er.Query) kinds.Add(q.ExtensionKind);
+        return kinds;
+    }
+
+    // Kind 182 on the wire: field 4 (length-delimited) is the experience-id blob; 0x02 = music video.
+    static ByteString CePayload(bool hasVideo)
+        => hasVideo
+            ? ByteString.CopyFrom(new byte[] { 0x22, 0x03, 0x01, 0x02, 0x04 })
+            : ByteString.CopyFrom(new byte[] { 0x22, 0x02, 0x01, 0x04 });
+
+    // Kind 212 on the wire: field 2 (length-delimited) carries the associated video's 16-byte gid.
+    static ByteString PlaybackTraitPayload(string gidHex)
+    {
+        var gid = Convert.FromHexString(gidHex);
+        var bytes = new byte[gid.Length + 2];
+        bytes[0] = 0x12;
+        bytes[1] = (byte)gid.Length;
+        gid.CopyTo(bytes, 2);
+        return ByteString.CopyFrom(bytes);
+    }
+
+    static ByteString TrackV4Payload(string canonicalUri)
+        => new Wavee.Protocol.Metadata.Track { Name = "aliased", CanonicalUri = canonicalUri }.ToByteString();
 
     static ByteString VaPayload(string counterpartUri, params (string FileHex, int Variant, int W, int H)[] files)
     {

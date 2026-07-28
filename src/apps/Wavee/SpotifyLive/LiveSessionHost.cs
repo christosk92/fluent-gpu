@@ -283,6 +283,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 },
                 seedId);
             svc.Playback.AttachLocalOutputs(localOutputs);
+            // …and let the CONNECT wire name the endpoint we render to (desktop publishes it on every PutState).
+            connect.AudioOutputDeviceName = localOutputs.CurrentOutputDeviceName;
             localOutputs.Activate(uiPost);
         }
         // The picker's local rows are truthful/enabled iff local playback is actually supported (an audio stack exists) —
@@ -421,7 +423,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.AlbumEnrichment.SetInner(new SpotifyAlbumEnrichmentService(pathfinderResource, em, store, metadataLog, extensionCache));
             // Standalone artist-page header stats (queryArtistOverview) — lazy, page-scoped; the Library artist surface
             // never reads it (100% V4). The discography itself is served from V4, not this.
-            svc.ArtistStats.SetInner(new SpotifyArtistStatsService(pathfinderResource, store));
+            var artistLog = spclientLog.With("artist.popular");
+            svc.ArtistStats.SetInner(new SpotifyArtistStatsService(pathfinderResource, store, artistLog));
+            // Step two of the same chart: the SpClient artist-top-tracks-extensions list (~50 uris) hydrated over the SHARED
+            // metadata service and merged onto that overview seed. Every dep is required — a half-wired go-live throws here
+            // rather than pinning the chart at 10 rows forever.
+            var popularTracks = new SpotifyArtistPopularTracksService(live.Pipeline, () => live.BaseUrl, md, store, artistLog);
+            svc.ArtistPopularTracks.SetInner(popularTracks);
             // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
             var videoSvc = new SpotifyVideoService(em, store, metadataLog, extensionCache);
             svc.Video.SetInner(videoSvc);
@@ -441,6 +449,18 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.UserProfiles.SetInner(userProfiles);
             // Let the player bar reflect the now-playing track's (async-detected) video via the store change stream.
             svc.Playback.AttachStore(store);
+            // …and let the CONNECT wire reflect it too: the gid the state builder stamps as `associated_video_id` +
+            // `switch-to-video`, and the one extra PutState a mid-track association land needs (no playback event fires
+            // for a badge-only land, so nothing else would re-publish it).
+            connect.AssociatedVideoGid = uri => store.GetVideoAssociation(uri)?.VideoGidHex;
+            svc.Playback.RepublishConnectState = () => connect.RepublishPlayerState();
+            // The detection hooks the surfaces that never route through OnDemandFetch fire: the artist chart, Liked Songs,
+            // the queue, online search rows and live (sync-loop) playlist opens. Each is fire-and-forget so a hook never
+            // sits on a read/render path; the batch itself is etag-cached and ≤300 uris per request inside the service.
+            var detectVideos = DetectHook(svc.Video, cts.Token);
+            popularTracks.DetectVideos = detectVideos;
+            svc.Playback.DetectVideos = detectVideos;
+            sync.OnPlaylistHydrated = uri => DetectContainerVideos(svc.Video, store, uri, cts.Token);
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.Sync = sync;   // on-open SWR: playlists route through the loop (blocking first fetch / background revalidate)
@@ -457,8 +477,21 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
                     DetectContainerVideos(svc.Video, store, uri, c);
                 };
+                libSrc.DetectVideos = detectVideos;   // Liked Songs never routes through OnDemandFetch
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
-                libSrc.LiveSearch = (q, facet, offset, limit, c) => FetchSearchAsync(pathfinder, q, facet, offset, limit, c);   // paged online search
+                libSrc.LiveSearch = async (q, facet, offset, limit, c) =>
+                {
+                    // Online search rows are transient mapper output (never store joins), so warm their associations at
+                    // read time: the badge comes from the mapped totalCount, but PLAY-time correctness needs the cache.
+                    var results = await FetchSearchAsync(pathfinder, q, facet, offset, limit, c).ConfigureAwait(false);
+                    if (results is { Tracks.Count: > 0 })
+                    {
+                        var trackUris = new List<string>(results.Tracks.Count);
+                        foreach (var t in results.Tracks) trackUris.Add(t.Uri);
+                        _ = detectVideos(trackUris);
+                    }
+                    return results;
+                };   // paged online search
                 libSrc.LiveSuggest = async (q, c) => (await FetchSuggestRichAsync(pathfinder, q, c).ConfigureAwait(false)).Queries;   // omnibar as-you-type suggestions
                 libSrc.LiveSuggestRich = (q, c) => FetchSuggestRichAsync(pathfinder, q, c);
             }
@@ -640,6 +673,17 @@ public sealed class LiveSessionHost : IAsyncDisposable
         catch (Exception ex) { log.Info("AUDIO FORMAT PROBE failed: " + ex.Message); }
     }
 
+    // The shared detect hook handed to the surfaces that own their own track lists (artist chart, Liked, queue, search).
+    // It returns a COMPLETED task on purpose: the callers sit on read/render paths, so the batch runs off-thread and its
+    // failures die here rather than surfacing as an unobserved exception.
+    static Func<IReadOnlyList<string>, Task> DetectHook(IVideoService video, CancellationToken ct)
+        => uris =>
+        {
+            if (uris.Count > 0)
+                _ = Task.Run(async () => { try { await video.DetectAsync(uris, ct).ConfigureAwait(false); } catch { } }, ct);
+            return Task.CompletedTask;
+        };
+
     // After a container's tracklist hydrates, batch-detect which of its tracks have a music video (fills the row indicator).
     // Fire-and-forget off the open path — best-effort, etag-cached, and a no-op when the container has no resident tracks yet.
     static void DetectContainerVideos(IVideoService video, IStore store, string uri, CancellationToken ct)
@@ -660,6 +704,15 @@ public sealed class LiveSessionHost : IAsyncDisposable
             {
                 uris = new List<string>(tracks.Count);
                 foreach (var t in tracks) uris.Add(t.Uri);
+            }
+        }
+        else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
+        {
+            // The artist page's popular chart (the discography's albums detect on their own open).
+            if (store.GetArtist(uri)?.TopTracks is { Count: > 0 } top)
+            {
+                uris = new List<string>(top.Count);
+                foreach (var t in top) uris.Add(t.Uri);
             }
         }
         if (uris is not { Count: > 0 }) return;

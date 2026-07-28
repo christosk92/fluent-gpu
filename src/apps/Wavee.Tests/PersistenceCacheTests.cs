@@ -246,6 +246,26 @@ public class CachedStoreTests
     }
 
     [Fact]
+    public void VideoAssociation_VideoGidHex_RoundTrips_AndLegacyRowsWithoutItStillLoad()
+    {
+        var cold = new MemCold();
+        const string gid = "3c14b1c9a7d94f0e9d2b8a6f5e4c3b2a";   // 32-hex associated-video gid (Connect's associated_video_id)
+        new CachedStore(cold).UpsertVideoAssociation(new VideoAssociation("spotify:track:t1", true, "spotify:track:vid",
+            Array.Empty<VideoFileRef>(), null, DateTimeOffset.UtcNow, 0, gid));
+        Assert.Equal(gid, new CachedStore(cold).GetVideoAssociation("spotify:track:t1")!.VideoGidHex);
+
+        // A row persisted BEFORE VideoGidHex existed must still deserialize (the field is optional and trails the record).
+        cold.VideoAssoc["spotify:track:legacy"] = System.Text.Encoding.UTF8.GetBytes(
+            "{\"Uri\":\"spotify:track:legacy\",\"HasVideo\":true,\"CounterpartUri\":\"spotify:track:vid\"," +
+            "\"Files\":[],\"Etag\":\"e1\",\"FetchedAt\":\"2026-01-01T00:00:00+00:00\",\"OfflineTtlSeconds\":0}");
+        var legacy = new CachedStore(cold).GetVideoAssociation("spotify:track:legacy");
+        Assert.NotNull(legacy);
+        Assert.True(legacy!.HasVideo);
+        Assert.Equal("spotify:track:vid", legacy.CounterpartUri);
+        Assert.Null(legacy.VideoGidHex);
+    }
+
+    [Fact]
     public void AllEntityKinds_RoundTrip()
     {
         var cold = new MemCold();
