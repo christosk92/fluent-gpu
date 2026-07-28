@@ -5,14 +5,16 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Signals;
 using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
 // Contextual content for the detail-track CommandBar. TrackList owns the single persistent surface and swaps this
-// projection in place of the browsing commands. Responsive.Of measures the real command lane, so labels collapse to
-// glyphs and then to the essential count/Play/More/Clear set without relying on window-size breakpoints.
+// projection in place of the browsing commands. Self-measures the command lane (ResponsiveBox pattern) so labels
+// collapse to glyphs / essentials — AND reads SelectionModel.Version in the SAME Render that builds count + action
+// labels (never via a frozen Responsive.Of closure, which previously left "1 selected" beside "Play 4 next").
 sealed class SelectionCommandBar : Component
 {
     readonly SelectionModel _sel;
@@ -21,6 +23,7 @@ sealed class SelectionCommandBar : Component
     readonly Func<PlaylistHost?>? _host;
     readonly bool _standalone;
     readonly float _bottomPadding;
+    readonly Signal<float> _laneW = new(0f);
 
     public SelectionCommandBar(
         SelectionModel sel,
@@ -56,15 +59,28 @@ sealed class SelectionCommandBar : Component
         var menuAnchor = UseRef<NodeHandle>(default);
         var menuHandle = UseRef<OverlayHandle?>(null);
         var previousCount = UseRef(0);
-        _ = _sel.Version.Value;
+
+        _ = _sel.Version.Value;                      // selection → rebuild count + action labels together
+        float lane = _laneW.Value;                   // measured width → fit tier
+        float effective = lane > 0.5f ? lane : 720f;
         int count = SelectedTrackCount();
         bool wasVisible = previousCount.Value > 0;
         previousCount.Value = count;
         if (count == 0) return new BoxEl();
 
-        Element content = Responsive.Of(
-            width => Build(acts, overlay, menuAnchor, menuHandle, count, FitFor(width), wasVisible),
-            fallback: 720f);
+        Element content = new BoxEl
+        {
+            Direction = 1,
+            Grow = 1f,
+            MinWidth = 0f,
+            // Parent sizes us; report the real lane width (same contract as ResponsiveBox).
+            OnBoundsChanged = r =>
+            {
+                if (r.W > 0f && MathF.Abs(r.W - _laneW.Peek()) > 0.5f)
+                    _laneW.Value = r.W;
+            },
+            Children = [Build(acts, overlay, menuAnchor, menuHandle, count, FitFor(effective), wasVisible)],
+        };
         if (!_standalone) return content;
 
         return new BoxEl

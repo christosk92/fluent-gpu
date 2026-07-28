@@ -1128,22 +1128,14 @@ sealed class TrackList : Component
         }
         else if (_showToolbar)
         {
-            // One Fluent command surface owns both action commands and the sortable column projection. Keeping the
-            // header inside the same clipped border removes the false "second toolbar" seam while preserving the exact
-            // row-grid tracks shared with TrackRow.
+            // One surface owns both action commands and the sortable column projection (same row-grid tracks as
+            // TrackRow). Chromeless — no fill/border — so the bar floats on the page backdrop.
             chromeChildren =
             [
                 new BoxEl
                 {
                     Direction = 1,
                     MinWidth = 0f,
-                    Corners = CornerRadius4.All(Radii.Control),
-                    Fill = Tok.FillControlDefault,
-                    HoverFill = Tok.FillControlDefault,
-                    BorderWidth = 1f,
-                    BorderColor = Tok.StrokeControlDefault,
-                    HoverBorderColor = Tok.StrokeControlDefault,
-                    ClipToBounds = true,
                     Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
                     Children = [Toolbar(labeled, tier), header],
                 },
@@ -1297,22 +1289,14 @@ sealed class TrackList : Component
 
     Element CommandBarSurface(string mode, Element content)
     {
-        // In the desktop list this is the first row of Chrome's unified command+column surface, so Chrome owns the
-        // border/corners. The vertical sticky projection has no column row beside it and therefore retains standalone
-        // Flyout/CommandBar chrome.
-        bool standalone = _verticalHeader;
+        // Chromeless lane (browsing + selection): no fill/border — floats on the page backdrop. Mode swap still
+        // animates via the keyed child.
         return new BoxEl
         {
             Direction = 1,
             Height = 44f,
             MinWidth = 0f,
             Padding = new Edges4(6f, 5f, 6f, 5f),
-            Corners = standalone ? CornerRadius4.All(Radii.Control) : default,
-            Fill = standalone ? Tok.FillControlDefault : ColorF.Transparent,
-            HoverFill = standalone ? Tok.FillControlDefault : ColorF.Transparent,
-            BorderWidth = standalone ? 1f : 0f,
-            BorderColor = standalone ? Tok.StrokeControlDefault : ColorF.Transparent,
-            HoverBorderColor = standalone ? Tok.StrokeControlDefault : ColorF.Transparent,
             ClipToBounds = true,
             Children =
             [
