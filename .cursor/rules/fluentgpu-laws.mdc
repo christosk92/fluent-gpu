@@ -1,0 +1,19 @@
+---
+description: Non-negotiable FluentGpu/Wavee laws — read AGENTS.md before any edit
+alwaysApply: true
+---
+
+Before writing or editing ANY code in this repo, read `AGENTS.md` at the repo root — its laws are binding.
+The ones agents break most:
+
+- NEVER read/edit `src/apps/.native/**`, `src/apps/Wavee.PlayPlay/**`, `private-runtimes/**` (separate private repo).
+- Props FREEZE at mount: `Embed.Comp(() => new T { Field = v })` runs once — changing data reaches a child only via
+  a signal, `UseProps`/`[Props]`, context, or a `Key` remount. Width-derived props must be folded into the `Key`.
+- Never hardcode widths/breakpoints/hex/durations. Use `Responsive.Of`/`UseMeasuredWidth` + hysteresis tiers,
+  `Tok.*`/`WaveeColors` tokens, `Spacing.*`, `MotionTok.*`. Grep for the house primitive before writing a new one.
+- Flex laws: one elastic lane per row (`Grow=1,Basis=0,MinWidth=0`); ellipsis needs `MinWidth=0`; existing
+  `Shrink=0` is a deliberate contract — don't remove it.
+- Zero managed alloc in frame phases 6–13: no `new`/LINQ/closures in bind thunks, effects, or per-frame code.
+- Evidence before "done": `dotnet build src/FluentGpu.slnx` clean AND
+  `dotnet run --project src/FluentGpu.VerticalSlice` prints "ALL CHECKS PASSED". The user runs the app themselves —
+  don't launch it to verify. No `FG_*` env kill switches for new behavior.

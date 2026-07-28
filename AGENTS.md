@@ -27,11 +27,11 @@ command list each frame. Updates are surgical — **no full-app re-render, no gl
 
 ## Build & test (use these exact commands)
 
-There is no single solution build you should rely on; build/run the targets you need.
-
 ```bash
-# Build + run the headless golden-check harness — THE verification gate (do this after every engine change):
-dotnet build src/FluentGpu.VerticalSlice
+# The canonical build (all 8 projects) — must be clean:
+dotnet build src/FluentGpu.slnx
+
+# Run the headless golden-check harness — THE verification gate (do this after every engine change):
 dotnet run   --project src/FluentGpu.VerticalSlice      # expect: "ALL CHECKS PASSED"
 # Local subset (CI must run the full suite — do not set FG_SUITE in CI):
 dotnet run   --project src/FluentGpu.VerticalSlice -- --suite scroll
@@ -76,6 +76,31 @@ computation; a property *binding* is a finer one. Three update paths, cheapest f
    closures in a bind thunk or hot effect. The harness asserts `FrameStats.HotPhaseAllocBytes == 0` on steady frames.
 10. High-frequency scalar? Bind it (`Slider.Create(FloatSignal)`), don't `setState` per move.
 
+## Craft laws — no free-hand values
+
+- **Spacing/radii**: `Spacing.*` (4px grid + semantic re-points) and `Radii.*` in `src/FluentGpu.Engine/Dsl/` —
+  never a bare pixel literal for padding/gaps.
+- **Color**: `Tok.*` semantic roles (`src/FluentGpu.Engine/Dsl/Tokens.cs`; app palette `WaveeColors`/`WaveeTokens`) —
+  never raw hex; frozen literals break live theme switching. The fill hierarchy encodes interaction state
+  (`FillControlDefault`/`Secondary`=hover/`Tertiary`=pressed).
+- **Motion**: `MotionTok.*` tokens / `MotionRecipes.*` (`src/FluentGpu.Engine/Animation/MotionTok.cs`,
+  `docs/guide/motion-recipes.md`) — never ad-hoc millisecond values, timers, or hand-rolled lerps. Orchestration is
+  declarative: `Element.{Transition,While*,Enter,Exit,Stagger,Layout}`. Reduced motion is a **value** the motion
+  system reads — an `if (reducedMotion)` branch in a hook is banned.
+- **Interaction states are declared, not hand-built**: `Fill`/`HoverFill`/`PressedFill` on `BoxEl` (or
+  `el.Interactive(...)`) — never a per-control state machine.
+- **Flex laws**: exactly one elastic lane per row (`Grow=1f, Basis=0f, MinWidth=0f`); ellipsizing text needs
+  `MinWidth=0f + MaxLines=1 + Trim=CharacterEllipsis`; fixed cells get `Shrink=0f`. Respect existing `Shrink=0f`
+  as a deliberate "this never gives" contract. Exemplar: `src/apps/Wavee/Components/TrackRow.cs`.
+- **Responsive = tier maps with hysteresis, never inline `if (width > N)` or hardcoded widths.** Measure with
+  `Responsive.Of` (`src/FluentGpu.Controls/Responsive.cs`) or `UseMeasuredWidth(quantum)`; derive ordered
+  pressure tiers (drop tertiary info → abbreviate → stack — never wrap); fold every width-derived prop into the
+  child's `Key` so a tier crossing remounts instead of leaving stale frozen props. Exemplars:
+  `src/apps/Wavee/Features/Detail/ArtistPopular.cs` (tier string in the row `Key`),
+  `src/apps/Wavee/Features/Detail/DetailLayoutBreakpoints.cs` (widen immediately, narrow past a 24-DIP dip).
+- **Long lists virtualize**: `Virtual.List`/`Virtual.Grid` (`src/FluentGpu.Controls/Virtual.cs`) — `Flow.For`
+  over thousands of rows is a guaranteed hitch.
+
 ## Async loading & skeletons — DERIVE, never hand-author
 
 There is **one** mechanism for the Pending / Ready / Empty / Failed lifecycle: the engine's `Skel.Region`. It **derives**
@@ -116,17 +141,17 @@ sealed class App : Component {
 
 | Area | File(s) |
 |---|---|
-| Signals runtime | `src/FluentGpu.Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
-| Hooks | `src/FluentGpu.Hooks/RenderContext.cs` (impl), `Component.cs` (surface) |
-| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Reconciler/Reconciler.cs` |
-| Element shapes / props / binds | `src/FluentGpu.Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` |
-| DSL helpers / modifiers | `src/FluentGpu.Dsl/Factories.cs`, `Modifiers.cs` |
+| Signals runtime | `src/FluentGpu.Engine/Foundation/Signals/{ReactiveCore,Signal,Effect,Memo}.cs` |
+| Hooks | `src/FluentGpu.Engine/Hooks/RenderContext.cs` (impl), `Component.cs` (surface) |
+| Reconcile / render-effects / For/Show / bindings / context | `src/FluentGpu.Engine/Reconciler/Reconciler.cs` |
+| Element shapes / props / binds | `src/FluentGpu.Engine/Dsl/Element.cs`, `ControlFlow.cs`, `Context.cs`, `ComponentEl.cs` |
+| DSL helpers / modifiers | `src/FluentGpu.Engine/Dsl/Factories.cs`, `Modifiers.cs` |
 | Controls | `src/FluentGpu.Controls/*.cs` (composition only — no new opcodes/columns) |
-| Frame loop / scheduling / compositor frame | `src/FluentGpu.Hosting/AppHost.cs` |
-| Layout / scoped relayout | `src/FluentGpu.Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
-| Retained scene (SoA, dirty flags, side-tables) | `src/FluentGpu.Scene/{SceneStore,Columns}.cs` |
-| Record → DrawList | `src/FluentGpu.Render/SceneRecorder.cs` |
-| Theming tokens | `src/FluentGpu.Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
+| Frame loop / scheduling / compositor frame | `src/FluentGpu.Engine/Hosting/AppHost.cs` |
+| Layout / scoped relayout | `src/FluentGpu.Engine/Layout/FlexLayout.cs`, `LayoutInvalidator.cs` |
+| Retained scene (SoA, dirty flags, side-tables) | `src/FluentGpu.Engine/Scene/{SceneStore,Columns}.cs` |
+| Record → DrawList | `src/FluentGpu.Engine/Render/SceneRecorder.cs` |
+| Theming tokens | `src/FluentGpu.Engine/Dsl/Tokens.cs` (`Tok`), `Theme.cs` |
 | Tests / golden checks | `src/FluentGpu.VerticalSlice/` (`Program.cs` + `Harness/` + `Suites/` + `Probes/`) |
 
 Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reconciler.Mount`/`Update` (and
@@ -137,6 +162,12 @@ Adding an `Element` type: assign a free `ElementTypeId`, then handle it in `Reco
 - .NET 10, C# 14, nullable enabled, `unsafe` allowed, NativeAOT-targeted. No reflection on hot paths; keep new
   code AOT-clean (delegates over reflection). Match the terse, XML-doc-commented style of nearby files.
 - Commit/push only when asked. Don't commit build output or diagnostics dumps (`*.dmp`/`*.gcdump` are gitignored).
+- **No `FG_*` env kill switches for new behavior** — the new path ships as the unconditional default (standing user
+  ruling; existing diag flags are unaffected).
+- **The user runs the app themselves.** Verify headlessly (build + VerticalSlice + `-- --screenshot <path>` for
+  pixels); don't launch the gallery/app to check your work unless asked.
+- Before writing any primitive (animation, breakpoint, skeleton, validator, easing, cache), grep for the house one
+  first — the #1 agent failure here is regenerating something that already exists and hardcoding around it.
 - The `docs/design/` tree is the canon-gated architecture authority; usage docs live in `docs/guide/`. As-built reactive model:
   `docs/design/subsystems/reconciler-hooks.md §0bis`.
 
