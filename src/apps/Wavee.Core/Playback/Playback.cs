@@ -69,7 +69,6 @@ public interface IPlaybackState : System.ComponentModel.INotifyPropertyChanged
     double Volume { get; }
     bool IsShuffle { get; }
     RepeatMode Repeat { get; }
-    Palette? Palette { get; }
     IReadOnlyList<QueueEntry> Queue { get; }
 
     // ── Stage G — widened surface (default members so existing providers keep working; the live projection overrides) ────

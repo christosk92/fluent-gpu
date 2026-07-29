@@ -55,6 +55,12 @@ sealed class TrackList : Component
     DetailHandlers _h;                                         // refreshed from _liveHandlers at the top of every render
     readonly IReadSignal<DetailHandlers?>? _liveHandlers;       // signal parent→child path: accent/actions must not freeze
     readonly bool _showToolbar;                                // false in the vertical layout (the header owns the toolbar)
+    // Chip derivation walks every track, so it is memoized on the track-list INSTANCE: the list is rebuilt (new
+    // reference) whenever enrichment lands, and re-derives then and only then. Never per render, never per frame.
+    readonly ChipCache _chipCache = new();
+    // The server's curated chip set, fetched once per Liked mount. Empty until it lands (or forever, offline), which
+    // is exactly when the derived fallback applies.
+    readonly Signal<IReadOnlyList<ContentFilterChip>> _serverChips = new(Array.Empty<ContentFilterChip>());
     readonly bool _embedded;                                   // true when hosted inside a compact pane (Library master-detail): the
                                                                // SAME virtualized list + cell, but no album trailing (About/Fans/More-by)
                                                                // so the rows ARE the scroller — the tier system still drops columns to fit.
@@ -141,6 +147,10 @@ sealed class TrackList : Component
     readonly HashSet<string> _recShown = new(StringComparer.Ordinal);   // every id ever shown → the accumulated skip set (non-repeating batches)
     readonly System.Threading.CancellationTokenSource _recCts = new();
     readonly Signal<int> _listCount = new(0);                  // ItemsView TOTAL (track rows + rec rows); _visibleCount stays the track count for §4.6
+    // The expanded row, by TRACK URI (not display index): a sort or filter reorders the list, and an index-keyed
+    // expansion would then open a different song than the one the user clicked. "" = nothing expanded.
+    // ONE row at a time — several open drawers would push the list around unpredictably while scrolling.
+    readonly Signal<string> _expandedUri = new("");
     bool _recsLive;                                            // the DATA half of the recs gate (see Render): refreshed each render, read by
                                                                // RowOrRecContent so an appended index can never render a header/rec row while the
                                                                // gate is off — the count signal is the primary gate, this is the belt-and-braces one
@@ -159,8 +169,19 @@ sealed class TrackList : Component
     readonly Signal<int> _toolbarMetricsEpoch = new(0);
     readonly float[] _toolbarWidths = [120f, 92f, 96f, 156f, 144f, 82f]; // conservative first-frame localized budgets
     DetailTrackCommandBarFit? _toolbarFit;
+    // The fit LATCHED at the moment search opened, with the pane width it was resolved against. While search is open the
+    // toolbar must not re-fit: promoting/evicting a command mid-flight changes the measured widths, which bumps
+    // _toolbarMetricsEpoch, which re-resolves and hands the width tween a NEW target — the box visibly jumps. A real
+    // pane resize (a different `available`) drops the latch and re-resolves once.
+    (float Available, DetailTrackCommandBarFit Fit)? _searchOpenFit;
     NodeHandle _searchButtonNode;
     bool _restoreSearchFocus;
+
+    /// <summary>The ONE search-disclosure duration. The width tween, the icon↔field cross-fade, the chrome brush
+    /// cross-fade and the compact pill's exit all run on it, so the box expanding and its styling resolving read as a
+    /// single motion instead of four overlapping ones.</summary>
+    internal const float SearchExpandMs = 260f;
+    internal const float SearchCollapseMs = 180f;
 
     static readonly LayoutTransition ToolbarCommandMotion = new(
         TransitionChannels.Position | TransitionChannels.Opacity,
@@ -169,10 +190,30 @@ sealed class TrackList : Component
         Exit: new EnterExit(Dx: 8f, Opacity: 0f, Active: true),
         ExitDynamics: TransitionDynamics.Tween(150f, Easing.FluentAccelerate));
 
+    // Reflow, never Reveal: the field must PUSH its neighbours through real layout. Reveal snaps the model bounds on
+    // frame 1 (neighbours jump) and overpaints them on the way back in.
     static readonly LayoutTransition SearchDisclosureMotion = new(
         TransitionChannels.Position | TransitionChannels.Size,
-        TransitionDynamics.Tween(260f, Easing.SmoothOut),
+        TransitionDynamics.Tween(SearchExpandMs, Easing.SmoothOut),
         Size: SizeMode.Reflow, Axes: SizeAxes.Width);
+
+    /// <summary>The icon↔field swap inside the growing box: a pure cross-fade on the disclosure's own curve, so the
+    /// content resolves WITH the width rather than popping in at either end.</summary>
+    static readonly LayoutTransition SearchSwapMotion = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(SearchExpandMs, Easing.SmoothOut),
+        Enter: new EnterExit(Opacity: 0f, Active: true),
+        Exit: new EnterExit(Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(SearchCollapseMs, Easing.FluentAccelerate));
+
+    /// <summary>The focus underline. Mounted only while focused, but it FADES rather than appearing — it is part of the
+    /// same chrome resolve as the fill and the border.</summary>
+    static readonly LayoutTransition SearchUnderlineMotion = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(SearchExpandMs, Easing.SmoothOut),
+        Enter: new EnterExit(Opacity: 0f, Active: true),
+        Exit: new EnterExit(Opacity: 0f, Active: true),
+        ExitDynamics: TransitionDynamics.Tween(SearchCollapseMs, Easing.FluentAccelerate));
 
     static readonly LayoutTransition ToolbarModeMotion = new(
         TransitionChannels.Position | TransitionChannels.Opacity,
@@ -201,7 +242,10 @@ sealed class TrackList : Component
     readonly record struct TrackRowsSnapshot(
         DetailModel Model, DetailConfig Config, DetailHandlers Handlers,
         TrackSort Sort, string Query, TrackFilterState Filters, IReadOnlySet<string>? Saved,
-        bool MarqueeDisabled, string? TopTrackId);
+        bool MarqueeDisabled, string? TopTrackId,
+        // The app-wide BPM·Key column opt-in. Carried in the SNAPSHOT (not read in SetFor) per the contract above:
+        // an appearance flag read outside the snapshot would recompute, compare equal, and never reach the rows.
+        bool TempoColumn = false);
 
     // The row/header column geometry for the active tier. Equality-gated: ColumnSet is a value record and the
     // TrackSize[] is the per-tier cached instance, so a re-render that does not cross a breakpoint compares equal and
@@ -284,7 +328,7 @@ sealed class TrackList : Component
     };
 
     // (ColumnSet — which optional columns are present at a tier — is the shared TrackRow.ColumnSet, so the header here and
-    // every shared cell agree on the build order: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration.)
+    // every shared cell agree on the build order: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Plays · Tempo · Duration · Video.)
     //
     // Drop order as the area narrows (most expendable first): Added-by (≥1) / Video (≥2) → Album (≥2) → Plays/Date (≥3)
     // → ♥ (≥4) → art-thumb (≥5). Plays exists only on album surfaces; Video follows any hydrated list that has one.
@@ -304,7 +348,8 @@ sealed class TrackList : Component
         // no-heart/no-video interaction profile of the vertical table is unchanged.
         ? new(Album: s.Config.ShowAlbumColumn && tier < 2, By: s.Model.HasAddedBy && tier < 1, Date: s.Model.HasDateAdded && tier < 3, Video: false,
               Plays: s.Config.ShowPlays && tier < 3, Heart: false,
-              Thumb: s.Config.ShowArtThumb && tier < 5, Actions: tier < 6, Tier: tier)
+              Thumb: s.Config.ShowArtThumb && tier < 5, Actions: tier < 6, Tier: tier,
+              Tempo: s.Config.ShowTempo && s.TempoColumn, Expand: s.Config.ShowVersions && tier < 6)
         : new(
             Album: s.Config.ShowAlbumColumn && tier < 2,
             By: s.Model.HasAddedBy && tier < 1,
@@ -313,8 +358,15 @@ sealed class TrackList : Component
             Plays: s.Config.ShowPlays && tier < 3,
             Heart: tier < 4,
             Thumb: s.Config.ShowArtThumb && tier < 5,
-            Actions: tier < 6,          // ultra-compact tier drops the "…" lane (still on the row context menu)
-            Tier: tier);
+            // Video lane hosts More (rest=Movie / hover=bare "…") — reserve the trailing Actions track only when
+            // Video is off (or dropped under width pressure). Ultra-compact still drops More entirely.
+            Actions: tier < 6 && !(s.Model.HasVideo && tier < 2),
+            Tier: tier,
+            // Tempo gates on the tier inside TrackRow.ShowTempo (<= 3), so the flag here is purely "does this surface
+            // want the column at all" — one place decides presence, one place decides width pressure.
+            Tempo: s.Config.ShowTempo && s.TempoColumn,
+            // The drawer needs room to breathe, so the chevron follows the same width gate as the "…" lane.
+            Expand: s.Config.ShowVersions && tier < 6);
 
     // Right-area-width breakpoints (sized off the widest column set), so the Star Title keeps a usable width at each
     // tier's minimum. Fewer-column contexts just cross the same widths with nothing to drop until a present column.
@@ -344,14 +396,38 @@ sealed class TrackList : Component
         t.Add(TrackSize.Star());
         if (s.Album) t.Add(TrackSize.Px(180f));
         if (s.By) t.Add(TrackSize.Px(132f));
-        if (s.Date) t.Add(TrackSize.Px(108f));
-        if (s.Video) t.Add(TrackSize.Px(28f));
+        if (s.Date) t.Add(TrackSize.Px(88f));
         if (s.Plays) t.Add(TrackSize.Px(84f));
-        t.Add(TrackSize.Px(64f));
-        if (s.Actions) t.Add(TrackSize.Px(ActionsColWidth));   // trailing "..." overflow lane (dropped at the ultra-compact tier)
+        // Tempo · key — swatch + BPM + one key token (Camelot preferred). Gated by the SAME ShowTempo the row uses,
+        // so the width track and the cell can never disagree (a mismatch shifts every later column).
+        if (TrackRow.ShowTempo(s)) t.Add(TrackSize.Px(80f));
+        t.Add(TrackSize.Px(52f));
+        if (s.Video) t.Add(TrackSize.Px(28f));                 // trailing film / hover "…" (after Duration, before Expand)
+        if (s.Actions) t.Add(TrackSize.Px(ActionsColWidth));   // trailing "..." when Video is off
+        if (s.Expand) t.Add(TrackSize.Px(26f));                // the expand chevron, last — matches ExpandChevron hit target
         var arr = t.ToArray();
         _tracksBySet[s] = arr;
         return arr;
+    }
+
+    /// <summary>The x of the parent row's ARTWORK CENTRE, in DIP from the row skin's left edge — the leading fixed
+    /// columns (# · ♥) plus their gaps, plus half the art column.
+    ///
+    /// The drawer's connector rail is placed here so the line visibly descends OUT OF the album art: the art is the
+    /// row's visual anchor, and a rail hanging off it says "these belong to that record" far more directly than one
+    /// starting under the title. It also reclaims the dead band to the left of the drawer that a title-aligned indent
+    /// left empty.
+    ///
+    /// It has to be DERIVED, not constant: the leading cluster is 36 / 76 / 112 wide depending on which columns the
+    /// tier kept, so the original hard-coded <c>PadX + ThumbSize</c> (52) landed mid-♥-column at every wide tier.</summary>
+    static float ArtCentreIndent(in ColumnSet s)
+    {
+        float gap = TrackRow.ColGapFor(s.Tier);
+        float x = TrackRow.PadXFor(s.Tier) - TrackRow.RowInset;   // the grid's own left pad
+        x += 36f;                                                 // the # column
+        if (s.Heart) x += gap + 40f;
+        // Land on the MIDDLE of the art so the rail drops from the centre of the cover, not its edge.
+        return s.Thumb ? x + gap + TrackRow.ThumbSize / 2f : x + gap;
     }
 
     public override Element Render()
@@ -383,6 +459,18 @@ sealed class TrackList : Component
             _searchFocused.Value = false;
             _restoreSearchFocus = false;
         }, _route.Value.Name);
+
+        // Spotify's curated Liked chip set. Fetched once per Liked route (the service itself coalesces, caches and
+        // revalidates by ETag), and only for Liked — no other surface has a content-filter bar to feed.
+        // The dep carries svc-readiness as well as the route: the body bails when svc is null, so keying on the route
+        // alone meant a Services.Slot that resolved after first render never re-ran this and the chips never arrived.
+        UseEffect(() =>
+        {
+            if (svc is null || !LikedSongsArtwork.IsLikedUri(_full.Value.Value.ContextUri)) return (Action?)null;
+            var cts = new CancellationTokenSource();
+            _ = LoadContentFilterChipsAsync(svc, _post, cts.Token);
+            return (Action?)(() => { try { cts.Cancel(); cts.Dispose(); } catch { } });
+        }, _route.Value.Name + (svc is null ? ":nosvc" : ":svc"));
         // One stable reactive snapshot owns every non-slot input a persistent row can observe. The memo reads the real
         // sources directly, so child rows never depend on this parent publishing mutable fields first.
         var rowsSnapshot = UseComputed(() =>
@@ -403,7 +491,8 @@ sealed class TrackList : Component
             return new TrackRowsSnapshot(
                 currentModel, config, handlers,
                 handlers.Sort.Value, handlers.Query.Value.Trim(), filters, saved,
-                noMarquee, TopTrack(currentModel.Tracks));
+                noMarquee, TopTrack(currentModel.Tracks),
+                handlers.TempoColumn.Value);
         });
         var rowItems = UseMemo(() => BoundItems.Project(
             rowsSnapshot,
@@ -495,6 +584,8 @@ sealed class TrackList : Component
         var filters = _h.Filters.Value;          // subscribe → update on local advanced-filter changes
         float rowH = TrackRow.RowHeightFor(density);
         var verticalLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
+        // The flat list's layout. Stateful — hoisted so it survives re-renders and keeps its extent table.
+        var flatLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
         float verticalHeroH = _verticalHeader ? VerticalHeaderHeight(subscribe: true) : VerticalHeaderFallbackHeight;
         float verticalCollapse = DetailVerticalLayout.CollapseDistance(verticalHeroH);
         _selectedCount = UseComputed(() =>
@@ -602,7 +693,11 @@ sealed class TrackList : Component
                 return ItemsView.CreateBound(
                     listTotal,
                     scope => Embed.Comp(() => new RowOrRecContent(this, scope, rowH, narrateRemount)),
-                    RepeatLayout.Stack(rowH),
+                    // Measured, like the plain branch: a track row in THIS list expands too, and a uniform stride can
+                    // physically not let one row grow — the drawer mounted and was clipped to rowH, so the chevron
+                    // flipped and nothing appeared. The rec header/rows still measure rowH, so this costs nothing when
+                    // no drawer is open.
+                    RepeatLayout.Measured(flatLayout),
                     new ListOptions
                     {
                         SelectionMode = _cfg.Selection,
@@ -628,8 +723,11 @@ sealed class TrackList : Component
             // change the slot SET and remount via the keyed wrapper below.
             : ItemsView.CreateBound(
                 rowItems,
-                scope => WrapRowSwipe(scope.Row, BoundRowSkin(scope.Row, BoundRow(scope.Row, scope.Item, rowH, 0), rowH, narrateRemount, 0), 0, scope.Item),
-                RepeatLayout.Stack(rowH),
+                scope => ExpandableSlot(scope.Row, scope.Item, rowH, narrateRemount),
+                // Measured, not a uniform stack: an open drawer makes exactly one row taller, and the measured layout
+                // corrects that row's extent on arrange AND re-anchors the scroll so nothing jumps. With no drawer
+                // open every row measures rowH, so this is identical to the old fixed-extent behaviour.
+                RepeatLayout.Measured(flatLayout),
                 new ListOptions<Track>
                 {
                     SelectionMode = _cfg.Selection,
@@ -1038,7 +1136,7 @@ sealed class TrackList : Component
         string nextMorphKey = "detail-shy:" + morphSuffix;
         if (!string.Equals(_verticalMorphKey, nextMorphKey, StringComparison.Ordinal)) _verticalMorphKey = nextMorphKey;
         Element toolbar = Toolbar(toolbarLabeled, tier);
-        Element compactSearch = CompactSearch(tier);
+        Element compactSearch = CompactSearch(availW, compactLeft);
         Element compactSelection = CompactSelectionToolbar();
         Element header = new BoxEl
         {
@@ -1080,6 +1178,8 @@ sealed class TrackList : Component
         if (includeAlbumTrailing)
         {
             Element trailing = Embed.Comp(() => new AlbumTrailing(_full, _route, _h));
+            if (_verticalHeader && DetailRail.PreReleaseCard(_model, _h) is { } countdown)
+                bodyChildren.Add(countdown);
             if (_verticalHeader && _cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(_model))
                 bodyChildren.Add(AlbumTrailing.ReleasePanel(_model, _h));
             bodyChildren.Add(trailing);
@@ -1124,12 +1224,20 @@ sealed class TrackList : Component
         Element[] chromeChildren;
         if (_verticalHeader)
         {
-            chromeChildren = [header];
+            // The vertical hero owns the toolbar, but the chip bar still belongs to the LIST — it changes what the
+            // rows below contain. Without this the Liked content-filter bar was unreachable in the vertical/hero
+            // layout (and with DetailPageLayout=Hero, unreachable at every width) while its fetch still ran.
+            chromeChildren = ContentFilterBar() is { } verticalChips ? [verticalChips, header] : [header];
         }
         else if (_showToolbar)
         {
             // One surface owns both action commands and the sortable column projection (same row-grid tracks as
             // TrackRow). Chromeless — no fill/border — so the bar floats on the page backdrop.
+            // The content-filter chips sit BETWEEN the command toolbar and the column header: they change what the
+            // header's rows contain, so they must read as belonging to the list rather than to the page chrome.
+            var stack = new List<Element>(3) { Toolbar(labeled, tier) };
+            if (ContentFilterBar() is { } chipBar) stack.Add(chipBar);
+            stack.Add(header);
             chromeChildren =
             [
                 new BoxEl
@@ -1137,7 +1245,7 @@ sealed class TrackList : Component
                     Direction = 1,
                     MinWidth = 0f,
                     Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
-                    Children = [Toolbar(labeled, tier), header],
+                    Children = stack.ToArray(),
                 },
             ];
         }
@@ -1202,8 +1310,15 @@ sealed class TrackList : Component
         var widths = new DetailTrackCommandWidths(
             _toolbarWidths[0], _toolbarWidths[1], _toolbarWidths[2],
             _toolbarWidths[3], _toolbarWidths[4], _toolbarWidths[5]);
+        float pane = MathF.Max(0f, available - 12f);
         var fit = DetailTrackCommandBarLayout.Resolve(
-            MathF.Max(0f, available - 12f), in widths, _verticalHeader, showTune, hasSelect, explicitSearch, _toolbarFit);
+            pane, in widths, _verticalHeader, showTune, hasSelect, explicitSearch, _toolbarFit);
+        // FREEZE the fit for as long as search is open. Hysteresis alone is not enough: measuring an evicted command
+        // bumps _toolbarMetricsEpoch, which re-renders and re-resolves, which hands SizeMode.Reflow a moving target.
+        // One latch, held until the pane genuinely resizes or search closes, gives the width tween a single destination.
+        if (!explicitSearch) _searchOpenFit = null;
+        else if (_searchOpenFit is { } latched && MathF.Abs(latched.Available - pane) <= 0.5f) fit = latched.Fit;
+        else _searchOpenFit = (pane, fit);
         _toolbarFit = fit;
 
         var kids = new List<Element>(9);
@@ -1343,13 +1458,63 @@ sealed class TrackList : Component
         _toolbarMetricsEpoch.Value = _toolbarMetricsEpoch.Peek() + 1;
     }
 
-    Element CompactSearch(int tier)
+    Element CompactSearch(float availW, float compactLeft)
     {
         var h = _liveHandlers?.Value ?? _initialH;
         var model = _full.Value.Value;
         bool expanded = _searchExpanded.Value;
         return SearchHost(h, FilterCapabilities(model), expanded,
-            expanded ? 196f : DetailTrackCommandBarLayout.SearchIconWidth, compact: true);
+            expanded ? CompactSearchWidth(availW, compactLeft) : DetailTrackCommandBarLayout.SearchIconWidth,
+            compact: true);
+    }
+
+    /// <summary>The expanded field's width in the compact sticky header. Derived, not the old hardcoded 196: the header
+    /// is <c>availW</c> wide with <c>compactLeft</c> padding either side, and the tools group is the field, one
+    /// <see cref="Spacing.M"/> gap and the play button — plus the gap the flex spacer leaves in front of the group. The
+    /// identity pill is unmounted while search is open, so all of that room is genuinely the field's.</summary>
+    static float CompactSearchWidth(float availW, float compactLeft)
+    {
+        float room = availW - compactLeft * 2f - DetailVerticalLayout.CompactPlaySize - Spacing.M * 2f;
+        return MathF.Max(DetailTrackCommandBarLayout.SearchIconWidth,
+                         MathF.Min(room, DetailTrackCommandBarLayout.SearchMax));
+    }
+
+    async Task LoadContentFilterChipsAsync(Services svc, Action<Action> post, CancellationToken ct)
+    {
+        IReadOnlyList<ContentFilterChip> chips;
+        // The service is documented never to throw and to return an empty list when the endpoint is unusable; this
+        // catch is the belt to that braces, so a chip bar can never take down a mounted track list.
+        try { chips = await svc.ContentFilters.GetLikedChipsAsync(ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) { return; }
+        catch { return; }
+        if (ct.IsCancellationRequested) return;
+        // An empty result is published, not swallowed. The service already falls back to its own cache before it
+        // returns empty, so empty means "the curated set is genuinely unusable now" — keeping the previous set on
+        // screen would leave a stale bar for the rest of the session, whereas publishing it hands the bar to the
+        // descriptor-derived fallback, which is what that fallback is for.
+        post(() => _serverChips.Value = chips);
+    }
+
+    /// <summary>Liked Songs' descriptor chips. Null everywhere else, and null on Liked until enough tracks carry
+    /// kind-6 tags — the bar appears as enrichment lands rather than reserving an empty strip.</summary>
+    Element? ContentFilterBar()
+    {
+        var model = _full.Value.Value;
+        if (!LikedSongsArtwork.IsLikedUri(model.ContextUri)) return null;
+
+        // Spotify's curated set is authoritative when it is available; descriptor-derived chips are the documented
+        // fallback for offline / a 404 account / a shape change, never the primary. Both paths carry an evidence
+        // split, so a chip that would match zero rows renders unavailable rather than filtering the list to empty.
+        var chips = _chipCache.For(model.Tracks, _serverChips.Value);
+        if (chips.Count == 0) return null;
+
+        var filters = _h.Filters.Value;   // subscribe: the selected chip is filter state, so the bar re-renders with it
+        // AllChip, not AllTracks: this is a chip sitting next to "Mellow" and "K-Pop", where the shorter word reads as
+        // one of the set. AllTracks stays reserved for the filter flyout, which uses it as a status SENTENCE.
+        return ContentFilterChips.Build(chips, filters.Tag,
+            tag => _h.SetFilters(_h.Filters.Peek() with { Tag = tag }),
+            Loc.Get(Strings.Detail.Filter.AllChip),
+            scrollKey: "contentfilter:" + _route.Value.Name);
     }
 
     Element CompactSelectionToolbar()
@@ -1367,12 +1532,24 @@ sealed class TrackList : Component
     {
         bool queryActive = h.Query.Value.Length > 0;
         bool focused = expanded && _searchFocused.Value;
+        // Both states are keyed LAYERS of the query region's ZStack, each with the same cross-fade spec: the outgoing
+        // one stays mounted and fades while the incoming one fades up, so neither ever pops. Distinct keys are what
+        // makes the reconciler run the Enter/Exit legs rather than morphing one into the other.
         Element query;
         if (expanded)
         {
-            query = Embed.Comp(() => new DetailTrackSearchField(
-                h.Query, _searchFocused, focusOnMount: true, canCollapse: true, CollapseSearch))
-                with { Key = "search:field" };
+            query = new BoxEl
+            {
+                Key = "search:field",
+                Direction = 1,
+                Height = 32f,
+                Animate = SearchSwapMotion,
+                Children =
+                [
+                    Embed.Comp(() => new DetailTrackSearchField(
+                        h.Query, _searchFocused, focusOnMount: true, canCollapse: true, CollapseSearch)),
+                ],
+            };
         }
         else
         {
@@ -1384,33 +1561,52 @@ sealed class TrackList : Component
                 _restoreSearchFocus = false;
                 _post?.Invoke(() => InputHooks.Current.Default.FocusNode?.Invoke(node, true));
             }
-            query = ToolTip.Wrap(
-                ToolFx.Button(Icons.Search, queryActive, Open, Capture),
-                Loc.Get(Strings.Detail.Filter.SearchThisList));
+            query = new BoxEl
+            {
+                Key = "search:icon",
+                Direction = 1,
+                Width = 32f,
+                Height = 32f,
+                JustifySelf = FlexAlign.Start,
+                Animate = SearchSwapMotion,
+                Children =
+                [
+                    ToolTip.Wrap(
+                        ToolFx.Button(Icons.Search, queryActive, Open, Capture),
+                        Loc.Get(Strings.Detail.Filter.SearchThisList)),
+                ],
+            };
         }
 
+        // The row carries NO explicit width: it fills the host, whose width is what the reflow tween is animating. That
+        // is what keeps the funnel pinned to the right edge for the whole flight — an explicitly-final-width row would
+        // hang past the narrower host and the button would be clipped, then snap into place at the end.
         float gap = expanded ? 0f : DetailTrackCommandBarLayout.Gap;
-        float queryWidth = MathF.Max(32f, width - gap - 32f);
         var row = new BoxEl
         {
             Direction = 0,
             Gap = gap,
-            Width = width,
             Height = 32f,
             AlignItems = FlexAlign.Center,
             Children =
             [
+                // Grow, not a computed width: the query region tracks the host's INTERPOLATED width every tick, so the
+                // field is always laid out at the width it is actually being shown at. (Sizing it to the final width
+                // inside a narrower clip is what produced the half-drawn placeholder mid-expand.)
                 new BoxEl
                 {
                     Key = "search-query-region",
-                    Direction = 1,
-                    Width = queryWidth,
+                    ZStack = true,
+                    Grow = 1f,
+                    MinWidth = 0f,
                     Height = 32f,
                     ClipToBounds = true,
                     Children = [query],
                 },
-                Embed.Comp(() => new FilterButton(h.Filters, h.SetFilters, caps))
-                    with { Key = "search-filter:" + caps.GetHashCode() },
+                // STABLE key + live props: capabilities are re-pushed, not keyed. Keying on them remounted the button
+                // whenever enrichment landed, which dropped its anchor/overlay refs and orphaned an open flyout.
+                Embed.Comp(new FilterButtonProps(caps), () => new FilterButton(h.Filters, h.SetFilters))
+                    with { Key = "search-filter" },
             ],
         };
         Element[] layers = focused
@@ -1419,11 +1615,12 @@ sealed class TrackList : Component
                 row,
                 new BoxEl
                 {
-                    Width = width,
+                    Key = "search-underline",
                     Height = 2f,
-                    OffsetY = 30f,
+                    AlignSelf = FlexAlign.End,
                     Fill = Tok.AccentDefault,
                     HitTestVisible = false,
+                    Animate = SearchUnderlineMotion,
                 },
             ]
             : [row];
@@ -1435,13 +1632,19 @@ sealed class TrackList : Component
             Width = width,
             Height = 32f,
             Shrink = 0f,
-            Corners = expanded ? Radii.ControlAll : default,
+            // The CHROME travels with the width instead of snapping at the ends. Corners and the border are mounted at
+            // ALL times — invisible while the fill and the border colour are transparent — because neither the corner
+            // radius nor the border WIDTH is an animatable channel, so toggling them pops. Only the colours change, and
+            // BrushTransitionMs cross-fades Fill and BorderColor over the SAME duration as the width tween.
+            // (BorderBrush, the ControlElevationBorder gradient, is deliberately not used here: the brush channel has no
+            // cross-fade, so it would snap. A flat stroke at 32 DIP tall is visually indistinguishable.)
+            Corners = Radii.ControlAll,
             Fill = expanded
                 ? (focused ? Tok.FillControlInputActive : Tok.FillControlDefault)
                 : ColorF.Transparent,
-            BorderWidth = expanded ? 1f : 0f,
-            BorderBrush = expanded ? Tok.ControlElevationBorder : null,
-            BrushTransitionMs = Motion.ControlFaster,
+            BorderWidth = 1f,
+            BorderColor = expanded ? Tok.StrokeControlDefault : ColorF.Transparent,
+            BrushTransitionMs = SearchExpandMs,
             Animate = SearchDisclosureMotion,
             ClipToBounds = true,
             Children = layers,
@@ -1457,20 +1660,27 @@ sealed class TrackList : Component
 
     TrackFilterCapabilities FilterCapabilities(DetailModel model)
     {
-        bool local = false, streamed = false, unavailable = false;
+        bool local = false, streamed = false, unavailable = false, tempo = false;
         for (int i = 0; i < model.Tracks.Count; i++)
         {
             var track = model.Tracks[i];
             if (track.Origin == TrackOrigin.Local) local = true; else streamed = true;
+            // Deliberately BROADER than the filter it gates (TrackFilterModel: `IsNotYetOut()`): Availability is
+            // nullable, and `!= Playable` counts a track with no verdict at all. Kept as-is rather than aligned — the
+            // narrower test would stop offering the "Playable only" chip on every surface whose rows never carry a
+            // verdict, which is a visible affordance change, not a tidy-up. Over-offering is inert: the chip appears and
+            // filters nothing.
             if (track.Availability != Availability.Playable) unavailable = true;
-            if (local && streamed && unavailable) break;
+            if (track.TempoBpm is > 0d) tempo = true;
+            if (local && streamed && unavailable && tempo) break;
         }
         return new TrackFilterCapabilities(
             HasVideo: model.HasVideo,
             HasDateAdded: model.HasDateAdded,
             HasMixedOrigin: local && streamed,
             HasUnavailable: unavailable,
-            HasLibrary: _lib is not null);
+            HasLibrary: _lib is not null,
+            HasTempo: tempo);
     }
 
     // A no-op OnRealized for the plain action buttons (Play / Shuffle) — they open no flyout, so they need no anchor.
@@ -1502,14 +1712,18 @@ sealed class TrackList : Component
         if (set.Album) Add(TrackRow.CellKey.Album, SortCell(HLabel(Loc.Get(Strings.Detail.Column.Album), SortColumn.Album, sort), SortColumn.Album, sort, FlexJustify.Start));
         if (set.By) Add(TrackRow.CellKey.By, PlainHeader(Loc.Get(Strings.Detail.Column.AddedBy)));
         if (set.Date) Add(TrackRow.CellKey.Date, SortCell(HLabel(Loc.Get(Strings.Detail.Column.DateAdded), SortColumn.DateAdded, sort), SortColumn.DateAdded, sort, FlexJustify.Start));
-        if (set.Video) Add(TrackRow.CellKey.Video, new BoxEl());
         if (set.Plays) Add(TrackRow.CellKey.Plays, SortCell(HLabel(Loc.Get(Strings.Detail.Column.Plays), SortColumn.Plays, sort), SortColumn.Plays, sort, FlexJustify.End));
+        // Tempo · key. Not sortable: tempo lands ASYNCHRONOUSLY per row (kind 222), so a sort would reorder the list
+        // under the user's cursor as adornments arrive. End-aligned to match the EndCell value lane.
+        if (TrackRow.ShowTempo(set)) Add(TrackRow.CellKey.Tempo, PlainHeader(Loc.Get(Strings.Detail.Column.Tempo), FlexJustify.End));
         // Duration header: a "Time" text label in the vertical (Apple Music) profile, the clock icon everywhere else.
         Add(TrackRow.CellKey.Duration, SortCell(_verticalHeader
                 ? HLabel(Loc.Get(Strings.Detail.Column.Time), SortColumn.Duration, sort)
                 : Icon(Icons.Clock, 14f, sort.Column == SortColumn.Duration ? Tok.TextSecondary : Tok.TextTertiary),
                            SortColumn.Duration, sort, FlexJustify.End));
+        if (set.Video) Add(TrackRow.CellKey.Video, new BoxEl());   // trailing film / "…" lane: no header label
         if (set.Actions) Add(TrackRow.CellKey.More, new BoxEl());   // trailing "..." overflow lane: no header label (keeps rows aligned)
+        if (set.Expand) Add(TrackRow.CellKey.Expand, new BoxEl());  // chevron lane: no header label
 
         var grid = new GridEl
         {
@@ -1543,10 +1757,11 @@ sealed class TrackList : Component
             MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
         };
 
-    // A non-sortable column header (Added by) — a static, left-aligned label with no click/caret.
-    static Element PlainHeader(string label) => new BoxEl
+    // A non-sortable column header — static label, no click/caret. Default Start (Added by); Tempo passes End so it
+    // shares the value lane's right edge.
+    static Element PlainHeader(string label, FlexJustify justify = FlexJustify.Start) => new BoxEl
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = justify,
         MinWidth = 0f, ClipToBounds = true,
         Children = [new TextEl(label) { Size = 12f, Weight = 600, Color = Tok.TextTertiary, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }],
     };
@@ -1670,11 +1885,16 @@ sealed class TrackList : Component
         });
         if (set.Album) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(120f, 10f)] });
         if (set.By) cells.Add(new BoxEl());
-        if (set.Date) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(72f, 10f)] });
-        if (set.Video) cells.Add(new BoxEl());
+        if (set.Date) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Children = [Bar(56f, 10f)] });
         if (set.Plays) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(48f, 10f)] });
-        cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(32f, 10f)] });   // duration
+        // Tempo lane: MUST be emitted whenever the width track exists, even though the real cell may render empty for
+        // an un-adorned track — the shimmer is positional (no cell keys), so a missing bar would shift duration into
+        // the tempo column and the whole skeleton would sit one lane left of the real rows.
+        if (TrackRow.ShowTempo(set)) cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(48f, 10f)] });
+        cells.Add(new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.End, Children = [Bar(28f, 10f)] });   // duration
+        if (set.Video) cells.Add(new BoxEl());
         if (set.Actions) cells.Add(new BoxEl());
+        if (set.Expand) cells.Add(new BoxEl());
         return new GridEl
         {
             Columns = tracks, ColGap = TrackRow.ColGapFor(set.Tier), RowHeight = rowH, Grow = 1f,
@@ -1905,9 +2125,11 @@ sealed class TrackList : Component
             int visible = _o._rowItems!.Count.Value;
             Element child;
             if (i < visible)
-                child = _o.WrapRowSwipe(_scope,
-                    _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, 0), _rowH, _entrance, 0),
-                    0, _item) with { Key = "rec:track" };
+                // The SAME expandable slot the plain list uses. This branch used to build the row inline and never host
+                // a drawer, so on any playlist with recommendations live the expand chevron toggled its signal, flipped
+                // its glyph, and nothing opened — the one list that looked broken was the one with an extra feature.
+                child = Embed.Comp(() => new ExpandableRowSlot(_o, _scope, _item, _rowH, _entrance))
+                    with { Key = "rec:track" };
             // The DATA half of the gate (see Render): this template is mounted for every capable playlist, including the
             // window before the full model lands (and non-owned playlists, which never go live). _listCount then equals
             // the track count, so an appended index cannot be realized — except transiently, if a count write lands a
@@ -2087,6 +2309,11 @@ sealed class TrackList : Component
         if ((uint)displayPos >= (uint)v.Length) return;
         int orig = v[displayPos];
         var track = snapshot.Model.Tracks[orig];
+        // The row is drawn dim, its # cell withholds the hover-play button (Components/TrackRow.cs) and its duration
+        // lane shows a date instead of a time — but a click, a double-tap and Enter all still reached the player and
+        // started nothing, silently. This is the one funnel every activation path goes through, so one guard closes
+        // all of them.
+        if (track.IsNotYetOut()) return;
         TrackRow.Invoke(_bridge, track, () => StartVisible(displayPos, snapshot));
     }
 
@@ -2146,6 +2373,170 @@ sealed class TrackList : Component
         return true;
     }
 
+    /// <summary>One list slot: the row, and — when THIS row is the expanded one — its versions drawer beneath.
+    ///
+    /// The drawer is a child of the slot rather than a list item of its own, so selection, reorder, roving focus and
+    /// the swipe layer keep their one-slot-per-track model. Only the slot's height changes.</summary>
+    Element ExpandableSlot(RowScope row, IReadSignal<Track> item, float rowH, bool narrateRemount)
+        => Embed.Comp(() => new ExpandableRowSlot(this, row, item, rowH, narrateRemount));
+
+    /// <summary>Open this row's drawer, closing any other. One at a time, because two open drawers make the list jump
+    /// unpredictably under the cursor while scrolling — and the measured layout re-anchors on every extent change.</summary>
+    void ToggleExpanded(string uri)
+        => _expandedUri.Value = _expandedUri.Peek() == uri ? "" : uri;
+
+    /// <summary>The expandable list slot. A Component (not a plain element) so it re-renders on ITS OWN
+    /// subscriptions: the expanded-uri signal and the slot's bound item. That keeps expansion off the parent's render
+    /// path — opening a drawer must not re-render the whole list.</summary>
+    sealed class ExpandableRowSlot : Component
+    {
+        readonly TrackList _o;
+        readonly RowScope _scope;
+        readonly IReadSignal<Track> _item;
+        readonly float _rowH;
+        readonly bool _narrate;
+
+        public ExpandableRowSlot(TrackList o, RowScope scope, IReadSignal<Track> item, float rowH, bool narrate)
+        { _o = o; _scope = scope; _item = item; _rowH = rowH; _narrate = narrate; }
+
+        // The open/close motion, on the ALWAYS-MOUNTED clip. Size-only: the clip never enters or exits, so Enter/Exit
+        // terminals would be dead weight. Trailing anchor pins the drawer's bottom edge to the reveal edge, so it
+        // slides out from under the row rather than growing away from it (Expander.cs:106).
+        static readonly LayoutTransition DrawerReveal = new(
+            TransitionChannels.Size,
+            TransitionDynamics.Tween(220f, Easing.SmoothOut),
+            Size: SizeMode.Reflow,
+            ExitDynamics: TransitionDynamics.Tween(150f, Easing.SmoothOut),
+            Anchor: SizeAnchor.Trailing);
+
+        // The track whose drawer is still shrinking. Held so the closing frames animate over real content instead of
+        // an empty box — the app's own idiom (ArtistPage.AlbumExpand.cs keeps `_last` through the close frame), since
+        // the engine's ExpanderCollapseWatcher is internal to FluentGpu.Controls.
+        readonly Signal<string> _closing = new("");
+
+        public override Element Render()
+        {
+            // Hooks first, unconditionally. UseContext used to sit AFTER the collapsed early-return, so the hook cursor
+            // saw a different sequence depending on whether the row was open — a rules-of-hooks violation that made the
+            // expanded render read another slot's hook state.
+            var svc = UseContext(Services.Slot);
+
+            var track = _item.Value;                       // subscribe → recycle rebinds this slot
+            string expanded = _o._expandedUri.Value;       // subscribe → open/close re-renders only the two slots involved
+            var row = _o.WrapRowSwipe(_scope,
+                _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, 0), _rowH, _narrate, 0),
+                0, _item);
+
+            bool hasTrack = track is { Uri.Length: > 0 };
+            bool open = hasTrack && expanded == track!.Uri;
+            string closing = _closing.Value;               // subscribe → the post-close clear re-renders this slot
+
+            // Track the close so content can outlive `open` by one animation. Written during render deliberately: it is
+            // derived from the very signals this render already read, and the write is value-gated.
+            if (open && closing.Length > 0) _closing.Value = "";
+            else if (!open && hasTrack && closing.Length == 0 && _wasOpen) _closing.Value = track!.Uri;
+            _wasOpen = open;
+
+            bool mountBody = open || (hasTrack && closing == track!.Uri);
+            // One frame past the 150ms exit, drop the body. Enabled-gated so it costs nothing while nothing is closing.
+            UseInterval(() => _closing.Value = "", 170f, enabled: !open && closing.Length > 0);
+
+            Element[] clipKids = System.Array.Empty<Element>();
+            if (mountBody)
+            {
+                // Subscribe to the shape: a breakpoint cross changes which leading columns exist, so an open drawer
+                // must re-indent in place rather than keep the indent it mounted with.
+                var shape = _o._rowShape!.Value;
+                var model = new TrackVersionsPanel.Model(
+                    track!,
+                    // A version's KIND is the user's requested form — clicking the music video means "watch it", not
+                    // "play the song". The video plays through the PARENT song's uri, not the version's own: kind 99
+                    // keys the video association on the SONG, so the linked video-track uri has no association of its
+                    // own and resolves to plain audio (`available=None has=False` in the log — the "plays but no
+                    // video" bug). Song-as-video is the proven pipeline: the resolve links the DRM video and plays it
+                    // with its own soundtrack, exactly what "play, then switch to video" does. The intent is a
+                    // ONE-PLAY scope (PlayAs → PrimeVideoIntentFor), so it dies with this track instead of leaving
+                    // the standing video toggle on for the rest of the queue.
+                    OnPlay: v =>
+                    {
+                        if (v.Kind == TrackVersionKind.Video)
+                            VideoActions.PlayAs(svc?.Player, _o._bridge, track!.Uri, MediaForm.Video);
+                        else
+                            VideoActions.PlayAs(svc?.Player, _o._bridge, v.Uri, MediaForm.Default);
+                    },
+                    OnOpen: (route, arg) => _o._rowsSnapshot?.Peek().Handlers.Go(route, arg),
+                    // Minus the rail's own offset inside the gutter, so the RAIL — not the gutter's left edge — is what
+                    // lands on the artwork centre.
+                    Indent: Math.Max(0f, ArtCentreIndent(shape.Set) - TrackVersionsPanel.RailOffset));
+                clipKids = [Ctx.Provide(TrackVersionsPanel.Props, model,
+                    Embed.Comp(() => new TrackVersionsPanel()) with { Key = "drawer:" + track!.Uri })];
+            }
+
+            // ONE shape in every state. The old code returned a bare row when collapsed and a wrapper when expanded:
+            // same ElementTypeId, so the reconciler took the UPDATE path, and BOTH animation entry points are
+            // isMount-gated — a node that acquires Animate mid-life gets a transition record and nothing else, hence
+            // the snap. Worse, the shape change shifted the row subtree one level and positional matching re-pointed
+            // the row-skin element at the old content-lane node; bind wiring is mount-only, so the skin's bound
+            // zebra Fill / HoverFill / PressedFill / BorderColor were silently destroyed. That is why an expanded odd
+            // row lost its stripe and stopped responding to hover.
+            //
+            // Keeping the clip permanently mounted makes the declared Height toggle 0 <-> NaN(auto) the whole motion
+            // trigger, exactly as the engine's own Expander does (Expander.cs:242-256).
+            return new BoxEl
+            {
+                Direction = 1, MinWidth = 0f,
+                Children =
+                [
+                    row with { Key = "row" },
+                    new BoxEl
+                    {
+                        Key = "drawerclip",
+                        Direction = 1, MinWidth = 0f,
+                        ClipToBounds = true,
+                        Height = open ? float.NaN : 0f,
+                        Animate = DrawerReveal,
+                        // The drawer continues the row's plate: same zebra parity, same inset, bottom corners only.
+                        // BOUND, not a value — the slot recycles by an index-signal write, so a plain fill would keep
+                        // whichever parity it was first built with.
+                        Fill = Prop.Of(() => _scope.Index.Value % 2 != 0 ? WaveeColors.RowZebra : ColorF.Transparent),
+                        Margin = new Edges4(TrackRow.RowInset, 0f, TrackRow.RowInset, 0f),
+                        Corners = new CornerRadius4(0f, 0f, 6f, 6f),
+                        Children = clipKids,
+                    },
+                ],
+            };
+        }
+
+        bool _wasOpen;
+    }
+
+    /// <summary>Reference-keyed memo for the derived chip set. IReadOnlyList identity is the right key here: the store
+    /// hands out a NEW list when adornments land and the SAME one on an unrelated re-render.</summary>
+    sealed class ChipCache
+    {
+        IReadOnlyList<Track>? _key;
+        ContentFilterChipSet _value = ContentFilterChipSet.Empty;
+
+        IReadOnlyList<ContentFilterChip>? _serverKey;
+
+        public ContentFilterChipSet For(IReadOnlyList<Track> tracks, IReadOnlyList<ContentFilterChip> serverChips)
+        {
+            if (ReferenceEquals(_key, tracks) && ReferenceEquals(_serverKey, serverChips)) return _value;
+            _key = tracks;
+            _serverKey = serverChips;
+            // The server's set is computed FOR THIS LIBRARY — Spotify already decided these concepts describe these
+            // Liked Songs — so it stands on its own and is NOT gated on local descriptor evidence. Requiring a
+            // matching kind-6 tag hid the bar entirely whenever descriptor enrichment was sparse or still in flight,
+            // which is the common case on a cold list. Evidence therefore decides ORDER and AVAILABILITY, never
+            // membership: concepts the tracks in view demonstrably carry come first and are tappable, the rest keep
+            // the server's own order behind them and render unavailable until enrichment lands.
+            _value = serverChips.Count > 0
+                ? ContentFilterTags.OrderByEvidence(serverChips, tracks)
+                : ContentFilterChips.Derive(tracks);
+            return _value;
+        }
+    }
+
     // ── row grid ─────────────────────────────────────────────────────────────────────────────────────────
     // The row cell is the shared TrackRow.Grid (Components/TrackRow.cs) — ONE definition rendered identically by the
     // detail list, the library pane, artist "Popular" and search. This threads the detail list's per-row state + the
@@ -2166,10 +2557,15 @@ sealed class TrackList : Component
                          // The trailing "…" — ClickRequestsContext opens the row's own context menu anchored at the
                          // button (input-a11y §6.5.1). Disabled for the shimmer rows: a skeleton keeps the identical
                          // reserved lane but stays non-interactive and hidden.
-                         // The ultra-compact tier drops the "…" lane (set.Actions false) → no button built.
+                         // When Video is on, More lives in the Video lane (set.Actions false) → no trailing button.
+                         // The ultra-compact tier also drops the "…" lane → no button built.
                          actionsCell: set.Actions ? TrackRow.MoreButton(more) : null,
+                         expandCell: set.Expand && t.Uri.Length > 0
+                             ? TrackRow.ExpandChevron(_expandedUri.Value == t.Uri, () => ToggleExpanded(t.Uri))
+                             : null,
                          showAlbumInMeta: showListMetadata && !set.Album,
-                         showListBadges: showListMetadata);
+                         showListBadges: showListMetadata,
+                         moreEnabled: more);
     }
 
     static Owner? AddedByProfile(DetailModel model, Track t)
@@ -2227,7 +2623,15 @@ sealed class TrackList : Component
         {
             ZStack = true, MinHeight = rowH, ClipToBounds = true,    // ZStack → the left accent bar overlays the content
             Margin = plainRows ? Edges4.All(0f) : new Edges4(RowInset, 0f, RowInset, 0f), // inset → rounded pill (#32)
-            Corners = plainRows ? CornerRadius4.All(0f) : CornerRadius4.All(6f),
+            // Bottom corners square while THIS row's drawer is open, so the row and the drawer below it read as one
+            // taller pill instead of a rounded row with a second plate stuck to it. Bound, so opening a drawer re-skins
+            // the row on the compositor without re-rendering the list.
+            Corners = plainRows
+                ? Prop.Of(() => CornerRadius4.All(0f))
+                : Prop.Of(() => DisplayTrack(index.Value, trackStart) is { Uri.Length: > 0 } dt
+                                && _expandedUri.Value == dt.Uri
+                    ? new CornerRadius4(6f, 6f, 0f, 0f)
+                    : CornerRadius4.All(6f)),
             // Reveal on slot MOUNT for navigation cold load + curated re-cut (reset epoch). Tier/density/filter remounts
             // skip the entrance — recycling reuses the slot (no mount), so this never replays on scroll or selection.
             Animate = entrance ? new LayoutTransition(TransitionChannels.Opacity,
@@ -2770,7 +3174,10 @@ static class ToolFx
 // Search and Filter share one outer field surface. The editor is chromeless and the stable FilterButton occupies the
 // trailing 32-DIP lane, so expanding/collapsing never remounts or visually ejects the funnel from the control.
 readonly record struct TrackFilterCapabilities(
-    bool HasVideo, bool HasDateAdded, bool HasMixedOrigin, bool HasUnavailable, bool HasLibrary);
+    bool HasVideo, bool HasDateAdded, bool HasMixedOrigin, bool HasUnavailable, bool HasLibrary,
+    // At least one track carries a kind-222 tempo. The BPM/Key facets are offered only then — on a list with no
+    // enrichment they would silently match nothing, which reads as a broken filter rather than an empty result.
+    bool HasTempo = false);
 
 sealed class DetailTrackSearchField : Component
 {
@@ -2852,14 +3259,32 @@ sealed class DetailTrackSearchField : Component
     }
 }
 
+/// <summary>Live props for <see cref="FilterButton"/>. Capabilities change MID-SESSION as enrichment lands (a kind-222
+/// tempo arriving adds the Tempo facet), so they must reach the component through the props channel — never as a frozen
+/// ctor field, and never baked into the <c>Key</c>: a remount would drop the anchor/overlay refs and orphan an OPEN
+/// flyout. See docs/design/subsystems/component-props-contract.md.</summary>
+sealed record FilterButtonProps(TrackFilterCapabilities Caps);
+
 sealed class FilterButton : Component
 {
     readonly IReadSignal<TrackFilterState> _filters;
     readonly Action<TrackFilterState> _setFilters;
-    readonly TrackFilterCapabilities _caps;
-    public FilterButton(IReadSignal<TrackFilterState> filters, Action<TrackFilterState> setFilters,
-        TrackFilterCapabilities caps)
-    { _filters = filters; _setFilters = setFilters; _caps = caps; }
+    public FilterButton(IReadSignal<TrackFilterState> filters, Action<TrackFilterState> setFilters)
+    { _filters = filters; _setFilters = setFilters; }
+
+    /// <summary>Park the count pill in the button's top-right corner. Declarative on both axes now that a ZStack
+    /// aligns horizontally too — and the pill is content-sized (a two-digit count widens it), which is exactly the
+    /// auto-sized-and-aligned case the stack resolves to the desired width rather than stretching.</summary>
+    static readonly TemplateParts BadgeCorner = new()
+    {
+        [InfoBadge.PartRoot] = static b => b with
+        {
+            AlignSelf = FlexAlign.Start,        // top …
+            JustifySelf = FlexAlign.End,        // … right
+            BorderWidth = 1.5f,
+            BorderColor = Tok.FillSolidBase,    // surface ring: keeps the accent pill off the funnel's ink
+        },
+    };
 
     // Checkable menu items (WinUI AppBarToggleButton-in-menu): the ✓ shows the live flag; clicking toggles it.
     public override Element Render()
@@ -2867,9 +3292,12 @@ sealed class FilterButton : Component
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
+        var caps = UsePropsOrDefault<FilterButtonProps>()?.Caps ?? default;
         var current = _filters.Value;
-        bool active = !current.IsDefault;
         int activeCount = current.ActiveCount;
+        // ActiveCount increments for EVERY non-default facet, so "has a count" and "is not the default state" are the
+        // same predicate — one flag, and the badge can never disagree with the accent plate.
+        bool active = activeCount > 0;
         ColorF accent = Tok.AccentTextPrimary;
 
         void Toggle()
@@ -2878,7 +3306,7 @@ sealed class FilterButton : Component
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
-                () => Embed.Comp(() => new TrackFilterFlyout(_filters, _setFilters, _caps)),
+                () => Embed.Comp(() => new TrackFilterFlyout(_filters, _setFilters, caps)),
                 FlyoutPlacement.BottomEdgeAlignedRight,
                 new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
                 { ConstrainToRootBounds = true });
@@ -2886,40 +3314,25 @@ sealed class FilterButton : Component
         }
         // Mirror the WinUI TextControlButton affix (EditableText.InnerButton): Width 30 + the inner-button margin 0,4,4,4,
         // and NO explicit height / AlignSelf — the field's affix row (AlignItems=Stretch) fills it to full height, while
-        // AlignItems/Justify=Center vertically centers the glyph. Accent pill + glyph when a filter is active.
+        // AlignItems/Justify=Center centers the glyph. Accent plate + count badge when a filter is active.
         Element glyph = new BoxEl
         {
-            // Segoe Fluent's funnel has more ink above its em-box midpoint than below it. The one-DIP optical offset
-            // aligns the visible funnel with the adjacent Search glyph, whose outline is vertically symmetrical.
             Width = 14f,
             Height = 14f,
             AlignItems = FlexAlign.Center,
             Justify = FlexJustify.Center,
-            Transform = Affine2D.Translation(0f, 1f),
-            Children = [Icon(Icons.Filter, 14f, active ? accent : Tok.TextSecondary)],
+            // Segoe Fluent's funnel has more ink above its em-box midpoint than below it; the one-DIP optical offset
+            // aligns the visible funnel with the adjacent Search glyph, whose outline is vertically symmetrical.
+            // With a badge in the top-right corner the glyph steps down-left so the two never share ink. These are the
+            // DECOMPOSED offsets, which the reconciler composes into LocalTransform.
+            OffsetX = active ? -4f : 0f,
+            OffsetY = active ? 4f : 1f,
+            // Accent is the PLATE's and the BADGE's colour, never the glyph's: an accent funnel touching an accent
+            // pill reads as one blob rather than an icon with a count on it.
+            Children = [Icon(Icons.Filter, 14f, active ? Tok.TextPrimary : Tok.TextSecondary)],
         };
-        Element[] visual = activeCount > 0
-            ?
-            [
-                glyph,
-                new BoxEl
-                {
-                    Width = 14f,
-                    Height = 14f,
-                    AlignItems = FlexAlign.Center,
-                    Justify = FlexJustify.Center,
-                    Corners = CornerRadius4.All(7f),
-                    Fill = Tok.AccentDefault,
-                    BorderWidth = 1f,
-                    BorderColor = Tok.FillSolidBase,
-                    Transform = Affine2D.Translation(8f, -8f),
-                    Children =
-                    [
-                        new TextEl(activeCount.ToString())
-                        { Size = 8f, Weight = 700, Color = Tok.TextOnAccentPrimary },
-                    ],
-                },
-            ]
+        Element[] visual = active
+            ? [glyph, InfoBadge.Count(activeCount, parts: BadgeCorner)]
             : [glyph];
 
         return ToolTip.Wrap(new BoxEl
@@ -2973,6 +3386,13 @@ sealed class DetailTrackMoreButton : Component
             if ((_overflow & DetailTrackInlineCommand.Density) != 0)
                 items.Add(MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.Density.RowSize),
                     ListButton.ItemsFor(_h.Density, _h.SetDensity), new IconRef { Glyph = Icons.List }));
+            // Offered only where the surface can actually host the column; the data itself is always in the expander.
+            if (_cfg.ShowTempo)
+            {
+                bool tempoOn = _h.TempoColumn.Peek();
+                items.Add(MenuFlyoutItem.Toggle(Loc.Get(Strings.Detail.TempoColumn), tempoOn,
+                    () => _h.SetTempoColumn(!tempoOn)));
+            }
             if ((_overflow & DetailTrackInlineCommand.Select) != 0
                 && _h.MultiSelect is not null && _h.SetMultiSelect is not null)
             {

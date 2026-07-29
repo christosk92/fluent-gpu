@@ -27,6 +27,8 @@ sealed class DetailPage : Component
     // Route → (kind, id): album:/pl: carry the uri after the prefix; "liked" is the saved-tracks collection.
     internal static (DetailKind Kind, string? Id) ParseDetail(Route r) =>
         r.Name.StartsWith("album:", StringComparison.Ordinal) ? (DetailKind.Album, r.Name["album:".Length..])
+        // Same kind, same config, same shell — only the id needs resolving before the load can read it.
+        : r.Name.StartsWith("prerelease:", StringComparison.Ordinal) ? (DetailKind.Album, r.Name["prerelease:".Length..])
         : r.Name.StartsWith("pl:", StringComparison.Ordinal) ? (DetailKind.Playlist, r.Name["pl:".Length..])
         : r.Name == "local" ? (DetailKind.Playlist, "wavee:local:all")   // the Local Files collection (LocalSource owns it)
         : r.Name.StartsWith("show:", StringComparison.Ordinal) ? (DetailKind.Show, r.Name["show:".Length..])
@@ -207,11 +209,34 @@ sealed class DetailPage : Component
 
     internal static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
     {
-        DetailKind.Playlist => MapPlaylist(await LoadPlaylistAsync(svc, id ?? "", ct)),
+        DetailKind.Playlist => await LoadPlaylistWithSaveCountAsync(svc, id ?? "", ct),
         DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
         DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct)),
-        _ => MapAlbum(await svc.Library.GetAlbumAsync(id ?? "", ct)),
+        _ => await LoadAlbumDetailAsync(svc, id ?? "", ct),
     };
+
+    /// <summary>The album detail load, with the ONE extra hop an upcoming release needs.
+    ///
+    /// A prerelease route must resolve before it can read anything — the two ids are unrelated (Wavee.Core/PreReleaseUris).
+    /// The REVERSE hop (album → prerelease link, for the pre-save heart) is deliberately gated: kind 138 404s for almost
+    /// every album, so it is only asked when the album already looks upcoming. A normal album open costs exactly what it
+    /// costs today.</summary>
+    static async Task<DetailModel> LoadAlbumDetailAsync(Services svc, string id, CancellationToken ct)
+    {
+        string albumUri = id;
+        PreReleaseLink? link = null;
+        if (PreReleaseUris.IsPreRelease(id))
+        {
+            link = await svc.PreRelease.ResolveAsync(id, ct).ConfigureAwait(false);
+            if (link is null) return DetailModel.Empty;   // unresolvable (offline / 404 / dead entity) → the existing empty state
+            albumUri = link.AlbumUri;
+        }
+        var album = await svc.Library.GetAlbumAsync(albumUri, ct).ConfigureAwait(false);
+        if (link is null
+            && (album.IsPreRelease || PreReleaseDerivation.UpcomingAt(album, DateTimeOffset.UtcNow) is not null))
+            link = await svc.PreRelease.ResolveAsync(albumUri, ct).ConfigureAwait(false);
+        return MapAlbum(album, link);
+    }
 
     static async Task<Playlist?> LoadPlaylistAsync(Services svc, string uri, CancellationToken ct)
     {
@@ -244,14 +269,44 @@ sealed class DetailPage : Component
             Title: s.Name, Cover: s.Cover, ContextUri: s.Uri,
             BadgeType: Loc.Get(Strings.Podcast.Show), Year: null, OwnerName: null, OwnerImage: null,
             Artists: Array.Empty<ArtistRef>(), Description: s.Description, MetaLine: meta,
-            Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null,
+            Tracks: Array.Empty<Track>(), AboutArtist: null,
             Episodes: eps, Publisher: s.Publisher);
     }
 
-    static DetailModel MapPlaylist(Playlist p)
+    /// <summary>How long the header will wait on the save count before rendering without it. The popcount body is
+    /// 6-11 bytes and it runs CONCURRENTLY with the (far heavier) playlist load, so in practice this never elapses —
+    /// it exists so a hung spclient connection can never hold a painted header hostage to a decorative number.</summary>
+    static readonly TimeSpan SaveCountGrace = TimeSpan.FromMilliseconds(250);
+
+    static async Task<DetailModel> LoadPlaylistWithSaveCountAsync(Services svc, string id, CancellationToken ct)
+    {
+        // Started FIRST and awaited last: the count rides along inside the playlist load's own latency instead of
+        // adding to it. Never awaited without a grace window — see SaveCountGrace.
+        var saves = svc.PlaylistPopcount.GetSaveCountAsync(PlaylistUri(id), ct);
+        var playlist = await LoadPlaylistAsync(svc, id, ct).ConfigureAwait(false);
+
+        long? count = null;
+        try { count = await saves.WaitAsync(SaveCountGrace, ct).ConfigureAwait(false); }
+        catch (TimeoutException) { }              // slow counter → header renders without the segment
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        return MapPlaylist(playlist, count);
+    }
+
+    /// <summary>The playlist route id as a uri. Ids arrive bare from the route but a full uri also flows through some
+    /// call paths, so accept both rather than producing `spotify:playlist:spotify:playlist:…`.</summary>
+    static string PlaylistUri(string id)
+        => id.StartsWith("spotify:", StringComparison.Ordinal) ? id : "spotify:playlist:" + id;
+
+    static DetailModel MapPlaylist(Playlist p, long? saveCount = null)
     {
         var tracks = p.Tracks ?? Array.Empty<Track>();
-        string meta = Strings.Detail.MetaLine(Strings.Detail.SongCount(p.TrackCount), DetailFormat.TotalTime(DetailFormat.TotalMs(tracks)));
+        // "50 songs · 12,345 saves · 2 hr 59 min" when the count is known, else the existing two-segment line. A
+        // playlist genuinely at 0 saves (a brand-new private one) also omits the segment rather than reading "0 saves".
+        string songs = Strings.Detail.SongCount(p.TrackCount);
+        string total = DetailFormat.TotalTime(DetailFormat.TotalMs(tracks));
+        string meta = saveCount is > 0 and var n
+            ? Strings.Detail.MetaLineSaved(songs, Strings.Detail.SaveCount(n), total)
+            : Strings.Detail.MetaLine(songs, total);
         // Data-drive the optional columns: show Date-added if any track has one, and Added-by only when the playlist is
         // collaborative (≥2 distinct contributors) — matching the reference app's "hide unless it carries signal" rule.
         bool hasDate = false, hasVideo = false;
@@ -266,7 +321,7 @@ sealed class DetailPage : Component
             Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
             BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: p.Owner?.Avatar,
             Artists: Array.Empty<ArtistRef>(), Description: p.Description, MetaLine: meta,
-            Tracks: tracks, AboutArtist: null, Palette: p.Palette,
+            Tracks: tracks, AboutArtist: null,
             HasDateAdded: hasDate, HasAddedBy: contributors.Count >= 2, HasVideo: hasVideo,
             Capabilities: p.Capabilities,
             Collaborators: p.Collaborators,
@@ -305,7 +360,7 @@ sealed class DetailPage : Component
             Title: Loc.Get(Strings.Detail.LikedSongs), Cover: null, ContextUri: "spotify:collection:tracks",
             BadgeType: null, Year: null, OwnerName: null, OwnerImage: null,
             Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: meta,
-            Tracks: tracks, AboutArtist: null, Palette: null,
+            Tracks: tracks, AboutArtist: null,
             HasDateAdded: tracks.Any(t => t.AddedAt is not null),   // liked rows carry the collection add time → Date-added column + sort
             HasVideo: tracks.Any(VideoPresence.HasVideo));
     }
@@ -314,7 +369,10 @@ sealed class DetailPage : Component
     // enrichment (About-the-artist / Fans-also-like / Featured-on / Merch / Similar) is deliberately NOT awaited here —
     // AlbumTrailing loads each section independently so the hero and track list render immediately and no slow or failed
     // enrichment can block (or sink) them.
-    static DetailModel MapAlbum(Album a)
+    // `link` is the resolved kind-138 pre-release identity, when the loader had reason to ask for one (a full
+    // prerelease route, or an album that already looks upcoming). Optional + null by default: every ordinary album open
+    // keeps its single request.
+    static DetailModel MapAlbum(Album a, PreReleaseLink? link = null)
     {
         var tracks = a.Tracks ?? Array.Empty<Track>();
         string badge = a.Kind switch
@@ -330,11 +388,18 @@ sealed class DetailPage : Component
             Title: a.Name, Cover: a.Cover, ContextUri: a.Uri,
             BadgeType: badge, Year: a.Year.ToString(), OwnerName: null, OwnerImage: null,
             Artists: a.Artists, Description: null, MetaLine: meta,
-            Tracks: tracks, AboutArtist: null, Palette: a.Palette,
+            Tracks: tracks, AboutArtist: null,
             HasVideo: tracks.Any(VideoPresence.HasVideo), ReleaseKind: a.Kind, MoreByArtist: a.MoreByArtist,
             Label: a.Label, Copyright: a.Copyright, ReleaseDate: FormatReleaseDate(a.ReleaseDate, a.ReleaseDatePrecision), AlbumArtists: a.ArtistsDetailed,
             OtherVersions: a.OtherVersions, CourtesyLine: a.CourtesyLine, ReleaseDatePrecision: a.ReleaseDatePrecision,
-            DiscCount: a.DiscCount, ShareUrl: a.ShareUrl, IsPreRelease: a.IsPreRelease, PreReleaseEnd: a.PreReleaseEnd);
+            DiscCount: a.DiscCount, ShareUrl: a.ShareUrl, IsPreRelease: a.IsPreRelease, PreReleaseEnd: a.PreReleaseEnd)
+        {
+            ReleaseInstant = PreReleaseDerivation.ReleaseInstant(a.ReleaseDate),
+            UpcomingAt = PreReleaseDerivation.UpcomingAt(a, DateTimeOffset.UtcNow),
+            // Only while genuinely ahead of us: a kind-138 link is cached for up to 30 days and must not turn the heart
+            // into a "Pre-save" for a record that shipped last week.
+            PreReleaseUri = link is { IsUpcoming: true } l ? l.PreReleaseUri : null,
+        };
     }
 
     // ISO date + Spotify precision: YEAR → "2014"; MONTH → "November 2014"; DAY → "November 4, 2014".

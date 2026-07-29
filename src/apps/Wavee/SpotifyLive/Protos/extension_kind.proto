@@ -221,4 +221,18 @@ enum ExtensionKind {
 	ARTIST_MUSIC_VIDEOS_UNMAPPED = 213;
 	ENTITY_CONNECTIONS = 214;
 	USER_PROFILE_V2 = 215;
+	// ── Resolved from live 2026 captures ────────────────────────────────────────────────────────────────────────────
+	// Past the end of the enum Wavee was built against. Each NAME is derived from the payload's google.protobuf.Any
+	// type_url on a 200 response: the number→message binding is wire-verified, the identifier is our spelling.
+	// Kind 225 was previously believed unresolvable (it is 304 in most captures) — omg.saz caught it with a 200.
+	MIX_BEATS = 217;                    // playlistmixing.extensions.mixbeats.Beats — per-beat grid
+	MIX_VOCAL_ACTIVITY = 218;           // playlistmixing.extensions.mixvocalactivity.VocalActivity
+	MIXABILITY = 219;                   // playlistmixing.extensions.mixability.Mixability
+	ENTITY_TYPE_TRAIT = 220;            // contentagnostic.v2.EntityTypeTrait
+	AUDIO_ATTRIBUTES_V2 = 222;          // playlistmixing…audio_attributes.v2.AudioAttributes — tempo + musical key
+	MIX_STATE = 225;                    // playlistmixing.extensions.mixstate.MixState
+	MIX_THREE_BAND_WAVEFORMS = 237;     // playlistmixing…mixthreebandwaveforms.ThreeBandWaveforms — the waveform
+	CONTENT_CAPABILITY_TRAIT = 239;     // contentagnostic.v2.ContentCapabilityTrait — states music-video-disabled
+	CURATION_EXPERIENCE_TRAIT = 246;    // contentagnostic.v2.CurationExperienceTrait
+	CONTENT_EXPERIENCE_TRAIT = 249;     // contentagnostic.v2.ContentExperienceTrait
 }

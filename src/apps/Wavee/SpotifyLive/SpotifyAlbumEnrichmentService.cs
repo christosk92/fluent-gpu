@@ -47,7 +47,9 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
                 w.WriteNumber("contributorsOffset", 0);
                 w.WriteBoolean("enableRelatedVideos", true);
                 w.WriteBoolean("enableRelatedAudioTracks", true);
-            }, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
+            // Desktop identity + the desktop document: the captured client uses b2cedf7e… here, which is a strict
+            // superset of the web-player variant (it adds onPlatformReputationTrait for the verified badge).
+            }, PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return new NowPlayingInfo(_store.GetArtist(artistUri), null);
 
         var mapped = SpotifyExportMapper.ArtistFromNpv(doc.RootElement);
@@ -66,8 +68,9 @@ sealed class SpotifyAlbumEnrichmentService : IAlbumEnrichmentService
             return Artists(cached);
 
         using var doc = await _pathfinder.QueryAsync(PathfinderOps.QueryArtistOverview, PathfinderOps.QueryArtistOverviewHash,
-            w => { w.WriteString("uri", artistUri); w.WriteString("locale", _pathfinder.Locale); w.WriteBoolean("preReleaseV2", false); },
-            PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
+            // Wire-exact: locale "" + preReleaseV2 true (same pairing as SpotifyArtistStatsService).
+            w => { w.WriteString("uri", artistUri); w.WriteString("locale", ""); w.WriteBoolean("preReleaseV2", true); },
+            PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);   // web-player bundle — see stats service
         if (doc is null) return Array.Empty<Artist>();
         var artist = SpotifyExportMapper.ArtistFromOverview(doc.RootElement);
         if (artist is null) return Array.Empty<Artist>();

@@ -39,8 +39,11 @@ public class SpotifyRuntimeIdentityTests
     [Fact]
     public void Default_MatchesHardcodedPins()
     {
-        Assert.Equal("129300667", SpotifyRuntimeIdentity.Default.AppVersion);
-        Assert.Equal("1.2.93.667.g7b5cc0ce", SpotifyRuntimeIdentity.Default.ClientVersion);
+        // Pinned to Spotify 1.2.94.583. Both values are wire-observed: omg.saz carries the full
+        // "1.2.94.583.g60394bd5" client-version string, so the .g suffix is captured, not invented.
+        // Bumping the pins is intentional — update this test WITH the pin, never the pin to suit the test.
+        Assert.Equal("129400583", SpotifyRuntimeIdentity.Default.AppVersion);
+        Assert.Equal("1.2.94.583.g60394bd5", SpotifyRuntimeIdentity.Default.ClientVersion);
         Assert.Equal(5, SpotifyRuntimeIdentity.Default.PlayPlayRequestVersion);
         Assert.Equal(9, SpotifyRuntimeIdentity.Default.AppVersion.Length);
     }

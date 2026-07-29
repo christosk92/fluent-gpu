@@ -48,7 +48,9 @@ public static class FakeData
         var s = Seed[Wrap(i, Seed.Length)];
         var album = new AlbumRef($"al{i}", $"spotify:album:al{i}", s.Title);
         long dur = 138_000 + (i * 37 % 150) * 1000L;       // 2:18 – ~4:50
-        return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64), HasVideo: i % 4 == 1);
+        // No has-video here: it is not a property of the row. The fake backend has no association plane, so a fake
+        // track honestly reports "no video" — which is also what the real app shows before a detect pass lands.
+        return new Track($"tr{i}", $"spotify:track:tr{i}", s.Title, [ArtistRef(i)], album, dur, i % 6 == 0, Cover(i, 64));
     }
 
     public static Track[] Tracks(int count, int offset = 0)
@@ -56,17 +58,6 @@ public static class FakeData
         var a = new Track[count];
         for (int i = 0; i < count; i++) a[i] = Track(offset + i);
         return a;
-    }
-
-    public static Palette PaletteFor(int seed)
-    {
-        uint accent = Accents[Wrap(seed, Accents.Length)];
-        // Derive a dark base + tinted-dark from the accent (rough; the real PaletteExtractor lands later).
-        uint Dark(uint c, float k) => 0xFF000000u
-            | ((uint)(((c >> 16) & 0xFF) * k) << 16)
-            | ((uint)(((c >> 8) & 0xFF) * k) << 8)
-            | (uint)((c & 0xFF) * k);
-        return new Palette(BackgroundDark: Dark(accent, 0.16f), TintedDark: Dark(accent, 0.28f), Light: 0xFFFFFFFF, Accent: accent);
     }
 
     // A deterministic release shape per index, so the catalog spans all four kinds (and the More-by/home shelves show a mix).
@@ -99,8 +90,6 @@ public static class FakeData
         var (kind, count) = AlbumShape(i);
         var artist = ArtistRef(i);
         var tracks = AlbumTracks(count, i * 10, artist, kind == AlbumKind.Compilation);
-        // A single leads with its official video → the detail page surfaces the "Watch the official video" card.
-        if (kind == AlbumKind.Single && tracks.Length > 0) tracks[0] = tracks[0] with { HasVideo = true };
         return new Album($"al{i}", $"spotify:album:al{i}", s.Title, Cover(i, 300), [artist], 2014 + (i % 11), tracks.Length, tracks, kind);
     }
 
@@ -356,8 +345,11 @@ public static class FakeData
             var ar = new ArtistRef("localar" + i, "wavee:local:artist:" + i, artist);
             var al = new AlbumRef("localal" + i, "wavee:local:album:" + i, title);
             long dur = 150_000 + (i * 41 % 140) * 1000L;
+            // Availability stated, not defaulted: it is nullable ("no verdict received") and a synthetic local file is
+            // playable by construction, so leaving it unknown would let a playable-only filter hide the fake library.
             list[i] = new Track("localtr" + i, "wavee:local:track:" + i, title, new[] { ar }, al, dur, false,
-                Cover(700 + i, 64), Origin: TrackOrigin.Local, Source: "local");
+                Cover(700 + i, 64), Origin: TrackOrigin.Local,
+                Availability: Availability.Playable, Source: "local");
         }
         return _localCache = list;
     }

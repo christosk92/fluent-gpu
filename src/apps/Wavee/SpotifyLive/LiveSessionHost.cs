@@ -405,11 +405,15 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // Concert discovery (artist schedules, hub feed, location controls) — the live Pathfinder adapter over the same
             // resource, installed into the switchable the concert pages hold. Reset to the Null service on GoOffline.
             svc.Concerts.SetInner(new SpotifyConcertService(pathfinderResource));
-            // Playlist page tint parity with albums: albums carry cover colors inline (getAlbum); playlists come over the
-            // Mercury proto with none, so resolve them via fetchExtractedColors on the cover, cached persistently (colors
-            // are immutable per image → ~half-year), and merged into the resident header.
-            var playlistPalette = new PlaylistPaletteEnricher(pathfinderResource, store, new ExtractedColorCache(), spclientLog);
-            var homeCache = new LiveHomeCache(pathfinderResource);
+            // Browse: the category directory + category pages, cached by the shared Pathfinder resource TTLs.
+            svc.Browse.SetInner(new SpotifyBrowseService(pathfinderResource, spclientLog));
+            // Expanded-row drawer data (kinds 98/99 associations + kind 5 audio formats), fetched on expand only.
+            svc.TrackExpansion.SetInner(new SpotifyTrackExpansionService(em, store, metadataLog));
+            // The cover-colour plane's universal feed. Everything that shows art — grids, shelves, heroes, editorial
+            // cards, track rows — resolves its colour from the plane, and a miss enqueues the IMAGE here, so no surface
+            // has to remember to prefetch its own tints. Kind 179 fills the same plane for free from the row bundle.
+            CoverColorPlane.Current.Filler = CoverColorFiller.Create(pathfinderResource, spclientLog);
+            var homeCache = new LiveHomeCache(pathfinderResource, () => svc.HomeFacet.Peek());
             // Featured-card hover peek: the batched feedBaselineLookup preview-track cache (display-only, no Store).
             HomeBaselinePreviews.Install(pathfinderResource);
             // "What's New" feed (queryWhatsNewFeed) — display-only, rides the PathfinderResource TTL. Seeded now so the
@@ -430,6 +434,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // rather than pinning the chart at 10 rows forever.
             var popularTracks = new SpotifyArtistPopularTracksService(live.Pipeline, () => live.BaseUrl, md, store, artistLog);
             svc.ArtistPopularTracks.SetInner(popularTracks);
+            svc.PlaylistPopcount.SetInner(new SpotifyPlaylistPopcountService(live.Pipeline, () => live.BaseUrl, artistLog));
+            svc.ContentFilters.SetInner(new SpotifyContentFilterService(live.Pipeline, () => live.BaseUrl, artistLog));
+            // Upcoming-release identity (kind 138) — shared extended-metadata source + etag cache, like the video detector.
+            // Resolves prerelease↔album for the artist masthead, prerelease: routing, and the pre-save write.
+            svc.PreRelease.SetInner(new SpotifyPreReleaseService(em, metadataLog, extensionCache));
             // Music-video detection + the video↔audio file-id map over the SAME extended-metadata source (etag-cached).
             var videoSvc = new SpotifyVideoService(em, store, metadataLog, extensionCache);
             svc.Video.SetInner(videoSvc);
@@ -457,14 +466,18 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // The detection hooks the surfaces that never route through OnDemandFetch fire: the artist chart, Liked Songs,
             // the queue, online search rows and live (sync-loop) playlist opens. Each is fire-and-forget so a hook never
             // sits on a read/render path; the batch itself is etag-cached and ≤300 uris per request inside the service.
-            var detectVideos = DetectHook(svc.Video, cts.Token);
+            // Row adornments: the cover tint (kind 179) that stops track lists painting blank grey squares, plus
+            // tempo/key (kind 222) for the track-row column. Shares the extended-metadata source + etag cache with the
+            // video detector, and rides the same hooks below.
+            var adornments = new SpotifyTrackAdornmentService(em, store, metadataLog, extensionCache);
+            svc.TrackAdornments = adornments;
+            var detectVideos = DetectHook(svc.Video, adornments, cts.Token);
             popularTracks.DetectVideos = detectVideos;
             svc.Playback.DetectVideos = detectVideos;
-            sync.OnPlaylistHydrated = uri => DetectContainerVideos(svc.Video, store, uri, cts.Token);
+            sync.OnPlaylistHydrated = uri => DetectContainerVideos(svc.Video, adornments, store, uri, cts.Token);
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.Sync = sync;   // on-open SWR: playlists route through the loop (blocking first fetch / background revalidate)
-                libSrc.EnsurePlaylistPalette = playlistPalette.EnsureAsync;
                 libSrc.OnDemandFetch = async (uri, c) =>
                 {
                     if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
@@ -475,7 +488,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
                         await Wavee.Backend.Metadata.ArtistDiscography.EnsureAsync(md, store, uri, c, hydrateAppearsOn: true).ConfigureAwait(false);   // V4 ensure; appears-on hydrated lazily on open
                     // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
-                    DetectContainerVideos(svc.Video, store, uri, c);
+                    DetectContainerVideos(svc.Video, adornments, store, uri, c);
                 };
                 libSrc.DetectVideos = detectVideos;   // Liked Songs never routes through OnDemandFetch
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
@@ -676,17 +689,30 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // The shared detect hook handed to the surfaces that own their own track lists (artist chart, Liked, queue, search).
     // It returns a COMPLETED task on purpose: the callers sit on read/render paths, so the batch runs off-thread and its
     // failures die here rather than surfacing as an unobserved exception.
-    static Func<IReadOnlyList<string>, Task> DetectHook(IVideoService video, CancellationToken ct)
+    // Adornments (kind 179 tint + kind 222 tempo/key) ride the SAME hook: every surface that already detects videos
+    // for its rows needs the same rows tinted, and both services batch ≤300 uris with their own etag caching.
+    static Func<IReadOnlyList<string>, Task> DetectHook(IVideoService video, SpotifyTrackAdornmentService? adorn,
+                                                       CancellationToken ct)
         => uris =>
         {
             if (uris.Count > 0)
-                _ = Task.Run(async () => { try { await video.DetectAsync(uris, ct).ConfigureAwait(false); } catch { } }, ct);
+                _ = Task.Run(async () =>
+                {
+                    try { await video.DetectAsync(uris, ct).ConfigureAwait(false); } catch { }
+                    if (adorn is not null)
+                    {
+                        // Tracks only. Album/playlist/artist covers no longer need a hook here at all: their colour is
+                        // image-keyed in CoverColorPlane and the art slot itself asks for a grading when it renders.
+                        try { await adorn.EnsureAsync(uris, ct).ConfigureAwait(false); } catch { }
+                    }
+                }, ct);
             return Task.CompletedTask;
         };
 
     // After a container's tracklist hydrates, batch-detect which of its tracks have a music video (fills the row indicator).
     // Fire-and-forget off the open path — best-effort, etag-cached, and a no-op when the container has no resident tracks yet.
-    static void DetectContainerVideos(IVideoService video, IStore store, string uri, CancellationToken ct)
+    static void DetectContainerVideos(IVideoService video, SpotifyTrackAdornmentService? adorn, IStore store,
+                                      string uri, CancellationToken ct)
     {
         List<string>? uris = null;
         if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
@@ -717,7 +743,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
         }
         if (uris is not { Count: > 0 }) return;
         var list = uris;
-        _ = Task.Run(async () => { try { await video.DetectAsync(list, ct).ConfigureAwait(false); } catch { } }, ct);
+        _ = Task.Run(async () =>
+        {
+            try { await video.DetectAsync(list, ct).ConfigureAwait(false); } catch { }
+            if (adorn is not null)
+                try { await adorn.EnsureAsync(list, ct).ConfigureAwait(false); } catch { }
+        }, ct);
     }
 
     // Full-catalog online search via Pathfinder — the per-facet ops (searchTracks/Albums/Artists/Playlists) fired in
@@ -760,6 +791,29 @@ public sealed class LiveSessionHost : IAsyncDisposable
             w.WriteEndArray();
         }
 
+        // Audiobooks is the ONE facet whose op sends includePreReleases:true (wire-verified, omg.saz sid 0671).
+        void VarsAudiobooks(Utf8JsonWriter w)
+        {
+            w.WriteBoolean("includePreReleases", true);
+            w.WriteBoolean("includeAlbumPreReleases", true);
+            w.WriteNumber("numberOfTopResults", limit);
+            w.WriteString("searchTerm", query);
+            w.WriteNumber("offset", offset);
+            w.WriteNumber("limit", limit);
+            w.WriteBoolean("includeAudiobooks", true);
+            w.WriteBoolean("includeAuthors", true);
+            w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+        }
+
+        // searchFullEpisodes takes a MINIMAL shape — sending the shared one would not match the persisted query.
+        void VarsEpisodes(Utf8JsonWriter w)
+        {
+            w.WriteString("searchTerm", query);
+            w.WriteNumber("offset", offset);
+            w.WriteNumber("limit", limit);
+            w.WriteBoolean("includeEpisodeContentRatingsV2", true);
+        }
+
         var callerCt = ct;
         using var searchCts = CancellationTokenSource.CreateLinkedTokenSource(callerCt);
         searchCts.CancelAfter(TimeSpan.FromSeconds(8));
@@ -782,10 +836,26 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 SearchFacet.Albums => (PathfinderOps.SearchAlbums, PathfinderOps.SearchAlbumsHash),
                 SearchFacet.Artists => (PathfinderOps.SearchArtists, PathfinderOps.SearchArtistsHash),
                 SearchFacet.Playlists => (PathfinderOps.SearchPlaylists, PathfinderOps.SearchPlaylistsHash),
-                _ => throw new NotSupportedException($"Search facet '{facet}' is not wired to a Pathfinder operation yet."),
+                SearchFacet.Podcasts => (PathfinderOps.SearchPodcasts, PathfinderOps.SearchPodcastsHash),
+                SearchFacet.Audiobooks => (PathfinderOps.SearchAudiobooks, PathfinderOps.SearchAudiobooksHash),
+                SearchFacet.Episodes => (PathfinderOps.SearchFullEpisodes, PathfinderOps.SearchFullEpisodesHash),
+                SearchFacet.Profiles => (PathfinderOps.SearchUsers, PathfinderOps.SearchUsersHash),
+                // Unreachable: every SearchFacet member is mapped above. Kept as a loud failure so a NEW enum member
+                // added without an operation fails at the call instead of silently returning empty results.
+                _ => throw new NotSupportedException($"Search facet '{facet}' is not wired to a Pathfinder operation."),
             };
 
-            using var doc = await pf.QueryAsync(op, hash, Vars, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
+            // Two ops do NOT take the shared variable shape:
+            //   searchAudiobooks  — the only op sending includePreReleases:TRUE
+            //   searchFullEpisodes — a completely different, minimal shape (no numberOfTopResults / include* flags)
+            Action<Utf8JsonWriter> vars = facet switch
+            {
+                SearchFacet.Audiobooks => VarsAudiobooks,
+                SearchFacet.Episodes => VarsEpisodes,
+                _ => Vars,
+            };
+
+            using var doc = await pf.QueryAsync(op, hash, vars, PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
             if (doc is null) throw new InvalidOperationException($"Spotify {facet} search failed.");
             return Wavee.Core.SpotifyExportMapper.SearchFromV2(doc.RootElement);
         }
@@ -936,31 +1006,40 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
     // The editorial/personalized home via Pathfinder → the existing composer (data.home.sectionContainer.sections).
     // The desktop query embeds recently-played inline, so the composer builds the recents shelf too — no extra call.
-    static async Task<IReadOnlyList<HomeGroup>> FetchHomeAsync(PathfinderResource pf, CancellationToken ct)
+    // facet: a homeChips[].id ("music-chip", "podcasts-following-chip", …) or null/"" for the unfiltered feed.
+    static async Task<LiveHomeResult> FetchHomeAsync(PathfinderResource pf, string? facet, CancellationToken ct)
     {
+        // The real local zone, as IANA. "Etc/UTC" used to be hardcoded here, which asked Spotify for someone else's
+        // afternoon: the zone drives the greeting bucket and the time-of-day shelves.
+        string tz = Wavee.Backend.Spotify.SpotifyTimeZone.LocalIana;
         using var doc = await pf.UseQueryAsync(PathfinderOps.Home, PathfinderOps.HomeHash,
             w =>
             {
                 w.WriteString("homeEndUserIntegration", "INTEGRATION_DESKTOP");
-                w.WriteString("timeZone", "Etc/UTC");
+                w.WriteString("timeZone", tz);
                 w.WriteString("sp_t", "");
-                w.WriteString("facet", "");
+                w.WriteString("facet", facet ?? "");
                 w.WriteNumber("sectionItemsLimit", 10);
                 w.WriteBoolean("includeEpisodeContentRatingsV2", true);
             }, PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
-        if (doc is null) return System.Array.Empty<HomeGroup>();
+        if (doc is null) return LiveHomeResult.Empty;
         var homeRoot = Wavee.Core.SpotifyExportMapper.Dig(doc.RootElement, "data", "home");
-        return Wavee.Core.SpotifyHomeComposer.Compose(homeRoot, System.Array.Empty<Wavee.Core.PlaylistSummary>(),
-            Loc.Get(Strings.Home.MadeForYou), Loc.Get(Strings.Home.MoreForYou), Loc.Get(Strings.Home.RecentlyPlayed)).Groups;
+        var contribution = Wavee.Core.SpotifyHomeComposer.Compose(homeRoot, System.Array.Empty<Wavee.Core.PlaylistSummary>(),
+            Loc.Get(Strings.Home.MadeForYou), Loc.Get(Strings.Home.MoreForYou), Loc.Get(Strings.Home.RecentlyPlayed));
+        return new LiveHomeResult(contribution.Groups, contribution.Chips);
     }
 
     sealed class LiveHomeCache
     {
         readonly PathfinderResource _pf;
+        readonly Func<string?> _facet;
 
-        public LiveHomeCache(PathfinderResource pf) => _pf = pf;
+        public LiveHomeCache(PathfinderResource pf, Func<string?> facet) { _pf = pf; _facet = facet; }
 
-        public Task<IReadOnlyList<HomeGroup>> GetAsync(CancellationToken ct) => FetchHomeAsync(_pf, ct);
+        // The facet is read at FETCH time, not at construction: the chip row writes Services.HomeFacet and asks for a
+        // refresh, and PathfinderResource keys its TTL cache on the request body — so a facet change is a distinct
+        // cache entry rather than a stale hit.
+        public Task<LiveHomeResult> GetAsync(CancellationToken ct) => FetchHomeAsync(_pf, _facet(), ct);
     }
 
     // V4-first album ensure: AlbumV4 (usually already resident from the prefetch) + TrackV4 enrichment for gid-only rows,
@@ -1000,14 +1079,28 @@ public sealed class LiveSessionHost : IAsyncDisposable
     internal static async Task FetchAlbumAsync(PathfinderResource pf, IStore store, string uri, CancellationToken ct)
     {
         using var doc = await pf.QueryAsync(PathfinderOps.GetAlbum, PathfinderOps.GetAlbumHash,
-            w => { w.WriteString("uri", uri); w.WriteString("locale", pf.Locale); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },
-            PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
+            // locale is EMPTY on the wire (omg.saz/browe.saz): the captured client sends "" and lets the account's
+            // market/language headers decide. Sending pf.Locale here diverged from every captured request.
+            w => { w.WriteString("uri", uri); w.WriteString("locale", ""); w.WriteNumber("offset", 0); w.WriteNumber("limit", 50); },
+            // getAlbum rides the web-player bundle in the capture, exactly like queryArtistOverview.
+            PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);
         if (doc is null) return;
         if (Wavee.Core.SpotifyExportMapper.AlbumFromUnion(doc.RootElement) is { } album)
         {
             if (album.ArtistsDetailed is { Count: > 0 })
                 foreach (var artist in album.ArtistsDetailed)
                     store.UpsertArtist(artist);
+            // Fan the tracklist out as ENTITIES before the album write. CachedStore.PersistAlbum strips Tracks, so a
+            // verdict carried only on the in-memory album is forgotten across a restart; routing each row through
+            // UpsertTrack puts it on StoreEntityMerge.Track + PersistTrack, inheriting the same merge and pin rules
+            // every other adornment uses.
+            //
+            // getAlbum is not the ONLY source of this — TrackV4 carries earliest_live_timestamp on every payload
+            // (10,472/10,472 in the capture) and that is what ExtendedMetadataSource derives availability from. This
+            // write is the getAlbum half; the two agree because both flow through the same nullable-merge rule.
+            if (album.Tracks is { Count: > 0 } albumTracks)
+                foreach (var t in albumTracks)
+                    if (t.Uri.Length > 0) store.UpsertTrack(t);
             store.UpsertAlbum(album);
         }
     }

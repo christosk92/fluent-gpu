@@ -620,7 +620,16 @@ public static class ConcertUi
     /// reused <c>"when-pill"</c> node so its width change animates via the FilterToken width-reflow recipe; the segment
     /// ENTERS from the chip's direction (right) as the chip EXITS toward the pill (left) — the two legs overlap and read
     /// as the dock. Returns <see cref="BoxEl"/> so the caller can attach the anchor capture.</summary>
-    public static BoxEl SegmentedDatePill(string name, string rangeText, Action onClick) => new BoxEl
+    public static BoxEl SegmentedDatePill(string name, string rangeText, Action onClick)
+        => SegmentedPill(name, rangeText, onClick);
+
+    /// <summary>The FUSED two-segment pill: a docked capsule carrying the chosen facet's name, then its value, then a
+    /// chevron to reopen. This is the visual survivor of a loose chip that has flown into the pill — the second half
+    /// of the Concerts filter grammar, generalised so the home facet row speaks the same language.
+    ///
+    /// <paramref name="name"/> is the facet ("Music", "This weekend"); <paramref name="valueText"/> is what it
+    /// resolved to ("Following", a date range).</summary>
+    public static BoxEl SegmentedPill(string name, string valueText, Action onClick) => new BoxEl
     {
         Key = "when-pill",
         Animate = new LayoutTransition(
@@ -651,7 +660,7 @@ public static class ConcertUi
                     Body(name) with { Color = Tok.AccentTextPrimary, Weight = 600, MaxLines = 1 },
                 ],
             },
-            Body(rangeText) with { Color = Tok.TextOnAccentPrimary, Weight = 600, MaxLines = 1 },
+            Body(valueText) with { Color = Tok.TextOnAccentPrimary, Weight = 600, MaxLines = 1 },
             Icon(Icons.ChevronDown, 10f, Tok.TextOnAccentPrimary) with { Shrink = 0f },
         ],
     };

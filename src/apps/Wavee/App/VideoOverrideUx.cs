@@ -341,10 +341,11 @@ public static class VideoOverrideUx
 public static class VideoPresence
 {
     static VideoOverrideService? _svc;
+    static IStore? _store;
 
-    /// <summary>Attach the curation (composition root). Null on a backend without one — every override path then reports
-    /// exactly today's behavior.</summary>
-    public static void Attach(VideoOverrideService? svc) => _svc = svc;
+    /// <summary>Attach the curation and the store (composition root). Null on a backend without them — every path then
+    /// reports "no video", which is exactly what a backend with no association plane can honestly say.</summary>
+    public static void Attach(VideoOverrideService? svc, IStore? store = null) { _svc = svc; _store = store; }
 
     /// <summary>The attached curation, for surfaces that need more than the predicate.</summary>
     public static VideoOverrideService? Service => _svc;
@@ -352,8 +353,17 @@ public static class VideoPresence
     /// <summary>Is a user attachment curated for this playable? One ordinal dictionary probe.</summary>
     public static bool HasOverride(string? playableUri) => _svc is { } s && s.Has(playableUri);
 
-    /// <summary>The has-video answer every row indicator and the "Videos only" filter use: the source's own video OR a
-    /// user attachment. Never writes <c>HasVideo=true</c> back into the shared track row (that would poison the
-    /// etag-cached Spotify association semantics).</summary>
-    public static bool HasVideo(Track t) => t.HasVideo || HasOverride(t.Uri);
+    /// <summary>THE has-video answer — every row indicator, the "Videos only" filter, the player-bar button and the
+    /// Connect projection ask this and nothing else.
+    ///
+    /// It reads the ASSOCIATION PLANE (Spotify's kind-99 verdict, keyed by uri) plus any user attachment. The answer
+    /// deliberately does not live on the track row: a row is written by half a dozen sources that know nothing about
+    /// videos, so a mirrored copy there needed an OR-merge to survive them and still drifted out of step with the
+    /// association the detect pass had just stored. One fact, one home, and disagreement becomes unrepresentable.</summary>
+    public static bool HasVideo(Track t) => HasVideo(t.Uri);
+
+    /// <summary>The same answer for a bare uri — for callers holding a playable rather than a hydrated row.</summary>
+    public static bool HasVideo(string? playableUri)
+        => (playableUri is { Length: > 0 } u && _store?.GetVideoAssociation(u) is { HasVideo: true })
+           || HasOverride(playableUri);
 }

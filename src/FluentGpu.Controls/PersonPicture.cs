@@ -96,10 +96,9 @@ public static class PersonPicture
 
         // The face layer: either the photo (PersonPictureEllipse / ActualImageBrush, UniformToFill, circular-cropped) or
         // the initials/glyph TextBlock. FontWeight SemiBold == Bold. IsTextScaleFactorEnabled=False ⇒ fixed font size.
-        // The text rides in a SIZED flex wrapper because ZStack pins children HORIZONTALLY at the content origin
-        // (only the vertical axis honors AlignSelf/AlignItems — FlexLayout.ArrangeZStack) — WinUI centers the
-        // InitialsTextBlock both ways (PersonPicture.xaml:66 HorizontalAlignment/VerticalAlignment="Center"); the
-        // sized wrapper's own flex centering places the measured run in the middle of the circle on both axes.
+        // The text rides in a SIZED flex wrapper that centers it on both axes, matching WinUI's InitialsTextBlock
+        // (PersonPicture.xaml:66 HorizontalAlignment/VerticalAlignment="Center"). The wrapper fills the circle, so the
+        // stack's own alignment is a no-op on it either way.
         Element face = hasPhoto
             ? new ImageEl
             {
@@ -135,7 +134,7 @@ public static class PersonPicture
         bool numberBadge = badgeNumber > 0;
         bool glyphBadge = badgeNumber == 0 && !string.IsNullOrEmpty(badgeGlyph);
         var children = numberBadge || glyphBadge
-            ? new[] { face, BuildBadge(ts, size, badgeNumber, glyphBadge ? badgeGlyph : null) }
+            ? new[] { face, BuildBadge(ts, badgeNumber, glyphBadge ? badgeGlyph : null) }
             : new[] { face };
 
         return new BoxEl
@@ -160,7 +159,7 @@ public static class PersonPicture
 
     // BadgeStates: BadgeWithoutImageSource. Badge plate = 50% of the control, top-right, margin 0,-4,-4,0.
     // Fill = AccentFillColorDefault; foreground = TextOnAccentFillColorPrimary; stroke = transparent (2px, invisible).
-    private static BoxEl BuildBadge(PersonPictureTemplateSettings ts, float size, int badgeNumber, string? badgeGlyph)
+    private static BoxEl BuildBadge(PersonPictureTemplateSettings ts, int badgeNumber, string? badgeGlyph)
     {
         bool isGlyph = !string.IsNullOrEmpty(badgeGlyph);   // caller resolved precedence: glyph only when badgeNumber == 0
         string text = isGlyph ? badgeGlyph! : (badgeNumber <= 99 ? badgeNumber.ToString() : "99+");
@@ -174,12 +173,11 @@ public static class PersonPicture
             LineBounds = TextLineBounds.Tight,                     // TextLineBounds="Tight" on BadgeNumberTextBlock (PersonPicture.xaml:71)
         };
 
-        // Position at the top-right corner. WinUI: BadgeGrid VerticalAlignment=Top, HorizontalAlignment=Right,
-        // Margin 0,-4,-4,0 (PersonPicture.xaml:68) → the plate's RIGHT edge sits 4px outside the control's right edge,
-        // i.e. left = size + 4 − plate. The engine's ZStack lays every layer at the content origin (left 0, and
-        // AlignSelf=Start pins the top), so the full target offset is applied as a translation — computed from the
-        // CONTROL size, not from any assumption that plate == size/2, so it survives a plate-fraction change.
-        // Vertically the -4 top margin lifts the plate 4px above the top edge (OffsetY = -4).
+        // Position at the top-right corner, DECLARATIVELY. WinUI's BadgeGrid is VerticalAlignment=Top,
+        // HorizontalAlignment=Right, Margin 0,-4,-4,0 (PersonPicture.xaml:68); the ZStack honors both axes, so that maps
+        // 1:1 onto AlignSelf=Start + JustifySelf=End + the same negative margin — the plate's right edge lands 4px
+        // outside the control's right edge and its top 4px above it, with no arithmetic off the control size at all.
+        // (This was a hand-computed OffsetX/OffsetY translation back when ZStack pinned every layer to x=0.)
         float plate = ts.BadgePlateSize;
         return new BoxEl
         {
@@ -189,12 +187,12 @@ public static class PersonPicture
             Corners = Radii.Circle(plate),
             Fill = Tok.AccentDefault,                              // PersonPictureEllipseBadgeFillThemeBrush = AccentFillColorDefault
             BorderWidth = 0f,                                      // stroke brush is ControlFillColorTransparent (invisible)
-            AlignSelf = FlexAlign.Start,                           // BadgeGrid VerticalAlignment=Top (lay out at the top, not centred)
+            AlignSelf = FlexAlign.Start,                           // BadgeGrid VerticalAlignment=Top
+            JustifySelf = FlexAlign.End,                           // BadgeGrid HorizontalAlignment=Right
+            Margin = new Edges4(0f, -4f, -4f, 0f),                 // BadgeGrid Margin 0,-4,-4,0 (overflows the circle)
             AlignItems = FlexAlign.Center,
             Justify = FlexJustify.Center,
             ClipToBounds = true,
-            OffsetX = size + 4f - plate,                           // right-aligned + the 4px outward (-4 right) margin
-            OffsetY = -4f,                                         // the -4 top margin lifts it 4px above the top edge
             Children = [label],
         };
     }

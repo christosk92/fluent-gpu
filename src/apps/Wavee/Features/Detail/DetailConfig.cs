@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using FluentGpu.Controls;
 using FluentGpu.Foundation;
 using FluentGpu.Localization;
@@ -52,7 +53,6 @@ public sealed record DetailModel(
     string MetaLine,                     // "50 songs · 2 hr 59 min · 2024"
     IReadOnlyList<Track> Tracks,
     Artist? AboutArtist,                 // album/single trailing: About-the-artist + More-by shelf (TopAlbums)
-    Palette? Palette,                    // art-derived palette (future GetPaletteAsync — null for now)
     bool HasDateAdded = false,           // playlist: any track carries an AddedAt → show the Date-added column + sort
     bool HasAddedBy = false,             // playlist: ≥2 distinct contributors → show the Added-by column (collaborative)
     bool HasVideo = false,               // any track has a video → offer the "Videos only" filter + the row indicator
@@ -78,9 +78,28 @@ public sealed record DetailModel(
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
     public string? MorphKey { get; init; }
 
+    // ── Upcoming release (album path) ────────────────────────────────────────────────────────────────────────────────
+    // Init-only, deliberately NOT positional: every `with` expression and DetailModel.Empty above would have to be
+    // rewritten for a new positional parameter, and these three are set by exactly one mapper (MapAlbum).
+
+    /// <summary>The raw release instant (album path only) — the FACT the "Released"/"Releases" tile keys its tense on.
+    /// <see cref="ReleaseDate"/> is already formatted for display, so the tense cannot be recovered from it.</summary>
+    public DateTimeOffset? ReleaseInstant { get; init; }
+
+    /// <summary>The effective countdown target: the moment SOMETHING about this release is still ahead of us. Null =
+    /// fully out. Covers three wire shapes — a declared <c>preReleaseEndDateTime</c>, a partly-released album whose
+    /// remaining rows carry a future <c>earliest_live_timestamp</c>, and an album whose date is simply in the future
+    /// with no prerelease flag at all (the vaultboy case: <c>IsPreRelease=false</c>, <c>ReleaseDate=2026-09-04</c>).
+    /// See <see cref="PreReleaseDerivation"/> for the precedence between them.</summary>
+    public DateTimeOffset? UpcomingAt { get; init; }
+
+    /// <summary>The <c>spotify:prerelease:</c> entity for this album, when one exists — the target a PRE-SAVE writes
+    /// to. Null when unresolved/offline/already out, in which case the heart falls back to saving the album itself.</summary>
+    public string? PreReleaseUri { get; init; }
+
     public static readonly DetailModel Empty = new(
         "", null, null, null, null, null, null,
-        Array.Empty<ArtistRef>(), null, "", Array.Empty<Track>(), null, null);
+        Array.Empty<ArtistRef>(), null, "", Array.Empty<Track>(), null);
 }
 
 /// <summary>
@@ -103,26 +122,34 @@ public readonly record struct DetailConfig(
     bool ShowPlays = false,         // album/single/EP/compilation: a Plays column + per-row video indicator + top-track star
     bool ShowTrackArtist = false,   // show the per-track artist subline (playlist/liked, and compilations — various artists)
     DetailContent Content = DetailContent.Tracks,   // tracks (music) vs episodes (podcast show) for the right column
-    bool Recommendations = false)   // owned/collaborative playlist: append the "Recommended songs" extender at the list bottom
+    bool Recommendations = false,   // owned/collaborative playlist: append the "Recommended songs" extender at the list bottom
+    // Tempo + musical key column (extended-metadata kind 222). On for the surfaces where a listener is choosing what
+    // to play next from a long list (playlists, Liked); off for album pages, where the running order is the point and
+    // the Plays lane already occupies that width.
+    bool ShowTempo = false,
+    // The expand chevron + versions drawer (alternate recordings, music videos, per-item audio format). On wherever
+    // a listener is choosing what to play from a long list; off on podcast/episode surfaces, which have no versions.
+    bool ShowVersions = false)
 {
     // Column track sets. Two shared instances → the header and rows are reference-equal (the alignment invariant).
     // playlist/liked: [ #, TITLE(+thumb+artist), ALBUM, ♥, DUR ]   album/single: [ #, TITLE(+artist), ♥, DUR ]
     // (No "Plays" column: the domain Track carries no play count — a data-driven deviation from the spec's column list.)
     internal static readonly TrackSize[] ListColumns =
-        [TrackSize.Px(36), TrackSize.Star(), TrackSize.Px(200), TrackSize.Px(40), TrackSize.Px(64)];
+        [TrackSize.Px(36), TrackSize.Star(), TrackSize.Px(200), TrackSize.Px(40), TrackSize.Px(52)];
     internal static readonly TrackSize[] AlbumColumns =
-        [TrackSize.Px(36), TrackSize.Star(), TrackSize.Px(40), TrackSize.Px(64)];
+        [TrackSize.Px(36), TrackSize.Star(), TrackSize.Px(40), TrackSize.Px(52)];
 
     public static DetailConfig Playlist => new(
         TwoColumn: true, RailWidth: WaveeSize.RailPlaylist, Badges: BadgeStyle.OwnerRow,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
         Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.Follow, ShowTrackArtist: true,
-        Recommendations: true);
+        Recommendations: true, ShowTempo: true, ShowVersions: true);
 
     public static DetailConfig Album => new(
         TwoColumn: true, RailWidth: WaveeSize.RailAlbum, Badges: BadgeStyle.TypeYear,
         ShowArtThumb: false, ShowAlbumColumn: false, Columns: AlbumColumns, CapTitle: false,
-        Selection: ItemsSelectionMode.Extended, HasTrailing: true, Heart: HeartMode.Save, ShowPlays: true);
+        Selection: ItemsSelectionMode.Extended, HasTrailing: true, Heart: HeartMode.Save, ShowPlays: true,
+        ShowVersions: true);
 
     // A single == the album surface (trailing sections included) but with no multi-select (1–2 tracks).
     public static DetailConfig Single => Album with { Selection = ItemsSelectionMode.None };
@@ -133,7 +160,8 @@ public readonly record struct DetailConfig(
     public static DetailConfig Liked => new(
         TwoColumn: true, RailWidth: WaveeSize.RailPlaylist, Badges: BadgeStyle.None,
         ShowArtThumb: true, ShowAlbumColumn: true, Columns: ListColumns, CapTitle: true,
-        Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.None, ShowTrackArtist: true);
+        Selection: ItemsSelectionMode.Extended, HasTrailing: false, Heart: HeartMode.None, ShowTrackArtist: true,
+        ShowTempo: true, ShowVersions: true);
 
     // A podcast show: the album-style two-column rail (cover · PODCAST pill · title · publisher/episode-count meta ·
     // Play + Follow), with the right column rendering EPISODES (EpisodeList) instead of a track table.
@@ -144,9 +172,22 @@ public readonly record struct DetailConfig(
         Content: DetailContent.Episodes);
 }
 
+// PreReleaseDerivation lives in its own engine-free file (PreReleaseDerivation.cs) so Wavee.Tests can source-include it.
+
 /// <summary>Shared formatting + small helpers for the detail surface.</summary>
 internal static class DetailFormat
 {
+    /// <summary>A compact release date for a track that is not out yet — "4 Sep", or "4 Sep 2027" once it crosses a
+    /// year boundary (a bare day/month a year out reads as though it were imminent). Culture-formatted, since this
+    /// lands in the duration lane where every other value is numeric and short.</summary>
+    public static string ShortDate(DateTimeOffset when)
+    {
+        var local = when.ToLocalTime();
+        return local.Year == DateTimeOffset.Now.Year
+            ? local.ToString("d MMM", System.Globalization.CultureInfo.CurrentCulture)
+            : local.ToString("d MMM yyyy", System.Globalization.CultureInfo.CurrentCulture);
+    }
+
     /// <summary>Per-track duration "m:ss" (or "h:mm:ss").</summary>
     public static string TrackTime(long ms)
     {
@@ -154,6 +195,18 @@ internal static class DetailFormat
         return t.TotalHours >= 1
             ? $"{(int)t.TotalHours}:{t.Minutes:00}:{t.Seconds:00}"
             : $"{t.Minutes}:{t.Seconds:00}";
+    }
+
+    /// <summary>Tempo readout — "101" for a whole BPM, "101.5" when the fraction is meaningful. Spotify reports tempo
+    /// as a double (101.0099…), and a full-precision figure in a narrow lane is noise; one decimal is the most a
+    /// listener can act on. Invariant culture: this is a technical figure, not a localised quantity, and a comma
+    /// decimal separator next to the key label reads as a list.</summary>
+    public static string Bpm(double bpm)
+    {
+        double rounded = Math.Round(bpm, 1, MidpointRounding.AwayFromZero);
+        return Math.Abs(rounded - Math.Round(rounded)) < 0.05
+            ? ((int)Math.Round(rounded)).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : rounded.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     /// <summary>Total-duration phrase "2 hr 59 min" / "47 min".</summary>
@@ -171,12 +224,18 @@ internal static class DetailFormat
         return ms;
     }
 
-    /// <summary>The Date-added column label: relative for the last week ("Today" / "3 days ago"), else an absolute date.</summary>
+    /// <summary>The Date-added column label: relative for the last week ("Today" / "3 days ago"), else an absolute
+    /// date — same calendar year omits the year ("MMM d") so the narrowed Date track stays readable.</summary>
     public static string DateAddedLabel(DateTimeOffset? at)
     {
         if (at is not { } d) return "";
         int days = (int)(DateTimeOffset.Now.Date - d.Date).TotalDays;
-        return days <= 0 ? Loc.Get(Strings.Detail.Today) : days == 1 ? Loc.Get(Strings.Detail.Yesterday) : days < 7 ? Strings.Detail.DaysAgo(days) : d.ToString("MMM d, yyyy");
+        if (days <= 0) return Loc.Get(Strings.Detail.Today);
+        if (days == 1) return Loc.Get(Strings.Detail.Yesterday);
+        if (days < 7) return Strings.Detail.DaysAgo(days);
+        return d.Year == DateTimeOffset.Now.Year
+            ? d.ToString("MMM d")
+            : d.ToString("MMM d, yyyy");
     }
 
     /// <summary>"· "-joined billed-artist names.</summary>

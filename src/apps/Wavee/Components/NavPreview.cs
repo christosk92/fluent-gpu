@@ -27,13 +27,13 @@ static class DetailPreview
         Title: a.Name, Cover: a.Cover, ContextUri: a.Uri,
         BadgeType: AlbumBadge(a.Kind), Year: a.Year > 0 ? a.Year.ToString() : null, OwnerName: null, OwnerImage: null,
         Artists: a.Artists, Description: null, MetaLine: Strings.Detail.SongCount(a.TrackCount),
-        Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null, ReleaseKind: a.Kind);
+        Tracks: Array.Empty<Track>(), AboutArtist: null, ReleaseKind: a.Kind);
 
     public static DetailModel FromPlaylist(PlaylistSummary p) => new(
         Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
         BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: null,
         Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: Strings.Detail.SongCount(p.TrackCount),
-        Tracks: Array.Empty<Track>(), AboutArtist: null, Palette: null);
+        Tracks: Array.Empty<Track>(), AboutArtist: null);
 
     static string AlbumBadge(AlbumKind k) => k switch
     {

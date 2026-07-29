@@ -20,6 +20,14 @@ public static class CollectionSets
         "artists" => "artist",
         "shows" => "show",
         "episodes" => "listenlater",
+        // A PRE-SAVE. The capture (pre-release.saz) proves the write is POST /collection/v2/write against
+        // spotify:prerelease:{id} but never shows the `set` string, so "collection" is INFERRED from observable
+        // behaviour — a pre-saved record turns into a saved album the moment it drops, and albums ride "collection".
+        // If the inference is wrong the gateway 400s: SetReplayStrategy.Replay returns false, the op backs off and then
+        // dead-letters + rolls the heart back (Backend/Mutation.cs). Visible, reversible, never corrupting.
+        // Inbound sync for this set is deliberately NOT wired (see LogicalSetsForWireSet) until a live capture confirms
+        // the set string.
+        "prerelease" => "collection",
         _ => setId,
     };
 
@@ -28,6 +36,7 @@ public static class CollectionSets
     {
         "liked" => "spotify:track:",
         "albums" => "spotify:album:",
+        "prerelease" => "spotify:prerelease:",
         _ => null,
     };
 

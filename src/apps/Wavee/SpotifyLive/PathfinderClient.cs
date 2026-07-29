@@ -94,16 +94,15 @@ public sealed class PathfinderClient
 
 public static class PathfinderOps
 {
+    // Recaptured against Spotify 1.2.94.583 (artist_more/omg/all/concerts.saz — 18 samples, every one HTTP 200). The
+    // previous hash 7f86ff63… appears NOWHERE in ~11k captured sessions, so it was unverifiable rather than
+    // known-good. This document also carries onPlatformReputationTrait, watchFeedEntrypoint, relatedContent.*V2 and
+    // preReleaseV2 — see SpotifyExportMapper.MapArtist.
     public const string QueryArtistOverview = "queryArtistOverview";
-    public const string QueryArtistOverviewHash = "7f86ff63e38c24973a2842b672abe44c910c1973978dc8a4a0cb648edef34527";
+    public const string QueryArtistOverviewHash = "ae0e2958a4ab645b35ca19ac04d0495ae12d9c5d7b7286217674801a9aab281a";
 
     public const string GetAlbum = "getAlbum";
     public const string GetAlbumHash = "b9bfabef66ed756e5e13f68a942deb60bd4125ec1f1be8cc42769dc0259b4b10";
-
-    // Generic image-color extraction: variables { imageUris:[url…] } → data.extractedColors[].{colorDark,colorLight,colorRaw}.hex.
-    // Used to tint the playlist page from its cover (albums carry colors inline in getAlbum). Persistent cache is authoritative.
-    public const string FetchExtractedColors = "fetchExtractedColors";
-    public const string FetchExtractedColorsHash = "36e90fcaea00d47c695fce31874efeb2519b97d4cd0ee1abfb4f8dc9348596ea";
 
     // Desktop "home" persisted query (INTEGRATION_DESKTOP). The response embeds the recently-played list inline
     // (HomeRecentlyPlayedSectionData → a `List` of recent entities), so no separate `recents` query is needed.
@@ -112,12 +111,52 @@ public static class PathfinderOps
 
     public const string SearchTracks = "searchTracks";
     public const string SearchTracksHash = "59ee4a659c32e9ad894a71308207594a65ba67bb6b632b183abe97303a51fa55";
+    // Recaptured 1.2.94.583 (omg.saz sid 0458/0706). The previous hash 5e7d2724… has ZERO wire support across the
+    // whole corpus — searchAlbums was the single op whose value nothing corroborated.
     public const string SearchAlbums = "searchAlbums";
-    public const string SearchAlbumsHash = "5e7d2724fbef31a25f714844bf1313ffc748ebd4bd199eaad50628a4f246a7ab";
+    public const string SearchAlbumsHash = "64ae1fe6df380b038c0a65a2606d3361bc270de6870b2fdc99cf0848b1efa6d3";
     public const string SearchArtists = "searchArtists";
     public const string SearchArtistsHash = "270905851ba5c7faca81cfe053c2dbd8ceb4f156a0e0ef4b385af75ab69ffd13";
     public const string SearchPlaylists = "searchPlaylists";
     public const string SearchPlaylistsHash = "af1730623dc1248b75a61a18bad1f47f1fc7eff802fb0676683de88815c958d8";
+
+    // The facets SearchFacet already declares but LiveSessionHost used to throw NotSupportedException for.
+    // All five share the standard search variable shape EXCEPT the two noted below (SearchRequests enforces it).
+    public const string SearchPodcasts = "searchPodcasts";
+    public const string SearchPodcastsHash = "0195d9f61b43606d490bca64c3456e3593528cea6cc05c7e822c7c42beed0f4e";
+    // NOTE: the ONLY search op that sends includePreReleases:true.
+    public const string SearchAudiobooks = "searchAudiobooks";
+    public const string SearchAudiobooksHash = "e05ac765d02c084f8783d3c1572b23d57761c43f47eb8b87ce2f9ccced3fa068";
+    public const string SearchAuthors = "searchAuthors";
+    public const string SearchAuthorsHash = "4a9d403a7cbc7e19da5520d619a865472b35382b043bfa458154e73a5c6f46bd";
+    public const string SearchUsers = "searchUsers";
+    public const string SearchUsersHash = "d3f7547835dc86a4fdf3997e0f79314e7580eaf4aaf2f4cb1e71e189c5dfcb1f";
+    // NOTE: a DIFFERENT, minimal variable shape — {searchTerm, offset, limit, includeEpisodeContentRatingsV2} only.
+    public const string SearchFullEpisodes = "searchFullEpisodes";
+    public const string SearchFullEpisodesHash = "d54e35fafe7520cb53883b86d012911cbad75c14ac079a917951c24cdb07c60f";
+
+    // ── Browse (browe.saz, 729 sessions) ─────────────────────────────────────────────────────────────────────────────
+    // browseAll → the 70-category directory; browsePage → one category page of sections; browseSection → paging the
+    // items INSIDE one section. pagePagination pages SECTIONS, browseSection pages ITEMS — two independent axes.
+    public const string BrowseAll = "browseAll";
+    public const string BrowseAllHash = "dbd8b55e09a58afc52eab438bc228ba28fd72ac2f2148c6c26354980e4579001";
+    public const string BrowsePage = "browsePage";
+    public const string BrowsePageHash = "f5c4e6d668f5716464a231c1cc8b22c1cbf6ad68b09929fd7de813a30581298b";
+    public const string BrowseSection = "browseSection";
+    public const string BrowseSectionHash = "b13c1cccbfcb6947753c2613411b3566485c21fd5f36d80a80bb64be61ba2d51";
+
+    // ── Artist discography paging ────────────────────────────────────────────────────────────────────────────────────
+    // ONE persisted document hosts BOTH operations; operationName selects which runs. Do not "de-duplicate" these
+    // constants into one — the pair (name, hash) is what identifies the call.
+    public const string QueryArtistDiscographyOverview = "queryArtistDiscographyOverview";
+    public const string QueryArtistDiscographyAll = "queryArtistDiscographyAll";
+    public const string QueryArtistDiscographyHash = "5e07d323febb57b4a56a42abbf781490e58764aa45feb6e3dc0591564fc56599";
+
+    // THE cover-colour op (CoverColorFiller): a pre-graded dark/light × contrast palette per image. Superseded
+    // fetchExtractedColors, which returned one hex and forced the app to fabricate a four-slot palette from it.
+    // NOTE: takes spotify:image: URIs, NOT https URLs.
+    public const string GetDynamicColorsByUris = "getDynamicColorsByUris";
+    public const string GetDynamicColorsByUrisHash = "f0f112945d6d745bd8ff790317bbf8d310036da75df33130490e9d6dc96c59d9";
 
     public const string SearchSuggestions = "searchSuggestions";
     public const string SearchSuggestionsHash = "556f5a15b2fdd3a7113ffd377ad9805e38a3a27b8bb1ca7d6d76bad54aa8ee12";
@@ -127,8 +166,10 @@ public static class PathfinderOps
 
     public const string QueryAlbumMerch = "queryAlbumMerch";
     public const string QueryAlbumMerchHash = "3ef44ed6f17be67299538fe77faffab4075aeaf9e1085f10fc835592266711b5";
+    // The DESKTOP document (16 samples in the corpus vs 1 for the web-player variant it replaces). Strict superset:
+    // adds artistUnion.onPlatformReputationTrait.verification, which drives the verified-artist badge.
     public const string QueryNpvArtist = "queryNpvArtist";
-    public const string QueryNpvArtistHash = "047c9c225967d41a763949a4db3f0493e901c9f8689a6537408aabf9beffc177";
+    public const string QueryNpvArtistHash = "b2cedf7ed0f29c713567d97ed69b848c8387294edfe58a0e439a3a5669cc27bb";
     public const string SimilarAlbumsBasedOnThisTrack = "similarAlbumsBasedOnThisTrack";
     public const string SimilarAlbumsBasedOnThisTrackHash = "1d1f93a737498adca2c892c73af87fc0b052afe4e1a33c989540c32413dfae17";
     public const string GetTrack = "getTrack";

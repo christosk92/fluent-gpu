@@ -94,12 +94,27 @@ public sealed class MfMediaPlayer : IMediaBackend
             ct.ThrowIfCancellationRequested();
         }
 
-        // A media element does not loop by default (the M3 harness kept a live frame via loop); honor StartPaused.
-        engine.SetLoop(false);
+        // A media element does not loop by default (the M3 harness kept a live frame via loop), but a source the caller
+        // explicitly wrapped in .Loop() must. Only an INFINITE loop maps onto the MF media engine, whose loop flag is a
+        // bool with no repeat count — a finite count would silently become infinite, so it stays unlooped instead.
+        // Previously this was hardcoded false and LoopSource was unwrapped only to reach the URL, making .Loop() a
+        // no-op: a "looping" canvas clip played once and froze.
+        engine.SetLoop(IsInfiniteLoop(source));
         if (opts.StartPaused) engine.Pause();
 
         return new MfMediaSession(engine, opts, manifest);
     }
+
+    /// <summary>True when the source asks to repeat forever (<c>.Loop()</c> with the default count of -1). Mirrors
+    /// <see cref="ResolveUrl"/>'s wrapper walk so a loop survives being nested under a clip. A finite repeat count is
+    /// deliberately NOT a loop here: <c>IMFMediaEngine.SetLoop</c> takes a bool, so honoring "play 3 times" as "play
+    /// forever" would be worse than not looping at all.</summary>
+    internal static bool IsInfiniteLoop(MediaSource source) => source switch
+    {
+        LoopSource l => l.Count < 0 || IsInfiniteLoop(l.Inner),
+        ClipSource c => IsInfiniteLoop(c.Inner),
+        _ => false,
+    };
 
     /// <summary>Extract the MF source URL from a <see cref="MediaSource"/> (a local path is passed through; MF accepts
     /// both file paths and http(s) URLs). Returns null for a shape MF can't open by URL.</summary>

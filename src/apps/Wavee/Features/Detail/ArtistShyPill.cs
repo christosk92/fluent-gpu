@@ -66,7 +66,7 @@ sealed class ArtistShyPillCore : Component
     static Element Surface(string uri, Artist a, Services svc)
     {
         // Match the page's cover-extracted accent (lifted) so the floating pill isn't default-blue over an accented page.
-        ColorF accent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
+        ColorF accent = Surfaces.SchemeFor(a.Image?.Url) is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
         return new BoxEl
         {
             Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
@@ -77,11 +77,20 @@ sealed class ArtistShyPillCore : Component
             [
                 new BoxEl { Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), ClipToBounds = true,
                     Children = [ Surfaces.Artwork(a.Image, a.Id.GetHashCode() & 0x7fffffff, 40f, 40f, 20f, decodePx: 256) ] },
+                // The subline carries the upcoming release INSTEAD of the listener count while one is pending. The pill
+                // exists precisely for the scrolled-past state, which is exactly when the hero's own countdown pill has
+                // gone — so this is the only place the announcement survives, and it is worth more than a stat that has
+                // not changed since the page loaded. The row is ~56px with an avatar, name, Play and Follow already in
+                // it, so this replaces rather than adds.
                 new BoxEl { Direction = 1, Gap = 1f,
                     Children =
                     [
                         new TextEl(a.Name) { Size = 14f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                        new TextEl(Strings.Artist.MonthlyListeners(a.MonthlyListeners.ToString("N0"))) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        a.Extras?.PreRelease is { IsUpcoming: true, ReleaseAt: { } due }
+                            ? new TextEl(Loc.Get(Strings.Detail.PreReleaseEyebrow) + " · " + PreReleaseCountdown.Remaining(due - DateTimeOffset.UtcNow))
+                                { Size = 12f, Weight = 600, Color = accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+                            : new TextEl(Strings.Artist.MonthlyListeners(a.MonthlyListeners.ToString("N0")))
+                                { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     ] },
                 new BoxEl
                 {

@@ -56,7 +56,6 @@ public class RecentCardsTests
         Assert.Single(cards);
         Assert.NotNull(cards[0].Image?.Url);
         Assert.Contains("spotifycdn.com", cards[0].Image!.Url);
-        Assert.Equal(0xFF5C5454u, cards[0].Accent);
     }
 
     [Fact]
@@ -82,7 +81,7 @@ public class RecentCardsTests
     }
 
     [Fact]
-    public void MapArtist_ReleaseWithVisualIdentityTrait_HasCoverAndPalette()
+    public void MapArtist_ReleaseWithVisualIdentityTrait_HasCover()
     {
         var artist = SpotifyExportMapper.MapArtist(Root("""
         {
@@ -117,12 +116,10 @@ public class RecentCardsTests
         Assert.Single(artist.TopAlbums);
         var al = artist.TopAlbums[0];
         Assert.Equal("https://i.scdn.co/disc-cover", al.Cover?.Url);
-        Assert.NotNull(al.Palette);
-        Assert.Equal(0xFF140D0Du, al.Palette!.TintedDark);
     }
 
     [Fact]
-    public void RecentCards_ExtractedColorSetFromRecentsShape()
+    public void RecentCards_MapsCoverFromRecentsShape()
     {
         // icedamericano.json recents entity: accent from visualIdentityTrait.squareCoverImage.extractedColorSet
         var cards = SpotifyExportMapper.RecentCards(Root("""
@@ -164,6 +161,5 @@ public class RecentCardsTests
         """));
 
         Assert.Single(cards);
-        Assert.Equal(0xFF5C5454u, cards[0].Accent);
     }
 }

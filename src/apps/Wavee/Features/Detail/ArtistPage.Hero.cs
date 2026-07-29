@@ -42,17 +42,43 @@ sealed partial class ArtistPage : Component
         {
             bool wide = w >= 960f && a.Pinned is not null;
 
+            // The artist's circular portrait, doubling as the watch-feed entry point. Sized to the title it sits beside,
+            // and dropped at narrow widths so it never crowds the name.
+            float portrait = w >= 960f ? 88f : 64f;
+            // Only render it when there is a REAL picture to show — a watch-feed still or an avatar with an actual url.
+            // Without this the control falls through to PersonPicture's initials circle, which on an artist page reads as
+            // a broken avatar rather than an intentional placeholder: the hero photo already carries the identity.
+            bool hasFace = a.Extras?.WatchFeed?.Thumbnail?.Url is { Length: > 0 }
+                           || a.Extras?.WatchFeed?.VideoFileId is { Length: > 0 }
+                           || a.Image?.Url is { Length: > 0 };
+            Element? face = hasFace
+                ? ArtistWatchFeedPicture.Create(a.Extras?.WatchFeed, a.Image, a.Name, portrait,
+                    onOpen: a.Extras?.WatchFeed is { EntrypointUri.Length: > 0 } wf ? () => go(wf.EntrypointUri, a.Name) : null)
+                : null;
+
+            // Name row: portrait BESIDE the title, centred on it, so the face and the name read as one identity block
+            // instead of a stack. With no portrait the row collapses to the title alone and the hero is unchanged.
+            Element title = WaveeType.PageHero(a.Name) with
+            {
+                Size = HeroSize(a.Name), Weight = 900, Color = WhiteText,
+                Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+            };
+            Element nameRow = face is null ? title : new BoxEl
+            {
+                Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
+                Children = [face, new BoxEl { Shrink = 1f, Children = [title] }],
+            };
+
             var copy = new BoxEl
             {
                 Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S, Grow = 1f, Basis = 0f,
                 Children =
                 [
-                    EyebrowPills(a),
-                    WaveeType.PageHero(a.Name) with
-                    {
-                        Size = HeroSize(a.Name), Weight = 900, Color = WhiteText,
-                        Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
-                    },
+                    // De-dup: when the WIDE pinned card is about to state the same countdown a few hundred pixels to the
+                    // right, the eyebrow pill would put one announcement twice in a single viewport-row. Narrow windows
+                    // keep the pill — the card does not render there, so the pill is the only copy.
+                    EyebrowPills(a, suppressPreRelease: wide && a.Pinned is { IsUpcoming: true }),
+                    nameRow,
                     HeroBioLine(a.Bio, w),
                     HeroMetaLine(a, albumCount, singleCount),
                     new BoxEl
@@ -253,16 +279,24 @@ sealed partial class ArtistPage : Component
         return sb.ToString().Trim();
     }
 
-    Element EyebrowPills(Artist a)
+    // <paramref name="suppressPreRelease"/>: the wide hero's pinned card is carrying the same date, so the pill would be
+    // a second copy of one announcement in one viewport-row. Only the pre-release pill is affected; the identity pills
+    // are unconditional.
+    Element EyebrowPills(Artist a, bool suppressPreRelease = false)
     {
-        var pills = new List<Element>(2);
+        var pills = new List<Element>(3);
         if (a.Verified) pills.Add(VerifiedPill());
         if (a.WorldRank > 0) pills.Add(GlassPill(Strings.Artist.WorldRank(a.WorldRank.ToString())));
+        // The upcoming release, stated where the identity pills already are. This is the first thing on the page and
+        // the one thing about the artist that expires, so it belongs beside "Verified" rather than in a band of its own
+        // further down — the page already announces the record twice below this point.
+        if (!suppressPreRelease && a.Extras?.PreRelease is { IsUpcoming: true, ReleaseAt: { } due })
+            pills.Add(GlassPill(Loc.Get(Strings.Detail.PreReleaseEyebrow) + " · " + PreReleaseCountdown.Remaining(due - DateTimeOffset.UtcNow)));
         return pills.Count == 0
             ? new BoxEl()
             : new BoxEl
             {
-                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = pills.ToArray()
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Wrap = true, Children = pills.ToArray()
             };
     }
 
@@ -288,54 +322,84 @@ sealed partial class ArtistPage : Component
     };
 
     // ── hero pinned promo card ───────────────────────────────────────────────────────────────────────────
-    static Element PinnedCard(PinnedItem p, Action<string, string?> go) => new BoxEl
+    // The artist's own pin. When what is pinned has not dropped yet the card re-dresses as the announcement — clock
+    // eyebrow, "Coming soon", and a date + countdown line where the artist's comment would be. The gate is
+    // PinnedItem.IsUpcoming, a WALL-CLOCK comparison (and deliberately false for a null date, unlike ArtistPreRelease),
+    // so an ordinary released pin renders byte-identically to before and a stale pin heals itself the moment the record
+    // lands, with no refetch. Still a static factory: no hooks, no ticking.
+    static Element PinnedCard(PinnedItem p, Action<string, string?> go)
     {
-        Width = 320f, Shrink = 0f, Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
-        Corners = CornerRadius4.All(Radii.Card), Fill = Scrim(0.55f), ClipToBounds = true,
-        HoverFill = Scrim(0.65f), OnClick = () => go("album:" + p.Uri, p.Title),
-        Children =
-        [
-            new BoxEl
+        bool upcoming = p.IsUpcoming;
+        ColorF eyebrowInk = WhiteText with { A = 0.7f };
+
+        // The third line. STATIC text on purpose: this card lives in the hero, which collapses to zero height on the
+        // first scroll, so a live ticker here would wake the app to re-render something nobody can see. The live clock
+        // is the Releases-column masthead; the hero pill and the shy pill are static for the same reason.
+        Element third = new BoxEl();
+        if (upcoming && p.ReleaseAt is { } due)
+            third = new TextEl(Strings.Detail.ReleasesOn(DetailFormat.ShortDate(due)) + " · " +
+                               PreReleaseCountdown.Remaining(due - DateTimeOffset.UtcNow))
             {
-                Width = 64f, Height = 64f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control),
-                ClipToBounds = true,
-                Children =
-                [
-                    Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 64f, 64f, Radii.Control,
-                        decodePx: 256)
-                ]
-            },
-            new BoxEl
+                Size = 12f, Weight = 600, Color = WhiteText, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
+            };
+        else if (p.Comment.Length > 0)
+            third = new TextEl(p.Comment)
             {
-                Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
-                Children =
-                [
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-                        Children =
-                        [
-                            Icon(Icons.Pin, 11f, WhiteText with { A = 0.7f }),
-                            new TextEl(p.Eyebrow)
-                                { Size = 10f, Weight = 700, Color = WhiteText with { A = 0.7f }, CharSpacing = 20f }
-                        ]
-                    },
-                    new TextEl(p.Title)
-                    {
-                        Size = 15f, Weight = 700, Color = WhiteText, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
-                    },
-                    p.Comment.Length == 0
-                        ? new BoxEl()
-                        : new TextEl(p.Comment)
+                Size = 12f, Color = WhiteText with { A = 0.75f }, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
+            };
+
+        return new BoxEl
+        {
+            Width = 320f, Shrink = 0f, Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
+            Corners = CornerRadius4.All(Radii.Card), Fill = Scrim(0.55f), ClipToBounds = true,
+            HoverFill = Scrim(0.65f),
+            // TargetUri is the pinned ITEM when the wire named one, else the pin's own uri (every pre-itemV2 payload).
+            // RouteForUri handles both schemes — it answers "album:"+uri for an album uri, so a released pin routes
+            // exactly as it did before, and it answers the prerelease route for a spotify:prerelease: pin. The literal
+            // fallback keeps a uri it cannot classify on the album route rather than on the generic stub.
+            OnClick = () => go(RichText.RouteForUri(p.TargetUri) ?? ("album:" + p.Uri), p.Title),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 64f, Height = 64f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control),
+                    ClipToBounds = true,
+                    Children =
+                    [
+                        Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 64f, 64f, Radii.Control,
+                            decodePx: 256)
+                    ]
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
+                    Children =
+                    [
+                        new BoxEl
                         {
-                            Size = 12f, Color = WhiteText with { A = 0.75f }, MaxLines = 1,
-                            Trim = TextTrim.CharacterEllipsis
+                            Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
+                            Children =
+                            [
+                                Icon(upcoming ? Icons.Clock : Icons.Pin, 11f, eyebrowInk),
+                                // White-alpha ink in BOTH dresses. This card sits on the artist PHOTO behind a 0.55
+                                // scrim, and the page accent is extracted from that same artwork — accent-on-photo has
+                                // no guaranteed contrast, so it would be legible on one artist and invisible on the
+                                // next. The glyph swap plus the copy carry the state change; the ink does not.
+                                new TextEl(upcoming ? Loc.Get(Strings.Detail.PreReleaseEyebrow) : p.Eyebrow)
+                                    { Size = 10f, Weight = 700, Color = eyebrowInk, CharSpacing = 20f }
+                            ]
                         },
-                ]
-            },
-        ],
-    };
+                        new TextEl(p.Title)
+                        {
+                            Size = 15f, Weight = 700, Color = WhiteText, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
+                        },
+                        third,
+                    ]
+                },
+            ],
+        };
+    }
 
     // ── action affordances ───────────────────────────────────────────────────────────────────────────────
     Element PlayPill(Action onPlay)

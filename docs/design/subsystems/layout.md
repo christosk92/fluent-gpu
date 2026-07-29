@@ -326,6 +326,32 @@ because the backing buffer never moves during the descent; lists are stored as `
   SoA column `ref`, never a property getter) — else the compiler silently falls back to the value-returning operator
   and reintroduces the copy.
 
+### 3.7 Overlay stacks (`ZStack`) — alignment on BOTH axes *(AS-BUILT 2026-07)*
+
+A ZStack overlays every child on the same slot, so it has **no main axis** and nothing to distribute along. Both axes
+are therefore ALIGNMENT, matching the WinUI overlay-`Grid` model where each child carries its own
+`HorizontalAlignment`/`VerticalAlignment`:
+
+| Axis | Per-child | Container fallback |
+|---|---|---|
+| Vertical | `AlignSelf` | the stack's `AlignItems` |
+| Horizontal | `JustifySelf` | the stack's `Justify`, read for its ALIGNMENT sense (`Space*` ⇒ `Start`) |
+
+`JustifySelf` is typed `FlexAlign` (not `FlexJustify`) deliberately: CSS `justify-self` takes alignment values, not
+distribution values, and `FlexAlign.Auto` gives the inherit-from-container sentinel the enum needs. It is meaningful
+only inside a ZStack — a flex container's main axis is distributed by the container, never per child.
+
+**Sizing interacts with alignment.** An **auto-sized** child (`Width`/`Height` unset) that is `Center` or `End` on an
+axis takes its **desired** extent on that axis; only a `Start`/`Stretch`/`Auto` child fills the slot. Without that rule
+alignment is silently inert on an auto-sized layer: it fills, so there is no free space left to align it within — which
+is why a content-sized badge could never be parked in a corner and callers hand-rolled a translation instead. The child's
+leading `Margin` still offsets from the aligned origin, so a NEGATIVE margin makes a corner-aligned layer overhang
+deliberately (the `PersonPicture` badge: `AlignSelf=Start` + `JustifySelf=End` + `Margin 0,-4,-4,0`).
+
+`Start`/`Stretch`/`Auto` on both axes reproduces the historical content-origin, stretch-to-fill arrangement exactly, so
+a stack that authors neither property is unaffected. Gates: `gate.layout.zstack-align`, plus check 55 as the
+no-regression pin.
+
 ---
 
 ## 4. INCREMENTAL LAYOUT — boundary firewall + two-rule invalidation graph (O(change))
@@ -476,6 +502,30 @@ and the realize/derealize of rows (§8) cannot escape it.
 `ScrollOffset` is clamped to `[0, ContentSize - ViewportExtent]` by Input using the `ContentSize` layout published last
 frame; layout never sees the offset. The shy/parallax header (WaveeMusic) is a separate transform write driven by the
 same `ScrollOffset`, also layout-free.
+
+### 6.1 Programmatic bring-into-view — ONE seam *(AS-BUILT 2026-07)*
+
+`FluentGpu.Animation.ScrollIntoView` is the single entry point for "scroll this into view" (WinUI
+`UIElement.StartBringIntoView` / `BringIntoViewOptions`). It is the only sanctioned author of a programmatic offset
+write; hand-rolled `ScrollRef` → `PendingTarget*` → `ArmScroll` sequences are the superseded form.
+
+| Call | For |
+|---|---|
+| `Bring(ctx, node, …)` | the node's NEAREST scrolling ancestor |
+| `BringInto(ctx, viewport, node, …)` | an EXPLICIT viewport a composing control captured via `ScrollEl.OnRealized` (so it cannot scroll some outer page instead) |
+| `ScrollTo(ctx, viewport, target, animate)` | the WRITE half alone, for a caller whose destination comes from a layout MODEL rather than a realized node — a virtualized list scrolling to an index that is not realized has no node to hand the others |
+
+`margin` is the gutter kept against the edge the node lands on. `alignmentRatio` NaN = **minimal scroll** (no move when
+already visible); 0 parks the leading edge at the leading gutter, 1 the trailing edge at the trailing gutter. `animate`
+records `PendingTarget*` + `PhaseProgrammatic` and calls `RenderContext.ArmScroll` so phase 7 runs the crit-damped
+chase; otherwise the write SNAPS — `Offset`==`Target` plus the `-offset` content `LocalTransform` in the same frame —
+and **arrests** any in-flight chase or fling, which a snap must do or the chase drags the offset straight back off
+target. Scrolling follows the viewport's own `Orientation`; a viewport scrolls one axis.
+
+**Documented exception:** `LyricsView.ScrollActiveIntoView` keeps its own implementation. Follow-scroll must re-target a
+running chase *without* discarding the carried velocity (dense lyric sections re-target every ~200–300 ms, and
+restarting the spring makes the list visibly trail the song), and it uses bespoke spring constants. The v1 seam models
+neither. Gate: `gate.scroll.bring-into-view`.
 
 ---
 

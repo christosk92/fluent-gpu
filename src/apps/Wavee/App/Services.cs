@@ -2,6 +2,7 @@ using System.Linq;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.SpotifyLive;
 
 namespace Wavee;
 
@@ -56,6 +57,10 @@ public sealed class Services
     public Wavee.Backend.Sync.LibrarySync? RealSync { get; internal set; }
     /// <summary>Reactive live capability for server-driven automatic-playlist tuning.</summary>
     public Signal<IPlaylistTuningSource?> PlaylistTuning { get; } = new(null);
+    /// <summary>The selected home facet chip id (Spotify <c>home.homeChips[].id</c>, e.g. "music-chip" or
+    /// "podcasts-following-chip"); null/empty = the unfiltered feed. Written by the home chip row, read by the live
+    /// home fetch when it builds the <c>facet</c> request variable. Opaque server token — never synthesised.</summary>
+    public Signal<string?> HomeFacet { get; } = new(null);
     /// <summary>The engine-backed Mutations seam adapter (REAL backend only) — exposed so go-live can route its post-write
     /// drains through the sync loop (§6, <c>ScheduleDrain</c>) and GoOffline can reset them to inline.</summary>
     public Wavee.Backend.EngineMutationSource? RealMutationSource { get; private set; }
@@ -103,9 +108,25 @@ public sealed class Services
     /// — only the standalone <c>ArtistPage</c> chart drives it. Offline/fake it is <see cref="NullArtistPopularTracksService"/>,
     /// which hands the seed straight back.</summary>
     public SwitchableArtistPopularTracksService ArtistPopularTracks { get; }
+    /// <summary>Playlist save counts (the spclient <c>popcount</c> endpoint) for the playlist header's meta line.
+    /// Stable wrapper; the live provider is installed on go-live. Offline it is <see cref="NullPlaylistPopcountService"/>,
+    /// which returns null so the header simply omits the segment.</summary>
+    public SwitchablePlaylistPopcountService PlaylistPopcount { get; }
+    /// <summary>Upcoming-release resolution (extended-metadata kind 138): prerelease uri ↔ album uri ↔ release instant.
+    /// Stable wrapper; the live provider is installed on go-live. Offline it is <see cref="NullPreReleaseService"/>, and
+    /// every prerelease surface then degrades to "announced, but not pre-savable / not click-through-resolvable".</summary>
+    public SwitchablePreReleaseService PreRelease { get; }
+    /// <summary>Spotify's curated Liked Songs content-filter chips. Stable wrapper; the live provider is installed on
+    /// go-live. Offline it is <see cref="NullContentFilterService"/> (empty), and the Liked chip bar then derives its
+    /// chips from the tracks' own kind-6 descriptors instead of showing nothing.</summary>
+    public SwitchableContentFilterService ContentFilters { get; }
     /// <summary>Music-video detection + the video↔audio file-id map (extended-metadata, etag-cached). Stable wrapper; the
     /// live Spotify implementation is installed after login. Offline it is a no-op (<see cref="NoVideoService"/>).</summary>
     public SwitchableVideoService Video { get; }
+    /// <summary>Track row adornments — cover tint (extended-metadata kind 179) + tempo/key (kind 222). REAL backend
+    /// only; null offline/fake, in which case rows fall back to the neutral placeholder and hide the tempo column.
+    /// Set on go-live, cleared on GoOffline.</summary>
+    public Wavee.SpotifyLive.SpotifyTrackAdornmentService? TrackAdornments { get; internal set; }
     /// <summary>Spotify user profile cache for playlist owners and added-by contributors. Stable wrapper; offline/fake
     /// returns null so raw ids remain visible until a live resolver is installed.</summary>
     public SwitchableUserProfileService UserProfiles { get; }
@@ -127,6 +148,13 @@ public sealed class Services
     /// <summary>Concert discovery (artist schedules, hub feed, location controls). Stable wrapper; the live Spotify
     /// Pathfinder adapter is installed after login, offline/fake it is the permanently-offline <see cref="NullConcertService"/>.</summary>
     public SwitchableConcertService Concerts { get; }
+    /// <summary>Spotify Browse (the category directory + category pages). Stable wrapper; the live Pathfinder adapter
+    /// is installed on go-live, and offline/fake it is <see cref="NullBrowseService"/> so the directory renders its
+    /// empty state instead of the UI holding a null.</summary>
+    public Wavee.SpotifyLive.SwitchableBrowseService Browse { get; }
+    /// <summary>Alternate versions (music videos / live / remix) + available audio formats for the expanded track
+    /// drawer. Everything it serves is fetched ON EXPAND, never with the row bundle.</summary>
+    public Wavee.SpotifyLive.SwitchableTrackExpansionService TrackExpansion { get; }
     /// <summary>One-shot OS geolocation (the "Use my location" concert flow). App/OS-scoped → hand-wired here like the other
     /// OS services (never switchable). Requested ONLY on an explicit user action; constructing it prompts nothing.</summary>
     public FluentGpu.Pal.IGeolocationProvider Geolocation { get; }
@@ -176,6 +204,9 @@ public sealed class Services
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
         ArtistStats = new SwitchableArtistStatsService(new NullArtistStatsService());
         ArtistPopularTracks = new SwitchableArtistPopularTracksService(new NullArtistPopularTracksService());
+        PlaylistPopcount = new SwitchablePlaylistPopcountService(NullPlaylistPopcountService.Instance);
+        PreRelease = new SwitchablePreReleaseService(NullPreReleaseService.Instance);
+        ContentFilters = new SwitchableContentFilterService(NullContentFilterService.Instance);
         Video = new SwitchableVideoService(new NoVideoService());
         UserProfiles = new SwitchableUserProfileService(new NullUserProfileService());
         Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
@@ -192,6 +223,8 @@ public sealed class Services
         SpotifyNotifications = new SwitchableSpotifyNotificationsService(new NullSpotifyNotificationsService());
         WhatsNew = new SwitchableWhatsNewService(new NullWhatsNewService());
         Concerts = new SwitchableConcertService(new NullConcertService());   // live Pathfinder adapter installed on go-live
+        Browse = new Wavee.SpotifyLive.SwitchableBrowseService();            // ditto — Null until go-live
+        TrackExpansion = new Wavee.SpotifyLive.SwitchableTrackExpansionService();
         Geolocation = new FluentGpu.WindowsApi.Location.WindowsGeolocationProvider();   // OS one-shot; no prompt until used
         AppUpdate = new NullAppUpdateService();
         Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
@@ -373,7 +406,7 @@ public sealed class Services
         // source tier at all — an override is the only video such a build can serve. LiveSessionHost later replaces that
         // resolver with the full two-tier composite, keeping tier 1 identical.
         var videoOverrides = new VideoOverrideService(store, new WaveeLogger(WaveeLog.Instance, VideoOverrideService.LogCategory));
-        videoOverrides.OnChanged = uri => svc.Playback.NotifyVideoOverrideChanged(uri);
+        videoOverrides.OnChanged = (uri, kind) => svc.Playback.NotifyVideoOverrideChanged(uri, kind);
         videoOverrides.OnBrokenLink = uri => svc.Playback.NotifyVideoOverrideMissing(uri);
         svc.VideoOverrides = videoOverrides;
         svc.Playback.AttachVideoOverrides(videoOverrides);
@@ -441,8 +474,14 @@ public sealed class Services
         SpotifyNotifications.SetInner(new NullSpotifyNotificationsService());   // gander + what's-new feeds back offline
         WhatsNew.SetInner(new NullWhatsNewService());
         Concerts.SetInner(new NullConcertService());   // concert discovery back offline until the next live login
+        Browse.Reset();                               // browse directory/pages unavailable until the next live login
+        TrackExpansion.Reset();                       // the row drawer shows no versions/formats while logged out
+        TrackAdornments = null;                       // row tint/tempo stop resolving; rows fall back to the neutral tile
         ArtistStats.SetInner(new NullArtistStatsService());   // drop the session-bound overview provider until the next live login
         ArtistPopularTracks.SetInner(new NullArtistPopularTracksService());   // …and its spclient/metadata-bound step two
+        PlaylistPopcount.SetInner(NullPlaylistPopcountService.Instance);      // …and the playlist save-count badge
+        PreRelease.SetInner(NullPreReleaseService.Instance);                  // …and kind-138 upcoming-release resolution
+        ContentFilters.SetInner(NullContentFilterService.Instance);           // …and the Liked content-filter chips
         MutTransport?.SetInner(new Wavee.Backend.StubTransport());   // writes return to the inert stub (queue in the durable outbox, replay on next login)
         if (RealMutationSource is { } mutSrc) mutSrc.ScheduleDrain = null;   // back to inline drains — the loop is torn down with the host
         if (RealPlaylistMutations is { } pmSrc)

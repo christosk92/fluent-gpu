@@ -238,8 +238,12 @@ public class StoreLibraryDiscographyTests
         await src.GetAlbumAsync(albumUri);          // named V4 tracklist still lacks play counts → need=true
         Assert.Equal(4, fetches);
 
+        // A COMPLETE getAlbum envelope carries the copyright/label block (and usually play counts). Full alone has
+        // never been proof — a partial response can stamp Full with named tracks and nothing else — so the gate wants
+        // one of those facets as evidence. (It used to read the inline cover palette for this; colours moved to
+        // CoverColorPlane, keyed by image, and say nothing about how hydrated an album is.)
         store.UpsertAlbum(new Album("g", albumUri, "G", null, Array.Empty<ArtistRef>(), 2020, 1, new[] { Trk("t") },
-            Hydration: AlbumHydrationLevel.Full));
+            Label: "Some Label", Hydration: AlbumHydrationLevel.Full));
         await src.GetAlbumAsync(albumUri);          // complete cached envelope → no fetch
         Assert.Equal(4, fetches);
 

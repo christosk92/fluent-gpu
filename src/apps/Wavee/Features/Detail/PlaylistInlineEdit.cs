@@ -245,48 +245,10 @@ static class PlaylistInlineEdit
         }, DepKey.From(HashCode.Combine(editing.Value, uriKey, draftSnapshot)));
     }
 
-    /// <summary>Snap-scroll a node into its nearest vertical viewport (viewport-relative bounds — reliable inside nested
-    /// scroll content). Immediate offset write (no smooth chase) so edit-enter lands before the user types.</summary>
+    /// <summary>Snap-scroll a node into its nearest viewport. SNAP, not a smooth chase: edit-enter must land before the
+    /// user types. <see cref="ScrollIntoView"/> owns the mechanics.</summary>
     static void BringIntoView(RenderContext ctx, NodeHandle node, float margin = 16f)
-    {
-        var scene = ctx.Scene;
-        if (scene is null || node.IsNull || !scene.IsLive(node)) return;
-
-        var vp = scene.Parent(node);
-        while (!vp.IsNull && !scene.HasScroll(vp)) vp = scene.Parent(vp);
-        if (vp.IsNull) return;
-        ref ScrollState sc = ref scene.ScrollRef(vp);
-        if (sc.Orientation != 0 || sc.ViewportH <= 1f) return;
-
-        RectF nodeAbs = scene.AbsoluteRect(node);
-        RectF vpAbs = scene.AbsoluteRect(vp);
-        float top = nodeAbs.Y - vpAbs.Y;
-        float bottom = top + nodeAbs.H;
-
-        float target = sc.OffsetY;
-        if (top < margin) target = sc.OffsetY + top - margin;
-        else if (bottom > sc.ViewportH - margin) target = sc.OffsetY + bottom - sc.ViewportH + margin;
-        else return;
-
-        target = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
-        if (MathF.Abs(target - sc.OffsetY) < 0.5f) return;
-
-        sc.OffsetY = target;
-        sc.TargetY = target;
-        sc.PendingTargetY = float.NaN;
-        sc.Phase = ScrollIntegrator.Idle;
-        sc.PhaseFlags = 0;
-        sc.FlingVelocity = 0f;
-
-        var content = sc.ContentNode;
-        if (!content.IsNull && scene.IsLive(content))
-        {
-            scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -target);
-            scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        }
-        scene.Mark(vp, NodeFlags.PaintDirty);
-        ctx.RequestRerender();
-    }
+        => ScrollIntoView.Bring(ctx, node, margin);
 
     // ── cover ────────────────────────────────────────────────────────────────────────────────────────────────────
 

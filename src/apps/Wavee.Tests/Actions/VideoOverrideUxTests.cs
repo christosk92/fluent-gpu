@@ -480,24 +480,27 @@ public class VideoOverrideUxTests
     // ── the row indicator / "Videos only" predicate ──────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void Indicator_LightsForAnOverrideOnlyVideo_AndNeverMutatesTheTrackRow()
+    public void Indicator_AnswersFromTheAssociationPlaneAndTheOverrides_AndFromNowhereElse()
     {
         var plain = new Track("a", "spotify:track:a", "A", Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 1000, false, null);
-        var official = plain with { Uri = "spotify:track:o", HasVideo = true };
+        var official = plain with { Uri = "spotify:track:o" };
+        var store = new Wavee.Backend.InMemoryStore();
+        // Spotify's own verdict lives in the association plane, keyed by uri — there is no row field to set.
+        store.UpsertVideoAssociation(new VideoAssociation("spotify:track:o", true, null,
+            VideoAssociation.NoFiles, null, DateTimeOffset.UtcNow, 0));
         var svc = Svc(("spotify:track:a", @"C:\v\a.mp4"));
         try
         {
-            VideoPresence.Attach(svc);
+            VideoPresence.Attach(svc, store);
 
             Assert.True(VideoPresence.HasVideo(plain));       // override-only → the row indicator + "Videos only" filter
-            Assert.True(VideoPresence.HasVideo(official));    // the source's own video is untouched
+            Assert.True(VideoPresence.HasVideo(official));    // the source's own video, straight from the plane
             Assert.True(VideoPresence.HasOverride("spotify:track:a"));
             Assert.False(VideoPresence.HasOverride("spotify:track:o"));
-            // Never upsert HasVideo=true back into the shared row — that would poison the etag-cached association.
-            Assert.False(plain.HasVideo);
 
             svc.Remove("spotify:track:a");
             Assert.False(VideoPresence.HasVideo(plain));      // and it goes dark again on a detach
+            Assert.True(VideoPresence.HasVideo(official));    // …while the association is untouched by that
         }
         finally { VideoPresence.Attach(null); }
     }

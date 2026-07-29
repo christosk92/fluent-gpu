@@ -25,6 +25,9 @@ readonly record struct DetailHandlers(
     // List-view controls surfaced by the chrome / header toolbar (search query, advanced local filters, row density).
     Signal<string> Query, IReadSignal<TrackFilterState> Filters, Action<TrackFilterState> SetFilters,
     IReadSignal<int> Density, Action<int> SetDensity,
+    // BPM·Key column opt-in (app-wide, persisted). Surfaces that CAN show the column gate on this; the row expander
+    // shows tempo/key regardless, so turning it off hides a column rather than hiding the data.
+    IReadSignal<bool> TempoColumn, Action<bool> SetTempoColumn,
     // Playlist/queue mutations for THIS context (insert next / append to the queue / add to a user playlist).
     Action PlayNext, Action AddToQueue, Action AddToPlaylist,
     // Open a related album / "Featured on" playlist card. Unlike Go (a bare route flip), these stash the card's partial
@@ -67,6 +70,7 @@ sealed class DetailShell : Component
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
     readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);   // local advanced filters (transient)
     readonly Signal<int> _density = new(1);                      // row density 0..3 (app-wide, persisted)
+    readonly Signal<bool> _tempoColumn = new(false);             // BPM·Key column opt-in (app-wide, persisted)
     readonly Signal<bool> _multiSelect = new(false);             // ephemeral multi-select mode (clears on navigation)
     readonly IAppSettings? _settings;
     readonly Signal<float> _albumRailW;
@@ -133,17 +137,21 @@ sealed class DetailShell : Component
         }, DepKey.FromRef(raw));
 
         Track? cur = bridge?.CurrentTrack.Value;     // subscribe → re-derive wash/tint on track change (rare)
-        Palette? livePal = bridge?.TrackPalette.Value;   // subscribe
+        // Watch THIS page's cover (not the global epoch): the wash appears the moment this one image is graded, and a
+        // scrolling grid's batches never re-render the page. Cards subscribe differently — see CoverShimmer.
+        _ = SpotifyLive.CoverColorPlane.Current.Watch(m.Cover?.Url).Value;
+        var coverArt = Surfaces.SchemeFor(m.Cover?.Url);
         bool thisPlaying = cur is not null && trackIds.Contains(cur.Id);
-        // m.Palette is the page's cover-extracted palette; when absent, fall back to the live-track palette while THIS
-        // page is playing, else none — so the page tints from its own art, degrading to "no tint", never a wrong colour.
-        Palette? art = m.Palette ?? (thisPlaying ? livePal : null);
+        // The page tints from its OWN cover; while this page is playing, a page with no grading of its own (Liked, a
+        // show) falls back to the now-playing track's cover — so it degrades to "no tint", never to a wrong colour.
+        var livePal = thisPlaying ? Surfaces.SchemeFor(cur?.Image?.Url) : null;
+        var art = coverArt ?? livePal;
 
-        // The cover palette's Spotify colorDark is near-black, so LIFT it for legibility. The live-track palette was
-        // already tuned for the player chrome (the bar tint reads it raw), so keep IT raw — unchanged from before this
-        // feature, so a currently-playing track on a null-palette page (Liked / show) doesn't suddenly brighten.
-        ColorF accent = m.Palette is { } cover ? WaveePalette.Lift(WaveePalette.Accent(cover))
-                      : thisPlaying && livePal is { } lp ? WaveePalette.Accent(lp)
+        // The graded backgroundBase is near-black on most covers, so LIFT the page accent for legibility. The live
+        // track's colours are already tuned for the player chrome (the bar tint reads them raw), so keep THOSE raw —
+        // a currently-playing track on an ungraded page must not suddenly brighten.
+        ColorF accent = coverArt is { } cover ? WaveePalette.Lift(WaveePalette.Accent(cover))
+                      : livePal is { } lp ? WaveePalette.Accent(lp)
                       : Tok.AccentDefault;
         // The hero wash. Dark: the art's dark background tone (or the neutral #1C1C1C). Light: a soft ACCENT band instead
         // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge. HeroWash paints WinUI-parity
@@ -153,9 +161,9 @@ sealed class DetailShell : Component
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
         // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
         // when there is no real palette ⇒ plain Mica.
-        ColorF? micaTint = (colorWashesDisabled || art is null || !_cfg.TwoColumn) ? null : Tok.Theme == ThemeKind.Light
-            ? WaveePalette.Lift(WaveePalette.ToColor(art.Light)) with { A = 0.05f }
-            : WaveePalette.TintedDark(art) with { A = 0.14f };
+        ColorF? micaTint = (colorWashesDisabled || art is not { } scheme || !_cfg.TwoColumn) ? null : Tok.Theme == ThemeKind.Light
+            ? WaveePalette.Lift(WaveePalette.ToColor(scheme.TextBase)) with { A = 0.05f }
+            : WaveePalette.TintedDark(scheme) with { A = 0.14f };
 
         // ── page-scoped Mica tint via the activation lifecycle (reconciler-hooks §0bis) ──
         // SET on mount + colour change (UseEffect) and on REACTIVATION (UseActivation.onActivated — a cached page does
@@ -230,6 +238,7 @@ sealed class DetailShell : Component
             int col = settings.Get(SortColKey());   // −1 sentinel = never chosen → the per-kind default (Liked: DateAdded desc)
             _sort.Value = col < 0 ? _defaultSort : new TrackSort((SortColumn)col, settings.Get(SortDescKey()));
             _density.Value = settings.Get(WaveeSettings.RowDensity);
+            _tempoColumn.Value = settings.Get(WaveeSettings.TempoColumn);
         }, _ctxUri ?? "");
         void SetSort(TrackSort s)
         {
@@ -238,6 +247,7 @@ sealed class DetailShell : Component
             settings?.Set(SortDescKey(), s.Descending);
         }
         void SetDensity(int d) { _density.Value = d; settings?.Set(WaveeSettings.RowDensity, d); }   // app-wide
+        void SetTempoColumn(bool on) { _tempoColumn.Value = on; settings?.Set(WaveeSettings.TempoColumn, on); }   // app-wide
 
         // SetSort / SetDensity are hoisted local functions; the rail + chrome toolbars read all list-view controls off here.
         // The record below is the LIVE one — its closures see THIS render's svc / model / settings — but nothing
@@ -258,7 +268,8 @@ sealed class DetailShell : Component
         var playAllOverride = UseRef(new Action?[1]).Value;
         live.Current = new DetailHandlers(Play, () => { var ov = playAllOverride[0]; if (ov is not null) ov(); else Play(0); },
             Shuffle, PlayContext, go, accent, _sort, SetSort,
-            _query, _filters, f => _filters.Value = f, _density, SetDensity, PlayNext, AddToQueue, AddToPlaylist,
+            _query, _filters, f => _filters.Value = f, _density, SetDensity, _tempoColumn, SetTempoColumn,
+            PlayNext, AddToQueue, AddToPlaylist,
             a => DetailNav.OpenAlbum(navPreview, go, a),
             p => DetailNav.OpenPlaylist(navPreview, go, p),
             playAllOverride,
@@ -277,6 +288,7 @@ sealed class DetailShell : Component
             _sort, s => live.Current.SetSort(s),
             _query, _filters, f => _filters.Value = f,
             _density, d => live.Current.SetDensity(d),
+            _tempoColumn, on => live.Current.SetTempoColumn(on),
             () => live.Current.PlayNext(),
             () => live.Current.AddToQueue(),
             () => live.Current.AddToPlaylist(),

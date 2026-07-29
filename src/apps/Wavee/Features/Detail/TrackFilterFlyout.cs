@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -11,7 +12,13 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 /// <summary>The rich, immediate-apply detail-list filter surface. Each selector owns a concrete signal for the lifetime
-/// of one flyout session; its callback projects the changed facet back into the aggregate list filter signal.</summary>
+/// of one flyout session; its callback projects the changed facet back into the aggregate list filter signal.
+///
+/// LAYOUT BUDGET is a real constraint here, not a nicety: the card caps its scroll region, so every facet that stacks
+/// its label above its control instead of sitting beside it pushes the next one below the fold. A user should be able
+/// to see the whole filter surface at once on a normal window and only scroll when several facets are expanded — which
+/// is why the scope picker is one segmented row rather than a 2x2 grid of buttons, the trait facets put their label and
+/// their control on the SAME line, and Status folds into Content instead of carrying its own title and divider.</summary>
 sealed class TrackFilterFlyout : Component
 {
     readonly IReadSignal<TrackFilterState> _filters;
@@ -24,13 +31,32 @@ sealed class TrackFilterFlyout : Component
     readonly Signal<bool> _playable;
     readonly Signal<int> _duration;
     readonly Signal<int> _added;
+    readonly Signal<int> _tempo;
     readonly Signal<int> _origin;
-    readonly Signal<bool> _durationOpen = new(false);
-    readonly Signal<bool> _addedOpen = new(false);
-    readonly Signal<bool> _originOpen = new(false);
 
-    static readonly TemplateParts DisclosureParts = new()
+    /// <summary>One collapsible "more filters" facet: its open state, the root node it realized into (so an expand can
+    /// bring it into view) and the template parts that capture that node. These live on the INSTANCE rather than in
+    /// hooks because WHICH sections render depends on capabilities — a hook per section would shift hook order the
+    /// moment enrichment adds the Tempo facet mid-session.</summary>
+    sealed class Section
     {
+        public readonly Signal<bool> Open = new(false);
+        public NodeHandle Node;
+        public TemplateParts Parts = null!;
+    }
+
+    readonly Section _durationSec = new();
+    readonly Section _addedSec = new();
+    readonly Section _tempoSec = new();
+    readonly Section _originSec = new();
+    readonly Section[] _sections;
+    NodeHandle _scrollNode;
+
+    /// <summary>The chromeless-disclosure restyle. Built per section so each can capture its own root node; everything
+    /// except that capture is identical across the four.</summary>
+    static TemplateParts DisclosurePartsFor(Section s) => new()
+    {
+        [Expander.PartRoot] = r => r with { OnRealized = h => s.Node = h },
         [Expander.PartHeader] = static h => h with
         {
             MinHeight = 42f,
@@ -56,6 +82,16 @@ sealed class TrackFilterFlyout : Component
         },
     };
 
+    // Card geometry. The scroll cap is the binding constraint (the outer cap only ever clips the header/footer chrome),
+    // so it is the number that decides whether the surface scrolls at rest.
+    const float CardWidth = 368f;
+    const float CardMaxHeight = 620f;
+    const float ScrollMaxHeight = 500f;
+    /// <summary>Width reserved for a trait facet's three-way control, leaving the rest of the row to its label.</summary>
+    const float TraitControlWidth = 150f;
+    /// <summary>Fired after a sibling's 167ms collapse has settled — see <see cref="Section"/> handling in Render.</summary>
+    const float RevealDelayMs = 170f;
+
     public TrackFilterFlyout(IReadSignal<TrackFilterState> filters, Action<TrackFilterState> setFilters,
         TrackFilterCapabilities caps)
     {
@@ -70,7 +106,17 @@ sealed class TrackFilterFlyout : Component
         _playable = new(f.PlayableOnly);
         _duration = new((int)f.Duration);
         _added = new((int)f.Added);
+        _tempo = new((int)f.Tempo);
         _origin = new((int)f.Origin);
+        _sections = [_durationSec, _addedSec, _tempoSec, _originSec];
+        foreach (var s in _sections) s.Parts = DisclosurePartsFor(s);
+    }
+
+    /// <summary>Index of the single open section, or -1. Drives the reveal timer's dep key.</summary>
+    int OpenSectionIndex()
+    {
+        for (int i = 0; i < _sections.Length; i++) if (_sections[i].Open.Value) return i;
+        return -1;
     }
 
     public override Element Render()
@@ -81,6 +127,20 @@ sealed class TrackFilterFlyout : Component
             ? Loc.Get(Strings.Detail.Filter.AllTracks)
             : Strings.Detail.Filter.ActiveCount(current.ActiveCount.ToString());
 
+        // Expanding a section also COLLAPSES its sibling, and that 167ms shrink slides everything below it upward — so
+        // arming the scroll at click time would chase a rect that is still moving. Waiting for the collapse to settle
+        // makes the header's position final, and the chase then parks it under the card's own header. Unconditional
+        // hook, re-armed by the dep key whenever the open section changes (-1 = all closed, fires and does nothing).
+        Context.UseTimeout(() =>
+        {
+            int i = OpenSectionIndex();
+            if (i < 0) return;
+            // Target the section ROOT's top edge, not its expanded body: the body reflows for 333ms after this, so its
+            // extent is not settled, while the top edge is exactly where the header already is.
+            ScrollIntoView.BringInto(Context, _scrollNode, _sections[i].Node,
+                margin: Spacing.S, alignmentRatio: 0f, animate: true);
+        }, RevealDelayMs, DepKey.From(OpenSectionIndex()));
+
         Element SectionTitle(string text) => new TextEl(text.ToUpperInvariant())
         {
             Size = 10f,
@@ -89,7 +149,7 @@ sealed class TrackFilterFlyout : Component
             Margin = new Edges4(4f, 0f, 4f, 8f),
         };
 
-        Element Section(string title, params Element[] children) => new BoxEl
+        Element Group(string title, params Element[] children) => new BoxEl
         {
             Direction = 1,
             Gap = 8f,
@@ -97,66 +157,51 @@ sealed class TrackFilterFlyout : Component
             Children = [SectionTitle(title), .. children],
         };
 
-        Element ScopeButton(TrackSearchScope value, string label)
-        {
-            int index = (int)value;
-            bool selected = _scope.Value == index;
-            Action choose = () =>
-            {
-                _scope.Value = index;
-                _setFilters(_filters.Peek() with { SearchScope = value });
-            };
-            return new BoxEl
-            {
-                Height = 34f,
-                AlignItems = FlexAlign.Center,
-                Justify = FlexJustify.Center,
-                Corners = Radii.ControlAll,
-                Fill = selected ? accent with { A = 0.14f } : Tok.FillSubtleTransparent,
-                HoverFill = selected ? accent with { A = 0.21f } : Tok.FillSubtleSecondary,
-                PressedFill = selected ? accent with { A = 0.10f } : Tok.FillSubtleTertiary,
-                BorderWidth = 1f,
-                BorderColor = selected ? accent with { A = 0.34f } : Tok.StrokeControlDefault,
-                BrushTransitionMs = 83f,
-                PressScale = 0.98f,
-                PressDurationMs = 83f,
-                OnClick = choose,
-                Role = AutomationRole.RadioButton,
-                Children = [new TextEl(label)
-                {
-                    Size = 13f,
-                    Weight = selected ? (ushort)600 : (ushort)450,
-                    Color = selected ? accent : Tok.TextSecondary,
-                }],
-            };
-        }
+        // ONE segmented row, not a 2x2 grid of buttons: the four scopes are mutually exclusive short words, which is
+        // exactly what Segmented is for, and it costs one 34-DIP line instead of two rows plus their gap.
+        Element ScopePicker() => Segmented.Create(
+            [
+                new SegmentedItem(Loc.Get(Strings.Detail.Filter.Everything)),
+                new SegmentedItem(Loc.Get(Strings.Detail.Filter.TitleOnly)),
+                new SegmentedItem(Loc.Get(Strings.Detail.Filter.ArtistOnly)),
+                new SegmentedItem(Loc.Get(Strings.Detail.Filter.AlbumOnly)),
+            ],
+            _scope,
+            onChange: value => _setFilters(_filters.Peek() with { SearchScope = (TrackSearchScope)value }));
 
+        // Label and control on ONE line. Stacking them read as a heading over a widget and cost ~23 DIP per facet for
+        // no added clarity — the icon plus a short label leaves plenty of room beside a three-way control.
         Element TraitFacet(string glyph, string label, Signal<int> signal, Action<int> changed) => new BoxEl
         {
-            Direction = 1,
-            Gap = 7f,
+            Direction = 0,
+            Gap = 9f,
+            MinHeight = 32f,
+            AlignItems = FlexAlign.Center,
+            Padding = new Edges4(4f, 0f, 0f, 0f),
             Children =
             [
+                Icon(glyph, 16f, Tok.TextTertiary),
+                new TextEl(label)
+                {
+                    Size = 13f, Weight = 600, Color = Tok.TextSecondary,
+                    Grow = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
                 new BoxEl
                 {
-                    Direction = 0,
-                    Gap = 9f,
-                    AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(4f, 0f, 4f, 0f),
+                    Width = TraitControlWidth,
+                    Shrink = 0f,
                     Children =
                     [
-                        Icon(glyph, 16f, Tok.TextTertiary),
-                        new TextEl(label) { Size = 13f, Weight = 600, Color = Tok.TextSecondary },
+                        Segmented.Create(
+                        [
+                            new SegmentedItem(Loc.Get(Strings.Detail.Filter.All)),
+                            new SegmentedItem(Loc.Get(Strings.Detail.Filter.Hide)),
+                            new SegmentedItem(Loc.Get(Strings.Detail.Filter.Only)),
+                        ],
+                        signal,
+                        onChange: changed),
                     ],
                 },
-                Segmented.Create(
-                [
-                    new SegmentedItem(Loc.Get(Strings.Detail.Filter.All)),
-                    new SegmentedItem(Loc.Get(Strings.Detail.Filter.Hide)),
-                    new SegmentedItem(Loc.Get(Strings.Detail.Filter.Only)),
-                ],
-                signal,
-                onChange: changed),
             ],
         };
 
@@ -165,7 +210,7 @@ sealed class TrackFilterFlyout : Component
             var checkStyle = CheckBox.DefaultStyle with
             {
                 MinWidth = 0f,
-                MinHeight = 32f,
+                MinHeight = 30f,
                 FontSize = 13f,
                 ContentGap = 7f,
             };
@@ -173,8 +218,8 @@ sealed class TrackFilterFlyout : Component
             {
                 Direction = 0,
                 Gap = 8f,
-                MinHeight = 38f,
-                Padding = new Edges4(9f, 2f, 7f, 2f),
+                MinHeight = 32f,
+                Padding = new Edges4(9f, 1f, 7f, 1f),
                 AlignItems = FlexAlign.Center,
                 Corners = Radii.ControlAll,
                 Fill = Tok.FillSubtleTransparent,
@@ -190,8 +235,8 @@ sealed class TrackFilterFlyout : Component
             };
         }
 
-        Element Disclosure(string glyph, string label, Signal<int> value, Signal<bool> open,
-            IReadOnlyList<string> labels, Action<int> changed, Action<bool> opened)
+        Element Disclosure(string glyph, string label, Signal<int> value, Section section,
+            IReadOnlyList<string> labels, Action<int> changed)
         {
             var header = new BoxEl
             {
@@ -216,11 +261,11 @@ sealed class TrackFilterFlyout : Component
             };
             var choices = RadioButtons.Create(labels, value, changed, maxColumns: 2);
             return Embed.Comp(
-                new Expander.ExpanderSlots(header, choices, DisclosureParts),
+                new Expander.ExpanderSlots(header, choices, section.Parts),
                 () => new Expander
             {
-                IsExpanded = open,
-                OnChange = opened,
+                IsExpanded = section.Open,
+                OnChange = open => OpenOnly(section, open),
             });
         }
 
@@ -231,12 +276,11 @@ sealed class TrackFilterFlyout : Component
             _setFilters(f with { Flags = flags });
         }
 
-        void OpenOnly(Signal<bool> target, bool open)
+        void OpenOnly(Section target, bool open)
         {
             if (!open) return;
-            if (!ReferenceEquals(target, _durationOpen)) _durationOpen.Value = false;
-            if (!ReferenceEquals(target, _addedOpen)) _addedOpen.Value = false;
-            if (!ReferenceEquals(target, _originOpen)) _originOpen.Value = false;
+            foreach (var s in _sections)
+                if (!ReferenceEquals(s, target)) s.Open.Value = false;
         }
 
         void ClearAll()
@@ -248,36 +292,20 @@ sealed class TrackFilterFlyout : Component
             _playable.Value = false;
             _duration.Value = (int)TrackDurationRange.Any;
             _added.Value = (int)TrackAddedRange.Any;
+            _tempo.Value = (int)TrackTempoBand.Any;
             _origin.Value = (int)TrackOriginFilter.Any;
-            _durationOpen.Value = false;
-            _addedOpen.Value = false;
-            _originOpen.Value = false;
+            foreach (var s in _sections) s.Open.Value = false;
             _setFilters(TrackFilterState.Default);
         }
 
-        var bodyChildren = new List<Element>(10)
+        // ── Content: the traits, plus Status folded in. Status was a section of its own with a title and a divider for
+        // two checkboxes; it is the same idea as the traits (does this list include X?) and reads fine under one head.
+        var contentChildren = new List<Element>(4)
         {
-            Section(Loc.Get(Strings.Detail.Filter.SearchIn),
-                new GridEl
-                {
-                    Columns = [TrackSize.Star(), TrackSize.Star()],
-                    ColGap = 4f,
-                    RowGap = 4f,
-                    RowHeight = 34f,
-                    Children =
-                    [
-                        ScopeButton(TrackSearchScope.Everything, Loc.Get(Strings.Detail.Filter.Everything)),
-                        ScopeButton(TrackSearchScope.Title, Loc.Get(Strings.Detail.Filter.TitleOnly)),
-                        ScopeButton(TrackSearchScope.Artist, Loc.Get(Strings.Detail.Filter.ArtistOnly)),
-                        ScopeButton(TrackSearchScope.Album, Loc.Get(Strings.Detail.Filter.AlbumOnly)),
-                    ],
-                }),
-            new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault },
-            Section(Loc.Get(Strings.Detail.Filter.Content),
-                TraitFacet(Icons.Important, Loc.Get(Strings.Detail.Filter.ExplicitContent), _explicit,
-                    value => _setFilters(_filters.Peek() with { ExplicitMode = (TrackTraitMode)value })),
-                TraitFacet(Icons.Movie, Loc.Get(Strings.Detail.Filter.VideoTracks), _video,
-                    value => _setFilters(_filters.Peek() with { VideoMode = (TrackTraitMode)value }))),
+            TraitFacet(Icons.Important, Loc.Get(Strings.Detail.Filter.ExplicitContent), _explicit,
+                value => _setFilters(_filters.Peek() with { ExplicitMode = (TrackTraitMode)value })),
+            TraitFacet(Icons.Movie, Loc.Get(Strings.Detail.Filter.VideoTracks), _video,
+                value => _setFilters(_filters.Peek() with { VideoMode = (TrackTraitMode)value })),
         };
 
         var statusChoices = new List<Element>(2);
@@ -292,31 +320,28 @@ sealed class TrackFilterFlyout : Component
             var columns = statusChoices.Count > 1
                 ? new[] { TrackSize.Star(), TrackSize.Star() }
                 : new[] { TrackSize.Star() };
-            bodyChildren.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault });
-            bodyChildren.Add(Section(Loc.Get(Strings.Detail.Filter.Status),
-                new GridEl
-                {
-                    Columns = columns,
-                    ColGap = 5f,
-                    RowGap = 5f,
-                    Children = statusChoices.ToArray(),
-                }));
+            contentChildren.Add(new GridEl
+            {
+                Columns = columns,
+                ColGap = 5f,
+                RowGap = 5f,
+                Children = statusChoices.ToArray(),
+            });
         }
 
-        var more = new List<Element>(3)
+        var more = new List<Element>(4)
         {
-            Disclosure(Icons.Clock, Loc.Get(Strings.Detail.Filter.Duration), _duration, _durationOpen,
+            Disclosure(Icons.Clock, Loc.Get(Strings.Detail.Filter.Duration), _duration, _durationSec,
                 [
                     Loc.Get(Strings.Detail.Filter.AnyDuration),
                     Loc.Get(Strings.Detail.Filter.UnderThree),
                     Loc.Get(Strings.Detail.Filter.ThreeToFive),
                     Loc.Get(Strings.Detail.Filter.OverFive),
                 ],
-                value => _setFilters(_filters.Peek() with { Duration = (TrackDurationRange)value }),
-                open => OpenOnly(_durationOpen, open)),
+                value => _setFilters(_filters.Peek() with { Duration = (TrackDurationRange)value })),
         };
         if (_caps.HasDateAdded || current.Added != TrackAddedRange.Any)
-            more.Add(Disclosure(Icons.Calendar, Loc.Get(Strings.Detail.Filter.DateAdded), _added, _addedOpen,
+            more.Add(Disclosure(Icons.Calendar, Loc.Get(Strings.Detail.Filter.DateAdded), _added, _addedSec,
                 [
                     Loc.Get(Strings.Detail.Filter.AnyTime),
                     Loc.Get(Strings.Detail.Filter.LastSevenDays),
@@ -324,27 +349,46 @@ sealed class TrackFilterFlyout : Component
                     Loc.Get(Strings.Detail.Filter.LastSixMonths),
                     Loc.Get(Strings.Detail.Filter.LastYear),
                 ],
-                value => _setFilters(_filters.Peek() with { Added = (TrackAddedRange)value }),
-                open => OpenOnly(_addedOpen, open)));
+                value => _setFilters(_filters.Peek() with { Added = (TrackAddedRange)value })));
+        // Tempo sits with the other "more filters" facets rather than as a chip: it is a refinement you reach for, not
+        // a mode you toggle. Key is deliberately NOT exposed as a 24-way picker here — a Camelot code is set from a
+        // track's own row (the versions drawer), where you have a reference to match against, which is the only moment
+        // "same key as this" is a question anyone asks.
+        if (_caps.HasTempo || current.Tempo != TrackTempoBand.Any)
+            more.Add(Disclosure(Icons.MusicNote, Loc.Get(Strings.Detail.Filter.Tempo), _tempo, _tempoSec,
+                [
+                    Loc.Get(Strings.Detail.Filter.AnyTempo),
+                    Loc.Get(Strings.Detail.Filter.TempoUnder90),
+                    Loc.Get(Strings.Detail.Filter.Tempo90To119),
+                    Loc.Get(Strings.Detail.Filter.Tempo120To139),
+                    Loc.Get(Strings.Detail.Filter.Tempo140Up),
+                ],
+                value => _setFilters(_filters.Peek() with { Tempo = (TrackTempoBand)value })));
         if (_caps.HasMixedOrigin || current.Origin != TrackOriginFilter.Any)
-            more.Add(Disclosure(Icons.MusicNote, Loc.Get(Strings.Detail.Filter.Source), _origin, _originOpen,
+            more.Add(Disclosure(Icons.MusicNote, Loc.Get(Strings.Detail.Filter.Source), _origin, _originSec,
                 [
                     Loc.Get(Strings.Detail.Filter.AnySource),
                     Loc.Get(Strings.Detail.Filter.Streamed),
                     Loc.Get(Strings.Detail.Filter.Local),
                 ],
-                value => _setFilters(_filters.Peek() with { Origin = (TrackOriginFilter)value }),
-                open => OpenOnly(_originOpen, open)));
-        bodyChildren.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault });
-        bodyChildren.Add(Section(Loc.Get(Strings.Detail.Filter.MoreFilters), more.ToArray()));
+                value => _setFilters(_filters.Peek() with { Origin = (TrackOriginFilter)value })));
+
+        var bodyChildren = new List<Element>(6)
+        {
+            Group(Loc.Get(Strings.Detail.Filter.SearchIn), ScopePicker()),
+            new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault },
+            Group(Loc.Get(Strings.Detail.Filter.Content), contentChildren.ToArray()),
+            new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault },
+            Group(Loc.Get(Strings.Detail.Filter.MoreFilters), more.ToArray()),
+        };
 
         return new BoxEl
         {
             Direction = 1,
-            Width = 368f,
+            Width = CardWidth,
             MinWidth = 320f,
-            MaxWidth = 368f,
-            MaxHeight = 560f,
+            MaxWidth = CardWidth,
+            MaxHeight = CardMaxHeight,
             MinHeight = 0f,
             ClipToBounds = true,
             Children =
@@ -387,7 +431,8 @@ sealed class TrackFilterFlyout : Component
                     ContentSized = true,
                     Grow = 1f,
                     MinHeight = 0f,
-                    MaxHeight = 430f,
+                    MaxHeight = ScrollMaxHeight,
+                    OnRealized = h => _scrollNode = h,
                     Content = new BoxEl
                     {
                         Direction = 1,

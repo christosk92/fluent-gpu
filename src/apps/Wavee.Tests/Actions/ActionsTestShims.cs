@@ -90,7 +90,6 @@ namespace Wavee.Tests.Actions
         public double Volume => 1.0;
         public bool IsShuffle => false;
         public RepeatMode Repeat => RepeatMode.Off;
-        public Palette? Palette => null;
         public IReadOnlyList<QueueEntry> Queue => Array.Empty<QueueEntry>();
         public IObservable<IPlaybackState> Changes => NeverObservable<IPlaybackState>.Instance;
         public IObservable<long> PositionTicks => NeverObservable<long>.Instance;

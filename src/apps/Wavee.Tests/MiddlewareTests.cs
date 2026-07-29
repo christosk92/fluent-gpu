@@ -1,3 +1,4 @@
+using Wavee.Backend.Audio;
 using Wavee.Backend.Spotify;
 using Xunit;
 
@@ -88,7 +89,9 @@ public class HttpMiddlewareTests
         Assert.Equal(200, resp.Status);
         Assert.Equal("CT123", captured!.Headers["client-token"]);
         Assert.Equal(SpotifyHeaders.AppPlatform, captured.Headers["App-Platform"]);
-        Assert.Equal("129300667", captured.Headers["Spotify-App-Version"]);
+        // Read the pin rather than restating it: this test asserts the middleware ATTACHES the app version, which is
+        // orthogonal to what that version currently is (SpotifyRuntimeIdentityTests owns the pin's value).
+        Assert.Equal(SpotifyRuntimeIdentity.DefaultAppVersion, captured.Headers["Spotify-App-Version"]);
         Assert.StartsWith("Spotify/", captured.Headers["User-Agent"]);
         Assert.Equal("nl", captured.Headers["Accept-Language"]);
     }

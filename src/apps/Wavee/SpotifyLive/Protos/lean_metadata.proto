@@ -46,6 +46,17 @@ message LeanExternalId {            // Track.external_id (field 10): type="isrc"
     optional string id = 2;
 }
 
+// Playability inputs, measured against 10,472 real TrackV4 payloads (461 extended-metadata responses). The corpus falls
+// into exactly three classes, and they are what the availability rule is built from:
+//
+//   8,378 (80.0%)  file[] present, no alternative, no restriction        → normal, playable
+//   2,050 (19.6%)  NO file[], alternative[] WITH its own file[], restriction present → RELINKED, still playable
+//      44 ( 0.4%)  NO file[], NO alternative, restriction present        → genuinely unplayable
+//
+// The lesson is that `restriction` is NOT a verdict: it appears on the relinked class and the dead class alike, and an
+// empty `countries_allowed` is an empty WHITELIST (i.e. no country gate), not "allowed nowhere". The verdict is
+// file-based: a track with no files AND no alternative carrying files cannot play. 0.4% is also a believable rate for
+// greyed-out rows, where treating the restriction as the signal would have dimmed a fifth of the library.
 message LeanTrack {
     optional bytes gid = 1;
     optional string name = 2;
@@ -54,6 +65,31 @@ message LeanTrack {
     optional sint32 duration = 7;
     optional bool explicit = 9;
     repeated LeanExternalId external_id = 10;   // field 10 == metadata.proto Track.external_id (carries the ISRC)
+    // Country gate. Parsed for completeness, but see the note above: on its own it decides nothing.
+    repeated LeanRestriction restriction = 11;
+    // The playable renditions. EMPTY is the interesting case — see `alternative`.
+    repeated LeanAudioFile file = 12;
+    // Relink targets. When `file` is empty, the track is playable IFF one of these carries files of its own; that is
+    // the 2,050-payload class above, and missing it would mark a fifth of a normal library unplayable.
+    repeated LeanTrack alternative = 13;
+    // When the track goes (or went) live — unix SECONDS. Present on 100% of payloads (10,472/10,472; 1,970 distinct
+    // values spanning 1983–2026), which makes it the reliable per-track release instant and the reason availability
+    // need not come from getAlbum. A FUTURE value is a track announced but not out — the partially-released album
+    // case. The capture holds no future values (nothing unreleased was open during it), so that branch follows from
+    // the field's meaning rather than being demonstrated by these samples.
+    optional int64 earliest_live_timestamp = 17;
+}
+
+// Track.file / Track.alternative[].file. Only presence is read — the format/id detail belongs to the audio path.
+message LeanAudioFile {
+    optional bytes file_id = 1;
+    optional int32 format = 2;
+}
+
+// Track.restriction (field 11). Only the country oneof is modelled; catalogue/type are not read.
+message LeanRestriction {
+    optional string countries_allowed = 2;
+    optional string countries_forbidden = 3;
 }
 
 message LeanAlbum {

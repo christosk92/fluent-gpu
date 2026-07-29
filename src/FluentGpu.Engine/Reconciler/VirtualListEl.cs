@@ -106,6 +106,8 @@ public sealed record VirtualListEl : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement — see <see cref="BoxEl.JustifySelf"/>.</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
     public ColorF Fill { get; init; }
 

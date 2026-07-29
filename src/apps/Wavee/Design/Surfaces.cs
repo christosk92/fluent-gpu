@@ -21,6 +21,37 @@ public static class Surfaces
     internal static ColorF ArtworkPlaceholder =>
         Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
+    // How far a cover's own colour pulls the placeholder away from the neutral tile. Full strength would make a long
+    // list read as a wall of saturated blocks; this keeps the slot legible as "art loading" while still being that
+    // cover's colour. Same blend technique as ConcertUi's hero band.
+    const float TintStrength = 0.55f;
+
+    /// <summary>The art placeholder for an entity whose dominant cover colour is known. Falls back to the neutral tile
+    /// when the colour has not been graded yet, so a slot is never a hole.</summary>
+    internal static ColorF TintedPlaceholder(uint? tint) =>
+        tint is { } argb ? ColorF.Lerp(ArtworkPlaceholder, WaveePalette.ToColor(argb), TintStrength) : ArtworkPlaceholder;
+
+    /// <summary>THE art placeholder resolver. Every art slot in the app goes through here, so no call site has to
+    /// know a colour exists, thread a <c>tint:</c> parameter, or remember to prefetch one: the plane is image-keyed
+    /// (a cover's colour is a property of the cover), and a miss enqueues that image for grading — rendering the art
+    /// IS the request. Light theme only accepts a light grading; a dark-only entry (all kind 179 ever ships) keeps the
+    /// neutral tile rather than dropping a dark slab onto a pale page.</summary>
+    internal static ColorF PlaceholderFor(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return ArtworkPlaceholder;
+        bool light = Tok.Theme == ThemeKind.Light;
+        return SpotifyLive.CoverColorPlane.Current.TryGetTint(url, light, out uint argb)
+            ? ColorF.Lerp(ArtworkPlaceholder, WaveePalette.ToColor(argb), TintStrength)
+            : ArtworkPlaceholder;
+    }
+
+    /// <summary>The full graded roles behind a cover — for PAGE chrome (hero washes, accent bars, the Play button, the
+    /// shell's Mica tint) rather than a placeholder tile. Null until the plane has a grading for this theme; a caller
+    /// that wants the wash to appear the moment it lands should also read <c>CoverColorPlane.Current.Epoch</c>. That is
+    /// safe at page scope (one subscriber) but deliberately NOT done per card — see <c>CoverShimmer</c>.</summary>
+    internal static SpotifyLive.CoverColorPlane.Scheme? SchemeFor(string? url) =>
+        SpotifyLive.CoverColorPlane.Current.TryGetScheme(url, Tok.Theme == ThemeKind.Light);
+
     // A restrained, top-anchored accent fade (Spotify's top-of-page colour band): a soft tint over the header that
     // fades out well before the tracklist, so the art colour reads as an accent — never a full-page flood. The peak
     // alpha is low and the falloff is steep (transparent by ~55% down, clear below); the previous solid WinUI-parity
@@ -74,7 +105,9 @@ public static class Surfaces
             // sidebar/chrome, so a see-through placeholder lets the dark Mica bleed through — the cover reads as a
             // washed, low-contrast smear while it loads (or a dark hole when it has no art / fails). Album art is opaque
             // content; back it with an opaque neutral so it always reads as a solid tile, never the backdrop.
-            return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = ArtworkPlaceholder };
+            // Tinted from the cover's own graded colour when the plane has one, else the neutral opaque tile.
+            // This is the difference between a track list of blank grey squares and one that paints its covers at once.
+            return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = PlaceholderFor(url) };
         // Covers/cards: the breathing shimmer. Keyed by url so a virtualized card that REBINDS to a new cover remounts
         // the tile (a Component freezes its ctor args at mount) — the breathe + load-state read then track the new item.
         // Skeletonized(false): inside a Skel.Region's derived skeleton this opaque component would otherwise map to the
@@ -104,7 +137,10 @@ public static class Surfaces
         int dw = decodePx > 0 ? decodePx : (int)width, dh = decodePx > 0 ? decodePx : (int)height;
         // Shared-layout art owns its placeholder. Culling only the tagged ImageEl must not leave a separate shimmer
         // sibling painting the old large slot behind the flying overlay.
-        ColorF placeholder = morphKey is null ? ColorF.Transparent : ArtworkPlaceholder;
+        // Un-tagged art keeps its transparent placeholder because the Shimmer tile below already fills the slot (and
+        // carries the tint). A morph participant owns its own placeholder — resolve that one directly, since it has no
+        // shimmer sibling to inherit from.
+        ColorF placeholder = morphKey is null ? ColorF.Transparent : PlaceholderFor(url);
         Element img = url is null ? new BoxEl()
             : decodePx > 0
                 ? Ui.Image(url, ImageFit.Cover, 1f, decodePx, corners, placeholder, image!.BlurHash) with { MorphId = morphKey, Saturation = saturation }
@@ -126,7 +162,10 @@ public static class Surfaces
         // width, which a fill cell doesn't have); the home/sidebar/detail cover-less cases use Artwork/Shelf which mosaic.
         if (image?.MosaicTiles is { Count: > 0 } tiles) image = new Image(tiles[0]);
         string? url = image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
-        return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, ArtworkPlaceholder, image?.BlurHash);
+        // Tinted from the cover's own graded colour exactly like Shimmer/Artwork. Without this a whole grid of albums
+        // loads as identical grey squares while the track list beside it paints in colour — the placeholder is on
+        // screen longest precisely where the most art is loading at once.
+        return Ui.Image(url ?? "", ImageFit.Cover, 1f, decodePx, corners, PlaceholderFor(url), image?.BlurHash);
     }
 
     /// <summary>A 2×2 mosaic of 4 album covers at an EXPLICIT size — how Spotify renders a cover-less playlist. Each
@@ -134,7 +173,11 @@ public static class Surfaces
     public static Element Mosaic(System.Collections.Generic.IReadOnlyList<string> tiles, float width, float height, float corners)
     {
         int cell = (int)(width / 2);
-        Element Cell(string u) => new BoxEl { Grow = 1f, ClipToBounds = true, Children = [ Ui.Image(ImageSource.Normalize(u) ?? "", ImageFit.Cover, 1f, cell, 0f, ArtworkPlaceholder) ] };
+        Element Cell(string u)
+        {
+            string? n = ImageSource.Normalize(u);
+            return new BoxEl { Grow = 1f, ClipToBounds = true, Children = [ Ui.Image(n ?? "", ImageFit.Cover, 1f, cell, 0f, PlaceholderFor(n)) ] };
+        }
         return new BoxEl
         {
             Width = width, Height = height, ClipToBounds = true, Corners = CornerRadius4.All(corners), Direction = 1,
@@ -234,9 +277,16 @@ sealed class CoverShimmer : Component
             else if (state == ImageState.Failed && failure != ImageFailureKind.Canceled) settled.Value = true;
             else loading = state is ImageState.None or ImageState.Pending;
         }
+        // Subscribe to the cover-colour plane ONLY while this tile is still the visible surface: the moment a graded
+        // batch lands, mounted placeholders repaint in their covers' colours. Art tiles are the only subscribers by
+        // design — subscribing at card level would turn one colour batch into a reconcile flush across every card.
+        if (loading) _ = SpotifyLive.CoverColorPlane.Current.Epoch.Value;
+
         // On the loading→settled edge `loading` flips, the dep changes, and the effect re-seeds a finite flat track
         // (loop:false) — the looping pulse is replaced in place and the loop-track count drops so the frame loop quiesces.
         UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, DepKey.From(loading));   // #9: DepKey, not a boxed object[]
-        return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Surfaces.ArtworkPlaceholder };
+        // The tile is the cover's own colour, not a grey slab. This is the surface that is on screen the LONGEST for a
+        // cold grid, so it is the one that decides whether a page reads as "loading its art" or as "broken".
+        return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Surfaces.PlaceholderFor(_url) };
     }
 }

@@ -1,0 +1,317 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using Wavee.SpotifyLive;
+using Xunit;
+
+namespace Wavee.Tests;
+
+// The one cover-colour plane. These cover the properties the whole feature rests on: a cover's colour is keyed by its
+// IMAGE (so every pre-sized URL and every entity showing that cover share one entry), it survives restarts for ~half a
+// year, a colourless cover is remembered for a shorter window instead of being re-asked forever, light theme never
+// serves a dark-only (kind 179) grading, and a render-path miss is what triggers the fetch.
+public class CoverColorPlaneTests
+{
+    static string TempFile() => Path.Combine(Path.GetTempPath(), "wavee-colors-" + Guid.NewGuid().ToString("N") + ".json");
+
+    static CoverColorPlane.Scheme Dark => new(0xFF101040u, 0xFF3C4478u, 0xFFFFFFFFu, 0xFFB3B3B3u, 0xFFACB8F5u);
+    static CoverColorPlane.Scheme Light => new(0xFFF2F2F2u, 0xFFE0E0E0u, 0xFF101010u, 0xFF505050u, 0xFF2E6CE0u);
+
+    // The SAME artwork at two sizes. Spotify puts the size in the id's first 16 chars and the artwork identity in the
+    // trailing 24 — 64px `…00004851` vs 640px `…0000b273`, both ending `e86f30ec6f14a30f1cf9bb9d`.
+    const string Small = "https://i.scdn.co/image/ab67616d00004851e86f30ec6f14a30f1cf9bb9d";
+    const string Large = "https://i.scdn.co/image/ab67616d0000b273e86f30ec6f14a30f1cf9bb9d";
+    const string Other = "https://i.scdn.co/image/ab67616d0000b273ffffffffffffffffffffffff";
+
+    [Fact]
+    public void KeyForUrl_IsTheSizeIndependentArtworkIdentity()
+    {
+        // Two sizes of one cover MUST collapse to one entry, or a row thumbnail and its grid card would each pay for
+        // their own grading and the tint would land twice, late.
+        Assert.Equal("e86f30ec6f14a30f1cf9bb9d", CoverColorPlane.KeyForUrl(Small));
+        Assert.Equal(CoverColorPlane.KeyForUrl(Small), CoverColorPlane.KeyForUrl(Large));
+        Assert.NotEqual(CoverColorPlane.KeyForUrl(Large), CoverColorPlane.KeyForUrl(Other));
+        // The FULL id is still what the wire wants (`spotify:image:<full id>`), so it stays available separately.
+        Assert.Equal("ab67616d0000b273e86f30ec6f14a30f1cf9bb9d", CoverColorPlane.IdSpan(Large).ToString());
+        // A query string is not part of the identity, and a non-Spotify id keys on itself.
+        Assert.Equal("cover.jpg", CoverColorPlane.KeyForUrl("https://mosaic.scdn.co/640/cover.jpg?x=1"));
+        Assert.Equal("", CoverColorPlane.KeyForUrl(null));
+    }
+
+    [Fact]
+    public void ImageUri_IsTheSpotifyImageForm_NotAnHttpsUrl()
+        => Assert.Equal("spotify:image:abc", CoverColorPlane.ImageUri("abc"));
+
+    [Fact]
+    public void DarkGrading_ServesDarkTheme_ButNeverLightTheme()
+    {
+        var plane = new CoverColorPlane(TempFile());
+        plane.SetDark(Large, Dark);
+
+        Assert.True(plane.TryGetTint(Large, lightTheme: false, out uint dark));
+        Assert.Equal(0xFF101040u, dark);
+        // Kind 179 only ever ships dark treatments (its three schemes are elevation levels). Serving one on a pale page
+        // would drop a near-black slab into it, so light theme keeps the neutral tile until the filler grades it.
+        Assert.False(plane.TryGetTint(Large, lightTheme: true, out _));
+    }
+
+    [Fact]
+    public void GradedEntry_ServesBothThemes()
+    {
+        var plane = new CoverColorPlane(TempFile());
+        plane.SetGraded(CoverColorPlane.KeyForUrl(Large), new CoverColorPlane.GradedColors(Dark, Light, BestFitIsLight: true));
+
+        Assert.True(plane.TryGetTint(Large, lightTheme: false, out uint d));
+        Assert.True(plane.TryGetTint(Large, lightTheme: true, out uint l));
+        Assert.Equal(0xFF101040u, d);
+        Assert.Equal(0xFFF2F2F2u, l);
+    }
+
+    [Fact]
+    public void OneImage_TintsEverySizeOfTheSameCover()
+    {
+        var plane = new CoverColorPlane(TempFile());
+        plane.SetGraded(CoverColorPlane.KeyForUrl(Small), new CoverColorPlane.GradedColors(Dark, Light, false));
+
+        // Written from the 64px URL, read from the 640px one: the row thumbnail and the grid card are the same entry.
+        Assert.True(plane.TryGetTint(Large, lightTheme: false, out uint argb));
+        Assert.Equal(0xFF101040u, argb);
+    }
+
+    [Fact]
+    public void RoundTripsThroughDisk_AndExpiresAfterTheHitTtl()
+    {
+        var path = TempFile();
+        try
+        {
+            long now = 1_000_000;
+            var a = new CoverColorPlane(path, () => now);
+            a.SetGraded(CoverColorPlane.KeyForUrl(Large), new CoverColorPlane.GradedColors(Dark, Light, false));
+            a.Flush();
+
+            var b = new CoverColorPlane(path, () => now);   // a fresh process reads the persisted table
+            Assert.True(b.TryGetTint(Large, lightTheme: true, out uint l));
+            Assert.Equal(0xFFF2F2F2u, l);
+
+            long later = now + (long)TimeSpan.FromDays(181).TotalSeconds;
+            var c = new CoverColorPlane(path, () => later);
+            Assert.False(c.TryGetTint(Large, lightTheme: false, out _));
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
+    public async Task ColourlessCover_IsNotReAskedInsideTheWindow_ButIsAfterIt()
+    {
+        long now = 5_000;
+        var path = TempFile();
+        try
+        {
+            int asks = 0;
+            Func<IReadOnlyList<string>, CancellationToken, Task<IReadOnlyList<CoverColorPlane.GradedColors?>>> filler =
+                (keys, _) =>
+                {
+                    asks++;
+                    return Task.FromResult<IReadOnlyList<CoverColorPlane.GradedColors?>>(
+                        new CoverColorPlane.GradedColors?[keys.Count]);   // the server has no colours for these
+                };
+
+            var plane = new CoverColorPlane(path, () => now) { Filler = filler };
+            Assert.False(plane.TryGetTint(Large, lightTheme: false, out _));
+            for (int i = 0; i < 100 && asks == 0; i++) await Task.Delay(25);
+            Assert.Equal(1, asks);
+
+            // Inside the window the answer is remembered: rendering that art again must NOT re-ask.
+            Assert.False(plane.TryGetTint(Large, lightTheme: false, out _));
+            await Task.Delay(250);
+            Assert.Equal(1, asks);
+            plane.Flush();
+
+            // Past it, the negative expires and the next render tries again — a colourless verdict is not permanent.
+            long later = now + (long)TimeSpan.FromDays(8).TotalSeconds;
+            int revivedAsks = 0;
+            var revived = new CoverColorPlane(path, () => later)
+            {
+                Filler = (keys, _) =>
+                {
+                    revivedAsks++;
+                    return Task.FromResult<IReadOnlyList<CoverColorPlane.GradedColors?>>(
+                        new CoverColorPlane.GradedColors?[] { new CoverColorPlane.GradedColors(Dark, Light, false) });
+                },
+            };
+            Assert.False(revived.TryGetTint(Large, lightTheme: false, out _));
+            for (int i = 0; i < 100 && revivedAsks == 0; i++) await Task.Delay(25);
+            Assert.Equal(1, revivedAsks);
+            Assert.True(revived.TryGetTint(Large, lightTheme: false, out _));
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
+    public async Task RenderMiss_IsTheRequest_AndBatchesBeforeAsking()
+    {
+        var plane = new CoverColorPlane(TempFile());
+        var asked = new List<IReadOnlyList<string>>();
+        plane.Filler = (keys, _) =>
+        {
+            asked.Add(keys.ToArray());
+            var result = new CoverColorPlane.GradedColors?[keys.Count];
+            for (int i = 0; i < keys.Count; i++) result[i] = new CoverColorPlane.GradedColors(Dark, Light, false);
+            return Task.FromResult<IReadOnlyList<CoverColorPlane.GradedColors?>>(result);
+        };
+
+        // Four art slots render and miss — exactly what a grid realize does. Two of them are the same artwork at
+        // different sizes (a row thumb + its card), which must cost ONE slot in the request, not two.
+        Assert.False(plane.TryGetTint(Large, false, out _));
+        Assert.False(plane.TryGetTint(Small, false, out _));
+        Assert.False(plane.TryGetTint("https://i.scdn.co/image/ab67616d0000b273cafe00000000000000cafe01", false, out _));
+        Assert.False(plane.TryGetTint("https://i.scdn.co/image/ab67616d0000b273cafe00000000000000cafe02", false, out _));
+
+        for (int i = 0; i < 100 && asked.Count == 0; i++) await Task.Delay(25);
+
+        Assert.Single(asked);                 // ONE request, not one per slot
+        Assert.Equal(3, asked[0].Count);      // …and three artworks, not four URLs
+        Assert.All(asked[0], id => Assert.Equal(40, id.Length));   // full image ids — spotify:image: takes nothing less
+        Assert.True(plane.TryGetTint(Large, false, out uint argb));
+        Assert.Equal(0xFF101040u, argb);
+    }
+
+    [Fact]
+    public async Task FailedBatch_IsRetriedByTheNextRender()
+    {
+        var plane = new CoverColorPlane(TempFile());
+        int calls = 0;
+        plane.Filler = (keys, _) =>
+        {
+            calls++;
+            return calls == 1
+                ? Task.FromException<IReadOnlyList<CoverColorPlane.GradedColors?>>(new InvalidOperationException("boom"))
+                : Task.FromResult<IReadOnlyList<CoverColorPlane.GradedColors?>>(
+                    new CoverColorPlane.GradedColors?[] { new CoverColorPlane.GradedColors(Dark, Light, false) });
+        };
+
+        Assert.False(plane.TryGetTint(Large, false, out _));
+        for (int i = 0; i < 100 && calls == 0; i++) await Task.Delay(25);
+
+        // A transport failure must not poison the image: the slot asks again on its next render.
+        Assert.False(plane.TryGetTint(Large, false, out _));
+        for (int i = 0; i < 100 && calls < 2; i++) await Task.Delay(25);
+        Assert.Equal(2, calls);
+        Assert.True(plane.TryGetTint(Large, false, out _));
+    }
+
+    [Fact]
+    public async Task WatchingOneCover_WakesOnlyThatWatcher()
+    {
+        var plane = new CoverColorPlane(TempFile());
+        plane.Filler = (keys, _) =>
+        {
+            var result = new CoverColorPlane.GradedColors?[keys.Count];
+            for (int i = 0; i < keys.Count; i++) result[i] = new CoverColorPlane.GradedColors(Dark, Light, false);
+            return Task.FromResult<IReadOnlyList<CoverColorPlane.GradedColors?>>(result);
+        };
+
+        var mine = plane.Watch(Large);
+        var other = plane.Watch("https://i.scdn.co/image/ab67616d0000b273cafe00000000000000cafe03");
+        int mineAt = mine.Peek(), otherAt = other.Peek();
+
+        Assert.False(plane.TryGetTint(Large, false, out _));
+        for (int i = 0; i < 100 && mine.Peek() == mineAt; i++) await Task.Delay(25);
+
+        Assert.True(mine.Peek() > mineAt);        // the page whose cover landed re-renders…
+        Assert.Equal(otherAt, other.Peek());      // …and a page watching a different cover does not
+    }
+
+    [Fact]
+    public void NoFiller_ServesTheCacheAndNeverThrows()
+    {
+        var plane = new CoverColorPlane(TempFile());   // logged out / offline / headless
+        Assert.False(plane.TryGetTint(Large, false, out _));
+        plane.SetDark(Large, Dark);
+        Assert.True(plane.TryGetTint(Large, false, out _));
+    }
+}
+
+// The universal feed's decoder. The response is POSITIONAL — nothing in it echoes the requested uri — so index
+// alignment is the contract that matters most; after that, picking the standard contrast tier and reading both themes.
+public class CoverColorFillerTests
+{
+    static JsonElement Json(string s) => JsonDocument.Parse(s).RootElement.Clone();
+
+    const string TwoImages = """
+    {
+      "data": { "dynamicColors": [
+        {
+          "bestFit": "light",
+          "dark":  { "highContrast": {
+                        "backgroundBase":       { "red": 16,  "green": 16,  "blue": 64,  "alpha": 255 },
+                        "backgroundTintedBase": { "red": 60,  "green": 68,  "blue": 120, "alpha": 255 },
+                        "textBase":             { "red": 255, "green": 255, "blue": 255, "alpha": 255 },
+                        "textSubdued":          { "red": 179, "green": 179, "blue": 179, "alpha": 255 },
+                        "textBrightAccent":     { "red": 172, "green": 184, "blue": 245, "alpha": 255 } } },
+          "light": { "highContrast": {
+                        "backgroundBase":       { "red": 242, "green": 242, "blue": 242, "alpha": 255 },
+                        "backgroundTintedBase": { "red": 224, "green": 224, "blue": 224, "alpha": 255 },
+                        "textBase":             { "red": 16,  "green": 16,  "blue": 16,  "alpha": 255 },
+                        "textSubdued":          { "red": 80,  "green": 80,  "blue": 80,  "alpha": 255 },
+                        "textBrightAccent":     { "red": 46,  "green": 108, "blue": 224, "alpha": 255 } } }
+        },
+        { "bestFit": "dark" }
+      ] }
+    }
+    """;
+
+    [Fact]
+    public void Decodes_BothThemes_AndKeepsRequestOrder()
+    {
+        var got = CoverColorFiller.Parse(Json(TwoImages), expected: 2);
+
+        Assert.Equal(2, got.Count);
+        Assert.NotNull(got[0]);
+        var first = got[0]!.Value;
+        Assert.Equal(0xFF101040u, first.Dark.BackgroundBase);
+        Assert.Equal(0xFF3C4478u, first.Dark.BackgroundTintedBase);
+        Assert.Equal(0xFFACB8F5u, first.Dark.TextBrightAccent);
+        Assert.NotNull(first.Light);
+        Assert.Equal(0xFFF2F2F2u, first.Light!.Value.BackgroundBase);
+        Assert.True(first.BestFitIsLight);
+
+        // Second image carried no grading at all → a null in ITS slot, not a shift of the first one's colours.
+        Assert.Null(got[1]);
+    }
+
+    [Fact]
+    public void ShortResponse_LeavesTheMissingSlotsNull()
+    {
+        var got = CoverColorFiller.Parse(Json(TwoImages), expected: 4);
+        Assert.Equal(4, got.Count);
+        Assert.NotNull(got[0]);
+        Assert.Null(got[2]);
+        Assert.Null(got[3]);
+    }
+
+    [Fact]
+    public void FallsBackToHigherContrast_WhenTheStandardTierIsAbsent()
+    {
+        var got = CoverColorFiller.Parse(Json("""
+        {
+          "data": { "dynamicColors": [ { "dark": { "higherContrast": {
+              "backgroundBase": { "red": 1, "green": 2, "blue": 3, "alpha": 255 } } } } ] }
+        }
+        """), expected: 1);
+
+        Assert.NotNull(got[0]);
+        Assert.Equal(0xFF010203u, got[0]!.Value.Dark.BackgroundBase);
+    }
+
+    [Fact]
+    public void MalformedOrEmptyResponse_IsAllNulls_NotAThrow()
+    {
+        Assert.All(CoverColorFiller.Parse(Json("""{"data":{}}"""), expected: 2), Assert.Null);
+        Assert.All(CoverColorFiller.Parse(Json("""{"errors":[{"message":"nope"}]}"""), expected: 1), Assert.Null);
+    }
+}

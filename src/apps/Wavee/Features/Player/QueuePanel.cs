@@ -79,7 +79,7 @@ sealed class QueuePanel : Component
         }
 
         var track = b.CurrentTrack.Value;
-        var accent = b.TrackPalette.Value is { } p ? WaveePalette.Accent(p) : Tok.AccentDefault;
+        var accent = Surfaces.SchemeFor(b.CurrentTrack.Value?.Image?.Url) is { } p ? WaveePalette.Accent(p) : Tok.AccentDefault;
 
         // ── bucket split: forward-looking only (History and the NowPlaying entry are NOT rows here) ──
         var queue = display.Value;
@@ -217,7 +217,7 @@ sealed class QueuePanel : Component
                     [
                         new TextEl(t.Title)
                         {
-                            Size = 14f, Weight = 700, Color = Tok.TextPrimary,
+                            Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         go is null
@@ -369,9 +369,15 @@ sealed class QueuePanel : Component
                 },
                 new BoxEl
                 {
-                    Width = QueueArt, Height = QueueArt, Shrink = 0f, ClipToBounds = true,
+                    Width = QueueArt, Height = QueueArt, Shrink = 0f, ZStack = true, ClipToBounds = true,
                     Corners = CornerRadius4.All(5f),
-                    Children = [Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, QueueArt, QueueArt, 5f, decodePx: 72)],
+                    Children =
+                    [
+                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, QueueArt, QueueArt, 5f, decodePx: 72),
+                        // Fluent now-playing cue (EQ / play-pause) — same overlay as RecRow / Next-up ArtCards.
+                        Embed.Comp(() => new NowPlayingOverlay(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, QueueArt, centered: true))
+                            .Skeletonized(false),
+                    ],
                 },
                 new BoxEl
                 {
@@ -380,7 +386,8 @@ sealed class QueuePanel : Component
                     [
                         new TextEl(t.Title)
                         {
-                            Size = 13.5f, Weight = 600, Color = Tok.TextPrimary,
+                            Size = 13.5f, Weight = 600,
+                            Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         go is null

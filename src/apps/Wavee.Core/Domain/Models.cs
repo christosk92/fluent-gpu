@@ -79,8 +79,6 @@ public sealed record Artist(
     int WorldRank = 0, Image? HeaderImage = null,
     IReadOnlyList<Track>? TopTracks = null, IReadOnlyList<Album>? AppearsOn = null,
     PinnedItem? Pinned = null, ArtistExtras? Extras = null,
-    // Cover-extracted page accent (ARGB; null = none). Drives the artist page wash + Play button + section bars.
-    Palette? Palette = null,
     // Per-facet discography totals (data.artistUnion.discography.<facet>.totalCount). 0 = unknown → callers fall back to
     // the in-memory TopAlbums count. Additive/defaulted; carried so the virtualized grid can size a facet up front and
     // "See all N" gates on the true total rather than the ~10-item overview slice.
@@ -119,7 +117,80 @@ public sealed record ArtistExtras(
     IReadOnlyList<ExternalLink>? ExternalLinks = null,
     IReadOnlyList<Image>? Gallery = null,
     IReadOnlyList<RelatedArtist>? Related = null,
-    TourBanner? Tour = null);
+    TourBanner? Tour = null,
+    ArtistWatchFeed? WatchFeed = null,
+    ArtistPreRelease? PreRelease = null);
+
+/// <summary>An announced-but-unreleased album on the artist page (Spotify <c>artistUnion.preReleaseV2</c>, which only
+/// populates when the request opts in with <c>preReleaseV2: true</c>).
+///
+/// <paramref name="ReleaseAt"/> is the moment it unlocks — the countdown's target. Null on artists with nothing
+/// upcoming, which is the common case, so the card is absent rather than empty.</summary>
+public sealed record ArtistPreRelease(
+    string Uri,
+    string Name,
+    Image? Cover,
+    DateTimeOffset? ReleaseAt,
+    string? Type = null)
+{
+    /// <summary>Whether this is still genuinely ahead of us, and therefore worth announcing.
+    ///
+    /// A stored pre-release outlives its own release: an offline session, or any read before the next overview write
+    /// clears the field, can hand back a record that already shipped. Every surface that announces an upcoming release
+    /// gates on this rather than on the field merely being non-null.
+    ///
+    /// A null <see cref="ReleaseAt"/> counts as upcoming — that is an announcement without a date, not a lapsed one.</summary>
+    public bool IsUpcoming => ReleaseAt is not { } due || due > DateTimeOffset.UtcNow;
+}
+
+/// <summary>The resolved identity of an upcoming release — extended-metadata kind 138, the only thing on the wire that
+/// links the two schemes (see <see cref="PreReleaseUris"/>).
+///
+/// The PAIR is the point: <paramref name="PreReleaseUri"/> is the entity a COLLECTION WRITE (a pre-save) addresses,
+/// <paramref name="AlbumUri"/> is the entity the app NAVIGATES to. Neither can be derived from the other — their ids
+/// differ — so a half-resolved link (one uri without the other) is not a link and must be rejected at the resolver
+/// rather than carried here as a null.</summary>
+public sealed record PreReleaseLink(
+    string PreReleaseUri,
+    string AlbumUri,
+    DateTimeOffset? ReleaseAt,
+    string? Name = null,
+    string? Type = null,            // "ALBUM"
+    ArtistRef? Artist = null,
+    Image? Cover = null)
+{
+    /// <summary>Gate every announce surface on this, never on the link merely existing — the kind-138 payload has a
+    /// 30-day offline TTL, so a cached link outlives its own release and would keep announcing an album that shipped
+    /// a fortnight ago.
+    ///
+    /// A null <see cref="ReleaseAt"/> counts as upcoming: that is announced-but-undated, not lapsed (the same polarity
+    /// as <see cref="ArtistPreRelease.IsUpcoming"/>, and the OPPOSITE of <see cref="PinnedItem.IsUpcoming"/> — see the
+    /// note there for why the pin has to differ).</summary>
+    public bool IsUpcoming => ReleaseAt is not { } due || due > DateTimeOffset.UtcNow;
+}
+
+/// <summary>The artist's watch-feed entry point (Spotify <c>artistUnion.watchFeedEntrypoint</c>) — a short looping
+/// clip Spotify uses as the artist's moving identity.
+///
+/// The <c>video</c> node is present on SOME entities and <c>null</c> on others (null for IU, maroon5, icedamericano
+/// and every album entrypoint in the capture corpus; populated for others) — so both shapes are live and neither may
+/// be assumed. When present it carries a <c>videoType</c> discriminator:
+/// <list type="bullet">
+/// <item><c>"URL"</c> — <c>fileId</c> is a ready-to-play <c>https://canvaz.scdn.co/…/*.cnvs.mp4</c> URL, surfaced
+/// here as <paramref name="CanvasUrl"/>. This is the only shape observed on the wire.</item>
+/// <item>anything else — <c>fileId</c> stays an opaque Spotify file id in <paramref name="VideoFileId"/> and is NOT
+/// played; resolving it would go through the normal video pipeline.</item>
+/// </list>
+/// Splitting the two means the "is this playable?" test is the discriminator, never a <c>StartsWith("http")</c> guess.
+/// <paramref name="Thumbnail"/> is the still to show before (or instead of) the clip — under reduced motion it is the
+/// ONLY thing shown.</summary>
+public sealed record ArtistWatchFeed(
+    string EntrypointUri,
+    Image? Thumbnail,
+    string? VideoFileId,
+    long StartMs = 0,
+    long EndMs = 0,
+    string? CanvasUrl = null);
 
 /// <summary>A music video on the artist page (16:9 thumbnail + duration). <paramref name="TrackUri"/> plays it.</summary>
 public sealed record MusicVideo(string TrackUri, string Title, Image? Thumbnail, long DurationMs, bool IsExplicit = false);
@@ -139,8 +210,9 @@ public sealed record Concert(
     string? Country = null,
     IReadOnlyList<ConcertArtist>? Artists = null,
     Image? Image = null,
-    // Cover/lineup-extracted dark accent (opaque ARGB, matching Palette's uint channels; WaveePalette.ToColor lifts it to
-    // a renderer color at the UI boundary). Null = no extracted colour ⇒ the surface keeps its neutral default.
+    // Cover/lineup-extracted dark accent (opaque ARGB; WaveePalette.ToColor lifts it to a renderer colour at the UI
+    // boundary). Concerts are NOT Spotify covers, so this stays on the record instead of coming from CoverColorPlane.
+    // Null = no extracted colour ⇒ the surface keeps its neutral default.
     uint? AccentColor = null);
 
 /// <summary>A merch product (image + name + display price). <paramref name="ShopUrl"/> opens the external shop.</summary>
@@ -159,8 +231,36 @@ public enum ExternalLinkKind { Generic, Twitter, Instagram, Facebook, YouTube, W
 /// <summary>A related/"fans also like" artist (carries its own avatar, unlike a bare <see cref="ArtistRef"/>).</summary>
 public sealed record RelatedArtist(string Id, string Uri, string Name, Image? Image);
 
-/// <summary>The hero "Pinned" promo card (the artist's spotlighted release + a short comment).</summary>
-public sealed record PinnedItem(string Eyebrow, string Title, string Subtitle, string Comment, Image? Cover, string Uri);
+/// <summary>The hero "Pinned" promo card (the artist's spotlighted release + a short comment).
+///
+/// <paramref name="Uri"/> is the PIN's own uri; <paramref name="ItemUri"/> is the uri of the thing pinned
+/// (<c>itemV2.data.uri</c>). They are not always the same entity, which is why navigation goes through
+/// <see cref="TargetUri"/> instead of reading either field directly.
+///
+/// Everything past the original six is nullable WITH a null default on purpose: <c>ArtistOverviewDoc</c> persists this
+/// record through STJ positional-record binding (see Backend/Persistence/ArtistOverview.cs), so a document written by
+/// an older build has only six values in its JSON. Nullable-with-default is what lets those legacy docs bind to
+/// <c>default(T)</c> instead of failing — adding a non-nullable or non-defaulted parameter here is a cache migration.</summary>
+public sealed record PinnedItem(
+    string Eyebrow, string Title, string Subtitle, string Comment, Image? Cover, string Uri,
+    string? ItemUri = null,               // itemV2.data.uri — what the pin points at
+    string? ItemType = null,              // itemV2.data.type — "ALBUM" | "SINGLE" | "EP" | …
+    string? ItemTypename = null,          // itemV2.data.__typename — "Album" | "PreRelease" | …
+    DateTimeOffset? ReleaseAt = null)     // itemV2.data.preReleaseEndDateTime
+{
+    /// <summary>Whether this pin is announcing something that has not dropped yet.
+    ///
+    /// DELIBERATE polarity difference vs <see cref="ArtistPreRelease.IsUpcoming"/> and
+    /// <see cref="PreReleaseLink.IsUpcoming"/>: there, a null date means "announced without a date" and counts as
+    /// upcoming. Here it must NOT. A pre-release record only exists because something is upcoming, but almost every
+    /// pin is an ordinary released album that simply carries no <c>preReleaseEndDateTime</c> — treating those as
+    /// upcoming would put a countdown on essentially every artist page.</summary>
+    public bool IsUpcoming => ReleaseAt is { } due && due > DateTimeOffset.UtcNow;
+
+    /// <summary>Where clicking the pin should go: the pinned item when the wire named one, else the pin's own uri
+    /// (which is what every payload captured before <c>itemV2</c> was mapped hands back).</summary>
+    public string TargetUri => ItemUri is { Length: > 0 } t ? t : Uri;
+}
 
 /// <summary>The "On tour now" banner copy, derived from the concert list (eyebrow/headline/subline + a live flag).</summary>
 public sealed record TourBanner(string Eyebrow, string Headline, string Subline, bool IsLive);
@@ -187,9 +287,7 @@ public sealed record Album(
     // Remaining getAlbum envelope fields used by the release panel and actions.
     string? CourtesyLine = null, string? ReleaseDatePrecision = null, int DiscCount = 1,
     string? ShareUrl = null, bool IsPreRelease = false, DateTimeOffset? PreReleaseEnd = null,
-    AlbumHydrationLevel Hydration = AlbumHydrationLevel.Summary,
-    // Cover-extracted page accent (ARGB; null = none). Drives the album page wash + Play button + section bars.
-    Palette? Palette = null);
+    AlbumHydrationLevel Hydration = AlbumHydrationLevel.Summary);
 
 public sealed record Track(
     string Id, string Uri, string Title,
@@ -198,19 +296,42 @@ public sealed record Track(
     // Per-playlist membership metadata (null outside a user playlist): when a track was added, and by whom. The detail
     // page surfaces these as optional columns — curated/editorial playlists carry neither.
     DateTimeOffset? AddedAt = null, string? AddedBy = null,
-    bool HasVideo = false,    // the track has an accompanying music video (offered as a list filter + a row indicator)
+    // NOTE: "has a music video" is deliberately NOT a field here. It is a property of the CATALOGUE ENTRY, answered by
+    // the VideoAssociation plane (extended-metadata kind 99) and read through VideoPresence. A row is written by half a
+    // dozen sources that know nothing about videos, so a copy on this record needed an OR-merge to survive them and
+    // still drifted out of step with the association a detect pass had just stored — a row saying "no video" while its
+    // own expand drawer listed one.
     long PlayCount = 0,       // stream count (album pages show a Plays column; the top-played track gets a star)
     // Source-agnostic seam (see docs/architecture.md §5): which provider this track came from, how it plays, and
     // whether it is playable in this context. Default = a streamed, playable, source-unspecified track.
     TrackOrigin Origin = TrackOrigin.Streamed,
-    Availability Availability = Availability.Playable,
+    // NULLABLE on purpose: null = "nobody has told us", which is NOT the same as "playable". Only getAlbum/getTrack
+    // carry a playability verdict; every other write (cluster, library, extended-metadata) leaves it unknown. Defaulting
+    // those to Playable made "field absent" and "confirmed playable" indistinguishable, so an unreleased track on a
+    // partially-released album was indistinguishable from a normal one.
+    Availability? Availability = null,
+    // When this track goes (or went) live, from TrackV4's earliest_live_timestamp — present on every payload in the
+    // capture, so it is the per-track release instant. A value in the FUTURE means the track is announced but not out,
+    // which is what lets a partially-released album say WHEN each pending row arrives instead of just that it is
+    // pending. Null = the metadata plane has not landed for this row.
+    DateTimeOffset? AvailableAt = null,
     string? Source = null,
     // Per-context membership uid (PlaylistMember.ItemId) for Connect skip_to.track_uid + embedded page uids. READ-MODEL
     // ONLY: stamped on the JoinMembership copy, never passed to UpsertTrack (EntityJson omits nulls → never persisted).
     string? ContextUid = null,
     // ISRC recording id (e.g. "USRC17607839"), sourced from the extended-metadata Track.external_id (type "isrc"). Drives
     // the lyrics search's exact-recording fast-path (Musixmatch track_isrc). Null when unknown (thin cluster / Pathfinder).
-    string? Isrc = null);
+    string? Isrc = null,
+    // Tempo + musical key from extension kind 222 (playlistmixing audio_attributes v2), prefetched alongside the row
+    // bundle so the track-row tempo column never pops in late. Null = unknown (never rendered as "0 BPM").
+    double? TempoBpm = null,
+    string? MusicalKey = null,     // the key name as the server spells it: "A", "F", "B"
+    string? CamelotCode = null,    // Camelot-wheel slot: 1B=B, 7B=F, 11B=A (self-validated against the wheel)
+    uint? CamelotColor = null,     // the wheel-slot colour Spotify pairs with CamelotCode (opaque ARGB)
+    // Descriptor tags from extension kind 6 (TRACK_DESCRIPTOR): the genre/mood/activity concepts Spotify itself uses
+    // for the Liked Songs content-filter chips. Presentation form ("K-Pop", "Energetic"), in the server's own order,
+    // which is descending weight. Null = not fetched; empty is a real "this track has none".
+    IReadOnlyList<string>? Tags = null);
 
 /// <summary>A per-track credit. <paramref name="RoleGroup"/> groups rows such as composition, production, or performers.</summary>
 public sealed record TrackCredit(string Name, string Role, string? RoleGroup = null,
@@ -233,6 +354,22 @@ public enum TrackOrigin { Streamed, Local }
 /// <summary>Whether a track can be played in the current context (account tier / market / delisting). First-class so
 /// the UI dims+disables rather than failing at play time. Extensible to a reason later.</summary>
 public enum Availability { Playable, Unavailable }
+
+/// <summary>The one "is this row out yet?" predicate (kept beside <see cref="Availability"/>, the enum it reads).</summary>
+public static class TrackAvailability
+{
+    /// <summary>Is this row announced but not out? The ONE definition the greyed row (Components/TrackRow.cs), the
+    /// play gate (Features/Detail/DetailTracks.PlayRow) and the "N of M songs" fact tile (DetailTrailing) all share,
+    /// so those three can never disagree about which rows are pending.
+    ///
+    /// The <see cref="Track.AvailableAt"/> clause is what makes the RELEASE-DROP transition correct without a refetch:
+    /// the server's <see cref="Availability"/> verdict is frozen at fetch time, but <c>earliest_live_timestamp</c> is
+    /// an INSTANT, so a row whose moment has passed becomes playable the next time the page renders instead of staying
+    /// grey until the album is read again.</summary>
+    public static bool IsNotYetOut(this Track t)
+        => t.Availability is Availability.Unavailable
+           && !(t.AvailableAt is { } at && at <= DateTimeOffset.UtcNow);
+}
 
 /// <summary>A content owner/curator (e.g. a playlist owner) — richer than a bare name; carries an avatar image.</summary>
 public sealed record Owner(string Id, string Name, Image? Avatar);
@@ -275,18 +412,12 @@ public sealed record Playlist(
     // Source-agnostic seam (see docs/architecture.md §5): the real owner, the user's capabilities (drives the
     // read-only vs editable UI), the recommender format (daily-mix/editorial/…), and which provider this came from.
     Owner? Owner = null, PlaylistCapabilities Capabilities = default, string? Format = null, string? Source = null,
-    // Cover-extracted page accent (ARGB; null = none). Drives the playlist page wash + Play button + section bars.
-    Palette? Palette = null,
     // Playlist-context user overlay, projected at read time from owner + added_by values. The store wire rows keep raw ids.
     IReadOnlyList<Owner>? Collaborators = null,
     // Owner visibility from permission/base (authoritative; default true until fetched).
     bool IsPublic = true, string? BasePermissionRevision = null,
     // Server-driven automatic-playlist controls. Exposed only while this revision matches membership.
     PlaylistTuning? Tuning = null);
-
-/// <summary>Album-art-derived palette. Plain ARGB <see cref="uint"/> channels keep Core
-/// framework-neutral; the app maps each to its renderer color (ColorF) at the UI boundary.</summary>
-public sealed record Palette(uint BackgroundDark, uint TintedDark, uint Light, uint Accent);
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp, History }
 

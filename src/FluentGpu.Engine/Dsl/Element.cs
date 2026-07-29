@@ -327,10 +327,14 @@ public sealed record BoxEl : Element
     // reconciler wires a bound channel into a mount-time effect that writes only this node's column + marks the
     // matching dirty axis (no component re-render, no reconcile). Transform/Opacity/Fill are compositor-only;
     // Width/Height bind layout and trigger a scoped relayout.
-    /// <summary>The whole-matrix transform channel — bind-only in v1 (a thunk/signal producing the full Affine2D;
-    /// the STATIC path composes from the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above). When bound, the
-    /// decomposed statics are ignored: one transform owner per node — never combine with a sticky/stretch ScrollBind or
-    /// transform-channel animations. An unbound Transform's Value is never read.</summary>
+    /// <summary>The whole-matrix transform channel — a thunk/signal producing the full Affine2D, or a plain static
+    /// matrix. Either spelling WINS over the decomposed OffsetX/Y/ScaleX/Y/Rotation floats above, which are the
+    /// convenience path for the common translate/scale/rotate cases.
+    /// ONE transform owner per node: never combine this with the decomposed statics, with a transform-owning ScrollBind
+    /// (PinTop / StretchFromTop / Morph* / a Trans*|Scale* sink), or with transform-channel animations. A DEBUG
+    /// tripwire in the reconciler turns each of those into a stack trace at the offending element.
+    /// NOTE <c>default(Affine2D)</c> is all-zeros, not identity — the reconciler treats "differs from default" as
+    /// "declared", so leaving this unset costs nothing.</summary>
     public Prop<Affine2D> Transform { get; init; } = default;
 
     // Legacy *Bind spellings — write-only init-aliases into the unified channel props, deleted per-channel by the
@@ -392,6 +396,11 @@ public sealed record BoxEl : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
     public bool Wrap { get; init; }
@@ -425,6 +434,11 @@ public sealed record GridEl : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
     public Edges4 Padding { get; init; }
 }
@@ -469,6 +483,11 @@ public sealed record PolylineStrokeEl : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
 }
 
@@ -575,6 +594,11 @@ public sealed record TextEl(Prop<string> Text) : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
 }
 
@@ -635,6 +659,11 @@ public sealed record SpanTextEl(TextSpan[] Spans) : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
 }
 
@@ -687,6 +716,11 @@ public sealed record ImageEl : Element
     public float Saturation { get; init; } = 1f;
     public Edges4 Margin { get; init; }
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
 }
 
 /// <summary>A single ThemedIcon vector layer (leaf): a colorless coverage mask (interned in
@@ -707,6 +741,11 @@ public sealed record IconLayerEl : Element
     public Prop<ColorF> Tint { get; init; } = ColorF.Transparent;
     public Edges4 Margin { get; init; }
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
 }
 
 /// <summary>
@@ -750,6 +789,11 @@ public sealed record ScrollEl : Element
     public float Shrink { get; init; }
     public float Basis { get; init; } = float.NaN;
     public FlexAlign AlignSelf { get; init; } = FlexAlign.Auto;
+    /// <summary>ZStack-only horizontal self-placement (CSS <c>justify-self</c>, WinUI <c>HorizontalAlignment</c> on an
+    /// overlay child): where this child sits on the X axis of a <c>ZStack = true</c> parent.
+    /// <see cref="FlexAlign.Auto"/> = inherit the stack's <c>Justify</c>. Ignored outside a ZStack (a flex container's
+    /// main axis is distributed by the container's <c>Justify</c>, not per-child).</summary>
+    public FlexAlign JustifySelf { get; init; } = FlexAlign.Auto;
     public Edges4 Margin { get; init; }
     public Edges4 Padding { get; init; }
     public ColorF Fill { get; init; }

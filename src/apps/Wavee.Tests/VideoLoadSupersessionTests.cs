@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -400,5 +401,30 @@ public class VideoLoadSupersessionTests
         await WaitUntilAsync(() => Volatile.Read(ref loads) > before);
 
         lock (errors) Assert.Empty(errors);   // recovered → a reload, not the error surface
+    }
+
+    // ── (4) surface unbind on teardown (video→video pump handoff) ─────────────────────────────────────────────────────
+    // TeardownAsync must fire PlayerChanged(null) BEFORE dispose — otherwise the mounted MediaPlayerElement keeps
+    // pumping the dying session and the successor never publishes duration/NaturalSize (Opening/Loading poster at 0:00).
+    // Stop() already had this contract; the load-pump teardown path must match. Source-pinned: the host is not
+    // constructible headlessly without the full MF stack.
+
+    [Fact]
+    public void TeardownAsync_UnbindsSurface_BeforeDispose()
+    {
+        string path = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..",
+            "Wavee", "SpotifyLive", "Audio", "FluentVideoMediaHost.cs"));
+        Assert.True(File.Exists(path), $"missing host source at {path}");
+        string src = File.ReadAllText(path);
+        int teardown = src.IndexOf("async System.Threading.Tasks.Task TeardownAsync", StringComparison.Ordinal);
+        Assert.True(teardown >= 0, "TeardownAsync not found");
+        int build = src.IndexOf("async System.Threading.Tasks.Task BuildAndOpenAsync", teardown, StringComparison.Ordinal);
+        Assert.True(build > teardown, "BuildAndOpenAsync must follow TeardownAsync");
+        string body = src.Substring(teardown, build - teardown);
+        Assert.Contains("PlayerChanged?.Invoke(null)", body, StringComparison.Ordinal);
+        Assert.Contains("unbound surface before dispose", body, StringComparison.Ordinal);
+        int unbind = body.IndexOf("PlayerChanged?.Invoke(null)", StringComparison.Ordinal);
+        int dispose = body.IndexOf("DisposeBoundedAsync(old)", StringComparison.Ordinal);
+        Assert.True(unbind >= 0 && dispose > unbind, "PlayerChanged(null) must precede DisposeBoundedAsync(old)");
     }
 }

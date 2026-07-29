@@ -1,6 +1,10 @@
 # Liked Songs content-filter chips — final technical plan (FluentGpu Wavee)
 
-**Status:** evidence-locked; **proto landed** (`src/apps/Wavee/SpotifyLive/Protos/extension_descriptor.proto`, builds clean). Phases 1-5 awaiting approval.
+> **SUPERSEDED** by [`spotify-wire-parity-plan.md`](spotify-wire-parity-plan.md) (Workstream C) and the
+> durable research corpus at [`spotify-wire-research/`](spotify-wire-research/README.md).
+> Kept for history — do not extend this file; put new work in the parity plan / research tree.
+
+**Status (historical):** evidence-locked; **proto landed** (`src/apps/Wavee/SpotifyLive/Protos/extension_descriptor.proto`, builds clean). Phases 1-5 were awaiting approval when this was folded into the master plan.
 **Product choice:** **A** — Desktop / WaveeMusic parity: exclusive chips (`All` + one tag); chip listed only if ≥1 liked track carries that tag; search / funnel filters AND on top.
 **Primary evidence:** `content-filters.saz` (646 sessions), re-analysed with a **protobuf-aware** scanner rather than text grep — this is what changed the conclusions below. Secondary: WaveeMusic `TrackDescriptorFetcher` / `LikedSongsFilterDto` / `SpClient.GetLikedSongsContentFiltersAsync`.
 

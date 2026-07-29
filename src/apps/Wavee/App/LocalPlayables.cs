@@ -61,6 +61,10 @@ public static class LocalPlayables
             IsExplicit: false,
             Image: null,
             Origin: origin,
+            // Stated, not defaulted. Availability is nullable ("nobody has told us") because only getAlbum/getTrack
+            // carry a server verdict — but a file the user just handed us needs no server to be playable, and leaving
+            // it unknown would let a "playable only" filter hide the very file they dropped in.
+            Availability: Availability.Playable,
             Source: source);
     }
 

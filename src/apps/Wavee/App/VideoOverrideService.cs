@@ -71,10 +71,10 @@ public sealed class VideoOverrideService
     /// disk; production is <see cref="File.Exists"/>.</summary>
     public Func<string, bool> FileExists { get; set; } = File.Exists;
 
-    /// <summary>Raised (on the caller's thread) after every attach/replace/remove with the affected playable uri. The app
-    /// wires this to <c>PlaybackBridge.NotifyVideoOverrideChanged</c>, which is the ONE mutation entry point that clears
-    /// the has-video latch + the cached source, recomputes availability, and forces a same-kind reload.</summary>
-    public Action<string>? OnChanged;
+    /// <summary>Raised (on the caller's thread) after every attach/replace/remove with the affected playable uri and the
+    /// mutation kind. The app wires this to <c>PlaybackBridge.NotifyVideoOverrideChanged</c>, which is the ONE mutation
+    /// entry point that applies <see cref="VideoOverrideMutationCore.Plan"/> (latch clears, availability, force-reload).</summary>
+    public Action<string, OverrideMutationKind>? OnChanged;
 
     /// <summary>Raised at most ONCE per session per (uri, path) when a play-time resolve finds the file gone. The app
     /// turns it into a single non-blocking warning; playback has already fallen through to the original.</summary>
@@ -161,7 +161,7 @@ public sealed class VideoOverrideService
         _log.Event(WaveeLogLevel.Info, replaced ? "override.replace" : "override.attach",
             replaced ? "replaced the attached video" : "attached a local video",
             fields: [WaveeLogField.Of("uri", playableUri), WaveeLogField.Of("path", full), WaveeLogField.Of("sizeBytes", size)]);
-        OnChanged?.Invoke(playableUri);
+        OnChanged?.Invoke(playableUri, replaced ? OverrideMutationKind.Replace : OverrideMutationKind.Attach);
         return o;
     }
 
@@ -175,7 +175,7 @@ public sealed class VideoOverrideService
         _store.RemoveVideoOverride(playableUri);
         _log.Event(WaveeLogLevel.Info, "override.remove", "detached the local video",
             fields: [WaveeLogField.Of("uri", playableUri), WaveeLogField.Of("path", o.Path)]);
-        OnChanged?.Invoke(playableUri);
+        OnChanged?.Invoke(playableUri, OverrideMutationKind.Remove);
         return true;
     }
 

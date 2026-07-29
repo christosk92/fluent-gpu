@@ -127,8 +127,13 @@ public class SearchSuggestionMapperTests
         Assert.True(hits[4].MatchedLyrics);
     }
 
+    // Search results used to project `associationsV3.videoAssociations.totalCount` onto a Track.HasVideo field. Both
+    // halves are deliberately gone: has-video is a property of the catalogue entry, answered by the VideoAssociation
+    // plane (kind 99) through VideoPresence — a second, weaker copy on the row is what let a list and its own expand
+    // drawer disagree. This pins that the mapper still swallows payloads WITH the node (present, zero, absent) without
+    // tripping over it.
     [Fact]
-    public void SearchFromV2_ProjectsVideoAssociationCount()
+    public void SearchFromV2_IgnoresVideoAssociationNodes()
     {
         var results = SpotifyExportMapper.SearchFromV2(Root("""
         { "data": { "searchV2": { "tracksV2": { "items": [
@@ -155,8 +160,9 @@ public class SearchSuggestionMapperTests
         """));
 
         Assert.Equal(3, results.Tracks.Count);
-        Assert.True(results.Tracks[0].HasVideo);
-        Assert.False(results.Tracks[1].HasVideo);
-        Assert.False(results.Tracks[2].HasVideo);   // facet hash omits the field entirely → Long() → 0
+        Assert.Equal("spotify:track:withvideo", results.Tracks[0].Uri);
+        Assert.Equal("Has A Video", results.Tracks[0].Title);
+        Assert.Equal("spotify:track:zerocount", results.Tracks[1].Uri);
+        Assert.Equal("spotify:track:nofield", results.Tracks[2].Uri);
     }
 }

@@ -32,6 +32,7 @@ public sealed class VideoSurfaceRegistry
         public bool InUse;
         public RectF RectDip;         // desired content rect in DIP; the host scales to device px at drain time
         public RectF ViewportDip;     // visible container; smaller than RectDip for center-crop
+        public float RadiusDip;         // corner radius in DIP (0 = square). Scaled to device px at flush, like the rect.
         public uint ContentW, ContentH; // the content's native pixel size (e.g. decoder swapchain) — the presenter scales it to fill the rect (0 = unknown)
         public bool Visible;
         public int Z;
@@ -105,6 +106,17 @@ public sealed class VideoSurfaceRegistry
         ref Entry e = ref Slot(token);
         if (e.ContentW == width && e.ContentH == height) return;
         e.ContentW = width; e.ContentH = height;
+        MarkDirty(ref e);
+    }
+
+    /// <summary>Round the composited surface's corners (DIP; 0 = square). The video child visual composites outside the
+    /// UI back buffer, so a UI-side rounded parent cannot clip it — this is the only way to get a non-rectangular video.
+    /// Value-gated.</summary>
+    public void SetCornerRadius(int token, float radiusDip)
+    {
+        ref Entry e = ref Slot(token);
+        if (e.RadiusDip == radiusDip) return;
+        e.RadiusDip = radiusDip;
         MarkDirty(ref e);
     }
 
@@ -305,6 +317,7 @@ public sealed class VideoSurfaceRegistry
             presenter.SetContentSize(e.SurfaceId, e.ContentW, e.ContentH);   // so it scales the frame to fill `dev` (not 1:1-cropped)
             presenter.Place(e.SurfaceId, dev, 1f, e.Z);
             presenter.SetViewport(e.SurfaceId, viewportDev);
+            presenter.SetCornerRadius(e.SurfaceId, e.RadiusDip * scale);
             presenter.SetVisible(e.SurfaceId, e.Visible);
             changed = true;
             e.Dirty = false;
@@ -382,6 +395,8 @@ public readonly struct VideoBinding
     /// <summary>Set the visible container. Oversized content is center-clipped to this rect.</summary>
     public void SetViewport(RectF rectDip) { if (_registry is { } r) r.SetViewport(Token, rectDip); }
     /// <summary>Set the content's native pixel size (decoder swapchain size) so the frame scales to fill the rect.</summary>
+    /// <summary>Round this surface's corners (DIP). Half the shorter side gives a circle.</summary>
+    public void SetCornerRadius(float radiusDip) { if (_registry is { } r) r.SetCornerRadius(Token, radiusDip); }
     public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }

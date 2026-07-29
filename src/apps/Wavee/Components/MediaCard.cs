@@ -187,6 +187,9 @@ public static class MediaCard
                     : ZStack(
                         // A neutral shimmer tile sits behind the art so a card is never an empty box — it breathes while
                         // the real art loads and settles once it lands.
+                        // The shimmer tile carries the cover's own graded colour (CoverColorPlane) when it is known,
+                        // so a loading card is that album's colour rather than a neutral hole. The Image keeps a
+                        // TRANSPARENT placeholder on purpose — the tinted tile behind it is the backdrop.
                         Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
                         Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent)
                             with { MorphId = morphKey });
@@ -308,6 +311,8 @@ public static class MediaCard
         return new BoxEl { Direction = 1, Padding = new Edges4(0f, 3f, 0f, 3f), Children = [ card.WithMenu(menu) ] };
     }
 
+    /// <remarks>The cover placeholder resolves its colour from <c>CoverColorPlane</c> inside <c>Surfaces</c> — a grid
+    /// is where that matters most, since a whole screen of covers decodes at once.</remarks>
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
                                    Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
                                    ColorF? accent = null, MenuAttach? menu = null)
@@ -587,7 +592,11 @@ public static class MediaCard
                         Height = artH, ZStack = true,
                         HoverScale = Motion.ReducedMotion ? 1f : 1.055f,
                         HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
-                        Children = [ Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius, Tok.FillCardDefault, cover?.BlurHash) ],
+                        // Opaque, cover-coloured placeholder — NOT Tok.FillCardDefault. The card brushes are
+                        // deliberately translucent, so using one here let the page show straight through and an
+                        // editorial card read as an empty hole until its 512px art decoded.
+                        Children = [ Ui.Image(cover?.Url ?? "", ImageFit.Cover, aspect, 512, radius,
+                                              Surfaces.PlaceholderFor(cover?.Url), cover?.BlurHash) ],
                     },
                     new BoxEl
                     {
@@ -643,7 +652,7 @@ public static class MediaCard
                                             // The 512 request deduplicates with the crisp cover; the derivative is a
                                             // half-resolution σ26 bake. FocusY=1 keeps the cover crop on the bottom slice.
                                             Ui.Image(cover?.Url ?? "", ImageFit.Cover, float.NaN, 512, radius,
-                                                Tok.FillCardDefault, cover?.BlurHash) with
+                                                Surfaces.PlaceholderFor(cover?.Url), cover?.BlurHash) with
                                             {
                                                 FocusY = 1f,
                                                 BakedBlur = new BakedBlurSpec(26f, 0.5f),
@@ -1155,8 +1164,8 @@ sealed class NowPlayingOverlay : Component
         {
             // Small ROW art (search "All" rows): the equalizer CENTERED at rest (hidden on hover), the play FAB centered
             // over a hover scrim — Spotify's row affordance. SAME component, a row-fit layout (vs the card's bottom corners).
-            // A centering flex box (NOT a ZStack): a ZStack honors AlignItems (vertical) but ignores Justify, so it would
-            // pin the FAB to the LEFT edge instead of centering it over the art. A single-child flex centers on BOTH axes.
+            // A single-child centering flex box: it carries the hover scrim fill as well as the centering, so it stays a
+            // flex box rather than folding into the enclosing ZStack.
             Element rowFab = new BoxEl
             {
                 Width = _inner, Height = _inner, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,

@@ -21,12 +21,16 @@ namespace Wavee;
 // hero's small lower-edge token, morphs into the shy header; the full-bleed immersive media itself stays static.
 static class DetailVerticalHero
 {
+    // The pill's EXIT is the search box's expand seen from the other side: opening search unmounts the identity pill
+    // while the field grows across the same row. Running it on the field's own duration and easing keeps that one
+    // motion instead of a 150ms snap racing a 260ms growth. (The same leg also covers scrolling back up, where a
+    // slightly softer fade reads fine.)
     static readonly LayoutTransition CompactPillPresence = new(
         TransitionChannels.Opacity,
         TransitionDynamics.Tween(280f, Easing.FluentDecelerate),
         Enter: new EnterExit(Dy: 3f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dy: -2f, Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(150f, Easing.FluentAccelerate),
+        ExitDynamics: TransitionDynamics.Tween(TrackList.SearchExpandMs, Easing.SmoothOut),
         DelayMs: 80f,
         ExitDelayMs: 0f);
 

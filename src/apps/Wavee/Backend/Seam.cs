@@ -85,7 +85,10 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
         if (toEmit is not null) _savedChanged.OnNext(toEmit);
     }
 
-    static readonly string[] AllSets = { "liked", "albums", "artists", "shows", "episodes", "playlists" };   // §2.8 — followed playlists fold into Saved
+    // "prerelease" is here so BuildUnion restores PRE-SAVE hearts from the persisted collection_items rows at boot.
+    // It is deliberately absent from the inbound sync's set list (LibrarySync.Sets): the wire `set` string is inferred,
+    // and fetching a set the server does not know would let the mark-and-sweep unsave every local pre-save.
+    static readonly string[] AllSets = { "liked", "albums", "artists", "shows", "episodes", "playlists", "prerelease" };   // §2.8 — followed playlists fold into Saved
 
     // The save set is inferred from the uri kind (track→liked, album→albums, artist→artists, show→shows, episode→episodes),
     // so ONE source covers every library type while Saved/IsSaved stay a single aggregated snapshot. Non-standard uris fall
@@ -97,6 +100,7 @@ public sealed class EngineMutationSource : IMutationSource, IDisposable
         uri.StartsWith("spotify:show:", StringComparison.Ordinal) ? "shows" :
         uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? "episodes" :
         uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) ? "playlists" :   // §2.8 — a single-uri follow change updates Saved incrementally
+        uri.StartsWith(PreReleaseUris.PreReleaseScheme, StringComparison.Ordinal) ? "prerelease" :   // a pre-save (kind-138 entity); rides the "collection" wire set
         _setId;
 
     HashSet<string> BuildUnion(IStore store)

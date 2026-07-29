@@ -565,8 +565,8 @@ public sealed class ItemsView : Component
             return from;
         }
 
-        // The dispatcher's SetScrollOffset idiom (InputDispatcher.cs:388-433): write Offset+Target, apply the
-        // layout-free -offset transform, dirty the realize window, request a render.
+        // Targeting is OURS (an index resolves through the virtual layout MODEL, so this works for an item that is not
+        // realized yet and therefore has no node); the offset WRITE is the shared ScrollIntoView.ScrollTo seam.
         void BringIntoView(int index, float alignmentRatio, bool animate)
         {
             if (sceneRef is null || layout is null || (uint)index >= (uint)count) return;
@@ -601,37 +601,10 @@ public sealed class ItemsView : Component
                     target -= frl.LeadInset;
             }
 
-            float content = horizontal ? sc.ContentW : sc.ContentH;
-            target = Math.Clamp(target, 0f, MathF.Max(0f, content - viewport));
-
-            // Animated (WinUI AnimationDesired): record the PendingTarget + Programmatic WheelAnimating and arm the
-            // ScrollIntegrator — phase 7 chases the live offset toward it (+ re-realizes the window + fades the bar) with
-            // the ProgrammaticSpringHalflifeMs crit-damped chase. Snap (default): write Offset==Target and apply the
-            // -offset content transform now (the dispatcher's SetScrollOffset idiom, InputDispatcher.cs:388-433).
-            if (animate)
-            {
-                sc.Phase = ScrollIntegrator.WheelAnimating;
-                sc.PhaseFlags = ScrollState.PhaseProgrammatic;
-                sc.FlingVelocity = 0f;
-                sc.FlingRetargeted = false;
-                sc.FlingSnapTarget = float.NaN;
-                if (horizontal) sc.PendingTargetX = target; else sc.PendingTargetY = target;
-                Context.ArmScroll?.Invoke(vp);
-                Context.RequestRerender();
-                return;
-            }
-
-            if (horizontal) { sc.OffsetX = target; sc.TargetX = target; }
-            else { sc.OffsetY = target; sc.TargetY = target; }
-
-            var contentNode = sc.ContentNode;
-            if (!contentNode.IsNull && sceneRef.IsLive(contentNode))
-            {
-                sceneRef.Paint(contentNode).LocalTransform = Affine2D.Translation(horizontal ? -target : 0f, horizontal ? 0f : -target);
-                sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-            }
-            sceneRef.Mark(vp, NodeFlags.VirtualRangeDirty);
-            Context.RequestRerender();
+            // Animated (WinUI AnimationDesired) arms the phase-7 ScrollIntegrator for the crit-damped programmatic
+            // chase; snap (default) writes Offset==Target and applies the -offset content transform now. Clamping to
+            // [0, content − viewport] happens inside the seam.
+            ScrollIntoView.ScrollTo(Context, vp, target, animate);
         }
 
         // The REALIZED container node for an index: persistent-prefix indices map 1:1 to the leading children; a normal

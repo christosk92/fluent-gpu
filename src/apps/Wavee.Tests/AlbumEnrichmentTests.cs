@@ -210,7 +210,8 @@ public class AlbumEnrichmentMapperTests
 
         Assert.NotNull(album);
         var t = Assert.Single(album!.Tracks!);
-        Assert.True(t.HasVideo);
+        // No has-video assertion here any more: the mapper deliberately stopped reading associationsV3 onto the row.
+        // That fact has one home (the VideoAssociation plane, kind 99) and one reader (VideoPresence).
         Assert.True(t.IsExplicit);
         Assert.Equal(Availability.Playable, t.Availability);
         Assert.Equal(98765, t.PlayCount);

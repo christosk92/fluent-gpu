@@ -18,27 +18,41 @@ public enum HomeCardKind { Playlist, Album, Artist, Track, Liked }
 /// cover-less-playlist mosaic.</summary>
 public sealed record HomeCard(string Uri, string Title, string? Subtitle, Image? Image, HomeCardKind Kind,
     System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null,
-    // The cover's extracted dominant color (ARGB; null = none). Drives the section accent bar / tinted band. uint keeps
-    // Core framework-neutral (mapped to the renderer's ColorF at the UI boundary, like Palette).
-    uint? Accent = null,
     // Optional eyebrow — the section context shown ABOVE the title on a Featured card (e.g. "For fans of IU",
     // "More like GFRIEND"). Carried from the baseline section's title, which the old composer discarded.
     string? Eyebrow = null);
 
-/// <summary>A titled group of home cards laid out per <see cref="HomeGroupKind"/>. <paramref name="Accent"/> (ARGB; null
-/// = none) is the group's section tint — the first card's extracted color, else a semantic per-kind fallback.</summary>
-public sealed record HomeGroup(HomeGroupKind Kind, string? Title, IReadOnlyList<HomeCard> Cards, uint? Accent = null);
+/// <summary>A titled group of home cards laid out per <see cref="HomeGroupKind"/>. The section tint is resolved by the
+/// VIEW from the first card's cover (CoverColorPlane), so no colour rides the feed.</summary>
+public sealed record HomeGroup(HomeGroupKind Kind, string? Title, IReadOnlyList<HomeCard> Cards);
 
 /// <summary>One preview track of a home recommendation (the hover peek on a Featured editorial card): display name,
 /// cover art, and an optional 30s MP3 preview URL. Source-neutral — Spotify fills it from feedBaselineLookup.</summary>
 public sealed record HomePreviewTrack(string Uri, string Name, Image? Cover, string? PreviewUrl = null);
 
-/// <summary>One source's contribution to the home feed (its groups), with a priority for ordering when merged across
-/// sources by the aggregate (lower sorts first).</summary>
-public sealed record HomeContribution(IReadOnlyList<HomeGroup> Groups, int Priority = 0);
+/// <summary>A home facet chip (Spotify <c>home.homeChips[]</c>). <paramref name="Id"/> is what goes back into the
+/// <c>facet</c> request variable — it is an opaque server token ("music-chip"), never localised or synthesised.
+/// <paramref name="Label"/> arrives already localised by the server. <paramref name="SubChips"/> is the second level
+/// ("Following"), which is what lets a selected chip fuse into a two-segment pill.</summary>
+public sealed record HomeChip(string Id, string Label, IReadOnlyList<HomeChip> SubChips);
 
-/// <summary>The finished, merged home model the UI renders: a greeting + the ordered, condensed groups.</summary>
-public sealed record HomeFeed(string Greeting, IReadOnlyList<HomeGroup> Groups)
+/// <summary>What a live (server) home fetch returns to a catalog source: the editorial groups plus the facet chip row.
+/// Chips are null when the server sent none — the source then contributes groups only.</summary>
+public sealed record LiveHomeResult(IReadOnlyList<HomeGroup> Groups, IReadOnlyList<HomeChip>? Chips)
+{
+    public static readonly LiveHomeResult Empty = new(System.Array.Empty<HomeGroup>(), null);
+}
+
+/// <summary>One source's contribution to the home feed (its groups), with a priority for ordering when merged across
+/// sources by the aggregate (lower sorts first). <paramref name="Chips"/> is the source's facet row, if it has one.</summary>
+public sealed record HomeContribution(IReadOnlyList<HomeGroup> Groups, int Priority = 0,
+    IReadOnlyList<HomeChip>? Chips = null);
+
+/// <summary>The finished, merged home model the UI renders: a greeting, the ordered condensed groups, and the facet
+/// chip row. <paramref name="Chips"/> is empty for sources that have no facets (local library, fakes) — the chip row
+/// is then simply not rendered.</summary>
+public sealed record HomeFeed(string Greeting, IReadOnlyList<HomeGroup> Groups,
+    IReadOnlyList<HomeChip>? Chips = null)
 {
     public static readonly HomeFeed Empty = new("", System.Array.Empty<HomeGroup>());
 }

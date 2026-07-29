@@ -4,6 +4,7 @@ using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Localization;
 using FluentGpu.WindowsApi.Dialogs;
+using Wavee.Core;
 using Wavee.SpotifyLive.Audio;
 
 namespace Wavee;
@@ -96,15 +97,12 @@ public static class LocalFileActions
         VideoActions.Apply(s, svc, track.Uri, path, replace: svc.Has(track.Uri));
         if (!svc.Has(track.Uri)) return;   // Apply refused it (validation) and has already explained why
 
-        // 2. Light the surface BEFORE the play intent. ShouldPlayAsVideo folds the user's standing surface intent, so a
-        //    user who has never turned video on (or who closed it, which is now sticky-off) would otherwise get the
-        //    audio branch for a file that has no audio path. Dropping a video file to play IS an explicit "show me
-        //    this", so it is one of the gestures allowed to turn the intent back on.
-        if (s.Playback is { } b && !b.VideoActive())
-            b.ShowVideoAt(b.VideoSurface.Peek().Preferred);
-
+        // 2. Play it AS VIDEO. Dropping a video file to play is an explicit "show me this", which is one of the
+        //    gestures allowed to turn the surface intent back on for a user who had closed it — but only for THIS
+        //    play (the intent is scoped to the dropped track and expires when playback moves on; only the real
+        //    toggles change the standing state). PlayAs owns the ordering that makes it apply to this track.
         Log(s, "localfile.play.video", "playing a dropped video with its own audio", path, via, track.Uri);
-        _ = s.Svc!.Player.PlayTrackAsync(track);
+        VideoActions.PlayAs(s.Svc!.Player, s.Playback, track, MediaForm.Video);
     }
 
     static void Log(ActionServices s, string eventId, string message, string path, string via, string uri)

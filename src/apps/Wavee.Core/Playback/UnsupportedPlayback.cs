@@ -31,7 +31,6 @@ public sealed class UnsupportedPlaybackPlayer : IPlaybackPlayer, IPlaybackState
     public double Volume => 0.7;                     // matches the bridge's default so the volume slider doesn't jump
     public bool IsShuffle => false;
     public RepeatMode Repeat => RepeatMode.Off;
-    public Palette? Palette => null;
     public IReadOnlyList<QueueEntry> Queue => Array.Empty<QueueEntry>();
     // No skipping / seeking when nothing can play (the widened surface; the player bar disables them via NoTrack anyway).
     public bool IsLoading => false;

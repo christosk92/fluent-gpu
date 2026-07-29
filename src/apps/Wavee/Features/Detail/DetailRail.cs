@@ -104,8 +104,12 @@ static class DetailRail
                     Children =
                     [
                         // Shuffle now lives in the track-list command bar; the rail keeps just the hero Play + save/share.
-                        m.ContextUri is { Length: > 0 } saveUri
-                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title))
+                        // A full pre-release has no album to save yet; the entity the collection write accepts is the
+                        // prerelease. Swap the heart's TARGET rather than adding a second heart. Falls back to the album
+                        // uri whenever the link is absent (offline, unresolved, or already released). Key = the target:
+                        // SaveButton's uri freezes at mount.
+                        (m.PreReleaseUri ?? m.ContextUri) is { Length: > 0 } saveUri
+                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title)) with { Key = "save:" + saveUri }
                             : Fab(Icons.Heart, () => { }),
                         PlaylistInlineEdit.ShareButton(modelSource),
                         PlaylistInlineEdit.OwnerMenu(modelSource, h),
@@ -113,6 +117,8 @@ static class DetailRail
                 },
             ],
         });
+
+        if (PreReleaseCard(m, h) is { } countdown) kids.Add(countdown);
 
         if (cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             kids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
@@ -198,6 +204,7 @@ static class DetailRail
         };
 
         var headerKids = new List<Element>(4) { coverRow, PlayRow(h, m) };
+        if (PreReleaseCard(m, h) is { } countdown) headerKids.Add(countdown);
         if (includeReleasePanel && cfg.Badges == BadgeStyle.TypeYear && AlbumTrailing.HasReleasePanel(m))
             headerKids.Add(AlbumTrailing.ReleasePanel(m, h, outerPadding: false));
 
@@ -209,6 +216,25 @@ static class DetailRail
         };
     }
 
+    /// <summary>The upcoming-release countdown, or null when nothing about this release is still ahead of us.
+    ///
+    /// The gate is <see cref="DetailModel.UpcomingAt"/>, NOT <c>IsPreRelease</c>: an album can be genuinely upcoming in
+    /// three different wire shapes and only one of them sets that flag (a declared <c>preReleaseEndDateTime</c>; a
+    /// partly-released album whose remaining rows carry a future live timestamp; a plain future release date with no
+    /// prerelease marking at all). <see cref="PreReleaseDerivation"/> owns the precedence between them, so the card
+    /// fires for all three and — because each rung is wall-clock checked — for none of them once the record is out.
+    ///
+    /// A pre-release with no derivable instant still renders nothing: a countdown to an unknown moment is not a
+    /// countdown, and the rest of the page already says the album is upcoming.
+    ///
+    /// Shared by all three mount sites (the two-column rail, the vertical header, and the vertical trailing body) so
+    /// the card cannot exist in one layout and be missing in another across a resize.</summary>
+    internal static Element? PreReleaseCard(DetailModel m, DetailHandlers h)
+        => m.UpcomingAt is { } end
+            ? Embed.Comp(() => new PreReleaseCountdown { ReleaseAt = end, Accent = () => h.Accent })
+                with { Key = "prerelease:" + m.ContextUri + ":" + end.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+            : null;
+
     // The play cluster for the vertical (narrow) header: Play pill + shuffle / save / share, wrapping as a unit. The list
     // view controls (filter / sort / row size) now live in the track list's own command bar, so this row carries none.
     static Element PlayRow(DetailHandlers h, DetailModel m) => new BoxEl
@@ -218,8 +244,10 @@ static class DetailRail
         [
             PlayPill(h.Accent, h.PlayAll),
             // Shuffle lives in the track-list command bar now (see DetailTracks.Toolbar).
-            m.ContextUri is { Length: > 0 } saveUri
-                ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title))
+            // Same heart-target swap as the two-column rail above (see the comment there): a full pre-release is saved
+            // against its prerelease entity, and the key is the target because SaveButton's uri freezes at mount.
+            (m.PreReleaseUri ?? m.ContextUri) is { Length: > 0 } saveUri
+                ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title)) with { Key = "save:" + saveUri }
                 : Fab(Icons.Heart, () => { }),
             Fab(Icons.Share, () => { if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url); }),
         ],

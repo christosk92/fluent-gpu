@@ -71,7 +71,7 @@ public class ColdStoreSchemaV5Tests
         "pinned", "spotify:track:pinned", title,
         [new ArtistRef("ca", "spotify:artist:closure", "Closure Artist"), new ArtistRef("cb", "spotify:artist:second", "Second")],
         new AlbumRef("cl", "spotify:album:closure", "Closure Album"),
-        213_000, IsExplicit: true, new Image("https://cdn.example/track.jpg"), HasVideo: true);
+        213_000, IsExplicit: true, new Image("https://cdn.example/track.jpg"));
 
     // The bare v4 SCHEMA — every table the v4 ctor created, both legacy entity generations, and version 4. No rows: the
     // fixtures below (and the focused regression tests at the bottom) add exactly the rows they are about.
@@ -224,7 +224,9 @@ public class ColdStoreSchemaV5Tests
                 Assert.Equal("Closure Artist, Second", r.GetString(1));
                 Assert.Equal(PinnedTrack("x").Image!.Url, r.GetString(2));
                 Assert.Equal(213_000, r.GetInt64(3));
-                Assert.Equal(EntityThinExtractor.FlagExplicit | EntityThinExtractor.FlagHasVideo, r.GetInt64(4));
+                // FlagHasVideo is LEGACY-only now: has-video moved off the Track record onto the VideoAssociation
+                // plane, so freshly serialized rows carry no "HasVideo" JSON property and the flag stays clear.
+                Assert.Equal(EntityThinExtractor.FlagExplicit, r.GetInt64(4));
                 Assert.Equal("spotify:album:closure", r.GetString(5));
                 Assert.Equal(PayloadCodec.FmtZstd, r.GetInt32(6));
                 Assert.True(r.GetInt64(7) > 0);
@@ -306,7 +308,7 @@ public class ColdStoreSchemaV5Tests
         var bytes = Json(track, EntityJson.Default.Track);
         var text = Encoding.UTF8.GetString(bytes);
         // `EntityJson` sets no PropertyNamingPolicy → members serialize under their DECLARED names.
-        foreach (var name in new[] { "\"Title\"", "\"Artists\"", "\"Album\"", "\"DurationMs\"", "\"IsExplicit\"", "\"Image\"", "\"HasVideo\"", "\"Uri\"", "\"Name\"", "\"Url\"" })
+        foreach (var name in new[] { "\"Title\"", "\"Artists\"", "\"Album\"", "\"DurationMs\"", "\"IsExplicit\"", "\"Image\"", "\"Uri\"", "\"Name\"", "\"Url\"" })
             Assert.Contains(name, text);
 
         Assert.True(EntityThinExtractor.TryExtract(bytes, EntityKind.Track, out var thin));
@@ -315,8 +317,16 @@ public class ColdStoreSchemaV5Tests
         Assert.Equal(track.Image!.Url, thin.ImageUrl);
         Assert.Equal(track.DurationMs, thin.DurationMs);
         Assert.Equal(track.Album.Uri, thin.AlbumUri);
-        Assert.Equal(EntityThinExtractor.FlagExplicit | EntityThinExtractor.FlagHasVideo, thin.Flags);
+        Assert.Equal(EntityThinExtractor.FlagExplicit, thin.Flags);
         Assert.Equal(new[] { "spotify:album:closure", "spotify:artist:closure", "spotify:artist:second" }, thin.Refs!.ToArray());
+
+        // LEGACY rows: Track.HasVideo is deleted (has-video lives on the VideoAssociation plane), but payloads
+        // persisted before that still carry the property, and the extractor must keep reading it — the thin flag
+        // column stays truthful for old rows without any migration.
+        Assert.True(EntityThinExtractor.TryExtract(
+            Encoding.UTF8.GetBytes("""{"Uri":"spotify:track:old","Title":"Old","IsExplicit":false,"HasVideo":true}"""),
+            EntityKind.Track, out var legacyThin));
+        Assert.Equal(EntityThinExtractor.FlagHasVideo, legacyThin.Flags);
 
         // Every other kind lands its own title/subtitle pair.
         Assert.True(EntityThinExtractor.TryExtract(

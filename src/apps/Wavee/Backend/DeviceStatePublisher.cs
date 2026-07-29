@@ -344,7 +344,7 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
         }
         return new SnapshotTrack(uri, entry.Uid, provider, t.Title ?? "", t.Album.Name ?? "",
             artist.Uri ?? "", artist.Name ?? "", t.Album.Uri ?? "", t.Image?.Url ?? "",
-            t.HasVideo, viewIndex, entry.Metadata ?? new Dictionary<string, string>());
+            VideoPresence.HasVideo(t.Uri), viewIndex, entry.Metadata ?? new Dictionary<string, string>());
     }
 
     static string ProviderOf(QueueEntry entry)

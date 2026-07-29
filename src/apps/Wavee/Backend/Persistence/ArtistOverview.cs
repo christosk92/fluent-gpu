@@ -11,11 +11,58 @@ namespace Wavee.Backend.Persistence;
 //   • the CORE  → `entity` (kind=Artist): Id/Uri/Name/Image/HeaderImage/Palette/Verified/MonthlyListeners/Followers +
 //                 the SWR stamp (FetchedAt). ~1 KB instead of the up-to-370 KB accreted document.
 //   • the FACETS→ `artist_overview`: TopAlbums/AppearsOn/PopularReleases/LatestRelease as (uri,kind,name,year,cover_url)
-//                 REFS, TopTracks as uris, plus Pinned/Bio/Extras and the per-facet totals + WorldRank ("stats").
+//                 REFS, TopTracks as (uri, plays), plus Pinned/Bio/Extras and the per-facet totals + WorldRank ("stats").
 //
 // The split is loss-tolerant by construction: album refs re-fatten from the STANDALONE album rows (ArtistDiscography.
 // Assemble already knows how), and anything genuinely missing simply degrades to the stub the overview stored.
 public sealed record ArtistAlbumStub(string Uri, int Kind, string Name, int Year, string? CoverUrl);
+
+/// <summary>One row of the artist's Popular chart: the track uri plus ITS PLAY COUNT.
+///
+/// The count is stored HERE, with the chart, and not read back off the shared track row — that is the whole point of
+/// the type. queryArtistOverview is the only source of play counts, but a track row belongs to every surface: the
+/// TrackV4 discography prefetch, a cluster projection and a library write all rewrite it knowing nothing about plays,
+/// and the store's `PlayCount > 0 ? incoming : current` guard cannot help once the resident row is already 0. Rows
+/// re-fattened from those rows lost their counts one at a time, which is what made a chart read "1,848,329,755 plays"
+/// on one line and nothing on the line above it.</summary>
+[System.Text.Json.Serialization.JsonConverter(typeof(ArtistTopTrackConverter))]
+public sealed record ArtistTopTrack(string Uri, long Plays = 0);
+
+/// <summary>Reads both shapes of the field: the bare <c>"spotify:track:…"</c> string that documents written before
+/// play counts were stored carry, and the <c>{uri, plays}</c> object written since. A legacy row therefore keeps
+/// working and simply has no counts until its next overview lands — no migration, no dropped document.</summary>
+public sealed class ArtistTopTrackConverter : System.Text.Json.Serialization.JsonConverter<ArtistTopTrack>
+{
+    public override ArtistTopTrack? Read(ref System.Text.Json.Utf8JsonReader reader, Type _,
+                                         System.Text.Json.JsonSerializerOptions options)
+    {
+        if (reader.TokenType == System.Text.Json.JsonTokenType.String)
+            return new ArtistTopTrack(reader.GetString() ?? "");
+        if (reader.TokenType != System.Text.Json.JsonTokenType.StartObject) return null;
+
+        string uri = ""; long plays = 0;
+        while (reader.Read() && reader.TokenType != System.Text.Json.JsonTokenType.EndObject)
+        {
+            if (reader.TokenType != System.Text.Json.JsonTokenType.PropertyName) continue;
+            bool isUri = reader.ValueTextEquals("Uri") || reader.ValueTextEquals("uri");
+            bool isPlays = reader.ValueTextEquals("Plays") || reader.ValueTextEquals("plays");
+            reader.Read();
+            if (isUri) uri = reader.GetString() ?? "";
+            else if (isPlays && reader.TokenType == System.Text.Json.JsonTokenType.Number) plays = reader.GetInt64();
+            else reader.Skip();
+        }
+        return new ArtistTopTrack(uri, plays);
+    }
+
+    public override void Write(System.Text.Json.Utf8JsonWriter w, ArtistTopTrack v,
+                               System.Text.Json.JsonSerializerOptions options)
+    {
+        w.WriteStartObject();
+        w.WriteString("uri", v.Uri);
+        if (v.Plays > 0) w.WriteNumber("plays", v.Plays);
+        w.WriteEndObject();
+    }
+}
 
 /// <summary>The persisted `artist_overview` document — the fat facets stripped off the Artist core.</summary>
 public sealed record ArtistOverviewDoc(
@@ -23,7 +70,7 @@ public sealed record ArtistOverviewDoc(
     IReadOnlyList<ArtistAlbumStub>? AppearsOn = null,
     IReadOnlyList<ArtistAlbumStub>? PopularReleases = null,
     ArtistAlbumStub? LatestRelease = null,
-    IReadOnlyList<string>? TopTracks = null,
+    IReadOnlyList<ArtistTopTrack>? TopTracks = null,
     PinnedItem? Pinned = null,
     string? Bio = null,
     ArtistExtras? Extras = null,
@@ -147,11 +194,12 @@ public static class ArtistSplit
     static ArtistAlbumStub? Stub(Album? a)
         => a is { Uri.Length: > 0 } ? new ArtistAlbumStub(a.Uri, (int)a.Kind, a.Name, a.Year, NullIfEmpty(a.Cover?.Url)) : null;
 
-    static IReadOnlyList<string>? TrackUris(IReadOnlyList<Track>? tracks)
+    static IReadOnlyList<ArtistTopTrack>? TrackUris(IReadOnlyList<Track>? tracks)
     {
         if (tracks is not { Count: > 0 }) return null;
-        var list = new List<string>(tracks.Count);
-        for (int i = 0; i < tracks.Count; i++) if (tracks[i].Uri.Length > 0) list.Add(tracks[i].Uri);
+        var list = new List<ArtistTopTrack>(tracks.Count);
+        for (int i = 0; i < tracks.Count; i++)
+            if (tracks[i].Uri.Length > 0) list.Add(new ArtistTopTrack(tracks[i].Uri, tracks[i].PlayCount));
         return list.Count > 0 ? list : null;
     }
 
@@ -168,11 +216,17 @@ public static class ArtistSplit
         : new Album("", s.Uri, s.Name, s.CoverUrl is null ? null : new Image(s.CoverUrl),
             Array.Empty<ArtistRef>(), s.Year, 0, Kind: (AlbumKind)s.Kind);
 
-    static IReadOnlyList<Track>? Tracks(IReadOnlyList<string>? uris, Func<string, Track?> resolve)
+    /// <summary>Re-fatten the chart: the track body comes from the shared row (title, artists, art, duration — whatever
+    /// the store knows), the PLAY COUNT comes from this document. The stored count wins because it is the only copy
+    /// that no other writer of that row can zero; a row that somehow carries a count while the document does not keeps
+    /// its own (a legacy document written before counts were stored).</summary>
+    static IReadOnlyList<Track>? Tracks(IReadOnlyList<ArtistTopTrack>? rows, Func<string, Track?> resolve)
     {
-        if (uris is not { Count: > 0 }) return null;
-        var list = new List<Track>(uris.Count);
-        for (int i = 0; i < uris.Count; i++) if (resolve(uris[i]) is { } t) list.Add(t);
+        if (rows is not { Count: > 0 }) return null;
+        var list = new List<Track>(rows.Count);
+        for (int i = 0; i < rows.Count; i++)
+            if (resolve(rows[i].Uri) is { } t)
+                list.Add(rows[i].Plays > 0 ? t with { PlayCount = rows[i].Plays } : t);
         return list.Count > 0 ? list : null;
     }
 

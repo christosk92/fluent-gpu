@@ -320,9 +320,10 @@ sealed class WaveeShell : Component
         _actions.Go = GoNav;
         _actions.Post = post;
         _actions.VideoOverrides = _actions.Svc?.VideoOverrides;
-        // The row indicator / "Videos only" filter read the curation through a process-wide probe rather than context,
-        // because they run per ROW (a context read or a signal subscription per row is not affordable there).
-        VideoPresence.Attach(_actions.VideoOverrides);
+        // The row indicator / "Videos only" filter read the association plane + the curation through a process-wide
+        // probe rather than context, because they run per ROW (a context read or a signal subscription per row is not
+        // affordable there). Both halves of the has-video answer are attached here, and nothing else answers it.
+        VideoPresence.Attach(_actions.VideoOverrides, _actions.Svc?.RealStore);
         // The two override toasts' "Manage" button + the Settings roster deep-link: bump the request counter (the
         // PlaybackRuntimeBanner precedent — Settings has no route-arg tab deep-link) and navigate.
         if (_actions.Playback is { } pb && pb.OpenVideoOverrideManager is null)

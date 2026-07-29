@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Runtime.InteropServices;
@@ -893,7 +893,7 @@ public sealed class TreeReconciler
         if (child.IsNull) return;
         ref LayoutInput a = ref _scene.Layout(anchor);
         ref LayoutInput c = ref _scene.Layout(child);
-        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf;
+        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
         a.Width = c.Width; a.Height = c.Height;
         a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
         // Transparent boundaries are NEVER input targets of their own. Keep the anchor traversable and make it yield
@@ -2921,6 +2921,33 @@ public sealed class TreeReconciler
         };
     }
 
+    /// <summary>[Conditional("DEBUG")] one-transform-owner tripwire — the invariant stated on
+    /// <see cref="Element.Transform"/>, now that an unbound static matrix is honored rather than dropped. A node may
+    /// declare EITHER an explicit matrix OR the decomposed Offset/Scale/Rotation floats, and neither may be combined with
+    /// a transform-owning <see cref="ScrollBindDsl"/> (which rewrites LocalTransform every frame and would silently win).
+    /// Erased from the shipping AOT binary — in production, safety == the CI gate that exercises this.</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void AssertSingleTransformOwner(Element el, bool staticMatrix, bool staticDecomposed)
+    {
+        if (!staticMatrix) return;
+        if (staticDecomposed)
+            throw new System.InvalidOperationException(
+                "Transform owner conflict: this element declares BOTH a static Transform matrix and decomposed " +
+                "OffsetX/OffsetY/Scale/Rotation. The matrix wins and the floats are dropped — declare one or the other.");
+        var binds = el.ScrollBinds;
+        if (binds is null) return;
+        foreach (var d in binds)
+        {
+            bool ownsTransform = d.PinTop.HasValue || d.StretchFromTop || d.MorphLeftTo.HasValue || d.MorphTopTo.HasValue
+                || d.To is BindSink.TransX or BindSink.TransY or BindSink.ScaleUniform or BindSink.ScaleY;
+            if (ownsTransform)
+                throw new System.InvalidOperationException(
+                    "Transform owner conflict: a static Transform matrix cannot be combined with a transform-owning " +
+                    "ScrollBind (PinTop / StretchFromTop / MorphLeftTo / MorphTopTo / a Trans*|Scale* sink) — the bind " +
+                    "rewrites LocalTransform every frame and would clobber the static matrix.");
+        }
+    }
+
     /// <summary>Compile an element's declarative <see cref="ScrollBindDsl"/> entries into POD
     /// <see cref="FluentGpu.Animation.ScrollBind"/> rows on the scene's scroll-binding slab: resolve the enclosing scroller
     /// once, bake literal-px anchors now (geometry anchors re-bake at ArrangeViewport), and link each into the scroller's
@@ -3192,7 +3219,21 @@ public sealed class TreeReconciler
 
                 // Static transform/opacity ONLY when the element declares one AND there's no transform binding/animation
                 // owning the channel (else a re-render would reset the bound/animated value to identity each frame).
-                if (!b.Transform.IsBound && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f))
+                // A static transform has TWO spellings, in precedence order: an explicit unbound MATRIX
+                // (Transform = Affine2D.Translation(...)) WINS over the decomposed OffsetX/Y + Scale + Rotation floats —
+                // the same "one transform owner per node" rule the BOUND path already states. Until this existed an
+                // unbound Transform was silently DROPPED (its Value was never read), so an authored
+                // `Transform = Affine2D.Translation(8, -8)` compiled, ran, and moved nothing.
+                bool tfUnbound = !b.Transform.IsBound;
+                bool staticMatrix = tfUnbound && b.Transform.Value != default;
+                bool staticDecomposed = tfUnbound
+                    && (b.OffsetX != 0f || b.OffsetY != 0f || b.ScaleX != 1f || b.ScaleY != 1f || b.Rotation != 0f);
+                AssertSingleTransformOwner(b, staticMatrix, staticDecomposed);
+                if (staticMatrix)
+                {
+                    paint.LocalTransform = b.Transform.Value;
+                }
+                else if (staticDecomposed)
                 {
                     var tf = Affine2D.Translation(b.OffsetX, b.OffsetY);
                     if (b.Rotation != 0f) tf = tf.Multiply(Affine2D.Rotation(b.Rotation * (MathF.PI / 180f)));
@@ -3204,8 +3245,10 @@ public sealed class TreeReconciler
                 // into a plain track box, which otherwise keeps painting/hit-testing 14px off forever (the ranged-
                 // slider tooltip hover flap). Identity-declared elements still leave ANIM-owned matrices alone:
                 // this writes only on the declared-static → declared-identity transition, never per re-render.
-                else if (!b.Transform.IsBound && old is BoxEl ob && !ob.Transform.IsBound
-                         && (ob.OffsetX != 0f || ob.OffsetY != 0f || ob.ScaleX != 1f || ob.ScaleY != 1f || ob.Rotation != 0f))
+                // Covers BOTH static spellings, so dropping an authored matrix clears it exactly like dropping OffsetY.
+                else if (tfUnbound && old is BoxEl ob && !ob.Transform.IsBound
+                         && (ob.Transform.Value != default
+                             || ob.OffsetX != 0f || ob.OffsetY != 0f || ob.ScaleX != 1f || ob.ScaleY != 1f || ob.Rotation != 0f))
                 {
                     paint.LocalTransform = Affine2D.Identity;
                 }
@@ -3245,7 +3288,7 @@ public sealed class TreeReconciler
                 li.FlexGrow = b.Grow;
                 li.FlexShrink = b.Shrink;
                 li.FlexBasis = b.Basis;
-                li.AlignSelf = b.AlignSelf;
+                li.AlignSelf = b.AlignSelf; li.JustifySelf = b.JustifySelf;
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
@@ -3481,7 +3524,7 @@ public sealed class TreeReconciler
                 li.Width = s.Width; li.Height = s.Height;
                 li.MinW = s.MinWidth; li.MinH = s.MinHeight; li.MaxW = s.MaxWidth; li.MaxH = s.MaxHeight;
                 li.FlexGrow = s.Grow; li.FlexShrink = s.Shrink; li.FlexBasis = s.Basis;
-                li.AlignSelf = s.AlignSelf;
+                li.AlignSelf = s.AlignSelf; li.JustifySelf = s.JustifySelf;
 
                 _scene.Mark(node, NodeFlags.ClipsToBounds);
                 ref ScrollState ss = ref _scene.ScrollRef(node);
@@ -3521,7 +3564,7 @@ public sealed class TreeReconciler
                 li.Width = v.Width; li.Height = v.Height;
                 li.MinW = v.MinWidth; li.MinH = v.MinHeight; li.MaxW = v.MaxWidth; li.MaxH = v.MaxHeight;
                 li.FlexGrow = v.Grow; li.FlexShrink = v.Shrink; li.FlexBasis = v.Basis;
-                li.AlignSelf = v.AlignSelf;
+                li.AlignSelf = v.AlignSelf; li.JustifySelf = v.JustifySelf;
 
                 _scene.Mark(node, NodeFlags.ClipsToBounds);
                 ref ScrollState sc = ref _scene.ScrollRef(node);
@@ -3547,7 +3590,7 @@ public sealed class TreeReconciler
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = g.Width; li.Height = g.Height;
                 li.FlexGrow = g.Grow; li.FlexShrink = g.Shrink; li.FlexBasis = g.Basis;
-                li.AlignSelf = g.AlignSelf; li.Margin = g.Margin; li.Padding = g.Padding;
+                li.AlignSelf = g.AlignSelf; li.JustifySelf = g.JustifySelf; li.Margin = g.Margin; li.Padding = g.Padding;
                 _scene.SetGrid(node, new GridSpec { Columns = g.Columns, ColGap = g.ColGap, RowGap = g.RowGap, RowHeight = g.RowHeight, MinColWidth = g.MinColWidth });
                 break;
             }
@@ -3586,7 +3629,7 @@ public sealed class TreeReconciler
                 li.Width = pl.Width; li.Height = pl.Height;
                 li.MinW = pl.MinWidth; li.MinH = pl.MinHeight; li.MaxW = pl.MaxWidth; li.MaxH = pl.MaxHeight;
                 li.FlexGrow = pl.Grow; li.FlexShrink = pl.Shrink; li.FlexBasis = pl.Basis;
-                li.AlignSelf = pl.AlignSelf;
+                li.AlignSelf = pl.AlignSelf; li.JustifySelf = pl.JustifySelf;
                 break;
             }
             case ImageEl im:
@@ -3629,7 +3672,7 @@ public sealed class TreeReconciler
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = im.Width; li.Height = im.Height; li.AspectRatio = im.AspectRatio;
-                li.Margin = im.Margin; li.AlignSelf = im.AlignSelf;
+                li.Margin = im.Margin; li.AlignSelf = im.AlignSelf; li.JustifySelf = im.JustifySelf;
                 break;
             }
             case IconLayerEl il:
@@ -3641,7 +3684,7 @@ public sealed class TreeReconciler
 
                 ref LayoutInput li = ref _scene.Layout(node);
                 li.Width = il.Size; li.Height = il.Size;
-                li.Margin = il.Margin; li.AlignSelf = il.AlignSelf;
+                li.Margin = il.Margin; li.AlignSelf = il.AlignSelf; li.JustifySelf = il.JustifySelf;
                 break;
             }
             case TextEl t:
@@ -3700,7 +3743,7 @@ public sealed class TreeReconciler
                 li.Width = t.Width; li.Height = t.Height;
                 li.MinW = t.MinWidth; li.MinH = t.MinHeight; li.MaxW = t.MaxWidth; li.MaxH = t.MaxHeight;
                 li.FlexGrow = t.Grow; li.FlexShrink = t.Shrink; li.FlexBasis = t.Basis;
-                li.AlignSelf = t.AlignSelf;
+                li.AlignSelf = t.AlignSelf; li.JustifySelf = t.JustifySelf;
 
                 WriteTextSelection(node, t.IsTextSelectionEnabled, t.SelectionHighlightColor);
                 break;
@@ -3790,7 +3833,7 @@ public sealed class TreeReconciler
                 li.Width = st.Width; li.Height = st.Height;
                 li.MinW = st.MinWidth; li.MinH = st.MinHeight; li.MaxW = st.MaxWidth; li.MaxH = st.MaxHeight;
                 li.FlexGrow = st.Grow; li.FlexShrink = st.Shrink; li.FlexBasis = st.Basis;
-                li.AlignSelf = st.AlignSelf;
+                li.AlignSelf = st.AlignSelf; li.JustifySelf = st.JustifySelf;
 
                 // Hyperlink spans: hit-testable so the dispatcher can resolve Hand over the span rects and fire the
                 // span's OnClick (WinUI inline Hyperlink — RichTextBlock.cpp:2995 SetCursor(MouseCursorHand)).

@@ -1,4 +1,4 @@
-# FluentGpu Subsystem Design Docs — Index
+﻿# FluentGpu Subsystem Design Docs — Index
 
 This directory holds the per-subsystem design docs for **FluentGpu** (from-scratch C#/.NET 10, NativeAOT, GPU UI
 engine: Reactor model — Element records + Component + hooks + keyed reconciler — over a retained SoA RenderNode tree,
@@ -223,6 +223,9 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | **`FluentGpu.Testing` app-author harness** (`TestHost`/`TestHostOptions`/simulate/assert/MatchGolden; shipped public) | validation.md |
 | **`FluentGpu.Devtools` quarantine participation** (`QUARANTINE = RenderInFlightDepth + (devtools ? 1 : 0) + 1`; reverts on detach; never in release) | devtools.md (derives, never hard-codes) / threading-render-seam.md (canonical quarantine relationship) |
 | **Unified media playback API** (`IMediaPlayer`/`MediaPlayer`/`MediaRouter` — one headless signals-first contract routed by `MediaSource.Kind`; the per-platform video seam `IMediaBackend`/`IMediaSession`/`VideoDelivery`; the `MediaSource` model + algebra; the audio-graph seams `IAudioSink`/`IAudioClockSource`/`IDeviceWatcher`/`IDspStage`/`AudioGraphHost`/`CrossfadeMixer` — graph published by atomic swap under `RenderInFlightDepth+1` quarantine; the `WithDrm` license relay `LicenseRequest`/`LicenseResponse` — native CDM challenge → managed POST → protected handle at `IVideoPresenter.BindSurfaceHandle`; `DecryptingSource`/`IAudioKeyProvider`; the cross-backend `IPreparableBackend` preroll. **LANDED M0–M5**, verified by Engine.Tests+Windows.Tests) | media-pipeline.md (subsystem owner: `FluentGpu.Media` present-tree §8 + DRM §8.4; seam `IVideoPresenter` shape → pal-rhi.md) + `../../docs/plans/media-playback-api-spec.md` (deep API) / `../../docs/plans/video-drm-layer-design.md` (DRM) — registered in `SPEC-INDEX.md §2` |
+| **Node transform ownership** (exactly one `LocalTransform` writer: static matrix > decomposed Offset/Scale/Rotation; a bound `Transform` supersedes both; never combined with a transform-owning `ScrollBind` or a transform-channel animation; DEBUG tripwire) | scene-memory.md §2.2 (column + rule) / reconciler-hooks.md (the write site + tripwire) |
+| **Overlay-stack (ZStack) alignment** (`JustifySelf`/`AlignSelf` on both axes, container `Justify`/`AlignItems` fallback, desired-size-when-aligned for an auto-sized layer) | layout.md §3.7 |
+| **Programmatic bring-into-view** (`ScrollIntoView.Bring`/`BringInto`/`ScrollTo`; the sole sanctioned programmatic offset write; `LyricsView` follow-scroll is the documented exception) | layout.md §6.1 (semantics) / input-a11y.md (`ScrollIntegrator` offset chokepoint it writes through) |
 
 ---
 

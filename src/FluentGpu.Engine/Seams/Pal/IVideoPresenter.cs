@@ -62,6 +62,12 @@ public interface IVideoPresenter
     /// </summary>
     void SetContentSize(VideoSurfaceId id, uint width, uint height) { }
 
+    /// <summary>Round the composited surface's corners by <paramref name="radiusPx"/> (device px, uniform on all four
+    /// corners; <c>0</c> = square, the default). The compositor clips the CONTENT, which a UI-side rounded parent
+    /// cannot do — a video child visual composites outside the UI back buffer, so it ignores the caller's ClipToBounds.
+    /// Half the shorter side gives a circle. Default no-op so headless/test presenters need not implement it.</summary>
+    void SetCornerRadius(VideoSurfaceId id, float radiusPx) { }
+
     /// <summary>Tear down one surface (removes the child visual, releases its content). Cold path.</summary>
     void Destroy(VideoSurfaceId id);
 

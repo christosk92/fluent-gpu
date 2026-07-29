@@ -16,7 +16,18 @@ namespace Wavee;
 // 56px rows, 12px gutters,
 // ~260px min columns (≤3, prefer 2 until 860px). Behavior stays canonical: the # cell is TrackRow.NumberCell
 // (number↔play/pause hover transport + live equalizer), row click = TrackRow.Invoke (toggles pause on the
-// now-playing track), TrackRow.Heart, zebra by track ordinal. Hard 5-row height; a single column pages ‹1/2›.
+// now-playing track), TrackRow.Heart. Hard 5-row height; a single column pages ‹1/2›.
+//
+// Row chrome is the prototype's `.row` verbatim and deliberately has NO zebra: transparent fill over a
+// 1px TRANSPARENT border (a present-but-invisible stroke so hover never nudges layout), painting only on
+// hover/press — plus the prototype's `.row.is-playing` accent wash, which is then the ONE fill that carries
+// meaning. This is also what SkeletonDeriver leaves standing (it strips Fill/Border/hover brushes), so the
+// live chart and its own shimmer read identically. Do not "restore" the bands.
+//
+// The chart HUGS its rows: a flat 56px each, 8px apart, and the column simply ends where the last row does. It does
+// NOT stretch to meet the (usually taller) Releases column beside it. Both earlier attempts at using that leftover
+// height failed the eye — growing the rows made chunky slabs, and distributing it as spacing (SpaceBetween) floated
+// small rows in ~137px slots. A ragged band bottom is the correct answer; the rhythm is the shimmer's.
 sealed class ArtistPopular : Component
 {
     readonly IReadOnlyList<Track> _tracks;   // the overview seed, frozen at mount (component-props contract)
@@ -95,20 +106,20 @@ sealed class ArtistPopular : Component
                 var t = _live[i];
                 // Density/position props freeze at mount (component-props contract) — key by tier + track index
                 // so a width/column-count change remounts the row instead of leaving stale frozen props.
-                Element row = Embed.Comp(() => new ChartRow(this, i, i, go, lib, art, showDuration, fullPlays, stackSub))
+                Element row = Embed.Comp(() => new ChartRow(this, i, go, lib, art, showDuration, fullPlays, stackSub))
                     with { Key = "chart:" + t.Uri + "|" + i + tier };
                 if (acts is { } a && menuOverlay is { } ov)
                 {
                     var track = t;
-                    row = new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Children = [row] }
+                    // A pass-through wrapper: the row owns its own 56px height, so this must not add a height
+                    // contract of its own (that is what let the old cap leak into a stretched slot).
+                    row = new BoxEl { Direction = 1, Children = [row] }
                         .WithContextMenu(ov, () => TrackContextMenu.BuildSingle(a, track));
                 }
                 rows.Add(row);
             }
-            // Short columns (3-col 4/4/2) get invisible spacer slots so every column stretches by the same
-            // per-row share — rows stay height-aligned across columns when the band cross-stretches.
-            while (rows.Count < rowsPerCol)
-                rows.Add(new BoxEl { Grow = 1f, Basis = 0f, MinHeight = RowH });
+            // A short column (the 3-col 4/4/2 case) is simply shorter — no spacer slots. Nothing stretches, so there
+            // is no per-row share to keep equal across columns.
             colEls[c] = new BoxEl
             {
                 Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = RowVGap,
@@ -128,18 +139,17 @@ sealed class ArtistPopular : Component
             ],
         };
 
-        // Grow chain: the band cross-stretches this component to the (possibly taller) releases column, the
-        // chart area absorbs the leftover, and each row's Grow share makes the cells taller — bottom-aligned
-        // columns instead of a dead band under the chart.
+        // NO vertical Grow anywhere in this chain: the chart is exactly as tall as its rows. The columns still grow
+        // HORIZONTALLY (Grow on the row-direction box above) to share the band's width — that is a different axis.
         return new BoxEl
         {
-            Direction = 1, Gap = 10f, Grow = 1f,
+            Direction = 1, Gap = 10f,
             Children =
             [
                 header,
                 new BoxEl
                 {
-                    Direction = 0, Gap = ColGap, MinWidth = 0f, Grow = 1f,
+                    Direction = 0, Gap = ColGap, MinWidth = 0f,
                     Children = colEls,
                 },
             ],
@@ -160,11 +170,12 @@ sealed class ArtistPopular : Component
             for (int r = 0; r < n; r++)
             {
                 int index = c * rowsPerCol + r;
-                rows[r] = Row(tracks[index], index, index,
+                rows[r] = Row(tracks[index], index,
                     new TrackRow.State(false, false, false, false, false),
                     art: 44f, showDuration: true, fullPlays: false, stackSub: false, featLine: null,
                     onPlay: static () => { }, onLike: null);
             }
+            // Same column contract as the live chart — shimmer and content must not drift geometrically.
             colEls[c] = new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = RowVGap, Children = rows };
         }
         return new BoxEl
@@ -183,11 +194,9 @@ sealed class ArtistPopular : Component
     }
 
     // ── the prototype row (shared by live rows and the skeleton) ────────────────────────────────────────────
-    static Element Row(Track t, int index, int zebraIndex, in TrackRow.State st, float art, bool showDuration,
+    static Element Row(Track t, int index, in TrackRow.State st, float art, bool showDuration,
                        bool fullPlays, bool stackSub, Element? featLine, Action onPlay, Action? onLike)
     {
-        bool shaded = zebraIndex % 2 != 0;   // zero-based odd = displayed tracks 2, 4, 6, 8, 10
-
         // Tight cells: feat and plays stop competing for one line — feat keeps line 2, plays moves to line 3
         // (where the full count always fits). Rows without a feat line never cramped, so they stay 2-line.
         bool stacked = stackSub && featLine is not null && t.PlayCount > 0;
@@ -214,13 +223,15 @@ sealed class ArtistPopular : Component
 
         return new BoxEl
         {
-            Direction = 0, MinHeight = RowH, Grow = 1f, Basis = 0f, AlignItems = FlexAlign.Center, Gap = 8f,
+            Direction = 0, MinHeight = RowH, AlignItems = FlexAlign.Center, Gap = 8f,
             Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f), MinWidth = 0f,
-            Fill = shaded ? WaveeColors.RowZebra : ColorF.Transparent,
-            HoverFill = shaded ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
-            PressedFill = shaded ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
+            // Fluent: no resting fill (hover/press only). Now-playing is content state — NumberCell EQ +
+            // AccentTextPrimary title — same cues as BoundRowSkin / TrackRow; selection pill is orthogonal.
+            Fill = ColorF.Transparent,
+            HoverFill = WaveeColors.RowHover,
+            PressedFill = WaveeColors.RowPressed,
             PressScale = 0.985f, BorderWidth = 1f,
-            BorderColor = shaded ? Tok.StrokeCardDefault : ColorF.Transparent,
+            BorderColor = ColorF.Transparent,
             HoverBorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, OnClick = onPlay,
             // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover
@@ -303,16 +314,16 @@ sealed class ArtistPopular : Component
     sealed class ChartRow : Component
     {
         readonly ArtistPopular _o;
-        readonly int _index, _zebraIndex;
+        readonly int _index;
         readonly Action<string, string?> _go;
         readonly LibraryBridge? _lib;
         readonly float _art;
         readonly bool _showDuration, _fullPlays, _stackSub;
 
-        public ChartRow(ArtistPopular o, int index, int zebraIndex, Action<string, string?> go, LibraryBridge? lib,
+        public ChartRow(ArtistPopular o, int index, Action<string, string?> go, LibraryBridge? lib,
                         float art, bool showDuration, bool fullPlays, bool stackSub)
         {
-            _o = o; _index = index; _zebraIndex = zebraIndex; _go = go; _lib = lib;
+            _o = o; _index = index; _go = go; _lib = lib;
             _art = art; _showDuration = showDuration; _fullPlays = fullPlays; _stackSub = stackSub;
         }
 
@@ -335,7 +346,7 @@ sealed class ArtistPopular : Component
             });
             if (presentation.Value.Track is not { } t) return new BoxEl();
             var st = presentation.Value.State;
-            return Row(t, _index, _zebraIndex, st, _art, _showDuration, _fullPlays, _stackSub,
+            return Row(t, _index, st, _art, _showDuration, _fullPlays, _stackSub,
                 featLine: FeatLine(t, _o._ctx, _go),
                 // Start BY URI, not by index. The artist context is a server list (popular-release-segments-main-roles)
                 // whose order is its own — with an extended chart, this row's ordinal is not that list's ordinal, and

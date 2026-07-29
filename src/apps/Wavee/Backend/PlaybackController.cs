@@ -287,6 +287,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _videoAudioFallbackUri = null;
         _failureCheckpoint = null;
         var outgoing = _currentHost;
+        // Local-video duration outranks the catalog while Video is the current media. Leaving Video must drop it so the
+        // player bar shows the Spotify catalog length (not the mp4's 4:15) once audio is hosting again — otherwise the
+        // bar desyncs (full blue / wrong remaining) across the thrash.
+        if (_videoHost is not null && ReferenceEquals(outgoing, _videoHost) && !ReferenceEquals(target, _videoHost))
+            _projection.SetDurationOverride(null, 0);
         int generation = Interlocked.Increment(ref _hostGeneration);
         _hostSub.Dispose();
         if (stopOutgoing)

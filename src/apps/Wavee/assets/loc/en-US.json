@@ -1,7 +1,6 @@
 {
   "$culture": "en-US",
   "$comment": "Wavee base culture — every user-facing UI string. Other cultures override per-key and fall back here. Keys flatten to a `Wavee.Strings` class via FluentGpu.SourceGen (Strings.Detail.Play == \"detail.play\"); parameterized keys expose a typed format method.",
-
   "detail": {
     "play": "Play",
     "pause": "Pause",
@@ -43,6 +42,17 @@
     "likedSongs": "Liked Songs",
     "moreBy": "More by {name}",
     "similarAlbums": "Similar albums",
+    "preReleaseEyebrow": "Coming soon",
+    "preReleaseOut": "Out now",
+    "preReleaseDays": "{count, plural, one {# day} other {# days}}",
+    "preReleaseHours": "{count, plural, one {# hour} other {# hours}}",
+    "preReleaseMinutes": "{count, plural, one {# minute} other {# minutes}}",
+    "preReleaseSeconds": "{count, plural, one {# second} other {# seconds}}",
+    "releasesOn": "Releases {date}",
+    "factReleases": "Releases",
+    "factReleased": "Released",
+    "preSave": "Pre-save",
+    "preSaved": "Pre-saved",
     "songCount": "{count, plural, one {# song} other {# songs}}",
     "selectedCount": "{count, plural, one {# selected} other {# selected}}",
     "daysAgo": "{count, plural, one {# day ago} other {# days ago}}",
@@ -51,6 +61,9 @@
     "durationHrMin": "{hours} hr {minutes} min",
     "durationMin": "{minutes} min",
     "metaLine": "{count} · {duration}",
+    "tempoColumn": "BPM · Key column",
+    "metaLineSaved": "{count} · {saves} · {duration}",
+    "saveCount": "{count, plural, one {# save} other {# saves}}",
     "metaLineYear": "{count} · {duration} · {year}",
     "column": {
       "number": "#",
@@ -61,7 +74,8 @@
       "dateAdded": "Date added",
       "plays": "Plays",
       "song": "Song",
-      "time": "Time"
+      "time": "Time",
+      "tempo": "BPM · Key"
     },
     "sort": {
       "customOrder": "Custom order",
@@ -95,6 +109,12 @@
       "likedOnly": "Liked only",
       "playableOnly": "Available to play",
       "duration": "Duration",
+      "tempo": "Tempo",
+      "anyTempo": "Any tempo",
+      "tempoUnder90": "Slow — under 90 BPM",
+      "tempo90To119": "Medium — 90 to 119 BPM",
+      "tempo120To139": "Fast — 120 to 139 BPM",
+      "tempo140Up": "Very fast — 140 BPM and up",
       "anyDuration": "Any duration",
       "underThree": "Under 3 minutes",
       "threeToFive": "3–5 minutes",
@@ -110,6 +130,7 @@
       "streamed": "Streaming",
       "local": "Local files",
       "allTracks": "All tracks",
+      "allChip": "All",
       "activeCount": "{count} active filters",
       "noFiltersApplied": "No filters applied",
       "clearFilters": "Clear all filters",
@@ -161,14 +182,21 @@
       "ep": "EP",
       "album": "ALBUM",
       "compilation": "COMPILATION"
+    },
+    "versions": {
+      "thisTrack": "This track",
+      "musicVideo": "Music video",
+      "alternateAudio": "Alternate audio",
+      "useDefaultQuality": "Use my default quality",
+      "noOtherVersions": "No other versions"
     }
   },
-
   "artist": {
     "popular": "Popular",
     "popularReleases": "Popular releases",
     "releases": "Releases",
     "latestRelease": "Latest release",
+    "upcoming": "Upcoming",
     "topTracks": "Top tracks",
     "feat": "feat.",
     "discography": "Discography",
@@ -213,7 +241,6 @@
       "worldRank": "World rank"
     }
   },
-
   "concerts": {
     "liveMusic": "Live music",
     "title": "Concerts",
@@ -296,7 +323,6 @@
       "relatedConcerts": "Related concerts"
     }
   },
-
   "home": {
     "goodMorning": "Good morning",
     "goodAfternoon": "Good afternoon",
@@ -324,7 +350,6 @@
     "album": "Album",
     "compilation": "Compilation"
   },
-
   "search": {
     "title": "Search Wavee",
     "prompt": "Find songs, artists, albums and playlists.",
@@ -340,9 +365,20 @@
     "typeSong": "Song",
     "typeArtist": "Artist",
     "typeAlbum": "Album",
-    "typePlaylist": "Playlist"
+    "typePlaylist": "Playlist",
+    "audiobooks": "Audiobooks",
+    "podcastsShows": "Podcasts & Shows",
+    "episodes": "Episodes",
+    "profiles": "Profiles",
+    "noAudiobookResults": "No audiobooks found",
+    "noPodcastResults": "No podcasts or shows found",
+    "noEpisodeResults": "No episodes found",
+    "noProfileResults": "No profiles found",
+    "typeAudiobook": "Audiobook",
+    "typePodcast": "Podcast",
+    "typeEpisode": "Episode",
+    "typeProfile": "Profile"
   },
-
   "podcast": {
     "episodes": "Episodes",
     "show": "Podcast",
@@ -363,7 +399,6 @@
       "oldest": "Oldest"
     }
   },
-
   "library": {
     "filter": "Filter",
     "matchedAlbum": "Matched · album ‘{name}’",
@@ -392,7 +427,6 @@
       "grid": "Grid"
     }
   },
-
   "settings": {
     "title": "Settings",
     "tabs": {
@@ -626,7 +660,6 @@
       "problem": "Problem"
     }
   },
-
   "shell": {
     "searchPlaceholder": "Search songs, artists, albums...",
     "connecting": "Connecting...",
@@ -636,7 +669,6 @@
     "lightTheme": "Light theme",
     "darkTheme": "Dark theme"
   },
-
   "friends": {
     "title": "Friend Activity",
     "empty": "No friend activity yet",
@@ -649,7 +681,6 @@
     "hrAgo": "{count} hr",
     "dAgo": "{count} d"
   },
-
   "notifications": {
     "title": "Notifications",
     "overflowTitle": "Notifications ({count})",
@@ -729,7 +760,6 @@
       }
     }
   },
-
   "auth": {
     "welcomeTagline": "Your Spotify library, beautifully fast.",
     "continueWithSpotify": "Continue with Spotify",
@@ -785,7 +815,6 @@
     "premiumBadge": "Spotify Premium",
     "freeBadge": "Spotify Free"
   },
-
   "player": {
     "nothingPlaying": "Nothing playing",
     "loading": "Loading…",
@@ -841,7 +870,6 @@
     "deviceRestored": "Reconnected to {device}",
     "outputFailed": "Couldn’t open an audio output"
   },
-
   "playback": {
     "runtime": {
       "title": "Local playback setup",
@@ -889,7 +917,6 @@
       "detailLocation": "Location"
     }
   },
-
   "nav": {
     "home": "Home",
     "forward": "Forward",
@@ -955,7 +982,6 @@
       }
     }
   },
-
   "sidebar": {
     "pinned": "Pinned",
     "yourLibrary": "Your Library",
@@ -972,7 +998,6 @@
     "createFolder": "Folder",
     "newPlaylist": "My Playlist"
   },
-
   "common": {
     "less": "Less",
     "more": "More",
@@ -984,7 +1009,6 @@
     "errorTitle": "Something went wrong.",
     "errorSubtitle": "Check your connection and try again."
   },
-
   "menu": {
     "playNextN": "Play {count} next",
     "addToQueueN": "Add {count} to queue",
@@ -1026,7 +1050,6 @@
     "radioUnavailable": "Couldn't start radio",
     "radio": "Radio"
   },
-
   "videoOverride": {
     "menuTitle": "Video",
     "attach": "Attach video file…",
@@ -1075,5 +1098,19 @@
     "rejected": "That file can’t be played. Wavee plays .mp3, .ogg, .flac and .mp4 files.",
     "notReady": "Local playback isn’t ready yet — sign in first.",
     "dropHint": "Drop a file to play it"
+  },
+  "browse": {
+    "eyebrow": "Browse all",
+    "title": "Discover something new",
+    "top": "Top",
+    "forYou": "For you",
+    "genres": "Genres",
+    "moodActivity": "Mood & activity",
+    "charts": "Charts",
+    "more": "More",
+    "showAll": "Show all",
+    "exploreAll": "Explore all categories",
+    "unavailable": "This category isn't available right now",
+    "homeSubtitle": "Genres, moods and charts — everything Spotify is featuring right now."
   }
 }

@@ -33,8 +33,10 @@ sealed class PopOutVideoWindow : Component
         // 0×0; WaveeShell fills the same way).
         var vp = UseContextSignal(Viewport.Size);
         var src = Source.Value;                 // subscribe → remount the stage on a source change
-        var player = Player;
-        bool live = src is not null && Player.Value.Player is not null;   // subscribe → repaint the plate when the player arrives
+        var binding = Player.Value;             // subscribe → repaint the plate when the player arrives
+        // Mount whenever a player exists — a brief source null must not unmount the only MF pump.
+        bool live = VideoSurfaceMount.ShouldMountPlayerStage(binding.Player is not null);
+        string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
         return new BoxEl
         {
             Direction = 1,
@@ -47,7 +49,7 @@ sealed class PopOutVideoWindow : Component
             // letterbox bars AROUND the video rect and leaves the rect itself the transparent hole.
             Fill = live ? ColorF.Transparent : Tok.MediaLetterbox,
             Children = live
-                ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src!, Player = player }) with { Key = "stage:" + src!.Key }] }]
+                ? [new BoxEl { Grow = 1, Children = [Embed.Comp(() => new PopOutVideoStage { Source = src, Player = Player }) with { Key = "stage:" + stageKey }] }]
                 : Array.Empty<Element>(),
         };
     }
@@ -64,7 +66,9 @@ sealed class PopOutVideoWindow : Component
 /// player (the MF session only advances while a mounted element pumps it); the single-placement state guarantees that.</summary>
 sealed class PopOutVideoStage : Component
 {
-    public required PopOutVideoSource Source { get; init; }
+    /// <summary>Resolved source identity (may be briefly null while an override re-resolves — the stage stays mounted
+    /// so MF keeps pumping; the parent overlays Loading when this is null).</summary>
+    public PopOutVideoSource? Source { get; init; }
     public required IReadSignal<PlaybackBridge.VideoPlayerBinding> Player { get; init; }
 
     public override Element Render()

@@ -134,7 +134,6 @@ public sealed class PlaybackBridge
     public FloatSignal Volume { get; } = new(0.7f);
     public Signal<long> PositionMs { get; } = new(0L);
     public Signal<long> DurationMs { get; } = new(0L);
-    public Signal<Palette?> TrackPalette { get; } = new(null);
     /// <summary>The published queue. Uses an ELEMENT-IDENTITY comparer, not the default reference comparer: the projection
     /// re-windows (<c>WindowQueue</c>) into a FRESH list of the SAME <see cref="QueueEntry"/> instances on every structural
     /// push — a seek, a pause, a volume nudge, a cluster heartbeat — so the default comparer notified every subscriber for a
@@ -205,8 +204,9 @@ public sealed class PlaybackBridge
     /// <summary>The PLAYBACK-side predicate the backend asks per playable (<c>PlaybackController.ShouldPlayAsVideo</c>): the
     /// SAME single rule as <see cref="VideoActive"/>, but scoped to <em>this</em> track and read WITHOUT subscribing (Peek),
     /// because the controller calls it from a playback/dealer thread where a reactive subscription would be meaningless.
-    /// has-video comes from the hydrated <see cref="Track.HasVideo"/> or — for the now-playing track — from the
-    /// async-detected <see cref="CurrentTrackHasVideo"/> signal. Never returns true once the user has closed/turned video
+    /// has-video comes from <see cref="VideoPresence"/> (the association plane ∪ user attachments) or — for the
+    /// now-playing track — from the async-detected <see cref="CurrentTrackHasVideo"/> signal. Never returns true once
+    /// the user has closed/turned video
     /// off — that intent is off until they turn it back on, so the ✕ routes this track AND every later one back to audio.
     ///
     /// <para>DO NOT "simplify" the <see cref="PlacementCore.ResolveWith"/> call below into <see cref="VideoActive"/>: it
@@ -218,14 +218,17 @@ public sealed class PlaybackBridge
     /// would silently make every next video track start as audio.</para></summary>
     public bool ShouldPlayAsVideo(Track track)
     {
+        // A ONE-PLAY intent (PrimeVideoIntentFor) belongs to exactly one uri. Any other track asking — including the
+        // NEXT queue track, evaluated by uri before CurrentTrack moves and therefore before the scope expires in
+        // PushState — gets a hard no, so a drawer "watch this one" can never leak video onto the rest of the queue.
+        if (_videoIntentScopeUri is { } scope && !string.Equals(track.Uri, scope, StringComparison.Ordinal)) return false;
         // A user-attached local video counts as "this playable has a video" for EVERY playable — including the NEXT one,
         // evaluated by uri before CurrentTrack moves — which is why the lookup must be the warm dictionary and not a
         // signal (a signal-based check would ping-pong across the track boundary).
         // Proven-dead beats every availability input: the backend already told us this exact playable produced no video
         // media, so asking it to try again would just re-mount the never-resolving surface.
         if (VideoMediaLatch.IsDead(track.Uri, _videoDeadUri)) return false;
-        bool hasVideo = track.HasVideo
-            || (_overrides is { } ov && ov.Has(track.Uri))
+        bool hasVideo = VideoPresence.HasVideo(track.Uri)   // the association plane ∪ user attachments — one answer
             || (string.Equals(CurrentTrack.Peek()?.Uri, track.Uri, StringComparison.Ordinal) && CurrentTrackHasVideo.Peek());
         // Same state, same rules — only the AVAILABILITY input is swapped for that track's, so this asks "what would be
         // resolved if THIS track were playing?" without mutating anything.
@@ -261,10 +264,17 @@ public sealed class PlaybackBridge
     /// the media and the source are already right, which is what keeps a move from restarting the video.
     /// <para><paramref name="clearConnectAudioFirst"/> travels with the refresh request: TRUE only from an explicit user
     /// media intent (toggle / picker / turn-off / surface ✕ / an override change), FALSE from an availability edge — see
-    /// <see cref="RequestMediaKindRefresh"/> for why the two flags may not be merged.</para>
+    /// <see cref="RequestMediaKindRefresh"/> for why the two flags may not be merged. An explicit intent also PROMOTES the
+    /// state to standing: it clears any one-play scope (<see cref="PrimeVideoIntentFor"/>), because a user who toggles has
+    /// asked for the sticky rule, not the one-shot one.</para>
+    /// <para><paramref name="refreshKind"/> is FALSE only when the very next thing the caller does re-evaluates the media
+    /// kind anyway (a play-as-form request, or the scope expiring at a track boundary the new track has already resolved
+    /// through). Refreshing there would reload the OUTGOING track — the observed flash of the old track's DRM video
+    /// between a drawer play and the swap.</para>
     /// </summary>
-    void CommitVideoSurface(in PlacementState after, bool clearConnectAudioFirst)
+    void CommitVideoSurface(in PlacementState after, bool clearConnectAudioFirst, bool refreshKind = true)
     {
+        if (clearConnectAudioFirst) _videoIntentScopeUri = null;   // an explicit toggle makes the intent standing
         var before = VideoSurface.Peek();
         if (after.Equals(before)) return;
         bool wasActive = PlacementCore.IsActive(before), isActive = PlacementCore.IsActive(after);
@@ -276,9 +286,24 @@ public sealed class PlaybackBridge
             var stored = PlacementPersistence.SavePlacement(after.Preferred);
             if (stored.Length > 0) settings.Set(WaveeSettings.VideoPreferredPlacement, stored);
         }
+        if (!refreshKind) return;
         // a real kind edge — never needs forcing
-        if (isActive != wasActive) RequestMediaKindRefresh?.Invoke(forceReloadIfVideo: false, clearConnectAudioFirst);
+        if (isActive != wasActive) RequestKindRefresh(forceReloadIfVideo: false, clearConnectAudioFirst);
         if (isActive && !wasActive) RequestPopOutSource(CurrentTrack.Peek()?.Uri);
+    }
+
+    /// <summary>The ONE call site for <see cref="RequestMediaKindRefresh"/> — logs placement/has/latch state so a
+    /// Video↔Audio thrash is one line, not archaeology.</summary>
+    void RequestKindRefresh(bool forceReloadIfVideo, bool clearConnectAudioFirst)
+    {
+        if (RequestMediaKindRefresh is not { } refresh) return;
+        var s = VideoSurface.Peek();
+        string? uri = CurrentTrack.Peek()?.Uri;
+        WaveeLog.Instance.Info("playback",
+            $"media kind refresh requested force={forceReloadIfVideo} clearConnect={clearConnectAudioFirst} " +
+            $"uri={uri ?? "-"} requested={s.Requested} available={s.Available} " +
+            $"has={CurrentTrackHasVideo.Peek()} latched={_hasVideoLatchedUri ?? "-"} dead={_videoDeadUri ?? "-"}");
+        refresh(forceReloadIfVideo, clearConnectAudioFirst);
     }
 
     /// <summary>The user's video INTENT, folded onto the CURRENT track's availability first. The fold is load-bearing:
@@ -296,6 +321,29 @@ public sealed class PlaybackBridge
     /// <summary>Show the video at a specific placement (the surface picker). Also clears a per-track dismiss and adopts
     /// the target as the preferred home, so the primary button and the next track follow the user there.</summary>
     public void ShowVideoAt(SurfacePlacement placement) => CommitVideoSurface(PlacementCore.OpenAt(IntentBase(), placement), clearConnectAudioFirst: true);
+
+    // The uri a ONE-PLAY video intent is scoped to (null = the intent, whatever it is, is standing). Set only by
+    // PrimeVideoIntentFor, cleared by any explicit toggle (which promotes to standing) or by the track moving on.
+    string? _videoIntentScopeUri;
+
+    /// <summary>Light the video intent for ONE upcoming play of <paramref name="uri"/> — "watch this one", not the
+    /// standing toggle. The caller follows with the play command; <c>ShouldPlayAsVideo</c> then resolves video for
+    /// exactly that uri and refuses every other, and the scope (surface included) expires at the next real track
+    /// boundary. Only the explicit toggles (<see cref="ToggleVideo"/> / <see cref="ShowVideoAt"/> / turn-off / ✕)
+    /// change the STANDING intent — a drawer "play the music video" must not leave video on for the rest of the queue.
+    ///
+    /// <para>Deliberately refresh-less: committing with a refresh would re-evaluate the CURRENT (outgoing) track and
+    /// load ITS video for the ~150 ms until the swap — a wasted DRM license and a visible flash (seen in the log as
+    /// <c>video-host loaded drm=True</c> for the old track right before the new one started).</para>
+    ///
+    /// <para>A no-op while video is already ACTIVE: the user is watching under a standing intent, and this gesture
+    /// must not downgrade that to a one-shot.</para></summary>
+    public void PrimeVideoIntentFor(string uri)
+    {
+        if (string.IsNullOrEmpty(uri) || VideoActive()) return;
+        CommitVideoSurface(PlacementCore.OpenAt(IntentBase(), VideoSurface.Peek().Preferred), clearConnectAudioFirst: false, refreshKind: false);
+        _videoIntentScopeUri = uri;   // AFTER the commit — an explicit-intent commit clears the scope, this one must set it
+    }
 
     /// <summary>Turn video off entirely (the menu's "turn off video"): the surface goes away and the media swaps back to
     /// the song's own audio. STICKY — no subsequent track re-opens it. The preferred placement is remembered for the
@@ -667,27 +715,31 @@ public sealed class PlaybackBridge
     public Signal<int> OpenVideoOverrides { get; } = new(0);
 
     /// <summary>The ONE mutation entry point for the override curation — post-marshalled, so it is safe to call from the
-    /// menu, from Settings, or from a background repair. It does the four things a bare store write cannot:
-    /// <list type="number">
-    /// <item>ends the has-video LATCH for this playable, because a REMOVAL is a genuine true→false the latch would
-    /// otherwise suppress (that is the difference between "detach worked" and "detach did nothing");</item>
-    /// <item>drops the cached resolved source for this playable, so the next resolve really goes back to the resolver;</item>
-    /// <item>recomputes availability, whose edge is what drives audio↔video via CommitVideoSurface;</item>
-    /// <item>forces a same-kind reload when video is already live for this playable — an override↔official swap changes
-    /// the SOURCE without changing the KIND, so nothing else would notice.</item>
-    /// </list></summary>
-    public void NotifyVideoOverrideChanged(string playableUri)
+    /// menu, from Settings, or from a background repair. Side-effects are decided by
+    /// <see cref="VideoOverrideMutationCore.Plan"/> (attach must not clear the has-video latch; force-reload only when
+    /// the source key really changed under an already-active video surface).</summary>
+    public void NotifyVideoOverrideChanged(string playableUri, OverrideMutationKind kind)
     {
         if (string.IsNullOrEmpty(playableUri)) return;
-        if (_post is not { } post) { ApplyVideoOverrideChanged(playableUri); return; }
-        post(() => ApplyVideoOverrideChanged(playableUri));
+        if (_post is not { } post) { ApplyVideoOverrideChanged(playableUri, kind); return; }
+        post(() => ApplyVideoOverrideChanged(playableUri, kind));
     }
 
-    void ApplyVideoOverrideChanged(string playableUri)
+    void ApplyVideoOverrideChanged(string playableUri, OverrideMutationKind kind)
     {
         bool isCurrent = string.Equals(CurrentTrack.Peek()?.Uri, playableUri, StringComparison.Ordinal);
-        HasVideoLatch.ClearFor(playableUri, ref _hasVideoLatchedUri);
-        VideoMediaLatch.ClearFor(playableUri, ref _videoDeadUri);   // an attach/replace is a real reason to try video again
+        bool videoAlreadyActive = VideoActive();
+        string? previousKey = string.Equals(_videoSourceUri, playableUri, StringComparison.Ordinal)
+            ? PopOutVideoSource.Peek()?.Key
+            : null;
+        string? nextKey = null;
+        if (kind != OverrideMutationKind.Remove && _overrides is { } ov && ov.TryGetActive(playableUri, out var o))
+            nextKey = o.SourceKey;
+
+        var plan = VideoOverrideMutationCore.Plan(kind, isCurrent, videoAlreadyActive, previousKey, nextKey);
+        if (plan.ClearHasVideoLatch) HasVideoLatch.ClearFor(playableUri, ref _hasVideoLatchedUri);
+        if (plan.ClearDeadVideoLatch) VideoMediaLatch.ClearFor(playableUri, ref _videoDeadUri);
+
         if (string.Equals(_videoSourceUri, playableUri, StringComparison.Ordinal))
         {
             _videoSourceUri = null;
@@ -695,12 +747,19 @@ public sealed class PlaybackBridge
             _videoResolveGen++;               // fence any in-flight resolve carrying the superseded source
             _videoResolveCts?.Cancel();
         }
-        // An override attach/detach is an EXPLICIT user action, so it is one of the two paths allowed to swap the media
-        // mid-track (availability edge → CommitVideoSurface → the audio↔video swap + a re-resolve).
-        RecomputeHasVideo(commitUpgrade: true);
-        // No availability edge on an override↔official swap (video was live and stays live), so ask for the reload
-        // explicitly. Forcing is safe: an unchanged source Key is a no-op inside the host.
-        if (isCurrent && VideoActive()) RequestMediaKindRefresh?.Invoke(forceReloadIfVideo: true, clearConnectAudioFirst: true);
+        // Explicit user action — commit upgrades (and downgrades) mid-track.
+        RecomputeHasVideo(commitUpgrade: plan.CommitHasVideoUpgrade);
+
+        // Reveal AFTER has-video is committed so OpenAt never runs against Available=None (that was the attach race that
+        // opened intent with a stale None and then double-fired Audio→Video + forced same-kind reload).
+        if (plan.RevealSurfaceIfCurrent
+            && VideoOverrideMutationCore.CanReveal(isCurrent, CurrentTrackHasVideo.Peek(), VideoActive()))
+            ShowVideoAt(VideoSurface.Peek().Preferred);
+
+        // Force only when the plan says the source identity changed under an already-live video (replace). First attach
+        // that flips Audio→Video is already handled by the availability edge above.
+        if (plan.ForceReloadIfVideo)
+            RequestKindRefresh(forceReloadIfVideo: true, clearConnectAudioFirst: true);
     }
 
     /// <summary>A playable's attached video file is missing at play time. One non-blocking WARNING per session per
@@ -781,8 +840,7 @@ public sealed class PlaybackBridge
         bool has = false;
         if (!string.IsNullOrEmpty(uri))
         {
-            if (_store is { } store)
-                has = (store.GetVideoAssociation(uri)?.HasVideo ?? false) || (store.GetTrack(uri)?.HasVideo ?? false);
+            if (_store is { } store) has = store.GetVideoAssociation(uri)?.HasVideo ?? false;
             // A user attachment makes ANY playable a video playable — including one the source serves no video for, and
             // including on a backend with no store at all (overrides work without Spotify).
             if (!has && _overrides is { } ov) has = ov.Has(uri);
@@ -826,7 +884,9 @@ public sealed class PlaybackBridge
     {
         var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
-        bool trackBoundary = s.CurrentTrack?.Uri != prevUri;
+        // Null/empty next uri is a mid-push glitch — NOT a track boundary. Clearing the has-video latch here would
+        // defeat HasVideoLatch's null-suppression and cost a Video→Audio→Video round trip (the observed custom-video thrash).
+        bool trackBoundary = VideoOverrideMutationCore.IsRealTrackBoundary(prevUri, s.CurrentTrack?.Uri);
         if (trackBoundary)
         {
             // A new track. The video INTENT is sticky in BOTH directions (on carries video across tracks; off keeps
@@ -838,6 +898,15 @@ public sealed class PlaybackBridge
             _videoResolveCts?.Cancel();
             _hasVideoLatchedUri = null;   // a REAL track change ends the has-video latch (see RecomputeHasVideo)
             _videoDeadUri = null;         // …and the proven-no-video latch: it is scoped to ONE playable, never sticky
+            // A ONE-PLAY video intent dies with its track: moving to any other uri clears the scope AND takes the
+            // surface down (refresh-less — the new track already resolved audio through the scope gate in
+            // ShouldPlayAsVideo, so there is no media kind left to change). The standing intent — the "do NOT touch it"
+            // note above — is exactly the null-scope case and stays untouched.
+            if (_videoIntentScopeUri is { } scopedUri && !string.Equals(scopedUri, s.CurrentTrack?.Uri, StringComparison.Ordinal))
+            {
+                _videoIntentScopeUri = null;
+                CommitVideoSurface(PlacementCore.TurnOff(VideoSurface.Peek()), clearConnectAudioFirst: false, refreshKind: false);
+            }
             // NOTE: a track change no longer touches the placement state at all. It used to bump a CONTENT generation
             // that expired a per-track dismiss — the machinery that re-opened a video the user had closed. Closing is
             // now plain off (PlacementCore.TurnOff), so there is nothing per-track left to expire, and the only edge a
@@ -868,7 +937,6 @@ public sealed class PlaybackBridge
         Repeat.Value = s.Repeat;
         Volume.Value = (float)s.Volume;
         DurationMs.Value = s.DurationMs;
-        TrackPalette.Value = s.Palette;
         Queue.Value = s.Queue;
         BumpQueueRevision(s.Queue);
         PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.ui.push-state",

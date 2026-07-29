@@ -82,7 +82,7 @@ sealed class ExpandableAlbumGrid : Component
             onClick: () => _expanded.Value = _expanded.Peek() == al.Uri ? null : al.Uri,
             onPlay: () => _play(al.Uri),
             onNavigate: () => _go("album:" + al.Uri, al.Name),
-            accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null);
+            accent: Surfaces.SchemeFor(al.Cover?.Url) is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null);
     }
 
     int IndexOf(string uri)
@@ -119,6 +119,8 @@ sealed class AlbumDrawer : Component
 
     public override Element Render()
     {
+        var bridge = UseContext(PlaybackBridge.Slot);
+        var lib = UseContext(LibraryBridge.Slot);
         string? uri = _expanded.Value;                       // subscribe → content swaps in place when the album changes
         var album = uri is not null ? Find(uri) : null;
         if (album is not null) _last = album;
@@ -128,10 +130,14 @@ sealed class AlbumDrawer : Component
         var full = UseResource(
             ct => show is null ? System.Threading.Tasks.Task.FromResult<Album?>(null) : _svc.Library.GetAlbumAsync(show.Uri, ct),
             (Album?)null, show?.Uri ?? "").Loadable;
+        // Fluent now-playing cues on thin rows: subscribe so # EQ + accent title refresh on track skip / pause.
+        _ = bridge?.Identity.Value;
+        _ = bridge?.IsPlaying.Value;
+        _ = bridge?.IsBuffering.Value;
         if (show is null) return new BoxEl();
 
         var ts = (full.Value.Value?.Tracks ?? show.Tracks) ?? System.Array.Empty<Track>();
-        Element body = ts.Count > 0 ? Rows(show, ts)
+        Element body = ts.Count > 0 ? Rows(show, ts, bridge, lib)
                      : full.State.Value == (byte)LoadState.Pending ? ShimmerRows(show.TrackCount)
                      : EmptyNote();
         return new BoxEl
@@ -171,25 +177,42 @@ sealed class AlbumDrawer : Component
         ],
     };
 
-    Element Rows(Album album, IReadOnlyList<Track> tracks)
+    Element Rows(Album album, IReadOnlyList<Track> tracks, PlaybackBridge? bridge, LibraryBridge? lib)
     {
         var rows = new Element[tracks.Count];
-        for (int i = 0; i < tracks.Count; i++) rows[i] = Row(album, i + 1, tracks[i]);
+        for (int i = 0; i < tracks.Count; i++) rows[i] = Row(album, i + 1, tracks[i], bridge, lib);
         return new BoxEl { Direction = 1, Children = rows };
     }
 
-    Element Row(Album album, int num, Track t) => new BoxEl
+    Element Row(Album album, int num, Track t, PlaybackBridge? bridge, LibraryBridge? lib)
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
-        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
-        OnClick = () => _ = _svc.Player.PlayAsync(album.Uri, num - 1),
-        Children =
-        [
-            new TextEl(num.ToString()) { Width = 24f, Size = 13f, Color = Tok.TextTertiary },
-            new TextEl(t.Title) { Grow = 1f, Basis = 0f, Size = 14f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            new TextEl(Dur(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary },
-        ],
-    }.Interactive(Interaction.Subtle);
+        var st = TrackRow.StateOf(bridge, lib, t);
+        int idx = num - 1;
+        void Play() => TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(album.Uri, idx));
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
+            Role = AutomationRole.Button, OnClick = Play,
+            // Interactive ancestor for NumberCell's hover play/pause reveal (TrackRow.Row idiom).
+            OnPointerExit = static () => { },
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 24f, Height = 24f, Shrink = 0f,
+                    Children = [TrackRow.NumberCell(idx, st.IsNow, st.IsPlaying, st.IsBuffering, false, Play)],
+                },
+                new TextEl(t.Title)
+                {
+                    Grow = 1f, Basis = 0f, MinWidth = 0f, Size = 14f, Weight = 600,
+                    Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+                new TextEl(Dur(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary },
+            ],
+        }.Interactive(Interaction.Subtle);
+    }
 
     static Element EmptyNote() => new BoxEl
     {
@@ -484,7 +507,7 @@ sealed class DiscoGrid : Component
             onClick: () => _expanded.Value = _expanded.Peek() == idx ? -1 : idx,
             onPlay: () => _play(al.Uri),
             onNavigate: () => _go("album:" + al.Uri, al.Name),
-            accent: al.Palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null,
+            accent: Surfaces.SchemeFor(al.Cover?.Url) is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null,
             menu: _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, al.Uri, al.Name, al.Cover, subtitle) : null);
         if (card is BoxEl b)
         {
@@ -641,7 +664,14 @@ sealed class DiscographySection : Component
             Children = bodyKids.ToArray(),
         };
         if (!collapsed)
-            body = ((BoxEl)body) with { ScrollBinds = [new() { ClipTopAtViewport = HeaderClipInset }] };
+            body = ((BoxEl)body) with
+            {
+                ScrollBinds = [new() { ClipTopAtViewport = HeaderClipInset }],
+                // The sticky clip is a hard cut: cards vanish on an exact pixel line under the pinned header, which
+                // reads as content being sliced rather than passing behind it. A short top band softens that line into
+                // a dissolve, the same cue the shelves already use at their scroll edges.
+                EdgeFade = new EdgeFadeSpec(EdgeMask.Top, 0f, StickyFadeBand, 0f, 0f),
+            };
 
         return new BoxEl
         {
@@ -693,12 +723,19 @@ sealed class DiscographySection : Component
     // header with a stale inset lets card pixels peek under the pinned text.
     const float HeaderClipInset = 38f;
 
+    /// <summary>Depth of the dissolve at the sticky-clip line. Deep enough to read as a fade rather than a seam, short
+    /// enough that a card is only ghosted for the last few pixels of its travel under the header.</summary>
+    const float StickyFadeBand = 14f;
+
     Element Header(int total, bool collapsed) => new BoxEl
     {
         // Left padding 0 so the accent bar aligns with the non-collapsible AccentHeader sections (Top tracks / Appears on).
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
         Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-        Padding = new Edges4(0f, Spacing.XS, Spacing.S, Spacing.XS),
+        // Breathing room while PINNED. At PinTop 0 with a tight vertical pad the header sat flush under the search
+        // chrome and hard against the right edge — it read as a strip wedged into the gap rather than as a heading.
+        // The extra top and right space is what lets it float clear of both.
+        Padding = new Edges4(0f, Spacing.S, Spacing.L, Spacing.S),
         // CSS-sticky wayfinding: the header pins at the viewport top while ITS section (the parent column = the
         // containing block) is in view, clamps at the section's end, and releases on scroll-back — so mid-grid the
         // user always sees which facet (Albums / Singles & EPs) they're in. The header itself never changes looks;

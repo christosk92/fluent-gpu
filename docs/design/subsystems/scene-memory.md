@@ -310,6 +310,20 @@ and `LocalTransform` maps local→parent — the composed **`WorldTransform[]`**
 (animation) and lives in a `FrameCache` double-buffer (not a SceneStore column; it is per-frame derived state
 the seam value-copies — §6.3 here, §3.2 of the seam doc).
 
+**Transform ownership — exactly ONE writer per node** *(AS-BUILT 2026-07; the canonical row in `SPEC-INDEX.md` §2).*
+An element declares `LocalTransform` in one of two STATIC spellings — an explicit `Transform` matrix, or the decomposed
+`OffsetX/OffsetY/ScaleX/ScaleY/Rotation` floats — and **the matrix wins**, exactly as a BOUND `Transform`
+(thunk/signal) supersedes both. Neither may be combined with a transform-owning `ScrollBind` (`PinTop` /
+`StretchFromTop` / `MorphLeftTo` / `MorphTopTo` / a `TransX`|`TransY`|`Scale*` sink) or with transform-channel
+animation: those rewrite the matrix every frame and would silently win. A `[Conditional("DEBUG")]` reconciler tripwire
+turns each combination into a stack trace at the offending element, and is erased from the shipping AOT binary — in
+production, safety is the gate that exercises it (`gate.reconciler.static-transform`).
+
+Dropping a declared transform back to none writes `Identity` once, on the declared-static → declared-identity
+transition only, so a recycled node cannot keep painting at a stale offset while leaving ANIM-owned matrices alone.
+An unbound `Transform` used to be **read never** — an authored `Transform = Affine2D.Translation(...)` compiled, ran,
+and moved nothing; that silent-drop behaviour is superseded.
+
 ### 2.3 `NodeFlags` — the single 32-bit pre-filter column (3 dirty axes + state)
 
 ```csharp

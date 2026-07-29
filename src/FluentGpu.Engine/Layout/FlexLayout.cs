@@ -1008,22 +1008,63 @@ public sealed class FlexLayout
         return new Size2(w, h);
     }
 
+    /// <summary>A ZStack's container-level horizontal default: <see cref="FlexJustify"/> is a main-axis DISTRIBUTION,
+    /// but an overlay stack has one child per layer, so only its alignment sense carries over. Space* ⇒ Start.</summary>
+    private static FlexAlign StackJustify(FlexJustify j) => j switch
+    {
+        FlexJustify.Center => FlexAlign.Center,
+        FlexJustify.End => FlexAlign.End,
+        _ => FlexAlign.Start,
+    };
+
     private void ArrangeZStack(NodeHandle node, float finalW, float finalH, in LayoutInput li)
     {
         float innerW = finalW - li.Padding.Horizontal, innerH = finalH - li.Padding.Vertical;
         float padL = li.Padding.Left, padT = li.Padding.Top;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            ref LayoutInput cli = ref _scene.Layout(c);
-            float mL = cli.Margin.Left, mT = cli.Margin.Top, mR = cli.Margin.Right, mB = cli.Margin.Bottom;
-            float cw = float.IsNaN(cli.Width) ? MathF.Max(0f, innerW - mL - mR) : cli.Width;   // explicit child size, else fill the stack (minus margin)
-            float ch = float.IsNaN(cli.Height) ? MathF.Max(0f, innerH - mT - mB) : cli.Height;
-            // A ZStack has no main axis; honor AlignSelf as the child's VERTICAL placement (overlay VerticalAlignment)
-            // and its leading Margin as the offset. Start/Stretch/Auto keep the legacy top-left origin (no regression).
-            FlexAlign align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
+            // Snapshot the child's layout inputs BEFORE any re-measure below: a ref into the SoA column must not be
+            // held across a call that can touch the store.
+            float mL, mT, mR, mB, declW, declH;
+            FlexAlign align, justify;
+            {
+                ref LayoutInput cli = ref _scene.Layout(c);
+                mL = cli.Margin.Left; mT = cli.Margin.Top; mR = cli.Margin.Right; mB = cli.Margin.Bottom;
+                declW = cli.Width; declH = cli.Height;
+                // A ZStack has no main axis, so BOTH axes are alignment (the WinUI overlay-Grid model):
+                //   vertical   = AlignSelf, falling back to the stack's AlignItems
+                //   horizontal = JustifySelf, falling back to the stack's Justify (a distribution mapped to its
+                //                alignment sense — Space* has no meaning with one child per layer, so it reads Start)
+                // plus the child's leading Margin as the offset. Start/Stretch/Auto keep the legacy top-left origin, so
+                // an existing ZStack that never authored Justify/JustifySelf arranges exactly as before.
+                align = cli.AlignSelf == FlexAlign.Auto ? li.AlignItems : cli.AlignSelf;
+                justify = cli.JustifySelf == FlexAlign.Auto ? StackJustify(li.Justify) : cli.JustifySelf;
+            }
+
+            float slotW = MathF.Max(0f, innerW - mL - mR);   // the child's slot: the stack minus its own margin
+            float slotH = MathF.Max(0f, innerH - mT - mB);
+            float cw = float.IsNaN(declW) ? slotW : declW;   // explicit child size, else fill the slot
+            float ch = float.IsNaN(declH) ? slotH : declH;
+
+            // An AUTO-sized child that is CENTERED or END-aligned takes its DESIRED extent on that axis — the CSS /
+            // XAML rule that only a stretched child fills. Without it, alignment is silently inert on an auto-sized
+            // layer: the child fills the slot, so there is no free space left to align it within (this is why a
+            // content-sized badge could never be parked in a corner). Start/Stretch keep filling, which is both the
+            // legacy behaviour and what a full-bleed backdrop/scrim layer wants.
+            bool desiredW = float.IsNaN(declW) && (justify == FlexAlign.Center || justify == FlexAlign.End);
+            bool desiredH = float.IsNaN(declH) && (align == FlexAlign.Center || align == FlexAlign.End);
+            if (desiredW || desiredH)
+            {
+                var desired = Measure(c, slotW);
+                if (desiredW) cw = MathF.Min(cw, desired.Width);
+                if (desiredH) ch = MathF.Min(ch, desired.Height);
+            }
+
             float freeV = MathF.Max(0f, innerH - ch - mT - mB);
+            float freeH = MathF.Max(0f, innerW - cw - mL - mR);
             float oy = align == FlexAlign.Center ? freeV * 0.5f : align == FlexAlign.End ? freeV : 0f;
-            Arrange(c, padL + mL, padT + mT + oy, cw, ch);   // overlay at the aligned origin (recorder paints in order)
+            float ox = justify == FlexAlign.Center ? freeH * 0.5f : justify == FlexAlign.End ? freeH : 0f;
+            Arrange(c, padL + mL + ox, padT + mT + oy, cw, ch);   // overlay at the aligned origin (recorder paints in order)
         }
     }
 

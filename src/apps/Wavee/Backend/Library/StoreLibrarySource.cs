@@ -39,17 +39,17 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// gates playlist/album/artist only), so nothing else would ever detect its rows. Fire-and-forget; null in tests.</summary>
     public Func<IReadOnlyList<string>, Task>? DetectVideos { get; set; }
 
-    /// <summary>Best-effort cover-palette hydration for playlist reads. Unlike <see cref="OnDemandFetch"/>, this runs
-    /// for warm/resident playlists too; the live implementation is fire-and-forget safe and publishes through Store.</summary>
-    public Func<string, CancellationToken, Task>? EnsurePlaylistPalette { get; set; }
-
     /// <summary>Set by the go-live block: the single library-sync loop. When present, playlist opens route through it (SWR —
     /// blocking first fetch / background revalidate); null offline/in tests → the OnDemandFetch path (album/artist unchanged).</summary>
     public Wavee.Backend.Sync.LibrarySync? Sync { get; set; }
 
     /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, inserted after the pinned
     /// quick-pick matrix and above the store-derived library shelves. Null offline → only the library-derived home.</summary>
-    public Func<CancellationToken, Task<IReadOnlyList<HomeGroup>>>? LiveHomeFetch { get; set; }
+    public Func<CancellationToken, Task<LiveHomeResult>>? LiveHomeFetch { get; set; }
+
+    /// <summary>The most recent non-empty <c>homeChips</c> set. A faceted home response does not reliably repeat the
+    /// chip row, so it is remembered rather than re-read from every response — see the pin in <c>GetHomeAsync</c>.</summary>
+    IReadOnlyList<HomeChip>? _lastHomeChips;
 
     /// <summary>Set by the live bootstrap: full-catalog online search (Pathfinder). Primary when present; the offline
     /// store track search is the fallback. Returns null on failure → caller degrades to offline.</summary>
@@ -92,11 +92,6 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public async Task<Playlist?> GetPlaylistAsync(string uri, CancellationToken ct = default)
     {
         await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
-        // Palette hydration is independent of membership freshness. The old placement inside OnDemandFetch never ran
-        // when LibrarySync served a warm playlist, which is why no fetchExtractedColors request appeared at all.
-        // This enrichment outlives the foreground read. A route/read token is commonly cancelled as soon as the
-        // ready model is published; forwarding it could abort Pathfinder before fetchExtractedColors reaches the wire.
-        if (EnsurePlaylistPalette is { } ensurePalette) _ = ensurePalette(uri, CancellationToken.None);
         var header = _store.GetPlaylist(uri);
         if (header is null) return null;
         var revision = _store.PlaylistRevision(uri);
@@ -163,6 +158,15 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         if (limit <= 0) return new DiscographyPage(Array.Empty<Album>(), filtered.Count);   // total-only probe
         var window = new List<Album>();
         for (int i = offset; i < filtered.Count && window.Count < limit; i++) window.Add(filtered[i]);
+        // The same fire-and-forget hook the track reads use — here it resolves each card's cover tint (kind 179), so a
+        // page of albums paints its placeholders in their own colours instead of as a grid of identical grey squares.
+        // Self-filtering and negatively cached, so re-paging over albums already resolved costs nothing.
+        if (DetectVideos is { } detect && window.Count > 0)
+        {
+            var uris = new List<string>(window.Count);
+            for (int i = 0; i < window.Count; i++) uris.Add(window[i].Uri);
+            try { _ = detect(uris); } catch { }
+        }
         return new DiscographyPage(window, filtered.Count);
     }
 
@@ -217,12 +221,13 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     internal static bool IsAlbumComplete(Album? album)
         => album is { Hydration: AlbumHydrationLevel.Full, Tracks: { Count: > 0 } tracks }
            && !HasUnnamedTrack(tracks)
-           // The Full flag alone is not proof: a partial/transient getAlbum response can carry named tracks but NEITHER
-           // play counts NOR inline colors, and marking that Full sealed the album "Full forever" (0 plays + no wash +
-           // stub artist — every later open early-returned here). A COMPLETE envelope always delivers inline colors and/or
-           // play counts, so require at least one; a payload-less "Full" is treated as cold and re-fetched. (Play counts
-           // are legitimately 0 on brand-new releases, hence OR — colors alone still count as complete, and vice versa.)
-           && (album.Palette is not null || HasAnyPlayCount(tracks));
+           // The Full flag alone is not proof: a partial/transient getAlbum response can carry named tracks but none of
+           // the envelope's own facets, and marking that Full sealed the album "Full forever" (0 plays + stub artist —
+           // every later open early-returned here). A COMPLETE envelope always delivers the copyright/label block
+           // and/or play counts, so require at least one; a payload-less "Full" is treated as cold and re-fetched.
+           // (Play counts are legitimately 0 on brand-new releases, hence OR.) This used to test the inline cover
+           // palette; colours now live in CoverColorPlane, keyed by image, and say nothing about album hydration.
+           && (album.Label is { Length: > 0 } || album.Copyright is { Length: > 0 } || HasAnyPlayCount(tracks));
 
     static bool HasUnnamedTrack(IReadOnlyList<Track> tracks)
     {
@@ -361,9 +366,22 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
         // The personal quick matrix is the stable first home module. Pathfinder editorial/personalized groups follow
         // it, still above the larger library-derived shelves.
+        IReadOnlyList<HomeChip>? chips = null;
         if (LiveHomeFetch is { } liveFetch)
         {
-            try { groups.AddRange(await liveFetch(ct).ConfigureAwait(false)); } catch { /* editorial home is best-effort */ }
+            try
+            {
+                var live = await liveFetch(ct).ConfigureAwait(false);
+                groups.AddRange(live.Groups);
+                // Pin the last non-empty set. A FACETED home response does not always repeat homeChips, and taking it
+                // verbatim meant selecting a facet could drop the row that produced the selection: the chips vanished,
+                // the greeting collapsed back to a bare hero, and the feed stayed filtered with no way to see or undo
+                // it. The chip set is a near-static piece of account chrome, so the previous one is always a better
+                // answer than none. A response that DOES carry chips still replaces it wholesale.
+                chips = live.Chips is { Count: > 0 } fresh ? _lastHomeChips = fresh : _lastHomeChips;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch { /* editorial home is best-effort — the library-derived shelves below still render */ }
         }
 
         if (playlists.Count > 0)
@@ -385,7 +403,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourArtists), cards));
         }
 
-        return new HomeContribution(groups, Priority: 100);
+        return new HomeContribution(groups, Priority: 100, Chips: chips);
     }
 
     public Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)
@@ -576,6 +594,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         uri.StartsWith("spotify:artist:", StringComparison.Ordinal) ? CollectionKind.Artists :
         uri.StartsWith("spotify:show:", StringComparison.Ordinal) || uri.StartsWith("spotify:episode:", StringComparison.Ordinal) ? CollectionKind.Shows :
         uri.StartsWith("spotify:playlist:", StringComparison.Ordinal) || uri == "rootlist" ? CollectionKind.Playlists :
+        // A PRE-SAVE (spotify:prerelease:) deliberately falls through to null: no library page lists pre-saves, so there
+        // is no collection to invalidate and no fan-out worth waking. The heart re-skins through LibraryBridge's
+        // per-URI signal, which the optimistic toggle drives directly.
         null;
 
     static bool BytesEqual(byte[] a, byte[] b)

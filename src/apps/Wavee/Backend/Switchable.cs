@@ -50,7 +50,6 @@ public sealed class SwitchableState : IPlaybackState, IDisposable
     public double Volume => Cur.Volume;
     public bool IsShuffle => Cur.IsShuffle;
     public RepeatMode Repeat => Cur.Repeat;
-    public Palette? Palette => Cur.Palette;
     public IReadOnlyList<QueueEntry> Queue => Cur.Queue;
     public bool IsLoading => Cur.IsLoading;
     public string? Error => Cur.Error;

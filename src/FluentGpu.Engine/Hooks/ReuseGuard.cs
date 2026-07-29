@@ -15,8 +15,8 @@ namespace FluentGpu.Hooks;
 /// Cost discipline (matches <c>Diag</c> / <c>RenderBudget</c> / validation.md §0): the whole facility is gated by the
 /// const <see cref="CompiledIn"/> (<c>false</c> unless <c>DEBUG</c> or <c>FLUENTGPU_DIAG</c>), so the reconciler's
 /// <c>if (ReuseGuard.CompiledIn &amp;&amp; ReuseGuard.Enabled) { … }</c> guard is dead-code-eliminated in the shipping
-/// AOT binary — zero bytes, zero probe allocation. When compiled in it is further gated at runtime by
-/// <c>FG_REUSE_GUARD=1</c> (opt-in, like <c>FG_RENDER_DIAG</c>); a gate flips <see cref="Enabled"/> on directly.
+/// AOT binary — zero bytes, zero probe allocation. When compiled in it is simply ON: there is no env flag, because a
+/// tripwire you have to remember to enable only ever fires for someone who already suspected the bug.
 /// "Production safety == CI coverage": the value is catching the regression in dev/CI, not in the customer's hands.
 /// </para>
 /// See <c>design/subsystems/component-props-contract.md</c> for the authoring contract this enforces.
@@ -32,9 +32,15 @@ public static class ReuseGuard
         false;
 #endif
 
-    /// <summary>Runtime gate (only consulted when <see cref="CompiledIn"/>): <c>FG_REUSE_GUARD=1</c> turns the tripwire
-    /// on. Off by default so normal debug runs and the slice stay quiet; the dedicated VerticalSlice gate sets it.</summary>
-    public static bool Enabled = CompiledIn && Diag.EnvFlag("FG_REUSE_GUARD");
+    /// <summary>ON whenever the facility is compiled in — i.e. every DEBUG/diag build, with no env flag to remember.
+    ///
+    /// It used to be opt-in behind <c>FG_REUSE_GUARD=1</c>, which meant the tripwire only fired for whoever already
+    /// suspected a frozen-props bug — the exact person who least needed telling. A guard nobody switches on catches
+    /// nothing. It stays report-only (see <see cref="ThrowOnViolation"/>) and it is still const-folded out of the
+    /// shipping AOT binary by <see cref="CompiledIn"/>, so being unconditional here costs release builds nothing.
+    ///
+    /// Still writable, because the VerticalSlice suite toggles it around its own negative cases.</summary>
+    public static bool Enabled = CompiledIn;
 
     /// <summary>When set, a detected violation THROWS <see cref="FrozenPropException"/> instead of only reporting —
     /// <c>FG_REUSE_GUARD_THROW=1</c>, or a gate scoping the strict path. Default report-only so surfacing a

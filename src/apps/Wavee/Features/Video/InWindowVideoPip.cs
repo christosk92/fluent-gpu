@@ -6,6 +6,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
+using Wavee.Core;
 using Wavee.SpotifyLive;
 
 namespace Wavee.Features.Video;
@@ -259,13 +260,27 @@ sealed class InWindowVideoPip : Component
     static Element BuildVideoArea(PlaybackBridge b)
     {
         var src = b.PopOutVideoSource.Value;                          // subscribe → remount the stage on a source change
-        bool live = src is not null && b.VideoPlayer.Value.Player is not null;   // subscribe → poster ↔ hole
-        if (live)
+        var binding = b.VideoPlayer.Value;                            // subscribe → poster ↔ hole
+        // Mount whenever a player exists — a brief source null (override re-resolve) must NOT tear down the only MF pump.
+        bool mount = VideoSurfaceMount.ShouldMountPlayerStage(binding.Player is not null);
+        if (mount)
+        {
+            string stageKey = src?.Key ?? ("gen:" + binding.Generation.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var stage = Embed.Comp(() => new PopOutVideoStage { Source = src, Player = b.VideoPlayer })
+                with { Key = "pipstage:" + stageKey };
+            if (src is not null)
+                return new BoxEl
+                {
+                    Grow = 1f, MinHeight = 0f, ClipToBounds = true, Fill = ColorF.Transparent,
+                    Children = [ stage ],
+                };
+            // Player present, source still resolving — keep pumping under a Loading overlay.
             return new BoxEl
             {
-                Grow = 1f, MinHeight = 0f, ClipToBounds = true, Fill = ColorF.Transparent,
-                Children = [ Embed.Comp(() => new PopOutVideoStage { Source = src!, Player = b.VideoPlayer }) with { Key = "pipstage:" + src!.Key } ],
+                Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true, Fill = ColorF.Transparent,
+                Children = [ stage, LoadingOverlay(b.CurrentTrack.Value) ],
             };
+        }
 
         var track = b.CurrentTrack.Value;
         return new BoxEl
@@ -276,23 +291,25 @@ sealed class InWindowVideoPip : Component
                 // The artwork fills the frame behind the spinner, dimmed enough to read as a placeholder rather than as
                 // content. A track with no art degrades to the letterbox fill — still never an empty rect.
                 new BoxEl { Grow = 1f, Opacity = 0.4f, ClipToBounds = true, Children = [ Surfaces.ArtworkFill(track?.Image, 0f) ] },
-                new BoxEl
-                {
-                    Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.S,
-                    HitTestPassThrough = true,
-                    Children =
-                    [
-                        ProgressRing.Indeterminate(size: 20f, foreground: Tok.TextOnAccentPrimary),
-                        new TextEl(Loc.Get(Strings.Player.Loading))
-                        {
-                            Size = 12f, Weight = 600, Color = Tok.TextOnAccentPrimary,
-                            Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                    ],
-                },
+                LoadingOverlay(track),
             ],
         };
     }
+
+    static Element LoadingOverlay(Track? _) => new BoxEl
+    {
+        Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.S,
+        HitTestPassThrough = true,
+        Children =
+        [
+            ProgressRing.Indeterminate(size: 20f, foreground: Tok.TextOnAccentPrimary),
+            new TextEl(Loc.Get(Strings.Player.Loading))
+            {
+                Size = 12f, Weight = 600, Color = Tok.TextOnAccentPrimary,
+                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+            },
+        ],
+    };
 
     // ── the eight resize zones ───────────────────────────────────────────────────────────────────────
     // A 3-row skeleton whose every non-band cell is HitTestPassThrough, so the layer is INVISIBLE to input except on the

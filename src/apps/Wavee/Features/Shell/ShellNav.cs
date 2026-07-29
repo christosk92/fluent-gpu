@@ -14,6 +14,9 @@ static class ShellNav
     {
         if (key.StartsWith("pl:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Playlist), Icons.MusicNote);
         if (key.StartsWith("album:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Icons.Album);
+        // An upcoming release renders the ordinary album page (ContentHost.IsDetail), so it wears the album's label and
+        // glyph — without this it would fall through to the "Your Library" default in the tab strip and breadcrumb.
+        if (key.StartsWith("prerelease:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Icons.Album);
         if (key.StartsWith("artist:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Artist), Icons.Contact);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch

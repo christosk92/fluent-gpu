@@ -302,8 +302,34 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         string? isrc = null;   // Track.external_id (field 10) — the ISRC drives the lyrics exact-recording fast-path
         foreach (var x in t.ExternalId)
             if (string.Equals(x.Type, "isrc", StringComparison.OrdinalIgnoreCase)) { isrc = x.Id; break; }
-        store.UpsertTrack(new Track(id, "spotify:track:" + id, t.Name, artists, album, t.Duration, t.Explicit, image, Isrc: isrc));
+        store.UpsertTrack(new Track(id, "spotify:track:" + id, t.Name, artists, album, t.Duration, t.Explicit, image,
+            Availability: PlayabilityOf(t), AvailableAt: LiveAtOf(t), Isrc: isrc));
     }
+
+    /// <summary>Can this track actually play? Decided by FILES, not by <c>restriction</c>.
+    ///
+    /// Measured over 10,472 real TrackV4 payloads: 8,378 carry files outright; 2,050 carry NO files but a relink
+    /// <c>alternative</c> that has files of its own (still playable); 44 carry neither (dead). <c>restriction</c> is
+    /// present on the relink class AND the dead class, so using it as the verdict would have marked a fifth of a normal
+    /// library unplayable — and an empty <c>countries_allowed</c> is an empty WHITELIST, i.e. no country gate at all.
+    ///
+    /// Returns null when the payload states nothing either way, so "unknown" stays distinct from "playable".</summary>
+    static Availability? PlayabilityOf(Lean.LeanTrack t)
+    {
+        if (t.File.Count > 0) return Core.Availability.Playable;
+        foreach (var alt in t.Alternative)
+            if (alt.File.Count > 0) return Core.Availability.Playable;   // relinked: a different rendition plays
+        // No files anywhere. Only call that unavailable when the payload is otherwise substantive — a thin projection
+        // that simply omitted the file plane must not be read as a verdict.
+        return t.HasEarliestLiveTimestamp || t.Restriction.Count > 0 ? Core.Availability.Unavailable : null;
+    }
+
+    /// <summary>The track's live instant (TrackV4 <c>earliest_live_timestamp</c>, unix seconds). Present on every
+    /// payload in the capture; a FUTURE value is a track announced but not yet out.</summary>
+    static DateTimeOffset? LiveAtOf(Lean.LeanTrack t)
+        => t.HasEarliestLiveTimestamp && t.EarliestLiveTimestamp > 0
+            ? DateTimeOffset.FromUnixTimeSeconds(t.EarliestLiveTimestamp)
+            : null;
 
     static void ProjectAlbum(Lean.LeanAlbum al, IStore store, ProjCtx proj)
     {
@@ -421,7 +447,9 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     // The cover_group carries SMALL/DEFAULT/LARGE/XLARGE renders, each its own file_id/URL. Pick the DEFAULT (~300px) — a
     // balanced single cover for lists/grids — over a heavy 640px+ render, and record its dimensions. (For true per-context
     // sizing — a 64px row thumbnail vs a 640px hero — the entity should carry the render SET; see the note to the user.)
-    static Image? PickImage(Lean.LeanImageGroup? group)
+    // Internal so the track-expansion service can reuse it for a music video's cover rather than adding a FOURTH copy of
+    // the "https://i.scdn.co/image/<hex>" construction to the tree.
+    internal static Image? PickImage(Lean.LeanImageGroup? group)
     {
         if (group is null) return null;
         // Keep DEFAULT as the normal card/list source, but retain the largest rendition separately for full-width heroes.
@@ -435,6 +463,34 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             fallback ??= img;
             if (img.Size == 0) chosen ??= img;   // 0 = Image.Size.DEFAULT (~300px)
             int score = img.HasWidth && img.Width > 0 ? img.Width * 8 : img.Size;
+            if (largest is null || score > largestScore) { largest = img; largestScore = score; }
+        }
+        var pick = chosen ?? fallback;
+        if (pick is null) return null;
+        string url = "https://i.scdn.co/image/" + Convert.ToHexStringLower(pick.FileId.Span);
+        string? largestUrl = largest is null
+            ? null
+            : "https://i.scdn.co/image/" + Convert.ToHexStringLower(largest.FileId.Span);
+        return new Image(
+            url,
+            pick.HasWidth ? pick.Width : null,
+            pick.HasHeight ? pick.Height : null,
+            LargestUrl: largestUrl);
+    }
+
+    /// <summary>TrackV4 / full metadata covers still arrive as <see cref="Wavee.Protocol.Metadata.ImageGroup"/>;
+    /// same DEFAULT-vs-largest pick as the lean overload.</summary>
+    internal static Image? PickImage(Wavee.Protocol.Metadata.ImageGroup? group)
+    {
+        if (group is null) return null;
+        Wavee.Protocol.Metadata.Image? chosen = null, fallback = null, largest = null;
+        int largestScore = int.MinValue;
+        foreach (var img in group.Image)
+        {
+            if (img.FileId.Length == 0) continue;
+            fallback ??= img;
+            if (img.Size == Wavee.Protocol.Metadata.Image.Types.Size.Default) chosen ??= img;
+            int score = img.HasWidth && img.Width > 0 ? img.Width * 8 : (int)img.Size;
             if (largest is null || score > largestScore) { largest = img; largestScore = score; }
         }
         var pick = chosen ?? fallback;

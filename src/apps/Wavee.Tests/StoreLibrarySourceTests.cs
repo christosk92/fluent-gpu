@@ -123,31 +123,23 @@ public class StoreLibrarySourceTests
     }
 
     [Fact]
-    public async Task GetPlaylist_WarmBaseline_StillSchedulesPaletteHydration()
+    public async Task GetPlaylist_WarmBaseline_ServesFromStoreWithoutRefetch()
     {
         const string uri = "spotify:playlist:warm";
         var store = new InMemoryStore();
         store.UpsertPlaylist(new Playlist("warm", uri, "Warm mix", null, "Spotify", new Image("https://img/cover"), 0));
         store.SetMembership(uri, System.Array.Empty<PlaylistMember>(), null);
-        int paletteCalls = 0;
-        CancellationToken paletteToken = new(canceled: true);
         var src = new StoreLibrarySource(store)
         {
             OnDemandFetch = (_, _) => throw new Xunit.Sdk.XunitException("warm membership must not refetch"),
-            EnsurePlaylistPalette = (got, token) =>
-            {
-                Assert.Equal(uri, got);
-                paletteToken = token;
-                paletteCalls++;
-                return Task.CompletedTask;
-            },
         };
 
         using var read = new CancellationTokenSource();
         read.Cancel();
+        // Even with an ALREADY-CANCELLED read token, a warm playlist is served from the store and never refetched.
+        // (The old palette-hydration hook this test also covered is gone: cover colours are image-keyed in
+        // CoverColorPlane and resolved by the art slot itself, so a playlist read no longer schedules colour work.)
         Assert.NotNull(await src.GetPlaylistAsync(uri, read.Token));
-        Assert.Equal(1, paletteCalls);
-        Assert.False(paletteToken.CanBeCanceled);
     }
 
     [Fact]

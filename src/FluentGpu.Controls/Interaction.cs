@@ -103,8 +103,9 @@ public static class Interaction
         // ── MOTION half (declarative While*) ───────────────────────────────────────────────────────────────────
         bool wantsHover = r.HoverScale != 1f || float.IsFinite(r.HoverOpacity);
         bool wantsPress = r.PressScale != 1f || float.IsFinite(r.PressedOpacity);
-        // One transform owner per node: a bound Transform owns the matrix outright — never fight it with a While* scale.
-        bool transformOwned = el.Transform.IsBound;
+        // One transform owner per node: a DECLARED Transform — a bound thunk or a plain static matrix, both of which the
+        // reconciler now writes — owns the matrix outright, so never fight it with a While* scale.
+        bool transformOwned = el.Transform.IsBound || el.Transform.Value != default;
         if (isEnabled && (wantsHover || wantsPress) && !transformOwned)
         {
             MotionTarget? hover = el.WhileHover is { } callerHover ? callerHover

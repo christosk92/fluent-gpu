@@ -19,7 +19,7 @@ public class PlaybackArtworkTests
     {
         var store = new InMemoryStore();
         var rich = new Track("tr", "spotify:track:tr", "Broken Angel", [Artist], Album, 180000, false, Cover,
-            HasVideo: true, PlayCount: 42, Source: "rich");
+            PlayCount: 42, Source: "rich");
         var thin = new Track("tr", "spotify:track:tr", "", [], new AlbumRef("", "", ""), 0, false, null);
 
         store.UpsertTrack(rich);
@@ -31,7 +31,7 @@ public class PlaybackArtworkTests
         Assert.Same(Cover, merged.Image);
         Assert.Equal("Arash", merged.Artists[0].Name);
         Assert.Equal("SUPERMAN", merged.Album.Name);
-        Assert.True(merged.HasVideo);
+        // (has-video is no longer a Track field the merge must defend — it lives on the VideoAssociation plane)
         Assert.Equal(42, merged.PlayCount);
     }
 

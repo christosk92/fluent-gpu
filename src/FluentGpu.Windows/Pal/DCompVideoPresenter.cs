@@ -25,10 +25,12 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         public bool InUse;
         public IDCompositionVisual* Child;   // the video child visual (owned)
         public IUnknown* Content;            // the surface wrapped from the external handle (owned)
+        public IDCompositionRectangleClip* RoundClip;   // owned; created lazily, only while Radius > 0
         public RectF Rect;
         public RectF Viewport;
         public uint ContentW, ContentH;      // the content's native pixel size (decoder swapchain) — scale source (0 = unknown → 1:1)
         public float Opacity;
+        public float Radius;                 // device-px corner radius (0 = square → the plain rect clip)
         public int Z;
         public bool Visible;
         public bool InTree;                  // AddVisual'd under the current root
@@ -112,6 +114,16 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
     }
 
+    public void SetCornerRadius(VideoSurfaceId id, float radiusPx)
+    {
+        _device.AssertRenderThread();
+        ref Slot s = ref Get(id);
+        float r = radiusPx > 0f ? radiusPx : 0f;
+        if (s.Radius == r) return;
+        s.Radius = r;
+        if (!s.Dirty) { s.Dirty = true; _dirtyCount++; }
+    }
+
     public void SetContentSize(VideoSurfaceId id, uint width, uint height)
     {
         _device.AssertRenderThread();
@@ -127,6 +139,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         ref Slot s = ref Get(id);
         DetachChild(ref s);
         _graphDirty = true;
+        if (s.RoundClip != null) { s.RoundClip->Release(); s.RoundClip = null; }
         if (s.Content != null) { s.Content->Release(); s.Content = null; }
         if (s.Child != null) { s.Child->Release(); s.Child = null; }
         if (s.Dirty) { s.Dirty = false; _dirtyCount--; }
@@ -223,7 +236,35 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
         D2D_RECT_F clip = s.Visible
             ? new D2D_RECT_F { left = left, top = top, right = right, bottom = bottom }
             : new D2D_RECT_F { left = 0f, top = 0f, right = 0f, bottom = 0f };
-        Check(s.Child->SetClip(&clip), "video child SetClip");
+
+        if (s.Radius <= 0f)
+        {
+            if (s.RoundClip != null) { s.Child->SetClip((IDCompositionClip*)null); s.RoundClip->Release(); s.RoundClip = null; }
+            Check(s.Child->SetClip(&clip), "video child SetClip");
+            return;
+        }
+
+        // Rounded: the radius arrives in DEVICE px but the clip lives in the visual's LOCAL (pre-transform) space, so
+        // it divides by the same scale ApplyPlacement just set. X and Y are divided SEPARATELY — that is what keeps a
+        // circle circular when the content is scaled non-uniformly, which a single radius value could not express.
+        if (s.RoundClip == null)
+        {
+            IDCompositionRectangleClip* created;   // via a local: s is a ref into the slot array, so &s.RoundClip is unfixed
+            Check(Dcomp->CreateRectangleClip(&created), "CreateRectangleClip(video child)");
+            s.RoundClip = created;
+        }
+        float rx = MathF.Min(s.Radius / sx, (clip.right - clip.left) * 0.5f);
+        float ry = MathF.Min(s.Radius / sy, (clip.bottom - clip.top) * 0.5f);
+        var rc = s.RoundClip;
+        Check(rc->SetLeft(clip.left), "round clip SetLeft");
+        Check(rc->SetTop(clip.top), "round clip SetTop");
+        Check(rc->SetRight(clip.right), "round clip SetRight");
+        Check(rc->SetBottom(clip.bottom), "round clip SetBottom");
+        Check(rc->SetTopLeftRadiusX(rx), "round clip TL x");       Check(rc->SetTopLeftRadiusY(ry), "round clip TL y");
+        Check(rc->SetTopRightRadiusX(rx), "round clip TR x");      Check(rc->SetTopRightRadiusY(ry), "round clip TR y");
+        Check(rc->SetBottomLeftRadiusX(rx), "round clip BL x");    Check(rc->SetBottomLeftRadiusY(ry), "round clip BL y");
+        Check(rc->SetBottomRightRadiusX(rx), "round clip BR x");   Check(rc->SetBottomRightRadiusY(ry), "round clip BR y");
+        Check(s.Child->SetClip((IDCompositionClip*)rc), "video child SetClip(rounded)");
     }
 
     private ref Slot Get(VideoSurfaceId id)
@@ -241,6 +282,7 @@ public sealed unsafe class DCompVideoPresenter : IVideoPresenter, IDisposable
             ref Slot s = ref _slots[i];
             if (!s.InUse) continue;
             DetachChild(ref s);
+            if (s.RoundClip != null) { s.RoundClip->Release(); s.RoundClip = null; }
             if (s.Content != null) { s.Content->Release(); s.Content = null; }
             if (s.Child != null) { s.Child->Release(); s.Child = null; }
             s.InUse = false;

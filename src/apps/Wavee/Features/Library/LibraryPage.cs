@@ -828,6 +828,7 @@ sealed class LibraryDetailPane : Component
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);
     readonly Signal<string> _query = new("");
     readonly Signal<TrackFilterState> _filters = new(TrackFilterState.Default);
+    readonly Signal<bool> _tempoColumn = new(false);
     readonly Signal<int> _density = new(1);
     readonly Signal<Route> _trackRoute = new(new Route("album:lib"));
     public LibraryDetailPane(Loadable<DetailModel> model, bool show, Services svc, PlaybackBridge? bridge)
@@ -894,6 +895,9 @@ sealed class LibraryDetailPane : Component
         }
         return new DetailHandlers(Play, () => Play(0), Shuffle, PlayContext, go, Tok.AccentDefault,
             _sort, s => _sort.Value = s, _query, _filters, f => _filters.Value = f, _density, d => _density.Value = d,
+            // The embedded library list never offers the BPM·Key column (no overflow menu to toggle it), so this is a
+            // constant-off pair rather than another persisted setting.
+            _tempoColumn, on => _tempoColumn.Value = on,
             PlayNext, AddToQueue, AddToPlaylist,
             // The embedded TrackList has no trailing shelves, so these are never invoked here; route through DetailNav
             // (no preview/morph store) so behaviour stays a plain nav if that ever changes.

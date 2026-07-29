@@ -5089,6 +5089,33 @@ static class ControlsSuite
                 $"found={found} FromRgba={fromRgba} usesTokens={usesTokens}");
         }
 
+        // gate.media.el.decorative-inactive-skips-pump / gate.media.el.player-inactive-still-pumps: parked decorative
+        // clips (WatchFeed) must SetVisible(false) AND return before PumpVideo; non-decorative player surfaces hide but
+        // keep pumping so MF can publish NaturalSize/duration. Source-scan of the PumpNow contract (UseIsActive in a
+        // headless host is a heavier setup; the branch shape is the load-bearing invariant).
+        {
+            string? src = ReadRepoFile("src/FluentGpu.Controls/Media/MediaPlayerElement.cs");
+            bool found = src is not null;
+            bool decorativeSkip = src is not null
+                && src.Contains("if (IsDecorative) return;", StringComparison.Ordinal)
+                && src.Contains("SetVisible(false)", StringComparison.Ordinal)
+                && src.Contains("PumpVideo", StringComparison.Ordinal);
+            // Non-decorative must reach PumpVideo after the inactive hide (the return is gated on IsDecorative only).
+            bool playerStillPumps = src is not null
+                && src.Contains("Non-decorative player surfaces", StringComparison.Ordinal);
+            Check("gate.media.el.decorative-inactive-skips-pump", found && decorativeSkip,
+                $"found={found} decorativeSkip={decorativeSkip}");
+            Check("gate.media.el.player-inactive-still-pumps", found && playerStillPumps,
+                $"found={found} playerStillPumps={playerStillPumps}");
+            // Remount / generation-swap frames can briefly report a non-live or 0×0 area — non-decorative must still
+            // PumpVideo so MF can publish duration/NaturalSize (video→video successor stuck at Opening otherwise).
+            bool zeroAreaStillPumps = src is not null
+                && src.Contains("even before the area is laid out", StringComparison.Ordinal)
+                && src.Contains("if (!IsDecorative) Player.PumpVideo(b, default, s);", StringComparison.Ordinal);
+            Check("gate.media.el.zero-area-still-pumps", found && zeroAreaStillPumps,
+                $"found={found} zeroAreaStillPumps={zeroAreaStillPumps}");
+        }
+
         // gate.media.el.video-knockout: ONE SOURCE OF TRUTH for the video rect. A PLAYING video player paints an OPAQUE
         // LetterboxColor stage fill across the WHOLE video area FIRST, then punches EXACTLY ONE hole at the FITTED video
         // rect — and PumpNow places the DComp visual from THAT node's rect, so the erased region and the composited

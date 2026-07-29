@@ -294,7 +294,6 @@ public class LocalMediaProviderTests
         Assert.Equal("local", track.Source);
         Assert.Equal(0, track.DurationMs);                      // no probe supplied ⇒ unknown, never a guess
         Assert.Equal(Availability.Playable, track.Availability);
-        Assert.False(track.HasVideo);
         Assert.NotEqual("", track.Id);
 
         // The kind rules are the EXISTING tested ones — nothing new decides this.

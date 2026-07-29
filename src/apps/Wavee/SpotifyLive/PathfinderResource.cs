@@ -133,6 +133,13 @@ public sealed class PathfinderResource : IConcertPathfinder
         PathfinderOps.QueryNpvArtist => TimeSpan.FromMinutes(30),
         PathfinderOps.QueryArtistOverview => TimeSpan.FromMinutes(30),
         PathfinderOps.QueryWhatsNewFeed => TimeSpan.FromMinutes(5),
+        // Browse is editorial and turns over on a daily-ish cadence, so it caches hard. browseAll especially: it is the
+        // directory backing a whole tab, and re-fetching 70 categories on every open would be pure waste.
+        PathfinderOps.BrowseAll => TimeSpan.FromHours(6),
+        PathfinderOps.BrowsePage => TimeSpan.FromMinutes(30),
+        PathfinderOps.BrowseSection => TimeSpan.FromMinutes(30),
+        // NOTE: this prefix rule would otherwise swallow searchAll-style names AND browse* is unaffected, but the
+        // browse cases above must stay ABOVE it if either is ever renamed to start with "search".
         _ when operationName.StartsWith("search", StringComparison.OrdinalIgnoreCase) => TimeSpan.Zero,
         _ => TimeSpan.FromMinutes(10),
     };

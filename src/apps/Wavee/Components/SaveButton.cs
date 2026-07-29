@@ -1,9 +1,12 @@
 using System;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using Wavee.Core;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -37,6 +40,79 @@ sealed class SaveButton : Component
             Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],
         }.Interactive(Interaction.Subtle);
     }
+}
+
+/// <summary>Pre-save / Pre-saved — the heart for something that is not out yet. Takes EITHER uri kind and resolves the
+/// <c>spotify:prerelease:</c> entity itself (extended-metadata kind 138), because that is the only entity the collection
+/// write accepts and the artist page usually only knows the album. Renders nothing until it resolves, nothing when no
+/// mutation source is connected (the same capability gate as <see cref="SaveButton"/>), and nothing when the release has
+/// already dropped.
+///
+/// <para>PROPS FREEZE AT MOUNT (docs/design/subsystems/component-props-contract.md): a parent re-render does NOT re-run
+/// the factory, so a caller whose uri can change must key the embed on it —
+/// <c>Embed.Comp(() =&gt; new PreSaveButton { Uri = uri }) with { Key = "presave:" + uri }</c>.</para></summary>
+sealed class PreSaveButton : Component
+{
+    /// <summary>Either scheme: <c>spotify:album:</c> (what the artist page holds) or <c>spotify:prerelease:</c> (what the
+    /// write needs). The ids differ — see <see cref="PreReleaseUris"/> — so an album uri costs one kind-138 resolve.</summary>
+    public required string Uri { get; init; }
+    /// <summary>Display-only: names the item in the notification-center activity entry.</summary>
+    public string? Name { get; init; }
+    /// <summary>Accent for the call-to-action fill, so the pill belongs to the page it sits on. A thunk, not a value:
+    /// the artist page derives its accent from art that lands AFTER the page mounts, and reading it inside Render
+    /// subscribes — so the pill re-tints when the palette arrives instead of staying frozen at the mount-time default.</summary>
+    public Func<ColorF>? Accent { get; init; }
+    /// <summary>Label size; the glyph tracks it. Defaults match the release-masthead action row (ArtistPage.TopTracks).</summary>
+    public float TextSize { get; init; } = 12f;
+
+    public override Element Render()
+    {
+        // Hooks first and UNCONDITIONALLY — every early return below is after the last hook call.
+        var lib = UseContext(LibraryBridge.Slot);
+        var svc = UseContext(Services.Slot);
+
+        // Already the write-addressable entity → no request at all. The loader still runs (hook discipline) but answers
+        // null immediately, and a resolve failure/absence also lands as null, which renders nothing.
+        bool direct = PreReleaseUris.IsPreRelease(Uri);
+        var link = UseResource(ct => Resolve(svc, Uri, direct, ct), (PreReleaseLink?)null, Uri).Loadable.Value.Value;
+
+        // The fast path has no date to check: a prerelease uri IS the announcement. The resolved path gates on the
+        // wall-clock IsUpcoming, never on the link merely existing — a cached link outlives its own release.
+        string? presaveUri = direct ? Uri : link is { IsUpcoming: true } ? link.PreReleaseUri : null;
+        if (lib is null) return new BoxEl();                                // no Mutations source → no affordance (capability gate)
+        if (presaveUri is not { Length: > 0 } target) return new BoxEl();   // still resolving, unresolvable, or already out
+
+        bool saved = lib.IsSaved(target);        // subscribe → re-skin on any saved-set change (incl. the optimistic flip)
+        ColorF fill = Accent?.Invoke() ?? Tok.AccentDefault;   // read inside Render → a late palette re-tints the pill
+
+        // Two states, the release-masthead action grammar verbatim: the call to action is the accent-FILLED pill (the
+        // Play slot), the engaged state is the bordered pill (the View slot) wearing the accent as ink.
+        return new BoxEl
+        {
+            Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(12f, 5f, 12f, 5f), Corners = CornerRadius4.All(4f),
+            Fill = saved ? ColorF.Transparent : fill,
+            BorderWidth = saved ? 1f : 0f, BorderColor = saved ? fill : ColorF.Transparent,
+            // Engaged: an explicit hover fill, because auto-lighten has nothing to lighten over a transparent pill.
+            // Call to action: left at the A==0 default so the recorder auto-lightens the accent (the Play pill's behaviour).
+            HoverFill = saved ? Tok.FillSubtleSecondary : ColorF.Transparent,
+            Cursor = CursorId.Hand, Role = AutomationRole.Button,
+            OnClick = () => lib.ToggleSaved(target, Name),
+            Children =
+            [
+                Icon(saved ? Icons.HeartFill : Icons.Heart, TextSize + 1f, saved ? fill : ColorContrast.PickContrast(fill)),
+                new TextEl(Loc.Get(saved ? Strings.Detail.PreSaved : Strings.Detail.PreSave))
+                {
+                    Size = TextSize, Weight = 600, Color = saved ? fill : ColorContrast.PickContrast(fill), MaxLines = 1,
+                },
+            ],
+        };
+    }
+
+    // The album→prerelease hop. Kind 138 answers to either key, so this is the ONE mapping between the two schemes;
+    // nothing may synthesise one uri from the other. Offline the service is NullPreReleaseService → null → no pill.
+    static Task<PreReleaseLink?> Resolve(Services? svc, string uri, bool direct, CancellationToken ct)
+        => direct || svc is null ? Task.FromResult<PreReleaseLink?>(null) : svc.PreRelease.ResolveAsync(uri, ct);
 }
 
 /// <summary>A Follow / Following pill — for artists + playlists (the "save" verb for a profile). Accent border + text when followed.</summary>

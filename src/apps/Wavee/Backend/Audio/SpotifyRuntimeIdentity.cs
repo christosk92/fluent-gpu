@@ -6,8 +6,10 @@ using System.Runtime.InteropServices;
 /// <summary>Desktop client identity for spclient / PlayPlay / client-token. Hardcoded until manifest-driven pins land.</summary>
 public sealed record SpotifyRuntimeIdentity(string AppVersion, string ClientVersion, int PlayPlayRequestVersion)
 {
-    public const string DefaultAppVersion = "129300667";
-    public const string DefaultClientVersion = "1.2.93.667.g7b5cc0ce";
+    // Pinned to Spotify 1.2.94.583 — both values observed on the wire (omg.saz carries the full
+    // "1.2.94.583.g60394bd5" client-version string, so the .g suffix is captured, not invented).
+    public const string DefaultAppVersion = "129400583";
+    public const string DefaultClientVersion = "1.2.94.583.g60394bd5";
     public const string DefaultPlayPlayTokenHex = "025614bf92a6c95e922e466523da4f96";
     public const int DefaultPlayPlayRequestVersion = 5;
 

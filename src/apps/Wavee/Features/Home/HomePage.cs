@@ -34,6 +34,7 @@ sealed class HomePage : Component
         if (svc is null) return new BoxEl { Grow = 1f };
 
         var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
+        _facetFeed = home;   // so a facet selection republishes into THIS loadable rather than remounting the page
         var post = UsePost();
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
@@ -95,7 +96,7 @@ sealed class HomePage : Component
         {
             string? url = HomeImageDiagnostics.Enabled ? HomeImageDiagnostics.NormalizedUrl(c.Image) : null;
             Element tile = MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
-                accent: c.Accent is { } a ? WaveePalette.Lift(WaveePalette.ToColor(a)) : null,
+                accent: Surfaces.SchemeFor(c.Image?.Url) is { } a ? WaveePalette.Lift(WaveePalette.Accent(a)) : null,
                 diagnostics: url is { Length: > 0 }
                     ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
                     : null,
@@ -220,6 +221,25 @@ sealed class HomePage : Component
             onClick: () => go(Wavee.Features.Concerts.ConcertRoutes.Hub, Loc.Get(Strings.Concerts.Title)))
             with { Key = "home-concerts-editorial" };
 
+        // The Browse destination, in the SAME editorial voice as the concert card directly above it — two calm
+        // full-width destinations closing the feed, rather than one and an abrupt end. Routes to Search's empty state,
+        // which IS the browse directory.
+        Element browse = ConcertUi.WideEditorialDestination(
+            artwork: null,
+            eyebrow: Loc.Get(Strings.Browse.Eyebrow),
+            title: Loc.Get(Strings.Browse.Title),
+            subtitle: Loc.Get(Strings.Browse.HomeSubtitle),
+            actionLabel: Loc.Get(Strings.Browse.ExploreAll),
+            onClick: () => go("search", null))
+            with { Key = "home-browse-editorial" };
+
+        // Both destinations ride the final virtual row together, so the tail mounts once.
+        Element tail = new BoxEl
+        {
+            Direction = 1, Gap = Spacing.XL, MinWidth = 0f,
+            Children = [ concerts, browse ],
+        };
+
         void WarmGroup(HomeGroup g)
         {
             // Preview lookup and image decode follow the realized window. The old eager whole-feed pass enqueued every
@@ -269,9 +289,9 @@ sealed class HomePage : Component
             {
                 string key = KeyAt(index);
                 if (index == 0)
-                    return HomeRow(GreetingHero(name), key, Spacing.M, Spacing.XL);
+                    return HomeRow(GreetingBlock(name, feed, svc, post), key, Spacing.M, Spacing.XL);
                 if (index == concertIndex)
-                    return HomeRow(concerts, key, 0f, PlayerDock.Reserve + Spacing.XXL);
+                    return HomeRow(tail, key, 0f, PlayerDock.Reserve + Spacing.XXL);
                 return HomeRow(Group(feed.Groups[index - 1]), key, 0f, Spacing.XL);
             }
 
@@ -296,7 +316,7 @@ sealed class HomePage : Component
             Direction = 1,
             Gap = Spacing.XL,
             Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
-            Children = [ GreetingHero(name), state, concerts ],
+            Children = [ GreetingBlock(name, null, svc, post), state, tail ],
         }) with { Grow = 1f, ScrollKey = "home" };
 
         // Swap one viewport for another. There is deliberately no outer ScrollView around VirtualHome: doing that would
@@ -343,11 +363,55 @@ sealed class HomePage : Component
     }
 
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
-    // The group's lifted accent (renderer color): the composer-assigned tint (cover-extracted or semantic), or a
-    // per-kind fallback for groups with none (the offline/library home). Lift keeps a near-black cover color legible.
-    static ColorF GroupAccent(HomeGroup g) => WaveePalette.Lift(WaveePalette.ToColor(
-        g.Accent ?? (g.Kind is HomeGroupKind.CollapsedGrid or HomeGroupKind.Compact or HomeGroupKind.Featured
-            ? 0xFF3B82F6u : 0xFF60CDFFu)));
+    // The group's lifted accent (renderer colour): the FIRST card's graded cover colour, else the semantic per-kind
+    // tint (amber-ish blue for made-for-you/editorial, the app accent elsewhere) while the plane has no grading yet.
+    // Lift keeps a near-black cover colour legible. The colour arrives with the plane's epoch, which the page reads.
+    static ColorF GroupAccent(HomeGroup g)
+    {
+        for (int i = 0; i < g.Cards.Count; i++)
+            if (Surfaces.SchemeFor(g.Cards[i].Image?.Url) is { } s) return WaveePalette.Lift(WaveePalette.Accent(s));
+        return WaveePalette.Lift(WaveePalette.ToColor(
+            g.Kind is HomeGroupKind.CollapsedGrid or HomeGroupKind.Compact or HomeGroupKind.Featured
+                ? 0xFF3B82F6u : 0xFF60CDFFu));
+    }
+
+    // Greeting + the home facet chip row. The chips come from the SAME home response the shelves do, so they cost no
+    // extra request; selecting one writes Services.HomeFacet and asks for a refresh, which re-issues home with the
+    // `facet` variable populated (it was always in the request, hardcoded to "").
+    Element GreetingBlock(string? name, HomeFeed? feed, Services? svc, Action<Action> post)
+    {
+        var hero = GreetingHero(name);
+        if (feed?.Chips is not { Count: > 0 } chips || svc is null) return hero;
+
+        var chipRow = Ctx.Provide(HomeFacetChips.Props,
+            new HomeFacetChips.Model(chips, () => RefreshForFacet(svc, post)),
+            Embed.Comp(() => new HomeFacetChips()));
+
+        return new BoxEl
+        {
+            Direction = 1, Gap = Spacing.M, MinWidth = 0f,
+            Children = [ hero, chipRow ],
+        };
+    }
+
+    // A facet change is a new home REQUEST, not a client-side filter: Spotify returns a different set of shelves per
+    // facet. PathfinderResource keys its cache on the request body, so each facet is its own entry rather than a stale
+    // hit on the unfiltered feed.
+    void RefreshForFacet(Services svc, Action<Action> post)
+        => _ = Task.Run(async () =>
+        {
+            try
+            {
+                var feed = await svc.Library.GetHomeAsync(default).ConfigureAwait(false);
+                post(() => _facetFeed?.SetReady(feed));
+            }
+            catch { /* the previous feed stays on screen; the chip row reflects the attempted selection */ }
+        });
+
+    // The live home Loadable, captured on render so the facet refresh publishes into the SAME instance this page is
+    // bound to — a facet change patches the feed in place rather than remounting the page. Instance state, not static:
+    // two mounted HomePages (tabs) must not fight over one field.
+    Loadable<HomeFeed>? _facetFeed;
 
     // ── greeting hero ────────────────────────────────────────────────────────────────────────────────
     static Element GreetingHero(string? name)

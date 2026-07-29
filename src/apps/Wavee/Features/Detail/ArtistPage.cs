@@ -70,10 +70,13 @@ sealed partial class ArtistPage : Component
         // arrives. Previously ArtistPage only drew its in-card gradient, so a whole-window tint on this route was stale
         // state from whichever detail page happened to be visited before it.
         bool artistReady = artist.State.Value == (byte)LoadState.Ready;
-        Palette? artPalette = artistReady ? artist.Value.Value.Palette : null;
-        ColorF? micaTint = colorWashesDisabled || artPalette is null ? null : Tok.Theme == ThemeKind.Light
-            ? WaveePalette.Lift(WaveePalette.ToColor(artPalette.Light)) with { A = 0.05f }
-            : WaveePalette.TintedDark(artPalette) with { A = 0.14f };
+        // Watch the artist's OWN picture, so the shell tint lands as soon as that image is graded without coupling
+        // this page to every batch the discography grid kicks off while scrolling.
+        _ = SpotifyLive.CoverColorPlane.Current.Watch(artist.Value.Value.Image?.Url).Value;
+        var artPalette = artistReady ? Surfaces.SchemeFor(artist.Value.Value.Image?.Url) : null;
+        ColorF? micaTint = colorWashesDisabled || artPalette is not { } artScheme ? null : Tok.Theme == ThemeKind.Light
+            ? WaveePalette.Lift(WaveePalette.ToColor(artScheme.TextBase)) with { A = 0.05f }
+            : WaveePalette.TintedDark(artScheme) with { A = 0.14f };
 
         void SetTint(ColorF? color)
         {
@@ -224,7 +227,7 @@ sealed partial class ArtistPage : Component
         string uri = a.Uri;
         // Cover-extracted page accent, lifted so a near-black colorDark stays legible (matches album/playlist via
         // DetailShell). Null palette ⇒ the neutral default. Set before the tree builds so every accent helper reads it.
-        _paletteAccent = a.Palette is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : null;
+        _paletteAccent = Surfaces.SchemeFor(a.Image?.Url) is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : null;
         Func<ColorF> accent = () => _accent;
         var extras = a.Extras;
         var popular = a.TopTracks is { Count: > 0 } tt ? tt : FakeData.TopTracksOf(a);
@@ -249,9 +252,14 @@ sealed partial class ArtistPage : Component
         // the inserted section. Keys must stay UNIQUE (a duplicate silently mounts a second node) and must stay stable
         // across renders — note "related" and "fans" are deliberately DISTINCT keys: they are alternatives holding
         // different data, and reusing one key would reuse the shelf subtree across the swap.
-        var sections = new List<Element>(14);
+        var sections = new List<Element>(15);
+        // NO pre-release band here. Four surfaces already carry the announcement, each in a place the visitor is
+        // already looking: the hero eyebrow pill (narrow windows), the hero pinned card's date line (wide), the shy
+        // pill once the hero scrolls away, and the Upcoming masthead at the head of the Releases column — where anyone
+        // asking "what's new from this artist" looks first. A band of its own would be a FIFTH copy of one fact, and it
+        // would push Top tracks, the thing most visitors came for, down by ~90px on every artist with something coming.
         if (popular.Count > 0)
-            sections.Add(TopBand(popular, uri, bridge, svc, a.LatestRelease, a.PopularReleases, go, PlayContext, accent) with { Key = "sec:popular" });
+            sections.Add(TopBand(popular, uri, bridge, svc, a.LatestRelease, a.PopularReleases, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
         // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
         if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent)) with { Key = "sec:albums" });
         if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent)) with { Key = "sec:singles" });
@@ -285,7 +293,8 @@ sealed partial class ArtistPage : Component
         // background is a live Mica composite no constant colour can match, so any opaque bridge/flatten necessarily
         // draws a line where it ends.
         float heroWidth = _heroWidth.Value;
-        ColorF wash = Tok.Theme == ThemeKind.Light ? _accent : WaveePalette.BackgroundDark(a.Palette ?? WaveePalette.Neutral);
+        ColorF wash = Tok.Theme == ThemeKind.Light ? _accent
+                    : WaveePalette.BackgroundDark(Surfaces.SchemeFor(a.Image?.Url) ?? WaveePalette.Neutral);
         ColorF washTint = wash with { A = Tok.Theme == ThemeKind.Light ? 38f / 255f : 60f / 255f };
         bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
         Element washLayer = colorWashesDisabled

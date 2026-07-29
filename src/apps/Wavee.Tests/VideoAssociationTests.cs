@@ -69,12 +69,12 @@ public class VideoAssociationTests
         var f = Assert.Single(has.Files);
         Assert.Equal("ab6742d3000053b751ab106a1c8edd63fa934530", f.FileIdHex);
         Assert.Equal((2560, 1440), (f.Width, f.Height));
-        Assert.True(store.GetTrack("spotify:track:HAS")!.HasVideo);   // the row indicator flips on
 
         var none = store.GetVideoAssociation("spotify:track:NONE");
         Assert.NotNull(none);
         Assert.False(none!.HasVideo);                                 // negative cached (404), so we stop re-asking
-        Assert.False(store.GetTrack("spotify:track:NONE")!.HasVideo);
+        // The association IS what the row indicator reads (VideoPresence). Nothing is mirrored onto the track row, so
+        // there is no second copy here to assert — and none that could drift out of step with this one.
     }
 
     [Fact]
@@ -82,21 +82,31 @@ public class VideoAssociationTests
     {
         var store = new InMemoryStore();
         store.UpsertTrack(Trk("HAS"));
-        // A stale cached association carrying an etag → the next detect must send it (so the server can 304).
-        store.UpsertVideoAssociation(VideoAssociation.None("spotify:track:HAS", "prevtag", DateTimeOffset.UtcNow.AddDays(-1), 0));
+        store.UpsertTrack(Trk("NONE"));
+        // A stale cached POSITIVE carrying an etag → the next detect must send it (so the server can 304 and save
+        // re-shipping the payload).
+        store.UpsertVideoAssociation(new VideoAssociation("spotify:track:HAS", true, "spotify:track:VID",
+            new[] { new VideoFileRef("abcd", 0, 2560, 1440) }, "prevtag", DateTimeOffset.UtcNow.AddDays(-1), 2592000));
+        // A stale cached NEGATIVE must send NO etag: there is no payload for a 304 to save, and a conditional would
+        // only have the server confirm the very miss we are re-testing — the mechanism that used to pin a wrong
+        // "no video" in place (VideoAssociation.RevalidationEtag).
+        store.UpsertVideoAssociation(VideoAssociation.None("spotify:track:NONE", "negtag", DateTimeOffset.UtcNow.AddDays(-1), 0));
 
         HttpReq? captured = null;
         var svc = Service(store, (req, _) => { captured = req; return new HttpResp(200, new Dictionary<string, string>(), new Xm.BatchedExtensionResponse().ToByteArray()); });
-        await svc.DetectAsync(new[] { "spotify:track:HAS" }, CT);
+        await svc.DetectAsync(new[] { "spotify:track:HAS", "spotify:track:NONE" }, CT);
 
         Assert.NotNull(captured);
         var req = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(captured!.Body));
-        // One EntityRequest, two kinds: 99 (etag-conditional) and the co-batched 182 hint.
-        var queries = Assert.Single(req.EntityRequest).Query;
-        Assert.Equal(2, queries.Count);
-        var query = Assert.Single(queries, q => q.ExtensionKind == Xm.ExtensionKind.VideoAssociations);
-        Assert.Equal("prevtag", query.Etag);   // the etag rode the ExtensionQuery
-        Assert.Contains(queries, q => q.ExtensionKind == Xm.ExtensionKind.ConsumptionExperienceTrait);
+        Assert.Equal(2, req.EntityRequest.Count);
+        foreach (var er in req.EntityRequest)
+        {
+            // Each entity asks two kinds: 99 (conditional iff the cached verdict is positive) + the co-batched 182 hint.
+            Assert.Equal(2, er.Query.Count);
+            var query = Assert.Single(er.Query, q => q.ExtensionKind == Xm.ExtensionKind.VideoAssociations);
+            Assert.Equal(er.EntityUri == "spotify:track:HAS" ? "prevtag" : "", query.Etag);
+            Assert.Contains(er.Query, q => q.ExtensionKind == Xm.ExtensionKind.ConsumptionExperienceTrait);
+        }
     }
 
     [Fact]
@@ -206,7 +216,6 @@ public class VideoAssociationTests
         Assert.Equal("ab6742d3000053b751ab106a1c8edd63fa934530", Assert.Single(a.Files).FileIdHex);
         Assert.Equal(GidHex, a.VideoGidHex);        // kind 212 field 2 → Connect's associated_video_id
         Assert.Null(a.Etag);                        // the canonical entity's etag must never ride the alias row
-        Assert.True(store.GetTrack("spotify:track:ALIAS")!.HasVideo);
         Assert.Null(store.GetVideoAssociation("spotify:track:CANON"));
     }
 
@@ -232,7 +241,44 @@ public class VideoAssociationTests
 
         Assert.Equal(1, posts);
         Assert.False(store.GetVideoAssociation("spotify:track:NONE")!.HasVideo);
-        Assert.False(store.GetTrack("spotify:track:NONE")!.HasVideo);
+    }
+
+    // ── the ONE shared kind-99 fold ──────────────────────────────────────────────────────────────────────────────────
+    // The detect batch, the single-track resolve AND the expand drawer (SpotifyTrackExpansionService) all fold their
+    // fetches through SpotifyVideoService.Fold, so whichever path fetched a payload, the same record lands in the same
+    // plane. This is what heals a row that showed "no video" the moment its expand fetch returns — and what makes the
+    // row indicator and the drawer structurally unable to disagree.
+
+    [Fact]
+    public void Fold_WritesThePlaneFromABareResult_WithNoTrackRowInvolved()
+    {
+        var store = new InMemoryStore();   // deliberately NO track row upserted — the plane needs none
+        var res = new ExtendedMetadataSource.ExtensionResult(200, "etag1", 2592000, ByteString.FromBase64(RealPayloadB64));
+
+        SpotifyVideoService.Fold(store, "spotify:track:2ZTU8atPwouhoQSvxv9aQj", res, DateTimeOffset.UtcNow);
+
+        var a = store.GetVideoAssociation("spotify:track:2ZTU8atPwouhoQSvxv9aQj");
+        Assert.NotNull(a);
+        Assert.True(a!.HasVideo);
+        Assert.Equal("spotify:track:3dzYeVS4L1mfAdqlxYxB12", a.CounterpartUri);
+        Assert.Equal(3, a.Files.Count);
+        Assert.Equal("etag1", a.Etag);
+    }
+
+    [Fact]
+    public void Fold_MissingResultWritesNothing_A404WritesTheNegative()
+    {
+        var store = new InMemoryStore();
+        // default(ExtensionResult) (Status 0) is what a TryGetValue miss hands the drawer's unconditional fold call —
+        // it must leave the plane untouched, never write a bogus negative.
+        SpotifyVideoService.Fold(store, "spotify:track:X", default, DateTimeOffset.UtcNow);
+        Assert.Null(store.GetVideoAssociation("spotify:track:X"));
+
+        SpotifyVideoService.Fold(store, "spotify:track:X",
+            new ExtendedMetadataSource.ExtensionResult(404, null, 2592000, null), DateTimeOffset.UtcNow);
+        var a = store.GetVideoAssociation("spotify:track:X");
+        Assert.NotNull(a);
+        Assert.False(a!.HasVideo);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────────────────────────────

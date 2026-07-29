@@ -49,6 +49,10 @@ sealed partial class ArtistPage : Component
         ],
     };
 
+    // (The stand-alone pre-release BAND was deleted: the announcement is carried by the hero pill / pinned card / shy
+    // pill and by ArtistPage.TopTracks' UpcomingMasthead at the head of the Releases column. See the note in
+    // ArtistPage.Body where the section list is built.)
+
     // ── music videos (16:9 shelf) ────────────────────────────────────────────────────────────────────────
     Element MusicVideosShelf(IReadOnlyList<MusicVideo> videos, Action<string> play) => new BoxEl
     {

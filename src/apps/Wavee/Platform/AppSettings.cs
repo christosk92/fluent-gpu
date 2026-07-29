@@ -31,6 +31,10 @@ static class WaveeSettings
     // an explicit BCP-47/language tag selects the matching bundled JSON table. Applied before first mount on next launch.
     public static readonly SettingKey<string> UiCulture = new("localization.culture", "system");
     public static readonly SettingKey<int> RowDensity = new("detail.rowdensity", 1);   // 0 Compact · 1 Default · 2 Cozy · 3 Comfortable
+    // BPM · Key as its own track-list COLUMN. Off by default: tempo/key is enrichment most listeners never scan for, and
+    // a permanent column costs width on every row. It is always available inside a row's expander, so this setting only
+    // promotes it to a column for the users who do want to scan it (DJ-adjacent use). App-wide, like RowDensity.
+    public static readonly SettingKey<bool> TempoColumn = new("detail.tempoColumn", false);
     // Track-detail page layout: 0 Automatic (metadata rail on wide windows, immersive Hero on narrow) · 1 Hero (the
     // hero composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
     public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);

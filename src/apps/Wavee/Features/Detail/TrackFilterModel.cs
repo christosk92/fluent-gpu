@@ -23,6 +23,12 @@ public enum TrackDurationRange : byte { Any = 0, UnderThreeMinutes = 1, ThreeToF
 public enum TrackAddedRange : byte { Any = 0, LastSevenDays = 1, LastThirtyDays = 2, LastSixMonths = 3, LastYear = 4 }
 public enum TrackOriginFilter : byte { Any = 0, Streamed = 1, Local = 2 }
 
+/// <summary>Tempo bands, in the vocabulary a listener actually uses ("slow", "fast") rather than raw BPM entry. The
+/// boundaries are the conventional ones: 90 separates ballad from mid, 120 is the four-on-the-floor line, 140 is where
+/// drum-and-bass / hard dance begins. A track with no tempo (no kind-222 payload yet) matches only <see cref="Any"/>,
+/// so an un-enriched list is never silently emptied by this filter.</summary>
+public enum TrackTempoBand : byte { Any = 0, Under90 = 1, From90To119 = 2, From120To139 = 3, From140AndUp = 4 }
+
 /// <summary>The complete transient track-list filter. The default value means no filtering and global text search.</summary>
 public readonly record struct TrackFilterState(
     TrackSearchScope SearchScope = TrackSearchScope.Everything,
@@ -31,7 +37,14 @@ public readonly record struct TrackFilterState(
     TrackFilterFlags Flags = TrackFilterFlags.None,
     TrackDurationRange Duration = TrackDurationRange.Any,
     TrackAddedRange Added = TrackAddedRange.Any,
-    TrackOriginFilter Origin = TrackOriginFilter.Any)
+    TrackOriginFilter Origin = TrackOriginFilter.Any,
+    TrackTempoBand Tempo = TrackTempoBand.Any,
+    // Camelot code ("8B", "11A"). Null = any key. Matched case-insensitively against Track.CamelotCode, which is the
+    // stable DJ notation; the pretty name ("C", "G#") is display only and differs by spelling convention.
+    string? CamelotCode = null,
+    // Liked Songs content-filter chip: a descriptor tag (kind 6 display name, e.g. "K-Pop"). Exclusive by design —
+    // one chip at a time — because the chips are a lens on the list, not a set of accumulating constraints.
+    string? Tag = null)
 {
     public static readonly TrackFilterState Default = new();
 
@@ -52,6 +65,9 @@ public readonly record struct TrackFilterState(
             if (Duration != TrackDurationRange.Any) n++;
             if (Added != TrackAddedRange.Any) n++;
             if (Origin != TrackOriginFilter.Any) n++;
+            if (Tempo != TrackTempoBand.Any) n++;
+            if (!string.IsNullOrEmpty(CamelotCode)) n++;
+            if (!string.IsNullOrEmpty(Tag)) n++;
             return n;
         }
     }
@@ -71,10 +87,22 @@ public static class TrackFilterModel
         if (!MatchesTrait(track.IsExplicit, filter.ExplicitMode)) return false;
         if (!MatchesTrait(hasVideo, filter.VideoMode)) return false;
         if (filter.LikedOnly && !isSaved) return false;
-        if (filter.PlayableOnly && track.Availability != Availability.Playable) return false;
+        // Only a CONFIRMED unavailable is filtered out. Availability is nullable — null means no response ever stated a
+        // verdict — and treating unknown as unplayable would empty the list on every surface that never carries
+        // playability at all (cluster, library and extended-metadata writes).
+        // The shared IsNotYetOut() predicate coincides with "cannot play" here, and that coincidence is intentional: it
+        // adds only the AvailableAt clause, so a region-blocked row (Unavailable, no timestamp) is still hidden, while a
+        // row whose release moment has passed under a stale server verdict is KEPT — which is the same release-drop heal
+        // the greyed row and the play gate get, reached without a refetch.
+        if (filter.PlayableOnly && track.IsNotYetOut()) return false;
 
         if (filter.Origin == TrackOriginFilter.Streamed && track.Origin != TrackOrigin.Streamed) return false;
         if (filter.Origin == TrackOriginFilter.Local && track.Origin != TrackOrigin.Local) return false;
+
+        if (filter.Tag is { Length: > 0 } tag && !HasTag(track.Tags, tag)) return false;
+        if (!MatchesTempo(track.TempoBpm, filter.Tempo)) return false;
+        if (filter.CamelotCode is { Length: > 0 } key
+            && !string.Equals(track.CamelotCode, key, StringComparison.OrdinalIgnoreCase)) return false;
 
         if (!MatchesDuration(track.DurationMs, filter.Duration)) return false;
         if (!MatchesAdded(track.AddedAt, filter.Added, now)) return false;
@@ -97,6 +125,30 @@ public static class TrackFilterModel
         TrackTraitMode.Only => hasTrait,
         _ => true,
     };
+
+    /// <summary>Tag match. Case-insensitive on the DISPLAY name, which is what the chip bar shows and what the store
+    /// holds; the lowercase wire token never reaches the UI, so there is one string to compare, not two.</summary>
+    static bool HasTag(IReadOnlyList<string>? tags, string tag)
+    {
+        if (tags is null) return false;
+        for (int i = 0; i < tags.Count; i++)
+            if (string.Equals(tags[i], tag, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    static bool MatchesTempo(double? bpm, TrackTempoBand band)
+    {
+        if (band == TrackTempoBand.Any) return true;
+        if (bpm is not { } t || t <= 0d) return false;   // unknown tempo cannot satisfy an explicit band
+        return band switch
+        {
+            TrackTempoBand.Under90 => t < 90d,
+            TrackTempoBand.From90To119 => t >= 90d && t < 120d,
+            TrackTempoBand.From120To139 => t >= 120d && t < 140d,
+            TrackTempoBand.From140AndUp => t >= 140d,
+            _ => true,
+        };
+    }
 
     static bool MatchesDuration(long durationMs, TrackDurationRange range) => range switch
     {

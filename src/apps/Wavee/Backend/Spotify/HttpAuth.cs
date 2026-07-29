@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Wavee.Backend.Audio;
 
 namespace Wavee.Backend.Spotify;
 
@@ -144,8 +145,13 @@ public sealed class PathfinderHeadersMiddleware : IHttpMiddleware
     public const string DesktopPlatform = "desktop";
     public const string WebPlayerPlatform = "webplayer";
 
-    const string DesktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.88.483 Safari/537.36";
+    // Matches the captured 1.2.94.583 desktop client (omg.saz). The Spotify/<semver> token is what pins the UA to a
+    // shipping build; keep it in step with SpotifyRuntimeIdentity.DefaultClientVersion.
+    const string DesktopUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.7680.179 Spotify/1.2.94.583 Safari/537.36";
     const string WebPlayerUa = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36";
+    /// <summary>The web-player build token the captured client sends on the operations it serves from the web-player
+    /// bundle. NOT a semver and NOT the spclient packed version — a distinct identifier, observed verbatim.</summary>
+    const string WebPlayerAppVersion = "896000000";
 
     readonly Func<CancellationToken, Task<string?>> _clientToken;
     readonly string _language;
@@ -163,8 +169,15 @@ public sealed class PathfinderHeadersMiddleware : IHttpMiddleware
 
         h["accept"] = "application/json";
         h["content-type"] = "application/json";
-        h["app-platform"] = webPlayer ? "WebPlayer" : "Win32_x86_64";
+        // Architecture-derived, not hardcoded: Wavee ships arm64 and the captured client reports Win32_ARM64 there.
+        // SpotifyRuntimeIdentity.AppPlatform already resolves this (env override → runtime pin → OSArchitecture).
+        h["app-platform"] = webPlayer ? "WebPlayer" : SpotifyRuntimeIdentity.AppPlatform;
         h["user-agent"] = webPlayer ? WebPlayerUa : DesktopUa;
+        // The captured desktop client sends a DIFFERENT spotify-app-version per operation on the SAME socket: the
+        // dotted desktop semver for its own ops, and the web-player build token for the two operations it serves from
+        // the web-player bundle (queryArtistOverview / getAlbum). Wavee sent none at all before this — matching the
+        // capture means the header now rides every Pathfinder call, keyed by the platform the caller selected.
+        h["spotify-app-version"] = webPlayer ? WebPlayerAppVersion : SpotifyRuntimeIdentity.Default.DesktopSemver;
         h["accept-language"] = _language;
         if (await _clientToken(ct).ConfigureAwait(false) is { Length: > 0 } token)
             h["client-token"] = token;

@@ -93,8 +93,12 @@ sealed class ContentHost : Component
 
     // album / playlist / liked / local / SHOW all flow through the one shared detail surface (DetailPage → DetailShell);
     // a show just renders Episodes instead of Tracks on the right (DetailConfig.Show.Content == Episodes).
+    // A `prerelease:` route IS the album detail surface: the prerelease uri is resolved to its album INSIDE DetailPage's
+    // load (kind 138 — the ids differ, so nothing can map them earlier), so it needs no page class of its own, only its
+    // own keep-alive slot.
     static bool IsDetail(Route r) =>
         r.Name.StartsWith("album:", StringComparison.Ordinal) || r.Name.StartsWith("pl:", StringComparison.Ordinal)
+        || r.Name.StartsWith("prerelease:", StringComparison.Ordinal)
         || r.Name.StartsWith("show:", StringComparison.Ordinal) || r.Name == "liked" || r.Name == "local";
 
     static bool IsArtist(Route r) => r.Name.StartsWith("artist:", StringComparison.Ordinal);
@@ -128,6 +132,12 @@ sealed class ContentHost : Component
         if (DiscographyRoute.Is(r.Name))
             return new BoxEl { Key = "page:disco", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new DiscographyPage(new Signal<Route>(r))) ] };
+
+        // A browse CATEGORY page. The directory itself has no route — it is Search's empty state — so only the page
+        // needs one, which is what makes opening a category back-navigable and keep-alive cached.
+        if (Wavee.Features.Browse.BrowseRoutes.Is(r.Name))
+            return new BoxEl { Key = "page:browse", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new Wavee.Features.Browse.BrowsePageHost(r)) ] };
 
         if (ConcertRoutes.Is(r.Name))
             return new BoxEl { Key = "page:concert-route", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,

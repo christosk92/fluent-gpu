@@ -118,16 +118,30 @@ public class VideoOverrideTests
     }
 
     [Fact]
+    public void AttachAndReplace_NotifyWithTheCorrectMutationKind()
+    {
+        var store = new InMemoryStore();
+        var svc = new VideoOverrideService(store) { FileExists = _ => true };
+        var changed = new List<OverrideMutationKind>();
+        svc.OnChanged = (_, kind) => changed.Add(kind);
+
+        svc.Attach("spotify:track:a", @"C:\v\a.mp4");
+        svc.Attach("spotify:track:a", @"C:\v\b.mp4");
+
+        Assert.Equal(new[] { OverrideMutationKind.Attach, OverrideMutationKind.Replace }, changed.ToArray());
+    }
+
+    [Fact]
     public void Remove_IsANoOpWhenNothingIsAttached_AndSilencesTheChangeNotification()
     {
         var svc = Svc(("spotify:track:a", @"C:\v\a.mp4"));
-        var changed = new List<string>();
-        svc.OnChanged = changed.Add;
+        var changed = new List<(string Uri, OverrideMutationKind Kind)>();
+        svc.OnChanged = (uri, kind) => changed.Add((uri, kind));
 
         Assert.True(svc.Remove("spotify:track:a"));
         Assert.False(svc.Remove("spotify:track:a"));
 
-        Assert.Equal(new[] { "spotify:track:a" }, changed.ToArray());
+        Assert.Equal(new[] { ("spotify:track:a", OverrideMutationKind.Remove) }, changed.ToArray());
         Assert.False(svc.Has("spotify:track:a"));
         Assert.Equal(VideoOverrideTier.None, svc.Decide("spotify:track:a").Tier);
     }
@@ -281,30 +295,33 @@ public class VideoOverrideTests
     // ── the controller: open-failure recovery ────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public async Task VideoError_WithNoRecoveryHook_FallsBackToAudio()
+    public async Task VideoError_WithNoRecoveryHook_ReportsError_WithoutSilentAudioFallback()
     {
+        // Local (non-Connect) video faults without a recovery hook surface as a typed playback error. Automatic
+        // video→audio fallback is reserved for Connect-originated sessions (see FallbackVideoToAudioAsync).
         using var h = new Harness { VideoIntent = true };
         await h.Controller.PlayAsync("spotify:playlist:p");
 
         h.Video!.Sig.Emit(AudioHostSignal.Fault(0, AudioKeyFailureReason.None, "decode failed"));
-        await WaitUntilAsync(() => h.Log.Exists(x => x.StartsWith("audio:load:", StringComparison.Ordinal)));
+        await WaitUntilAsync(() => h.Errors.Count > 0);
 
-        Assert.Empty(h.Errors);
-        Assert.Equal(PlayableKind.Audio, h.Controller.CurrentMediaKind);
+        Assert.Single(h.Errors);
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
     }
 
     [Fact]
-    public async Task VideoError_RecoveryDeclines_FallsBackToAudio_AfterAskingOnce()
+    public async Task VideoError_RecoveryDeclines_ReportsError_AfterAskingOnce()
     {
         using var h = new Harness { VideoIntent = true };
         await h.Controller.PlayAsync("spotify:playlist:p");
         h.Controller.TryRecoverVideoAsync = (t, _) => { h.RecoveryAsks.Add(t.Uri); return Task.FromResult(false); };
 
         h.Video!.Sig.Emit(AudioHostSignal.Fault(0, AudioKeyFailureReason.None, "decode failed"));
-        await WaitUntilAsync(() => h.Controller.CurrentMediaKind == PlayableKind.Audio);
+        await WaitUntilAsync(() => h.Errors.Count > 0);
 
         Assert.Equal(new[] { "spotify:track:a" }, h.RecoveryAsks.ToArray());
-        Assert.Empty(h.Errors);
+        Assert.Single(h.Errors);
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
     }
 
     [Fact]
@@ -334,10 +351,10 @@ public class VideoOverrideTests
         await Task.Delay(60);                         // let the recovery reload settle (it keeps the same playable)
 
         h.Video.Sig.Emit(AudioHostSignal.Fault(0, AudioKeyFailureReason.None, "decode failed again"));
-        await WaitUntilAsync(() => h.Controller.CurrentMediaKind == PlayableKind.Audio);
+        await WaitUntilAsync(() => h.Errors.Count > 0);
 
-        Assert.Single(h.RecoveryAsks);                // one video recovery, then a deterministic audio fail-over
-        Assert.Empty(h.Errors);
+        Assert.Single(h.RecoveryAsks);                // one video recovery; a second fault reports rather than looping
+        Assert.Single(h.Errors);
     }
 
     [Fact]
@@ -402,6 +419,42 @@ public class VideoOverrideTests
 
         Assert.Equal(200_000, p.DurationMs);
         Assert.Equal(0, p.DurationOverrideMs);
+    }
+
+    [Fact]
+    public async Task DurationOverride_ClearedWhenLeavingVideoKind()
+    {
+        using var h = new Harness { VideoIntent = true };
+        await h.Controller.PlayAsync("spotify:playlist:p");
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+        h.Projection.SetDurationOverride("spotify:track:a", 255_095);
+        Assert.Equal(255_095, h.Projection.DurationOverrideMs);
+
+        h.VideoIntent = false;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+
+        Assert.Equal(PlayableKind.Audio, h.Controller.CurrentMediaKind);
+        Assert.Equal(0, h.Projection.DurationOverrideMs);
+        Assert.NotEqual(255_095, h.Projection.DurationMs);   // must not keep the mp4 length on audio
+        Assert.True(h.Projection.DurationMs > 0);
+    }
+
+    [Fact]
+    public async Task DurationOverride_ReAdoptedWhenVideoReloads()
+    {
+        using var h = new Harness { VideoIntent = true };
+        await h.Controller.PlayAsync("spotify:playlist:p");
+        h.Projection.SetDurationOverride("spotify:track:a", 255_095);
+        h.VideoIntent = false;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+        Assert.Equal(0, h.Projection.DurationOverrideMs);
+
+        h.VideoIntent = true;
+        await h.Controller.RefreshCurrentMediaKindAsync();
+        h.Projection.SetDurationOverride("spotify:track:a", 255_095);
+
+        Assert.Equal(PlayableKind.Video, h.Controller.CurrentMediaKind);
+        Assert.Equal(255_095, h.Projection.DurationOverrideMs);
     }
 
     [Fact]
@@ -485,6 +538,7 @@ public class VideoOverrideTests
         public readonly List<string> Log = new();
         public readonly FakeAudioHost Audio;
         public readonly FakeVideoHost? Video;
+        public readonly NowPlayingProjection Projection;
         public readonly PlaybackController Controller;
         public readonly List<PlaybackErrorInfo> Errors = new();
         public readonly List<string> RecoveryAsks = new();
@@ -496,7 +550,8 @@ public class VideoOverrideTests
         {
             Audio = new FakeAudioHost(Log);
             Video = new FakeVideoHost(Log);
-            Controller = new PlaybackController(Audio, new StubTrackResolver(), new NowPlayingProjection("us", () => 0),
+            Projection = new NowPlayingProjection("us", () => 0);
+            Controller = new PlaybackController(Audio, new StubTrackResolver(), Projection,
                 new FakeContextResolver("spotify:track:a", "spotify:track:b"), "us", videoHost: Video);
             Controller.ShouldPlayAsVideo = _ => VideoIntent;
             Controller.LoadCurrentVideoAsync = (_, _) => { LoadVideoCalls++; return Task.FromResult(true); };

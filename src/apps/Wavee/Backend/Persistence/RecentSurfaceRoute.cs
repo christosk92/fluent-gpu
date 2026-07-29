@@ -14,6 +14,9 @@ namespace Wavee.Backend.Persistence;
 //   • `local` resolves to the synthetic uri `wavee:local:all`, which no cold row and no pin table ever contains.
 // Recording either would burn one of the 50 LRU slots on a row that can never be read back. Everything else the detail
 // surfaces render (`album:` / `pl:` / `show:` / `artist:`) is a real entity uri and is recorded.
+//   • `prerelease:` (an upcoming release, which renders the ordinary album page) is deliberately left unclassified: the
+//     ALBUM uri is the thing worth pinning, and it is pinned the moment the user reaches the `album:` route — pinning
+//     the prerelease uri too would spend a second LRU slot on an entity the cold store has no row for.
 //
 // Lives in Backend (not Features) because it is pure route→entity mapping with no UI dependency — which is also what
 // makes it unit-testable without the shell.

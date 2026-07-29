@@ -199,17 +199,35 @@ sealed class AlbumTrailing : Component
 
     // Songs / Length / Released / Label — each present-only (a missing fact drops its tile). Songs+Length come from the
     // track list; Released prefers the formatted date, else the year; Label is the record label.
+    // TODO(loc): the neighbouring literals are hardcoded English throughout this file.
     static Element[] AlbumFactTiles(DetailModel m)
     {
         var stats = new List<(string Value, string Label)>(4);
         if (m.Tracks.Count > 0)
         {
-            stats.Add((m.Tracks.Count.ToString(), "Songs"));
-            long ms = DetailFormat.TotalMs(m.Tracks);
+            // On a PARTLY released album the plain count and the summed length both lie: the count includes tracks that
+            // are not out, and the length silently omits their unknown durations, so "12 songs · 31 min" describes a
+            // record that does not exist yet. Report what is actually out, and measure only that.
+            int outNow = 0;
+            long ms = 0;
+            for (int i = 0; i < m.Tracks.Count; i++)
+            {
+                if (m.Tracks[i].IsNotYetOut()) continue;
+                outNow++;
+                ms += m.Tracks[i].DurationMs;
+            }
+            stats.Add((outNow == m.Tracks.Count
+                ? m.Tracks.Count.ToString()
+                : outNow + " of " + m.Tracks.Count, "Songs"));
             if (ms > 0) stats.Add((DetailFormat.TotalTime(ms), "Length"));
         }
         string? released = m.ReleaseDate is { Length: > 0 } rd ? rd : m.Year;
-        if (released is { Length: > 0 }) stats.Add((released, "Released"));
+        // The tense comes from the FACT, not from the countdown: a partly-released album has a release date in the past
+        // AND a countdown to its next track in the future at the same time, so gating this on UpcomingAt would relabel
+        // an album that is already partly out as one that has not happened.
+        bool future = m.ReleaseInstant is { } ri && ri > DateTimeOffset.UtcNow;
+        if (released is { Length: > 0 })
+            stats.Add((released, Loc.Get(future ? Strings.Detail.FactReleases : Strings.Detail.FactReleased)));
         if (m.Label is { Length: > 0 } lb) stats.Add((lb, "Label"));
         var tiles = new Element[stats.Count];
         for (int i = 0; i < stats.Count; i++) tiles[i] = CompactStatTile(stats[i].Value, stats[i].Label);

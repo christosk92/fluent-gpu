@@ -587,10 +587,13 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     {
         var doc = ArtistSplit.Project(a);
         foreach (var uri in ArtistSplit.ReferencedAlbums(doc)) NoteRefs(uri);
-        if (doc.TopTracks is { } tops) foreach (var uri in tops) NoteRefs(uri);
+        if (doc.TopTracks is { } tops) foreach (var row in tops) NoteRefs(row.Uri);
         PersistEntity(a.Uri, EntityKind.Artist, JsonSerializer.SerializeToUtf8Bytes(ArtistSplit.Core(a), EntityJson.Default.Artist));
         // The artist's own Popular list rides along: it is ≤10 rows already in hand, and without it the re-fatten hands
-        // back an artist with no TopTracks — which trips SpotifyArtistStatsService's TopTracks-presence gate every launch.
+        // back an artist with no TopTracks — which trips SpotifyArtistStatsService's freshness gate every launch.
+        // These bypass the hot merge (they are written straight from the projection), so a play-count-bearing overview
+        // row lands on disk here — but a LATER thin write of the same uri re-persists the merged hot row over it. The
+        // counts only stay put because the stats service now also upserts them into the track plane.
         if (a.TopTracks is { Count: > 0 } topTracks)
             for (int i = 0; i < topTracks.Count; i++)
                 PersistEntity(topTracks[i].Uri, EntityKind.Track, JsonSerializer.SerializeToUtf8Bytes(topTracks[i], EntityJson.Default.Track));

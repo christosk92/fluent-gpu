@@ -35,7 +35,10 @@ sealed class NowPlayingPanel : Component
         if (b is null) return new BoxEl { Grow = 1f };
         if (track is null) return Empty(Loc.Get(Strings.Player.NothingPlaying));
 
-        Palette? pal = b.TrackPalette.Value;
+        // The now-playing colour, from the track's OWN cover. Watching just that image recolours the hero the moment
+        // it is graded, without waking this panel for unrelated batches.
+        _ = SpotifyLive.CoverColorPlane.Current.Watch(track.Image?.Url).Value;
+        var pal = Surfaces.SchemeFor(track.Image?.Url);
         var sections = new List<Element>(8);
         if (info?.About is { } about)
         {
@@ -83,7 +86,7 @@ sealed class NowPlayingPanel : Component
         catch { return null; }
     }
 
-    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go, Palette? palette)
+    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go, SpotifyLive.CoverColorPlane.Scheme? palette)
     {
         ColorF accent = palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : Tok.AccentDefault;
         ColorF wash = ColorF.Lerp(Tok.FillCardSecondary, accent, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.10f);

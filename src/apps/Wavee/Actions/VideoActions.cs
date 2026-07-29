@@ -4,6 +4,7 @@ using FluentGpu;
 using FluentGpu.Controls;
 using FluentGpu.Localization;
 using FluentGpu.WindowsApi.Dialogs;
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -102,6 +103,44 @@ public static class VideoActions
         Apply(c.S, svc, uri, picked, replace);
     }
 
+    /// <summary>Start a playable in a chosen FORM. This exists because "play it" and "play it as video" used to be the
+    /// same call: <c>PlayTrackAsync(uri)</c> carries no form, so the decision fell to
+    /// <c>PlaybackBridge.ShouldPlayAsVideo</c> reading the user's STANDING surface intent — and a caller who wanted
+    /// video had to know to light the surface first, in the right order, before playing. The versions drawer did not
+    /// know that, so its music-video row started the audio track.
+    ///
+    /// <para>That ordering is no longer a rule callers must remember; it lives inside this one verb.
+    /// <see cref="MediaForm.Video"/> is a ONE-PLAY request — the intent is scoped to this uri
+    /// (<c>PlaybackBridge.PrimeVideoIntentFor</c>) and dies at the next track boundary, so playing a music video never
+    /// leaves the STANDING toggle on for the rest of the queue; only the explicit player-bar/menu toggles do that.
+    /// <see cref="MediaForm.Audio"/> turns the standing intent off (no callers yet — kept for symmetry), and
+    /// <see cref="MediaForm.Default"/> leaves everything alone — byte-identical to a bare play.</para></summary>
+    public static void PlayAs(IPlaybackPlayer? player, PlaybackBridge? bridge, string playableUri, MediaForm form)
+    {
+        if (playableUri.Length == 0 || player is null) return;
+        ApplyForm(bridge, playableUri, form);
+        _ = player.PlayTrackAsync(playableUri);
+    }
+
+    /// <summary>The same verb for a playable the store does not hold — a dropped local file, which arrives as a
+    /// synthetic <see cref="Track"/> rather than a uri.</summary>
+    public static void PlayAs(IPlaybackPlayer? player, PlaybackBridge? bridge, Track track, MediaForm form)
+    {
+        if (player is null) return;
+        ApplyForm(bridge, track.Uri, form);
+        _ = player.PlayTrackAsync(track);
+    }
+
+    /// <summary>Set the surface intent BEFORE the play command. <c>ShouldPlayAsVideo</c> reads the intent as the
+    /// playable starts, so setting it afterwards lands on the NEXT track instead of this one — the ordering that
+    /// every caller used to have to know. A null bridge (tests, audio-only builds) just plays, exactly like Default.</summary>
+    static void ApplyForm(PlaybackBridge? bridge, string uri, MediaForm form)
+    {
+        if (bridge is not { } b) return;
+        if (form == MediaForm.Video) b.PrimeVideoIntentFor(uri);   // one-play scope; a no-op while already watching
+        else if (form == MediaForm.Audio && b.VideoActive()) b.TurnVideoOff();
+    }
+
     /// <summary>Validate → attach → toast (with Undo) → make it visible. The ONE entry point the menu picker, the
     /// "Locate…" repair and the row drag-drop all share, so those three can never drift apart.</summary>
     public static void Apply(ActionServices s, VideoOverrideService svc, string uri, string path, bool replace)
@@ -139,8 +178,8 @@ public static class VideoActions
             // Undo restores the PREVIOUS state exactly: the prior attachment on a replace, no attachment on a first attach.
             OnAction = () => Restore(svc, uri, previousPath),
         });
-
-        RevealIfCurrent(s, uri);
+        // Reveal is owned by PlaybackBridge.ApplyVideoOverrideChanged (after has-video commit) — calling ShowVideoAt
+        // here raced the posted mutation and opened with Available=None, which double-fired Audio→Video + forced reload.
     }
 
     /// <summary>Undo: re-attach the previous file, or detach when there was none. Both directions run through the same
@@ -154,17 +193,6 @@ public static class VideoActions
         }
         catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); return; }
         Toast.Show(Loc.Get(Strings.VideoOverride.Restored), new ToastOptions { Severity = InfoBarSeverity.Informational });
-    }
-
-    /// <summary>When the change lands on the playable that is playing RIGHT NOW, show it: open the surface at the user's
-    /// preferred home. Without this the attachment is real but invisible until the next track — the bridge's mutation
-    /// flow swaps the MEDIA, not the surface INTENT. Attaching a video to the playing track is an explicit "show me
-    /// this", so it is allowed to turn video back on after the user had closed it (closing is otherwise sticky-off).</summary>
-    static void RevealIfCurrent(ActionServices s, string uri)
-    {
-        if (s.Playback is not { } b) return;
-        if (!string.Equals(b.CurrentTrack.Peek()?.Uri, uri, StringComparison.Ordinal)) return;
-        if (!b.VideoActive()) b.ShowVideoAt(b.VideoSurface.Peek().Preferred);
     }
 
     // ── shared gates ─────────────────────────────────────────────────────────────────────────────────────────────────

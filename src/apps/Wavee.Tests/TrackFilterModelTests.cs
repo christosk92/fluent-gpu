@@ -8,13 +8,13 @@ public class TrackFilterModelTests
 {
     static Track Song(
         string title = "Blue Monday", string artist = "New Order", string album = "Power, Corruption & Lies",
-        long duration = 450_000, bool explicitTrack = false, bool video = false,
+        long duration = 450_000, bool explicitTrack = false,
         TrackOrigin origin = TrackOrigin.Streamed, Availability availability = Availability.Playable,
         DateTimeOffset? added = null) =>
         new("1", "spotify:track:1", title,
             [new ArtistRef("a", "spotify:artist:a", artist)],
             new AlbumRef("b", "spotify:album:b", album),
-            duration, explicitTrack, null, added, HasVideo: video, Origin: origin, Availability: availability);
+            duration, explicitTrack, null, added, Origin: origin, Availability: availability);
 
     [Fact]
     public void SearchScope_UsesOnlySelectedMetadata()
@@ -42,13 +42,15 @@ public class TrackFilterModelTests
     public void PlaylistTrack_SupportsDateAndTraitModes()
     {
         var now = new DateTimeOffset(2026, 7, 27, 0, 0, 0, TimeSpan.Zero);
-        var song = Song(explicitTrack: true, video: true, added: now.AddDays(-3));
+        var song = Song(explicitTrack: true, added: now.AddDays(-3));
         var filter = new TrackFilterState(
             ExplicitMode: TrackTraitMode.Hide,
             VideoMode: TrackTraitMode.Only,
             Added: TrackAddedRange.LastSevenDays);
 
-        Assert.False(TrackFilterModel.Matches(song, "", filter, song.HasVideo, false, now));
+        // hasVideo is a PARAMETER by design: the caller answers it from VideoPresence (the association plane ∪
+        // overrides), never from a track field — true here mirrors a video-bearing row.
+        Assert.False(TrackFilterModel.Matches(song, "", filter, hasVideo: true, false, now));
         Assert.Equal(3, filter.ActiveCount);
     }
 

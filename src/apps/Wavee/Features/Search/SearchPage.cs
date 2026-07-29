@@ -109,15 +109,15 @@ sealed class SearchPage : Component
     static string[] ChipLabels() =>
     [
         Loc.Get(Strings.Search.All), Loc.Get(Strings.Search.Songs), Loc.Get(Strings.Search.Albums),
-        Loc.Get(Strings.Search.Playlists), "Audiobooks", "Podcasts & Shows", Loc.Get(Strings.Search.Artists),
+        Loc.Get(Strings.Search.Playlists), Loc.Get(Strings.Search.Audiobooks),
+        Loc.Get(Strings.Search.PodcastsShows), Loc.Get(Strings.Search.Artists),
+        Loc.Get(Strings.Search.Episodes), Loc.Get(Strings.Search.Profiles),
     ];
 
-    static SearchFacet RequestFacetFor(int chip) => chip switch
-    {
-        // We do not have dedicated captured Pathfinder ops for these yet. Query All and filter the unified top hits.
-        4 or 5 => SearchFacet.All,
-        _ => FacetFor(chip),
-    };
+    // Every chip maps to a dedicated captured Pathfinder operation now, so the request facet IS the display facet.
+    // Audiobooks/Podcasts used to query All and filter the unified top hits, which capped them at the top-results page
+    // size and mixed in unrelated kinds.
+    static SearchFacet RequestFacetFor(int chip) => FacetFor(chip);
 
     static SearchFacet FacetFor(int chip) => chip switch
     {
@@ -127,6 +127,8 @@ sealed class SearchPage : Component
         4 => SearchFacet.Audiobooks,
         5 => SearchFacet.Podcasts,
         6 => SearchFacet.Artists,
+        7 => SearchFacet.Episodes,
+        8 => SearchFacet.Profiles,
         _ => SearchFacet.All,
     };
 
@@ -137,8 +139,16 @@ sealed class SearchPage : Component
         void PlayTrack(string uri) => _ = svc.Player.PlayTrackAsync(uri);
         void PlayKnownTrack(Track track) => _ = svc.Player.PlayTrackAsync(track);
 
-        if (chip == 4) return TopHitList(r, h => h.Kind == SearchHitKind.Audiobook, "No audiobook results", go, Play, PlayTrack, PlayKnownTrack);
-        if (chip == 5) return TopHitList(r, h => h.Kind is SearchHitKind.Podcast or SearchHitKind.Episode, "No podcast results", go, Play, PlayTrack, PlayKnownTrack);
+        // Dedicated facets render their OWN result list (not a filtered slice of the All-tab top hits), so they page
+        // properly and keep their per-kind metadata: an audiobook's access signifier, an episode's show name.
+        if (chip == 4)
+            return HitsList(r.Audiobooks, Loc.Get(Strings.Search.NoAudiobookResults), r, go, Play, PlayTrack, PlayKnownTrack);
+        if (chip == 5)
+            return HitsList(ShowHits(r.Shows), Loc.Get(Strings.Search.NoPodcastResults), r, go, Play, PlayTrack, PlayKnownTrack);
+        if (chip == 7)
+            return HitsList(EpisodeHits(r.Episodes), Loc.Get(Strings.Search.NoEpisodeResults), r, go, Play, PlayTrack, PlayKnownTrack);
+        if (chip == 8)
+            return HitsList(r.Profiles, Loc.Get(Strings.Search.NoProfileResults), r, go, Play, PlayTrack, PlayKnownTrack);
 
         if (chip != 0 && r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count == 0)
             return Centered(Icons.Search, Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
@@ -161,6 +171,45 @@ sealed class SearchPage : Component
                        Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
         => Ctx.Provide(SearchAllList.Props, new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, include, emptyTitle),
             Embed.Comp(() => new SearchAllList()));
+
+    /// <summary>Render an explicit hit list (a dedicated facet's results) through the SAME row factory the All tab
+    /// uses, so a search row looks and behaves identically regardless of which operation produced it.</summary>
+    Element HitsList(IReadOnlyList<SearchTopHit>? hits, string emptyTitle, SearchResults r,
+                     Action<string, string?> go, Action<string> play, Action<string> playTrack, Action<Track> playKnownTrack)
+        => Ctx.Provide(SearchAllList.Props,
+            new SearchAllList.Model(r, go, playTrack, play, playKnownTrack, Filter: null, EmptyTitle: emptyTitle,
+                                    Hits: hits ?? Array.Empty<SearchTopHit>()),
+            Embed.Comp(() => new SearchAllList()));
+
+    // Show/Episode are real domain records (the app has podcast surfaces to route into); the search LIST renders them
+    // through the shared hit row, so they are projected here instead of duplicating the row factory.
+    static IReadOnlyList<SearchTopHit> ShowHits(IReadOnlyList<Show>? shows)
+    {
+        if (shows is not { Count: > 0 }) return Array.Empty<SearchTopHit>();
+        var hits = new SearchTopHit[shows.Count];
+        for (int i = 0; i < shows.Count; i++)
+        {
+            var sh = shows[i];
+            hits[i] = new SearchTopHit(SearchHitKind.Podcast, sh.Uri, sh.Name, sh.Publisher,
+                Loc.Get(Strings.Search.TypePodcast), sh.Cover, RoundImage: false, Followable: true,
+                MatchedLyrics: false, AccessLabel: null);
+        }
+        return hits;
+    }
+
+    static IReadOnlyList<SearchTopHit> EpisodeHits(IReadOnlyList<Episode>? episodes)
+    {
+        if (episodes is not { Count: > 0 }) return Array.Empty<SearchTopHit>();
+        var hits = new SearchTopHit[episodes.Count];
+        for (int i = 0; i < episodes.Count; i++)
+        {
+            var ep = episodes[i];
+            hits[i] = new SearchTopHit(SearchHitKind.Episode, ep.Uri, ep.Title, ep.ShowName,
+                Loc.Get(Strings.Search.TypeEpisode), ep.Image, RoundImage: false, Followable: false,
+                MatchedLyrics: false, AccessLabel: null, Detail: ep.Description);
+        }
+        return hits;
+    }
 
     Element SongsList(IReadOnlyList<Track> tracks, Action<Track> playTrack, Action<string, string?> go, int max)
     {
@@ -198,37 +247,27 @@ sealed class SearchPage : Component
         Children = [new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f }],
     };
 
-    // ── browse-all empty state (a grid of category tiles; tapping searches that category) ──
-    static readonly string[] Categories =
-        ["Pop", "Hip-Hop", "Rock", "Dance / Electronic", "Chill", "Focus", "Workout", "Indie", "Jazz", "R&B", "Classical", "Sleep"];
-    static readonly (byte R, byte G, byte B)[] CatRgb =
-        [(0xE1, 0x3A, 0x5A), (0x2E, 0x6C, 0xE0), (0x6A, 0x2D, 0x6A), (0x1E, 0x5F, 0x4F), (0xB5, 0x53, 0x2A), (0x24, 0x50, 0x6B), (0x7A, 0x5A, 0x2E), (0x2A, 0x6F, 0x5A)];
-    static ColorF CatColor(int i) { var (r, g, b) = CatRgb[i % CatRgb.Length]; return ColorF.FromRgba(r, g, b); }
-
-    static Element BrowseAll(Signal<string>? querySig)
+    // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
+    // No query → the real Browse directory (every Spotify category, grouped and alphabetised), NOT a hardcoded grid of
+    // invented category tiles. Type to search, don't type and you're browsing.
+    Element BrowseAll(Signal<string>? querySig)
     {
-        var cards = new Element[Categories.Length];
-        for (int i = 0; i < Categories.Length; i++)
-        {
-            int idx = i;
-            cards[i] = CategoryCard(Categories[i], i, () => { if (querySig is not null) querySig.Value = Categories[idx]; });
-        }
-        return new BoxEl
-        {
-            Direction = 1, Gap = Spacing.L,
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
-            Children = [WaveeType.PageHero(Loc.Get(Strings.Search.BrowseAll)), AutoGrid(200f, Spacing.M, 104f, cards)],
-        };
+        var go = UseContext(HistoryStore.NavCtx);
+        var model = new Wavee.Features.Browse.BrowseDirectory.Model(
+            OnOpenCategory: uri => go(Wavee.Features.Browse.BrowseRoutes.Page(uri), null),
+            // Live Events is a BrowseClientFeature, not a page — it routes into the Concerts hub Wavee already has.
+            OnOpenFeature: uri => go(string.Equals(uri, "spotify:concerts", StringComparison.Ordinal)
+                ? Wavee.Features.Concerts.ConcertRoutes.Hub
+                : uri, null));
+
+        return Ctx.Provide(Wavee.Features.Browse.BrowseDirectory.Props, model,
+            new BoxEl
+            {
+                Direction = 1, MinWidth = 0f,
+                Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
+                Children = [Embed.Comp(() => new Wavee.Features.Browse.BrowseDirectory())],
+            });
     }
-
-    static Element CategoryCard(string name, int i, Action open) => new BoxEl
-    {
-        Height = 104f, Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
-        Gradient = LinearGradient(135f, new GradientStop(0f, CatColor(i)), new GradientStop(1f, CatColor(i) with { A = 0.7f })),
-        Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
-        HoverScale = 1.02f, PressScale = 0.99f, OnClick = open,
-        Children = [new TextEl(name) { Size = 18f, Weight = 800, Color = ColorF.FromRgba(255, 255, 255), MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis }],
-    };
 
     // ── top result ───────────────────────────────────────────────────────────────────────────────────────
     static Element? TopResult(SearchResults r, Action<string, string?> go, Action<string> play)
@@ -322,7 +361,7 @@ sealed class SearchSongs : Component
 
     static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
     static readonly TrackSize[] Columns =
-        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(64f), TrackSize.Px(40f)];   // trailing 40px = the "…" overflow lane
+        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing 40px = the "…" overflow lane
     const float RowContentH = 56f;
     const float RowExtent = 60f;
     readonly SwipeGroup _swipeGroup = new();
@@ -472,7 +511,10 @@ sealed class SearchAllList : Component
         Action<string> PlayContext,
         Action<Track> PlayKnownTrack,
         Func<SearchTopHit, bool>? Filter = null,
-        string? EmptyTitle = null);
+        string? EmptyTitle = null,
+        // An EXPLICIT hit list (a dedicated facet's own results). Takes precedence over Filter, which only ever slices
+        // the All-tab top hits.
+        IReadOnlyList<SearchTopHit>? Hits = null);
     internal static readonly Context<Model?> Props = new(null);
 
     public override Element Render()
@@ -482,6 +524,8 @@ sealed class SearchAllList : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);      // row context menus (Menus.Card / Menus.TrackAttach)
         var menuOverlay = UseContext(Overlay.Service);
+        if (model.Hits is { } explicitHits)
+            return BuildHits(explicitHits, lib, model, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay);
         return model.Filter is { } filter
             ? BuildFiltered(model.Results, lib, model, filter, model.EmptyTitle ?? Loc.Get(Strings.Search.NoResults), acts, menuOverlay)
             : Build(model.Results, lib, model, acts, menuOverlay);
@@ -525,12 +569,16 @@ sealed class SearchAllList : Component
 
     internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle,
                                           ActionServices? acts = null, IOverlayService? menuOverlay = null)
-    {
-        var hits = r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>();
-        if (hits.Length == 0) return EmptyState.Build(emptyTitle, glyph: Icons.Search);
+        => BuildHits(r.TopHits?.Where(include).ToArray() ?? Array.Empty<SearchTopHit>(), lib, model, emptyTitle, acts, menuOverlay);
 
-        var rows = new Element[hits.Length];
-        for (int i = 0; i < hits.Length; i++)
+    /// <summary>Render a hit list through the shared row factory — one code path for the All tab's filtered slice and
+    /// for a dedicated facet's own results, so a podcast row is identical wherever it came from.</summary>
+    internal static Element BuildHits(IReadOnlyList<SearchTopHit> hits, LibraryBridge? lib, Model model, string emptyTitle,
+                                      ActionServices? acts = null, IOverlayService? menuOverlay = null)
+    {
+        if (hits.Count == 0) return EmptyState.Build(emptyTitle, glyph: Icons.Search);
+        var rows = new Element[hits.Count];
+        for (int i = 0; i < hits.Count; i++)
             rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
         return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows };
     }
@@ -595,7 +643,7 @@ sealed class SearchAllList : Component
 
     static Element TrackRowFb(Track t, LibraryBridge? lib, Model model,
                               ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
-        t.Image, t.Title, (t.HasVideo ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
+        t.Image, t.Title, (VideoPresence.HasVideo(t) ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
         () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t), typeChip: "Song",
         trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }),
         menu: TrackMenu(acts, menuOverlay, t));

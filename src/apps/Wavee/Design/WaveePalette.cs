@@ -1,11 +1,12 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
-using Wavee.Core;
+using Wavee.SpotifyLive;
 
 namespace Wavee;
 
-// The boundary mapper: framework-neutral Wavee.Core.Palette (uint ARGB) → engine ColorF. This is the ONLY place the
-// album-art palette becomes renderer color (keeps Wavee.Core free of FluentGpu types). Used by the now-playing recolor.
+// The boundary mapper: the framework-neutral cover-colour roles (uint ARGB, from CoverColorPlane) → engine ColorF.
+// This is the ONLY place a cover colour becomes a renderer colour. A page asks the plane for its cover's Scheme and
+// maps the roles it needs here; nothing carries a per-entity palette any more.
 public static class WaveePalette
 {
     public static ColorF ToColor(uint argb)
@@ -27,21 +28,26 @@ public static class WaveePalette
         return new ColorF(MathF.Min(1f, c.R * k), MathF.Min(1f, c.G * k), MathF.Min(1f, c.B * k), c.A);
     }
 
-    public static ColorF Accent(Palette p) => ToColor(p.Accent);
-    public static ColorF BackgroundDark(Palette p) => ToColor(p.BackgroundDark);
-    public static ColorF TintedDark(Palette p) => ToColor(p.TintedDark);
+    // The four roles the app's chrome asks for, over the plane's five-role scheme. textBrightAccent IS the accent
+    // Spotify grades for text/controls on that cover; backgroundBase is the dominant tone; backgroundTintedBase is the
+    // slightly-lifted band tone the page washes use.
+    public static ColorF Accent(in CoverColorPlane.Scheme s) => ToColor(s.TextBrightAccent);
+    public static ColorF BackgroundDark(in CoverColorPlane.Scheme s) => ToColor(s.BackgroundBase);
+    public static ColorF TintedDark(in CoverColorPlane.Scheme s) => ToColor(s.BackgroundTintedBase);
 
     /// <summary>Neutral card fill under <see cref="Surfaces.HeroWash"/> — same as the shell content card on detail pages.</summary>
-    public static ColorF HeroBase(Palette? art) => WaveeColors.FileArea;
+    public static ColorF HeroBase(CoverColorPlane.Scheme? art) => WaveeColors.FileArea;
 
-    /// <summary>Hero-wash accent — same derivation as <c>DetailShell</c> (lifted accent in light, <c>colorDark</c> in dark).</summary>
-    public static ColorF HeroWashColor(Palette? art) =>
+    /// <summary>Hero-wash accent — same derivation as <c>DetailShell</c> (lifted accent in light, the dominant tone in dark).</summary>
+    public static ColorF HeroWashColor(CoverColorPlane.Scheme? art) =>
         Tok.Theme == ThemeKind.Light
             ? (art is { } p ? Lift(Accent(p)) : Tok.AccentDefault)
             : BackgroundDark(art ?? Neutral);
 
-    /// <summary>Neutral fallback when no palette is available (no current track / not yet extracted).</summary>
-    public static Palette Neutral { get; } = new(BackgroundDark: 0xFF1C1C1C, TintedDark: 0xFF2A2A2A, Light: 0xFFFFFFFF, Accent: 0xFF2E6CE0);
+    /// <summary>Neutral fallback when the plane has no grading yet (no current track / not fetched).</summary>
+    public static CoverColorPlane.Scheme Neutral { get; } =
+        new(BackgroundBase: 0xFF1C1C1C, BackgroundTintedBase: 0xFF2A2A2A, TextBase: 0xFFFFFFFF,
+            TextSubdued: 0xFFB3B3B3, TextBrightAccent: 0xFF2E6CE0);
 
     /// <summary>The player bar's neutral dark base — the surface the album hue is only faintly lifted from. WinUI's
     /// subtlety came from acrylic over a real blurred desktop; we have neither, so the bar is a flat neutral fill with a
@@ -50,5 +56,5 @@ public static class WaveePalette
 
     /// <summary>The player bar fill: the neutral <see cref="BarSurface"/> with only ~10% of the track accent blended in,
     /// so the bar reads neutral-dark with a hint of the cover — never the raw saturated album colour.</summary>
-    public static ColorF BarTint(Palette p) => ColorF.Lerp(BarSurface, Accent(p), 0.10f);
+    public static ColorF BarTint(in CoverColorPlane.Scheme s) => ColorF.Lerp(BarSurface, Accent(s), 0.10f);
 }

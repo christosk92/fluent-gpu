@@ -64,14 +64,24 @@ sealed class ArtistMoreButton : Component
 }
 
 // Which optional columns a track row shows. #, Title and Duration are always present. Cell build order (and the matching
-// track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Video · Plays · Duration. SHARED by the detail
-// TrackList header + every row builder, so the header and the rows stay column-aligned by construction.
-// Actions = the trailing "…" overflow lane (dropped at the ultra-compact tier; still reachable via the row context menu).
-// Tier = the resolved width tier this set was built for — carried here so Grid/Header/TracksFor all derive the SAME
-// tier-scaled padding/gap (the alignment invariant). Both are defaulted so the many non-tiered ColumnSet sites (search,
-// artist "Popular", queue, drawers) keep their current look (Actions present, tier-0 spacing).
+// track widths) is: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Plays · Tempo · Duration · Video · Actions.
+// SHARED by the detail TrackList header + every row builder, so the header and the rows stay column-aligned by
+// construction. Video sits in the trailing chrome (before Expand) so film / hover "…" never land between Album and
+// Tempo. Actions = the trailing "…" overflow lane when Video is off (dropped at the ultra-compact tier; still reachable
+// via the row context menu). When Video is on, More lives IN the Video lane (rest=Movie / hover=bare "…") and Actions
+// stays off so the trailing lane is not double-reserved. Tier = the resolved width tier this set was built for —
+// carried here so Grid/Header/TracksFor all derive the SAME tier-scaled padding/gap (the alignment invariant). Both are
+// defaulted so the many non-tiered ColumnSet sites (search, artist "Popular", queue, drawers) keep their current look
+// (Actions present, tier-0 spacing).
 internal readonly record struct ColumnSet(bool Album, bool By, bool Date, bool Video, bool Plays, bool Heart, bool Thumb,
-                                          bool Actions = true, int Tier = 0);
+                                          bool Actions = true, int Tier = 0,
+                                          // Tempo + musical key (extended-metadata kind 222). Enrichment rather than
+                                          // identity, so it is the FIRST column dropped under width pressure — see
+                                          // ShowTempo. Off by default: dense surfaces (search, artist Popular) opt out.
+                                          bool Tempo = false,
+                                          // The expand chevron (alternate versions + per-item audio format). Sits at
+                                          // the very END of the row, after the Video/"…" lane.
+                                          bool Expand = false);
 
 // ── the ONE track-row cell, used EVERYWHERE a track is shown (detail list, library pane, artist "Popular", search) ──
 // This is the single source of truth for what a track row LOOKS like and how it BEHAVES at rest/hover/now-playing — the
@@ -112,8 +122,10 @@ internal static class TrackRow
         internal const string Date = "c.date";
         internal const string Video = "c.video";
         internal const string Plays = "c.plays";
+        internal const string Tempo = "c.tempo";
         internal const string Duration = "c.dur";
         internal const string More = "c.more";
+        internal const string Expand = "c.expand";
     }
 
     // Stream count → "1.85B" / "11.8M" / "654.8K".
@@ -127,6 +139,10 @@ internal static class TrackRow
     internal readonly record struct State(bool IsNow, bool IsPlaying, bool IsBuffering, bool IsTop, bool Saved);
 
     internal enum ArtCardKind { Grid, Rail }
+
+    /// <summary>What a numeric cell shows when the value is not merely zero but not yet knowable — an em dash, which
+    /// reads as "nothing to state" where "0" and "0:00" read as facts.</summary>
+    internal const string Dash = "—";
 
     internal static State StateOf(PlaybackBridge? bridge, LibraryBridge? lib, Track t,
                                   bool isTop = false, bool extraBuffering = false)
@@ -162,7 +178,8 @@ internal static class TrackRow
                                  Element title, bool showTrackArtist, Action<string, string?> go,
                                  Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
                                  bool likePop = false, Element? actionsCell = null,
-                                 bool showAlbumInMeta = false, bool showListBadges = false)
+                                 bool showAlbumInMeta = false, bool showListBadges = false,
+                                 Element? expandCell = null, bool moreEnabled = true)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -174,8 +191,17 @@ internal static class TrackRow
         // that left and updates the rest in place. Keys are per-parent, so the header below reuses the same names.
         void Add(string key, Element cell) => cells.Add(cell with { Key = key });
 
-        // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW hover.
-        Add(CellKey.Num, NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop, onPlay));
+        // The server says this one is not out yet. It keeps its position and its height — hiding it would make a 12-track
+        // album look like a 3-track one and jump the numbering — but it stops offering things that cannot happen.
+        // IsNotYetOut() is the ONE shared predicate (Wavee.Core): the grey treatment here, the play gate in
+        // DetailTracks.PlayRow and the "N of M songs" fact tile must never disagree about which rows are pending, and it
+        // un-dims the row the moment its live timestamp passes — no refetch needed.
+        bool notYetOut = t.IsNotYetOut();
+
+        // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW
+        // hover — suppressed for a track that is not released, where the hover play would be a button that does nothing.
+        Add(CellKey.Num, NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop,
+                                    notYetOut ? null : onPlay));
 
         // ♥ — in the left cluster (between # and the art thumb). Filled when saved; click toggles via the caller's bridge.
         if (set.Heart) Add(CellKey.Heart, CenterCell(Heart(st.Saved, onLike, likePop)));
@@ -193,6 +219,10 @@ internal static class TrackRow
             // MinWidth=0: this stack sits in the STAR track, which the overflow guard collapses to 0 first. Without the
             // floor override it keeps its natural width and the title/artist runs paint across the whole row.
             Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f,
+            // Dimmed rather than recoloured: the title element is built by the CALLER (plain, marquee, bound), so the
+            // grid cannot reach into it to swap a token — but it can hand the whole column back a step in the hierarchy,
+            // which is the same signal and works for every title variant.
+            Opacity = notYetOut ? 0.45f : 1f,
             // At compact playlist tiers the dedicated Album/Video lanes disappear. Preserve their information on the
             // existing artist subline instead of simply dropping it: Explicit · artists · album, plus the video glyph.
             Children = showMeta
@@ -208,19 +238,38 @@ internal static class TrackRow
             Add(CellKey.By, AddedByCell(t.AddedBy, addedByProfile));
         if (set.Date)
             Add(CellKey.Date, LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
+        // A track the server says is not playable yet (an unreleased entry on a partly-released album) reports 0 plays
+        // and 0 duration. Formatting those gives "0" and "0:00", which reads as a real, dismal track rather than as one
+        // that is not out — so the cells state the absence instead. Reuses the `notYetOut` local above rather than
+        // re-deriving the test: one row must not be dim-but-timed or bright-but-dashed.
+        if (set.Plays)
+            Add(CellKey.Plays, EndCell(new TextEl(notYetOut ? Dash : PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
+        if (ShowTempo(set))
+            Add(CellKey.Tempo, EndCell(TempoCell(t)));
+        // A pending track states WHEN rather than a dash, when the metadata plane gave us a live instant in the future
+        // (TrackV4.earliest_live_timestamp). "Fri 4 Sep" answers the question the row actually raises; "—" only says
+        // the duration is unknown, which the reader can already see.
+        string durationText = notYetOut
+            ? (t.AvailableAt is { } live && live > DateTimeOffset.UtcNow ? DetailFormat.ShortDate(live) : Dash)
+            : DetailFormat.TrackTime(t.DurationMs);
+        Add(CellKey.Duration, EndCell(new TextEl(durationText)
+        {
+            Size = 13f, Color = notYetOut ? Tok.TextTertiary : Tok.TextSecondary,
+        }));
+
+        // Trailing chrome: Video (film at rest / bare "…" on hover) OR dedicated Actions "…", then Expand. Video must
+        // sit AFTER Duration so it never wedges between Album and Tempo when the BPM column is on.
         if (set.Video)
             // Override-aware: a user-attached local video counts as "this row has a video" exactly like the source's own
             // association. VideoPresence.HasVideo is one ordinal dictionary probe — no context read, no per-row signal.
-            Add(CellKey.Video, CenterCell(VideoPresence.HasVideo(t) ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl()));
-        if (set.Plays)
-            Add(CellKey.Plays, EndCell(new TextEl(PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
-        Add(CellKey.Duration, EndCell(new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 13f, Color = Tok.TextSecondary }));
-
-        // Trailing "..." overflow lane (Apple Music style) — a fixed column AFTER Duration. Present only when the set
-        // keeps the Actions lane AND the caller reserved its width in `tracks` (the detail list; eager/preview rows and
-        // the ultra-compact tier pass null → no extra cell). Kept in cell order so the header's matching empty cell and
-        // the row stay column-aligned.
+            Add(CellKey.Video, CenterCell(VideoMoreCell(VideoPresence.HasVideo(t), moreEnabled)));
+        // Trailing "..." overflow lane when Video is off. Present only when the set keeps Actions AND the caller
+        // reserved its width in `tracks`. When Video is on, More lives in the Video lane instead.
         if (set.Actions && actionsCell is not null) Add(CellKey.More, actionsCell);
+        // The expand chevron is the LAST cell — after Video/"…" — so it reads as "open this row" rather than as another
+        // row command. Emitted only when the caller both wants it and supplied one, so the width track and the cell
+        // can never disagree.
+        if (set.Expand && expandCell is not null) Add(CellKey.Expand, expandCell);
 
         float padX = PadXFor(set.Tier);
         return new GridEl
@@ -350,7 +399,8 @@ internal static class TrackRow
                     Corners = CornerRadius4.All(radius),
                     Children =
                     [
-                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, radius, decodePx: (int)MathF.Max(64f, art * 2f)),
+                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, radius,
+                                         decodePx: (int)MathF.Max(64f, art * 2f)),
                         st.IsBuffering
                             ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = ColorF.FromRgba(0, 0, 0, 110), Children = [Spinner()] }
                             : Embed.Comp(() => new NowPlayingOverlay(t.Uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
@@ -420,6 +470,58 @@ internal static class TrackRow
             ],
         };
     }
+
+    /// <summary>Tempo/key is shown only when the caller asked for it AND the pane is wide enough. It is the first
+    /// column to go under pressure: a row must always keep title, duration and its transport, never a BPM readout.</summary>
+    internal static bool ShowTempo(in ColumnSet set) => set.Tempo && set.Tier <= 3;
+
+    /// <summary>"101.5 4A" with the Camelot-wheel colour as a leading swatch — colour carries the identity so the
+    /// text stays short enough for a narrow lane. One key token only (Camelot preferred, else standard). Renders EMPTY
+    /// (not "0 BPM" / "—") when the adornment has not landed: kind 222 arrives asynchronously, and a placeholder dash
+    /// would flicker to a real value a moment later.</summary>
+    static Element TempoCell(Track t)
+    {
+        if (t.TempoBpm is not { } bpm || bpm <= 0d) return new BoxEl();
+
+        var parts = new List<Element>(3);
+        if (t.CamelotColor is { } argb)
+            parts.Add(new BoxEl
+            {
+                Width = 8f, Height = 8f, Corners = CornerRadius4.All(2f),
+                Fill = WaveePalette.ToColor(argb), AlignSelf = FlexAlign.Center,
+            });
+        parts.Add(new TextEl(DetailFormat.Bpm(bpm)) { Size = 12.5f, Color = Tok.TextSecondary });
+        if (KeyLabel(t) is { Length: > 0 } key)
+            parts.Add(new TextEl(key) { Size = 12.5f, Color = Tok.TextTertiary });
+
+        return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Children = parts.ToArray() };
+    }
+
+    /// <summary>One key notation: Camelot code when present (matches the swatch + filter), else standard MusicalKey.
+    /// Never both — dual tokens bloated the Tempo lane and fought the narrowed track.</summary>
+    static string? KeyLabel(Track t) =>
+        t.CamelotCode is { Length: > 0 } c ? c
+        : t.MusicalKey is { Length: > 0 } k ? k
+        : null;
+
+    /// <summary>The row's expand affordance. Rotates 90° when open, so the control states its own state rather than
+    /// relying on the drawer below being visible (which it is not, once the row scrolls to the viewport edge).</summary>
+    internal static Element ExpandChevron(bool expanded, Action onToggle) => new BoxEl
+    {
+        Width = 26f, Height = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(Radii.Control),
+        HoverFill = Tok.FillControlSecondary,
+        Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
+        FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
+        OnClick = onToggle,
+        Children =
+        [
+            // Glyph swap rather than a rotation: icons are TEXT here, and WinUI's own Expander swaps the chevron
+            // glyph for exactly this reason.
+            Icon(expanded ? Icons.ChevronDown : Icons.ChevronRight, 12f,
+                 expanded ? Tok.AccentTextPrimary : Tok.TextSecondary),
+        ],
+    };
 
     internal static Element ExplicitBadge() => new BoxEl
     {
@@ -587,6 +689,36 @@ internal static class TrackRow
         Cursor = onAdd is null ? (CursorId?)null : CursorId.Hand, OnClick = onAdd,
         Children = [Icon(Icons.Add, 15f, Tok.TextPrimary)],
     }.Interactive(Interaction.Subtle);
+
+    /// <summary>Video lane that doubles as the row More affordance: film icon (or empty) at rest, bare "…" on row
+    /// hover. Same interactive-ancestor HoverOpacity swap as <see cref="NumberCell"/> — no circular chrome on the
+    /// ellipsis (the dedicated <see cref="MoreButton"/> keeps that look for Actions-only surfaces). Click raises
+    /// <c>ClickRequestsContext</c> so the row context menu opens anchored at this cell.</summary>
+    internal static Element VideoMoreCell(bool hasVideo, bool moreEnabled)
+    {
+        Element rest = hasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl();
+        return new BoxEl
+        {
+            ZStack = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    HoverOpacity = 0f, Children = [rest],
+                },
+                new BoxEl
+                {
+                    Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Opacity = 0f, HoverOpacity = moreEnabled ? 1f : 0f,
+                    Cursor = moreEnabled ? CursorId.Hand : (CursorId?)null,
+                    ClickRequestsContext = moreEnabled,
+                    Role = AutomationRole.Button,
+                    Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
+                },
+            ],
+        };
+    }
 
     // The # cell — a small state machine over the playback of THIS track, with the transport button revealed on row hover:
     //   • fetching/buffering → a spinner (shown whether or not you're hovering);

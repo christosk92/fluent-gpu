@@ -74,12 +74,15 @@ public static class RichText
     }
 
     /// <summary>A Spotify uri → the app's route key (matches ContentHost): playlist → "pl:…", album → "album:…",
-    /// artist → "artist:…", saved-tracks → "liked". Null when it's not a navigable uri.</summary>
+    /// prerelease → "prerelease:…", artist → "artist:…", saved-tracks → "liked". Null when it's not a navigable uri.</summary>
     public static string? RouteForUri(string? uri)
     {
         if (string.IsNullOrEmpty(uri)) return null;
         if (uri == "spotify:collection:tracks") return "liked";
         if (uri.Contains(":playlist:", StringComparison.Ordinal)) return "pl:" + uri;
+        // Before :album: — a prerelease uri contains neither, but the intent is that the MORE SPECIFIC scheme wins.
+        // The route resolves to the album's own DetailPage; the resolution is kind 138 and happens inside the load.
+        if (uri.Contains(":prerelease:", StringComparison.Ordinal)) return "prerelease:" + uri;
         if (uri.Contains(":album:", StringComparison.Ordinal)) return "album:" + uri;
         if (uri.Contains(":artist:", StringComparison.Ordinal)) return "artist:" + uri;
         return null;

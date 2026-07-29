@@ -61,6 +61,27 @@ public sealed class MediaPlayerElement : Component
 
     /// <summary>The player this element presents (headless contract; the MF backend drives real video).</summary>
     public required IMediaPlayer Player { get; init; }
+    /// <summary>Round the composited video's corners (DIP; 0 = square, the default). The frame composites in its own
+    /// DirectComposition visual OUTSIDE the UI back buffer, so a rounded parent with ClipToBounds cannot clip it — the
+    /// radius has to reach the compositor, which is what this does. Half the shorter side gives a circle.</summary>
+    public float CornerRadius { get; init; }
+    /// <summary>Decoration mode: a BARE composited surface that owns none of the player frame. No minimum height, no
+    /// border, no poster and no status overlay; the UI-side corners follow <see cref="CornerRadius"/> instead of the
+    /// standard overlay radius, and everything before first frame paints transparent so whatever the caller stacked
+    /// underneath (a still, a placeholder) shows through.
+    ///
+    /// Use for a clip that IS part of a layout's own shape — an artist portrait, a hover preview — never for a player
+    /// the user operates. The default 160 DIP minimum height exists so a real player cannot collapse to a sliver; in a
+    /// small decorative slot that same floor turns the composited rect into a capsule that overflows its container.</summary>
+    public bool IsDecorative { get; init; }
+
+    /// <summary>The UI-side corner shape of the frame and the video stage. Fullscreen is square; decoration follows
+    /// <see cref="CornerRadius"/> so the UI clip agrees with the compositor clip (a decorative surface's shape IS the
+    /// caller's shape); everything else keeps the standard overlay radius.</summary>
+    private CornerRadius4 FrameCorners =>
+        IsFullscreenPresentation ? default
+        : IsDecorative ? CornerRadius4.All(CornerRadius)
+        : Radii.OverlayAll;
     /// <summary>Show the transport controls. Never crashes across OS versions (there is no OS control). Default true.</summary>
     public bool AreTransportControlsEnabled { get; init; } = true;
     /// <summary>Hide overlay chrome after inactivity while playback advances. Pointer/focus/touch reveal it.</summary>
@@ -109,6 +130,8 @@ public sealed class MediaPlayerElement : Component
     private Signal<VideoAspectMode>? _aspectForPump;
     private Signal<double>? _customAspectForPump;
     private SceneStore? _scene;
+    // This component's KeepAlive/window-visibility signal, read by the pump (which runs outside Render).
+    private IReadSignal<bool>? _isActive;
 
     public override Element Render()
     {
@@ -155,6 +178,8 @@ public sealed class MediaPlayerElement : Component
         _aspectForPump = aspectSig;
         _customAspectForPump = customAspectSig;
         _scene = Context.Scene;
+        // Peeked (never .Value) by the pump, so publishing it here does not make the pump a render dependency.
+        _isActive = UseIsActive();
 
         UseEffect(() =>
         {
@@ -241,7 +266,11 @@ public sealed class MediaPlayerElement : Component
 
         // A terminal failure wins over the opening spinner: otherwise a Failed state with a lingering play intent would
         // keep showing "Starting playback…" forever (the DRM-license-rejected infinite-spinner bug).
-        Element? statusOverlay = state == PlaybackState.Failed
+        // Decoration never reports status: a spinner or an error card inside an artist portrait is worse than the still
+        // the caller already has underneath. Failures stay observable through Player.Error/State for the caller to log.
+        Element? statusOverlay = IsDecorative
+            ? null
+            : state == PlaybackState.Failed
             ? FailedOverlay(Player.Error.Value?.Message)
             : !videoReady && (state is PlaybackState.Opening or PlaybackState.Buffering || playIntent)
                 ? OpeningOverlay(playIntent)
@@ -284,6 +313,10 @@ public sealed class MediaPlayerElement : Component
                 OnRealized = h => holeRef.Value = h,
             });
         }
+        else if (IsDecorative)
+            // Transparent until the first frame lands, so the caller's own still stays visible underneath rather than
+            // being covered by a dark stage or a default poster.
+            videoChildren.Add(new BoxEl { Grow = 1f, HitTestVisible = false });
         else
             videoChildren.Add(statusOverlay is not null
                 ? new BoxEl { Grow = 1f, Fill = Tok.MediaStage }
@@ -305,9 +338,9 @@ public sealed class MediaPlayerElement : Component
             ZStack = true,
             Direction = 1,
             Grow = 1f,
-            MinHeight = IsFullscreenPresentation ? 0f : 160f,
+            MinHeight = IsFullscreenPresentation || IsDecorative ? 0f : 160f,
             ClipToBounds = true,
-            Corners = IsFullscreenPresentation ? default : Radii.OverlayAll,
+            Corners = FrameCorners,
             Fill = ColorF.Transparent,
             OnRealized = h => areaRef.Value = h,
             OnBoundsChanged = b => { if (b != areaBounds.Peek()) areaBounds.Value = b; },   // resize → recompute letterbox
@@ -352,10 +385,10 @@ public sealed class MediaPlayerElement : Component
         {
             ZStack = true,
             Grow = 1f,
-            Corners = IsFullscreenPresentation ? default : Radii.OverlayAll,
+            Corners = FrameCorners,
             ClipToBounds = true,
-            BorderColor = IsFullscreenPresentation ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
-            BorderWidth = IsFullscreenPresentation ? 0f : 1f,
+            BorderColor = IsFullscreenPresentation || IsDecorative ? ColorF.Transparent : Tok.StrokeFlyoutDefault,
+            BorderWidth = IsFullscreenPresentation || IsDecorative ? 0f : 1f,
             Focusable = true,
             OnRealized = h => playerRoot.Value = h,
             OnKeyDown = HandleKey,
@@ -378,11 +411,34 @@ public sealed class MediaPlayerElement : Component
     {
         VideoBinding b = _binding;
         if (!b.IsValid) return;
+        // Parked (Flow.KeepAlive) or minimized: hide the composited surface. The video visual lives in its OWN
+        // DirectComposition visual below the UI swapchain, so it is not clipped or covered by whatever the shell draws
+        // next — a parked page's frame keeps compositing at its last placement (a navigated-away artist portrait on the
+        // nav rail). Decorative clips SKIP the pump while inactive (they must not keep an MF session alive off-screen).
+        // Non-decorative player surfaces (PiP / pop-out) still pump: the MF session only advances while pumped, and
+        // NaturalSize / duration never publish without it — hiding without pumping is the black Loading poster over audio.
+        if (_isActive is { } act && !act.Peek())
+        {
+            b.SetVisible(false);
+            if (IsDecorative) return;
+        }
+        float s = scale <= 0f ? 1f : scale;
         var scene = _scene;
         NodeHandle h = _areaRef?.Value ?? default;
-        if (scene is null || h.IsNull || !scene.IsLive(h)) return;
+        // Non-decorative player surfaces must keep calling PumpVideo even before the area is laid out (remount /
+        // generation swap frames): MF only publishes duration + NaturalSize inside PumpVideo. Returning early here is
+        // what left a video→video successor stuck on the Opening/Loading poster at 0:00 with no duration adopt.
+        if (scene is null || h.IsNull || !scene.IsLive(h))
+        {
+            if (!IsDecorative) Player.PumpVideo(b, default, s);
+            return;
+        }
         RectF area = scene.AbsoluteRect(h);
-        if (area.W <= 0f || area.H <= 0f) return;
+        if (area.W <= 0f || area.H <= 0f)
+        {
+            if (!IsDecorative) Player.PumpVideo(b, default, s);
+            return;
+        }
         SizeI natural = Player.NaturalSize.Peek();
         bool audioOnly = IsAudioOnly(natural);
         RectF videoRect = area;
@@ -397,9 +453,38 @@ public sealed class MediaPlayerElement : Component
                 videoRect = FitVideoRect(area, natural, _aspectForPump?.Peek() ?? VideoAspectMode.Uniform,
                     _customAspectForPump?.Peek() ?? (16.0 / 9.0));
         }
-        b.SetViewport(area);
-        Player.PumpVideo(b, videoRect, scale <= 0f ? 1f : scale);
+        // Clip the viewport to every clipping ancestor before handing it to the presenter. The frame composites in its
+        // OWN DirectComposition visual BELOW the UI swapchain — it is not inside any scissor the UI draws with — so a
+        // viewport of the element's own rect keeps presenting at full size while the element scrolls out of its
+        // scroller. That is how a video in a list ended up painted across the tab strip and the title bar.
+        RectF viewport = ClipToAncestors(scene, h, area);
+        if (viewport.W <= 0.5f || viewport.H <= 0.5f) { b.SetVisible(false); return; }
+        b.SetViewport(viewport);
+        // Clamped so a caller asking for "fully round" on a non-square element still gets a clean capsule rather than
+        // radii that overlap and degenerate. CornerRadius freezes at mount, so this is a constant per element.
+        if (CornerRadius > 0f)
+            b.SetCornerRadius(MathF.Min(CornerRadius, MathF.Min(videoRect.W, videoRect.H) * 0.5f));
+        Player.PumpVideo(b, videoRect, s);
         if (audioOnly) b.SetVisible(false);
+    }
+
+    /// <summary>Intersect <paramref name="rect"/> with the bounds of every <c>ClipsToBounds</c> ancestor.
+    ///
+    /// The UI gets this for free from the scissor stack; a composited video visual does not, because it lives outside
+    /// the UI back buffer entirely. Walking the parent chain is cheap — it runs once per pumped surface per frame, and
+    /// the chain is a handful of nodes deep.</summary>
+    private static RectF ClipToAncestors(SceneStore scene, NodeHandle node, RectF rect)
+    {
+        for (NodeHandle p = scene.Parent(node); !p.IsNull && scene.IsLive(p); p = scene.Parent(p))
+        {
+            if ((scene.Flags(p) & NodeFlags.ClipsToBounds) == 0) continue;
+            RectF c = scene.AbsoluteRect(p);
+            float x0 = MathF.Max(rect.X, c.X), y0 = MathF.Max(rect.Y, c.Y);
+            float x1 = MathF.Min(rect.X + rect.W, c.X + c.W), y1 = MathF.Min(rect.Y + rect.H, c.Y + c.H);
+            rect = new RectF(x0, y0, MathF.Max(0f, x1 - x0), MathF.Max(0f, y1 - y0));
+            if (rect.W <= 0f || rect.H <= 0f) return rect;
+        }
+        return rect;
     }
 
     // ── default transport (pure FluentGpu: play/pause, scrub Slider, GPU time text, mute) ────────────────────────────

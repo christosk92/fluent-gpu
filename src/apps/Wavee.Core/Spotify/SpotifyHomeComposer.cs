@@ -49,7 +49,7 @@ public static class SpotifyHomeComposer
                 {
                     case "HomeSpotlightSectionData":
                         if (hero is null && FirstCard(items) is { } hc)
-                            hero = new HomeGroup(HomeGroupKind.Hero, title, new[] { hc }, GroupAccent(HomeGroupKind.Hero, new[] { hc }));
+                            hero = new HomeGroup(HomeGroupKind.Hero, title, new[] { hc });
                         break;
                     case "HomeFeedBaselineSectionData":
                         // Single-item personalized rec → one Featured card; the section title becomes the card eyebrow.
@@ -63,7 +63,7 @@ public static class SpotifyHomeComposer
                             if (cards.Count >= 2)
                             {
                                 var kind = GenericKind(Str(d, "title", "translatedBaseText"));
-                                modules.Add(new HomeGroup(kind, title, cards, GroupAccent(kind, cards)));
+                                modules.Add(new HomeGroup(kind, title, cards));
                             }
                         }
                         break;
@@ -74,7 +74,7 @@ public static class SpotifyHomeComposer
                         {
                             var rc = SpotifyExportMapper.RecentCardsFromListData(listData, RecentsShown);
                             if (rc.Count > 0)
-                                recents = new HomeGroup(HomeGroupKind.Shelf, recentlyPlayedTitle, rc, GroupAccent(HomeGroupKind.QuickGrid, rc));
+                                recents = new HomeGroup(HomeGroupKind.Shelf, recentlyPlayedTitle, rc);
                         }
                         break;
                     // HomeShortsSectionData: skipped (short-form module we don't render).
@@ -93,7 +93,7 @@ public static class SpotifyHomeComposer
             var cards = featured.GetRange(featureAt, take);
             groups.Add(new HomeGroup(HomeGroupKind.Featured,
                 featureBreak == 0 ? madeForYouTitle : moreForYouTitle,
-                cards, GroupAccent(HomeGroupKind.Featured, cards)));
+                cards));
             featureAt += take;
             featureBreak++;
         }
@@ -110,20 +110,41 @@ public static class SpotifyHomeComposer
             if ((i + 1) % interval == 0) AddFeatureBreak();
         }
         while (featureAt < featured.Count) AddFeatureBreak();   // drain any leftover recs at the tail
-        return new HomeContribution(groups, Priority: 0);
+        return new HomeContribution(groups, Priority: 0, Chips: MapChips(homeRoot));
     }
 
-    // The group's section tint: the first card carrying an extracted cover color, else a semantic per-kind fallback
-    // (amber recents / blue made-for-you / the app accent for generic shelves) — ported from WaveeMusic's HomeRegion kinds.
-    public static uint GroupAccent(HomeGroupKind kind, IReadOnlyList<HomeCard> cards)
+    /// <summary>Projects <c>home.homeChips[]</c> — the Music / Podcasts / Audiobooks facet row, each optionally
+    /// carrying a second level ("Following"). The id is an opaque server token that goes straight back into the
+    /// <c>facet</c> request variable; the label is already localised by the server, so it is never re-translated.
+    /// A chip with no usable id or label is dropped rather than rendered as a dead control.</summary>
+    static IReadOnlyList<HomeChip>? MapChips(JsonElement homeRoot)
     {
-        foreach (var c in cards) if (c.Accent is { } a) return a;
-        return kind switch
+        var items = SpotifyExportMapper.Dig(homeRoot, "homeChips");
+        if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() == 0) return null;
+
+        var chips = new List<HomeChip>(items.GetArrayLength());
+        foreach (var c in items.EnumerateArray())
         {
-            HomeGroupKind.QuickGrid => 0xFFF59E0Bu,                              // amber — your recents
-            HomeGroupKind.Compact or HomeGroupKind.CollapsedGrid or HomeGroupKind.Featured => 0xFF3B82F6u, // blue — made for you/editorial
-            _ => 0xFF60CDFFu,                                                    // the app accent — generic sections / hero
-        };
+            if (MapChip(c) is { } chip) chips.Add(chip);
+        }
+        return chips.Count > 0 ? chips : null;
+    }
+
+    static HomeChip? MapChip(JsonElement c)
+    {
+        var id = SpotifyExportMapper.Str(c, "id");
+        // transformedLabel is the display form; translatedBaseText is the untransformed source. Prefer the former.
+        var label = SpotifyExportMapper.Str(c, "label", "transformedLabel")
+                    ?? SpotifyExportMapper.Str(c, "label", "translatedBaseText");
+        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(label)) return null;
+
+        var subs = SpotifyExportMapper.Dig(c, "subChips");
+        List<HomeChip>? children = null;
+        if (subs.ValueKind == JsonValueKind.Array)
+            foreach (var s in subs.EnumerateArray())
+                if (MapChip(s) is { } sub) (children ??= new List<HomeChip>(2)).Add(sub);
+
+        return new HomeChip(id!, label!, (IReadOnlyList<HomeChip>?)children ?? System.Array.Empty<HomeChip>());
     }
 
     // Route on Spotify's stable canonical template, never the localized/transformed display label. Unknown templates

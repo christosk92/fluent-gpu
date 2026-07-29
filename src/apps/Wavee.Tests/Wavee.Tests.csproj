@@ -87,9 +87,13 @@
     <!-- shared detail-track command-bar fit + query/facet predicate (engine-free) -->
     <Compile Include="..\Wavee\Features\Detail\DetailTrackCommandBarLayout.cs" />
     <Compile Include="..\Wavee\Features\Detail\TrackFilterModel.cs" />
+
     <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
     <Compile Include="..\Wavee\Features\Concerts\ConcertRoutes.cs" />
+    <!-- browse category grouping: pure uri->band map + ordering (Wavee.Core + BCL only) — BrowseTaxonomyTests -->
+    <Compile Include="..\Wavee\Features\Browse\BrowseTaxonomy.cs" />
+    <Compile Include="..\Wavee\Features\Browse\BrowseRoutes.cs" />
     <!-- pure schedule shaping (chronological sort/dedup) + geolocation-status → message map (Wavee.Core + FluentGpu.Pal) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertScheduleModel.cs" />
     <!-- pure detail shaping: ticket-URL validation, price/availability/sale-window formatting, status/location lines -->
@@ -106,6 +110,9 @@
     <Compile Include="..\Wavee\App\VideoUpgradeGate.cs" Link="VideoUpgradeGate.cs" />
     <!-- pure media host-swap decision rules (System + the PlayableKind enum only) — MediaSwitchLogicTests -->
     <Compile Include="..\Wavee\App\MediaSwitchLogic.cs" Link="MediaSwitchLogic.cs" />
+    <!-- pure override-mutation / track-boundary / reveal / stage-mount rules — VideoOverrideMutationCoreTests -->
+    <Compile Include="..\Wavee\App\VideoOverrideMutationCore.cs" Link="VideoOverrideMutationCore.cs" />
+    <Compile Include="..\Wavee\App\VideoSurfaceMount.cs" Link="VideoSurfaceMount.cs" />
     <!-- the local video-override curation: the warm map, the per-session quarantine, the PURE tier-1 decision, and the
          has-video latch — all engine-free (IStore + WaveeLogger + BCL). VideoOverrideTests drive the precedence walk that
          CompositeVideoResolver (engine-bound, not includable) only maps onto a PopOutVideoSource. -->
@@ -151,12 +158,18 @@
     <Compile Include="..\Wavee\SpotifyLive\SpotifyWhatsNewService.cs" />
     <!-- the artist chart's step two (spclient extensions + MetadataService + IStore; engine-free) — ArtistPopularTracksTests -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistPopularTracksService.cs" />
+    <!-- step ONE of the same chart: queryArtistOverview, the only source of play counts — ArtistStatsPlayCountTests -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistStatsService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConcertPathfinderRequests.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConcertPathfinderMapper.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyConcertService.cs" />
-    <Compile Include="..\Wavee\SpotifyLive\ExtractedColorCache.cs" />
+    <!-- The cover-colour plane + its getDynamicColorsByUris decoder. The plane's only engine dependency is
+         Signal<int>/IReadSignal<int>, which VirtualCollectionSignalShim.cs already stands in for — so this compiles
+         here WITHOUT a FluentGpu.Engine reference, exactly like the source-included VirtualCollection. -->
+    <Compile Include="..\Wavee\SpotifyLive\CoverColorPlane.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\CoverColorFiller.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
          resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
     <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />

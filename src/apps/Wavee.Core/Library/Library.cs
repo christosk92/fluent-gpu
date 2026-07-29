@@ -22,7 +22,9 @@ public sealed record SearchSuggestions(
         System.Array.Empty<string>(), System.Array.Empty<SearchSuggestionItem>());
 }
 
-public enum SearchFacet { All, Tracks, Albums, Playlists, Audiobooks, Podcasts, Artists }
+// Ordered as the result tabs read left-to-right. Episodes/Profiles were added when the corresponding Spotify search
+// operations were captured; every member now maps to a real operation (no member throws).
+public enum SearchFacet { All, Tracks, Albums, Playlists, Audiobooks, Podcasts, Artists, Episodes, Profiles }
 
 public enum SearchHitKind { Track, Artist, Album, Playlist, Audiobook, Podcast, Episode, Author, User, Unknown }
 
@@ -44,7 +46,19 @@ public sealed record SearchResults(
     int TracksTotal = -1,
     int AlbumsTotal = -1,
     int ArtistsTotal = -1,
-    int PlaylistsTotal = -1)
+    int PlaylistsTotal = -1,
+    // The facets Spotify serves from their own operations. Shows/Episodes use the real podcast domain records because
+    // the app has podcast surfaces to route into; audiobooks and profiles are LIST-ONLY today, so they reuse the
+    // generic SearchTopHit (which already carries the access signifier and the round-image flag) instead of inventing
+    // domain records nothing else consumes. Total -1 = "facet not queried", 0 = "queried, no results".
+    IReadOnlyList<Show>? Shows = null,
+    int ShowsTotal = -1,
+    IReadOnlyList<Episode>? Episodes = null,
+    int EpisodesTotal = -1,
+    IReadOnlyList<SearchTopHit>? Audiobooks = null,
+    int AudiobooksTotal = -1,
+    IReadOnlyList<SearchTopHit>? Profiles = null,
+    int ProfilesTotal = -1)
 {
     public static readonly SearchResults Empty = new(
         System.Array.Empty<Track>(), System.Array.Empty<Album>(), System.Array.Empty<Artist>(), System.Array.Empty<Playlist>());
@@ -55,7 +69,26 @@ public sealed record SearchResults(
         SearchFacet.Albums => AlbumsTotal >= 0 ? AlbumsTotal : Albums.Count,
         SearchFacet.Artists => ArtistsTotal >= 0 ? ArtistsTotal : Artists.Count,
         SearchFacet.Playlists => PlaylistsTotal >= 0 ? PlaylistsTotal : Playlists.Count,
+        SearchFacet.Podcasts => ShowsTotal >= 0 ? ShowsTotal : Shows?.Count ?? 0,
+        SearchFacet.Episodes => EpisodesTotal >= 0 ? EpisodesTotal : Episodes?.Count ?? 0,
+        SearchFacet.Audiobooks => AudiobooksTotal >= 0 ? AudiobooksTotal : Audiobooks?.Count ?? 0,
+        SearchFacet.Profiles => ProfilesTotal >= 0 ? ProfilesTotal : Profiles?.Count ?? 0,
         _ => TopHits?.Count ?? Tracks.Count + Albums.Count + Artists.Count + Playlists.Count,
+    };
+
+    /// <summary>True when the facet returned nothing — used to hide an empty result tab rather than showing a tab that
+    /// leads to an empty pane.</summary>
+    public bool HasAny(SearchFacet facet) => facet switch
+    {
+        SearchFacet.Tracks => Tracks.Count > 0,
+        SearchFacet.Albums => Albums.Count > 0,
+        SearchFacet.Artists => Artists.Count > 0,
+        SearchFacet.Playlists => Playlists.Count > 0,
+        SearchFacet.Podcasts => Shows is { Count: > 0 },
+        SearchFacet.Episodes => Episodes is { Count: > 0 },
+        SearchFacet.Audiobooks => Audiobooks is { Count: > 0 },
+        SearchFacet.Profiles => Profiles is { Count: > 0 },
+        _ => TopHits is { Count: > 0 },
     };
 }
 

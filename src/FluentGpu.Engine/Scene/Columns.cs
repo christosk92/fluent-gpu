@@ -54,6 +54,7 @@ public struct LayoutInput
     public float FlexShrink;      // share of negative free space (default 0, Yoga-style)
     public float FlexBasis;       // NaN = auto (content / explicit main size)
     public FlexAlign AlignSelf;   // Auto = inherit container AlignItems
+    public FlexAlign JustifySelf; // ZStack overlay child: horizontal placement. Auto = inherit the stack's Justify
 
     public FlexJustify Justify;   // container: main-axis distribution
     public FlexAlign AlignItems;  // container: default child cross alignment
@@ -75,6 +76,7 @@ public struct LayoutInput
         FlexShrink = 0f,
         FlexBasis = float.NaN,
         AlignSelf = FlexAlign.Auto,
+        JustifySelf = FlexAlign.Auto,
         Justify = FlexJustify.Start,
         AlignItems = FlexAlign.Stretch,
     };

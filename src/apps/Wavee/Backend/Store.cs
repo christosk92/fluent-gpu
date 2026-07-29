@@ -118,12 +118,29 @@ static class StoreEntityMerge
             Image = incoming.Image ?? current.Image,
             AddedAt = incoming.AddedAt ?? current.AddedAt,
             AddedBy = incoming.AddedBy ?? current.AddedBy,
-            HasVideo = incoming.HasVideo || current.HasVideo,
+            // (has-video had an OR-merge here, for a field that no longer exists: it lived on the row so every writer
+            // could clobber it, and the OR was the guard against exactly that. The answer now has one home — the
+            // VideoAssociation plane — so there is nothing here to defend.)
             PlayCount = incoming.PlayCount > 0 ? incoming.PlayCount : current.PlayCount,
             Origin = incoming.Origin != TrackOrigin.Streamed || current.Origin == TrackOrigin.Streamed ? incoming.Origin : current.Origin,
-            Availability = incoming.Availability != Availability.Playable ? incoming.Availability : current.Availability,
+            // The nullable-adornment rule, like Isrc/Tint below. The old form ("keep incoming only when it is not
+            // Playable") was one-way: once a track went Unavailable it could NEVER return, which is precisely backwards
+            // for a feature whose whole point is rows becoming available as a record ships.
+            Availability = incoming.Availability ?? current.Availability,
+            AvailableAt = incoming.AvailableAt ?? current.AvailableAt,
             Source = incoming.Source ?? current.Source,
             Isrc = incoming.Isrc ?? current.Isrc,   // keep a known ISRC across a later thin upsert (cluster/library write)
+            // Adornments from extended-metadata kind 222 (tempo/key). These arrive on their OWN pass, long after the
+            // thin cluster/library upsert that created the row — so a later thin write must never blank them.
+            // Null-coalesce, exactly like Isrc: null means "this writer didn't know", not "clear it". (The cover
+            // colour is NOT here: it is image-keyed in CoverColorPlane, so no row write can clobber it.)
+            TempoBpm = incoming.TempoBpm ?? current.TempoBpm,
+            // Same 0-is-unknown discipline as the other adornments: tags land on their own pass long after the thin
+            // cluster upsert, so a later thin write must never blank them.
+            Tags = incoming.Tags ?? current.Tags,
+            MusicalKey = incoming.MusicalKey ?? current.MusicalKey,
+            CamelotCode = incoming.CamelotCode ?? current.CamelotCode,
+            CamelotColor = incoming.CamelotColor ?? current.CamelotColor,
         };
     }
 
@@ -174,9 +191,16 @@ static class StoreEntityMerge
             HeaderImage = incoming.HeaderImage ?? current.HeaderImage,
             TopTracks = Has(incoming.TopTracks) ? incoming.TopTracks : current.TopTracks,
             AppearsOn = MergeAlbumCards(current.AppearsOn, incoming.AppearsOn),
+            // Pinned deliberately does NOT take MergeExtras' null-back rule, even though a pin can now announce an
+            // upcoming release. A thin write also carries Pinned = null, so telling "the pin was removed" from "this
+            // write doesn't know" would need the same overviewAuthoritative discriminator plumbed in here — and a stale
+            // pin is far less harmful than a stale "Coming soon": every pre-release surface gates on
+            // PinnedItem.IsUpcoming, a wall-clock test, so a pin whose record has shipped silently reverts to an
+            // ordinary promo card on the next render.
             Pinned = incoming.Pinned ?? current.Pinned,
-            Extras = MergeExtras(current.Extras, incoming.Extras),
-            Palette = incoming.Palette ?? current.Palette,   // a thin write (no palette) must not drop a full-overview palette
+            // A FRESH overview write is authoritative about what the artist no longer has — see MergeExtras.PreRelease.
+            // FetchedAt is the existing discriminator: a full overview carries UtcNow, a thin write carries default.
+            Extras = MergeExtras(current.Extras, incoming.Extras, overviewAuthoritative: incoming.FetchedAt > current.FetchedAt),
             // Per-facet discography totals: a thin write (0 = unknown) must not drop a full-overview's real total.
             AlbumsTotal = incoming.AlbumsTotal > 0 ? incoming.AlbumsTotal : current.AlbumsTotal,
             SinglesTotal = incoming.SinglesTotal > 0 ? incoming.SinglesTotal : current.SinglesTotal,
@@ -223,7 +247,10 @@ static class StoreEntityMerge
         return merged;
     }
 
-    static ArtistExtras? MergeExtras(ArtistExtras? current, ArtistExtras? incoming)
+    /// <param name="overviewAuthoritative">True when <paramref name="incoming"/> is a fresh full-overview write, whose
+    /// ABSENCES are meaningful. Most fields here use "keep the richer of the two" because a thin write simply does not
+    /// carry them; <see cref="ArtistExtras.PreRelease"/> is the exception — see below.</param>
+    static ArtistExtras? MergeExtras(ArtistExtras? current, ArtistExtras? incoming, bool overviewAuthoritative)
     {
         if (incoming is null) return current;
         if (current is null) return incoming;
@@ -236,7 +263,17 @@ static class StoreEntityMerge
             ExternalLinks: Has(incoming.ExternalLinks) ? incoming.ExternalLinks : current.ExternalLinks,
             Gallery: Has(incoming.Gallery) ? incoming.Gallery : current.Gallery,
             Related: Has(incoming.Related) ? incoming.Related : current.Related,
-            Tour: incoming.Tour ?? current.Tour);
+            Tour: incoming.Tour ?? current.Tour,
+            // Positional ctor: every field of ArtistExtras MUST appear here. WatchFeed was added to the record without
+            // being added to this merge, so it defaulted to null on every non-first artist write — the artist page does
+            // ≥2 writes (thin V4 upsert, then the overview upsert), which nulled the watch feed before the hero read it
+            // and reduced the portrait to a bare avatar with no ring, no scrim and no click-through.
+            WatchFeed: incoming.WatchFeed ?? current.WatchFeed,
+            // The ONE field that must be able to go back to null. Every other field here is additive — a thin write
+            // lacking it means "I don't know", so keeping the old value is right. A pre-release is different: it is a
+            // temporary state that ENDS, and the server signals the end by dropping preReleaseV2 from the overview.
+            // With a plain `?? current` the album ships and the artist page still says "Coming soon" forever.
+            PreRelease: overviewAuthoritative ? incoming.PreRelease : (incoming.PreRelease ?? current.PreRelease));
     }
 
     static AlbumRef MergeAlbumRef(AlbumRef current, AlbumRef incoming) => new(
@@ -498,8 +535,11 @@ public sealed class InMemoryStore : IStore
     public Episode? GetEpisode(string uri) { lock (_gate) { if (_episodes.TryGetValue(uri, out var e)) { TouchUse(uri); return e; } return null; } }
 
     // A full replace (each fetch yields the complete association; a 304 keeps the prior record with a bumped FetchedAt,
-    // handled by the caller). No Bump — this is side-table data; the rendered has-video signal is Track.HasVideo.
-    public void UpsertVideoAssociation(VideoAssociation a) { lock (_gate) _videoAssoc[a.Uri] = a; }
+    // handled by the caller). This DOES Bump: the association is now the has-video answer every surface renders
+    // (VideoPresence), so a detect landing mid-list is precisely the edge a row indicator must repaint on. It used to
+    // be silent side-table data behind a mirrored Track.HasVideo — that mirror is gone, and with it the ability of a
+    // row and the expand drawer to disagree about the same fetched fact.
+    public void UpsertVideoAssociation(VideoAssociation a) { lock (_gate) _videoAssoc[a.Uri] = a; Bump(a.Uri); }
     public VideoAssociation? GetVideoAssociation(string uri) { lock (_gate) return _videoAssoc.TryGetValue(uri, out var a) ? a : null; }
 
     // User video overrides DO Bump — unlike the association side table, an attach/remove is a user edit whose availability

@@ -61,7 +61,10 @@ public static class DetailTrackCommandBarLayout
     {
         available = MathF.Max(0f, available);
         var candidate = ResolveCore(available, widths, vertical, hasTune, hasSelect, explicitSearch);
-        if (explicitSearch || previous is not { } old || candidate.Richness <= old.Richness)
+        // Hysteresis applies in EVERY mode. It used to be skipped whenever search was open, which is exactly when it
+        // matters most: opening the field evicts commands, their exit animation re-measures them, those measurements
+        // re-enter here, and the promoted set oscillates while the width tween is still mid-flight.
+        if (previous is not { } old || candidate.Richness <= old.Richness)
             return candidate;
 
         // Promote only with a small reserve. Narrowing remains immediate, so nothing can clip while the pane contracts.

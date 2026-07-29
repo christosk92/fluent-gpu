@@ -226,7 +226,12 @@ public sealed class FluentVideoMediaHost : IMediaHost
 
     /// <summary>Step 1 — release the CURRENT session completely, bounded. Nothing may open a new native session until this
     /// has returned: the native PlayReady session is a process-global singleton whose Stop carries no session identity, so
-    /// an un-awaited teardown is exactly what used to shut a freshly-started successor down.</summary>
+    /// an un-awaited teardown is exactly what used to shut a freshly-started successor down.
+    /// <para>UNBIND BEFORE DISPOSE: the mounted <c>MediaPlayerElement</c> keeps pumping whatever
+    /// <see cref="PlayerChanged"/> last published. Clearing <see cref="_player"/> without notifying left the surface
+    /// pumping a player mid-dispose on every video→video skip (track change while already on the video host) — MF then
+    /// never published duration/NaturalSize on the successor, and the PiP sat on the Opening/Loading poster at 0:00.
+    /// <see cref="Stop"/> already fires <c>PlayerChanged(null)</c>; teardown must do the same.</para></summary>
     async System.Threading.Tasks.Task TeardownAsync(long epoch)
     {
         StopTicker();
@@ -245,6 +250,11 @@ public sealed class FluentVideoMediaHost : IMediaHost
         if (old is not null)
         {
             try { old.Stop(); } catch (Exception ex) { _log.Info($"video-host stop failed: {ex.Message}"); }
+            // Drop the surface binding BEFORE native dispose — same contract as Stop(). Without this, video→video
+            // LoadVideo pumps a dying session and the successor never receives a pump (no duration, stuck Loading).
+            try { PlayerChanged?.Invoke(null); }
+            catch (Exception ex) { _log.Info($"video-host PlayerChanged(null) failed: {ex.Message}"); }
+            _log.Info("video-host teardown — unbound surface before dispose");
             await DisposeBoundedAsync(old).ConfigureAwait(false);
         }
         // Anything Stop() handed over (its observable state was cleared synchronously) is released here, in order.

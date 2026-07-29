@@ -121,6 +121,8 @@ static class LayoutShellSuite
         AutoGridChecks(strings);
         VirtualGridChecks(strings);
         ZStackRepeaterChecks(strings);
+        ZStackAlignChecks(strings);
+        StaticTransformChecks(strings);
         G3TokenChecks();
         G3AspectChecks(strings);
         G3PrimitiveChecks(strings);
@@ -1254,6 +1256,78 @@ static class LayoutShellSuite
 
         Check("55. ZStack overlays at origin; ItemsRepeater builds (Inline) / virtualizes (Stack)", zstack && inlineN && stackVirtual,
             $"z0=({z0.X:0},{z0.Y:0}) z1=({z1.X:0},{z1.Y:0}) inlineN={inlineN} stackVirt={stackVirtual}");
+    }
+
+    /// <summary>gate.layout.zstack-align — a ZStack aligns on BOTH axes (the WinUI overlay-Grid model): the container's
+    /// Justify is the horizontal default, per-child JustifySelf overrides it, and an AUTO-sized child that is centered
+    /// or end-aligned takes its DESIRED extent instead of stretching (otherwise there is no free space to align it in,
+    /// which is why a content-sized badge could never be parked in a corner). Check 55 is the companion regression pin:
+    /// a stack that authors neither still overlays at the content origin.</summary>
+    static void ZStackAlignChecks(StringTable strings)
+    {
+        // Explicit child sizes: container Justify=Center is the default, each child may override on either axis.
+        var scene = LayoutTree(strings, Ui.ZStack(
+            new BoxEl { Width = 40, Height = 20 },
+            new BoxEl { Width = 40, Height = 20, JustifySelf = FlexAlign.End, AlignSelf = FlexAlign.Start },
+            new BoxEl { Width = 40, Height = 20, JustifySelf = FlexAlign.Start, AlignSelf = FlexAlign.End })
+            with { Width = 200, Height = 100, Justify = FlexJustify.Center, AlignItems = FlexAlign.Center });
+        var c0 = scene.AbsoluteRect(Child(scene, scene.Root, 0));
+        var c1 = scene.AbsoluteRect(Child(scene, scene.Root, 1));
+        var c2 = scene.AbsoluteRect(Child(scene, scene.Root, 2));
+        bool inherited = Near(c0.X, 80) && Near(c0.Y, 40);      // Auto ⇒ the stack's Justify/AlignItems (both Center)
+        bool topRight = Near(c1.X, 160) && Near(c1.Y, 0);
+        bool bottomLeft = Near(c2.X, 0) && Near(c2.Y, 80);
+        Check("gate.layout.zstack-align: container Justify + per-child JustifySelf place overlay layers on X",
+            inherited && topRight && bottomLeft,
+            $"c0=({c0.X:0},{c0.Y:0}) c1=({c1.X:0},{c1.Y:0}) c2=({c2.X:0},{c2.Y:0})");
+
+        // An auto-sized, END-justified child shrinks to its content; an unaligned sibling still fills the stack.
+        var auto = LayoutTree(strings, Ui.ZStack(
+            new BoxEl { JustifySelf = FlexAlign.End, Children = [new BoxEl { Width = 30, Height = 12 }] },
+            new BoxEl())
+            with { Width = 200, Height = 100 });
+        var a0 = auto.AbsoluteRect(Child(auto, auto.Root, 0));
+        var a1 = auto.AbsoluteRect(Child(auto, auto.Root, 1));
+        Check("gate.layout.zstack-align: an auto-sized aligned layer takes its desired width, an unaligned one fills",
+            Near(a0.W, 30) && Near(a0.X, 170) && Near(a1.W, 200) && Near(a1.H, 100),
+            $"aligned=({a0.X:0},w{a0.W:0}) filler=(w{a1.W:0},h{a1.H:0})");
+
+        // The PersonPicture badge shape: corner-parked with a NEGATIVE margin so it overhangs the stack deliberately.
+        var over = LayoutTree(strings, Ui.ZStack(
+            new BoxEl
+            {
+                Width = 20, Height = 20,
+                JustifySelf = FlexAlign.End, AlignSelf = FlexAlign.Start,
+                Margin = new Edges4(0f, -4f, -4f, 0f),
+            })
+            with { Width = 100, Height = 100 });
+        var o0 = over.AbsoluteRect(Child(over, over.Root, 0));
+        Check("gate.layout.zstack-align: a negative margin overhangs the corner it is aligned to",
+            Near(o0.X, 84) && Near(o0.Y, -4), $"badge=({o0.X:0},{o0.Y:0})");
+    }
+
+    /// <summary>gate.reconciler.static-transform — an UNBOUND <c>Transform</c> matrix is honored (it used to be
+    /// silently dropped, so an authored offset compiled, ran and moved nothing) and WINS over the decomposed
+    /// Offset/Scale/Rotation floats. Dropping it back to identity clears the stale matrix, exactly like dropping
+    /// OffsetY does.</summary>
+    static void StaticTransformChecks(StringTable strings)
+    {
+        var scene = LayoutTree(strings, new BoxEl
+        {
+            Width = 100, Height = 100,
+            Children =
+            [
+                new BoxEl { Width = 10, Height = 10, Transform = Affine2D.Translation(7f, -3f) },
+                new BoxEl { Width = 10, Height = 10, OffsetX = 5f, OffsetY = 2f },
+                new BoxEl { Width = 10, Height = 10 },
+            ],
+        });
+        var m = scene.Paint(Child(scene, scene.Root, 0)).LocalTransform;
+        var d = scene.Paint(Child(scene, scene.Root, 1)).LocalTransform;
+        var none = scene.Paint(Child(scene, scene.Root, 2)).LocalTransform;
+        Check("gate.reconciler.static-transform: an unbound Transform matrix reaches LocalTransform",
+            Near(m.Dx, 7f) && Near(m.Dy, -3f) && Near(d.Dx, 5f) && Near(d.Dy, 2f) && none.IsIdentity,
+            $"matrix=({m.Dx:0.##},{m.Dy:0.##}) decomposed=({d.Dx:0.##},{d.Dy:0.##}) bare={none.IsIdentity}");
     }
 
     static void LayoutBoundaryMeasuredChecks(StringTable strings)

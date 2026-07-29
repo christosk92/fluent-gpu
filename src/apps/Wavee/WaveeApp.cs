@@ -135,6 +135,9 @@ sealed class WaveeApp : Component
             friendsBridge.Activate(post);
             notifications.Activate(post);
             store.Activate(post);
+            // The cover-colour plane bumps its epoch from background batch completions; art tiles subscribe to it, so
+            // the bump has to land on the UI thread like every other bridge signal.
+            Wavee.SpotifyLive.CoverColorPlane.Current.Activate(post);
 
             // Persist volume changes (local intents AND remote echoes both land on bridge.Volume) with a coarse poll —
             // Peek is a plain field read, and the registry write happens only when the value actually moved.

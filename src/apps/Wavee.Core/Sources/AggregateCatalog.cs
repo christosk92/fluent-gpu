@@ -174,7 +174,10 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         }
         contribs.Sort((a, b) => a.Priority.CompareTo(b.Priority));
         var groups = contribs.SelectMany(c => c.Groups).ToList();
-        return new HomeFeed(Greeting(), groups);
+        // The facet row belongs to whichever source actually publishes one (only the streaming source does). First
+        // non-empty wins by priority order, so a local-library contribution can never blank out Spotify's chips.
+        var chips = contribs.FirstOrDefault(c => c.Chips is { Count: > 0 })?.Chips;
+        return new HomeFeed(Greeting(), groups, chips);
     }
 
     // ── podcasts: federated to the Podcasts-capable sources (route single-show reads to the owner; merge the grid) ──

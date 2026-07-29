@@ -46,6 +46,7 @@ static class ScrollSuite
         ScrollHoverChecks(strings);
         HoverSubtreeChecks(strings);
         ScrollChecks(strings);
+        BringIntoViewChecks(strings);
         TwoAxisScrollChecks(strings);
         ScrollCrossAxisChecks(strings);
         ScrollOverlayChecks(strings);
@@ -249,6 +250,60 @@ static class ScrollSuite
 
         Check("36. ScrollView publishes ContentSize + clips overflow", sized && clipped, $"content={sc0.ContentH:0} drawn={drawnAtTop} clips={device.LastClips.Count}");
         Check("37. wheel scrolls via transform (layout-free) + clamps", scrolled && clamped, $"off→{sc1.OffsetY:0}, clamp={sc2.OffsetY:0}");
+    }
+
+    /// <summary>gate.scroll.bring-into-view — the ONE programmatic bring-into-view seam (ScrollIntoView), which every
+    /// caller used to hand-roll with per-site divergence. Covers all three legs: minimal scroll is a no-op for an
+    /// already-visible node, the snap path writes Offset+Target AND the content transform in the same frame, and the
+    /// animated path only arms the phase-7 integrator (offset untouched until it ticks).</summary>
+    static void BringIntoViewChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("bring-into-view", new Size2(480, 320), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ScrollProbe());
+        host.RunFrame();   // mount + layout → ContentSize published
+
+        var scene = host.Scene;
+        var vp = scene.Root;
+        scene.TryGetScroll(vp, out var sc);
+        var content = sc.ContentNode;
+        var rowNear = Child(scene, content, 1);    // y 40..80  — inside the 200-tall viewport
+        var rowFar = Child(scene, content, 14);    // y 560..600 — well past it
+
+        var armed = NodeHandle.Null;
+        var ctx = new RenderContext { Scene = scene, ArmScroll = h => armed = h, RequestRerender = static () => { } };
+
+        // Already visible ⇒ minimal scroll declines to move (and reports that it did nothing).
+        bool visibleNoop = !ScrollIntoView.Bring(ctx, rowNear) && Near(ReadOffset(scene, vp), 0f);
+
+        // Snap: the row's BOTTOM lands on the viewport's bottom edge — 600 − 200 = 400 — and the content transform is
+        // applied in the same frame, so the node is on screen now rather than after the next tick.
+        bool snapped = ScrollIntoView.Bring(ctx, rowFar);
+        snapped &= Near(ReadOffset(scene, vp), 400f)
+                && Near(scene.Paint(content).LocalTransform.Dy, -400f);
+
+        // Aligned: ratio 0 parks the row's TOP at the leading gutter — 560 − 8.
+        bool aligned = ScrollIntoView.Bring(ctx, rowFar, margin: 8f, alignmentRatio: 0f)
+                       && Near(ReadOffset(scene, vp), 552f);
+
+        // Animated: nothing moves yet; the destination is recorded and the viewport is armed for phase 7.
+        bool armedOk = ScrollIntoView.Bring(ctx, rowNear, alignmentRatio: 0f, animate: true);
+        scene.TryGetScroll(vp, out var scA);
+        armedOk &= Near(scA.OffsetY, 552f) && Near(scA.PendingTargetY, 40f) && armed.Equals(vp)
+                && (scA.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
+
+        Check("gate.scroll.bring-into-view: minimal scroll no-ops when visible; snap writes offset + content transform; aligned honours the ratio; animate only arms",
+            visibleNoop && snapped && aligned && armedOk,
+            $"noop={visibleNoop} snap={snapped} aligned={aligned} armed={armedOk} pending={scA.PendingTargetY:0}");
+    }
+
+    static float ReadOffset(SceneStore scene, NodeHandle vp)
+    {
+        scene.TryGetScroll(vp, out var sc);
+        return sc.OffsetY;
     }
 
     static void TwoAxisScrollChecks(StringTable strings)

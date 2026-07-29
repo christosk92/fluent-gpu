@@ -20,8 +20,8 @@ namespace Wavee.SpotifyLive;
 /// is a follow-up tied to the deferred player swap.</summary>
 sealed partial class SpotifyVideoService : IVideoService
 {
-    // After this long we revalidate (cheap — the request carries the etag, so an unchanged entity comes back 304).
-    static readonly TimeSpan RevalidateAfter = TimeSpan.FromHours(6);
+    // How long a cached verdict stands, and whether it revalidates conditionally, are properties of the ANSWER — a
+    // positive is durable, a negative is a "not yet" — so they live on VideoAssociation, not in this fetcher.
     // Desktop never asks for more than ~300 entities per VIDEO_ASSOCIATIONS batch. Our transport does NOT bound this for
     // us — MetadataChunking splits by BYTES only and ExtensionEtagCache takes the whole list — so a 10k-track playlist
     // would otherwise go out as one request body. Sliced here, at the single chokepoint every caller funnels through.
@@ -52,7 +52,7 @@ sealed partial class SpotifyVideoService : IVideoService
         {
             if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal) || !seen.Add(uri)) continue;
             var cached = _store.GetVideoAssociation(uri);
-            if (cached is not null && IsFresh(cached, now)) continue;   // fresh → skip the network entirely
+            if (cached is not null && cached.IsFresh(now)) continue;   // fresh → skip the network entirely
             pending.Add(uri);
         }
         if (pending.Count == 0) return;
@@ -67,7 +67,7 @@ sealed partial class SpotifyVideoService : IVideoService
         var reqs = new List<(string Uri, Xm.ExtensionKind Kind, string? Etag)>(uris.Count * 2);
         foreach (var uri in uris)
         {
-            reqs.Add((uri, Xm.ExtensionKind.VideoAssociations, _store.GetVideoAssociation(uri)?.Etag));
+            reqs.Add((uri, Xm.ExtensionKind.VideoAssociations, _store.GetVideoAssociation(uri)?.RevalidationEtag));
             // CONSUMPTION_EXPERIENCE_TRAIT (182, ~10 B/track) rides the SAME entity request — GzipExtensionRequest groups
             // kinds under one EntityRequest, so this costs no extra round-trip. It is the gate for canonical recovery.
             reqs.Add((uri, Xm.ExtensionKind.ConsumptionExperienceTrait, null));
@@ -171,7 +171,7 @@ sealed partial class SpotifyVideoService : IVideoService
     {
         if (string.IsNullOrEmpty(trackUri) || !trackUri.StartsWith("spotify:track:", StringComparison.Ordinal)) return null;
         var cached = _store.GetVideoAssociation(trackUri);
-        if (cached is not null && IsFresh(cached, DateTimeOffset.UtcNow)) return cached;
+        if (cached is not null && cached.IsFresh(DateTimeOffset.UtcNow)) return cached;
 
         // Coalesce concurrent single fetches for the same uri (the batch DetectAsync is the bulk path).
         var task = _inflight.GetOrAdd(trackUri, u => FetchOneAsync(u, cached?.Etag, ct));
@@ -215,16 +215,22 @@ sealed partial class SpotifyVideoService : IVideoService
         return _store.GetVideoAssociation(uri);
     }
 
-    // Fold one (uri, status) result into the cache and, on a positive, flip the track's HasVideo so the list shows it.
-    void Apply(string uri, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now)
+    // Fold one (uri, status) result into the plane. There is nothing to mirror onto the track row: the association IS
+    // the has-video answer every surface reads (VideoPresence), so a row indicator cannot disagree with the record the
+    // fetch just produced — which is what used to happen when the two lived in different places.
+    void Apply(string uri, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now) => Fold(_store, uri, res, now);
+
+    /// <summary>THE kind-99 fold, shared by every fetcher of the association (the detect batch here, the single-track
+    /// resolve, and <see cref="SpotifyTrackExpansionService"/>'s drawer fetch). One fold is what makes the row
+    /// indicator and the expand drawer structurally unable to disagree: whichever path fetched the payload, the same
+    /// projection lands in the same plane — so expanding a row that showed no video HEALS the row the moment the
+    /// drawer's own fetch comes back.</summary>
+    internal static void Fold(IStore store, string uri, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now)
     {
         VideoAssociation? projected;
-        try { projected = Project(uri, res, now); }
+        try { projected = Project(store, uri, res, now); }
         catch (InvalidProtocolBufferException) { return; }   // skip one malformed entity, keep the batch
-        if (projected is null) return;
-        _store.UpsertVideoAssociation(projected);
-        if (projected.HasVideo && _store.GetTrack(uri) is { HasVideo: false } t)
-            _store.UpsertTrack(t with { HasVideo = true });   // merge ORs HasVideo → TrackRow movie icon
+        if (projected is not null) store.UpsertVideoAssociation(projected);
     }
 
     void Apply(string uri, CachedExtension res, DateTimeOffset now)
@@ -232,10 +238,7 @@ sealed partial class SpotifyVideoService : IVideoService
         VideoAssociation? projected;
         try { projected = Project(uri, res, now); }
         catch (InvalidProtocolBufferException) { return; }
-        if (projected is null) return;
-        _store.UpsertVideoAssociation(projected);
-        if (projected.HasVideo && _store.GetTrack(uri) is { HasVideo: false } t)
-            _store.UpsertTrack(t with { HasVideo = true });
+        if (projected is not null) _store.UpsertVideoAssociation(projected);
     }
 
     // Fold a CANONICAL entity's association under the ALIAS uri. Returns whether anything was recovered (only a real hit
@@ -243,14 +246,12 @@ sealed partial class SpotifyVideoService : IVideoService
     bool ApplyRecovered(string alias, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now, string? gidHex)
     {
         VideoAssociation? projected;
-        try { projected = Project(alias, res, now); }
+        try { projected = Project(_store, alias, res, now); }
         catch (InvalidProtocolBufferException) { return false; }
         if (projected is not { HasVideo: true }) return false;
         // The etag belongs to the CANONICAL entity — never persist it against the alias, or the next detect would send
         // it as the alias's conditional and 304 us onto the wrong entity's freshness.
         _store.UpsertVideoAssociation(projected with { Etag = null, VideoGidHex = gidHex ?? projected.VideoGidHex });
-        if (_store.GetTrack(alias) is { HasVideo: false } t)
-            _store.UpsertTrack(t with { HasVideo = true });
         return true;
     }
 
@@ -340,7 +341,7 @@ sealed partial class SpotifyVideoService : IVideoService
         return null;
     }
 
-    VideoAssociation? Project(string uri, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now)
+    static VideoAssociation? Project(IStore store, string uri, ExtendedMetadataSource.ExtensionResult res, DateTimeOffset now)
     {
         switch (res.Status)
         {
@@ -350,7 +351,7 @@ sealed partial class SpotifyVideoService : IVideoService
                 return new VideoAssociation(uri, has, counterpart, files, res.Etag, now, res.OfflineTtlSeconds);
             case 304:
                 // Unchanged — keep the cached record, just refresh its freshness (and any rotated etag).
-                var existing = _store.GetVideoAssociation(uri);
+                var existing = store.GetVideoAssociation(uri);
                 return existing is null ? null : existing with { FetchedAt = now, Etag = res.Etag ?? existing.Etag };
             case 404:
             case 200:   // 200 with an empty payload ⇒ no association
@@ -384,5 +385,4 @@ sealed partial class SpotifyVideoService : IVideoService
         return (assoc.HasAssociatedUri ? assoc.AssociatedUri : null, files);
     }
 
-    static bool IsFresh(VideoAssociation a, DateTimeOffset now) => now - a.FetchedAt < RevalidateAfter;
 }

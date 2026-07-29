@@ -108,7 +108,6 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     string? _durOverrideUri;
     long _durOverrideMs;
     double _speed = 1.0;   // playback rate folded from the cluster (remote) / 1.0 (local); applied in Pos()
-    Palette? _palette;
     IReadOnlyList<QueueEntry> _queue = Array.Empty<QueueEntry>();
     string? _lastLocalQueueDiagSig, _lastViewerQueueDiagSig, _lastRemoteClusterDiagSig;
     // The active device's queue, verbatim from the last cluster (with uid+provider) — the source for a forwarded set_queue.
@@ -173,7 +172,6 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public double Volume { get { lock (_gate) return _volume; } }
     public bool IsShuffle { get { lock (_gate) return _shuffle; } }
     public RepeatMode Repeat { get { lock (_gate) return _repeat; } }
-    public Palette? Palette { get { lock (_gate) return _palette; } }
     public IReadOnlyList<QueueEntry> Queue { get { lock (_gate) return _queue; } }
     public bool CanSkipNext { get { lock (_gate) return _canSkipNext; } }
     public bool CanSkipPrev { get { lock (_gate) return _canSkipPrev; } }
@@ -194,7 +192,6 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     static double NormalizeSpeed(double v) => v <= 0 || double.IsNaN(v) || double.IsInfinity(v) ? 1.0 : Math.Clamp(v, 0.5, 3.5);
 
     /// <summary>Allow the app to set a palette derived from the current art (off the slab path).</summary>
-    public void SetPalette(Palette? p) { lock (_gate) _palette = p; FireChanges(); }
 
     /// <summary>Publish the media-authoritative duration for ONE playable (the real length of a user-attached local
     /// video, as reported by the media engine). Applies immediately when that playable is current, and is re-applied on

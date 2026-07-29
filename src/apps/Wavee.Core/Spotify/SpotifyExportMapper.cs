@@ -45,8 +45,7 @@ public static class SpotifyExportMapper
                 Merch: MapMerch(Dig(au, "goods", "merch", "items")),
                 TopCities: MapTopCities(Dig(au, "stats", "topCities", "items")),
                 ExternalLinks: MapLinks(Dig(au, "profile", "externalLinks", "items")),
-                Gallery: MapGallery(Dig(au, "visuals", "gallery", "items"))),
-            Palette: ExtractPalette(Dig(au, "visualIdentity", "wideFullBleedImage")));
+                Gallery: MapGallery(Dig(au, "visuals", "gallery", "items"))));
     }
 
     /// <summary>Map a LIVE Pathfinder <c>getAlbum</c> response (data.albumUnion) → the domain Album WITH its tracklist
@@ -78,13 +77,15 @@ public static class SpotifyExportMapper
                 if (turi is null) continue;
                 var tArtists = MapUnionArtists(Dig(t, "artists", "items"));
                 bool explicitFlag = (Str(t, "contentRating", "label") ?? "NONE") != "NONE";
-                bool playable = BoolAt(t, true, "playability", "playable");
-                bool hasVideo = Long(t, "associationsV3", "videoAssociations", "totalCount") > 0;
+                var playable = PlayabilityOf(t);
+                // `associationsV3.videoAssociations` is deliberately NOT read onto the row: has-video is answered by
+                // the VideoAssociation plane (kind 99), which every surface already triggers. A second, weaker source
+                // of the same fact on the row is what let a list and its own expand drawer disagree.
                 tracks.Add(new Track(IdFromUri(turi), turi, Str(t, "name") ?? "",
                     tArtists.Count > 0 ? tArtists : albumArtists, albumRef,
                     Long(t, "duration", "totalMilliseconds"), explicitFlag, cover,
-                    HasVideo: hasVideo, PlayCount: Long(t, "playcount"),
-                    Availability: playable ? Availability.Playable : Availability.Unavailable, Source: "spotify"));
+                    PlayCount: Long(t, "playcount"),
+                    Availability: playable, Source: "spotify"));
             }
 
         var moreBy = new List<Album>();
@@ -123,7 +124,7 @@ public static class SpotifyExportMapper
             otherVersions.Count > 0 ? otherVersions : null,
             CourtesyLine: courtesyLine, ReleaseDatePrecision: releasePrecision, DiscCount: discCount,
             ShareUrl: shareUrl, IsPreRelease: isPreRelease, PreReleaseEnd: preReleaseEnd,
-            Hydration: AlbumHydrationLevel.Full, Palette: ExtractPalette(Dig(au, "coverArt")));
+            Hydration: AlbumHydrationLevel.Full);
     }
 
     // The album's primary artists WITH avatars (albumUnion.artists.items[].visuals.avatarImage) — for the stacked header.
@@ -270,14 +271,13 @@ public static class SpotifyExportMapper
         if (dur == 0) dur = LongAt(data, "duration", "totalMilliseconds");
         long plays = LongAt(data, "playcount");
         bool explicitFlag = (Str(data, "contentRating", "label") ?? "NONE") != "NONE";
-        bool playable = BoolAt(data, true, "playability", "playable");
-        bool hasVideo = Long(data, "associationsV3", "videoAssociations", "totalCount") > 0;
+        var playable = PlayabilityOf(data);
 
         return new Track(
             IdFromUri(uri), uri, Str(data, "name") ?? "", artists, albumRef,
-            dur, explicitFlag, image, HasVideo: hasVideo, PlayCount: plays,
+            dur, explicitFlag, image, PlayCount: plays,
             Origin: TrackOrigin.Streamed,
-            Availability: playable ? Availability.Playable : Availability.Unavailable,
+            Availability: playable,
             Source: "spotify");
     }
 
@@ -339,8 +339,7 @@ public static class SpotifyExportMapper
                 MapUnionArtists(Dig(d, "artists", "items")),
                 new AlbumRef(IdFromUri(Str(alb, "uri") ?? ""), Str(alb, "uri") ?? "", Str(alb, "name") ?? ""),
                 Long(d, "duration", "totalMilliseconds"), Str(d, "contentRating", "label") == "EXPLICIT",
-                PickImage(Dig(alb, "coverArt", "sources")),
-                HasVideo: Long(d, "associationsV3", "videoAssociations", "totalCount") > 0));
+                PickImage(Dig(alb, "coverArt", "sources"))));
         }
 
         var albums = new List<Album>();
@@ -372,11 +371,85 @@ public static class SpotifyExportMapper
                 Str(d, "ownerV2", "data", "name") ?? "", cover, 0));
         }
 
+        // ── podcasts / audiobooks / episodes / profiles ──────────────────────────────────────────────────────────────
+        // Each facet op fills exactly ONE of these collections and leaves the rest absent, so this single mapper serves
+        // every facet response without the caller having to know which one it asked for.
+        List<Show>? shows = null;
+        foreach (var it in Arr(Dig(sv, "podcasts", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
+            (shows ??= new List<Show>()).Add(new Show(IdFromUri(uri), uri, Str(d, "name") ?? "",
+                Str(d, "publisher", "name") ?? "", PickImage(Dig(d, "coverArt", "sources"))));
+        }
+
+        List<Episode>? episodes = null;
+        foreach (var it in Arr(Dig(sv, "episodes", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
+            // The episode's own art is the SHOW's cover — the episode node itself carries none.
+            var showData = Dig(d, "podcastV2", "data");
+            (episodes ??= new List<Episode>()).Add(new Episode(IdFromUri(uri), uri, Str(d, "name") ?? "",
+                Str(showData, "name") ?? "", PickImage(Dig(showData, "coverArt", "sources")),
+                DurationMs: 0, PublishedAt: default, Description: HtmlText(Str(d, "description"))));
+        }
+
+        List<SearchTopHit>? audiobooks = null;
+        foreach (var it in Arr(Dig(sv, "audiobooks", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
+            // authorsV2 is a bare ARRAY of {name,uri} — not the usual {items:[{data:…}]} envelope.
+            string authors = JoinNames(Dig(d, "authorsV2"));
+            (audiobooks ??= new List<SearchTopHit>()).Add(new SearchTopHit(
+                SearchHitKind.Audiobook, uri, Str(d, "name") ?? "", authors, "Audiobook",
+                PickImage(Dig(d, "coverArt", "sources")), RoundImage: false, Followable: false, MatchedLyrics: false,
+                AccessLabel: Str(d, "accessInfo", "signifier", "text"),
+                Detail: HtmlText(Str(d, "description"))));
+        }
+
+        List<SearchTopHit>? profiles = null;
+        foreach (var it in Arr(Dig(sv, "users", "items")))
+        {
+            var d = Dig(it, "data");
+            if (Str(d, "uri") is not { } uri || IsNotFound(d)) continue;
+            // The user node carries no avatar — the card falls back to PersonPicture initials from the display name.
+            (profiles ??= new List<SearchTopHit>()).Add(new SearchTopHit(
+                SearchHitKind.User, uri, Str(d, "displayName") ?? Str(d, "username") ?? "", "", "Profile",
+                Image: null, RoundImage: true, Followable: true, MatchedLyrics: false, AccessLabel: null));
+        }
+
         return new SearchResults(tracks, albums, artists, playlists,
             TracksTotal: TotalCount(sv, "tracksV2"),
             AlbumsTotal: TotalCount(sv, "albumsV2"),
             ArtistsTotal: TotalCount(sv, "artists"),
-            PlaylistsTotal: TotalCount(sv, "playlists"));
+            PlaylistsTotal: TotalCount(sv, "playlists"),
+            Shows: shows, ShowsTotal: TotalCount(sv, "podcasts"),
+            Episodes: episodes, EpisodesTotal: TotalCount(sv, "episodes"),
+            Audiobooks: audiobooks, AudiobooksTotal: TotalCount(sv, "audiobooks"),
+            Profiles: profiles, ProfilesTotal: TotalCount(sv, "users"));
+    }
+
+    /// <summary>A search result whose entity no longer resolves comes back as a wrapper with
+    /// <c>__typename: "NotFound"</c> and nothing else — observed on searchAuthors, and mixed in among real items on
+    /// browse sections. Rendering one produces a blank, unclickable card, so every list skips them.</summary>
+    static bool IsNotFound(JsonElement d) =>
+        string.Equals(Str(d, "__typename"), "NotFound", StringComparison.Ordinal);
+
+    /// <summary>Comma-joins a bare array of <c>{name,uri}</c> objects (audiobook <c>authorsV2</c>). Returns "" when the
+    /// array is absent or every entry is nameless.</summary>
+    static string JoinNames(JsonElement arr)
+    {
+        if (arr.ValueKind != JsonValueKind.Array) return "";
+        var sb = new System.Text.StringBuilder();
+        foreach (var a in arr.EnumerateArray())
+        {
+            if (Str(a, "name") is not { Length: > 0 } n) continue;
+            if (sb.Length > 0) sb.Append(", ");
+            sb.Append(n);
+        }
+        return sb.ToString();
     }
 
     /// <summary>Map a LIVE Pathfinder <c>searchTopResultsList</c> response → the ordered unified "All"-tab hits
@@ -667,7 +740,8 @@ public static class SpotifyExportMapper
         return sb.ToString();
     }
 
-    static System.Collections.Generic.IEnumerable<JsonElement> Arr(JsonElement e)
+    // Public so the sibling browse mapper can share the SAME null-safe array walk instead of re-implementing it.
+    public static System.Collections.Generic.IEnumerable<JsonElement> Arr(JsonElement e)
         => e.ValueKind == JsonValueKind.Array ? e.EnumerateArray() : System.Linq.Enumerable.Empty<JsonElement>();
 
     // ── safe JSON navigation ───────────────────────────────────────────────────────────────────────────────
@@ -696,6 +770,22 @@ public static class SpotifyExportMapper
     {
         var x = Dig(e, path);
         return x.ValueKind == JsonValueKind.True ? true : x.ValueKind == JsonValueKind.False ? false : fallback;
+    }
+
+    /// <summary>The playability verdict, or null when the response did not state one.
+    ///
+    /// Distinguishing "absent" from "playable" is the whole point: only getAlbum/getTrack carry
+    /// <c>playability.playable</c>, so a default of true meant every other write asserted a verdict it never received —
+    /// and an unreleased track on a partly-released album looked exactly like a normal one.</summary>
+    static Availability? PlayabilityOf(JsonElement e)
+    {
+        var x = Dig(e, "playability", "playable");
+        return x.ValueKind switch
+        {
+            JsonValueKind.True => Availability.Playable,
+            JsonValueKind.False => Availability.Unavailable,
+            _ => null,
+        };
     }
 
     static long LongAt(JsonElement e, params string[] path)
@@ -786,7 +876,7 @@ public static class SpotifyExportMapper
         long dur = LongAt(data, "trackDuration", "totalMilliseconds");
         long plays = LongAt(data, "playcount");
         bool explicitFlag = (StrAt(data, "contentRating", "label") ?? "NONE") != "NONE";
-        bool playable = BoolAt(data, true, "playability", "playable");
+        var playable = PlayabilityOf(data);
 
         DateTimeOffset? addedAt = null;
         var iso = StrAt(item, "addedAt", "isoString");
@@ -795,9 +885,9 @@ public static class SpotifyExportMapper
 
         return new Track(
             IdFromUri(uri), uri, StrAt(data, "name") ?? "", artists, albumRef,
-            dur, explicitFlag, image, addedAt, addedBy, HasVideo: false, PlayCount: plays,
+            dur, explicitFlag, image, addedAt, addedBy, PlayCount: plays,
             Origin: TrackOrigin.Streamed,
-            Availability: playable ? Availability.Playable : Availability.Unavailable,
+            Availability: playable,
             Source: "spotify");
     }
 
@@ -822,12 +912,11 @@ public static class SpotifyExportMapper
         // null (missing/fallback) leaves the page on its neutral default.
         var imgItems = Dig(data, "images", "items");
         var firstImg = imgItems.ValueKind == JsonValueKind.Array && imgItems.GetArrayLength() > 0 ? imgItems[0] : default;
-        Palette? palette = ExtractPalette(Dig(data, "visualIdentity", "squareCoverImage")) ?? ExtractPalette(firstImg);
 
         return new Playlist(
             IdFromUri(uri), uri, StrAt(data, "name") ?? "", HtmlText(StrAt(data, "description")), ownerName,
             ImagesCover(data), trackCount, tracks ?? System.Array.Empty<Track>(),
-            owner, caps, StrAt(data, "format"), Source: "spotify", Palette: palette);
+            owner, caps, StrAt(data, "format"), Source: "spotify");
     }
 
     // ── home cards (an entity inside a section item: Album / Playlist / Artist) ─────────────────────────────
@@ -840,15 +929,15 @@ public static class SpotifyExportMapper
         switch (typename)
         {
             case "Album":
-                return new HomeCard(uri, name, FirstArtistName(data), CoverArt(data) ?? EntityImage(data), HomeCardKind.Album, Accent: ExtractedAccent(data));
+                return new HomeCard(uri, name, FirstArtistName(data), CoverArt(data) ?? EntityImage(data), HomeCardKind.Album);
             case "Playlist":
                 return new HomeCard(uri, name, HtmlText(StrAt(data, "description")) ?? StrAt(data, "ownerV2", "data", "name"),
-                    ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist, Accent: ExtractedAccent(data));
+                    ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist);
             case "Artist":
                 // Artist entities expose their display name under profile.name (albums/playlists use top-level name).
                 // Reading only data.name produced photo-only cards whose sole caption was the generic "Artist" label.
                 var artistName = StrAt(data, "profile", "name") ?? name;
-                return new HomeCard(uri, artistName, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist, Accent: ExtractedAccent(data));
+                return new HomeCard(uri, artistName, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist);
             default:
                 return null;
         }
@@ -908,19 +997,19 @@ public static class SpotifyExportMapper
         var image = RecentImage(data);
 
         if (entityType == "ENTITY_TYPE_TRACK" || uri.StartsWith("spotify:track:", StringComparison.Ordinal))
-            return new HomeCard(uri, title, JoinNames("Song", contributors), image, HomeCardKind.Track, Accent: ExtractedAccent(data));
+            return new HomeCard(uri, title, JoinNames("Song", contributors), image, HomeCardKind.Track);
 
         if (entityType == "ENTITY_TYPE_ARTIST" || uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
-            return new HomeCard(uri, title, "Artist", image, HomeCardKind.Artist, Accent: ExtractedAccent(data));
+            return new HomeCard(uri, title, "Artist", image, HomeCardKind.Artist);
 
         if (entityType == "ENTITY_TYPE_ALBUM" || uri.StartsWith("spotify:album:", StringComparison.Ordinal))
         {
             var type = TitleCase((StrAt(identity, "type") ?? "Album").Replace('_', ' '));
-            return new HomeCard(uri, title, JoinNames(type, contributors), image, HomeCardKind.Album, Accent: ExtractedAccent(data));
+            return new HomeCard(uri, title, JoinNames(type, contributors), image, HomeCardKind.Album);
         }
 
         if (entityType == "ENTITY_TYPE_PLAYLIST" || uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
-            return new HomeCard(uri, title, contributors.Count > 0 ? contributors[0].Name : "Playlist", image, HomeCardKind.Playlist, Accent: ExtractedAccent(data));
+            return new HomeCard(uri, title, contributors.Count > 0 ? contributors[0].Name : "Playlist", image, HomeCardKind.Playlist);
 
         return null;
     }
@@ -991,21 +1080,6 @@ public static class SpotifyExportMapper
         return v ?? ImagesCover(artistData);
     }
 
-    // ── home card accent (cover-derived section tint) ──────────────────────────────────────────────────────
-    /// <summary>A home card's cover-extracted dominant tint as ARGB — from <c>coverArt</c> or
-    /// <c>visualIdentityTrait.squareCoverImage</c> (rich <c>extractedColorSet</c> or <c>extractedColors.colorDark</c>).
-    /// Skips Spotify's generic fallback (<c>isFallback</c>) so the composer substitutes a semantic per-kind tint instead.</summary>
-    static uint? ExtractedAccent(JsonElement data)
-        => AccentFromCoverNode(Dig(data, "coverArt"))
-        ?? AccentFromCoverNode(Dig(data, "visualIdentityTrait", "squareCoverImage"))
-        ?? AccentFromCoverNode(Dig(data, "visualIdentity", "squareCoverImage"));
-
-    static uint? AccentFromCoverNode(JsonElement coverNode)
-    {
-        if (coverNode.ValueKind != JsonValueKind.Object) return null;
-        return ExtractPalette(coverNode)?.TintedDark;
-    }
-
     /// <summary>Parse a <c>#RRGGBB</c> (or bare <c>RRGGBB</c>) hex color → opaque <c>0xFFRRGGBB</c>; null when absent/malformed.</summary>
     public static uint? HexToArgb(string? hex)
     {
@@ -1013,60 +1087,6 @@ public static class SpotifyExportMapper
         var s = hex[0] == '#' ? hex.AsSpan(1) : hex.AsSpan();
         return s.Length == 6 && uint.TryParse(s, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var rgb)
             ? 0xFF000000u | rgb : null;
-    }
-
-    // ── cover-extracted page palette (ALBUM / ARTIST / PLAYLIST detail accent) ───────────────────────────────
-    /// <summary>Parse a <c>fetchExtractedColors</c> Pathfinder response → a Palette from the FIRST image's dark tone.
-    /// The response shape is <c>data.extractedColors[]</c>, each element carrying <c>colorDark/colorLight/colorRaw</c>
-    /// with <c>hex</c> + <c>isFallback</c> — i.e. each element IS an <c>extractedColors</c> node, so it feeds the same
-    /// <see cref="PaletteFromColorDark"/> the album path uses. Null (empty / fallback / malformed) ⇒ no tint.</summary>
-    public static Palette? PaletteFromExtractedColorsResponse(JsonElement root)
-    {
-        var arr = Dig(Dig(root, "data"), "extractedColors");
-        if (arr.ValueKind != JsonValueKind.Array || arr.GetArrayLength() == 0) return null;
-        return PaletteFromColorDark(arr[0]);
-    }
-
-    /// <summary>A cover's single dark extracted color (<c>extractedColors.colorDark</c>) → a Palette whose slots all
-    /// carry that dark tone (the VIEW lifts Accent for legibility). Null when the node is absent, a generic fallback
-    /// (<c>isFallback</c>), or malformed — never a wrong colour.</summary>
-    static Palette? PaletteFromColorDark(JsonElement extractedColorsNode)
-    {
-        var cd = Dig(extractedColorsNode, "colorDark");
-        if (cd.ValueKind != JsonValueKind.Object || BoolAt(cd, false, "isFallback")) return null;
-        if (HexToArgb(Str(cd, "hex")) is not { } dark) return null;
-        return new Palette(BackgroundDark: dark, TintedDark: dark, Light: 0xFFFFFFFF, Accent: dark);
-    }
-
-    /// <summary>A cover's rich <c>extractedColorSet</c> → a Palette from its dark tier (<c>higherContrast</c>, else
-    /// <c>highContrast</c> — WaveeMusic's dark-mode tier choice). backgroundBase backs the wash; backgroundTintedBase
-    /// the accent/tint (the VIEW lifts Accent to match BrightenForTint). Null when neither tier is present.</summary>
-    static Palette? PaletteFromColorSet(JsonElement extractedColorSetNode)
-    {
-        var tier = Dig(extractedColorSetNode, "higherContrast");
-        if (tier.ValueKind != JsonValueKind.Object) tier = Dig(extractedColorSetNode, "highContrast");
-        var bg   = Dig(tier, "backgroundBase");
-        var tint = Dig(tier, "backgroundTintedBase");
-        if (bg.ValueKind != JsonValueKind.Object || tint.ValueKind != JsonValueKind.Object) return null;
-        uint bgArgb = ColorComponentsToArgb(bg), tintArgb = ColorComponentsToArgb(tint);
-        return new Palette(BackgroundDark: bgArgb, TintedDark: tintArgb, Light: 0xFFFFFFFF, Accent: tintArgb);
-    }
-
-    // {alpha,red,green,blue} (0–255 ints) → opaque ARGB. Alpha is forced to 0xFF (matches HexToArgb's convention) so a
-    // missing channel never yields a transparent accent — the fixtures always carry alpha=255, so this is identical to
-    // the literal ((uint)alpha<<24)|… form for all real data.
-    static uint ColorComponentsToArgb(JsonElement c) =>
-        0xFF000000u | ((uint)(Long(c, "red")   & 0xFF) << 16)
-                    | ((uint)(Long(c, "green") & 0xFF) << 8)
-                    |  (uint)(Long(c, "blue")  & 0xFF);
-
-    /// <summary>Extract a Palette from a cover node — the rich <c>extractedColorSet</c> first, then the single
-    /// <c>extractedColors.colorDark</c>. Null (missing/fallback/malformed) ⇒ the page keeps its neutral default.</summary>
-    static Palette? ExtractPalette(JsonElement coverNode)
-    {
-        if (coverNode.ValueKind != JsonValueKind.Object) return null;
-        return PaletteFromColorSet(Dig(coverNode, "extractedColorSet"))
-            ?? PaletteFromColorDark(Dig(coverNode, "extractedColors"));
     }
 
     // ── artist overview (data.artistUnion) → the full "magazine" Artist ───────────────────────────────────────
@@ -1113,24 +1133,113 @@ public static class SpotifyExportMapper
             Concerts: concerts,
             Merch: MapMerch(Dig(au, "goods", "merch", "items")),
             Playlists: MapPlaylistRefs(Dig(au, "profile", "playlistsV2", "items")),
-            MusicVideos: null,
+            MusicVideos: MapMusicVideos(au),
             TopCities: MapTopCities(Dig(au, "stats", "topCities", "items")),
             ExternalLinks: MapLinks(Dig(au, "profile", "externalLinks", "items")),
             Gallery: MapGallery(Dig(au, "visuals", "gallery", "items")),
             Related: MapRelated(Dig(au, "relatedContent", "relatedArtists", "items")),
-            Tour: FakeData.TourBannerFor(name, concerts));
+            Tour: FakeData.TourBannerFor(name, concerts),
+            WatchFeed: MapWatchFeed(Dig(au, "watchFeedEntrypoint")),
+            PreRelease: MapPreRelease(Dig(au, "preReleaseV2", "data")));
 
         return new Artist(IdFromUri(uri), uri, name, avatar, topAlbums,
             MonthlyListeners: Long(au, "stats", "monthlyListeners"), Followers: Long(au, "stats", "followers"), Bio: bio, Verified: verified,
             WorldRank: (int)Long(au, "stats", "worldRank"), HeaderImage: header, TopTracks: topTracks,
             AppearsOn: appearsOn.Count > 0 ? appearsOn : null, Pinned: pinned, Extras: extras,
-            Palette: ExtractPalette(Dig(au, "visualIdentity", "wideFullBleedImage")),
             // Per-facet totals — carried alongside the first ~10 items so the grid sizes the whole facet up front.
             AlbumsTotal: (int)Long(au, "discography", "albums", "totalCount"),
             SinglesTotal: (int)Long(au, "discography", "singles", "totalCount"),
             CompilationsTotal: (int)Long(au, "discography", "compilations", "totalCount"),
             LatestRelease: latestRelease,
             PopularReleases: popularReleases.Count > 0 ? popularReleases : null);
+    }
+
+    /// <summary>The artist's upcoming release (<c>artistUnion.preReleaseV2.data</c>). Null unless there is a real one:
+    /// the field is <c>null</c> on most artists, and the request only asks for it at all when it sends
+    /// <c>preReleaseV2: true</c>.
+    ///
+    /// Requires a uri and a name — a node with neither cannot be navigated to or labelled, so it would render as a
+    /// dead card. A missing <c>preReleaseEndDateTime</c> is tolerated: the card still announces the release, it just
+    /// cannot count down to it.</summary>
+    static ArtistPreRelease? MapPreRelease(JsonElement node)
+    {
+        if (node.ValueKind != JsonValueKind.Object) return null;
+        string? uri = Str(node, "uri");
+        string? name = Str(node, "name");
+        if (string.IsNullOrEmpty(uri) || string.IsNullOrEmpty(name)) return null;
+
+        return new ArtistPreRelease(
+            uri!, name!,
+            PickImage(Dig(node, "coverArt", "sources")),
+            ParseIso(Str(node, "preReleaseEndDateTime")),
+            Str(node, "type"));
+    }
+
+    /// <summary>The artist page's music-video shelf: <c>relatedMusicVideos</c> (videos mapped to a track) plus
+    /// <c>unmappedMusicVideosV2</c> (videos with no track counterpart), de-duplicated by uri.
+    ///
+    /// The ITEM shape is tolerant on purpose. Every captured artist returned <c>totalCount: 0</c> for both lists, so
+    /// the element schema is genuinely unverified — this reads the two envelopes Spotify uses everywhere else
+    /// (<c>items[].data</c> and a bare <c>items[]</c>) and drops anything without a uri and a name. An artist with no
+    /// videos yields null and the shelf does not render, which is also what a shape change degrades to.</summary>
+    static IReadOnlyList<MusicVideo>? MapMusicVideos(JsonElement au)
+    {
+        List<MusicVideo>? list = null;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        AddVideos(Dig(au, "relatedMusicVideos", "items"), ref list, seen);
+        AddVideos(Dig(au, "unmappedMusicVideosV2", "items"), ref list, seen);
+        return list;
+    }
+
+    static void AddVideos(JsonElement items, ref List<MusicVideo>? into, HashSet<string> seen)
+    {
+        if (items.ValueKind != JsonValueKind.Array) return;
+        foreach (var it in items.EnumerateArray())
+        {
+            // Either envelope: {data:{…}} (the common wrapper) or the fields inline on the item.
+            var d = Dig(it, "data");
+            if (d.ValueKind != JsonValueKind.Object) d = it;
+
+            var uri = Str(d, "uri") ?? Str(d, "trackUri");
+            var name = Str(d, "name") ?? Str(d, "title");
+            if (string.IsNullOrEmpty(uri) || string.IsNullOrEmpty(name) || !seen.Add(uri!)) continue;
+
+            // 16:9 stills live under thumbnail/coverArt depending on the node; try both rather than assuming.
+            var thumb = PickImage(Dig(d, "thumbnailImage", "data", "sources"))
+                        ?? PickImage(Dig(d, "thumbnail", "sources"))
+                        ?? PickImage(Dig(d, "coverArt", "sources"));
+
+            (into ??= new List<MusicVideo>()).Add(new MusicVideo(
+                uri!, name!, thumb,
+                Long(d, "duration", "totalMilliseconds"),
+                (Str(d, "contentRating", "label") ?? "NONE") != "NONE"));
+        }
+    }
+
+    /// <summary>The artist's watch-feed entry point. Returns null unless there is something to open — an entrypoint
+    /// with neither a video nor a thumbnail would render as a dead control.
+    ///
+    /// <c>video</c> is null on plenty of entities (every album entrypoint and several artists in the corpus), so its
+    /// absence is normal and yields a thumbnail-only feed. When present, <c>videoType</c> decides what <c>fileId</c>
+    /// means: <c>"URL"</c> makes it a ready-to-play canvas mp4, anything else leaves it an opaque id we do not play.
+    /// Branching on the discriminator (rather than sniffing the string for "http") keeps a future non-URL variant from
+    /// being handed to the media engine as if it were a URL.</summary>
+    static ArtistWatchFeed? MapWatchFeed(JsonElement node)
+    {
+        if (node.ValueKind != JsonValueKind.Object) return null;
+        string? entry = Str(node, "entrypointUri");
+        if (string.IsNullOrEmpty(entry)) return null;
+
+        var video = Dig(node, "video");
+        string? fileId = Str(video, "fileId");
+        string? videoType = Str(video, "videoType");
+        string? canvasUrl = string.Equals(videoType, "URL", StringComparison.OrdinalIgnoreCase) ? fileId : null;
+        // thumbnailImage.data.sources — one level deeper than the usual {sources:[…]} envelope.
+        var thumb = PickImage(Dig(node, "thumbnailImage", "data", "sources"));
+        if (string.IsNullOrEmpty(fileId) && thumb is null) return null;
+
+        return new ArtistWatchFeed(entry!, thumb, fileId,
+            StartMs: Long(video, "startTime"), EndMs: Long(video, "endTime"), CanvasUrl: canvasUrl);
     }
 
     static IReadOnlyList<TopCity>? MapTopCities(JsonElement items)
@@ -1178,9 +1287,7 @@ public static class SpotifyExportMapper
         };
         return new Album(IdFromUri(uri), uri, Str(r, "name") ?? "", CoverArt(r) ?? EntityImage(r),
             System.Array.Empty<ArtistRef>(), year, tracks, null, kind,
-            ReleaseDate: releaseDate, ReleaseDatePrecision: releasePrecision,
-            Palette: ExtractPalette(Dig(r, "coverArt"))
-                ?? ExtractPalette(Dig(r, "visualIdentityTrait", "squareCoverImage")));
+            ReleaseDate: releaseDate, ReleaseDatePrecision: releasePrecision);
     }
 
     // Discography release dates arrive as discrete { year, month, day, precision } fields rather than the getAlbum
@@ -1223,14 +1330,35 @@ public static class SpotifyExportMapper
             PlayCount: Long(t, "playcount"), Source: "spotify");
     }
 
+    /// <summary>The hero pin (<c>artistUnion.profile.pinnedItem</c>): the pin's own display fields plus the identity of
+    /// the thing it points at, read out of the <c>itemV2</c> wrapper (<c>itemV2.data.{uri, type, __typename,
+    /// preReleaseEndDateTime}</c>).
+    ///
+    /// A pin whose <c>itemV2</c> carries a future <c>preReleaseEndDateTime</c> is an ANNOUNCEMENT, not a promo, and the
+    /// card renders it as one (see <see cref="PinnedItem.IsUpcoming"/>). Nothing here decides that: the mapper only
+    /// carries the instant across, so a release that drops flips the card back to an ordinary promo on the next render
+    /// with no refetch.
+    ///
+    /// <c>Eyebrow</c> stays the literal "Pinned" because the wire has no eyebrow — the pin's own <c>type</c> is the
+    /// wrapper kind ("ALBUM"), not a label, and inventing one from it would read as a badge. The pre-release surface
+    /// overrides the eyebrow at render time from the localized string table.
+    ///
+    /// Null-tolerant end to end: <c>itemV2: null</c> (or any missing leaf) leaves all four of the new fields null, which
+    /// is byte-identical to what every pin mapped before they existed. The cover still prefers <c>thumbnailImage</c> and
+    /// falls back to the wrapped item's <c>coverArt</c>.</summary>
     static PinnedItem? MapPinned(JsonElement p)
     {
         if (p.ValueKind != JsonValueKind.Object) return null;
         var uri = Str(p, "uri");
         if (uri is null) return null;
-        var cover = PickImage(Dig(p, "thumbnailImage", "data", "sources")) ?? CoverArt(Dig(p, "itemV2", "data"));
+        var item = Dig(p, "itemV2", "data");
+        var cover = PickImage(Dig(p, "thumbnailImage", "data", "sources")) ?? CoverArt(item);
         return new PinnedItem("Pinned", Str(p, "title") ?? "", Str(p, "subtitle") ?? "",
-            Str(p, "comment") ?? "", cover, uri);
+            Str(p, "comment") ?? "", cover, uri,
+            ItemUri: Str(item, "uri"),
+            ItemType: Str(item, "type"),
+            ItemTypename: Str(item, "__typename"),
+            ReleaseAt: ParseIso(Str(item, "preReleaseEndDateTime")));
     }
 
     static IReadOnlyList<Concert>? MapConcerts(JsonElement items)
