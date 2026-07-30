@@ -36,6 +36,8 @@ static class ContentFilterChips
     const float ChipHeight = 32f;
     /// <summary>Rail height: the chip plus room for its focus visual, which draws outside the chip's own box.</summary>
     const float RailHeight = 40f;
+    /// <summary>Total vertical space contributed to stacked detail chrome, including its bottom semantic gap.</summary>
+    public static float VerticalExtent => RailHeight + Spacing.S;
 
     /// <summary>The bar. Returns null when there is nothing to offer, so the caller can omit the row entirely.
     ///

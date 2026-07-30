@@ -510,7 +510,7 @@ public sealed class FillRowVirtualLayout : IViewportVirtualLayout
 /// <summary>
 /// The Fenwick variable-extent list behind the <see cref="IMeasuredVirtualLayout"/> seam (E11-L0): every row starts at
 /// <see cref="Estimate"/>, gets corrected to its measured extent on realize, and the layout engine re-pins the scroll
-/// anchor across corrections. Functionally the engine's legacy <c>Layout = null</c> variable path (kept for
+/// anchor across corrections. Functionally the engine's legacy <c>ItemLayout = null</c> variable path (kept for
 /// compatibility), but USER-REACHABLE: compose it, subclass the idea, or build your own measured layout on the same
 /// contract. STATEFUL (owns an <see cref="ExtentTable"/>) — create ONCE and reuse across renders (hoist in a
 /// <c>UseMemo</c>); the table self-rebuilds only on item-count change.

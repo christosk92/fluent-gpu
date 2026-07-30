@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
+using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
 using Wavee.Core;
 using Xm = Wavee.Protocol.ExtendedMetadata;
@@ -25,7 +26,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     static readonly MessageParser<Lean.LeanTrack> TrackParser = Lean.LeanTrack.Parser.WithDiscardUnknownFields(true);
     static readonly MessageParser<Lean.LeanAlbum> AlbumParser = Lean.LeanAlbum.Parser.WithDiscardUnknownFields(true);
     static readonly MessageParser<Lean.LeanArtist> ArtistParser = Lean.LeanArtist.Parser.WithDiscardUnknownFields(true);
-    // Show carries a repeated episode[] (potentially every episode); the lean view skips it (DiscardUnknownFields), as with Track.file[] etc.
+    // Show episode[] is NOW parsed (LeanShow.episode = 70); DiscardUnknownFields still skips unused show fields.
     static readonly MessageParser<Lean.LeanShow> ShowParser = Lean.LeanShow.Parser.WithDiscardUnknownFields(true);
     static readonly MessageParser<Lean.LeanEpisode> EpisodeParser = Lean.LeanEpisode.Parser.WithDiscardUnknownFields(true);
 
@@ -42,10 +43,11 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         _ctx = ctx;
     }
 
-    public async Task FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+    public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
     {
         var session = _ctx();
         var proj = new ProjCtx();   // memoizes repeated album/artist refs across the whole sync
+        var landed = new HashSet<string>(StringComparer.Ordinal);
         var bulk = entities.Count > 1 ? store.BeginBulk() : null;   // coalesce the per-entity change signals into one
         try
         {
@@ -55,10 +57,11 @@ public sealed class ExtendedMetadataSource : IMetadataSource
                 if (gz is null) continue;   // the chunk had no supported entities
                 using var resp = await SendAsync(gz, ct).ConfigureAwait(false);
                 if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
-                ProjectResponse(resp.Body, store, proj);   // resp.Body is the response stream → parsed without an LOH byte[]
+                ProjectResponse(resp.Body, store, proj, landed);   // resp.Body is the response stream → parsed without an LOH byte[]
             }
         }
         finally { bulk?.Dispose(); }
+        return landed;
     }
 
     // Serialize the BatchedEntityRequest STRAIGHT into gzip, REUSING one EntityRequest + ExtensionQuery across all entities
@@ -259,15 +262,20 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         _ => Xm.ExtensionKind.UnknownExtension,
     };
 
-    /// <summary>Parse a BatchedExtensionResponse and project each entity proto into the Store. Pure — the unit test feeds
-    /// crafted protobuf here, so the whole parse→project path is covered without a network.</summary>
-    public static void ProjectResponse(byte[] responseBytes, IStore store)
-        => ProjectParsed(Xm.BatchedExtensionResponse.Parser.ParseFrom(responseBytes), store, new ProjCtx());
+    /// <summary>Parse a BatchedExtensionResponse and project each entity proto into the Store. Returns the EntityUris
+    /// that successfully projected — callers seal freshness on this set only (outcome seeding). Pure — the unit test
+    /// feeds crafted protobuf here, so the whole parse→project path is covered without a network.</summary>
+    public static HashSet<string> ProjectResponse(byte[] responseBytes, IStore store)
+    {
+        var landed = new HashSet<string>(StringComparer.Ordinal);
+        ProjectParsed(Xm.BatchedExtensionResponse.Parser.ParseFrom(responseBytes), store, new ProjCtx(), landed);
+        return landed;
+    }
 
-    static void ProjectResponse(Stream responseStream, IStore store, ProjCtx proj)
-        => ProjectParsed(Xm.BatchedExtensionResponse.Parser.ParseFrom(responseStream), store, proj);   // streamed, no LOH byte[]
+    static void ProjectResponse(Stream responseStream, IStore store, ProjCtx proj, HashSet<string> landed)
+        => ProjectParsed(Xm.BatchedExtensionResponse.Parser.ParseFrom(responseStream), store, proj, landed);   // streamed, no LOH byte[]
 
-    static void ProjectParsed(Xm.BatchedExtensionResponse resp, IStore store, ProjCtx proj)
+    static void ProjectParsed(Xm.BatchedExtensionResponse resp, IStore store, ProjCtx proj, HashSet<string> landed)
     {
         foreach (var array in resp.ExtendedMetadata)    // outer: a few arrays grouped by ExtensionKind (a small constant)
         {
@@ -284,7 +292,9 @@ public sealed class ExtendedMetadataSource : IMetadataSource
                         case Xm.ExtensionKind.ArtistV4: ProjectArtist(ArtistParser.ParseFrom(value), store); break;
                         case Xm.ExtensionKind.ShowV4: ProjectShow(ShowParser.ParseFrom(value), store); break;
                         case Xm.ExtensionKind.EpisodeV4: ProjectEpisode(EpisodeParser.ParseFrom(value), store); break;
+                        default: continue;
                     }
+                    if (data.EntityUri is { Length: > 0 } uri) landed.Add(uri);
                 }
                 catch (InvalidProtocolBufferException) { /* skip one malformed entity, keep the rest of the batch */ }
             }
@@ -303,7 +313,19 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         foreach (var x in t.ExternalId)
             if (string.Equals(x.Type, "isrc", StringComparison.OrdinalIgnoreCase)) { isrc = x.Id; break; }
         store.UpsertTrack(new Track(id, "spotify:track:" + id, t.Name, artists, album, t.Duration, t.Explicit, image,
-            Availability: PlayabilityOf(t), AvailableAt: LiveAtOf(t), Isrc: isrc));
+            Availability: PlayabilityOf(t), AvailableAt: LiveAtOf(t), Isrc: isrc,
+            CanonicalUri: CanonicalUriOf(t, id)));
+    }
+
+    /// <summary>LeanTrack.canonical_uri when it names a different playable than self; null = unknown-or-self.</summary>
+    static string? CanonicalUriOf(Lean.LeanTrack t, string selfId)
+    {
+        if (!t.HasCanonicalUri || t.CanonicalUri.Length == 0) return null;
+        string c = t.CanonicalUri.StartsWith("spotify:", StringComparison.Ordinal) ? t.CanonicalUri
+                 : t.CanonicalUri.Length == 22 ? "spotify:track:" + t.CanonicalUri
+                 : "";
+        if (c.Length == 0) return null;
+        return c == "spotify:track:" + selfId ? null : c;
     }
 
     /// <summary>Can this track actually play? Decided by FILES, not by <c>restriction</c>.
@@ -421,7 +443,22 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     static void ProjectShow(Lean.LeanShow sh, IStore store)
     {
         string id = Base62.Encode(sh.Gid.Span);
-        store.UpsertShow(new Show(id, "spotify:show:" + id, sh.Name, sh.Publisher, PickImage(sh.CoverImage), Description: NullIfEmpty(sh.Description)));
+        string uri = "spotify:show:" + id;
+        store.UpsertShow(new Show(id, uri, sh.Name, sh.Publisher, PickImage(sh.CoverImage), Description: NullIfEmpty(sh.Description)));
+        // Episode gids → generic membership plane (playlist_items keyed by show uri). Kind-blind consumers
+        // (GcSweepMemberships / NoteAdopted) already key by uri string — show keys are safe; offline track search
+        // filters entity.kind=Track so episode members do not pollute QueryTracks. Opened shows should land in
+        // recent_surfaces so membership GC does not purge them as "foreign playlists".
+        if (sh.Episode.Count == 0) return;
+        var members = new List<PlaylistMember>(sh.Episode.Count);
+        for (int i = 0; i < sh.Episode.Count; i++)
+        {
+            var ep = sh.Episode[i];
+            if (ep.Gid.Length == 0) continue;
+            string eid = Base62.Encode(ep.Gid.Span);
+            members.Add(new PlaylistMember(eid, "spotify:episode:" + eid, null, 0));
+        }
+        if (members.Count > 0) store.SetMembership(uri, members, null);
     }
 
     static void ProjectEpisode(Lean.LeanEpisode ep, IStore store)

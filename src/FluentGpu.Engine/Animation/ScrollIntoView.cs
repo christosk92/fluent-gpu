@@ -106,10 +106,22 @@ public static class ScrollIntoView
         {
             // Hand off to the phase-7 ScrollIntegrator: it chases Offset → PendingTarget with the programmatic
             // crit-damped spring, re-realizing the virtual window and fading the bar as it goes.
+            //
+            // VELOCITY-PRESERVING RETARGET. Re-arming a chase that is ALREADY a programmatic glide keeps the carried
+            // spring velocity, so the closed form bends toward the new target instead of restarting from rest — the
+            // visible hitch when a pager re-arms mid-glide (a second chevron click, a same-page re-arm after a partial
+            // pan). Any other inbound phase starts at rest: carrying a FRICTION-coast (fling) or finger-tracking velocity
+            // into a spring chase would slingshot past the target.
+            bool retarget = sc.Phase == ScrollIntegrator.WheelAnimating
+                         && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0
+                         && (sc.PhaseFlags & ScrollState.PhaseImmediate) == 0;
+            if (!retarget) sc.FlingVelocity = 0f;
+            // Latch the half-life from the travel REMAINING at arm time (a retarget re-solves it for the new distance).
+            // Per-chase, never per-tick, so the integrator's step stays the exact closed form (dt-deterministic).
+            sc.ProgrammaticHalflifeMs = ScrollTuning.ProgrammaticHalflifeForDistance(target - offset);
             if (horizontal) sc.PendingTargetX = target; else sc.PendingTargetY = target;
             sc.Phase = ScrollIntegrator.WheelAnimating;
             sc.PhaseFlags = ScrollState.PhaseProgrammatic;
-            sc.FlingVelocity = 0f;
             sc.FlingRetargeted = false;
             sc.FlingSnapTarget = float.NaN;
             ctx.ArmScroll?.Invoke(viewport);
@@ -125,6 +137,7 @@ public static class ScrollIntoView
         sc.Phase = ScrollIntegrator.Idle;
         sc.PhaseFlags = 0;
         sc.FlingVelocity = 0f;
+        sc.ProgrammaticHalflifeMs = 0f;
         sc.FlingRetargeted = false;
         sc.FlingSnapTarget = float.NaN;
 

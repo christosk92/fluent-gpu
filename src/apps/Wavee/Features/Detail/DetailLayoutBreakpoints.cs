@@ -14,10 +14,18 @@ public static class DetailLayoutBreakpoints
     /// its first frame.</summary>
     public static int InitialTierForViewport(float viewportWidth) => NominalTierFor(viewportWidth);
 
-    /// <summary>Widen immediately; narrow only after <see cref="TierHysteresisDip"/> past the threshold.</summary>
-    public static int TierFor(float w, int prev)
+    /// <summary>Narrow (drop a column) immediately; re-admit a column only once the width clears the threshold by
+    /// <see cref="TierHysteresisDip"/> — the safe asymmetry, since the cost of the wrong guess in the widening
+    /// direction is a column set the pane cannot hold.
+    ///
+    /// <paramref name="initialized"/> false ⇒ the caller has not measured yet, so <paramref name="prev"/> is a
+    /// construction default / a pre-measure viewport seed rather than a tier the user has actually seen: take the
+    /// nominal tier outright and let hysteresis start from there. (Mirrors <see cref="ModeFor"/>'s first-measure rule.
+    /// Without it, whether the first real measure is honoured depends on which side of the seed it lands on.)</summary>
+    public static int TierFor(float w, int prev, bool initialized = true)
     {
         if (w <= 0f) return prev;
+        if (!initialized) return NominalTierFor(w);
         int nominal = NominalTierFor(w);
         if (nominal >= prev) return nominal;
         int dipped = NominalTierFor(w - TierHysteresisDip);

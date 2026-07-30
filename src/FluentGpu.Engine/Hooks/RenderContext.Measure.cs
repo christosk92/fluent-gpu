@@ -58,7 +58,10 @@ internal sealed class MeasuredBoundsCell : HookCell, IDisposableCell
         var scene = _ctx.Scene;
         if (scene is null || node.IsNull || !scene.IsLive(node)) return;
         _node = node;
-        if (Diag.CompiledIn) _clock = _ctx.ResolveFrameClockForMeasure();   // frame clock — only read by the DEBUG tripwire
+        // Frame clock — read ONLY by the DEBUG tripwire below, which itself early-outs on !Diag.Enabled. Both operands
+        // are deliberate: the const CompiledIn is what folds this away in release, the non-const Enabled is what keeps
+        // the guard a non-constant expression (so the folded body is not reported as CS0162 unreachable code).
+        if (Diag.CompiledIn && Diag.Enabled) _clock = _ctx.ResolveFrameClockForMeasure();
         RectF cur = scene.Bounds(node);                 // the arranged LOCAL rect (valid post-layout)
         scene.BoundsDeliveredRef(node) = cur;           // align the edge baseline so the next arrange doesn't re-fire the seed
         Write(cur);                                     // seed the initial value (MarkDirty → consumer re-renders NEXT frame)

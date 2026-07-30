@@ -27,10 +27,13 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
     /// <summary>The end-state schema version (v5 = the one `entity` table + entity_refs/artist_overview/recent_surfaces,
     /// fmt-framed payloads, thin columns, cache accounting; legacy `entities`/`localized_entities` dropped. v6 = the
-    /// `playlists.adopted_at` stamp the membership GC dates its victims by — critique #6).</summary>
-    public const int CurrentSchemaVersion = 6;
+    /// `playlists.adopted_at` stamp the membership GC dates its victims by — critique #6. v7 = `localized_extension_cache.last_access`
+    /// + its LRU index, which is what finally makes the extension tier EVICTABLE: before it, `cache_bytes` counted those
+    /// payloads but no sweep could delete them, so the byte budget had an unbounded floor it could never get under).</summary>
+    public const int CurrentSchemaVersion = 7;
 
-    /// <summary>Matches ExtensionEtagCache's live <c>maxEntries</c> — the seed loop discards everything past it.</summary>
+    /// <summary>Cap for the bulk <see cref="LoadAllExtensions"/> read. NOT used by the live path any more — the cache is
+    /// point-read per miss — so this only bounds tests and offline tooling.</summary>
     public const int DefaultExtensionLimit = 2048;
 
     // meta keys owned by the cache tier.
@@ -107,7 +110,10 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         Exec("CREATE TABLE IF NOT EXISTS outbox(id INTEGER PRIMARY KEY, type TEXT NOT NULL, entity_key TEXT NOT NULL, set_id TEXT, target_saved INTEGER, op BLOB, base_rev BLOB, attempts INTEGER NOT NULL DEFAULT 0);");
         Exec("CREATE TABLE IF NOT EXISTS dead_letter(id INTEGER PRIMARY KEY, type TEXT, entity_key TEXT, reason TEXT, created_at INTEGER);");
         Migrate();
-        SweepExpiredExtensions();
+        // NO open-time extension sweep. It used to run here — one unbatched DELETE of every expired row, in a single
+        // transaction, before the reader connection even opened — which is O(expired rows) squarely on the pre-first-paint
+        // path and a steady source of WAL growth. EntityCacheGc already calls the identical sweep on its recurring pass
+        // (armed ~30 s after warm, off the UI thread), and the +7 d ETag grace means nothing cares about a 30 s delay.
         // The reader opens only AFTER Migrate() + the open-time sweep: the schema (and the v5 DDL) must exist first, and a
         // read-only connection can only attach to the WAL once the writer has created it.
         _read = OpenReader(path);
@@ -268,7 +274,32 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
 
             if (ver == "4") { MigrateToV5(); ver = "5"; }
             if (ver == "5") { MigrateToV6(); ver = "6"; }
+            if (ver == "6") { MigrateToV7(); ver = "7"; }
         }
+    }
+
+    // ── v6 → v7: make the extension tier evictable ───────────────────────────────────────────────────────────────────
+    // `cache_bytes` has always counted localized_extension_cache payloads, but GcEnforceBudget only ever deleted from
+    // `entity` — so those bytes were an un-evictable FLOOR under the byte budget (36 MB under a 64 MB budget on a real
+    // profile, and it only grows). A last_access column plus its index gives the sweep an LRU order to delete in, exactly
+    // like ix_entity_gc does for entities. Purely ADDITIVE: one column, one index, no row rewritten.
+    void MigrateToV7()
+    {
+        // Every read for the life of this file resolves pages through the WAL, and the index build below wants a clean
+        // sequential pass over the table. Truncate first — a pragma CANNOT run inside a transaction, so both calls sit
+        // outside one. Safe here: _read does not open until after Migrate(), so this is the only connection.
+        ExecLocked("PRAGMA wal_checkpoint(TRUNCATE);");
+        using (var tx = _conn.BeginTransaction())
+        {
+            if (!ColumnExistsLocked("localized_extension_cache", "last_access", tx))
+                ExecLocked("ALTER TABLE localized_extension_cache ADD COLUMN last_access INTEGER NOT NULL DEFAULT 0;", tx);
+            // Backfill from updated_at so nothing looks infinitely cold on the first pass after the upgrade.
+            ExecLocked("UPDATE localized_extension_cache SET last_access=updated_at WHERE last_access=0;", tx);
+            ExecLocked("CREATE INDEX IF NOT EXISTS ix_localized_extension_lru ON localized_extension_cache(last_access);", tx);
+            ExecLocked("INSERT OR REPLACE INTO meta(key,value) VALUES('schema_version','7');", tx);
+            tx.Commit();
+        }
+        ExecLocked("PRAGMA wal_checkpoint(TRUNCATE);");   // land the new index pages in the db file
     }
 
     // ── v5 → v6: the membership-GC clock ─────────────────────────────────────────────────────────────────────────────
@@ -646,6 +677,86 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
             : null;
     }
 
+    /// <summary>POINT-READ the persisted extension rows for a set of uris at one kind — the live path's ONLY read.
+    /// Rides `sqlite_autoindex_localized_extension_cache_1` on (entity_uri, locale, extension_kind): O(log n) per uri, so
+    /// the cost is the working set and NEVER the table. Chunked at <see cref="MaxInParams"/> and the read lock is taken
+    /// PER CHUNK, exactly like <see cref="LoadEntities"/>, so a screenful never blocks behind a larger request.
+    /// Expired rows are returned too — their ETag is what makes the follow-up fetch a cheap 304.</summary>
+    public IReadOnlyList<ColdExtension> LoadExtensions(IReadOnlyCollection<string> uris, int extensionKind)
+    {
+        var list = new List<ColdExtension>(uris.Count);
+        if (uris.Count == 0 || _spotifyLocale is null) return list;
+        var chunk = new List<string>(Math.Min(uris.Count, MaxInParams));
+        foreach (var uri in uris)
+        {
+            if (string.IsNullOrEmpty(uri)) continue;
+            chunk.Add(uri);
+            if (chunk.Count == MaxInParams) { LoadExtensionChunk(chunk, extensionKind, list); chunk.Clear(); }
+        }
+        if (chunk.Count > 0) LoadExtensionChunk(chunk, extensionKind, list);
+        return list;
+    }
+
+    void LoadExtensionChunk(List<string> chunk, int extensionKind, List<ColdExtension> into)
+    {
+        var sql = new System.Text.StringBuilder(
+            "SELECT entity_uri,extension_kind,payload,etag,offline_ttl,missing,expires_at,updated_at " +
+            "FROM localized_extension_cache WHERE locale=$l AND extension_kind=$k AND entity_uri IN (");
+        for (int i = 0; i < chunk.Count; i++) { if (i > 0) sql.Append(','); sql.Append("$u").Append(i); }
+        sql.Append(");");
+        lock (_readLock)
+        {
+            using var c = _read.CreateCommand();
+            c.CommandText = sql.ToString();
+            c.Parameters.AddWithValue("$l", _spotifyLocale);
+            c.Parameters.AddWithValue("$k", extensionKind);
+            for (int i = 0; i < chunk.Count; i++) c.Parameters.AddWithValue("$u" + i, chunk[i]);
+            using var r = c.ExecuteReader();
+            while (r.Read())
+                into.Add(new ColdExtension(
+                    r.GetString(0), r.GetInt32(1), r.IsDBNull(2) ? null : r.GetFieldValue<byte[]>(2),
+                    r.IsDBNull(3) ? null : r.GetString(3), r.GetInt64(4), r.GetInt64(5) != 0,
+                    r.GetInt64(6), r.GetInt64(7)));
+        }
+    }
+
+    /// <summary>Stamp last_access at DAY granularity for a set of extension rows (v7 LRU). Day-truncated and guarded with
+    /// `last_access &lt; $d`, so a row already touched today costs nothing and the writer never churns pages for re-reads.
+    /// Mirrors <see cref="TouchEntities"/> — the read path itself never writes; the caller batches and calls this.</summary>
+    public void TouchExtensions(IReadOnlyCollection<string> uris, int extensionKind, long day)
+    {
+        if (uris is null || uris.Count == 0 || _spotifyLocale is null) return;
+        var buffer = new List<string>(Math.Min(uris.Count, MaxInParams));
+        lock (_connLock)
+        {
+            using var tx = _conn.BeginTransaction();
+            foreach (var uri in uris)
+            {
+                if (string.IsNullOrEmpty(uri)) continue;
+                buffer.Add(uri);
+                if (buffer.Count == MaxInParams) { TouchExtensionChunkLocked(buffer, extensionKind, day, tx); buffer.Clear(); }
+            }
+            if (buffer.Count > 0) TouchExtensionChunkLocked(buffer, extensionKind, day, tx);
+            tx.Commit();
+        }
+    }
+
+    void TouchExtensionChunkLocked(List<string> chunk, int extensionKind, long day, SqliteTransaction tx)
+    {
+        var sql = new System.Text.StringBuilder(
+            "UPDATE localized_extension_cache SET last_access=$d WHERE locale=$l AND extension_kind=$k AND last_access<$d AND entity_uri IN (");
+        for (int i = 0; i < chunk.Count; i++) { if (i > 0) sql.Append(','); sql.Append("$u").Append(i); }
+        sql.Append(");");
+        using var c = _conn.CreateCommand();
+        c.Transaction = tx;
+        c.CommandText = sql.ToString();
+        c.Parameters.AddWithValue("$d", day);
+        c.Parameters.AddWithValue("$l", _spotifyLocale);
+        c.Parameters.AddWithValue("$k", extensionKind);
+        for (int i = 0; i < chunk.Count; i++) c.Parameters.AddWithValue("$u" + i, chunk[i]);
+        c.ExecuteNonQuery();
+    }
+
     public IEnumerable<ColdExtension> LoadAllExtensions(int limit = DefaultExtensionLimit)
     {
         var list = new List<ColdExtension>();
@@ -668,40 +779,53 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
         return list;
     }
 
-    // Open-time hygiene: drop extension rows whose TTL lapsed more than the +7d ETag-revalidation grace ago. Writer-side
-    // (it is a DELETE), before the reader opens, and it keeps `cache_bytes` honest.
-    void SweepExpiredExtensions() => SweepExpiredExtensionsNow();
 
-    /// <summary>The expired-extension sweep, shared between the open-time pass and the RECURRING GC pass (§C.3 — it is a
-    /// TTL tier like any other, not a one-shot). `expires_at` + the 7 d ETag-revalidation grace; returns what it freed.</summary>
-    public (int Rows, long Bytes) SweepExpiredExtensionsNow()
+    /// <summary>The expired-extension sweep — a TTL tier like any other (§C.3), run by the RECURRING GC pass, no longer at
+    /// open. `expires_at` + the 7 d ETag-revalidation grace; returns what it freed.
+    ///
+    /// BATCHED. It used to be one SELECT + one DELETE covering every expired row in a single transaction, which is fine at
+    /// 70k rows and a multi-GB write transaction at 10M. Bounded batches match <c>GcDeleteLoop</c>'s discipline: each is
+    /// atomic on its own, an abort between batches just leaves the rest for the next pass, and the accounting can never
+    /// drift because the byte sum and the delete share a transaction.</summary>
+    public (int Rows, long Bytes) SweepExpiredExtensionsNow(int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue)
     {
         long cutoff = DateTimeOffset.UtcNow.ToUnixTimeSeconds() - ExtensionGraceSeconds;
+        // expires_at>0 keeps a hand-seeded 0 ("no TTL recorded") row out of the sweep; every real row is now+ttl.
+        const string Victims = "SELECT rowid FROM localized_extension_cache " +
+                               "WHERE expires_at IS NOT NULL AND expires_at>0 AND expires_at<$c LIMIT $n";
+        int rows = 0;
+        long freed = 0;
         lock (_connLock)
         {
-            using var tx = _conn.BeginTransaction();
-            long freed;
-            using (var c = _conn.CreateCommand())
+            for (int batch = 0; batch < maxBatches; batch++)
             {
-                c.Transaction = tx;
-                // expires_at>0 keeps a hand-seeded 0 ("no TTL recorded") row out of the sweep; every real row is now+ttl.
-                c.CommandText = "SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache WHERE expires_at IS NOT NULL AND expires_at>0 AND expires_at<$c;";
-                c.Parameters.AddWithValue("$c", cutoff);
-                freed = Convert.ToInt64(c.ExecuteScalar());
+                using var tx = _conn.BeginTransaction();
+                long batchBytes;
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = $"SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache WHERE rowid IN ({Victims});";
+                    c.Parameters.AddWithValue("$c", cutoff);
+                    c.Parameters.AddWithValue("$n", batchRows);
+                    batchBytes = Convert.ToInt64(c.ExecuteScalar());
+                }
+                int deleted;
+                using (var d = _conn.CreateCommand())
+                {
+                    d.Transaction = tx;
+                    d.CommandText = $"DELETE FROM localized_extension_cache WHERE rowid IN ({Victims});";
+                    d.Parameters.AddWithValue("$c", cutoff);
+                    d.Parameters.AddWithValue("$n", batchRows);
+                    deleted = d.ExecuteNonQuery();
+                }
+                if (deleted == 0) { tx.Rollback(); break; }
+                if (batchBytes > 0) ApplyCacheBytesDeltaLocked(-batchBytes, tx);
+                tx.Commit();
+                rows += deleted;
+                freed += batchBytes;
             }
-            int deleted;
-            using (var d = _conn.CreateCommand())
-            {
-                d.Transaction = tx;
-                d.CommandText = "DELETE FROM localized_extension_cache WHERE expires_at IS NOT NULL AND expires_at>0 AND expires_at<$c;";
-                d.Parameters.AddWithValue("$c", cutoff);
-                deleted = d.ExecuteNonQuery();
-            }
-            if (deleted == 0) { tx.Rollback(); return (0, 0); }
-            if (freed > 0) ApplyCacheBytesDeltaLocked(-freed, tx);
-            tx.Commit();
-            return (deleted, freed);
         }
+        return (rows, freed);
     }
 
     public void UpsertExtension(ColdExtension extension)
@@ -1765,6 +1889,64 @@ public sealed class SqliteColdStore : IColdStore, IMutationOutbox, IExtensionCac
                 "SELECT DISTINCT uri FROM entity WHERE updated_at<$u AND uri NOT IN (SELECT uri FROM temp.gc_pin) " +
                 "ORDER BY last_access ASC LIMIT $n;",
                 accessBefore: 0, updatedBefore, budget, ct, batchRows, maxBatches, evicted);
+
+    /// <summary>Extension-tier byte cap (v7) — the leg that was MISSING, and the reason the whole byte budget could never
+    /// be met. `cache_bytes` has always counted localized_extension_cache payloads, but every sweep above deletes from
+    /// `entity` only, so those bytes were a floor the budget sat under rather than a tier the budget governed (36 MB under
+    /// a 64 MB budget on a real profile, growing ~9k rows/day). Deletes oldest-`last_access` first — the index the v7
+    /// migration adds — in the same bounded, atomic batches, down to 0.9 × budget for hysteresis.
+    ///
+    /// Nothing here is pinned: an extension row is a pure cache of a wire response, always re-fetchable, and its ETag
+    /// going away costs one full body instead of a 304. That is why this needs no gc_pin interaction.</summary>
+    public (int Rows, long Bytes) GcTrimExtensions(long budgetBytes, System.Threading.CancellationToken ct,
+                                                   int batchRows = GcDeleteBatchRows, int maxBatches = int.MaxValue)
+    {
+        if (budgetBytes <= 0) return (0, 0);
+        int rows = 0;
+        long freed = 0;
+        lock (_connLock)
+        {
+            long total = ExtensionBytesLocked();
+            long target = (long)(budgetBytes * 0.9);
+            for (int batch = 0; batch < maxBatches && total > target && !ct.IsCancellationRequested; batch++)
+            {
+                // rowid IN (… ORDER BY last_access LIMIT n) rides ix_localized_extension_lru; the SELECT and the DELETE
+                // share one transaction so the byte accounting can never drift from the rows actually removed.
+                const string Victims = "SELECT rowid FROM localized_extension_cache ORDER BY last_access ASC LIMIT $n";
+                using var tx = _conn.BeginTransaction();
+                long batchBytes;
+                using (var c = _conn.CreateCommand())
+                {
+                    c.Transaction = tx;
+                    c.CommandText = $"SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache WHERE rowid IN ({Victims});";
+                    c.Parameters.AddWithValue("$n", batchRows);
+                    batchBytes = Convert.ToInt64(c.ExecuteScalar());
+                }
+                int deleted;
+                using (var d = _conn.CreateCommand())
+                {
+                    d.Transaction = tx;
+                    d.CommandText = $"DELETE FROM localized_extension_cache WHERE rowid IN ({Victims});";
+                    d.Parameters.AddWithValue("$n", batchRows);
+                    deleted = d.ExecuteNonQuery();
+                }
+                if (deleted == 0) { tx.Rollback(); break; }   // nothing left to take — do not spin
+                if (batchBytes > 0) ApplyCacheBytesDeltaLocked(-batchBytes, tx);
+                tx.Commit();
+                rows += deleted;
+                freed += batchBytes;
+                total -= batchBytes;
+            }
+        }
+        return (rows, freed);
+    }
+
+    long ExtensionBytesLocked()
+    {
+        using var c = _conn.CreateCommand();
+        c.CommandText = "SELECT IFNULL(SUM(length(payload)),0) FROM localized_extension_cache;";
+        return Convert.ToInt64(c.ExecuteScalar());
+    }
 
     /// <summary>The bytes this pass could actually reclaim: `entity` rows the current `temp.gc_pin` does NOT protect.
     /// Only valid between <see cref="GcBeginPass"/> and <see cref="GcEndPass"/>; outside a pass it degrades to the whole

@@ -3,7 +3,7 @@ namespace FluentGpu.Foundation;
 /// <summary>
 /// The placeholder→image reveal transition (the cross-fade) — spec'd with the engine's shared motion vocabulary (a
 /// duration in ms + an <see cref="Easing"/> curve) so image reveals animate exactly like every other control. Override
-/// per-image via <c>ImageEl.Transition</c>, or change the app-wide <see cref="Default"/> once at startup. Set
+/// per-image via <c>ImageEl.RevealTransition</c>, or change the app-wide <see cref="Default"/> once at startup. Set
 /// <see cref="DurationMs"/> = 0 (or use <see cref="None"/>) to DISABLE the fade — the image then appears instantly.
 /// </summary>
 public readonly record struct ImageTransition(float DurationMs, Easing Easing)

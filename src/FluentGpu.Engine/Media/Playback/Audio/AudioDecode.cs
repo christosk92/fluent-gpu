@@ -295,6 +295,7 @@ public sealed class WavAudioDecoder : IAudioDecoder
 
         long pos = 12;
         Span<byte> ck = stackalloc byte[8];
+        Span<byte> fmt = stackalloc byte[40];
         while (true)
         {
             if (ReadExact(ck) < 8) return false;
@@ -303,7 +304,7 @@ public sealed class WavAudioDecoder : IAudioDecoder
 
             if (ck[0] == 'f' && ck[1] == 'm' && ck[2] == 't' && ck[3] == ' ')
             {
-                Span<byte> fmt = stackalloc byte[40];
+                fmt.Clear();   // hoisted buffer: a short/duplicate fmt chunk must still see zeros past `take`
                 int take = (int)Math.Min(size, (uint)fmt.Length);
                 if (ReadExact(fmt[..take]) < take) return false;
                 ushort audioFormat = BinaryPrimitives.ReadUInt16LittleEndian(fmt);

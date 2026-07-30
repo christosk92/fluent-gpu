@@ -763,6 +763,118 @@ sealed class NestedScrollProbe : Component
     };
 }
 
+// WP-G1 declarative scroll-snap probe. TWO side-by-side viewports over identical content: the LEFT one DECLARES
+// ScrollEl.Snap (so the element OWNS the snap columns and the reconciler re-asserts them on every patch), the RIGHT one
+// declares nothing (so a post-mount scene write must survive every reconcile — the shipped DatePicker/probe idiom). The
+// Toggle signal re-renders BOTH with a DIFFERENT scroll field changed (AlwaysShowScrollbar), which is precisely the patch
+// that must neither drop the declaration nor clobber the imperative write.
+sealed class SnapDeclProbe : Component
+{
+    public const float DeclaredInterval = 50f;
+    public const float WrittenInterval = 37f;
+    public readonly Signal<bool> Toggle = new(false);
+
+    static Element Rows()
+    {
+        var rows = new Element[20];
+        for (int i = 0; i < rows.Length; i++) rows[i] = new BoxEl { Width = 180, Height = 40, Fill = ColorF.FromRgba(40, 40, 40) };
+        return new BoxEl { Direction = 1, Children = rows };
+    }
+
+    public override Element Render()
+    {
+        bool bar = Toggle.Value;
+        return new BoxEl
+        {
+            Direction = 0,
+            Children =
+            [
+                new ScrollEl
+                {
+                    Key = "decl", Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+                    AlwaysShowScrollbar = bar, Snap = SnapSpec.Every(DeclaredInterval), Content = Rows(),
+                },
+                new ScrollEl
+                {
+                    Key = "plain", Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+                    AlwaysShowScrollbar = bar, Content = Rows(),
+                },
+            ],
+        };
+    }
+}
+
+// WP-G1 page-snap shelf probe: the SAME geometry as PagedShelfMeasuredProbe (10 cards, fixed 100 wide, gap 10, a 320-wide
+// shelf ⇒ 3 columns, page stride 330, 4 pages, content 1114 in a 344 viewport ⇒ max offset 770) but with
+// snap: ShelfSnap.Page. Measured/realize-all, so the strip's viewport is a real ScrollEl the gate can wheel directly.
+sealed class PagedShelfSnapProbe : Component
+{
+    public const float CardW = 100f, Gap = 10f, ShelfW = 320f;
+    public const int Cols = 3;
+    public const float PageW = Cols * (CardW + Gap);   // 330 — the page stride in offset space
+    public ShelfPagerContext Pager;
+
+    public override Element Render() => new BoxEl
+    {
+        Width = ShelfW,
+        Direction = 1,
+        AlignItems = FlexAlign.Stretch,
+        Children =
+        [
+            PagedShelf.Create(10,
+                static (i, w) => new BoxEl { Width = w, Height = 44f, Fill = ColorF.FromRgba(40, 90, 220), OnClick = static () => { } },
+                pager: ShelfPager.None,
+                customPager: ctx => { Pager = ctx; return new BoxEl { Width = 0f, Height = 0f }; },
+                minCardW: CardW, maxCardW: CardW, gap: Gap, fixedCardW: CardW,
+                headerGap: 0f, edgeFade: 0f,
+                measured: true,
+                snap: ShelfSnap.Page),
+        ],
+    };
+}
+
+// The rows:5 CHART shelf — the VIRTUALIZED multi-row body with page snapping (ArtistPopular's top-tracks band). Two
+// things only this geometry can gate. (1) A multi-row shelf must arm NO hover-elevate park/hoist: nothing lifts in a
+// dense chart, so an escape from the strip's clip would only let the hovered row paint over whatever sits beside the
+// band. (2) The snap interval, the settled re-snap and the fit-change re-seat all run through the ItemsView controller
+// seam here, not a bare ScrollEl. Geometry: 45 cards fixed 100 wide, gap 10 ⇒ 9 columns; at WideW 320 that is 3 columns
+// per page (stride 330, 3 pages), at NarrowW 210 it is 2 (stride 220, 5 pages) — so writing Width re-fits the page grid
+// UNDER a strip that is resting mid-page, which is the re-seat case.
+sealed class PagedShelfChartProbe : Component
+{
+    public const float CardW = 100f, Gap = 10f, RowH = 40f;
+    public const int Rows = 5, Count = 45;
+    public const float WideW = 320f, NarrowW = 210f;
+
+    /// <summary>Columns per page at a shelf width — <c>FillRowVirtualLayout.Fit</c>'s fixed-card-width branch verbatim,
+    /// so the gate derives the expected stride instead of hard-coding one that a fit change would silently invalidate.</summary>
+    public static int Cols(float shelfW) => shelfW <= 1f ? 1 : Math.Max(1, (int)MathF.Floor((shelfW + Gap) / (CardW + Gap)));
+    /// <summary>The page stride in OFFSET space at a shelf width (cols × column stride).</summary>
+    public static float PageW(float shelfW) => Cols(shelfW) * (CardW + Gap);
+
+    public readonly Signal<float> Width = new(WideW);
+    public ShelfPagerContext Pager;
+
+    public override Element Render() => new BoxEl
+    {
+        Width = Width.Value,
+        Direction = 1,
+        AlignItems = FlexAlign.Stretch,
+        Children =
+        [
+            PagedShelf.Create(Count,
+                static (i, w) => new BoxEl { Width = w, Height = RowH, Fill = ColorF.FromRgba(40, 90, 220), OnClick = static () => { } },
+                cardHeight: static _ => RowH,
+                pager: ShelfPager.None,
+                customPager: ctx => { Pager = ctx; return new BoxEl { Width = 0f, Height = 0f }; },
+                minCardW: CardW, maxCardW: CardW, gap: Gap, rows: Rows, fixedCardW: CardW,
+                headerGap: 0f, edgeFade: 0f,
+                keyOf: static i => "chart-probe-" + i,
+                snap: ShelfSnap.Page),
+        ],
+    };
+}
+
 // A 10,000-row virtualized list (40px uniform rows) in a 400px viewport → proves windowing + recycle at scale.
 sealed class PagedShelfMeasuredProbe : Component
 {
@@ -1400,8 +1512,9 @@ sealed class TouchFlingSettleProbe : Component
 }
 
 // A bound virtual list sized so a touch flick lands MID-LIST (the clamp is far away) — the snap-fling probe. The test
-// sets ScrollState.SnapInterval = RowH on the viewport after mount (the reconciler patches Orientation/ItemCount but
-// never touches the snap fields, so a post-mount SnapInterval survives every reconcile). A flick then retargets its
+// sets ScrollState.SnapInterval = RowH on the viewport after mount: the reconciler patches Orientation/ItemCount but its
+// snap patch is DECLARATION-GATED — it writes the snap fields only for an element that declares Snap (SnapSpec), and this
+// probe declares none, so a post-mount SnapInterval survives every reconcile. A flick then retargets its
 // friction decay to land EXACTLY on a RowH multiple (ScrollSnap + ScrollIntegrator). Large content keeps the snap target
 // interior (never clamp-bounded), so the landing is purely the snap math. Viewport = Scene.Root.
 sealed class SnapFlingProbe : Component
@@ -3514,6 +3627,36 @@ sealed class E4ToolTipWheelProbe : Component
     });
 }
 
+// e4popup.7c — the orphaned-tooltip probe: the wrapped target can be UNMOUNTED while its bubble is open (Mounted), and
+// its text can be swapped without a remount (Tip) so the recycled-owner staleness is observable too. Exposes the
+// overlay service so the gate can assert the ENTRY is gone, not merely that the bubble stopped painting.
+sealed class E4ToolTipOrphanProbe : Component
+{
+    public readonly Signal<bool> Mounted = new(true);
+    public readonly Signal<string> Tip = new("tip-orphan");
+    public IOverlayService? Service;
+    public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new E4ToolTipOrphanInner(this)) });
+}
+
+sealed class E4ToolTipOrphanInner : Component
+{
+    readonly E4ToolTipOrphanProbe _p;
+    public E4ToolTipOrphanInner(E4ToolTipOrphanProbe p) => _p = p;
+    public override Element Render()
+    {
+        _p.Service = UseContext(Overlay.Service);
+        bool mounted = _p.Mounted.Value;
+        string tip = _p.Tip.Value;
+        return new BoxEl
+        {
+            Width = 480, Height = 360, Padding = Edges4.All(40),
+            Children = mounted
+                ? [ToolTip.Wrap(new BoxEl { Width = 120, Height = 32, Fill = ColorF.FromRgba(40, 40, 40) }, tip)]
+                : [new BoxEl { Width = 120, Height = 32 }],
+        };
+    }
+}
+
 sealed class CheckBoxProbe : Component
 {
     public CheckState State;
@@ -4056,7 +4199,7 @@ sealed class PersistentPrefixProbe : Component
                     Height = 40f,
                     Fill = initial == 0 ? HeroFill : initial == 1 ? ChromeFill : RowFill,
                     ScrollBinds = initial == 0 ? [new() { PinTop = 0f }]
-                        : initial == 1 ? [new() { PinTop = 40f }] : null,
+                        : initial == 1 ? [new() { PinTop = 40f }] : [],
                     OnClick = () => { Clicks++; LastClicked = scope.Index.Peek(); },
                     Children = [new TextEl(Prop.Of(() => $"row {scope.Index.Value}")) { Size = 12f }],
                 };
@@ -4066,7 +4209,7 @@ sealed class PersistentPrefixProbe : Component
             {
                 Overscan = 4,
                 PersistentPrefixCount = 2,
-                Scroll = new ScrollOptions { ItemClipTopInset = 80f },
+                Scroll = new ScrollOptions { ItemClipTopInset = 80f, ItemClipTopFadeBand = 22f },
             });
 }
 

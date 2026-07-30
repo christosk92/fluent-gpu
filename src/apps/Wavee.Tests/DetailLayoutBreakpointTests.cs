@@ -39,6 +39,20 @@ public class DetailLayoutBreakpointTests
     }
 
     [Fact]
+    public void TierFor_FirstMeasure_TakesNominalTierWithoutHysteresis()
+    {
+        // Pre-measure, `prev` is a construction default / a viewport seed — not a tier the user has seen — so the first
+        // real width must win outright in BOTH directions. 884 would otherwise be needed to widen off a seeded tier 1,
+        // and 836 would otherwise be held by the dip band.
+        Assert.Equal(0, DetailLayoutBreakpoints.TierFor(870f, prev: 1, initialized: false));
+        Assert.Equal(3, DetailLayoutBreakpoints.TierFor(500f, prev: 0, initialized: false));
+        // Hysteresis engages from the SECOND measure on (the default is the measured case).
+        Assert.Equal(1, DetailLayoutBreakpoints.TierFor(870f, prev: 1, initialized: true));
+        // A zero/absent width never overrides the caller's current tier, measured or not.
+        Assert.Equal(2, DetailLayoutBreakpoints.TierFor(0f, prev: 2, initialized: false));
+    }
+
+    [Fact]
     public void TierFor_MultiTierJump_WidensImmediately()
     {
         int tier = DetailLayoutBreakpoints.TierFor(500f, 5);

@@ -22,8 +22,10 @@ sealed class SidebarResizeGrip : Component
 {
     // Tuning (DIP) — all empirical, safe to tweak live.
     const float CompactWidth = 56f;     // the collapsed rail width (matches WaveeShell's pane)
-    const float MinWidth = 240f, MaxWidth = 460f;
-    const float SnapThreshold = 240f;   // = MinWidth: at/below this the pane enters the sticky resist zone
+    // The clamp bounds are ShellResponsiveLayout's (one owner — the probe seam and the responsive tier ladder clamp through
+    // the same pair); the detent tuning below stays local to the gesture.
+    const float MinWidth = ShellResponsiveLayout.NavPaneMinW, MaxWidth = ShellResponsiveLayout.NavPaneMaxW;
+    const float SnapThreshold = MinWidth;   // at/below this the pane enters the sticky resist zone
     const float ForcePush = 44f;        // push this far past the threshold (→ rawW < 196) to actually collapse
     const float Resist = 0.28f;         // residual shrink inside the resist zone (lower = stickier)
     const float ReExpand = 210f;        // from compact, pull rawW past this to re-expand (sits above the 196 collapse → hysteresis)
@@ -36,6 +38,7 @@ sealed class SidebarResizeGrip : Component
     NodeHandle _self;
     float _startW, _startPx;
     bool _startedCompact;
+    bool _moved;                        // a zero-movement click on the seam is not a width preference — only a real drag commits
 
     public SidebarResizeGrip(Signal<bool> compact, Signal<float> width, Signal<bool> dragging, Signal<float> fade, Action onCommit)
     {
@@ -68,6 +71,7 @@ sealed class SidebarResizeGrip : Component
         // so ApplyProjections never sees the collapse spring for live width writes.
         Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, true);
         _dragging.Value = true;
+        _moved = false;
         _startedCompact = _compact.Peek();
         _startW = _startedCompact ? CompactWidth : _width.Peek();
         _startPx = local.X + scene.AbsoluteRect(_self).X;
@@ -77,6 +81,7 @@ sealed class SidebarResizeGrip : Component
     {
         var scene = Context.Scene;
         if (scene is null || _self.IsNull || !scene.IsLive(_self)) return;
+        _moved = true;
         float px = local.X + scene.AbsoluteRect(_self).X;   // reconstruct true window-X (grip moves as the pane resizes)
         float rawW = _startW + (px - _startPx);
 
@@ -121,7 +126,7 @@ sealed class SidebarResizeGrip : Component
         // persisting the slightly-sub-min sticky value.
         if (!_compact.Peek()) _width.Value = Math.Clamp(_width.Peek(), MinWidth, MaxWidth);
         _fade.Value = 1f;        // settle the content opacity (collapsed shows the full rail; expanded shows full content)
-        _onCommit();             // persist the chosen width + collapsed state (drag-end)
+        if (_moved) _onCommit(); // persist the chosen width + collapsed state (drag-end); a plain click changed nothing and must not pin SidebarWidthUserSet
         _dragging.Value = false;
     }
 

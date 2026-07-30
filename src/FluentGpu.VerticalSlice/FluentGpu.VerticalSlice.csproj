@@ -5,6 +5,9 @@
     <PublishAot>true</PublishAot>
     <TieredCompilation>false</TieredCompilation>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Pre-existing warning backlog (IL2026/IL2070/IL2075 trim warnings in suites); the solution baseline
+         enforces warnings-as-errors — clear the backlog before removing this opt-out. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
   <!-- The validation harness runs the PORTABLE path only (Engine's headless backends + the portable control kit).
        Regression guard: this project's transitive closure must contain NO TerraFX / Windows-backend reference. -->

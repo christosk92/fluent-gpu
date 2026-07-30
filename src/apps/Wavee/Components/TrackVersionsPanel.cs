@@ -49,7 +49,6 @@ sealed class TrackVersionsPanel : Component
     const float RowH = AudioThumb + 2f * Spacing.XS;
 
     readonly Signal<TrackExpansion?> _data = new(null);
-    readonly Signal<bool> _loading = new(true);
 
     public override Element Render()
     {
@@ -72,11 +71,11 @@ sealed class TrackVersionsPanel : Component
         }, DepKey.From(model.Track.Uri.GetHashCode()));
 
         var data = _data.Value;
-        if (_loading.Value && data is null) return Loading(model.Indent);
 
-        // Flat, in order: the track itself, then its video, then its alternate audio. NO group headings — each kind
-        // yields AT MOST ONE row (the wire models `association` as singular), so the old three ALL-CAPS labels over
-        // three identical cards were captions on lists of one. The thumbnail aspect already says which is which.
+        // Flat, in order: the GUARANTEED self row renders immediately while the fetch is pending, then a proven video
+        // and/or alternate audio joins it when data lands. This keeps the drawer's first presented height truthful:
+        // there is no speculative "video row" to flash for 1–2 frames and collapse when an empty response arrives.
+        // NO group headings — each association kind yields at most one row and the thumbnail aspect says which is which.
         var versions = new List<TrackVersion>(3) { SelfVersion(model.Track) };
         if (data is not null)
         {
@@ -108,7 +107,7 @@ sealed class TrackVersionsPanel : Component
         catch (OperationCanceledException) { return; }
         catch { result = TrackExpansion.Empty; }
         if (ct.IsCancellationRequested) return;
-        post(() => { _data.Value = result; _loading.Value = false; });
+        post(() => _data.Value = result);
     }
 
     /// <summary>One version, hung off the connector rail.
@@ -173,22 +172,26 @@ sealed class TrackVersionsPanel : Component
         float h = video ? VideoThumbH : AudioThumb;
         float fab = Math.Clamp(MathF.Min(w, h) * 0.62f, 22f, 28f);
 
-        var meta = new List<Element>(5);
+        var meta = new List<Element>(6);
         meta.Add(new TextEl(KindLabel(v, isSelf)) { Size = 12f, Color = Tok.TextTertiary });
         if (v.TempoBpm is { } bpm && bpm > 0d)
         {
             // The Camelot swatch leads the tempo, exactly as the track row's own tempo column does — the colour IS the
             // key's identity (harmonically adjacent keys are adjacent hues), so dropping it here made the drawer's own
-            // track read as less informative than the row it expanded from.
+            // track read as less informative than the row it expanded from. Size/dim/middot stay in LOCKSTEP with
+            // TrackRow.TempoCell — this pairing is one visual idiom rendered in two places.
             if (v.CamelotColor is { } argb)
                 meta.Add(new BoxEl
                 {
-                    Width = 8f, Height = 8f, Corners = CornerRadius4.All(2f),
+                    Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
                     Fill = WaveePalette.ToColor(argb), AlignSelf = FlexAlign.Center, Shrink = 0f,
                 });
             meta.Add(new TextEl(DetailFormat.Bpm(bpm)) { Size = 12f, Color = Tok.TextSecondary });
             if (KeyLabel(v) is { Length: > 0 } key)
+            {
+                meta.Add(new TextEl("·") { Size = 12f, Color = Tok.TextTertiary });
                 meta.Add(new TextEl(key) { Size = 12f, Color = Tok.TextTertiary });
+            }
         }
         if (v.DurationMs > 0)
             meta.Add(new TextEl(DetailFormat.TrackTime(v.DurationMs)) { Size = 12f, Color = Tok.TextTertiary });
@@ -335,32 +338,4 @@ sealed class TrackVersionsPanel : Component
         : v.MusicalKey is { Length: > 0 } k ? k
         : null;
 
-    /// <summary>The loading silhouette, derived from the REAL row so the drawer does not resize when data lands. Two
-    /// rows is the common case (the track plus one association); a third appearing costs one row of growth, which the
-    /// clip's own reflow eases.</summary>
-    static Element Loading(float indent) => new BoxEl
-    {
-        Direction = 1, MinWidth = 0f,
-        Padding = new Edges4(indent, 0f, TrackRow.PadX, Spacing.S),
-        Children = [ShimmerRow(), ShimmerRow()],
-    }.Skeletonized(true);
-
-    static Element ShimmerRow() => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Height = RowH,
-        Padding = new Edges4(GutterW + Spacing.XS, 0f, Spacing.XS, 0f),
-        Children =
-        [
-            new BoxEl { Width = AudioThumb, Height = AudioThumb, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary },
-            new BoxEl
-            {
-                Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 5f,
-                Children =
-                [
-                    new BoxEl { Width = 150f, Height = 11f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardSecondary },
-                    new BoxEl { Width = 96f, Height = 9f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardSecondary },
-                ],
-            },
-        ],
-    };
 }

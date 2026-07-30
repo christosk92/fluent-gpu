@@ -217,6 +217,23 @@ public class VideoAssociationTests
         Assert.Equal(GidHex, a.VideoGidHex);        // kind 212 field 2 → Connect's associated_video_id
         Assert.Null(a.Etag);                        // the canonical entity's etag must never ride the alias row
         Assert.Null(store.GetVideoAssociation("spotify:track:CANON"));
+        Assert.Equal("spotify:track:CANON", store.GetTrack("spotify:track:ALIAS")!.CanonicalUri);
+    }
+
+    [Fact]
+    public void GetVideoAssociation_MissBridge_RetriesCanonicalUri()
+    {
+        var store = new InMemoryStore();
+        store.UpsertVideoAssociation(new VideoAssociation("spotify:track:CANON", true, "spotify:track:VID",
+            new[] { new VideoFileRef("abcd", 0, 2560, 1440) }, "etag", DateTimeOffset.UtcNow, 2592000));
+        store.UpsertTrack(new Track("ALIAS", "spotify:track:ALIAS", "A", [], new AlbumRef("", "", ""), 0, false, null,
+            CanonicalUri: "spotify:track:CANON"));
+
+        Assert.Null(store.GetVideoAssociation("spotify:track:MISSING"));
+        var bridged = store.GetVideoAssociation("spotify:track:ALIAS");
+        Assert.NotNull(bridged);
+        Assert.Equal("spotify:track:CANON", bridged!.Uri);
+        Assert.True(bridged.HasVideo);
     }
 
     [Fact]

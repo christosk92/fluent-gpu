@@ -15,26 +15,55 @@ namespace Wavee;
 // The hero-adjacent "Top tracks + Releases" band.
 sealed partial class ArtistPage : Component
 {
+    const float TopBandWideW = 760f;
+    const float TopBandHysteresis = 24f;   // == DetailLayoutBreakpoints.TierHysteresisDip, by intent
+    // Latched across renders so a slow drag across ~760 does not flip the Releases column between the chip strip and
+    // the row list on every 0.5px ResponsiveBox rebuild. A plain FIELD, not a signal: it is derived purely from `w`
+    // (idempotent for a given width) and must not schedule a render, so writing it from the build lambda is not a
+    // backwards write. One ArtistPage instance is alive at a time and it is reused across artist→artist hops — which
+    // is correct, because the window width does not change on navigation.
+    bool _topBandWide = true;
+    bool TopBandWide(float w)
+        => _topBandWide = _topBandWide ? w >= TopBandWideW - TopBandHysteresis : w >= TopBandWideW;
+
     // Top tracks (left, wider) + Releases masthead+strip (right) — stacked on a narrow page.
     Element TopBand(IReadOnlyList<Track> popular, string uri, PlaybackBridge? bridge, Services svc,
                     Album? latest, IReadOnlyList<Album>? popularReleases, ArtistPreRelease? upcoming,
                     Action<string, string?> go, Action<string> play, Func<ColorF> accent) =>
         Responsive.Of(w =>
         {
-            bool wide = w >= 760f;
-            float releaseW = wide ? MathF.Max(0f, (w - Spacing.XL) / 3f) : w;
+            bool wide = TopBandWide(w);
+            // The chips size to the BARE responsive column — no enclosing card padding to spend. Any inset subtracted
+            // here that layout does not actually impose makes the strip narrower than its slot; any inset missed makes
+            // it overflow. Keep this equal to the width the strip's parent really offers.
+            float columnW = wide ? MathF.Max(0f, (w - Spacing.XL) / 3f) : w;
+            float releaseW = columnW;
             string popTitle = Loc.Get(Strings.Artist.TopTracks);
+            // NO section container: cards are for OBJECTS (a release, a setting), never for SECTIONS. Section structure
+            // comes from typography + spacing alone, so the chart sits directly on the page and its own AccentHeader +
+            // pager (built by ArtistPopular) are its header row. The shimmer — SkeletonDeriver strips fills/borders —
+            // is the reference for how this must look; live and shimmer now agree.
             Element left = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
-            Element right = ReleasesColumn(latest, popularReleases, upcoming, go, play, accent, releaseW);
+            // ReleasesColumn can return an EMPTY element ("earns no place"), so nothing here may wrap it in chrome or
+            // padding that would still paint for a column that isn't there.
+            // `stacked` is threaded EXPLICITLY, never inferred from the width inside the column: the strip's own
+            // narrow rule (the <370px two-chip case) is a WIDE-mode rule about a third-width column, and a stacked
+            // column is full page width — so a width test down there cannot tell the two situations apart.
+            Element right = ReleasesColumn(latest, popularReleases, upcoming, go, play, accent, releaseW, stacked: !wide);
             return new BoxEl
             {
                 Direction = (byte)(wide ? 0 : 1), Gap = Spacing.XL,
-                // Each column keeps its NATURAL height — no cross-stretch. The chart is exactly as tall as its rows
-                // and the releases column is usually taller, so the band's bottom is ragged. Stretching the chart to
-                // close that gap is what produced first chunky rows and then huge inter-row spacing.
+                // WIDE (row): each column keeps its NATURAL height — no cross-stretch. The chart is exactly as tall as
+                // its rows and the releases column is usually taller, so the band's bottom is ragged. Stretching the
+                // chart to close that gap is what produced first chunky rows and then huge inter-row spacing.
                 // The strip sizes its covers from this responsive width, so nothing fluid inflates the band later.
-                AlignItems = FlexAlign.Start,
+                //
+                // STACKED (column): the cross axis is WIDTH, so the same Start COLLAPSES both children to their intrinsic
+                // width — and the chart shelf self-measures from the width it is handed, so it measured its own content
+                // instead of the page and fitted a single narrow column forever. Stretch is the correct cross-align once
+                // the direction flips; the height argument above is about the ROW case only.
+                AlignItems = wide ? FlexAlign.Start : FlexAlign.Stretch,
                 Children =
                 [
                     new BoxEl
@@ -51,9 +80,12 @@ sealed partial class ArtistPage : Component
             };
         }, fallback: 900f);
 
+    const int StripCap = 3;   // wide: equal-width square chips across a third-width column
+    const int ListCap = 5;    // stacked: vertical rows at full page width
+
     Element ReleasesColumn(Album? latest, IReadOnlyList<Album>? popular, ArtistPreRelease? upcoming,
                            Action<string, string?> go, Action<string> play,
-                           Func<ColorF> accent, float availableWidth)
+                           Func<ColorF> accent, float availableWidth, bool stacked)
     {
         var popularList = popular ?? Array.Empty<Album>();
         bool hasLatest = latest is { Name.Length: > 0, Uri.Length: > 0 };
@@ -65,8 +97,11 @@ sealed partial class ArtistPage : Component
         if (mast is null && !hasUpcoming) return new BoxEl();
 
         string mastUri = mast?.Uri ?? "";
-        var strip = new List<Album>(3);
-        for (int i = 0; i < popularList.Count && strip.Count < 3; i++)
+        // The cap belongs to the VARIANT, not to the column: three chips is what a third-width row of squares holds,
+        // while a full-width row list has the vertical room (and, stacked, the page's whole width) for five.
+        int cap = stacked ? ListCap : StripCap;
+        var strip = new List<Album>(cap);
+        for (int i = 0; i < popularList.Count && strip.Count < cap; i++)
         {
             var al = popularList[i];
             if (al.Uri.Length > 0 && string.Equals(al.Uri, mastUri, StringComparison.OrdinalIgnoreCase)) continue;
@@ -87,8 +122,16 @@ sealed partial class ArtistPage : Component
         // burying it under a record that is already out inverts the reason a visitor is on this page today.
         if (hasUpcoming) children.Add(UpcomingMasthead(upcoming!, go, accent) with { Key = "rel:upcoming" });
         if (mast is not null) children.Add(ReleaseMasthead(mast, eyebrow, go, play, accent) with { Key = "rel:mast" });
-        if (strip.Count > 0) children.Add(BuildReleaseStrip(strip, go, availableWidth) with { Key = "rel:strip" });
+        // ONE key across both variants. The keying rationale above is about the CONDITIONAL first sibling (the upcoming
+        // masthead) re-pairing its BoxEl neighbours by index; that hazard is unchanged by the variant swap, and a
+        // per-variant key would remount the whole releases block on every 760px crossing.
+        if (strip.Count > 0)
+            children.Add((stacked ? BuildReleaseList(strip, go) : BuildReleaseStrip(strip, go, availableWidth))
+                with { Key = "rel:strip" });
 
+        // A SECTION, not a card: cards are for OBJECTS (the mastheads and chips below), and a section is held together
+        // by its heading plus this gap — nothing else. The shimmer already renders exactly this (SkeletonDeriver strips
+        // fills/borders), and it is the reference. Do not re-introduce a container here.
         return Section(title, new BoxEl
         {
             Direction = 1, Gap = Spacing.S,
@@ -119,6 +162,9 @@ sealed partial class ArtistPage : Component
         {
             Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
             Padding = Edges4.All(10f), Corners = CornerRadius4.All(Radii.Card),
+            // A FULL card, on the bare page surface: this is a discrete promoted object (one announced record) — exactly
+            // what a Fluent card is FOR — and the announcement is this page's one piece of news, so it earns the chrome.
+            // The stroke is safe because nothing encloses it any more; there is no second hairline to double up with.
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverFill = Tok.FillSubtleSecondary,
             Role = AutomationRole.Button,
@@ -205,6 +251,7 @@ sealed partial class ArtistPage : Component
             // Prototype .mast: 96px cover, 10px padding/gap.
             Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
             Padding = Edges4.All(10f), Corners = CornerRadius4.All(Radii.Card),
+            // A full card — see UpcomingMasthead: one discrete release is an OBJECT, and objects are what cards are for.
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HoverFill = Tok.FillSubtleSecondary,
             Role = AutomationRole.Button,
@@ -324,6 +371,67 @@ sealed partial class ArtistPage : Component
             };
         }
         return new BoxEl { Direction = 0, Gap = Gap, AlignItems = FlexAlign.Start, Children = chips };
+    }
+
+    // The STACKED variant of the popular-releases strip. Below ~760 the releases column stops being a third-width
+    // sidebar and becomes a full-page-width block, where three equal-width chips inflate into three huge squares —
+    // covers hundreds of DIP across, and a band taller than the top-tracks chart above it. A vertical row list is the
+    // right shape for that slot: it is bounded by ROW COUNT rather than by width, so widening the page cannot inflate it.
+    //
+    // Geometry is the mastheads' grammar deliberately (the same 10px gap, Radii.Card corners and hover-only plate) at a
+    // smaller 52px cover, so the list reads as a continuation of the masthead card stack directly above it rather than
+    // as a third design sharing the column.
+    static Element BuildReleaseList(IReadOnlyList<Album> albums, Action<string, string?> go)
+    {
+        if (albums.Count == 0) return new BoxEl();
+        var rows = new Element[albums.Count];
+        for (int i = 0; i < albums.Count; i++)
+        {
+            var al = albums[i];
+            string sub = (al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind);
+            rows[i] = new BoxEl
+            {
+                Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(10f, 6f, 10f, 6f), Corners = CornerRadius4.All(Radii.Card),
+                // Transparent stroke reserved so the hover border does not re-layout the row (same trick as the chips).
+                BorderWidth = 1f, BorderColor = ColorF.Transparent,
+                HoverFill = Tok.FillSubtleSecondary, HoverBorderColor = Tok.StrokeCardDefault,
+                Role = AutomationRole.Button, Cursor = CursorId.Hand,
+                OnClick = () => go("album:" + al.Uri, al.Name),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 52f, Height = 52f, Shrink = 0f,
+                        Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+                        Children =
+                        [
+                            // 128px decode, not the chips' 256: this cover is 52 DIP even at 2x, so the larger target
+                            // would be a second, bigger decode of the same art for no visible gain.
+                            Surfaces.Artwork(al.Cover, al.Id.GetHashCode() & 0x7fffffff, 52f, 52f, Radii.Control, decodePx: 128),
+                        ],
+                    },
+                    new BoxEl
+                    {
+                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 2f,
+                        Children =
+                        [
+                            new TextEl(al.Name)
+                            {
+                                Size = 13f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1,
+                                Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            },
+                            new TextEl(sub)
+                            {
+                                Size = 11f, Color = Tok.TextSecondary, MaxLines = 1,
+                                Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            },
+                        ],
+                    },
+                ],
+            };
+        }
+        return new BoxEl { Direction = 1, Gap = 2f, Children = rows };
     }
 
     static string ReleaseMeta(Album al)

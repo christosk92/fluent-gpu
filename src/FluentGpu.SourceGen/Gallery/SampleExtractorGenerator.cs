@@ -32,19 +32,19 @@ namespace FluentGpu.SourceGen.Gallery
 
         private static readonly DiagnosticDescriptor NotStatic = new(
             "FGG001", "[Sample] method must be static",
-            "[Sample] method '{0}' must be static — a sample factory is invoked without an instance.",
+            "[Sample] method '{0}' must be static — a sample factory is invoked without an instance",
             "FluentGpu.Gallery", DiagnosticSeverity.Error, true);
 
         private static readonly DiagnosticDescriptor WrongShape = new(
             "FGG002", "[Sample] method has the wrong signature",
             "[Sample] method '{0}' must return FluentGpu.Dsl.Element and take either no parameters or a single "
-            + "FluentGpu.GalleryKit.Knobs parameter.",
+            + "FluentGpu.GalleryKit.Knobs parameter",
             "FluentGpu.Gallery", DiagnosticSeverity.Error, true);
 
         private static readonly DiagnosticDescriptor NotPartial = new(
             "FGG003", "[Sample] container must be partial",
             "[Sample] method '{0}' is in a type that is not declared 'partial' — the generated sample constant is "
-            + "emitted into the same partial type, so the container (and any enclosing type) must be partial.",
+            + "emitted into the same partial type, so the container (and any enclosing type) must be partial",
             "FluentGpu.Gallery", DiagnosticSeverity.Error, true);
 
         public void Initialize(IncrementalGeneratorInitializationContext context)

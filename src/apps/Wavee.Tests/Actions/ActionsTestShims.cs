@@ -51,7 +51,7 @@ namespace Wavee.Tests.Actions
         public readonly List<QueueItemId> Removed = new();
         public readonly List<string> RadioSeeds = new();
         /// <summary>What <see cref="StartRadioAsync"/> returns (the radio playlist uri, or null = no radio) — set per test.</summary>
-        public string? RadioResult;
+        public string? RadioResult = null;
 
         public string? ActiveDeviceId { get; set; }
 

@@ -26,8 +26,10 @@ public static class PlayerDock
 }
 
 /// <summary>Wavee app shell colors. Derived from the active <see cref="Tok.Palette"/> shell ramp. The window itself is
-/// transparent to DWM Mica; chrome and content are translucent semantic layers composited over it. This is the WinUI
-/// two-layer model: Mica remains the foundation while low-alpha fills establish navigation and content hierarchy.</summary>
+/// transparent to DWM Mica and the MUX tabbed-window ladder is built on top of it: the TAB RAIL row stays unpainted so
+/// bare Mica Alt is the frame; the app body sits on ONE translucent LayerOnMicaBaseAlt plate (toolbar, nav pane, player
+/// dock, content-pane backing); the content pane is a LayerFillColorDefault step on that plate; and (light) the opaque
+/// card is the step on the pane.</summary>
 public static class WaveeColors
 {
     /// <summary>One theme's shell surfaces (the values that aren't simply a plain engine token).</summary>
@@ -45,25 +47,27 @@ public static class WaveeColors
         ActiveShell.RowZebra, ActiveShell.RowHover, ActiveShell.RowHoverZebra,
         ActiveShell.RowPressed, ActiveShell.RowPressedZebra);
 
-    // The shell root is Mica passthrough: FluentApp sets Theme.WindowBackground = Transparent when mica:true, so DWM
-    // composites Mica BaseAlt behind the client area; the translucent chrome above tints it (both themes).
-    public static ColorF Window => ColorF.Transparent;
-    public static ColorF TitleBar => ColorF.Transparent;
+    // Both themes are published AS-IS: the shell ramp carries the stock WinUI alphas directly (an unpainted tab rail
+    // over real Mica + one LayerOnMicaBaseAlt body plate + one LayerFillColorDefault content pane on it), so the old
+    // light-only alpha re-multiply would re-thin values that are already the stock ones.
+    public static ColorF Toolbar => Active.Toolbar;
+    public static ColorF Sidebar => Active.Sidebar;
 
-    // WinUI's stock LayerOnMica brush is intentionally conservative. Wavee uses thinner light composites so the Mica
-    // color remains perceptible across its large, persistent shell regions; RGB still comes from the selected palette.
-    static ColorF LightComposite(ColorF color, float alpha) => Tok.Theme == ThemeKind.Light ? color with { A = alpha } : color;
+    static ColorF MicaBase => Tok.Theme == ThemeKind.Light ? MicaRef.LightDefault : MicaRef.DarkDefault;
 
-    public static ColorF Toolbar => LightComposite(Active.Toolbar, 0.46f);
-    public static ColorF Sidebar => LightComposite(Active.Sidebar, 0.38f);
-    public static ColorF SelectedTab => LightComposite(Tok.LayerOnMicaBaseAlt, 0.58f);
-    public static ColorF RailOverlay => Tok.Theme == ThemeKind.Light
-        ? Active.ContentAlt with { A = 0.58f }
-        : ColorF.FromRgba(0x1C, 0x1D, 0x20);
-    public static ColorF PlayerBar => LightComposite(Active.PlayerBar, 0.42f);
-    public static ColorF FileArea => LightComposite(Active.FileArea, 0.62f);
-    public static ColorF Content => LightComposite(Active.Content, 0.62f);
-    public static ColorF ContentAlt => LightComposite(Active.ContentAlt, 0.40f);
+    /// <summary>Opaque equivalent of the app-body PLATE (rung 1) — for a floating pane that replaces a docked CHROME
+    /// band (the narrow nav drawer). It must not be translucent: the page it covers would read through it.</summary>
+    public static ColorF FloatingChrome => ColorContrast.Flatten(Active.Toolbar, MicaBase);
+
+    /// <summary>Opaque equivalent of the CONTENT PANE (rung 2 = pane on plate) — for a floating pane that replaces a
+    /// docked CONTENT surface (the non-docked right rail). It must be flattened through BOTH rungs, or the floating rail
+    /// desyncs from the docked rail it stands in for.</summary>
+    public static ColorF FloatingPane => ColorContrast.Flatten(Active.Content,
+        ColorContrast.Flatten(Active.Toolbar, MicaBase));
+    public static ColorF PlayerBar => Active.PlayerBar;
+    public static ColorF FileArea => Active.FileArea;
+    public static ColorF Content => Active.Content;
+    public static ColorF ContentAlt => Active.ContentAlt;
     public static ColorF PremiumText => Active.PremiumText;
 
     // White-alpha stripes disappear over the near-white light Mica/page composite. Use a restrained neutral-ink ramp
@@ -79,10 +83,15 @@ public static class WaveeColors
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;
     public static ColorF Badge => Tok.AccentDefault;
 
-    /// <summary>Swatch preview for the palette picker: the preset's chrome bar flattened over the reference Mica for
-    /// the CURRENT theme — i.e. what that preset's toolbar actually reads as, so the swatch matches what clicking it
-    /// produces (the old hardcoded swatch hexes drifted from the real preset output and ignored dark entirely).</summary>
+    /// <summary>Swatch preview for the palette picker: the preset's CONTENT PANE flattened through the PLATE and over
+    /// the reference Mica for the CURRENT theme — i.e. what that preset's largest surface actually reads as, so the
+    /// swatch matches what clicking it produces. Keyed on rung 2 because it is both the largest surface AND, riding a
+    /// tinted plate, the most tinted point of the whole ladder (the preset hue is applied twice there; pairwise dark
+    /// max-channel deltas measure 16/8/16/9/6/8 at the pane vs single digits at rung 1). Reads the ARGUMENT's shells,
+    /// not <c>Active</c> — the swatch previews a palette that is not the active one.</summary>
     public static ColorF PresetSwatch(ThemePalette palette) => Tok.Theme == ThemeKind.Light
-        ? ColorContrast.Flatten(palette.LightShell.Toolbar, MicaRef.LightDefault)
-        : ColorContrast.Flatten(palette.DarkShell.Toolbar, MicaRef.DarkDefault);
+        ? ColorContrast.Flatten(palette.LightShell.Content,
+            ColorContrast.Flatten(palette.LightShell.Toolbar, MicaRef.LightDefault))
+        : ColorContrast.Flatten(palette.DarkShell.Content,
+            ColorContrast.Flatten(palette.DarkShell.Toolbar, MicaRef.DarkDefault));
 }

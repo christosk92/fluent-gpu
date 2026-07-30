@@ -60,8 +60,8 @@ sealed class WaveeShell : Component
     readonly Signal<int> _selectedTab = new(0);
 
     readonly Signal<string> _searchText = new("");
-    // Sidebar state. Width + collapsed are seeded (in the ctor, from the injected settings) so the FIRST layout already
-    // uses the saved width — no startup animation; written back on change via SaveSidebar.
+    // Sidebar state. Collapsed and (once pinned by a drag) width are seeded in the ctor from the injected settings so the
+    // FIRST layout already uses the saved values — no startup animation; written back on change via SaveSidebar.
     readonly IAppSettings _settings;
     readonly Signal<bool> _drawerExpanded = new(false);
     Signal<bool>? _narrowShellState;
@@ -70,6 +70,11 @@ sealed class WaveeShell : Component
     readonly Signal<bool> _sidebarCompact;
     readonly Signal<float> _sidebarWidth;                       // expanded width (drag-resizable, persisted)
     readonly Signal<bool> _sidebarDragging = new(false);       // ON during a seam drag → snaps all layout transitions (1:1 resize)
+    // Latches true on the first seam-drag commit (mirrors WaveeSettings.SidebarWidthUserSet). While false the pane width is
+    // a responsive default owned by the viewport effect below; once true, the persisted width is the user's and nothing
+    // else may write it. Plain field, not a signal: only the effect reads it, and it never needs to re-trigger a render.
+    bool _sidebarWidthUserSet;
+    bool _navPaneTierSeeded;                                   // false until the first effect run with a real viewport width
     readonly Signal<float> _sidebarFade = new(1f);             // content-opacity cue as a resize nears the collapse detent
     Action<float>? _requestTheme;                              // ambient ThemeControl.Request: live animated re-theme (captured in Render)
 
@@ -153,7 +158,14 @@ sealed class WaveeShell : Component
     {
         _settings = settings;
         _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
-        _sidebarWidth = new(settings.Get(WaveeSettings.SidebarWidth));
+        _sidebarWidthUserSet = settings.Get(WaveeSettings.SidebarWidthUserSet);
+        // A dragged width is a preference and seeds verbatim. An undragged one is only the last responsive default, so it
+        // seeds from the tier ladder instead — the viewport is not known here (no bounds callback yet), so this takes the
+        // pre-measure fallback and the viewport effect in Render (which runs at mount, before the first layout) commits
+        // the real tier without a visible step.
+        _sidebarWidth = new(_sidebarWidthUserSet
+            ? Math.Clamp(settings.Get(WaveeSettings.SidebarWidth), ShellResponsiveLayout.NavPaneMinW, ShellResponsiveLayout.NavPaneMaxW)
+            : ShellResponsiveLayout.InitialNavPaneDefaultForViewport(0f));
 
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
@@ -189,13 +201,13 @@ sealed class WaveeShell : Component
             ProbeSidebarDragWidth = width =>
             {
                 _sidebarCompact.Value = false;
-                _sidebarWidth.Value = Math.Clamp(width, 240f, 460f);
+                _sidebarWidth.Value = Math.Clamp(width, ShellResponsiveLayout.NavPaneMinW, ShellResponsiveLayout.NavPaneMaxW);
                 _sidebarFade.Value = 1f;
             };
             ProbeSidebarDragEnd = () =>
             {
                 _sidebarFade.Value = 1f;
-                SaveSidebar();
+                SaveSidebar(widthUserSet: true);   // the probe replicates a real drag commit, including the width-pin edge
                 _sidebarDragging.Value = false;
                 SyncDragSuppression();
             };
@@ -241,11 +253,19 @@ sealed class WaveeShell : Component
         At(new Route("search", "Stromae"),           0, 10, 20);
     }
 
-    void SaveSidebar()
+    // widthUserSet is the DRAG-COMMIT edge only: it pins the width as a preference so the responsive tier ladder stops
+    // writing it. The collapse toggle also persists through here and must leave the flag alone — collapsing the pane is
+    // not a width choice, and pinning on it would freeze every user at whatever tier they happened to collapse from.
+    void SaveSidebar(bool widthUserSet = false)
     {
         _settings.Set(WaveeSettings.SidebarWidth, _sidebarWidth.Peek());
         _settings.Set(WaveeSettings.SidebarCollapsed, _sidebarCompact.Peek());
+        if (!widthUserSet || _sidebarWidthUserSet) return;
+        _sidebarWidthUserSet = true;
+        _settings.Set(WaveeSettings.SidebarWidthUserSet, true);
     }
+
+    void CommitSidebarDrag() => SaveSidebar(widthUserSet: true);
 
     void ToggleSidebar()
     {
@@ -293,13 +313,30 @@ sealed class WaveeShell : Component
             narrowShell.Value = next;
             if (!next) narrowDrawer.SetIfChanged(false);
         });
+        // The nav-pane's responsive DEFAULT width (stock OpenPaneLength-per-window-class). Same band discipline as the
+        // narrow-shell effect above: it reads the hot viewport width but only writes when a hysteretic tier flips, and it
+        // is never debounced (a deferred structural width is a frame rendered at the wrong tier — ShellUi's note).
+        // Three writers must never fight over _sidebarWidth, so this one yields to both of the others:
+        //   • a pinned width — _sidebarWidthUserSet, latched by the drag commit, is a permanent opt-out;
+        //   • a live drag — Peek-gated (no subscription): OnMove owns the width 1:1 while the pointer is down. A drag ends
+        //     with SaveSidebar(widthUserSet: true), so after any committed drag this effect is inert anyway.
+        // vpSig is read FIRST and unconditionally: an early return before the read would drop the subscription and the
+        // tier would never update again. The pane's SidebarPaneAnim animates whatever this commits, for free.
+        UseSignalEffect(() =>
+        {
+            float w = vpSig.Value.Width;
+            if (_sidebarWidthUserSet || _sidebarDragging.Peek()) return;
+            float next = ShellResponsiveLayout.NavPaneDefaultFor(w, _sidebarWidth.Peek(), _navPaneTierSeeded);
+            if (w > 0f) _navPaneTierSeeded = true;
+            _sidebarWidth.SetIfChanged(next);
+        });
         UseSignalEffect(() =>
             presentedCompact.SetIfChanged(narrowShell.Value || _sidebarCompact.Value));
         bool compact = _sidebarCompact.Value;    // subscribe → re-persist on a collapse/expand toggle (infrequent)
         bool dragging = _sidebarDragging.Value;  // subscribe → snap all layout transitions while resizing the sidebar
-        // Persist the collapse toggle here; the grip's drag-end (OnReleased → SaveSidebar) persists the width. The
-        // initial values are seeded at field construction (below) so the first layout already uses the saved width
-        // (no startup animation). Defensive: storage failures never touch the UI.
+        // Persist the collapse toggle here; the grip's drag-end (OnReleased → CommitSidebarDrag) persists the width AND
+        // pins it as a user choice. This path must stay on the flag-free overload. The initial values are seeded at field
+        // construction (below) so the first layout is already correct. Defensive: storage failures never touch the UI.
         UseEffect(() => SaveSidebar(), compact);
         // Keep an owner-safe suppression edge in the reactive lifecycle as cleanup insurance. This snaps geometry only;
         // the user's reduced-motion preference and non-layout feedback remain untouched.
@@ -363,8 +400,10 @@ sealed class WaveeShell : Component
                     // The sidebar + content row. The sidebar PANE (SidebarPane) is the row's DIRECT child, so ITS width
                     // is what the row distributes — the content column re-solves and tiles against it gap-free. The width
                     // is signal-bound + drag-resizable (the grip overlay below); the pane animates the collapse toggle.
-                    // No Fill on the row: it stays Mica-passthrough (a chrome slab would sit UNDER the translucent sidebar
-                    // + content layers and double-tint them); real-layout tiling keeps the seam gap-free with nothing behind.
+                    // No Fill on the row: the PLATE is painted once per band (the sidebar pane and the content-side
+                    // backing below each paint it), so a row-level slab would sit UNDER those and double-tint them —
+                    // the exact hazard the coincident content-pane double-composite used to have. Real-layout tiling
+                    // keeps the seam gap-free with nothing behind.
                     new BoxEl
                     {
                         // ClipToBounds (Task B5): a settle-frame safety net so a page's content can never paint past the
@@ -417,18 +456,28 @@ sealed class WaveeShell : Component
                                 Direction = 1, ZStack = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f,
                                 Children =
                                 [
-                                    // Uniform chrome behind the translucent page and its rounded top-left cut-away.
-                                    // Do not add a sidebar-colored seam strip here: it remains visible through the
-                                    // page surface as a full-height opaque rail and squares off the rounded corner.
+                                    // The app-body PLATE behind the translucent page and its rounded top-left cut-away
+                                    // (rung 1 = LayerOnMicaBaseAlt, the same bound fill as the toolbar / nav pane /
+                                    // player dock) — so the page's corner cut-away and the trailing gap show the plate,
+                                    // not bare Mica. Do not add a sidebar-colored seam strip here: it remains visible
+                                    // through the page surface as a full-height opaque rail and squares off the corner.
                                     new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.Toolbar) },
-                                    // Static final-geometry underlay. WinUI translates ContentRoot but does not animate
-                                    // its width; while that translated card moves, this matching surface prevents the
-                                    // trailing side from exposing toolbar chrome (the false "right rail ghost").
+                                    // Static final-geometry underlay — and, at rest, THE content-pane surface itself
+                                    // (rung 2): the animated card above paints no fill, so this one layer of FileArea
+                                    // is the pane and it is never double-composited. WinUI translates ContentRoot but
+                                    // does not animate its width; while that translated card moves, this matching
+                                    // surface prevents the trailing side from exposing plate chrome (the false "right
+                                    // rail ghost") — and closer to WinUI, where ContentRoot translates and the surface
+                                    // beneath does not.
                                     new BoxEl
                                     {
                                         Grow = 1f, Margin = new Edges4(0f, 0f, Spacing.S, 0f),
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
-                                        Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
+                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                        // Wino/WinUI content zones sit one elevation step above commanding chrome.
+                                        // Keep the shadow on this STATIC final-geometry pane: putting it on the animated
+                                        // transparent card would make the elevation itself slide during sidebar FLIP.
+                                        Shadow = Elevation.Card,
                                     },
                                     new BoxEl
                                     {
@@ -441,14 +490,20 @@ sealed class WaveeShell : Component
                                         Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
                                         // Flush against the navigation pane and player dock; only the trailing edge is inset.
                                         Margin = new Edges4(0f, 0f, Spacing.S, 0f),
-                                        // BOUND (not a static ColorF): this content "page" is a frozen literal inside the
-                                        // OverlayHost.Child column (constructor args freeze at mount), so a re-render can't
-                                        // re-read the token. As a bind it lives in the reconciler's _nodeBindings and the
-                                        // host's live re-theme (RethemeAll) re-fires it → FillCardDefault follows the theme.
-                                        Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        // NO fill: the static underlay above owns the pane surface. This card and that
+                                        // underlay are coincident at rest (both Grow=1, same trailing margin, same
+                                        // corner), so a fill here composited the translucent FileArea TWICE — the pane
+                                        // read a rung too light (#333333 instead of #303030 dark) and mid-slide the
+                                        // moving card banded against the static surface. The card keeps the stroke, the
+                                        // corner, the clip and the FLIP; only the paint moved down one node.
+                                        // (Regression tell: a dark pane sampling #333333 means this fill came back.)
+                                        Fill = ColorF.Transparent,
                                         BorderWidth = 1f,
                                         BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
-                                        Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
+                                        // Stock NavigationViewContentGridCornerRadius = 8,0,0,0: only the corner facing
+                                        // the nav pane rounds. (The seam stroke is uniform 1px — per-side borders are
+                                        // unsupported, so the ring is an accepted deviation from the top+left-only rule.)
+                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
                                         ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this
@@ -519,7 +574,7 @@ sealed class WaveeShell : Component
                         [
                             // The strip is entirely on the content side of the seam to avoid covering the sidebar's
                             // 12-DIP scrollbar lane; SidebarResizeGrip's root Grow=1 fills this definite-height column.
-                            Embed.Comp(() => new SidebarResizeGrip(_sidebarCompact, _sidebarWidth, _sidebarDragging, _sidebarFade, SaveSidebar)),
+                            Embed.Comp(() => new SidebarResizeGrip(_sidebarCompact, _sidebarWidth, _sidebarDragging, _sidebarFade, CommitSidebarDrag)),
                         ],
                     },
                     new BoxEl
@@ -553,7 +608,7 @@ sealed class WaveeShell : Component
                                         // overlay. The interactive RightRail subtree above owns input while open.
                                         Grow = 1f, HitTestPassThrough = true,
                                         Fill = Prop.Of(() => _shellUi.RailOpen.Value && !_shellUi.RailFits.Value
-                                            ? WaveeColors.RailOverlay : ColorF.Transparent),
+                                            ? WaveeColors.FloatingPane : ColorF.Transparent),
                                     },
                                     new BoxEl
                                     {
@@ -682,8 +737,9 @@ sealed class WaveeShell : Component
         OnTabCloseRequested = CloseTab,
         OnAddTabButtonClick = () => { OpenNewTab("home"); return null; },
         IsAddTabButtonVisible = true,
-        // Files uses LayerOnMicaBaseAlt for the selected tab independently of its toolbar material.
-        SelectedFill = Prop.Of(() => WaveeColors.SelectedTab), TabWidth = 200f, MinTabWidth = 120f, MaxTabWidth = 240f,
+        // Wavee's commanding plate is translucent over live Mica. Using that RAW material here (rather than an opaque
+        // reference-Mica flatten) makes the tab and toolbar follow the same wallpaper hue/luminance and fuse exactly.
+        SelectedFill = Prop.Of(() => WaveeColors.Toolbar), TabWidth = 200f, MinTabWidth = 120f, MaxTabWidth = 240f,
     };
 
     int TitleBarTabsVersion()
@@ -951,7 +1007,10 @@ sealed class ShellNarrowDrawerPane : Component
                 0f)),
             Width = Prop.Of(() => ShellResponsiveLayout.DrawerWidth(
                 _viewport.Value.Width, _expandedWidth.Value)),
-            Fill = Prop.Of(() => WaveeColors.Sidebar),
+            // FloatingChrome, not Sidebar: the docked pane's fill is the TRANSLUCENT plate, but this drawer slides OVER
+            // the page — a translucent fill would let the content read through it. FloatingChrome is that same plate
+            // made opaque (rung 1), so the drawer matches the docked pane it stands in for rather than the content pane.
+            Fill = Prop.Of(() => WaveeColors.FloatingChrome),
             BorderWidth = 1f, BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
             Corners = new CornerRadius4(0f, Radii.Card, Radii.Card, 0f),
             Shadow = Elevation.Dialog, HitTestVisible = open,

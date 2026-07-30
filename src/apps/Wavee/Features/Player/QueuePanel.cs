@@ -79,7 +79,11 @@ sealed class QueuePanel : Component
         }
 
         var track = b.CurrentTrack.Value;
-        var accent = Surfaces.SchemeFor(b.CurrentTrack.Value?.Image?.Url) is { } p ? WaveePalette.Accent(p) : Tok.AccentDefault;
+        // These are accent-FILLED chrome pills, not a wash: use the same lifted/saturation-floored cover role as every
+        // media CTA. The raw grading role can be deliberately dark and made an enabled pill read disabled.
+        var accent = Surfaces.ChromeSchemeFor(b.CurrentTrack.Value?.Image?.Url) is { } p
+            ? WaveePalette.ChromeAccent(p)
+            : Tok.AccentDefault;
 
         // ── bucket split: forward-looking only (History and the NowPlaying entry are NOT rows here) ──
         var queue = display.Value;

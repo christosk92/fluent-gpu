@@ -283,7 +283,7 @@ public sealed class ScrollIntegrator
         // shift (recorded while this node was outside the _active tick set — e.g. budgeted realize correcting extents
         // after the previous gesture settled) is therefore stale here: applying it at the next Tick would double-count
         // the pin into the anchor. Discard it; only shifts recorded AFTER this latch belong to the anchor.
-        if (sc.PendingAnchorShift != 0f && FluentGpu.Foundation.ScrollTrace.On)
+        if (sc.PendingAnchorShift != 0f && FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.Note(104, sc.PendingAnchorShift, (int)n.Raw.Index);   // stale pre-latch shift discarded
         sc.PendingAnchorShift = 0f;
         sc.Phase = TouchpadTracking;
@@ -340,7 +340,7 @@ public sealed class ScrollIntegrator
         // ops/diag: reset the ambient gesture-state stamp each frame; the per-node loop below raises it. This is the
         // drag → inertia → settle split, which a human phase marker structurally cannot record and which is exactly the
         // boundary that separates "content is not glued to my finger" from "the fling is not smooth".
-        if (FluentGpu.Foundation.ScrollTrace.On)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Gesture, 0);
         // §5 pacing: StopwatchFrameTimeSource deliberately emits one zero-delta frame after a cadence Resync. A zero
         // simulation step cannot move; treating it as a clamp killed newly-seeded motion (the wheel dead-zone). No
@@ -362,7 +362,7 @@ public sealed class ScrollIntegrator
             {
                 bool tracked = _rs.Node == idx;
                 if (tracked) _rs.Anchor += sc.PendingAnchorShift;
-                if (FluentGpu.Foundation.ScrollTrace.On)
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                     FluentGpu.Foundation.ScrollTrace.Note(tracked ? 102 : 103, sc.PendingAnchorShift, idx);   // 102=shift folded into the live resampler anchor, 103=drained with no tracked gesture
                 sc.PendingAnchorShift = 0f;
             }
@@ -371,7 +371,7 @@ public sealed class ScrollIntegrator
             byte phase = sc.Phase;
             // Highest-wins across the frame's active nodes (an inertial outer scroller under a settling inner one reads
             // as inertia, which is what the gesture felt like).
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             {
                 int g = phase == TouchpadTracking || phase == Overscroll ? 1
                       : phase == Fling ? 2
@@ -402,7 +402,7 @@ public sealed class ScrollIntegrator
                     snapTarget = Math.Clamp(snapTarget, 0f, maxOffS);
                     sc.FlingVelocity = (snapTarget - off) * k;
                     sc.FlingSnapTarget = snapTarget;
-                    if (FluentGpu.Foundation.ScrollTrace.On)
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                         FluentGpu.Foundation.ScrollTrace.AnimEvent(idx, 2, natural, snapTarget, sc.FlingVelocity);
                 }
 
@@ -439,7 +439,7 @@ public sealed class ScrollIntegrator
                     off = horizontal ? sc.OffsetX : sc.OffsetY;              // re-read the clamped position
                     if (hitClamp || !moved || MathF.Abs(v) < _flingSettleVelPxPerS)     // a clamp boundary or a settle ends the fling
                     {
-                        if (FluentGpu.Foundation.ScrollTrace.On)
+                        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                             FluentGpu.Foundation.ScrollTrace.AnimEvent(idx, 0, off, v, (hitClamp ? 1f : 0f) + (moved ? 2f : 0f));
                         // §4.5: a touch fling that REACHES a clamp with residual speed hands the momentum to the SnapBack
                         // rubber-band (WinUI/iOS) instead of stopping dead (§2.2 extent asymmetry: contact-descended only).
@@ -454,7 +454,7 @@ public sealed class ScrollIntegrator
                             OverscrollPhysics.SeedFromEdgeMomentum(ref bandVel, v, viewport);
                             sc.OverscrollVel = bandVel;
                             sc.Phase = SnapBack;
-                            if (FluentGpu.Foundation.ScrollTrace.On)
+                            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                                 FluentGpu.Foundation.ScrollTrace.AnimEvent(idx, 1, band, bandVel, v);
                         }
                         else sc.Phase = Idle;
@@ -471,9 +471,12 @@ public sealed class ScrollIntegrator
             else if (phase == WheelAnimating)
             {
                 float pending = horizontal ? sc.PendingTargetX : sc.PendingTargetY;
+                // Every chase-END path below also clears ProgrammaticHalflifeMs: it is a PER-CHASE latch, so a later
+                // caller that arms a programmatic chase WITHOUT setting one (LazyGrid's drawer bring-into-view) can never
+                // inherit the previous glide's distance-derived value — it falls to ProgrammaticSpringHalflifeMs.
                 if (float.IsNaN(pending))
                 {
-                    sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0;
+                    sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0; sc.ProgrammaticHalflifeMs = 0f;
                 }
                 else if ((sc.PhaseFlags & ScrollState.PhaseImmediate) != 0)
                 {
@@ -482,7 +485,7 @@ public sealed class ScrollIntegrator
                     // the same frame it was recorded — the sole offset writer stays the integrator, with no manipulation lag.
                     moved = ScrollWrite?.Invoke(n, pending) ?? false;
                     off = horizontal ? sc.OffsetX : sc.OffsetY;
-                    sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0;
+                    sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0; sc.ProgrammaticHalflifeMs = 0f;
                     if (horizontal) sc.PendingTargetX = float.NaN; else sc.PendingTargetY = float.NaN;
                 }
                 else
@@ -507,7 +510,14 @@ public sealed class ScrollIntegrator
                     }
                     else
                     {
-                        float halflifeMs = programmatic ? ProgrammaticSpringHalflifeMs : ScrollTuning.WheelChaseHalflifeMs;
+                        // A programmatic glide rides the half-life its ARMING caller latched from the travel distance
+                        // (ScrollTuning.ProgrammaticHalflifeForDistance): a page jump stays legible while a short
+                        // settle-correction lands crisply, without either becoming a wheel notch. Constant across the
+                        // chase ⇒ this step is still the exact closed form, so the glide is dt-deterministic and a
+                        // mid-flight retarget (below) stays velocity-continuous. 0 ⇒ the fixed legacy value.
+                        float halflifeMs = programmatic
+                            ? (sc.ProgrammaticHalflifeMs > 0f ? sc.ProgrammaticHalflifeMs : ProgrammaticSpringHalflifeMs)
+                            : ScrollTuning.WheelChaseHalflifeMs;
                         float y = 1.3862944f / (halflifeMs * 0.001f);   // 2·ln2 / halflife(s) — critically-damped (ζ=1)
                         vel = sc.FlingVelocity;
                         float j0 = off - pending;
@@ -524,7 +534,7 @@ public sealed class ScrollIntegrator
                     if (MathF.Abs(newOff - pending) < 0.5f && MathF.Abs(vel) < settleVelocity)
                     {
                         moved = ScrollWrite?.Invoke(n, pending) ?? false;   // land exactly on the accumulated target
-                        sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0;
+                        sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0; sc.ProgrammaticHalflifeMs = 0f;
                         if (horizontal) sc.PendingTargetX = float.NaN; else sc.PendingTargetY = float.NaN;
                         off = horizontal ? sc.OffsetX : sc.OffsetY;
                     }
@@ -535,7 +545,7 @@ public sealed class ScrollIntegrator
                         // Hard-stop at the extent (§2.2): a clamped write that no longer advances ends the chase (no band).
                         if (!moved && MathF.Abs(vel) < settleVelocity)
                         {
-                            sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0;
+                            sc.Phase = Idle; sc.FlingVelocity = 0f; sc.PhaseFlags = 0; sc.ProgrammaticHalflifeMs = 0f;
                             if (horizontal) sc.PendingTargetX = float.NaN; else sc.PendingTargetY = float.NaN;
                         }
                     }
@@ -562,7 +572,7 @@ public sealed class ScrollIntegrator
                 moved = ScrollWrite?.Invoke(n, clamped) ?? false;
                 off = horizontal ? sc.OffsetX : sc.OffsetY;
                 float excess = rawOffset < 0f ? rawOffset : rawOffset > maxOffS ? rawOffset - maxOffS : 0f;
-                if (FluentGpu.Foundation.ScrollTrace.On) NoteTrackingLag(rawOffset, off, excess);
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled) NoteTrackingLag(rawOffset, off, excess);
                 if (excess != 0f && !touchPan && (sc.PhaseFlags & ScrollState.PhaseOsOwned) != 0)
                 {
                     // OS-owned momentum (DManip INERTIA) reached the edge. The OS tail decays for up to ~2s and no
@@ -600,7 +610,7 @@ public sealed class ScrollIntegrator
                     sc.Phase = SnapBack;
                     OverscrollWrite?.Invoke(n, band);
                     moved = true;
-                    if (FluentGpu.Foundation.ScrollTrace.On)
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                         FluentGpu.Foundation.ScrollTrace.AnimEvent(idx, 1, band, bandVel, vOs);
                 }
                 else if (excess != 0f)
@@ -642,7 +652,7 @@ public sealed class ScrollIntegrator
                 {
                     sc.OverscrollReleaseOmega = 0f;
                     if (sc.Phase == SnapBack) sc.Phase = Idle;
-                    if (FluentGpu.Foundation.ScrollTrace.On) FluentGpu.Foundation.ScrollTrace.AnimEvent(idx, 3, p, vsp, omega);
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled) FluentGpu.Foundation.ScrollTrace.AnimEvent(idx, 3, p, vsp, omega);
                 }
                 bandActive = !settled;
             }
@@ -654,7 +664,7 @@ public sealed class ScrollIntegrator
             float tgt = horizontal ? sc.TargetX : sc.TargetY;
 
             // DIAGNOSTIC (FG_SCROLL_TRACE): per-frame physics state of this scroll node WHEN anything is moving.
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             {
                 if (moved || flinging || bandActive || sc.OverscrollPx != 0f || MathF.Abs(tgt - off) > 0.5f)
                     FluentGpu.Foundation.ScrollTrace.AnimTick(idx, sc.Phase, off, tgt,
@@ -833,7 +843,7 @@ public sealed class ScrollIntegrator
                 {
                     double slope = num / denom;
                     double tEval = Math.Clamp(targetT, oldest, t1);
-                    if (FluentGpu.Foundation.ScrollTrace.On && targetT > t1) FluentGpu.Foundation.ScrollTrace.Note(101, 0f);
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && targetT > t1) FluentGpu.Foundation.ScrollTrace.Note(101, 0f);
                     return (float)(xm + slope * (tEval - tm));
                 }
             }
@@ -863,7 +873,7 @@ public sealed class ScrollIntegrator
         // NO extrapolation past the newest sample — hold at it. Traced sessions proved prediction fires almost only at
         // packet GAPS (deceleration, segment end, lift), exactly where the last slope is stale: every mis-prediction was
         // a visible snap-back (up to 32 DIP), while with the 12ms latency the live stream virtually never lands here.
-        if (FluentGpu.Foundation.ScrollTrace.On) FluentGpu.Foundation.ScrollTrace.Note(101, 0f);
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled) FluentGpu.Foundation.ScrollTrace.Note(101, 0f);
         return x1;
     }
 

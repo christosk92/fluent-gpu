@@ -50,7 +50,11 @@ public sealed class ExtensionEtagCache
             async (key, _) =>
             {
                 var fetched = await FetchBatchAsync(new[] { key }, CancellationToken.None).ConfigureAwait(false);
-                return fetched.TryGetValue(key, out var value) ? value : CachedExtension.MissingValue(key.Uri, key.Kind);
+                // Absent-from-response is NOT a Missing outcome — inventing one would seal a 24h negative and wedge
+                // recovery (S0). Fail the single-key fetch so Resource records an error instead of a fake miss.
+                if (!fetched.TryGetValue(key, out var value))
+                    throw new InvalidOperationException("extended-metadata omitted " + key.Uri);
+                return value;
             },
             new FreshnessPolicy.Etag(TimeSpan.FromHours(6)),
             ctx,
@@ -59,25 +63,86 @@ public sealed class ExtensionEtagCache
             name: "extended-metadata",
             debugLog: log);
 
-        if (_persistent is not null)
+        // NO bulk seed here — the ctor is O(1) and this runs on the go-live critical path. The cold tier is read
+        // LAZILY, per miss, through HydrateFromCold. The old seed pulled the newest `maxEntries` rows out of
+        // `localized_extension_cache` at construction, which was both the login stall (an unindexed
+        // `ORDER BY updated_at DESC` = full SCAN + TEMP B-TREE; 34 MB read to keep 636 KB, measured) and a
+        // correctness ceiling: only those 2048 rows were EVER readable, so ~97% of the persisted cache was
+        // write-only and every browse outside the window re-fetched a payload that was already on disk.
+    }
+
+    /// <summary>Tier 2 — fold the persisted rows for the current misses into the LRU BEFORE touching the network.
+    /// Point-read by primary key, so this is O(misses · log n) and its cost is the working set, never the table.
+    /// An unexpired row satisfies the request outright; an expired one still lands, because its ETag is what turns
+    /// the follow-up fetch into a 304 instead of a full body.</summary>
+    void HydrateFromCold(List<ExtensionKey> misses)
+    {
+        if (_persistent is null || misses.Count == 0) return;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        // One statement per distinct kind; a screenful is normally one or two kinds.
+        var byKind = new Dictionary<int, List<string>>();
+        foreach (var key in misses)
         {
-            // Match the SQL LIMIT to the LIVE cap: the seed loop below discards everything past `maxEntries`, so reading
-            // the whole table was pure I/O waste (~26k rows / ~24 MB of BLOBs at go-live for a 2048-entry cache).
-            var rows = new List<ColdExtension>(_persistent.LoadAllExtensions(maxEntries));
-            int keep = Math.Min(rows.Count, maxEntries > 0 ? maxEntries : rows.Count);
-            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            // Store returns newest-first; seed oldest-first so an LRU cap retains the newest rows.
-            for (int i = keep - 1; i >= 0; i--)
+            int kind = (int)key.Kind;
+            if (!byKind.TryGetValue(kind, out var uris)) byKind[kind] = uris = new List<string>();
+            uris.Add(key.Uri);
+        }
+        foreach (var (kind, uris) in byKind)
+        {
+            IReadOnlyList<ColdExtension> rows;
+            // A cold-tier failure must never break the live fetch — fall through to the network.
+            try { rows = _persistent.LoadExtensions(uris, kind); }
+            catch (Exception) { continue; }
+            // Stamp what we actually served so the v7 LRU sweep evicts by USE, not by write time. Debounced on a plain
+            // tick check rather than a timer: this runs inside _batchGate on a pool thread, and a day-granularity guarded
+            // UPDATE is a no-op for rows already touched today — so there is no lifetime to own and nothing to dispose.
+            if (rows.Count > 0) TouchServed(kind, rows);
+            foreach (var row in rows)
             {
-                var row = rows[i];
                 var key = new ExtensionKey(_locale, row.EntityUri, (Xm.ExtensionKind)row.ExtensionKind);
-                var value = new CachedExtension(row.EntityUri, (Xm.ExtensionKind)row.ExtensionKind, row.Etag,
+                var value = new CachedExtension(row.EntityUri, (Xm.ExtensionKind)row.ExtensionKind,
+                    row.Missing ? null : row.Etag,
                     row.OfflineTtlSeconds, row.Payload is { Length: > 0 } bytes ? ByteString.CopyFrom(bytes) : null, row.Missing);
-                _resource.Seed(key, value,
+                // SeedPersisted, not Seed: a fetch that already landed must win, and a dealer MarkStale that arrived
+                // while this read was in flight must survive it.
+                _resource.SeedPersisted(key, value,
                     DateTimeOffset.FromUnixTimeSeconds(row.UpdatedAtUnixSeconds).UtcDateTime,
                     DateTimeOffset.FromUnixTimeSeconds(row.ExpiresAtUnixSeconds).UtcDateTime,
                     needsRevalidate: row.ExpiresAtUnixSeconds <= now);
             }
+        }
+    }
+
+    // Pending last_access stamps, flushed when they get big enough or old enough. Guarded by _batchGate (its only caller
+    // is HydrateFromCold, which always runs inside it), so no extra lock.
+    readonly Dictionary<int, List<string>> _touchPending = new();
+    int _touchCount;
+    long _touchFlushedAt = Environment.TickCount64;
+    const int TouchFlushRows = 512;
+    const long TouchFlushIntervalMs = 60_000;
+
+    void TouchServed(int kind, IReadOnlyList<ColdExtension> rows)
+    {
+        if (!_touchPending.TryGetValue(kind, out var pending)) _touchPending[kind] = pending = new List<string>();
+        foreach (var row in rows) { pending.Add(row.EntityUri); _touchCount++; }
+        long now = Environment.TickCount64;
+        if (_touchCount < TouchFlushRows && now - _touchFlushedAt < TouchFlushIntervalMs) return;
+        FlushTouches(now);
+    }
+
+    void FlushTouches(long now)
+    {
+        _touchFlushedAt = now;
+        _touchCount = 0;
+        if (_persistent is null) { _touchPending.Clear(); return; }
+        // Midnight-truncated, matching the entity tier's TouchEntities convention so both compare against the same cutoffs.
+        long day = new DateTimeOffset(DateTime.UtcNow.Date, TimeSpan.Zero).ToUnixTimeSeconds();
+        foreach (var (kind, uris) in _touchPending)
+        {
+            if (uris.Count == 0) continue;
+            // Never let cache bookkeeping break a read.
+            try { _persistent.TouchExtensions(uris, kind, day); } catch (Exception) { }
+            uris.Clear();
         }
     }
 
@@ -143,6 +208,24 @@ public sealed class ExtensionEtagCache
 
                 if (misses.Count > 0)
                 {
+                    // Consult the durable tier before the wire: a hit is one indexed lookup instead of an HTTP
+                    // round-trip, and even a miss-with-ETag downgrades the fetch below to a 304.
+                    HydrateFromCold(misses);
+                    misses.Clear();
+                    foreach (var key in keys)
+                    {
+                        var cached = _resource.Peek(key);
+                        if (cached.IsReady && !cached.IsStale && cached.Value is { } value)
+                        {
+                            values[(key.Uri, key.Kind)] = value;
+                            continue;
+                        }
+                        misses.Add(key);
+                    }
+                }
+
+                if (misses.Count > 0)
+                {
                     IReadOnlyDictionary<ExtensionKey, CachedExtension> fetched;
                     try { fetched = await FetchBatchAsync(misses, ct).ConfigureAwait(false); }
                     catch
@@ -156,9 +239,15 @@ public sealed class ExtensionEtagCache
                     }
                     foreach (var key in misses)
                     {
-                        var value = fetched.TryGetValue(key, out var cached) ? cached : _resource.Peek(key).Value;
-                        if (value is null) value = CachedExtension.MissingValue(key.Uri, key.Kind);
-                        if (fetched.ContainsKey(key)) _resource.Seed(key, value);
+                        // Only Seed explicit wire outcomes (keys present in `fetched`). Absent-from-response stays
+                        // unsealed so the next hydrate retries; never invent a MissingValue here (that was the 24h wedge).
+                        if (!fetched.TryGetValue(key, out var value))
+                        {
+                            if (_resource.Peek(key).Value is { } stale)
+                                values[(key.Uri, key.Kind)] = stale;
+                            continue;
+                        }
+                        _resource.Seed(key, value);
                         values[(key.Uri, key.Kind)] = value;
                     }
                 }
@@ -179,18 +268,24 @@ public sealed class ExtensionEtagCache
         for (int i = 0; i < keys.Count; i++)
         {
             var cached = _resource.Peek(keys[i]);
-            reqs[i] = (keys[i].Uri, keys[i].Kind, cached.IsReady ? cached.Value?.Etag : null);
+            // Never conditional-GET a Missing row — its ETag (if any) would 304-forever the miss past TTL.
+            string? etag = cached is { IsReady: true, Value: { Missing: false, Etag: { Length: > 0 } e } } ? e : null;
+            reqs[i] = (keys[i].Uri, keys[i].Kind, etag);
         }
 
         var response = await _source.GetExtensionsWithHeadersAsync(reqs, ct).ConfigureAwait(false);
         var result = new Dictionary<ExtensionKey, CachedExtension>(keys.Count);
         foreach (var key in keys)
         {
-            response.TryGetValue((key.Uri, key.Kind), out var wire);
+            if (!response.TryGetValue((key.Uri, key.Kind), out var wire)) continue;   // absent — not an outcome
+            if (wire.Status is not (200 or 304 or 404)) continue;
             var existing = _resource.Peek(key);
-            var folded = Fold(key, existing.IsReady ? existing.Value : null, wire);
+            var prior = existing.IsReady ? existing.Value : null;
+            // 304 can only reconfirm a real payload; a Missing+ETag 304 must not reseal past TTL (need a full body).
+            if (wire.Status == 304 && prior is not { Missing: false }) continue;
+            var folded = Fold(key, prior, wire);
             result[key] = folded;
-            if (wire.Status is 200 or 304 or 404) Persist(folded);
+            Persist(folded);
         }
         return result;
     }
@@ -200,9 +295,10 @@ public sealed class ExtensionEtagCache
         if (_persistent is null) return;
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         long ttl = Math.Max(1, (long)value.Ttl.TotalSeconds);
+        // Never persist an ETag onto a Missing row — cold restore would otherwise 304-forever the miss.
         _persistent.UpsertExtension(new ColdExtension(value.Uri, (int)value.Kind,
             value.Payload is { IsEmpty: false } payload ? payload.ToByteArray() : null,
-            value.Etag, value.OfflineTtlSeconds, value.Missing, now + ttl, now));
+            value.Missing ? null : value.Etag, value.OfflineTtlSeconds, value.Missing, now + ttl, now));
     }
 
     static CachedExtension Fold(ExtensionKey key, CachedExtension? existing, ExtendedMetadataSource.ExtensionResult wire)
@@ -211,14 +307,15 @@ public sealed class ExtensionEtagCache
         {
             200 when wire.Payload is { IsEmpty: false } payload =>
                 new CachedExtension(key.Uri, key.Kind, wire.Etag ?? existing?.Etag, wire.OfflineTtlSeconds, payload, Missing: false),
-            304 when existing is not null =>
+            304 when existing is { Missing: false } =>
                 existing with
                 {
                     Etag = wire.Etag ?? existing.Etag,
                     OfflineTtlSeconds = wire.OfflineTtlSeconds > 0 ? wire.OfflineTtlSeconds : existing.OfflineTtlSeconds,
                 },
-            404 => CachedExtension.MissingValue(key.Uri, key.Kind, wire.Etag ?? existing?.Etag, wire.OfflineTtlSeconds),
-            200 => CachedExtension.MissingValue(key.Uri, key.Kind, wire.Etag ?? existing?.Etag, wire.OfflineTtlSeconds),
+            // Explicit negative outcomes: never adopt the wire ETag onto Missing (304-forever loop).
+            404 => CachedExtension.MissingValue(key.Uri, key.Kind, etag: null, wire.OfflineTtlSeconds),
+            200 => CachedExtension.MissingValue(key.Uri, key.Kind, etag: null, wire.OfflineTtlSeconds),
             _ when existing is not null => existing,
             _ => CachedExtension.MissingValue(key.Uri, key.Kind),
         };

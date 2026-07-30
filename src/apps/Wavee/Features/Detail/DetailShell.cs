@@ -75,12 +75,24 @@ sealed class DetailShell : Component
     readonly IAppSettings? _settings;
     readonly Signal<float> _albumRailW;
     readonly Signal<float> _playlistRailW;
+    // Rail DRAG-TO-COLLAPSE state (WP-η). Per kind, like the widths, because the two surfaces are independent
+    // preferences. `_railFade` is shared: it is a transient in-gesture cue (the resist-zone content fade), never
+    // persisted, and only one rail is ever on screen. Seeded 1f = fully opaque.
+    readonly Signal<bool> _albumRailCollapsed;
+    readonly Signal<bool> _playlistRailCollapsed;
+    readonly Signal<float> _railFade = new(1f);
 
     public DetailShell(Signal<Route> route, Loadable<DetailModel> model, Image? fallbackCover = null, IAppSettings? settings = null)
     {
         _route = route; _model = model; _fallbackCover = fallbackCover; _settings = settings;
-        _albumRailW = new(settings?.Get(WaveeSettings.DetailAlbumRailWidth) ?? WaveeSettings.DetailAlbumRailWidth.Default);
-        _playlistRailW = new(settings?.Get(WaveeSettings.DetailPlaylistRailWidth) ?? WaveeSettings.DetailPlaylistRailWidth.Default);
+        // CLAMP the loaded widths to the live grip bounds (the sidebar's seed rule, WaveeShell): the floor moved 220→180
+        // with the collapse detent, and a value written by another build — or a hand-edited store — must never seed raw.
+        _albumRailW = new(Math.Clamp(settings?.Get(WaveeSettings.DetailAlbumRailWidth)
+            ?? WaveeSettings.DetailAlbumRailWidth.Default, RailMinW, RailMaxW));
+        _playlistRailW = new(Math.Clamp(settings?.Get(WaveeSettings.DetailPlaylistRailWidth)
+            ?? WaveeSettings.DetailPlaylistRailWidth.Default, RailMinW, RailMaxW));
+        _albumRailCollapsed = new(settings?.Get(WaveeSettings.DetailAlbumRailCollapsed) ?? false);
+        _playlistRailCollapsed = new(settings?.Get(WaveeSettings.DetailPlaylistRailCollapsed) ?? false);
     }
 
     // Per-context persisted-sort keys (each album/playlist remembers its own sort). Keyed by the context uri so two
@@ -98,6 +110,25 @@ sealed class DetailShell : Component
     static int ModeFor(float w, int currentMode, bool initialized)
         => DetailLayoutBreakpoints.ModeFor(w, currentMode, initialized);
     static float RailW(int mode, DetailConfig cfg) => mode switch { 0 => cfg.RailWidth, 1 => 224f, _ => 188f };
+
+    // ── the mode-0 resizable rail: drag bounds + the collapse detent (WP-η) ──
+    // The floor is 180 rather than the old 220 because the rail's own content genuinely survives it: the cover floors at
+    // CoverEdge (156 here), the hero title auto-fits down to MinSize 18, the CTA cluster Wraps (the 3-FAB group is 136
+    // wide, so it fits under the Play pill), and the fact bento's tiles are Basis=0/MinWidth=0 wrap-grow.
+    const float RailMinW = 180f, RailMaxW = 480f;
+    // SnapThreshold == RailMinW: at/above the floor the rail tracks the cursor 1:1; below it the grip RESISTS and the
+    // rail's content fades, and only pushing ForcePush further (raw ≈ 136) collapses into the compact identity strip
+    // (WP-κ — never to oblivion). Re-opening needs a pull past ReExpand (220) — comfortably above the 136 collapse
+    // point, so the rail cannot flicker shut/open at the seam. Feel constants (resist 0.28, fade floor 0.35) live in
+    // ColumnGrip.
+    const float RailForcePush = 44f, RailReExpand = 220f;
+    // Compact strip width while collapsed (sidebar analog): wide enough for a readable cover + 2-line title, narrow
+    // enough that the track list keeps most of the card. Cover = strip − 2× Spacing.S.
+    const float RailCompactW = 96f;
+    // The grip's hit strip: 7 DIP normally (a hairline seam between two visible columns), 12 while collapsed — the
+    // compact strip already carries cover/chevron re-open, but the seam still accepts a bare click / drag past ReExpand.
+    const float GripStripW = 7f, GripStripCollapsedW = 12f;
+
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
@@ -137,27 +168,53 @@ sealed class DetailShell : Component
         }, DepKey.FromRef(raw));
 
         Track? cur = bridge?.CurrentTrack.Value;     // subscribe → re-derive wash/tint on track change (rare)
-        // Watch THIS page's cover (not the global epoch): the wash appears the moment this one image is graded, and a
-        // scrolling grid's batches never re-render the page. Cards subscribe differently — see CoverShimmer.
-        _ = SpotifyLive.CoverColorPlane.Current.Watch(m.Cover?.Url).Value;
-        var coverArt = Surfaces.SchemeFor(m.Cover?.Url);
+        // Watch THIS page's stable palette source (not the global epoch): the wash appears the moment this one image is
+        // graded, and a scrolling grid's batches never re-render the page. A provider image is gradeable directly.
+        // Playlist mosaics/custom covers are not: when no visual-identity scheme already seeded that cover, use the
+        // first real track cover instead of waiting forever on an endpoint request that cannot succeed.
+        string? coverUrl = m.Cover?.Url;
+        var coverArt = Surfaces.SchemeFor(coverUrl);
+        string? paletteUrl = coverArt is not null || SpotifyLive.CoverColorPlane.CanGrade(coverUrl)
+            ? coverUrl
+            : FirstGradeableTrackCover(m.Tracks) ?? coverUrl;
+        if (!string.Equals(paletteUrl, coverUrl, StringComparison.Ordinal))
+            coverArt = Surfaces.SchemeFor(paletteUrl);
+        var coverChrome = Surfaces.ChromeSchemeFor(paletteUrl);
+        _ = SpotifyLive.CoverColorPlane.Current.Watch(paletteUrl).Value;
         bool thisPlaying = cur is not null && trackIds.Contains(cur.Id);
         // The page tints from its OWN cover; while this page is playing, a page with no grading of its own (Liked, a
         // show) falls back to the now-playing track's cover — so it degrades to "no tint", never to a wrong colour.
+        if (thisPlaying) _ = SpotifyLive.CoverColorPlane.Current.Watch(cur?.Image?.Url).Value;
         var livePal = thisPlaying ? Surfaces.SchemeFor(cur?.Image?.Url) : null;
+        var liveChrome = thisPlaying ? Surfaces.ChromeSchemeFor(cur?.Image?.Url) : null;
         var art = coverArt ?? livePal;
 
-        // The graded backgroundBase is near-black on most covers, so LIFT the page accent for legibility. The live
-        // track's colours are already tuned for the player chrome (the bar tint reads them raw), so keep THOSE raw —
-        // a currently-playing track on an ungraded page must not suddenly brighten.
-        ColorF accent = coverArt is { } cover ? WaveePalette.Lift(WaveePalette.Accent(cover))
-                      : livePal is { } lp ? WaveePalette.Accent(lp)
-                      : Tok.AccentDefault;
+        // The graded backgroundBase is near-black on most covers, so LIFT the page accent for legibility.
+        // Two treatments from the same artwork, on purpose:
+        //   accentBase — brightness-lifted only. The LIGHT hero wash paints this; the wash's strength is owned by
+        //                Surfaces.HeroWashLightA, not by chroma.
+        //   accent     — the provider's OPPOSITE contrast branch through WaveePalette.ChromeAccent: softer on dark
+        //                heroes, stronger on pale pages. Every accent-FILLED control reads this: the rail Play pill,
+        //                the vertical hero's non-immersive Play, anything reading DetailHandlers.Accent.
+        // Keeping them apart means a saturation change can never be mistaken for a wash-alpha regression.
+        ColorF accentBase;
+        if (coverArt is { } cover)
+            accentBase = WaveePalette.Lift(WaveePalette.Accent(cover));
+        else if (livePal is { } lp)
+        {
+            // Keep the live track's raw role for the low-alpha WASH, matching the player tint. Accent-FILLED controls
+            // still need the page-wide ChromeAccent contract: the wire's background role may be dark, and a dark Play
+            // capsule reads disabled even though it carries the right hue.
+            accentBase = WaveePalette.Accent(lp);
+        }
+        else accentBase = Tok.AccentDefault;
+        var chrome = coverChrome ?? liveChrome;
+        ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp) : Tok.AccentDefault;
         // The hero wash. Dark: the art's dark background tone (or the neutral #1C1C1C). Light: a soft ACCENT band instead
-        // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge. HeroWash paints WinUI-parity
-        // solid alphas (dark ≈0.235 / light ≈0.149).
+        // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge. The light branch reads the
+        // NON-vivid accentBase on purpose (see above): the wash is an alpha decision, not a chroma one.
         ColorF washColor = Tok.Theme == ThemeKind.Light
-            ? accent
+            ? accentBase
             : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
         // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
         // when there is no real palette ⇒ plain Mica.
@@ -205,13 +262,13 @@ sealed class DetailShell : Component
         {
             // Queueing is remote-only (local playback is unsupported). No active device ⇒ prompt to choose one (the toast
             // opens the player-bar device picker) instead of the old silent no-op.
-            if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
+            if (bridge is null || string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge?.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
             if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void PlayNext()
         {
-            if (string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge.NotifyLocalPlaybackUnsupported(); return; }
+            if (bridge is null || string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge?.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
             if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
@@ -423,6 +480,11 @@ sealed class DetailShell : Component
         // jumps/flickers on a nav and resizes smoothly. The rail's scrollbar stays the last resort.
         bool resizableRail = mode == 0 && (kind == DetailKind.Album || kind == DetailKind.Playlist);
         Signal<float> railWidthSignal = kind == DetailKind.Playlist ? _playlistRailW : _albumRailW;
+        Signal<bool> railCollapsedSignal = kind == DetailKind.Playlist ? _playlistRailCollapsed : _albumRailCollapsed;
+        // Read the collapse preference UNCONDITIONALLY (a stable subscription) but honour it only where the grip that can
+        // undo it exists — mode 0. The responsive mid/narrow modes keep composing their breakpoint rail (224/188), exactly
+        // as they already ignore the persisted widths, and the collapsed preference returns when the page is wide again.
+        bool railCollapsed = railCollapsedSignal.Value && resizableRail;
         float railW = mode == 0 && resizableRail ? railWidthSignal.Value : RailW(mode, _cfg);
         float winH = viewportSig.Value.Height;   // subscribe (only here) → re-fit smoothly on resize (stable per page → no nav jump)
         float titleSize = Math.Clamp(24f + (winH - 620f) * 0.05f, 24f, 38f);   // 620px window → 24px … 900px → 38px
@@ -438,13 +500,8 @@ sealed class DetailShell : Component
             // mid-glyph ("Plays"→"Pl") instead of the table reflowing to a tighter tier. `right` already shrinks (below);
             // the fix is to let its PARENT shrink so the reduced width actually reaches it.
             Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, MaxWidth = 1600f,
-            Children = resizableRail
-                ? [
-                    DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model),
-                    DetailRailGrip(railWidthSignal, kind, settings),
-                    right,
-                  ]
-                : [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model), right],
+            Children = RowChildren(m, handlers, railW, titleSize, descLines, right,
+                resizableRail, railCollapsed, railWidthSignal, railCollapsedSignal, kind, settings),
         };
         var twoColumnPage = new BoxEl
         {
@@ -473,20 +530,69 @@ sealed class DetailShell : Component
         };
     }
 
-    // Same persisted splitter implementation as LibraryPage's artist columns. It owns a 7-DIP hit strip around a
-    // persistent 1px seam; width writes are direct during drag and committed to settings only on release.
-    static Element DetailRailGrip(Signal<float> width, DetailKind kind, IAppSettings? settings) => new BoxEl
+    // The two-column row's children. Collapsed keeps a compact identity strip — `[compact, grip, right]` — so the rail
+    // never vanishes (WP-κ). `right` keeps its Key so the track list reconciles in place across the collapse rather than
+    // remounting (a remount would reset the scroll offset and the hero morph on every collapse).
+    Element[] RowChildren(DetailModel m, DetailHandlers handlers, float railW, float titleSize, int descLines,
+        Element right, bool resizableRail, bool railCollapsed,
+        Signal<float> railWidthSignal, Signal<bool> railCollapsedSignal, DetailKind kind, IAppSettings? settings)
     {
-        Width = 7f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
+        if (railCollapsed)
+        {
+            void ExpandRail()
+            {
+                railCollapsedSignal.Value = false;
+                _railFade.Value = 1f;
+                bool pl = kind == DetailKind.Playlist;
+                settings?.Set(pl ? WaveeSettings.DetailPlaylistRailCollapsed : WaveeSettings.DetailAlbumRailCollapsed, false);
+            }
+            return
+            [
+                DetailRail.BuildCompact(m, RailCompactW, ExpandRail),
+                DetailRailGrip(railWidthSignal, railCollapsedSignal, kind, settings, collapsedNow: true),
+                right,
+            ];
+        }
+
+        // The fade wrapper is present in EVERY non-collapsed mode (0/1/2), not just the resizable one, so crossing a
+        // breakpoint never changes the row's child SHAPE at index 0 — the rail subtree reconciles in place instead of
+        // being rebuilt against a wrapper. Direction=0 + AlignItems=Stretch reproduces exactly what the row itself gave
+        // the rail when it was a direct child (a stretched, full-height cross-axis item at its own fixed Width): the
+        // rail's inner ScrollView needs that definite height, and DetailRail.Build returns an `Element`, which carries no
+        // Grow to re-declare from here.
+        Element railFaded = new BoxEl
+        {
+            Key = "detail-rail-fade",
+            Direction = 0, AlignItems = FlexAlign.Stretch, Width = railW, Shrink = 0f,
+            // PAINT-BOUND (WaveeShell's sidebar-fade pattern): the resist-zone cue rides the compositor's opacity
+            // channel, so a drag toward the detent never re-renders the rail subtree.
+            Opacity = Prop.Of(() => _railFade.Value),
+            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model)],
+        };
+        return resizableRail
+            ? [railFaded, DetailRailGrip(railWidthSignal, railCollapsedSignal, kind, settings, collapsedNow: false), right]
+            : [railFaded, right];
+    }
+
+    // Same persisted splitter implementation as LibraryPage's artist columns, with the collapse detent ARMED (WP-η): it
+    // owns a 7-DIP hit strip (12 while collapsed) around a persistent 1px seam; width writes are direct during drag and
+    // committed to settings only on release.
+    Element DetailRailGrip(Signal<float> width, Signal<bool> collapsed, DetailKind kind, IAppSettings? settings,
+        bool collapsedNow) => new BoxEl
+    {
+        Key = "detail-rail-grip-strip",
+        Width = collapsedNow ? GripStripCollapsedW : GripStripW,
+        Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
         Children =
         [
-            Embed.Comp(() => new ColumnGrip(width, 220f, 480f, () =>
+            Embed.Comp(() => new ColumnGrip(width, RailMinW, RailMaxW, () =>
                 {
-                    var key = kind == DetailKind.Playlist
-                        ? WaveeSettings.DetailPlaylistRailWidth
-                        : WaveeSettings.DetailAlbumRailWidth;
-                    settings?.Set(key, width.Peek());
-                }))
+                    // ONE commit edge for the whole gesture: the width AND the collapse decision the same drag produced.
+                    bool pl = kind == DetailKind.Playlist;
+                    settings?.Set(pl ? WaveeSettings.DetailPlaylistRailWidth : WaveeSettings.DetailAlbumRailWidth, width.Peek());
+                    settings?.Set(pl ? WaveeSettings.DetailPlaylistRailCollapsed : WaveeSettings.DetailAlbumRailCollapsed, collapsed.Peek());
+                },
+                collapsed: collapsed, fade: _railFade, forcePush: RailForcePush, reExpand: RailReExpand))
                 // DetailShell is reused album↔playlist. Component ctor arguments are mount-stable, so key by width family
                 // to remount the grip with the correct signal + persistence key on a cross-kind route.
                 with { Key = "detail-rail-grip:" + kind },
@@ -507,6 +613,16 @@ sealed class DetailShell : Component
         public bool ReadyLatched;
         public Image? Shown;
         public Image? LastRaw;
+    }
+
+    static string? FirstGradeableTrackCover(IReadOnlyList<Track> tracks)
+    {
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            string? url = tracks[i].Image?.Url;
+            if (SpotifyLive.CoverColorPlane.CanGrade(url)) return url;
+        }
+        return null;
     }
 
     Image? ResolveStableCover(Ref<CoverLatch> latchRef, string routeKey, Image? rawCover, bool modelReady)

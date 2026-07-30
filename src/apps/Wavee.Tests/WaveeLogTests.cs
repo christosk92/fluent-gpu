@@ -190,7 +190,7 @@ public class WaveeLogTests
             log.Info("app", "two");
             log.FlushForTests();
             // Still only ONE warning (first-failure-only), no recovery yet (path still bad).
-            Assert.Single(log.Snapshot().Where(e => e.Category == "log" && e.Level == WaveeLogLevel.Warning));
+            Assert.Single(log.Snapshot(), e => e.Category == "log" && e.Level == WaveeLogLevel.Warning);
 
             string good = Path.Combine(dir, "wavee.log");
             log.Configure(good, minLevel: WaveeLogLevel.Info, fileMinLevel: WaveeLogLevel.Info);

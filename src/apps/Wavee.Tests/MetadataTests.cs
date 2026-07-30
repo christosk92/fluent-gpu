@@ -112,13 +112,27 @@ public class MetadataServiceTests
         public int Calls { get; private set; }
         public int TotalEntities { get; private set; }
         readonly Action<EntityRef, IStore>? _project;
-        public FakeBatchSource(Action<EntityRef, IStore>? project = null) => _project = project;
-        public Task FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+        readonly Func<EntityRef, bool>? _projectFilter;
+        public FakeBatchSource(Action<EntityRef, IStore>? project = null, Func<EntityRef, bool>? projectFilter = null)
+        {
+            _project = project;
+            _projectFilter = projectFilter;
+        }
+        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
         {
             Calls++;
             TotalEntities += entities.Count;
-            if (_project is not null) foreach (var e in entities) _project(e, store);
-            return Task.CompletedTask;
+            var landed = new List<string>(entities.Count);
+            if (_project is not null)
+            {
+                foreach (var e in entities)
+                {
+                    if (_projectFilter is not null && !_projectFilter(e)) continue;
+                    _project(e, store);
+                    landed.Add(e.Uri);
+                }
+            }
+            return Task.FromResult<IReadOnlyCollection<string>>(landed);
         }
     }
 
@@ -186,6 +200,42 @@ public class MetadataServiceTests
         Assert.NotNull(store.GetTrack("spotify:track:t1"));
         Assert.True(svc.Use("spotify:track:t1").IsReady);
         Assert.Equal(1, src.Calls);   // fresh (1h TTL) → no refetch
+    }
+
+    [Fact]
+    public async Task SyncAll_SealsOnlyProjectedUris_OmittedStayUnsealed()
+    {
+        var store = new InMemoryStore();
+        // Projects a + c, omits b — b must remain a miss so the next SyncAll re-requests it.
+        var src = new FakeBatchSource(
+            (e, st) => st.UpsertTrack(Trk(e)),
+            e => e.Uri is "spotify:track:a" or "spotify:track:c");
+        var svc = new MetadataService(src, store, () => Ctx);
+
+        await svc.SyncAllAsync(["spotify:track:a", "spotify:track:b", "spotify:track:c"],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(1, src.Calls);
+        Assert.Equal(3, src.TotalEntities);
+
+        await svc.SyncAllAsync(["spotify:track:a", "spotify:track:b", "spotify:track:c"],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(2, src.Calls);
+        Assert.Equal(4, src.TotalEntities);   // only b re-requested
+        Assert.Null(store.GetTrack("spotify:track:b"));
+    }
+
+    [Fact]
+    public async Task MarkStale_ForcesRefetchOnNextSync()
+    {
+        var store = new InMemoryStore();
+        var src = new FakeBatchSource((e, st) => st.UpsertTrack(Trk(e)));
+        var svc = new MetadataService(src, store, () => Ctx);
+        await svc.SyncAllAsync(["spotify:track:a"], TestContext.Current.CancellationToken);
+        Assert.Equal(1, src.Calls);
+
+        svc.MarkStale("spotify:track:a");
+        await svc.SyncAllAsync(["spotify:track:a"], TestContext.Current.CancellationToken);
+        Assert.Equal(2, src.Calls);
     }
 }
 

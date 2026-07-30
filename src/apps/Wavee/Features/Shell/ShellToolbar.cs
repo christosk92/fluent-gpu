@@ -87,17 +87,17 @@ sealed class ShellToolbar : Component
             kids.Add(HomeButton(nav, onHome));
         }
 
-            // ── centre: omnibar (left-aligned right after Home, like WaveeMusic — not centred) ──
+            // ── centre: omnibar, CENTRED in the free space (the stock NavigationView search placement) ──
         kids.Add(new BoxEl
             {
                 // Right margin keeps a clear gap between the omnibar and the account cluster — without it the search box's
                 // trailing icon butts right up against the profile avatar at narrower widths (reads as overlap).
-                Grow = 1f, Basis = 0f, Shrink = 1f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
+                Grow = 1f, Basis = 0f, Shrink = 1f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 ClipToBounds = true,
                 Padding = new Edges4(8f, 0f, 8f, 0f), Margin = new Edges4(0f, 0f, Spacing.L, 0f),
                 Children =
                 [
-                    // Fills the omnibar slot, capped at 720 (shrinks below that on a narrow window). Live as-you-type
+                    // Fills the omnibar slot, capped at 480 (shrinks below that on a narrow window). Live as-you-type
                     // suggestions come from the Omnibar component (online searchSuggestions).
                     Embed.Comp(() => new FluentRichOmnibar(_searchText, _go)),
                 ],
@@ -120,13 +120,40 @@ sealed class ShellToolbar : Component
         if (overflow.Count > 0 || overflowBell)
             kids.Add(Embed.Comp(() => new OverflowMenu(this, layout, ui)));
 
+        var row = new BoxEl
+        {
+            // MUX tabbed-window chrome: this row IS the app-body PLATE (LayerOnMicaBaseAlt) — the same material as the
+            // nav pane, the player dock and the content-pane backing, so the whole body reads as one continuous plate.
+            // The UNPAINTED row is the one ABOVE this: the TAB RAIL in the title bar, where bare Mica Alt shows.
+            // BOUND so the host's live re-theme (RethemeAll) re-fires it and follows a palette swap.
+            Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = 4f,
+            Padding = new Edges4(6f, 0f, 6f, 0f), Fill = Prop.Of(() => WaveeColors.Toolbar),
+            Children = kids.ToArray(),
+        };
         return new BoxEl
         {
-            // The WaveeMusic AddressBar chrome material (App.Theme.AddressBar.BackgroundBrush = LayerOnMicaBaseAlt,
-            // App.xaml:41) — the SAME material as the sidebar and the selected tab, so the top chrome reads as one shell.
-            Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(6f, 0f, 6f, 0f), Fill = WaveeColors.Toolbar,
-            Children = kids.ToArray(),
+            ZStack = true,
+            Height = 48f,
+            Children =
+            [
+                row,
+                // The commanding plate/content handoff needs the same quiet alpha seam as the player dock and tab rail.
+                // Keeping it as an overlay preserves the toolbar's full 48-DIP content lane.
+                new BoxEl
+                {
+                    Direction = 1, Justify = FlexJustify.End, HitTestVisible = false,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Height = 1f,
+                            Fill = Prop.Of(() => Theme.Dark
+                                ? Tok.StrokeDividerDefault
+                                : ColorF.FromRgba(0, 0, 0, 0x0F)),
+                        },
+                    ],
+                },
+            ],
         };
     }
 
@@ -343,10 +370,10 @@ sealed class Omnibar : Component
         UseEffect(() => StartFetch(svc, post, text), text);
 
         return AutoSuggestBox.Create(System.Array.Empty<string>(), Loc.Get(Strings.Shell.SearchPlaceholder),
-            grow: 1f, maxFillWidth: 720f, text: _text, suggestionsSignal: _sugg, loadingSignal: _loading,
+            grow: 1f, maxFillWidth: 480f, text: _text, suggestionsSignal: _sugg, loadingSignal: _loading,
             onQuerySubmitted: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
             onSuggestionChosen: q => _go("search", string.IsNullOrWhiteSpace(q) ? null : q),
-            minHeight: 36f, cornerRadius: 18f, boldMatch: true, itemGlyph: Icons.Search);
+            minHeight: 32f, cornerRadius: 0f, boldMatch: true, itemGlyph: Icons.Search);
     }
 
     void StartFetch(Services? svc, Action<Action> post, string q)
@@ -440,10 +467,12 @@ sealed class FluentRichOmnibar : Component
             SubmitSelection: () => InvokeSelection(_highlight.Peek()),
             ResetSelection: () => _highlight.Value = -1);
 
+        // Stock AutoSuggestBox metrics: a 32-DIP field at ControlCornerRadius (cornerRadius 0 resolves to Radii.Control
+        // inside the box) with the control-default chrome — no pill, no elevation ring. 480 is the stock search cap.
         return AutoSuggestBox.Create(Array.Empty<string>(), Loc.Get(Strings.Shell.SearchPlaceholder),
-            grow: 1f, maxFillWidth: 720f, text: _text, onQuerySubmitted: Submit,
-            minHeight: 38f, cornerRadius: 19f, presenter: presenter,
-            chrome: AutoSuggestBoxChrome.ElevatedPill);
+            grow: 1f, maxFillWidth: 480f, text: _text, onQuerySubmitted: Submit,
+            minHeight: 32f, cornerRadius: 0f, presenter: presenter,
+            chrome: AutoSuggestBoxChrome.Standard);
     }
 
     void StartFetch(Services? svc, Action<Action> post, string q)
@@ -518,8 +547,8 @@ sealed class RichOmnibar : Component
 
         const float fieldHeight = 36f;
         const float iconCol = AutoSuggestBox.QueryButtonWidth + AutoSuggestBox.QueryButtonLeftMargin + AutoSuggestBox.RightButtonMargin;
-        float width = _fieldWidth.Value > 0f ? _fieldWidth.Value : 720f;
-        var innerWidth = UseComputed(() => MathF.Max(16f, (_fieldWidth.Value > 0f ? _fieldWidth.Value : 720f) - iconCol));
+        float width = _fieldWidth.Value > 0f ? _fieldWidth.Value : 480f;
+        var innerWidth = UseComputed(() => MathF.Max(16f, (_fieldWidth.Value > 0f ? _fieldWidth.Value : 480f) - iconCol));
         var editor = Embed.Comp(() => new EditableText
         {
             Text = _text,
@@ -554,7 +583,7 @@ sealed class RichOmnibar : Component
             Width = float.NaN,
             Grow = 1f,
             Shrink = 1f,
-            MaxWidth = 720f,
+            MaxWidth = 480f,
             Height = fieldHeight,
             MinHeight = fieldHeight,
             MaxHeight = fieldHeight,

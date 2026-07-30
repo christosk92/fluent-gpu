@@ -148,9 +148,20 @@ public interface IExtensionCacheStore
 {
     string? MetadataLocale { get; }
 
-    /// <summary>Newest-first extension rows, capped at <paramref name="limit"/>. The seed loop only keeps its own
-    /// <c>maxEntries</c> (2048) rows, so reading the whole table was pure I/O waste — the cap belongs in the SQL.
-    /// <c>limit &lt;= 0</c> = no cap.</summary>
+    /// <summary>POINT-READ the persisted rows for a screenful of uris at one extension kind. This is the ONLY read the
+    /// live path uses: it rides the (entity_uri, locale, extension_kind) primary key, so it is O(log n) per uri and its
+    /// cost is the working set, never the table. Rows are returned in no particular order and missing keys are simply
+    /// absent. An EXPIRED row is still returned — its ETag is what turns the follow-up fetch into a 304.</summary>
+    IReadOnlyList<ColdExtension> LoadExtensions(IReadOnlyCollection<string> uris, int extensionKind);
+
+    /// <summary>Stamp last_access (v7 LRU) for rows that were just SERVED from disk, at day granularity. The read path
+    /// never writes — the caller batches and calls this — and a row already stamped today is a no-op.</summary>
+    void TouchExtensions(IReadOnlyCollection<string> uris, int extensionKind, long day) { }
+
+    /// <summary>Newest-first extension rows, capped at <paramref name="limit"/>. <c>limit &lt;= 0</c> = no cap.
+    /// NOT on the live path — `WHERE locale=? ORDER BY updated_at DESC` has no index to serve it, so it is a full SCAN
+    /// plus a TEMP B-TREE sort over every row (34 MB read to keep 636 KB, measured). Bulk-seeding a bounded LRU from it
+    /// was the go-live stall; <see cref="LoadExtensions"/> replaced it. Retained for tests and offline tooling only.</summary>
     IEnumerable<ColdExtension> LoadAllExtensions(int limit = 2048);
     void UpsertExtension(ColdExtension extension);
 }

@@ -30,6 +30,28 @@ public static class FluentApp
     /// </summary>
     public static nint WindowHandle { get; private set; }
 
+    // The LIVE window-material state, seeded from AppOptions at Run and re-writable through SetWindowMaterialAlt. It is
+    // held here rather than read off the captured options record because DwmSetWindowAttribute is re-callable: both the
+    // startup apply and the host's re-theme hook must see the CURRENT variant, or a live change would be reverted by the
+    // next theme flip.
+    private static bool s_mica, s_customFrame, s_micaAlt;
+
+    /// <summary>True when the window is using Mica <b>BaseAlt</b> (the flatter File-Explorer tint) rather than base Mica.
+    /// Seeded from <see cref="AppOptions.MicaAlt"/>; changed by <see cref="SetWindowMaterialAlt"/>.</summary>
+    public static bool WindowMaterialAlt => s_micaAlt;
+
+    /// <summary>Switch the LIVE window between Mica BaseAlt (<paramref name="micaAlt"/> true) and base Mica — the
+    /// re-callable half of the startup <c>ApplyWindowMaterial</c>, for an app that exposes the material as a user setting.
+    /// The new variant sticks: it also becomes what the host's re-theme hook re-applies on a dark/light flip. UI-thread
+    /// only; before the window exists this just records the value (the next <see cref="Run(Func{Component}, AppOptions?)"/>
+    /// seeds from <see cref="AppOptions.MicaAlt"/>). No-op when the window is not Mica-backed.</summary>
+    public static void SetWindowMaterialAlt(bool micaAlt)
+    {
+        s_micaAlt = micaAlt;
+        if (WindowHandle != 0 && s_mica)
+            Win32Theme.ApplyWindowMaterial(WindowHandle, Theme.Dark, s_mica, s_customFrame, micaAlt);
+    }
+
     /// <summary>
     /// Relay of the host's single-instance activation-redirect event (a second app launch's deep-link payload forwarded
     /// to this running instance). Forwarded from <c>AppHost.ActivationRedirected</c> while a run is active and delivered
@@ -124,12 +146,14 @@ public static class FluentApp
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
+        // Seed the live material state (see SetWindowMaterialAlt) — every later apply reads these, not the options record.
+        s_mica = o.Mica; s_customFrame = o.CustomFrame; s_micaAlt = o.MicaAlt;
 
         // Prefer the exact OS ramp (theme-aware accent fills); fall back to the base accent (Tok.SetAccent derives a ramp).
         if (Win32Theme.ReadAccentRamp() is { } ramp) Tok.SetAccent(in ramp);
         else if (Win32Theme.AccentLight2() is { } a) Theme.Accent = ColorF.FromRgba(a.R, a.G, a.B);
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
-        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, o.Mica, o.CustomFrame, o.MicaAlt);
+        Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_mica, s_customFrame, s_micaAlt);
         if (o.Mica) Theme.WindowBackground = ColorF.Transparent;
 
         // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
@@ -166,8 +190,9 @@ public static class FluentApp
 
         // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;
-        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above.
-        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, o.Mica, o.CustomFrame, o.MicaAlt);
+        // the in-app content cross-fades). Mirrors the one-shot startup ApplyWindowMaterial above. Reads the LIVE material
+        // statics so a SetWindowMaterialAlt change survives every subsequent theme flip.
+        host.OnApplyThemeMaterial = dark => Win32Theme.ApplyWindowMaterial(window.Handle.Value, dark, s_mica, s_customFrame, s_micaAlt);
         // Relay the host's UI-thread OS color-settings-change to the app-layer static event (the app subscribes to follow
         // the OS dark-mode/accent live while its theme mode is "System").
         Action forwardSystemColors = () => SystemColorsChanged?.Invoke();

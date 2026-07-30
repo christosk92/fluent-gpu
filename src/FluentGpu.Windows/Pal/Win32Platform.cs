@@ -21,6 +21,10 @@ public sealed unsafe partial class Win32App : IPlatformApp
     // lines/chars per notch" preference. WHEEL_PAGESCROLL (UINT_MAX) means "one screen at a time" (page mode).
     private const uint SpiGetWheelScrollLines = 0x0068, SpiGetWheelScrollChars = 0x006C;
     private const uint WHEEL_PAGESCROLL = 0xFFFFFFFF;
+    // SPI_GETCLIENTAREAANIMATION = 0x1042 (WinUser.h) — the OS "Show animations in Windows" accessibility preference
+    // (Settings ▸ Accessibility ▸ Visual effects ▸ Animation effects). pvParam is a BOOL: TRUE = animations ENABLED, so
+    // the engine's Dsl.Motion.ReducedMotion is its INVERSE. This is the exact source WinUI reads for the same purpose.
+    private const uint SpiGetClientAreaAnimation = 0x1042;
 
     [LibraryImport("user32.dll", EntryPoint = "SystemParametersInfoW")]
     [return: global::System.Runtime.InteropServices.MarshalAs(global::System.Runtime.InteropServices.UnmanagedType.Bool)]
@@ -54,6 +58,21 @@ public sealed unsafe partial class Win32App : IPlatformApp
         SystemParams.QpcFrequency = System.Diagnostics.Stopwatch.Frequency;
 
         ReadWheelScrollParams();
+        ReadReducedMotion();
+    }
+
+    /// <summary>Publish the OS animation preference into <see cref="FluentGpu.Dsl.Motion.ReducedMotion"/> — the engine's
+    /// reduced-motion VALUE (never a branch in an authoring path: the motion helpers and the scroll/pager glides read it at
+    /// seed time and write the destination directly instead of easing to it). Its doc has always said "host-set from
+    /// SPI_GETCLIENTAREAANIMATION"; this is that host. Called once at startup AND from every window's WM_SETTINGCHANGE (the
+    /// broadcast names no area for this preference, so the refresh is unconditional, like the wheel-lines pair) so toggling
+    /// "Animation effects" takes effect live. A plain bool write on the UI thread: the OS dispatches WM_SETTINGCHANGE on the
+    /// window's own thread, and the ctor runs on the thread that creates the app.</summary>
+    internal static void ReadReducedMotion()
+    {
+        int animationsEnabled = 1;   // fail-open: an SPI failure must not silently disable every transition
+        if (SystemParametersInfoW(SpiGetClientAreaAnimation, 0, &animationsEnabled, 0))
+            FluentGpu.Dsl.Motion.ReducedMotion = animationsEnabled == 0;
     }
 
     /// <summary>Read SPI_GETWHEELSCROLLLINES/CHARS into <see cref="SystemParams"/> (scroll-feel-rework-v2 §3.2). Called
@@ -485,7 +504,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private void TraceWheelSwallow(int notch, int reason, bool horizontal, bool thisHiRes, bool streamIdle, bool ptTouchpad,
                                    uint wheelGapMs, bool phasePath = false)
     {
-        if (!FluentGpu.Foundation.ScrollTrace.On) return;
+        if (!FluentGpu.Foundation.ScrollTrace.CompiledIn || !FluentGpu.Foundation.ScrollTrace.Enabled) return;
         FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
             WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: phasePath, fbActiveBefore: _fbActive)
                 | WheelTraceSwallowed | reason,
@@ -1073,7 +1092,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         if (!_fbActive || Environment.TickCount64 - _fbLastTick < _hiResLiftMs) return;
         _fbActive = false;
         KillTimer(_hwnd, LiftTimerId);
-        if (FluentGpu.Foundation.ScrollTrace.On)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.FbLift(Environment.TickCount64 - _fbLastTick, _fbLastQpc);
         if (FluentGpu.Foundation.ScrollLog.On) FluentGpu.Foundation.ScrollLog.Line($"FB END   silence>{_hiResLiftMs}ms (lift={_fbLastMs})");
         _queue.Enqueue(new InputEvent(InputKind.ScrollEnd, _fbLastPos, 0, 0, 0f, Mods(),
@@ -1324,6 +1343,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 // lines" change takes effect immediately — the broadcast carries no specific area for it, so refresh
                 // unconditionally (a cheap pair of SPI reads).
                 Win32App.ReadWheelScrollParams();
+                // …and the reduced-motion accessibility preference (SPI_GETCLIENTAREAANIMATION), for the same reason: the
+                // broadcast carries no area name for it, so refresh unconditionally (one cheap SPI read).
+                Win32App.ReadReducedMotion();
                 return false;
             case WM_ENTERSIZEMOVE:
                 // Entered the OS modal move/size loop. Arm a ~120 Hz timer so frames keep flowing (animations, caret,
@@ -1569,7 +1591,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     // Ctrl+hi-res wheel is the OS's legacy PINCH synthesis — consume it, never scroll (design §5/§11).
                     if ((Mods() & KeyModifiers.Ctrl) != 0)
                     {
-                        if (FluentGpu.Foundation.ScrollTrace.On)
+                        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                             FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
                                 WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: true, phasePath: true, fbActiveBefore: _fbActive),
                                 _fbSeq, 0f, wheelGapMs, 0);
@@ -1591,7 +1613,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     else if (streamIdle) { _gapCount = 0; _gapHead = 0; }
                     _hiResLiftMs = AdaptiveLiftMs();
                     InputKind kind = _fbActive ? InputKind.ScrollUpdate : InputKind.ScrollBegin;
-                    if (FluentGpu.Foundation.ScrollTrace.On)
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                         FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
                             WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: true, fbActiveBefore: _fbActive),
                             unchecked((byte)(_fbSeq + 1)), horizontal ? tpDipX : tpDipY, wheelGapMs, qpc);
@@ -1629,7 +1651,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 float dipX =  wholeH * WheelDipPerNotch;
                 PointerKind wheelKind = _wheelHiRes ? PointerKind.Touchpad : PointerKind.Mouse;
                 long notchQpc = WheelStampQpc(wheelPid);
-                if (FluentGpu.Foundation.ScrollTrace.On)
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                     FluentGpu.Foundation.ScrollTrace.RawWheel(notch,
                         WheelTraceFlags(horizontal, thisHiRes, streamIdle, ptTouchpad, ctrl: false, phasePath: false, fbActiveBefore: _fbActive),
                         0, horizontal ? dipX : dipY, wheelGapMs, notchQpc);

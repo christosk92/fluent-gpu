@@ -188,6 +188,15 @@ public static class SceneRecorder
     // large only costs fill), so pad generously — the win is full-canvas → group box; a handful of px back is free.
     private const float OpacityGroupExtentPadDip = 8f;
 
+    // Halo/shadow slack (device space) a hover-elevate HOIST may bleed past its clip root's own box. A hoisted subtree
+    // escapes the root's clip by design — that IS the mechanism — but escape is not licence: the root's INCOMING clip is
+    // routinely the whole canvas, so an unbounded re-walk lets a hovered descendant paint arbitrarily far outside the
+    // surface that owns it (a chart row over a neighbouring column). CONSTRAINT: a hoisted subtree may not bleed further
+    // than the lift + halo class the mechanism exists for — PagedShelf's HaloBleed 12 + ShadowClearance 12, plus AA/ink
+    // slop — so this bounds every clip root to its own box inflated by that. Deliberately conservative rather than
+    // exact: too small shaves a real halo, too large only costs fill, and either way the escape stays BOUNDED.
+    private const float HoverElevateHoistSlackDip = 32f;
+
     private struct SpanRecordResult
     {
         public bool HasBounds;
@@ -867,9 +876,19 @@ public static class SceneRecorder
             float efsy = b.H > 0.01f ? deviceBounds.H / b.H : 1f;
             var efc = new CornerRadius4(p.Corners.TopLeft * efsx, p.Corners.TopRight * efsx, p.Corners.BottomRight * efsx, p.Corners.BottomLeft * efsx);
             RectF edgeCompositeClip = deviceBounds.Intersect(clip);
+            // Feather from the VISIBLE boundary, not the element box. The bands are measured off the FADE RECT, so a
+            // viewport-anchored ClipRect (ScrollBindDsl.ClipTopAtViewport — a sticky cut that walks up the node while
+            // the page scrolls) IS the edge the content dissolves at: anchoring the ramp at the element box instead put
+            // the band off-screen above the cut (the clip scissored the whole ramp away while engaged) AND feathered the
+            // node's own top at rest. Un-clipped nodes keep deviceBounds, so every other EdgeFade site is byte-identical.
+            RectF fadeRect = deviceBounds;
             if (!p.ClipRect.IsInfinite)
-                edgeCompositeClip = edgeCompositeClip.Intersect(world.TransformBounds(p.ClipRect));
-            dl.PushEdgeFadeLayer(deviceBounds, edgeCompositeClip, efc, opacity, (int)edgeFade.Edges,
+            {
+                RectF wc = world.TransformBounds(p.ClipRect);
+                edgeCompositeClip = edgeCompositeClip.Intersect(wc);
+                fadeRect = deviceBounds.Intersect(wc);
+            }
+            dl.PushEdgeFadeLayer(fadeRect, edgeCompositeClip, efc, opacity, (int)edgeFade.Edges,
                 (edgeFade.Edges & EdgeMask.Left) != 0 ? edgeFade.BandLeft * efsx : 0f,
                 (edgeFade.Edges & EdgeMask.Top) != 0 ? edgeFade.BandTop * efsy : 0f,
                 (edgeFade.Edges & EdgeMask.Right) != 0 ? edgeFade.BandRight * efsx : 0f,
@@ -1308,7 +1327,8 @@ public static class SceneRecorder
         // (see the deferral below and the consume after this node's scope closes) instead of emitting in place.
         if ((interaction.HandlerMask & InteractionInfo.HoverElevateClipRootBit) != 0)
             childState = childState.WithUnderElevateRoot();
-        bool hasItemBand = scene.TryGetVirtualItemBand(node, out int itemBandPrefix, out float itemBandTopInset);
+        bool hasItemBand = scene.TryGetVirtualItemBand(
+            node, out int itemBandPrefix, out float itemBandTopInset, out float itemBandTopFade);
         RectF itemBandClip = childClip;
         bool itemBandClipChanged = false;
         if (hasItemBand)
@@ -1352,6 +1372,7 @@ public static class SceneRecorder
             float deferElevateT = 0f;
             int childOrdinal = 0;
             bool itemBandPushed = false;
+            bool itemBandFadePushed = false;
             for (var c = scene.FirstChild(node); !c.IsNull; c = scene.NextSibling(c))
             {
                 if (hasItemBand && !itemBandPushed && childOrdinal >= itemBandPrefix)
@@ -1370,6 +1391,20 @@ public static class SceneRecorder
                     }
                     if (itemBandClipChanged && !itemBandClip.IsEmpty) dl.PushClip(itemBandClip, key);
                     itemBandPushed = itemBandClipChanged && !itemBandClip.IsEmpty;
+                    if (!itemBandClip.IsEmpty && itemBandTopFade > 0.5f)
+                    {
+                        // One offscreen group feathers the contiguous recyclable suffix. The prefix is emitted outside
+                        // this scope (and a pinned prefix is replayed after it), so sticky chrome stays crisp while rows
+                        // dissolve at the exact hard paint/input boundary. Group alpha remains 1: child opacity is already
+                        // carried by each Walk, and multiplying it again here would double-dim a translucent list.
+                        float bandPx = itemBandTopFade * MathF.Abs(parentScaleY);
+                        ulong bandLayerId = layerId ^ 0x4954454D42414E44UL; // "ITEMBAND"
+                        dl.PushEdgeFadeLayer(itemBandClip, itemBandClip, default, 1f, (int)EdgeMask.Top,
+                            0f, bandPx, 0f, 0f, (int)FadeFalloff.Smoothstep, 1f,
+                            sortKey: key | 0x0D, layerId: bandLayerId);
+                        stats.EdgeFadeGroupCount++;
+                        itemBandFadePushed = true;
+                    }
                 }
                 RectF activeChildClip = hasItemBand && childOrdinal >= itemBandPrefix ? itemBandClip : childClip;
                 NodeFlags cf = scene.Flags(c);
@@ -1433,6 +1468,7 @@ public static class SceneRecorder
                     result.Include(elevResult);
                 }
             }
+            if (itemBandFadePushed) dl.PopLayer(itemBandClip, key | 0x0D);
             if (itemBandPushed) dl.PopClip(key);
             if (anyPinned)
             {
@@ -1555,12 +1591,22 @@ public static class SceneRecorder
         {
             var hoist = stats.PendingElevate;
             stats.PendingElevate = NodeHandle.Null;
-            var hoistResult = Walk(scene, dl, images, hoist, stats.PendingElevateWorld, stats.PendingElevateOpacity,
-                stats.PendingElevateDepth, clip, in focus, in textEdit, scrollThumb, scrollTrack,
-                stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
-                globalBlurHold, stats.PendingElevateScrollInMotion, stats.PendingElevateState, skipRoots, spans, spanFrame,
-                spanReuseDisabled: true, spanStoreEnabled: false, ref stats);
-            result.Include(hoistResult);
+            // BOUNDED escape: OUR incoming clip INTERSECTED with our own box inflated by the halo slack (see
+            // HoverElevateHoistSlackDip). Passing the bare incoming clip made the escape unbounded — the hoisted card
+            // could paint anywhere the ancestors allow, which for a multi-row strip is the whole page.
+            RectF hoistClip = clip.Intersect(new RectF(
+                deviceBounds.X - HoverElevateHoistSlackDip, deviceBounds.Y - HoverElevateHoistSlackDip,
+                deviceBounds.W + 2f * HoverElevateHoistSlackDip, deviceBounds.H + 2f * HoverElevateHoistSlackDip));
+            // Zero-area intersection ⇒ nothing the hoist could contribute; the pending slot is already released above.
+            if (!hoistClip.IsEmpty)
+            {
+                var hoistResult = Walk(scene, dl, images, hoist, stats.PendingElevateWorld, stats.PendingElevateOpacity,
+                    stats.PendingElevateDepth, hoistClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
+                    globalBlurHold, stats.PendingElevateScrollInMotion, stats.PendingElevateState, skipRoots, spans, spanFrame,
+                    spanReuseDisabled: true, spanStoreEnabled: false, ref stats);
+                result.Include(hoistResult);
+            }
         }
 
         if (spanTracking)
@@ -1698,9 +1744,10 @@ public static class SceneRecorder
 
     private static void MixVirtualItemBand(SceneStore scene, NodeHandle node, ref ulong h)
     {
-        if (!scene.TryGetVirtualItemBand(node, out int prefix, out float inset)) return;
+        if (!scene.TryGetVirtualItemBand(node, out int prefix, out float inset, out float fadeBand)) return;
         Mix(ref h, (uint)prefix);
         MixFloat(ref h, inset);
+        MixFloat(ref h, fadeBand);
     }
 
     private static bool IsDirectMovingScrollContent(SceneStore scene, NodeHandle node, NodeFlags flags)

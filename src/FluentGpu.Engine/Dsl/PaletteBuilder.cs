@@ -2,10 +2,11 @@ using FluentGpu.Foundation;
 
 namespace FluentGpu.Dsl;
 
-/// <summary>Seed for a shadcn-style base palette — hue/chroma of the neutral ramp, light-mode luminance anchors
-/// (interpreted as FLATTENED-over-Mica targets for the translucent shell, see <see cref="PaletteBuilder"/>), and the
-/// per-preset chrome saturations that make presets read distinct (fed to <see cref="ColorRamp.Tinted"/>, which skips
-/// the high-lightness chroma softening that crushes <see cref="ColorRamp.Neutral"/> tints to sub-perceptual).</summary>
+/// <summary>Seed for a shadcn-style base palette — hue/chroma of the neutral ramp, the light-mode luminance anchors for
+/// the OPAQUE light token set (the shell's translucent rungs take fixed lightnesses instead, see
+/// <see cref="PaletteBuilder"/>), and the per-preset chrome saturations that make presets read distinct (fed to
+/// <see cref="ColorRamp.Tinted"/>, which skips the high-lightness chroma softening that crushes
+/// <see cref="ColorRamp.Neutral"/> tints to sub-perceptual).</summary>
 public sealed record PaletteSeed(
     string Id,
     float NeutralHueDeg,
@@ -17,7 +18,11 @@ public sealed record PaletteSeed(
     float LightChromeSat,
     float DarkChromeSat);
 
-/// <summary>Wavee app-shell surfaces derived from a <see cref="PaletteSeed"/> (one light + one dark per preset).</summary>
+/// <summary>Wavee app-shell surfaces derived from a <see cref="PaletteSeed"/> (one light + one dark per preset).
+/// <para><see cref="Toolbar"/>, <see cref="Sidebar"/> and <see cref="PlayerBar"/> are ONE material — the app-body plate
+/// (<c>LayerOnMicaBaseAltFillColorDefault</c>, mirrored from <see cref="TokenSet.LayerOnMicaBaseAlt"/>) — published as
+/// three fields so a preset can still diverge a single band. The TAB RAIL is deliberately not a field: it is UNPAINTED,
+/// i.e. a paint-site omission, so bare Mica Alt reads as the tabbed window's frame.</para></summary>
 public sealed record ShellPalette(
     ColorF Toolbar, ColorF Sidebar, ColorF PlayerBar, ColorF FileArea, ColorF Content, ColorF ContentAlt,
     ColorF RowZebra, ColorF RowHover, ColorF RowHoverZebra, ColorF RowPressed, ColorF RowPressedZebra);
@@ -40,32 +45,50 @@ public static class PaletteBuilder
 
     public static ThemePalette BuildAccentTinted(ColorF accent) => Build(AccentTinted(ColorRamp.HueDegrees(accent)));
 
-    /// <summary>Files / WaveeMusic light file-area brush (<c>App.Theme.FileArea.BackgroundBrush</c> = <c>#C0FCFCFC</c>).</summary>
-    public static readonly ColorF FilesLightFileArea = ColorF.FromRgba(0xFC, 0xFC, 0xFC, 0xC0);
+    /// <summary>The app-body PLATE material — WinUI <c>LayerOnMicaBaseAltFillColorDefault</c>. It backs the toolbar,
+    /// the nav pane, the player dock AND the content-pane chrome; the tab rail band above it stays UNPAINTED so the
+    /// bare Mica Alt shows (MUX <c>TabView_themeresources</c>: <c>TabViewBackground</c> = <c>SubtleFillColorTransparent</c>).
+    /// Dark is the stock <c>#733A3A3A</c> at sat 0 by construction (<c>Tinted(0.227)</c> = <c>#3A3A3A</c>), so the
+    /// neutral seed reproduces MUX exactly and the tinted seeds carry their hue THROUGH the plate.</summary>
+    static ColorF DarkPlate(PaletteSeed seed)
+        => ColorRamp.Tinted(0.227f, seed.NeutralHueDeg, seed.DarkChromeSat, 0x73);
+
+    /// <summary>Light plate. Alpha <c>0xB3</c> is MUX's <c>LayerOnMicaBaseAltFillColorDefault</c> alpha, but the COLOR
+    /// must not be raw <c>#B3FFFFFF</c> for a tinted seed: 70% pure white bleaches the preset hue out of the largest
+    /// surface in the app. The lightness is FIXED at 0.98 (the anchor the content pane already uses) rather than solved
+    /// from a flattened-luminance anchor (the retired bar recipe's <c>tintL = (anchorL − micaL·(1−a)) / a</c>): with the
+    /// plate now the only step off Mica for the whole body, a seed-luminance anchor would sink a cool tint back onto the
+    /// backdrop. 0.98 is as close to stock white as HSL admits while still carrying chroma (at L = 1.0 every saturation
+    /// collapses to white) — which is exactly why the NEUTRAL seed is the literal stock value instead.</summary>
+    static ColorF LightPlate(PaletteSeed seed)
+        => seed.Id == "neutral"
+            ? ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3)   // LayerOnMicaBaseAltFillColorDefault (light), verbatim
+            : ColorRamp.Tinted(0.98f, seed.NeutralHueDeg, seed.LightChromeSat, 0xB3);
 
     static ShellPalette BuildLightShell(PaletteSeed seed)
     {
         if (seed.Id == "neutral")
             return BuildFilesLightShell();
-        // Mica-first light chrome: translucent seed-tinted layers over the DWM backdrop — the light analogue of the
-        // dark #3A3A3A@0x73 stack. The seed's luminance anchors are FLATTENED targets: each tint's lightness is
-        // solved so compositing at its alpha over the reference light Mica lands on the anchor
-        //     tintL = (anchorL − micaL·(1−a)) / a
-        // so the frame < rail < page ladder holds on the reference backdrop and, because every surface shares the
-        // Mica term scaled by (1−a), it compresses proportionally under wallpaper swings but never inverts.
-        const float barA = 0x73 / 255f;    // bars match dark's 45% — real Mica/wallpaper bleed
-        const float pageA = 0x8C / 255f;   // frame + text-hosting page keep 55% — stable contrast floor
-        float micaL = MicaRef.LightDefault.R;
-        float Solve(float anchorL, float a) => Math.Clamp((anchorL - micaL * (1f - a)) / a, 0f, 1f);
-        float h = seed.NeutralHueDeg, s = seed.LightChromeSat;
-        var frame = ColorRamp.Tinted(Solve(seed.LightFrameL, pageA), h, s, 0x8C);
-        var rail = ColorRamp.Tinted(Solve(seed.LightRailL, barA), h, s * 0.9f, 0x73);
-        var dock = ColorRamp.Tinted(Solve(seed.LightRailL + 0.014f, barA), h, s * 0.9f, 0x73);
-        var page = ColorRamp.Tinted(Solve(seed.LightPageL, pageA), h, s * 0.5f, 0x8C);
-        var inset = ColorRamp.Tinted(Solve(seed.LightPageL - 0.036f, pageA), h, s * 0.6f, 0x8C);
+        // MUX tabbed-window light recipe (Notepad / File Explorer). Rung 0 is the TAB RAIL only: that band stays
+        // UNPAINTED so DWM Mica Alt is the frame behind the tabs. Rung 1 is the app-body PLATE — one
+        // LayerOnMicaBaseAltFillColorDefault material published as the three chrome bands (toolbar, nav pane, player
+        // dock) and also painted behind the content pane. Rung 2 is the content pane itself: LayerFillColorDefault
+        // #80FFFFFF at sat 0, now composited ON the plate rather than straight onto Mica.
+        // The preset tint therefore rides BOTH rungs, at a FIXED lightness per rung rather than the retired bars'
+        // flattened-anchor solve: the plate is the whole body's one step off Mica, so it has to hold that step for
+        // EVERY seed, and a seed-luminance anchor cannot — a cool tint spends its chroma on the two heavy luminance
+        // channels and lands the composite back on the backdrop (slate solved to 0.7% off Mica, i.e. no visible layer
+        // at all). 0.98 is as close to stock white as HSL can come while still admitting chroma: at L = 1.0 every
+        // saturation collapses to white, so a stock-lightness light surface is necessarily UNTINTED — which is exactly
+        // the neutral seed's case (LightPlate hands it the verbatim #B3FFFFFF). The price is that light presets
+        // separate by ≤6/255 even summed across both rungs (see the palette.distinct gate); light preset identity
+        // lives in the opaque TokenSet — canvas, cards, strokes, ink — not in the shell.
+        var plate = LightPlate(seed);
+        var layer = ColorRamp.Tinted(0.98f, seed.NeutralHueDeg, seed.LightChromeSat, 0x80);
+        var inset = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80);   // CardBackgroundFillColorSecondary — the inset plate
         // Rows are neutral overlays (mirrors dark's white-alpha rows): the preset tint comes from the translucent
-        // page beneath, so row states are preset-independent by construction.
-        return new(frame, rail, dock, page, page, inset,
+        // pane-on-plate beneath, so row states are preset-independent by construction.
+        return new(plate, plate, plate, layer, layer, inset,
             RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x32),
             RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
             RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
@@ -73,13 +96,16 @@ public static class PaletteBuilder
             RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x16));
     }
 
-    /// <summary>Files-faithful light shell (see <c>C:\WAVEE\Files\src\Files.App\App.xaml</c> Light theme dict).</summary>
+    /// <summary>Stock WinUI neutral light shell, verbatim MUX tabbed-window ladder: an unpainted tab rail over real Mica
+    /// Alt (≈<c>#EDEDED</c>) → a <c>LayerOnMicaBaseAltFillColorDefault</c> body plate (<c>#B3FFFFFF</c>, ≈<c>#FAFAFA</c>
+    /// composited over <see cref="MicaRef.LightDefault"/>) → a <c>LayerFillColorDefault</c> content pane ON the plate
+    /// (<c>#80FFFFFF</c>, ≈<c>#FCFCFC</c>).</summary>
     static ShellPalette BuildFilesLightShell()
     {
-        var onMica = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3);   // LayerOnMicaBaseAltFillColorDefault
+        var plate = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3);         // LayerOnMicaBaseAltFillColorDefault (light)
+        var layer = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80);         // LayerFillColorDefault (light)
         var cardSecondary = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80); // CardBackgroundFillColorSecondary
-        var fileArea = FilesLightFileArea;
-        return new(onMica, onMica, cardSecondary, fileArea, fileArea, cardSecondary,
+        return new(plate, plate, plate, layer, layer, cardSecondary,
             RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x32),
             RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
             RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
@@ -89,16 +115,24 @@ public static class PaletteBuilder
 
     static ShellPalette BuildDarkShell(PaletteSeed seed)
     {
-        // Seed-tinted translucent bars over dark Mica — the neutral seed (sat 0) reproduces WinUI's #3A3A3A@0x73
-        // exactly, so today's proven dark stack is the sat-0 special case. Page card + rows stay the WinUI
-        // white-alpha overlays: the bars and the solid canvas (BuildDark) carry the preset tint.
-        var bar = ColorRamp.Tinted(0.227f, seed.NeutralHueDeg, seed.DarkChromeSat, 0x73);
+        // MUX tabbed-window dark recipe (the mirror of BuildLightShell). Rung 0 is the TAB RAIL only: unpainted, so DWM
+        // Mica Alt (≈#202020) is the frame behind the tabs. Rung 1 is the app-body PLATE —
+        // LayerOnMicaBaseAltFillColorDefault #733A3A3A, ≈#2C2C2C over that base — published as the three chrome bands
+        // (toolbar, nav pane, player dock) and painted behind the content pane too. Rung 2 is the content pane:
+        // LayerFillColorDefault #4C3A3A3A composited ON the plate (≈#303030), one further step lighter. Both steps LIFT
+        // — that, not a bar tint, is the ladder. The neutral seed (sat 0) reproduces the stock MUX values exactly
+        // (Tinted(0.227, ·, 0) == #3A3A3A), so the stock stack is the sat-0 special case and needs no branch, and the
+        // tinted seeds keep their preset identity through BOTH rungs (the composited tint roughly doubles vs the
+        // pane-only ladder). Rows stay the WinUI white-alpha overlays; the solid canvas (BuildDark) still carries the
+        // preset tint for opaque surfaces.
+        var plate = DarkPlate(seed);
+        var layer = ColorRamp.Tinted(0.227f, seed.NeutralHueDeg, seed.DarkChromeSat, 0x4C);
         return new(
-            Toolbar:    bar,
-            Sidebar:    bar,
-            PlayerBar:  bar,
-            FileArea:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
-            Content:    ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
+            Toolbar:    plate,
+            Sidebar:    plate,
+            PlayerBar:  plate,
+            FileArea:   layer,
+            Content:    layer,
             ContentAlt: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
             RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F), // match FillSubtleSecondary — WinUI even-row plate
             RowHover:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0F),
@@ -130,10 +164,13 @@ public static class PaletteBuilder
         var textPrimary = TintInk(seed, 0.12f);
         var textSecondary = TintInk(seed, 0.36f);
         // Tertiary must clear AA on the LIGHTEST surface it can land on — the opaque card, or the zebra row
-        // flattened over the translucent page on the brightest assumed Mica — not the mid-tone rail (the old,
-        // inverted target: darker bg = easier ratio for dark-on-light text).
+        // flattened over the translucent page on the plate on the brightest assumed Mica — not the mid-tone rail (the
+        // old, inverted target: darker bg = easier ratio for dark-on-light text).
+        // Flattened through BOTH shell rungs (pane on plate on bright Mica) — the same host the palette.contrast gate
+        // builds; solving against a pane-on-Mica host would disagree with the gate by the plate's own lift.
         var shell = BuildLightShell(seed);
-        var zebraHost = ColorContrast.Flatten(shell.RowZebra, ColorContrast.Flatten(shell.FileArea, MicaRef.LightBright));
+        var zebraHost = ColorContrast.Flatten(shell.RowZebra,
+            ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, MicaRef.LightBright)));
         var lightestHost = ColorContrast.RelativeLuminance(card) >= ColorContrast.RelativeLuminance(zebraHost) ? card : zebraHost;
         var textTertiary = SolveTertiaryText(lightestHost, TintInk(seed, 0.40f));
 
@@ -154,7 +191,7 @@ public static class PaletteBuilder
             FillCardSecondary    = card2,
             FillLayerDefault     = layer,
             FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-            LayerOnMicaBaseAlt   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
+            LayerOnMicaBaseAlt   = LightPlate(seed),
             FillSolidBase        = ColorRamp.Darken(page, 0.05f),
             FillSolidBaseAlt     = well,
             FillSolidSecondary   = controlPress,
@@ -242,7 +279,7 @@ public static class PaletteBuilder
             FillCardSecondary    = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x08),
             FillLayerDefault     = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x4C),
             FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x0D),
-            LayerOnMicaBaseAlt   = ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x73),
+            LayerOnMicaBaseAlt   = DarkPlate(seed),
             FillSolidBase        = canvas,
             FillSolidBaseAlt     = ColorRamp.Darken(canvas, 0.08f),
             FillSolidSecondary   = ColorRamp.Darken(canvas, 0.08f),
@@ -329,7 +366,8 @@ public static class PaletteBuilder
         var controlHover = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x80);
         var controlPress = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D);
         var solidBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3);
-        var fileFlat = ColorContrast.Flatten(shell.FileArea, MicaRef.LightBright);
+        // Pane on PLATE on bright Mica — both shell rungs, matching the palette.contrast gate's host.
+        var fileFlat = ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, MicaRef.LightBright));
         var zebraHost = ColorContrast.Flatten(shell.RowZebra, fileFlat);
         var lightestHost = ColorContrast.RelativeLuminance(card) >= ColorContrast.RelativeLuminance(zebraHost) ? card : zebraHost;
         var textTertiary = SolveTertiaryText(lightestHost, ColorF.FromRgba(0x00, 0x00, 0x00, 0x72));
@@ -435,7 +473,7 @@ public static class PaletteBuilder
         FillCardSecondary    = ColorF.FromRgba(0xF7, 0xF6, 0xF3),
         FillLayerDefault     = ColorF.FromRgba(0xFA, 0xF9, 0xF6),
         FillLayerAlt         = ColorF.FromRgba(0xFF, 0xFF, 0xFF),
-        LayerOnMicaBaseAlt   = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3),
+        LayerOnMicaBaseAlt   = ColorF.FromRgba(0xFC, 0xFA, 0xF8, 0xB3),   // = LightPlate(Warm), hand-calibrated literal
         FillSolidBase        = ColorF.FromRgba(0xEF, 0xEE, 0xEB),
         FillSolidBaseAlt     = ColorF.FromRgba(0xE8, 0xE7, 0xE3),
         FillSolidSecondary   = ColorF.FromRgba(0xEC, 0xEB, 0xE8),

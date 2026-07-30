@@ -1307,6 +1307,15 @@ public static class SpotifyExportMapper
     }
 
     // topTracks[].track shape: { name, uri, playcount(string), duration.totalMilliseconds, albumOfTrack.{uri,coverArt}, artists.items[] }
+    //
+    // NOTE the album NAME: `albumOfTrack` in this op carries only `uri` + `coverArt` — there is no name on the wire, so
+    // the AlbumRef below is deliberately name-LESS (identity + cover, no title). It is not a bug to "fix" here and it is
+    // not inferred from anything: inventing a title from the request context would put a fabricated fact on a shared
+    // store row, and the row's own uri is all the wire gave us. The gap is closed downstream by the writers that DO know
+    // the title — MetadataService.SyncAllAsync's blank-AlbumRef closure (batches those album uris through AlbumV4, whose
+    // projection rewrites the tracklist with the full albumRef) and the ordinary album hydration on open — and the empty
+    // name can never overwrite a known one, because StoreEntityMerge.MergeAlbumRef is NonEmpty-guarded per field. Until it
+    // heals, the Album column renders the shared em-dash rather than a blank lane (TrackRow.AlbumLink).
     static Track? MapArtistTrack(JsonElement t)
     {
         if (t.ValueKind != JsonValueKind.Object) return null;

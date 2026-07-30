@@ -732,8 +732,13 @@ public sealed class PlaybackSession
         if (_history.Count > HistoryCap) _history.RemoveRange(0, _history.Count - HistoryCap);
     }
 
-    // Anchored Fisher-Yates over the natural order: the current context row stays at logical 0; only Context playable rows
-    // are shuffled; the autoplay tail + markers keep their natural relative order at the end.
+    // Anchored Fisher-Yates over the natural order, dispatched on the anchor's provider. Invariant either way: nothing
+    // already played may resurface as Upcoming.
+    // Context anchor: the current row sits at logical 0; every Context playable row (already-played ones included)
+    // re-pools after it; the autoplay tail + markers keep their natural relative order at the end; cursor = 0.
+    // Autoplay anchor: everything already consumed (the original context AND earlier autoplay rows) stays BEFORE the
+    // cursor in natural order; only the autoplay playables after the anchor shuffle; the cursor sits on the anchor at
+    // its natural index.
     void ReshuffleAnchoringCurrent()
     {
         if (_naturalOrder.Count <= 1) return;
@@ -741,6 +746,8 @@ public sealed class PlaybackSession
             ? _current
             : (_cursor >= 0 && _cursor < _context.Count ? _context[_cursor] : null);
         if (anchor is null) return;
+
+        if (anchor.Provider == QueueProvider.Autoplay) { ReshuffleAutoplayAnchored(anchor); return; }
 
         var ctx = new List<SessionItem>();
         var tail = new List<SessionItem>();
@@ -750,17 +757,34 @@ public sealed class PlaybackSession
             if (it.Provider == QueueProvider.Context && it.Kind == QueueRowKind.Playable) ctx.Add(it);
             else tail.Add(it);
         }
-        for (int i = ctx.Count - 1; i > 0; i--)
-        {
-            int j = NextSeed(i);
-            (ctx[i], ctx[j]) = (ctx[j], ctx[i]);
-        }
+        FisherYates(ctx);
         _context.Clear();
         _context.Add(anchor);
         _context.AddRange(ctx);
         _context.AddRange(tail);
         _cursor = 0;
         if (_current is { } cur && cur.Id == anchor.Id) _current = anchor;
+    }
+
+    void ReshuffleAutoplayAnchored(SessionItem anchor)
+    {
+        int na = _naturalOrder.FindIndex(x => x.Id == anchor.Id);
+        if (na < 0) return;
+        var pool = new List<SessionItem>();
+        var rest = new List<SessionItem>();
+        for (int i = na + 1; i < _naturalOrder.Count; i++)
+        {
+            var it = _naturalOrder[i];
+            if (it.Provider == QueueProvider.Autoplay && it.Kind == QueueRowKind.Playable) pool.Add(it);
+            else rest.Add(it);
+        }
+        FisherYates(pool);
+        _context.Clear();
+        for (int i = 0; i <= na; i++) _context.Add(_naturalOrder[i]);
+        _context.AddRange(pool);
+        _context.AddRange(rest);
+        _cursor = na;
+        if (_current is { } cur && cur.Id == anchor.Id) _current = _context[na];
     }
 
     void ShuffleWithoutAnchor()
@@ -772,11 +796,7 @@ public sealed class PlaybackSession
             if (item.Provider == QueueProvider.Context && item.Kind == QueueRowKind.Playable) playable.Add(item);
             else tail.Add(item);
         }
-        for (int i = playable.Count - 1; i > 0; i--)
-        {
-            int j = NextSeed(i);
-            (playable[i], playable[j]) = (playable[j], playable[i]);
-        }
+        FisherYates(playable);
         _context.Clear();
         _context.AddRange(playable);
         _context.AddRange(tail);
@@ -788,6 +808,15 @@ public sealed class PlaybackSession
         _context.AddRange(_naturalOrder);
         int idx = _current is { } c ? _context.FindIndex(x => x.Id == c.Id) : -1;
         _cursor = idx >= 0 ? idx : (_context.Count > 0 ? 0 : -1);
+    }
+
+    void FisherYates(List<SessionItem> items)
+    {
+        for (int i = items.Count - 1; i > 0; i--)
+        {
+            int j = NextSeed(i);
+            (items[i], items[j]) = (items[j], items[i]);
+        }
     }
 
     int NextSeed(int maxInclusive)

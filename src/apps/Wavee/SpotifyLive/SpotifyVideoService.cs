@@ -48,13 +48,30 @@ sealed partial class SpotifyVideoService : IVideoService
         var now = DateTimeOffset.UtcNow;
         var pending = new List<string>(trackUris.Count);
         var seen = new HashSet<string>(StringComparer.Ordinal);
+        int notTrack = 0, freshPos = 0, freshNeg = 0;
         foreach (var uri in trackUris)
         {
-            if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal) || !seen.Add(uri)) continue;
+            if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal)) { notTrack++; continue; }
+            if (!seen.Add(uri)) continue;
             var cached = _store.GetVideoAssociation(uri);
-            if (cached is not null && cached.IsFresh(now)) continue;   // fresh → skip the network entirely
+            if (cached is not null && cached.IsFresh(now))
+            {
+                if (cached.HasVideo) freshPos++; else freshNeg++;
+                continue;   // fresh → skip the network entirely
+            }
             pending.Add(uri);
         }
+        // The REQUEST-side ledger (H2 = coverage). `pending` is what actually goes to the wire; `freshNeg` is the
+        // 30-minute negative window suppressing a re-ask, and `notTrack` is a caller handing us non-track uris (the
+        // discography hook does exactly that — every one of them is dropped here and only the adornment pass uses them).
+        _log.Event(WaveeLogLevel.Debug, "video.assoc.request", "kind-99 detect batch admitted",
+            fields:
+            [
+                WaveeLogField.Of("asked", trackUris.Count), WaveeLogField.Of("distinctTracks", seen.Count),
+                WaveeLogField.Of("notTrackUri", notTrack), WaveeLogField.Of("freshPos", freshPos),
+                WaveeLogField.Of("freshNeg", freshNeg), WaveeLogField.Of("pending", pending.Count),
+                WaveeLogField.Of("kinds", "99+182"), WaveeLogField.Of("etagCache", _extensions is not null),
+            ]);
         if (pending.Count == 0) return;
 
         for (int start = 0; start < pending.Count && !ct.IsCancellationRequested; start += DetectBatchCap)
@@ -73,6 +90,8 @@ sealed partial class SpotifyVideoService : IVideoService
             reqs.Add((uri, Xm.ExtensionKind.ConsumptionExperienceTrait, null));
         }
 
+        var tally = new DetectTally();
+
         if (_extensions is not null)
         {
             IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), CachedExtension> cached;
@@ -88,13 +107,22 @@ sealed partial class SpotifyVideoService : IVideoService
             using (var bulkCached = _store.BeginBulk())
                 foreach (var uri in uris)
                 {
-                    if (cached.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var res))
-                        Apply(uri, res, now);
-                    if (NeedsRecovery(uri)
-                        && cached.TryGetValue((uri, Xm.ExtensionKind.ConsumptionExperienceTrait), out var ce)
-                        && !ce.Missing && CeHasVideo(ce.Payload))
-                        (recoverCached ??= new List<string>()).Add(uri);
+                    bool wire = cached.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var res);
+                    if (wire) Apply(uri, res!, now);
+                    // `Missing` is the SEALED-NEGATIVE case (H3): the shared extension cache turned a 404 / an empty 200 /
+                    // an entity the response simply omitted into a 24 h miss, and the fold above wrote a 30-minute
+                    // `VideoAssociation.None` from it. Counted separately from "no wire entry at all".
+                    bool needs = NeedsRecovery(uri);
+                    bool ceRow = false, ceVideo = false;
+                    if (needs)   // kind 182 is only ever consulted for a kind-99 miss — keep it that way
+                    {
+                        ceRow = cached.TryGetValue((uri, Xm.ExtensionKind.ConsumptionExperienceTrait), out var ce) && !ce!.Missing;
+                        ceVideo = ceRow && CeHasVideo(ce!.Payload);
+                        if (ceVideo) (recoverCached ??= new List<string>()).Add(uri);
+                    }
+                    tally.Fold(uri, wire, wire && res!.Missing, _store.GetVideoAssociation(uri), needs, ceRow, ceVideo);
                 }
+            LogSlice(uris.Count, tally, "etag-cache", recoverCached?.Count ?? 0);
             if (recoverCached is not null) await RecoverCanonicalAsync(recoverCached, now, ct).ConfigureAwait(false);
             return;
         }
@@ -107,15 +135,77 @@ sealed partial class SpotifyVideoService : IVideoService
         using (var bulk = _store.BeginBulk())   // coalesce the per-track HasVideo bumps into one change signal
             foreach (var uri in uris)
             {
-                if (results.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var res))
-                    Apply(uri, res, now);
-                if (NeedsRecovery(uri)
-                    && results.TryGetValue((uri, Xm.ExtensionKind.ConsumptionExperienceTrait), out var ce)
-                    && CeHasVideo(ce.Payload))
-                    (recover ??= new List<string>()).Add(uri);
+                bool wire = results.TryGetValue((uri, Xm.ExtensionKind.VideoAssociations), out var res);
+                if (wire) Apply(uri, res, now);
+                bool needs = NeedsRecovery(uri);
+                bool ceRow = false, ceVideo = false;
+                if (needs)
+                {
+                    ceRow = results.TryGetValue((uri, Xm.ExtensionKind.ConsumptionExperienceTrait), out var ce);
+                    ceVideo = ceRow && CeHasVideo(ce.Payload);
+                    if (ceVideo) (recover ??= new List<string>()).Add(uri);
+                }
+                // The raw path's own sealed negative is a 404 or an empty 200 (Project → VideoAssociation.None); an odd
+                // status leaves the plane untouched, which is why it is NOT folded in as `sealed`.
+                tally.Fold(uri, wire, wire && res.Status is 404 or 200 && res.Payload is null or { IsEmpty: true },
+                    _store.GetVideoAssociation(uri), needs, ceRow, ceVideo);
             }
+        LogSlice(uris.Count, tally, "direct", recover?.Count ?? 0);
         if (recover is not null) await RecoverCanonicalAsync(recover, now, ct).ConfigureAwait(false);
     }
+
+    // ── the detect ledger ─────────────────────────────────────────────────────────────────────────────────────────────
+    // One line per wire slice, answering the four questions the "playlist says no video, search says it does" report
+    // splits into: did we ASK for these uris (the request line above), did a kind-99 row COME BACK, was the verdict a
+    // real negative or a sealed miss (H3), and did the alias/relink recovery gate (kind 182) even fire (H1).
+    sealed class DetectTally
+    {
+        const int SampleCap = 4;
+
+        public int WireRow, WireAbsent, WireSealed;      // kind-99 response shape
+        public int Positive, Negative, NoRow;            // the resulting plane state, read back after the fold
+        public int CeGate, CeNoRow, CeNoVideo;           // the kind-182 recovery gate, over the tracks that needed it
+        readonly List<string> _pos = new(SampleCap);
+        readonly List<string> _miss = new(SampleCap);
+
+        public void Fold(string uri, bool wireRow, bool wireSealed, VideoAssociation? plane, bool needsRecovery,
+                         bool ceRow, bool ceVideo)
+        {
+            if (wireRow) WireRow++; else WireAbsent++;
+            if (wireSealed) WireSealed++;
+            switch (plane)
+            {
+                case { HasVideo: true }: Positive++; Add(_pos, uri); break;
+                case not null: Negative++; Add(_miss, uri); break;
+                default: NoRow++; Add(_miss, uri); break;
+            }
+            if (!needsRecovery) return;
+            if (ceVideo) CeGate++;
+            else if (ceRow) CeNoVideo++;
+            else CeNoRow++;
+        }
+
+        public string PositiveSample => Join(_pos);
+        public string MissSample => Join(_miss);
+
+        static void Add(List<string> to, string uri) { if (to.Count < SampleCap) to.Add(Id(uri)); }
+        static string Id(string uri) => uri.Length > 14 ? uri[14..] : uri;   // drop the "spotify:track:" prefix
+        static string Join(List<string> ids) => ids.Count == 0 ? "-" : string.Join(",", ids);
+    }
+
+    void LogSlice(int requested, DetectTally t, string path, int queuedForRecovery)
+        => _log.Event(WaveeLogLevel.Debug, "video.assoc.detect", "kind-99 slice folded into the association plane",
+            fields:
+            [
+                WaveeLogField.Of("path", path), WaveeLogField.Of("requested", requested),
+                WaveeLogField.Of("wireRow", t.WireRow), WaveeLogField.Of("wireAbsent", t.WireAbsent),
+                WaveeLogField.Of("wireSealed", t.WireSealed),
+                WaveeLogField.Of("positive", t.Positive), WaveeLogField.Of("negative", t.Negative),
+                WaveeLogField.Of("noRow", t.NoRow),
+                WaveeLogField.Of("ceGate", t.CeGate), WaveeLogField.Of("ceNoRow", t.CeNoRow),
+                WaveeLogField.Of("ceNoVideo", t.CeNoVideo), WaveeLogField.Of("recoverQueued", queuedForRecovery),
+                WaveeLogField.Of("posIds", t.PositiveSample), WaveeLogField.Of("missIds", t.MissSample),
+            ]);
 
     // A kind-99 miss that kind 182 contradicts is the alias/relinked-id case (kind 99 is keyed by the CANONICAL id and
     // 404s on an alias; 182 is canonical-computed, so it still reports the video).
@@ -141,31 +231,82 @@ sealed partial class SpotifyVideoService : IVideoService
         var pairs = new List<(string Alias, string Canonical, string? GidHex)>(aliases.Count);
         var second = new List<(string Uri, Xm.ExtensionKind Kind, string? Etag)>(aliases.Count);
         var asked = new HashSet<string>(StringComparer.Ordinal);
+        int noCanonical = 0, selfCanonical = 0;
+        _recoverLinesLogged = 0;   // per-pass budget for the per-alias detail (the summary always fires)
         foreach (var alias in aliases)
         {
             string? canonical = canon.TryGetValue((alias, Xm.ExtensionKind.TrackV4), out var tv) ? CanonicalUri(tv.Payload) : null;
-            if (canonical is null || string.Equals(canonical, alias, StringComparison.Ordinal)) continue;
+            if (canonical is null) { noCanonical++; LogRecover(alias, null, null, "no-canonical-uri"); continue; }
+            if (string.Equals(canonical, alias, StringComparison.Ordinal))
+            { selfCanonical++; LogRecover(alias, canonical, null, "canonical-is-self"); continue; }
             string? gid = canon.TryGetValue((alias, Xm.ExtensionKind.PlaybackTrait), out var pb) ? AssociatedVideoGid(pb.Payload) : null;
             pairs.Add((alias, canonical, gid));
             if (asked.Add(canonical)) second.Add((canonical, Xm.ExtensionKind.VideoAssociations, null));
         }
-        if (pairs.Count == 0) return;
+        if (pairs.Count == 0)
+        {
+            // Nothing to try. This is the H1 dead end the old code hit SILENTLY: kind 182 said "there is a video" but
+            // TrackV4 offered no canonical_uri to ask kind 99 about, so the alias keeps its negative and its row stays dark.
+            LogRecoverSummary(aliases.Count, 0, noCanonical, selfCanonical, 0, 0, 0);
+            return;
+        }
 
         IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ExtendedMetadataSource.ExtensionResult> recovered;
         try { recovered = await _metadata.GetExtensionsWithHeadersAsync(second, ct).ConfigureAwait(false); }
         catch (Exception ex) when (ex is not OperationCanceledException) { _log.Info("VIDEO_ASSOCIATIONS canonical: " + ex.Message); return; }
 
-        using var bulk = _store.BeginBulk();
-        foreach (var (alias, canonical, gid) in pairs)
-        {
-            if (!recovered.TryGetValue((canonical, Xm.ExtensionKind.VideoAssociations), out var res)) continue;
-            if (!ApplyRecovered(alias, res, now, gid)) continue;
-            // The alias's own 404 collapsed to a 24 h `Missing` in the SHARED extension cache; drop it so the next
-            // detect re-runs this recovery instead of re-serving (and re-clearing on) the cached miss.
-            _extensions?.MarkStale(alias, Xm.ExtensionKind.VideoAssociations);
-            _log.Debug($"[video] canonical recovery {alias} → {canonical} hasVideo=true gid={gid ?? "-"}");
-        }
+        int ok = 0, canonicalNoRow = 0, canonicalNoVideo = 0;
+        using (var bulk = _store.BeginBulk())
+            foreach (var (alias, canonical, gid) in pairs)
+            {
+                if (!recovered.TryGetValue((canonical, Xm.ExtensionKind.VideoAssociations), out var res))
+                { canonicalNoRow++; LogRecover(alias, canonical, gid, "canonical-no-kind99-row"); continue; }
+                if (!ApplyRecovered(alias, res, now, gid))
+                { canonicalNoVideo++; LogRecover(alias, canonical, gid, "canonical-no-video status=" + res.Status); continue; }
+                // Stamp the derived canonical onto the resident alias row (adornment-service pattern) so miss-bridges
+                // and later detects do not re-parse TrackV4. Previously discarded after use.
+                if (_store.GetTrack(alias) is { } row)
+                    _store.UpsertTrack(row with { CanonicalUri = canonical });
+                // The alias's own 404 collapsed to a 24 h `Missing` in the SHARED extension cache; drop it so the next
+                // detect re-runs this recovery instead of re-serving (and re-clearing on) the cached miss.
+                _extensions?.MarkStale(alias, Xm.ExtensionKind.VideoAssociations);
+                ok++;
+                LogRecover(alias, canonical, gid, "recovered");
+            }
+        LogRecoverSummary(aliases.Count, pairs.Count, noCanonical, selfCanonical, ok, canonicalNoRow, canonicalNoVideo);
     }
+
+    // Per-alias recovery verdict. Bounded: a slice can carry up to 300 aliases and the per-alias detail is only useful
+    // for the first handful — the summary below carries the totals.
+    int _recoverLinesLogged;
+    const int RecoverLineCap = 24;
+
+    void LogRecover(string alias, string? canonical, string? gid, string verdict)
+    {
+        if (_recoverLinesLogged >= RecoverLineCap) return;
+        _recoverLinesLogged++;
+        _log.Event(WaveeLogLevel.Debug, "video.assoc.recover", "alias → canonical kind-99 recovery",
+            fields:
+            [
+                WaveeLogField.Of("alias", alias), WaveeLogField.Of("canonical", canonical ?? "-"),
+                WaveeLogField.Of("gid", gid ?? "-"), WaveeLogField.Of("verdict", verdict),
+            ]);
+    }
+
+    // THE H1 line. `aliases` is how many kind-99 misses kind 182 contradicted (i.e. relink suspects); everything after it
+    // is where each suspect ended up. `recovered > 0` means the relink path is working; a large `noCanonicalUri` or
+    // `canonicalNoKind99Row` means it is not, and the playlist row will stay dark while the canonical uri search returns
+    // shows a video.
+    void LogRecoverSummary(int aliases, int pairs, int noCanonicalUri, int canonicalIsSelf, int recovered,
+                           int canonicalNoRow, int canonicalNoVideo)
+        => _log.Event(WaveeLogLevel.Info, "video.assoc.recover.done", "relink recovery pass finished",
+            fields:
+            [
+                WaveeLogField.Of("suspects", aliases), WaveeLogField.Of("pairs", pairs),
+                WaveeLogField.Of("noCanonicalUri", noCanonicalUri), WaveeLogField.Of("canonicalIsSelf", canonicalIsSelf),
+                WaveeLogField.Of("recovered", recovered), WaveeLogField.Of("canonicalNoKind99Row", canonicalNoRow),
+                WaveeLogField.Of("canonicalNoVideo", canonicalNoVideo),
+            ]);
 
     public async Task<VideoAssociation?> GetAsync(string trackUri, CancellationToken ct = default)
     {

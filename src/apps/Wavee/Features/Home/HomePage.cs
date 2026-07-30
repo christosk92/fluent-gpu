@@ -262,7 +262,7 @@ sealed class HomePage : Component
         Element HomeRow(Element child, string contentKey, float top, float bottom) => new BoxEl
         {
             Direction = 1,
-            Padding = new Edges4(Spacing.L, top, Spacing.L, bottom),
+            Padding = new Edges4(Spacing.Gutter, top, Spacing.Gutter, bottom),
             // Home is a heterogeneous virtual list: greeting, grids, shelves and the concert destination do not share
             // a recyclable subtree shape. Keep this cheap row shell recyclable, but key its content so a shell reused
             // for another row replaces the old subtree instead of positionally rebinding incompatible element trees.
@@ -315,7 +315,7 @@ sealed class HomePage : Component
         {
             Direction = 1,
             Gap = Spacing.XL,
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, PlayerDock.Reserve + Spacing.XXL),
+            Padding = new Edges4(Spacing.Gutter, Spacing.M, Spacing.Gutter, PlayerDock.Reserve + Spacing.XXL),
             Children = [ GreetingBlock(name, null, svc, post), state, tail ],
         }) with { Grow = 1f, ScrollKey = "home" };
 
@@ -363,13 +363,13 @@ sealed class HomePage : Component
     }
 
     static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
-    // The group's lifted accent (renderer colour): the FIRST card's graded cover colour, else the semantic per-kind
+    // The group's chrome accent (renderer colour): the FIRST card's graded cover colour, else the semantic per-kind
     // tint (amber-ish blue for made-for-you/editorial, the app accent elsewhere) while the plane has no grading yet.
-    // Lift keeps a near-black cover colour legible. The colour arrives with the plane's epoch, which the page reads.
+    // The colour arrives with the plane's epoch, which the page reads.
     static ColorF GroupAccent(HomeGroup g)
     {
         for (int i = 0; i < g.Cards.Count; i++)
-            if (Surfaces.SchemeFor(g.Cards[i].Image?.Url) is { } s) return WaveePalette.Lift(WaveePalette.Accent(s));
+            if (Surfaces.ChromeSchemeFor(g.Cards[i].Image?.Url) is { } s) return WaveePalette.ChromeAccent(s);
         return WaveePalette.Lift(WaveePalette.ToColor(
             g.Kind is HomeGroupKind.CollapsedGrid or HomeGroupKind.Compact or HomeGroupKind.Featured
                 ? 0xFF3B82F6u : 0xFF60CDFFu));
@@ -467,7 +467,9 @@ sealed class HomePage : Component
                         new BoxEl
                         {
                             Direction = 0, Margin = new Edges4(0f, Spacing.S, 0f, 0f),
-                            Children = [ Button.Accent(Loc.Get(Strings.Home.Play), () => play(c)) ],
+                            // A labeled media Play, so it wears the WaveeCta pill on the same cover-derived chrome accent
+                            // as this spotlight's glow and caption.
+                            Children = [ WaveeCta.Play(accent, () => play(c), Loc.Get(Strings.Home.Play)) ],
                         },
                     ],
                 },
@@ -558,7 +560,7 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 
         // Trace the reseed trigger (code 110): f0=incoming cross, f1=previously seeded cross, i1=itemCount vs i2=seeded
         // count — a reseed mid-scroll wipes every measured correction and flaps the anchor re-pin.
-        if (FluentGpu.Foundation.ScrollTrace.On)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.Note(110, cross, itemCount, (_extents.Count << 8) | (_seededVersion == _shapeVersion ? 1 : 0), _seededCross);
 
         _extents.Reset(itemCount, 360f);

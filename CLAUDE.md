@@ -35,11 +35,18 @@ re-entering the public tree. If a request would require them, ask the user to wo
 
 ```powershell
 dotnet build src/FluentGpu.slnx                              # the canonical build (all 8 projects); must be clean
+dotnet build src/FluentGpu.slnx -c Release                  # AND Release — a Debug-only build cannot see the diag-gate arm (see below)
 dotnet run --project src/FluentGpu.VerticalSlice            # the validation suite; expect "ALL CHECKS PASSED" (incl. zero-alloc gates)
 dotnet run --project src/FluentGpu.WindowsApp              # the gallery (composition root)
 dotnet run --project src/FluentGpu.WindowsApp -- --screenshot <path>   # render a deterministic scene to a PNG (visual-diff loop)
 powershell -File docs\design\check-canon.ps1              # design-time drift gate — run AFTER editing any docs/design/ doc (exit 0 = clean)
 ```
+
+**Both configurations are load-bearing, and `dotnet build` defaults to Debug.** The diagnostics const gates
+(`ScrollTrace.CompiledIn`, `Diag.CompiledIn`, `RenderBudget.CompiledIn`, `ReuseGuard`, `BindContract`,
+`BackwardsWriteGuard` — all `#if DEBUG || FLUENTGPU_DIAG`) fold to `true` in Debug and `false` in Release, so **each
+configuration compiles a different arm** and Release surfaces errors Debug structurally cannot. `TreatWarningsAsErrors`
+is on, so a Release-only warning is a Release-only *build break*. `.github/workflows/build.yml` enforces both.
 
 The VerticalSlice harness (`src/FluentGpu.VerticalSlice/` — `Program.cs` + `Harness/` + `Suites/` + `Probes/`) runs headless golden checks (no GPU/window) and enforces the alloc tripwire (`GC.GetAllocatedBytesForCurrentThread()` delta == 0 per hot phase) on the headless `Rhi.Headless`/`Pal.Headless` seams; local subset via `--suite` / `FG_SUITE` (CI must run the full suite). GPU pixels are the separate `--screenshot` check.
 

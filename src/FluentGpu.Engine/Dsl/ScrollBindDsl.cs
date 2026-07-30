@@ -67,7 +67,10 @@ public readonly record struct ScrollBindDsl
     /// page's real backdrop (Mica/tint) — not this node's content — shows behind chrome pinned on that line.
     /// Released (no clip) while the line sits at/above the node's top. This bind OWNS the node's ClipRect — do not
     /// combine with <see cref="BindSink.ClipTop"/>/<see cref="BindSink.ClipBottom"/> binds on the same node.
-    /// <see cref="OnFlag"/> observes the clip's engage/release edge (the :stuck analog).</summary>
+    /// <see cref="OnFlag"/> observes the clip's engage/release edge (the :stuck analog).
+    /// An <c>EdgeFade</c> authored on the SAME node feathers from the CLIP LINE while this bind is engaged (the recorder
+    /// anchors the fade rect at the visible box), so the hard cut reads as a dissolve; gate the spec on <see cref="OnFlag"/>
+    /// if the band must not feather the node's own edge once the clip releases.</summary>
     public float? ClipTopAtViewport { get; init; }
     /// <summary>Shared-element morph: translate this retained node from its laid-out position toward a viewport-space
     /// LEFT coordinate over <see cref="Range"/>. The engine resolves the live arranged source coordinate, including

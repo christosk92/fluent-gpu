@@ -385,7 +385,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             // context uses just below) — a stale cluster echo must NOT overwrite the just-issued current, not merely inside
             // the 2.5 s suppression window. Recovery (weActive but no local context yet) still takes the cluster's track.
             bool localOwnsTrack = weActive && _hasLocalContext;
-            if (c.HasTrack && !suppressPlayState && !localOwnsTrack) _track = MergeClusterTrack(_track, MapTrack(c.Track));
+            if (c.HasTrack && !suppressPlayState && !localOwnsTrack)
+            {
+                var mapped = MapTrack(c.Track);
+                _track = _track is { } cur && cur.Uri == mapped.Uri
+                    ? StoreEntityMerge.Track(cur, mapped)
+                    : mapped;
+            }
             if (!weActive || !_hasLocalContext)
             {
                 _contextUri = c.ContextUri;
@@ -448,9 +454,11 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             if (_track is not { } t) return;
             // Album identity is UI-critical too: Connect can provide usable art + artist while omitting Album.Uri.
             // Without this term the player-bar title looks complete but can never become an album hyperlink.
-            bool thin = !ImageSource.IsUsable(t.Image)
-                || t.Artists.Count == 0 || string.IsNullOrEmpty(t.Artists[0].Name)
-                || string.IsNullOrEmpty(t.Album.Uri);
+            // The NAME is the other half of that identity and needs its own term: a cluster/thin row can carry the album
+            // URI with an empty name, which satisfied every test here — so the enrichment never ran and the album stayed
+            // nameless for the whole track, even though the resolver's getTrack upgrade
+            // (LiveSessionHost.ResolveNowPlayingTrackAsync) is exactly what supplies it.
+            bool thin = !StoreEntityGaps.NowPlayingReady(t) || string.IsNullOrEmpty(t.Album.Uri);
             if (!thin || t.Uri.Length == 0 || _resolvingUri == t.Uri) return;
             _resolvingUri = uri = t.Uri;
         }
@@ -470,7 +478,7 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 // Keep the cluster's title (+ duration/position state); fill artist + album + art from the resolved track.
                 _track = cur with
                 {
-                    Title = TitleMissing(cur.Title, cur.Uri) ? e.Title : cur.Title,
+                    Title = StoreEntityMerge.TitleMissing(cur.Title, cur.Uri) ? e.Title : cur.Title,
                     Artists = e.Artists.Count > 0 ? e.Artists : cur.Artists,
                     Album = e.Album,
                     Image = ImageSource.ChooseBetter(e.Image, cur.Image),
@@ -605,32 +613,6 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         Image? img = string.IsNullOrEmpty(r.ImageUrl) ? null : new Image(r.ImageUrl!);
         return new Track(IdFromUri(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, HasVideoMetadata(r), img);
     }
-
-    // Cluster player_state often repeats a THIN copy of the same current track. Preserve the enriched TrackV4 fields
-    // already folded into the slab (artist credits + album cover) so each cluster heartbeat cannot blank the player bar.
-    static Track MergeClusterTrack(Track? current, Track incoming)
-    {
-        if (current is null || current.Uri != incoming.Uri) return incoming;
-        bool incomingHasArtist = incoming.Artists.Count > 0 && !string.IsNullOrEmpty(incoming.Artists[0].Name);
-        return incoming with
-        {
-            Title = TitleMissing(incoming.Title, incoming.Uri) ? current.Title : incoming.Title,
-            Artists = incomingHasArtist ? incoming.Artists : current.Artists,
-            Album = MergeAlbumRef(current.Album, incoming.Album),
-            DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
-            Image = ImageSource.ChooseBetter(incoming.Image, current.Image),
-            Isrc = incoming.Isrc ?? current.Isrc,   // a thin cluster heartbeat must not blank the resolved ISRC
-        };
-    }
-
-    // A title is "missing" if it's blank OR is just the track URI echoed back — the synthetic/context placeholders
-    // seed Title=Uri before real metadata resolves, and that placeholder must never win over a resolved name.
-    static bool TitleMissing(string? title, string uri) => string.IsNullOrEmpty(title) || title == uri;
-
-    static AlbumRef MergeAlbumRef(AlbumRef current, AlbumRef incoming) => new(
-        string.IsNullOrEmpty(incoming.Id) ? current.Id : incoming.Id,
-        string.IsNullOrEmpty(incoming.Uri) ? current.Uri : incoming.Uri,
-        string.IsNullOrEmpty(incoming.Name) ? current.Name : incoming.Name);
 
     // Viewer-mode queue: the active device's next_tracks split by provider. History is local-only on the active device;
     // viewer mode does not surface cluster prev_tracks (server-driven history is a follow-up).

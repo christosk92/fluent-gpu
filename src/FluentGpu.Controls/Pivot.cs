@@ -68,8 +68,8 @@ public sealed class Pivot : Component
         var contentNode = UseRef<NodeHandle>(default);
         var prevSel = UseRef(-1);
 
-        var sig = props?.SelectedIndex ?? own;   // caller's value signal, else the internal one (one code path)
-        int count = props?.Headers.Count ?? 0;
+        var sig = props.SelectedIndex ?? own;   // caller's value signal, else the internal one (one code path)
+        int count = props.Headers.Count;
         int selRaw = sig.Value;
         int selected = count == 0 ? 0 : Math.Clamp(selRaw, 0, count - 1);
 

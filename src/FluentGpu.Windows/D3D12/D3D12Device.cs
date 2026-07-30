@@ -173,8 +173,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
     private IDCompositionDevice* _dcomp;
-    private IDCompositionTarget* _dcompTarget;
-    private IDCompositionVisual* _dcompVisual;
 
     // Video compositing spine (M0): the DComp video presenter shares this device's ONE IDCompositionDevice
     // (docs/plans/video-compositing-spine-design.md §4/§13.6). Each COMPOSITED swapchain gets its own presenter bound to

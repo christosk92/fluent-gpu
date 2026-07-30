@@ -1065,7 +1065,8 @@ static class TouchSuite
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new SnapFlingProbe());
             host.RunFrame();
             var vp = host.Scene.Root;
-            host.Scene.ScrollRef(vp).SnapInterval = SnapFlingProbe.RowH;   // survives reconcile (the patch never touches snap fields)
+            host.Scene.ScrollRef(vp).SnapInterval = SnapFlingProbe.RowH;   // survives reconcile: the snap patch is DECLARATION-GATED
+                                                                           // (it writes only when the element declares Snap; this probe does not)
 
             // A modest flick (the 0.95/s decay is near-frictionless, so even a slow flick coasts many rows). Settle to the
             // snap with a generous frame budget (the free-fling gate uses 600; a snap target can be ~tens of rows away).

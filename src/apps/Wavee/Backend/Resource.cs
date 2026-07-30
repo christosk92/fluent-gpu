@@ -185,6 +185,29 @@ public sealed class Resource<TKey, TValue> where TKey : notnull
         }
     }
 
+    /// <summary>Restore a DURABLE persisted row — the cold-tier twin of <see cref="Seed(TKey,TValue,DateTime,DateTime?,bool)"/>.
+    /// Two differences, both required because the cold read races the dealer route and the network:
+    ///  • never clobber a fresher resident value (a fetch that already landed wins over the row on disk);
+    ///  • never clear a <c>NeedsRevalidate</c> that <see cref="MarkStale"/> set while the read was in flight (OR, don't assign).
+    /// <see cref="MarkStale"/> creates a valueless entry with NeedsRevalidate=true, so the HasVal guard lets the row through
+    /// and the OR is what stops the seed from silently swallowing that push.</summary>
+    public void SeedPersisted(TKey key, TValue value, DateTime fetchedAtUtc, DateTime? expiresAtUtc, bool needsRevalidate)
+    {
+        lock (_gate)
+        {
+            if (!_cache.TryGetValue(key, out var e)) { e = new Entry(); _cache[key] = e; }
+            if (e.HasVal && fetchedAtUtc <= e.FetchedAt) return;   // the network already spoke, and spoke later
+            e.Val = value;
+            e.HasVal = true;
+            e.Error = null;
+            e.FetchedAt = fetchedAtUtc;
+            e.ExpiresAt = expiresAtUtc;
+            e.NeedsRevalidate |= needsRevalidate;
+            Touch(e);
+            EvictIfNeeded();
+        }
+    }
+
     /// <summary>Drop the value so the next Get/Use fetches. Unlike MarkStale, the dead value is never served again.</summary>
     public void Invalidate(TKey key)
     {

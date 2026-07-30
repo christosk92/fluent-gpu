@@ -293,7 +293,7 @@ public static class ConcertUi
                 // The provider ships no focal point, and these banners are far wider than the pane — a centred Cover
                 // window regularly decapitates the subject. Bias the crop to the upper third, where faces live.
                 Source = url, Fit = ImageFit.Cover, FocusY = 0.30f, DecodePx = 1024f, Placeholder = fill,
-                Transition = ImageTransition.Fade(220f),
+                RevealTransition = ImageTransition.Fade(220f),
             });
         }
         else

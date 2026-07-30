@@ -110,12 +110,17 @@ static class StoreEntityMerge
         return incoming with
         {
             Id = NonEmpty(incoming.Id, current.Id),
-            Title = NonEmpty(incoming.Title, current.Title),
+            // Title == Uri is the synthetic placeholder every thin writer seeds — treat it as missing so a resolved
+            // name can never be blanked by a cluster/library echo (lifted from the old MergeClusterTrack).
+            Title = TitleMissing(incoming.Title, incoming.Uri) ? current.Title : incoming.Title,
             Artists = Has(incoming.Artists) ? incoming.Artists : current.Artists,
             Album = MergeAlbumRef(current.Album, incoming.Album),
             DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
             IsExplicit = incoming.IsExplicit || current.IsExplicit,
-            Image = incoming.Image ?? current.Image,
+            // SameSource → prefer incoming (genuine cover refresh of the same identity). Else quality-rank.
+            Image = ImageSource.SameSource(incoming.Image, current.Image)
+                ? incoming.Image ?? current.Image
+                : ImageSource.ChooseBetter(incoming.Image, current.Image),
             AddedAt = incoming.AddedAt ?? current.AddedAt,
             AddedBy = incoming.AddedBy ?? current.AddedBy,
             // (has-video had an OR-merge here, for a field that no longer exists: it lived on the row so every writer
@@ -141,8 +146,13 @@ static class StoreEntityMerge
             MusicalKey = incoming.MusicalKey ?? current.MusicalKey,
             CamelotCode = incoming.CamelotCode ?? current.CamelotCode,
             CamelotColor = incoming.CamelotColor ?? current.CamelotColor,
+            CanonicalUri = incoming.CanonicalUri ?? current.CanonicalUri,
         };
     }
+
+    /// <summary>Blank OR <c>title == uri</c> (the synthetic placeholder thin writers seed before real metadata resolves).</summary>
+    public static bool TitleMissing(string? title, string uri)
+        => string.IsNullOrEmpty(title) || title == uri;
 
     public static Album Album(Album? current, Album incoming)
     {
@@ -212,21 +222,94 @@ static class StoreEntityMerge
         };
     }
 
+    /// <summary>Playlist merge is NOT blanket-NonEmpty. The header writer
+    /// (<c>OpRebaseStrategy.ApplyHeaderPatch</c>) is AUTHORITATIVE for Name/Description/Cover/Capabilities — absence
+    /// means clear (ClearDescription / ClearPicture / dead-letter rollback). IsPublic adopts only when the permission
+    /// writer stamped <see cref="Playlist.BasePermissionRevision"/> (both fields always travel together). Everything
+    /// else is per-field NonEmpty / null-coalesce / Has.</summary>
+    public static Playlist Playlist(Playlist? current, Playlist incoming)
+    {
+        if (current is null) return incoming;
+        bool permissionWrite = incoming.BasePermissionRevision is not null;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Name = incoming.Name,                                    // header writer authoritative ("" clears)
+            Description = incoming.Description,                      // null = ClearDescription
+            Cover = incoming.Cover,                                  // null = ClearPicture
+            Capabilities = incoming.Capabilities,                    // header writer authoritative
+            OwnerName = NonEmpty(incoming.OwnerName, current.OwnerName),
+            Owner = incoming.Owner ?? current.Owner,
+            Collaborators = Has(incoming.Collaborators) ? incoming.Collaborators : current.Collaborators,
+            Tracks = Has(incoming.Tracks) ? incoming.Tracks : current.Tracks,
+            TrackCount = incoming.TrackCount > 0 ? incoming.TrackCount : current.TrackCount,
+            Format = incoming.Format ?? current.Format,
+            Source = incoming.Source ?? current.Source,
+            Tuning = incoming.Tuning ?? current.Tuning,
+            IsPublic = permissionWrite ? incoming.IsPublic : current.IsPublic,
+            BasePermissionRevision = incoming.BasePermissionRevision ?? current.BasePermissionRevision,
+        };
+    }
+
+    public static Show Show(Show? current, Show incoming)
+    {
+        if (current is null) return incoming;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Name = NonEmpty(incoming.Name, current.Name),
+            Publisher = NonEmpty(incoming.Publisher, current.Publisher),
+            Cover = incoming.Cover ?? current.Cover,
+            Description = incoming.Description ?? current.Description,
+            // Episodes land via membership (S3); until then protect a present list from a thin header rewrite.
+            Episodes = Has(incoming.Episodes) ? incoming.Episodes : current.Episodes,
+        };
+    }
+
+    public static Episode Episode(Episode? current, Episode incoming)
+    {
+        if (current is null) return incoming;
+        return incoming with
+        {
+            Id = NonEmpty(incoming.Id, current.Id),
+            Title = NonEmpty(incoming.Title, current.Title),
+            ShowName = NonEmpty(incoming.ShowName, current.ShowName),
+            Image = incoming.Image ?? current.Image,
+            DurationMs = incoming.DurationMs > 0 ? incoming.DurationMs : current.DurationMs,
+            PublishedAt = incoming.PublishedAt != default && incoming.PublishedAt != DateTimeOffset.UnixEpoch
+                ? incoming.PublishedAt : current.PublishedAt,
+            Description = incoming.Description ?? current.Description,
+            // ProgressMs inventory (S1): the ONLY writer today is ProjectEpisode, which always lands the default 0 —
+            // there is no resume path yet. Adopt incoming always so a future resume writer can represent an explicit
+            // reset to 0; do NOT use `>0 ? incoming : current` (that would make resets unrepresentable).
+            ProgressMs = incoming.ProgressMs,
+        };
+    }
+
     // Discography merge: the incoming list is the authoritative group order + Kind (a fresh ArtistV4 write), so incoming
     // order wins — but a name-less incoming STUB must never downgrade an already-hydrated card (the "discography flickers
     // empty" bug). Per URI, a stub keeps the prior rich card (adopting only the incoming Kind); a hydrated incoming card
     // upgrades. A GraphQL-stats write passes TopAlbums:null → Has=false → keeps current wholesale.
-    static IReadOnlyList<Album>? MergeAlbumCards(IReadOnlyList<Album>? current, IReadOnlyList<Album>? incoming)
+    public static IReadOnlyList<Album>? MergeAlbumCards(IReadOnlyList<Album>? current, IReadOnlyList<Album>? incoming)
+        => MergeNamedByUri(current, incoming, static a => a.Uri, static a => a.Name,
+            static (rich, incoming) => rich with { Kind = incoming.Kind });
+
+    /// <summary>Shared stub-fold for album cards and <c>ArtistAlbumStub</c> lists — same uri/name/Kind discipline,
+    /// different record shapes. A name-less incoming keeps the prior rich row (adopting only Kind).</summary>
+    public static IReadOnlyList<T>? MergeNamedByUri<T>(
+        IReadOnlyList<T>? current, IReadOnlyList<T>? incoming,
+        Func<T, string> uriOf, Func<T, string> nameOf, Func<T, T, T> keepRichWithIncomingKind)
     {
         if (!Has(incoming)) return current;
         if (!Has(current)) return incoming;
-        var prior = new Dictionary<string, Album>(StringComparer.Ordinal);
-        for (int i = 0; i < current!.Count; i++) prior[current[i].Uri] = current[i];
-        var merged = new List<Album>(incoming!.Count);
+        var prior = new Dictionary<string, T>(StringComparer.Ordinal);
+        for (int i = 0; i < current!.Count; i++) prior[uriOf(current[i])] = current[i];
+        var merged = new List<T>(incoming!.Count);
         for (int i = 0; i < incoming.Count; i++)
         {
             var a = incoming[i];
-            merged.Add(a.Name.Length == 0 && prior.TryGetValue(a.Uri, out var rich) ? rich with { Kind = a.Kind } : a);
+            merged.Add(nameOf(a).Length == 0 && prior.TryGetValue(uriOf(a), out var rich)
+                ? keepRichWithIncomingKind(rich, a) : a);
         }
         return merged;
     }
@@ -283,6 +366,35 @@ static class StoreEntityMerge
 
     static bool Has<T>(IReadOnlyList<T>? value) => value is { Count: > 0 };
     static string NonEmpty(string value, string fallback) => value.Length > 0 ? value : fallback;
+}
+
+/// <summary>One shared notion of "thin" for row-pickers and the SyncAllAsync closure. Presentation em-dashes stay
+/// local; envelope completeness (<see cref="Wavee.Backend.Library.StoreLibrarySource.IsAlbumComplete"/>) stays separate.</summary>
+static class StoreEntityGaps
+{
+    public static bool RefNeedsName(in AlbumRef r) => r.Uri.Length > 0 && r.Name.Length == 0;
+
+    public static bool TrackUnnamed(Track t)
+        => StoreEntityMerge.TitleMissing(t.Title, t.Uri) || ArtistsNeedNames(t);
+
+    /// <summary>Thin enough that a TrackV4 re-fetch is owed (unnamed title / artist uris without names). Album-name
+    /// blanks are a separate album-uri arm — ProjectArtist does not rewrite denormalized track artist lists.</summary>
+    public static bool TrackNeedsData(Track t) => TrackUnnamed(t);
+
+    /// <summary>The now-playing early-out (C5): art + named artist + named album. Kept so Pathfinder getTrack does
+    /// not fire on every cluster heartbeat when TrackV4 already closed the gap.</summary>
+    public static bool NowPlayingReady(Track? t)
+        => t is not null
+           && ImageSource.IsUsable(t.Image)
+           && t.Artists.Count > 0 && t.Artists[0].Name.Length > 0
+           && t.Album.Name.Length > 0;
+
+    static bool ArtistsNeedNames(Track t)
+    {
+        for (int i = 0; i < t.Artists.Count; i++)
+            if (t.Artists[i].Uri.Length > 0 && t.Artists[i].Name.Length == 0) return true;
+        return false;
+    }
 }
 
 public sealed class InMemoryStore : IStore
@@ -527,11 +639,41 @@ public sealed class InMemoryStore : IStore
         MaybeBackstopEvict();
     }
     public Artist? GetArtist(string uri) { lock (_gate) { if (_artists.TryGetValue(uri, out var a)) { TouchUse(uri); return a; } return null; } }
-    public void UpsertPlaylist(Playlist p) { lock (_gate) { _playlists[p.Uri] = p; TouchUse(p.Uri); } Bump(p.Uri); MaybeBackstopEvict(); }
+    public void UpsertPlaylist(Playlist p)
+    {
+        lock (_gate)
+        {
+            _playlists.TryGetValue(p.Uri, out var current);
+            _playlists[p.Uri] = StoreEntityMerge.Playlist(current, p);
+            TouchUse(p.Uri);
+        }
+        Bump(p.Uri);
+        MaybeBackstopEvict();
+    }
     public Playlist? GetPlaylist(string uri) { lock (_gate) { if (_playlists.TryGetValue(uri, out var p)) { TouchUse(uri); return p; } return null; } }
-    public void UpsertShow(Show s) { lock (_gate) { _shows[s.Uri] = s; TouchUse(s.Uri); } Bump(s.Uri); MaybeBackstopEvict(); }
+    public void UpsertShow(Show s)
+    {
+        lock (_gate)
+        {
+            _shows.TryGetValue(s.Uri, out var current);
+            _shows[s.Uri] = StoreEntityMerge.Show(current, s);
+            TouchUse(s.Uri);
+        }
+        Bump(s.Uri);
+        MaybeBackstopEvict();
+    }
     public Show? GetShow(string uri) { lock (_gate) { if (_shows.TryGetValue(uri, out var s)) { TouchUse(uri); return s; } return null; } }
-    public void UpsertEpisode(Episode e) { lock (_gate) { _episodes[e.Uri] = e; TouchUse(e.Uri); } Bump(e.Uri); MaybeBackstopEvict(); }
+    public void UpsertEpisode(Episode e)
+    {
+        lock (_gate)
+        {
+            _episodes.TryGetValue(e.Uri, out var current);
+            _episodes[e.Uri] = StoreEntityMerge.Episode(current, e);
+            TouchUse(e.Uri);
+        }
+        Bump(e.Uri);
+        MaybeBackstopEvict();
+    }
     public Episode? GetEpisode(string uri) { lock (_gate) { if (_episodes.TryGetValue(uri, out var e)) { TouchUse(uri); return e; } return null; } }
 
     // A full replace (each fetch yields the complete association; a 304 keeps the prior record with a bumped FetchedAt,
@@ -540,7 +682,20 @@ public sealed class InMemoryStore : IStore
     // be silent side-table data behind a mirrored Track.HasVideo — that mirror is gone, and with it the ability of a
     // row and the expand drawer to disagree about the same fetched fact.
     public void UpsertVideoAssociation(VideoAssociation a) { lock (_gate) _videoAssoc[a.Uri] = a; Bump(a.Uri); }
-    public VideoAssociation? GetVideoAssociation(string uri) { lock (_gate) return _videoAssoc.TryGetValue(uri, out var a) ? a : null; }
+    public VideoAssociation? GetVideoAssociation(string uri)
+    {
+        lock (_gate)
+        {
+            if (_videoAssoc.TryGetValue(uri, out var a)) return a;
+            // Miss-bridge (S4): never-detected aliases may only have CanonicalUri stamped — retry once under the
+            // already-held lock. Hearts bridge deliberately NOT shipped until unsave targets row.CanonicalUri.
+            if (_tracks.TryGetValue(uri, out var t) && t.CanonicalUri is { Length: > 0 } canon
+                && !string.Equals(canon, uri, StringComparison.Ordinal)
+                && _videoAssoc.TryGetValue(canon, out var bridged))
+                return bridged;
+            return null;
+        }
+    }
 
     // User video overrides DO Bump — unlike the association side table, an attach/remove is a user edit whose availability
     // edge must reach the player (has-video → the audio↔video swap) and any roster view. Two signals per write: the

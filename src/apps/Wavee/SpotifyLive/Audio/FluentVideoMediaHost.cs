@@ -60,7 +60,7 @@ public sealed class FluentVideoMediaHost : IMediaHost
     MediaPlayer? _player;
     string _sourceKey = "";           // the PopOutVideoSource.Key the live player was built for ("" = none)
     double _volume = 1.0;
-    readonly bool _muted;
+    bool _muted;                      // the app's mute intent — re-applied to EVERY player this host builds (see BuildAndOpenAsync)
     PlaybackState _lastState = PlaybackState.Idle;
     bool _errorReported;
     bool _durationReported;           // DurationKnown fires at most ONCE per loaded source
@@ -187,6 +187,17 @@ public sealed class FluentVideoMediaHost : IMediaHost
         _volume = Math.Clamp(volume01, 0, 1);
         var p = CurrentPlayer;
         if (p is not null) { try { p.SetVolume(_volume); } catch (Exception ex) { _log.Info($"video-host volume failed: {ex.Message}"); } }
+    }
+
+    /// <summary>Mute/unmute the VIDEO half of the current media. Mirrors <see cref="SetVolume"/>: the intent is STORED, so a
+    /// player built later (a track skip, a placement flip, a video that starts while the app is already muted) opens muted
+    /// too — <see cref="BuildAndOpenAsync"/> re-applies it to every player. Without this the app's mute was silently lost the
+    /// moment a music video became the current media and the video played at full volume.</summary>
+    public void SetMuted(bool muted)
+    {
+        _muted = muted;
+        var p = CurrentPlayer;
+        if (p is not null) { try { p.SetMuted(_muted); } catch (Exception ex) { _log.Info($"video-host mute failed: {ex.Message}"); } }
     }
 
     // ── video-specific load (called by the controller at the switch, NOT via IMediaHost) ─────────────────────────────
@@ -519,5 +530,47 @@ public sealed class FluentVideoMediaHost : IMediaHost
         lock (_gate) { old = _player; _player = null; _sourceKey = ""; _watchdog.Disarm(); }
         if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
         while (_toDispose.TryDequeue(out var queued)) { try { await queued.DisposeAsync().ConfigureAwait(false); } catch { } }
+    }
+}
+
+/// <summary>The output-device control for the WHOLE local media stack, not just its audio half.
+/// <para>Mute reaches the app through <see cref="IAudioOutputDeviceControl"/> (the player bar and the device picker both go
+/// through <c>LocalAudioDeviceService.SetMuted</c>), and only the AUDIO host implements that interface — so a mute set while
+/// a music video was the current media, or set before one started, was silently dropped and the video played at full volume.
+/// This composite hands every other member to the audio host verbatim and additionally fans <see cref="SetOutputMuted"/> out
+/// to the video host, which stores the intent and re-applies it to every player it builds.</para>
+/// <para>Both dependencies are REQUIRED: the composition root constructs this only when a real audio host exists, so there is
+/// no nullable-with-silent-default half here.</para></summary>
+public sealed class LocalMediaOutputControl : IAudioOutputDeviceControl
+{
+    readonly IAudioOutputDeviceControl _audio;
+    readonly FluentVideoMediaHost _video;
+
+    public LocalMediaOutputControl(IAudioOutputDeviceControl audio, FluentVideoMediaHost video)
+    {
+        _audio = audio;
+        _video = video;
+    }
+
+    public event Action<OutputDeviceNotice>? OutputDeviceNotice
+    {
+        add => _audio.OutputDeviceNotice += value;
+        remove => _audio.OutputDeviceNotice -= value;
+    }
+
+    public event Action<double, bool>? ExternalVolumeChanged
+    {
+        add => _audio.ExternalVolumeChanged += value;
+        remove => _audio.ExternalVolumeChanged -= value;
+    }
+
+    /// <summary>Endpoint selection is an audio-stack concern: the video session renders through Media Foundation's own
+    /// default-endpoint routing, so there is nothing to fan out here.</summary>
+    public void SetOutputDevice(string? deviceId) => _audio.SetOutputDevice(deviceId);
+
+    public void SetOutputMuted(bool muted)
+    {
+        _audio.SetOutputMuted(muted);
+        _video.SetMuted(muted);
     }
 }

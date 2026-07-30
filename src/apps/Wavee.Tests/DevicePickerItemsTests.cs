@@ -31,7 +31,7 @@ public class DevicePickerItemsTests
         Assert.Equal(2, rows.Count(r => r.Kind == DevicePickerRowKind.Header));
         Assert.Contains(rows, r => r.Kind == DevicePickerRowKind.Header && r.Label == "This computer");
         Assert.Contains(rows, r => r.Kind == DevicePickerRowKind.Header && r.Label == "Spotify Connect");
-        Assert.Single(rows.Where(r => r.Kind == DevicePickerRowKind.Separator));
+        Assert.Single(rows, r => r.Kind == DevicePickerRowKind.Separator);
         Assert.Contains(rows, r => r.Kind == DevicePickerRowKind.LocalDefault);
         Assert.Contains(rows, r => r.Kind == DevicePickerRowKind.LocalDevice && r.Label == "Speakers");
     }

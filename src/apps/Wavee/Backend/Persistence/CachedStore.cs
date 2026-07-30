@@ -89,6 +89,8 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     volatile bool _coldNotFullyResident = true;
     long _warmMillis;
     int _warmRows;
+    long _savedMillis, _videoAssocMillis;
+    int _savedRows, _videoAssocRows;
 
     public CachedStore(IColdStore cold, int maxResidentPlaylists = 128, long maxResidentBytes = 24L * 1024 * 1024)
     {
@@ -98,9 +100,16 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
         // IDENTITY tier only — tiny, and the very first render reads it. NO entity replay (that is WarmAsync's job).
         // video_assoc stays EAGER (locked decision 8): GetVideoAssociation is a hot-only reader and the video-edge code
         // is fragile — a false "no video" during the warm window flips the placement machine at a track edge.
-        foreach (var v in _cold.LoadAllVideoAssociations()) ReplayVideo(v);
+        // §G startup marks: these two loops are the only O(LIBRARY) work before first paint — video_assoc is a full-table
+        // scan plus a per-row JSON decode, and LoadAllSaved reads EVERY collection_items row into two uncapped maps. They
+        // used to be pooled into one opaque `boot.identity_load_ms`; split so a regression names itself.
+        long t = System.Environment.TickCount64;
+        foreach (var v in _cold.LoadAllVideoAssociations()) { ReplayVideo(v); _videoAssocRows++; }
+        _videoAssocMillis = System.Environment.TickCount64 - t;
         foreach (var o in _cold.LoadAllVideoOverrides()) _hot.UpsertVideoOverride(o);          // the user's video curation
-        foreach (var s in _cold.LoadAllSaved()) _hot.SetSaved(s.SetId, s.Uri, true, s.Sync, s.AddedAtMs);   // library state
+        t = System.Environment.TickCount64;
+        foreach (var s in _cold.LoadAllSaved()) { _hot.SetSaved(s.SetId, s.Uri, true, s.Sync, s.AddedAtMs); _savedRows++; }
+        _savedMillis = System.Environment.TickCount64 - t;
         // The two identity-tier pin mirrors. Both are uri-only scans of tiny tables (≤50 rows / the sidebar), and the
         // gate needs them from the FIRST write, so they cannot wait for the warm pass.
         foreach (var r in _cold.LoadRecentSurfaces()) _recentSurfaces.Add(r.Uri);
@@ -124,6 +133,14 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     /// <c>boot.warm_ms</c> / <c>boot.warm_rows</c>). Valid once <see cref="WarmComplete"/> has run.</summary>
     public long WarmMillis => System.Threading.Volatile.Read(ref _warmMillis);
     public int WarmRows => System.Threading.Volatile.Read(ref _warmRows);
+
+    /// <summary>The two O(library) legs of the eager identity tier, split out of <c>boot.identity_load_ms</c> (§G startup
+    /// marks). Both are read-only after the ctor, so no volatile read is needed. Watch the ROW counts, not just the ms:
+    /// they are what grows, and the ms only follows once the working set stops fitting in the page cache.</summary>
+    public long SavedMillis => _savedMillis;
+    public int SavedRows => _savedRows;
+    public long VideoAssocMillis => _videoAssocMillis;
+    public int VideoAssocRows => _videoAssocRows;
 
     public int ResidentMembershipCount { get { lock (_lruGate) return _resident.Count; } }
     public long ResidentMembershipBytes { get { lock (_lruGate) return _residentBytes; } }
@@ -458,17 +475,20 @@ public sealed class CachedStore : IStore, ILibraryCandidateStore, IDisposable
     public void UpsertPlaylist(Playlist p)
     {
         _hot.UpsertPlaylist(p);
-        if (PinnedPlaylist(p.Uri)) PersistPlaylist(p);
+        var merged = _hot.GetPlaylist(p.Uri) ?? p;
+        if (PinnedPlaylist(merged.Uri)) PersistPlaylist(merged);
     }
     public void UpsertShow(Show s)
     {
         _hot.UpsertShow(s);
-        if (PinnedShowOrEpisode(s.Uri)) PersistShow(s);
+        var merged = _hot.GetShow(s.Uri) ?? s;
+        if (PinnedShowOrEpisode(s.Uri)) PersistShow(merged);
     }
     public void UpsertEpisode(Episode e)
     {
         _hot.UpsertEpisode(e);
-        if (PinnedShowOrEpisode(e.Uri)) PersistEpisode(e);
+        var merged = _hot.GetEpisode(e.Uri) ?? e;
+        if (PinnedShowOrEpisode(e.Uri)) PersistEpisode(merged);
     }
     public void UpsertVideoAssociation(VideoAssociation a) { _hot.UpsertVideoAssociation(a); _cold.UpsertVideoAssociation(a.Uri, JsonSerializer.SerializeToUtf8Bytes(a, EntityJson.Default.VideoAssociation)); }
     // The user's video curation: typed columns, not a JSON blob (the roster UI queries them by field), so no serializer

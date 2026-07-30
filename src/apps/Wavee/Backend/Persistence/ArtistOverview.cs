@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Wavee.Backend;
 using Wavee.Core;
 
 namespace Wavee.Backend.Persistence;
@@ -15,7 +16,10 @@ namespace Wavee.Backend.Persistence;
 //
 // The split is loss-tolerant by construction: album refs re-fatten from the STANDALONE album rows (ArtistDiscography.
 // Assemble already knows how), and anything genuinely missing simply degrades to the stub the overview stored.
-public sealed record ArtistAlbumStub(string Uri, int Kind, string Name, int Year, string? CoverUrl);
+// TrackCount is stored because the artist page's inline drawer RESERVES height from it before the album is fetched.
+// Without it a cold-restored card came back as TrackCount 0 and the drawer reserved no rows. Optional/last ⇒ documents
+// written before this field deserialize with 0: no migration.
+public sealed record ArtistAlbumStub(string Uri, int Kind, string Name, int Year, string? CoverUrl, int TrackCount = 0);
 
 /// <summary>One row of the artist's Popular chart: the track uri plus ITS PLAY COUNT.
 ///
@@ -192,7 +196,7 @@ public static class ArtistSplit
     }
 
     static ArtistAlbumStub? Stub(Album? a)
-        => a is { Uri.Length: > 0 } ? new ArtistAlbumStub(a.Uri, (int)a.Kind, a.Name, a.Year, NullIfEmpty(a.Cover?.Url)) : null;
+        => a is { Uri.Length: > 0 } ? new ArtistAlbumStub(a.Uri, (int)a.Kind, a.Name, a.Year, NullIfEmpty(a.Cover?.Url), a.TrackCount) : null;
 
     static IReadOnlyList<ArtistTopTrack>? TrackUris(IReadOnlyList<Track>? tracks)
     {
@@ -214,7 +218,7 @@ public static class ArtistSplit
     static Album? Card(ArtistAlbumStub? s) => s is null || s.Uri.Length == 0
         ? null
         : new Album("", s.Uri, s.Name, s.CoverUrl is null ? null : new Image(s.CoverUrl),
-            Array.Empty<ArtistRef>(), s.Year, 0, Kind: (AlbumKind)s.Kind);
+            Array.Empty<ArtistRef>(), s.Year, s.TrackCount, Kind: (AlbumKind)s.Kind);
 
     /// <summary>Re-fatten the chart: the track body comes from the shared row (title, artists, art, duration — whatever
     /// the store knows), the PLAY COUNT comes from this document. The stored count wins because it is the only copy
@@ -231,19 +235,8 @@ public static class ArtistSplit
     }
 
     static IReadOnlyList<ArtistAlbumStub>? MergeCards(IReadOnlyList<ArtistAlbumStub>? stored, IReadOnlyList<ArtistAlbumStub>? incoming)
-    {
-        if (!Has(incoming)) return stored;
-        if (!Has(stored)) return incoming;
-        var prior = new Dictionary<string, ArtistAlbumStub>(StringComparer.Ordinal);
-        for (int i = 0; i < stored!.Count; i++) prior[stored[i].Uri] = stored[i];
-        var merged = new List<ArtistAlbumStub>(incoming!.Count);
-        for (int i = 0; i < incoming.Count; i++)
-        {
-            var s = incoming[i];
-            merged.Add(s.Name.Length == 0 && prior.TryGetValue(s.Uri, out var rich) ? rich with { Kind = s.Kind } : s);
-        }
-        return merged;
-    }
+        => StoreEntityMerge.MergeNamedByUri(stored, incoming, static s => s.Uri, static s => s.Name,
+            static (rich, incoming) => rich with { Kind = incoming.Kind });
 
     static bool Has<T>(IReadOnlyList<T>? v) => v is { Count: > 0 };
     static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;

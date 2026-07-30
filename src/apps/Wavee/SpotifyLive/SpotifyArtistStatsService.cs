@@ -45,9 +45,13 @@ sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store, Wave
                     AlbumsTotal = 0, SinglesTotal = 0, CompilationsTotal = 0,
                     FetchedAt = DateTimeOffset.UtcNow,
                 });
-                // Hydrate the shared track rows from the overview too: these are real titles/artists/albums/durations
-                // for rows a thin cluster or library write may only know as a gid, and the merge keeps whichever
-                // fields the writer actually knew. The CHART's play counts do not depend on this — they persist with
+                // Hydrate the shared track rows from the overview too: real titles/artists/durations/covers plus the
+                // album's IDENTITY for rows a thin cluster or library write may only know as a gid, and the merge keeps
+                // whichever fields the writer actually knew. NOT the album NAME: queryArtistOverview's topTracks
+                // `albumOfTrack` has no name field, so SpotifyExportMapper.MapArtistTrack writes a name-less AlbumRef
+                // (uri + cover only) — this write is honest about that rather than complete. The title is filled by
+                // MetadataService.SyncAllAsync's blank-AlbumRef closure / album hydration, and cannot be clobbered back to empty
+                // (MergeAlbumRef is NonEmpty-guarded). The CHART's play counts do not depend on this — they persist with
                 // the chart itself (ArtistOverviewDoc) precisely so no other writer of these rows can drop them.
                 int withCounts = 0;
                 if (overview.TopTracks is { Count: > 0 } landed)

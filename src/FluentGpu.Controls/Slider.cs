@@ -232,7 +232,7 @@ public static partial class Slider
     /// what drives the WinUI dot COLOR (control CommonStates, lines 285-289/310-314); WinUI's dot SCALE is thumb-local
     /// hover, not reachable while drag handlers must stay on the track (documented engine concession).
     /// </summary>
-    internal static BoxEl BuildThumb(Style s, bool isEnabled, Action<NodeHandle>? onRealized, Func<Affine2D>? transformBind, TemplateParts? parts)
+    internal static BoxEl BuildThumb(Style s, bool isEnabled, Action<NodeHandle>? onRealized, Func<Affine2D> transformBind, TemplateParts? parts)
     {
         ColorF dot = isEnabled ? s.ThumbFill : s.ThumbFillDisabled;
         ColorF dotHover = isEnabled ? s.ThumbFillPointerOver : s.ThumbFillDisabled;   // SliderThumbBackgroundPointerOver (line 15)
@@ -276,9 +276,8 @@ public static partial class Slider
             ring = m with
             {
                 OnRealized = TemplateParts.Chain(onRealized, m.OnRealized),
-                // The value-position bind always wins; a modifier's bound Transform survives otherwise
-                // (m's Transform carries through the `with` clone — *Bind aliases are write-only).
-                Transform = transformBind is not null ? transformBind : m.Transform,
+                // The value-position bind always wins (a modifier's bound Transform is overwritten).
+                Transform = transformBind,
                 Children = thumbKids,
             };
         }

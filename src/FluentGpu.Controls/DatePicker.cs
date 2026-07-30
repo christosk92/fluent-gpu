@@ -26,7 +26,9 @@ namespace FluentGpu.Controls;
 /// Phase 4 the engine DOES carry the snap-points seam (<see cref="FluentGpu.Scene.ScrollSnap"/> — the ScrollPresenter
 /// applicable-zone math — plus the <c>ScrollIntegrator</c> fling-retarget that lands a flick exactly on a configured
 /// <c>ScrollState.SnapInterval</c> row): any control built on a real virtualized <c>ScrollEl</c> viewport now gets
-/// touch-fling-snap-to-row for free (set <c>SnapInterval = itemHeight</c>). This DatePicker column is deliberately NOT
+/// touch-fling-snap-to-row for free — declaratively via <c>ScrollEl.Snap = SnapSpec.Every(itemHeight)</c>, or by writing
+/// <c>SnapInterval</c> onto the realized viewport when the interval is a live layout measure (the reconciler's snap patch is
+/// declaration-gated, so a non-declaring viewport keeps such a write). This DatePicker column is deliberately NOT
 /// a scroll viewport — it is the fixed 9-row RepeatButton + click-to-select model WinUI ALSO ships for the
 /// keyboard/mouse path, keyed off a tentative-index signal (no offset to fling). Converting it to a scrolling looping
 /// strip is a separate control rewrite; the visual result here — a fixed window, centered selection, up/down repeat

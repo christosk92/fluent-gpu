@@ -6,6 +6,7 @@ using Google.Protobuf;
 using Google.Protobuf.WellKnownTypes;
 using Wavee.Backend;
 using Wavee.Backend.Spotify;
+using Wavee.Core;
 using Xm = Wavee.Protocol.ExtendedMetadata;
 
 namespace Wavee.Backend.Metadata;
@@ -22,6 +23,14 @@ public sealed class MetadataService
     readonly Resource<MetadataKey, long> _res;
     readonly ExtensionEtagCache? _extensionCache;
     readonly Func<SessionContext> _ctx;
+
+    // Chokepoint closure (S2): after a SyncAll lands (or skips-as-fresh) track uris, scan resident rows for blank
+    // AlbumRefs / thin tracks and fire-and-forget a depth-bounded second wave. Same bounds the deleted
+    // LikedAlbumNameBackfill shipped — once-per-session, 300/batch, ≤900/pass, 512-row yield.
+    const int ClosureBatchSize = 300;
+    const int ClosureMaxPerPass = 900;
+    readonly object _closureGate = new();
+    readonly HashSet<string> _closureAttempted = new(StringComparer.Ordinal);
 
     public MetadataService(IMetadataSource source, IStore store, Func<SessionContext> ctx, TimeSpan? ttl = null,
         ExtensionEtagCache? extensionCache = null)
@@ -41,10 +50,21 @@ public sealed class MetadataService
     public Task EnsureAsync(string uri) => _res.Revalidate(Key(uri));
     public int FetchCount => _res.FetchCount;
 
+    /// <summary>Mark a catalog uri dirty so the next <see cref="SyncAllAsync"/> / <see cref="Use"/> re-fetches it.
+    /// Video recovery and dealer routes call this when a sealed miss must not win against a known-better outcome.</summary>
+    public void MarkStale(string uri) => _res.MarkStale(Key(uri));
+
     /// <summary>BULK hydrate many entities (a whole playlist). PARTIAL-CACHE aware: only stale/missing entities hit the
     /// network — of a 10k playlist with 5k already fresh, just the 5k misses fetch, and a fully-cached sync makes zero
-    /// requests. The misses go to the source as one batch (which itself chunks by body size + gzips). Alloc-free parse.</summary>
-    public async Task SyncAllAsync(IReadOnlyList<string> uris, CancellationToken ct = default)
+    /// requests. The misses go to the source as one batch (which itself chunks by body size + gzips). Alloc-free parse.
+    /// Freshness seals ONLY uris whose projection landed — omitted / Missing payloads stay unsealed so the next hydrate
+    /// retries them (outcome seeding, not batch-membership seeding).
+    /// When <paramref name="closeRefs"/> is true (default), a fire-and-forget closure scans the requested TRACK rows for
+    /// blank AlbumRefs / thin tracks and re-enters them once (depth-bounded — the second wave does not rescan).</summary>
+    public Task SyncAllAsync(IReadOnlyList<string> uris, CancellationToken ct = default)
+        => SyncAllAsync(uris, ct, closeRefs: true);
+
+    public async Task SyncAllAsync(IReadOnlyList<string> uris, CancellationToken ct, bool closeRefs)
     {
         var misses = new List<EntityRef>(uris.Count);   // the bulk path is cold-cache (mostly all-miss) → pre-size, no resizes
         foreach (var uri in uris)
@@ -53,15 +73,70 @@ public sealed class MetadataService
             if (cached.IsReady && !cached.IsStale) continue;   // fresh in cache → skip
             misses.Add(EntityRef.Parse(uri));
         }
-        if (misses.Count == 0) return;
-        if (_extensionCache is not null)
-            await SyncAllConditionalAsync(misses, ct).ConfigureAwait(false);
-        else
-            await _source.FetchAsync(misses, _store, ct).ConfigureAwait(false);
-        foreach (var e in misses) _res.Seed(Key(e.Uri), _store.Version(e.Uri));   // mark fetched → next sync skips them
+        if (misses.Count > 0)
+        {
+            IReadOnlyCollection<string> landed;
+            if (_extensionCache is not null)
+                landed = await SyncAllConditionalAsync(misses, ct).ConfigureAwait(false);
+            else
+                landed = await _source.FetchAsync(misses, _store, ct).ConfigureAwait(false);
+            foreach (var uri in landed) _res.Seed(Key(uri), _store.Version(uri));
+        }
+        // Closure scans the ORIGINAL request (fresh-skips included) — a row cached thin by an earlier session still heals.
+        if (closeRefs && uris.Count > 0) ScheduleClosure(uris, ct);
     }
 
-    async Task SyncAllConditionalAsync(IReadOnlyList<EntityRef> misses, CancellationToken ct)
+    void ScheduleClosure(IReadOnlyList<string> requested, CancellationToken ct)
+    {
+        if (ct.IsCancellationRequested) return;
+        // Snapshot the list — callers reuse buffers; the closure runs off-thread.
+        var snapshot = requested is string[] arr ? (IReadOnlyList<string>)arr : new List<string>(requested);
+        _ = Task.Run(async () =>
+        {
+            try { await RunClosureAsync(snapshot, ct).ConfigureAwait(false); }
+            catch (OperationCanceledException) { }
+            catch { /* best-effort — thin refs are cosmetic gaps until the next surface touch */ }
+        }, ct);
+    }
+
+    async Task RunClosureAsync(IReadOnlyList<string> requested, CancellationToken ct)
+    {
+        List<string>? need = null;
+        for (int i = 0; i < requested.Count; i++)
+        {
+            if ((i & 511) == 511) await Task.Delay(1, ct).ConfigureAwait(false);
+            var uri = requested[i];
+            if (!uri.StartsWith("spotify:track:", StringComparison.Ordinal)) continue;
+            if (_store.GetTrack(uri) is not { } track) continue;
+
+            if (StoreEntityGaps.RefNeedsName(track.Album))
+            {
+                bool first;
+                lock (_closureGate) first = _closureAttempted.Add(track.Album.Uri);
+                if (first) (need ??= new List<string>(ClosureBatchSize)).Add(track.Album.Uri);
+            }
+            if (StoreEntityGaps.TrackNeedsData(track))
+            {
+                bool first;
+                lock (_closureGate) first = _closureAttempted.Add(uri);
+                if (first) (need ??= new List<string>(ClosureBatchSize)).Add(uri);
+            }
+            if (need is { Count: >= ClosureMaxPerPass }) break;
+        }
+        if (need is null) return;
+
+        for (int i = 0; i < need.Count; i += ClosureBatchSize)
+        {
+            ct.ThrowIfCancellationRequested();
+            var batch = need.GetRange(i, Math.Min(ClosureBatchSize, need.Count - i));
+            // closeRefs:false — depth bound; do not rescan album/track second-wave for further refs.
+            try { await SyncAllAsync(batch, ct, closeRefs: false).ConfigureAwait(false); }
+            catch (OperationCanceledException) { throw; }
+            catch { /* counted nowhere — next surface touch retries via unsealed freshness */ }
+        }
+    }
+
+    async Task<IReadOnlyCollection<string>> SyncAllConditionalAsync(IReadOnlyList<EntityRef> misses, CancellationToken ct)
     {
         var extensionRequests = new List<(string Uri, Xm.ExtensionKind Kind)>(misses.Count);
         var fallback = new List<EntityRef>();
@@ -72,17 +147,23 @@ public sealed class MetadataService
             else extensionRequests.Add((entity.Uri, kind));
         }
 
+        var landed = new HashSet<string>(StringComparer.Ordinal);
         if (extensionRequests.Count > 0)
         {
             var cached = await _extensionCache!.GetAsync(extensionRequests, ct).ConfigureAwait(false);
-            ProjectCachedExtensions(cached, _store);
+            foreach (var uri in ProjectCachedExtensions(cached, _store))
+                landed.Add(uri);
         }
 
         if (fallback.Count > 0)
-            await _source.FetchAsync(fallback, _store, ct).ConfigureAwait(false);
+        {
+            foreach (var uri in await _source.FetchAsync(fallback, _store, ct).ConfigureAwait(false))
+                landed.Add(uri);
+        }
+        return landed;
     }
 
-    static void ProjectCachedExtensions(
+    static HashSet<string> ProjectCachedExtensions(
         IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), CachedExtension> cached, IStore store)
     {
         var arrays = new Dictionary<Xm.ExtensionKind, Xm.EntityExtensionDataArray>();
@@ -101,10 +182,10 @@ public sealed class MetadataService
             });
         }
 
-        if (arrays.Count == 0) return;
+        if (arrays.Count == 0) return [];
         var resp = new Xm.BatchedExtensionResponse();
         foreach (var array in arrays.Values) resp.ExtendedMetadata.Add(array);
-        ExtendedMetadataSource.ProjectResponse(resp.ToByteArray(), store);
+        return ExtendedMetadataSource.ProjectResponse(resp.ToByteArray(), store);
     }
 
     MetadataKey Key(string uri) => new(SpotifyHeaders.NormalizeLanguage(_ctx().Locale), uri);

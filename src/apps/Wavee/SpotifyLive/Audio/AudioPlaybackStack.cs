@@ -117,6 +117,10 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
     public void StartProvisioning(CancellationToken ct)
     {
         Log(WaveeLogLevel.Debug, "playplay.provision.scheduled", "PlayPlay provisioning scheduled");
+        // Build the WASAPI-backed PCM backend HERE rather than in the host ctor: the mix-format probe opens (and then
+        // discards) a real endpoint, which on a cold start can stall for seconds. This is off the go-live path but still
+        // well ahead of first play, so the user pays it in neither place.
+        if (Host is FluentMediaAudioHost fluent) fluent.WarmBackend();
         _ = ProvisionAndBindAsync(ct);
     }
 

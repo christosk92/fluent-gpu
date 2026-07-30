@@ -49,7 +49,10 @@ public readonly record struct EntityRef(string Uri, EntityKind Kind)
 /// <see cref="MetadataService"/> coordinates freshness, dedup, and batching.</summary>
 public interface IMetadataSource
 {
-    Task FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct);
+    /// <summary>Fetch and project into the store. Returns the uris that actually landed (projection wrote an entity) —
+    /// not merely requested. Omitted / failed entities stay out so <see cref="MetadataService"/> seals freshness on
+    /// outcome only.</summary>
+    Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct);
 }
 
 /// <summary>Packs entities into request chunks by serialized BODY SIZE (not a fixed count), so each POST is pushed as

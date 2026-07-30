@@ -78,6 +78,9 @@ message LeanTrack {
     // case. The capture holds no future values (nothing unreleased was open during it), so that branch follows from
     // the field's meaning rather than being demonstrated by these samples.
     optional int64 earliest_live_timestamp = 17;
+    // Linked-URI alias → canonical playable (metadata.proto Track.canonical_uri = 36). Stamped onto Track.CanonicalUri
+    // so video recovery / miss-bridges do not re-parse the full Track proto per alias.
+    optional string canonical_uri = 36;
 }
 
 // Track.file / Track.alternative[].file. Only presence is read — the format/id detail belongs to the audio path.
@@ -134,7 +137,12 @@ message LeanShow {
     optional string description = 64;
     optional string publisher = 66;
     optional LeanImageGroup cover_image = 69;
+    // ShowV4 episode list (metadata.proto Show.episode = 70) — gid-only refs. Projected into the generic membership
+    // plane (SetMembership) so GetShowAsync can join resident Episode entities; previously discarded by the lean view.
+    repeated LeanEpisodeRef episode = 70;
 }
+
+message LeanEpisodeRef { optional bytes gid = 1; }
 
 message LeanEpisode {
     optional bytes gid = 1;

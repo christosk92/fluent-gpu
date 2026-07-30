@@ -18,6 +18,23 @@ internal static class PlaybackBucketDiagnostics
     public static void Startup(string source, string message, params WaveeLogField[] fields)
         => WaveeLog.Instance.Info(Category, "startup", source + " - " + message, fields);
 
+    /// <summary>Info-level shuffle-toggle attribution (lands in the log file): the surface that flipped it, whether the
+    /// state actually changed, the anchor row's provider, and the session context.</summary>
+    public static void ShuffleToggle(string source, bool on, bool changed, QueueSnapshot snap)
+        => WaveeLog.Instance.Info(Category, "shuffle.toggle",
+            "source=" + source
+            + " on=" + (on ? "1" : "0")
+            + " changed=" + (changed ? "1" : "0")
+            + " anchorProvider=" + (snap.Current?.Provider.ToWire() ?? "-")
+            + " ctx=" + Safe(snap.ContextUri)
+            + " upcoming=" + snap.Upcoming.Length.ToString(CultureInfo.InvariantCulture),
+            WaveeLogField.Of("source", source),
+            WaveeLogField.Of("on", on),
+            WaveeLogField.Of("changed", changed),
+            WaveeLogField.Of("anchorProvider", snap.Current?.Provider.ToWire() ?? ""),
+            WaveeLogField.Of("ctx", snap.ContextUri ?? ""),
+            WaveeLogField.Of("upcoming", snap.Upcoming.Length));
+
     public static void Continuation(string eventId, string message, params WaveeLogField[] fields)
         => WaveeLog.Instance.Debug(Category, eventId, message, fields);
 

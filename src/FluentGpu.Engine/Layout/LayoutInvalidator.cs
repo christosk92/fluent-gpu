@@ -58,6 +58,17 @@ public sealed class LayoutInvalidator
         && s.FlexGrow == 0f && s.FlexShrink == 0f
         && (f & NodeFlags.ClipsToBounds) != 0);
 
+    /// <summary>A scroll viewport is a relayout firewall only when its main-axis size is parent-owned. Auto-main,
+    /// non-growing ItemsView presenters intentionally report their content extent to an outer page scroller; stopping
+    /// there would leave that parent on the previous extent while a measured row reflows (album drawer snap/overlap).</summary>
+    private bool IsHardScrollBoundary(NodeHandle node, in LayoutInput s)
+    {
+        if (!_scene.TryGetScroll(node, out var sc)) return false;
+        if (sc.ContentSized) return true;                                  // popup presenters own their clamped extent
+        bool explicitMain = sc.Orientation == 1 ? !float.IsNaN(s.Width) : !float.IsNaN(s.Height);
+        return s.FlexGrow != 0f || explicitMain;
+    }
+
     private NodeHandle FindRelayoutRoot(NodeHandle node, out int depth)
     {
         var cur = node;
@@ -65,8 +76,9 @@ public sealed class LayoutInvalidator
         while (true)
         {
             if (cur == _scene.Root) return cur;
-            if (_scene.HasScroll(cur)) return cur;                          // a scroll/virtual viewport is a boundary (§4.3, §6)
-            if (IsLayoutBoundary(_scene.Layout(cur), _scene.Flags(cur))) return cur;
+            ref LayoutInput input = ref _scene.Layout(cur);
+            if (IsLayoutBoundary(input, _scene.Flags(cur))) return cur;
+            if (IsHardScrollBoundary(cur, input)) return cur;               // fixed/filling viewport owns overflow (§4.3, §6)
             var parent = _scene.Parent(cur);
             if (parent.IsNull) return cur;
             cur = parent;

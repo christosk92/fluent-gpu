@@ -14,8 +14,10 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
 
-    <!-- Keep scaffold builds green; tighten later. -->
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Warning-clean is enforced: the shipping libraries + SourceGen build with zero warnings, and new ones fail
+         the build. Test/harness/gallery projects that still carry pre-existing warnings (xUnit1051, CS0436 shim
+         conflicts) opt out per-csproj with a note; clear their backlog before removing the opt-out. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
 
     <!-- Write source-generator output to disk so it is inspectable: obj/<cfg>/<tfm>/generated/<analyzer>/<generator>/*.g.cs.

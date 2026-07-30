@@ -155,7 +155,10 @@ sealed class FriendsPanel : Component
                         new BoxEl
                         {
                             Width = 12f, Height = 12f, Corners = CornerRadius4.All(6f),
-                            Fill = accent, BorderWidth = 2f, BorderColor = WaveeColors.FileArea,
+                            // The cut-out ring must match what the badge actually sits ON: FloatingPane is the content
+                            // pane flattened through the plate, so the ring reads as a hole whether the rail is docked
+                            // (translucent pane over the plate) or floating (that same surface, opaque).
+                            Fill = accent, BorderWidth = 2f, BorderColor = WaveeColors.FloatingPane,
                         },
                     ],
                 },

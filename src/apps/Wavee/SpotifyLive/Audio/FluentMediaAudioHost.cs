@@ -266,7 +266,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     readonly AudioEffects _effects = new();
     readonly MediaPlayerCore _core;
     readonly MediaSignalSink _sink;
-    readonly PcmAudioPlayer _backend;
+    PcmAudioPlayer? _backend;                        // built on FIRST USE, never in the ctor — see Backend
 
     readonly SimpleEvent<AudioHostSignal> _signals = new();
     readonly object _gate = new();
@@ -326,8 +326,17 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     long _crossfadeCommitSeq;
     (SpotifyMediaByteSource? Bytes, long StartMs, long DurMs, string Uri, long PrimaryId)? _committedActive;
 
+    // CS0067 (declared, never raised HERE) is suppressed deliberately, NOT because the members are dead: both are REQUIRED
+    // by IAudioOutputDeviceControl (Backend/AudioHost.cs) and both already have a live subscriber (LiveSessionHost turns a
+    // notice into a toast and an external volume/mute into the projection + UI reflect). What is missing is the PRODUCER
+    // inside this host: the notices come from OutputDeviceRouter.Notice and the external volume/mute from
+    // AudioSessionEventsSink.OnSimpleVolumeChanged, neither of which is attached to this host yet because the engine WASAPI
+    // leaf does not expose per-endpoint selection (see the SetOutputDevice note below). Wiring the router is that follow-up
+    // feature; keeping the contracted members declared is what lets it land without touching every consumer.
+#pragma warning disable CS0067
     public event Action<OutputDeviceNotice>? OutputDeviceNotice;
     public event Action<double, bool>? ExternalVolumeChanged;
+#pragma warning restore CS0067
 
     public FluentMediaAudioHost(Func<IPlayPlayCdnDecryptorFactory?> decryptors, System.Net.Http.HttpClient http,
         WaveeLogger log = default, AudioBodyDiskCache? bodyDisk = null)
@@ -339,9 +348,38 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _core = new MediaPlayerCore(_effects);
         _sink = new MediaSignalSink(_core);
         // DiagSink stays unwired — the 1 Hz feed/play counters are opt-in (set WasapiAudioDevice.DiagSink in a debugger).
-        _backend = WasapiPcm.CreateBackend(_effects, decoderFactory: static _ => new SpotifyEngineAudioDecoder());
+        // The PCM backend is deliberately NOT built here; see Backend.
         _ticker = new Timer(_ => Tick(), null, Timeout.Infinite, Timeout.Infinite);
     }
+
+    /// <summary>The PCM backend, built on FIRST USE rather than in the ctor. <c>WasapiPcm.CreateBackend</c> calls
+    /// <c>ProbeFormat</c>, which opens a COMPLETE WASAPI endpoint (CoCreateInstance → GetDefaultAudioEndpoint → Activate →
+    /// GetMixFormat → Initialize → GetService×2) purely to read the device mix rate, then throws the device away. On a cold
+    /// start — a sleeping Bluetooth/USB endpoint, a driver the OS still has to spin up — that is seconds of stall, and it
+    /// used to sit on the go-live path for a device the session may never play to. It is warmed off-path instead, from
+    /// <c>AudioPlaybackStack.StartProvisioning</c>, so first play is still hot.
+    ///
+    /// Deliberately NOT a timeout + 48k fallback: WasapiPcm's own comment notes a wrong rate is a second route to a
+    /// decoder/hardware rate divergence (slowed/pitched playback). The fallback must keep firing only on genuine device
+    /// FAILURE, never on device SLOWNESS — which is exactly the cold-start case.
+    ///
+    /// Safe without a lock: both readers (OpenSessionAsync, PrepareNextCoreAsync) run on the serialized _tail pump, and
+    /// PrepareNextCoreAsync early-returns while _session is null, so OpenSessionAsync is always the first toucher.</summary>
+    PcmAudioPlayer Backend => _backend ??= CreateBackendTimed();
+
+    PcmAudioPlayer CreateBackendTimed()
+    {
+        long start = Environment.TickCount64;
+        var backend = WasapiPcm.CreateBackend(_effects, decoderFactory: static _ => new SpotifyEngineAudioDecoder());
+        _log.Event(WaveeLogLevel.Info, "audio.backend_init", "PCM backend built (WASAPI mix-format probe)",
+            elapsedMs: Environment.TickCount64 - start,
+            fields: [WaveeLogField.Of("audio.backend_init_ms", Environment.TickCount64 - start)]);
+        return backend;
+    }
+
+    /// <summary>Build the backend off the login/play path (called from AudioPlaybackStack's background provision). Rides the
+    /// same serialized pump the readers use, so it can never race them.</summary>
+    public void WarmBackend() => Enqueue(() => { _ = Backend; return Task.CompletedTask; });
 
     // The raw session clock (track A's decode position, in ms). After an overlapping crossfade the active track is a
     // later mixer voice, so PositionMs subtracts the active track's start offset to stay active-track-relative.
@@ -585,7 +623,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         try
         {
             var source = MediaSource.FromPull(bytes).WithKind(MediaKind.PcmAudio);
-            var session = await _backend.OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None).ConfigureAwait(false);
+            var session = await Backend.OpenAsync(source, new MediaOpenOptions { StartPaused = true }, CancellationToken.None).ConfigureAwait(false);
             if (epoch != Volatile.Read(ref _loadEpoch)) { await session.DisposeAsync().ConfigureAwait(false); return; }
             session.ConnectSignals(_sink);
             _session = session;
@@ -863,7 +901,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         var bytes = new SpotifyMediaByteSource(stream, skip, kind, start.DurationMs, DbToLinear(start.NormalizationGainDb));
         var source = MediaSource.FromPull(bytes).WithKind(MediaKind.PcmAudio);
         var pctx = PrepareContext.For(session.Format, session.NormalizationMode, session.ReferenceLufsValue);
-        var result = await _backend.PrepareAsync(source, pctx, ct).ConfigureAwait(false);
+        var result = await Backend.PrepareAsync(source, pctx, ct).ConfigureAwait(false);
 
         // Supersede any stale prepared slot (a queue edit re-prepares); keep only the newest.
         if (_prepToken is not null && !ReferenceEquals(_prepStream, stream))

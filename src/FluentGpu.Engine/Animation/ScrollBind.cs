@@ -214,8 +214,16 @@ public sealed class ScrollBindTable
 public readonly struct ScrollGeometry
 {
     public readonly float OffsetX, OffsetY, ViewportW, ViewportH, ContentW, ContentH, Band, Velocity;
+    /// <summary>The <see cref="ScrollState.ScrollFlags"/> predicate bitfield — <b>BIND-OWNERS ONLY, and 0 otherwise</b>.
+    /// <c>ScrollBindEval.ApplyPinAndFlagPass</c> computes the field only for viewports that own at least one ScrollBind
+    /// row, so an observer registered on a plain scroller (the common case: this escape hatch is used precisely by
+    /// controls that declare no binds) reads 0 for every bit — including <see cref="ScrollState.MovingNowBit"/>, which
+    /// makes a projection or guard written against it silently inert. Use <see cref="UserScrollActive"/> for motion state;
+    /// it is maintained per-tick for every armed viewport.</summary>
     public readonly byte Flags;
-    /// <summary>True only for real user-driven motion; false for programmatic bring-into-view and rest.</summary>
+    /// <summary>True only for real user-driven motion; false for programmatic bring-into-view and rest. Unlike
+    /// <see cref="Flags"/> this is maintained for EVERY armed viewport, and it is false on the settle tick — so the
+    /// falling edge is observable from <c>RunObservers</c>, which runs after the integrator tick.</summary>
     public readonly bool UserScrollActive;
 
     public ScrollGeometry(float ox, float oy, float vw, float vh, float cw, float ch, float band, float vel, byte flags,

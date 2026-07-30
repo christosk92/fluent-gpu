@@ -43,12 +43,12 @@ namespace FluentGpu.SourceGen.Routing
         private static readonly DiagnosticDescriptor NoCtor = new(
             "FGRT002", "[Route] page needs a routable constructor",
             "[Route] page '{0}' has no routable constructor — declare a parameterless ctor, a '(Route)' ctor, or a "
-            + "'(string)' ctor so the generated factory can build it.",
+            + "'(string)' ctor so the generated factory can build it",
             "FluentGpu.Routing", DiagnosticSeverity.Error, true);
 
         private static readonly DiagnosticDescriptor NotComponent = new(
             "FGRT003", "[Route] class must derive Component",
-            "[Route] class '{0}' must derive FluentGpu.Hooks.Component (a route resolves to a page component).",
+            "[Route] class '{0}' must derive FluentGpu.Hooks.Component (a route resolves to a page component)",
             "FluentGpu.Routing", DiagnosticSeverity.Error, true);
 
         public void Initialize(IncrementalGeneratorInitializationContext context)

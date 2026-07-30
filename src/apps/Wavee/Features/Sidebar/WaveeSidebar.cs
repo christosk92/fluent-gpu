@@ -191,7 +191,7 @@ sealed class WaveeSidebar : Component
                     LibRow("podcasts", Icons.RadioTower, Loc.Get(Strings.Sidebar.Podcasts),   sel, 3, CountBadge(stats, s => s.Podcasts)),
                     LocalRow(sel),
                 ],
-            }),
+            }, rule: true),
             Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, Skel.Region(
                 playlists,
                 shimmerSource: () => new BoxEl
@@ -203,7 +203,7 @@ sealed class WaveeSidebar : Component
                 reveal: SkelReveal.StaggerRows,
                 onFailed: () => ErrorState.Build(playlists.Error),
                 isEmpty: arr => arr is null || arr.Count == 0, onEmpty: () => EmptyState.Default()),
-                action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder))),
+                action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder)), rule: true),
             DevToolsRow(sel),
         ],
     };
@@ -211,7 +211,10 @@ sealed class WaveeSidebar : Component
     // `action` (optional) is a trailing affordance (e.g. the Playlists "+" create button) placed before the chevron.
     // Click dispatch targets the nearest clickable self-or-ancestor, so a clickable action consumes its own clicks
     // without toggling the section (the header toggle only fires on the non-clickable title/spacer/chevron).
-    Element Section(string title, Signal<bool> open, Element body, Element? action = null)
+    // `rule` draws the stock NavigationViewItemSeparator above the header: every group EXCEPT the first is preceded by a
+    // 1px divider + an 8-DIP lead-in, so the pane reads as grouped bands instead of one undifferentiated column. Expanded
+    // pane only — the 56-DIP rail composes CompactBody, which never calls Section (its own short CompactDivider stands in).
+    Element Section(string title, Signal<bool> open, Element body, Element? action = null, bool rule = false)
     {
         bool isOpen = open.Value;             // subscribe
         return new BoxEl
@@ -219,6 +222,9 @@ sealed class WaveeSidebar : Component
             Direction = 1, Gap = 2f,
             Children =
             [
+                .. (rule
+                    ? new Element[] { Divider() with { Margin = new Edges4(0f, 8f, 0f, 0f) } }
+                    : Array.Empty<Element>()),
                 new BoxEl
                 {
                     Direction = 0, Height = 28f, AlignItems = FlexAlign.Center, Gap = 4f,
@@ -226,7 +232,9 @@ sealed class WaveeSidebar : Component
                     HoverFill = Tok.FillSubtleSecondary, OnClick = () => open.Value = !open.Peek(),
                     Children =
                     [
-                        new TextEl(title) { Size = 11f, Weight = 600, Color = Tok.TextTertiary },
+                        // Stock NavigationViewItemHeader typography: Caption-scale 12 at BodyStrong weight in the SECONDARY
+                        // text colour. 11/Tertiary read as disabled micro-copy rather than as a group label.
+                        new TextEl(title) { Size = 12f, Weight = 600, Color = Tok.TextSecondary },
                         new BoxEl { Grow = 1f },
                         .. (action is null ? Array.Empty<Element>() : new[] { action }),
                         Icon(isOpen ? Icons.ChevronUp : Icons.ChevronDown, 10f, Tok.TextTertiary),
@@ -256,8 +264,12 @@ sealed class WaveeSidebar : Component
             OnRealized = h => _rowNodes[key] = h,
             Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
             Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
+            // Stock NavigationViewItem backplate ramp (NavigationView.cs:1174-1176 / NavigationView_themeresources): rest
+            // Transparent · Selected=Secondary; hover Secondary · SelectedPointerOver=Tertiary; pressed Tertiary ·
+            // SelectedPressed=Secondary. The selected row must DARKEN on hover, never flatten into its own rest fill.
             Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
             OnClick = () => _go(key, null),
             Children =
             [
@@ -281,8 +293,9 @@ sealed class WaveeSidebar : Component
             OnRealized = h => _rowNodes["local"] = h,
             Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
             Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // ramp as LibRow (stock NavigationViewItem)
+            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
             OnClick = () => _go("local", null),
             Children =
             [
@@ -321,8 +334,9 @@ sealed class WaveeSidebar : Component
             OnRealized = h => _rowNodes[key] = h,
             Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 10f,
             Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // ramp as LibRow (stock NavigationViewItem)
+            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
             OnClick = () => _go(key, p.Name),
             Children =
             [
@@ -426,8 +440,9 @@ sealed class WaveeSidebar : Component
         {
             Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(6f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // ramp as LibRow (stock NavigationViewItem)
+            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
+            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
             OnClick = () => _go(key, null),
             Children = [ Icon(glyph, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary) ],
         };

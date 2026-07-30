@@ -66,7 +66,10 @@ sealed class LoginView : Component
             LoginPhase.ChallengeExpired => Expired(),
             LoginPhase.Failed           => Failed(snap.Error),
             LoginPhase.PremiumRequired  => Premium(),
-            LoginPhase.Finalizing       => Splash(Loc.Get(Strings.Auth.SigningIn), Loc.Get(Strings.Auth.SigningInSub)),
+            // Finalizing is the LONG one (dealer → metadata → audio → profile). It gets the step list instead of a single
+            // frozen line: the phase — and therefore the card Key — never changes across those steps, so the card updates
+            // in place and the rows animate rather than the whole screen remounting.
+            LoginPhase.Finalizing       => FinalizingSplash(bridge),
             _                           => Splash(Loc.Get(Strings.Auth.GettingCode), null),   // LoggedOut/SilentResume/RequestingCode/AwaitingBrowser
         };
 
@@ -88,7 +91,12 @@ sealed class LoginView : Component
     {
         Direction = 1, Width = 440f, MaxWidth = 440f, AlignItems = FlexAlign.Center, Gap = Spacing.L,
         Padding = Edges4.All(32f), Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-        Fill = WaveeColors.Content, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+        // FloatingPane, not Content: the login view REPLACES the whole shell, so there is no plate behind this card —
+        // a translucent pane fill would let bare Mica read straight through it. FloatingPane is the same content-pane
+        // surface flattened through the plate, i.e. opaque and identical to what the docked pane shows.
+        // Kept a STATIC read (not Prop.Of): a static token read inside Render() gets the theme cross-fade, whereas a
+        // bind snaps.
+        Fill = WaveeColors.FloatingPane, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
         Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success/dismiss: dissolve out as the shell rises
         Children = kids,
@@ -125,6 +133,32 @@ sealed class LoginView : Component
         new BoxEl { Margin = new Edges4(0, Spacing.S, 0, Spacing.S), AlignSelf = FlexAlign.Center, Children = [ProgressBar.Indeterminate(220f)] },
         BodyStrong(status),
         sub is null ? new BoxEl() : Caption(sub).Secondary());
+
+    // The Finalizing splash: the same brand + status, but the bar is DETERMINATE off the step count and the old
+    // (untrue) "Setting up your library." subtitle is replaced by the actual steps. Rows read the login signal
+    // themselves — a component cannot take a changing prop, since props freeze at mount.
+    static Element FinalizingSplash(PlaybackBridge? bridge)
+    {
+        if (bridge is null) return Card(Brand(), BodyStrong(Loc.Get(Strings.Auth.SigningIn)));
+        Element Row(LoginStep step, string label) => Embed.Comp(() => new LoginStepRow(bridge.Login, step, label));
+        return Card(
+            Brand(),
+            new BoxEl { Margin = new Edges4(0, Spacing.S, 0, Spacing.XS), AlignSelf = FlexAlign.Center, Children = [Embed.Comp(() => new LoginStepBar(bridge.Login))] },
+            BodyStrong(Loc.Get(Strings.Auth.SigningIn)),
+            new BoxEl
+            {
+                Direction = 1, Gap = Spacing.XS, AlignSelf = FlexAlign.Stretch,
+                Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, 0),
+                Stagger = 55f,   // MILLISECONDS on the live path (Reconciler → LayoutTransition.DelayMs), despite the doc
+                Children =
+                [
+                    Row(LoginStep.Connecting, Loc.Get(Strings.Auth.StepConnecting)),
+                    Row(LoginStep.Metadata,   Loc.Get(Strings.Auth.StepMetadata)),
+                    Row(LoginStep.Audio,      Loc.Get(Strings.Auth.StepAudio)),
+                    Row(LoginStep.Profile,    Loc.Get(Strings.Auth.StepProfile)),
+                ],
+            });
+    }
 
     Element Expired() => Card(
         GlyphBadge(Icons.Important, Tok.SystemFillCaution),
@@ -205,7 +239,8 @@ sealed class TwoPaneLogin : Component
             Direction = 1, Width = CardW, MaxWidth = CardW, AlignItems = FlexAlign.Stretch,
             Padding = new Edges4(36f, 32f, 36f, 24f), Gap = 0f,
             Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-            Fill = WaveeColors.Content, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            // FloatingPane (see LoginView.Card): no shell plate behind the login view, so the card must be opaque.
+            Fill = WaveeColors.FloatingPane, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
             Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success: dissolve out as the shell rises in
             Children = [content, footerSep, bottom],
@@ -377,6 +412,94 @@ sealed class CopyButton : Component
                 new TextEl(copied ? Loc.Get(Strings.Auth.Copied) : Loc.Get(Strings.Auth.CopyCode)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary },
             ],
         };
+    }
+}
+
+// ── One row of the Finalizing step list ──────────────────────────────────────────────────────────────────────────────
+// Reads the login SIGNAL rather than taking the step as a prop: props freeze at mount (component-props contract), so a
+// parent re-render would never move a field-passed step. The row's OWN step and label are constants, which is exactly
+// what a frozen prop is for.
+//
+// Marks: pending = a dim bullet; current = the shipped indeterminate ProgressRing (reduced-motion aware, compositor
+// driven — no Lottie in this engine and none needed); done = a checkmark with an explicit scale-POP, the same
+// anim-keyframe path CopyButton uses rather than a keyed Enter the positional reconciler can update in place.
+sealed class LoginStepRow : Component
+{
+    readonly Signal<LoginSnapshot> _login;
+    readonly LoginStep _step;
+    readonly string _label;
+    public LoginStepRow(Signal<LoginSnapshot> login, LoginStep step, string label) { _login = login; _step = step; _label = label; }
+
+    public override Element Render()
+    {
+        var snap = _login.Value;   // subscribe → re-render as the bootstrap advances
+        int mine = (int)_step, cur = (int)snap.Step;
+        bool done = cur > mine;
+        bool current = cur == mine;
+        bool failed = current && snap.Phase == LoginPhase.Failed;
+
+        var iconRef = UseRef<NodeHandle>(default);
+        UseEffect(() =>
+        {
+            if (!done || Motion.ReducedMotion) return;
+            var anim = Context.Anim;
+            var scene = Context.Scene;
+            if (anim is null || scene is null || iconRef.Value.IsNull || !scene.IsLive(iconRef.Value)) return;
+            var pop = new Keyframe[] { new(0f, 0.3f, Easing.EaseOut), new(0.55f, 1.18f, Easing.EaseOut), new(1f, 1f, Easing.EaseInOut) };
+            anim.Keyframes(iconRef.Value, AnimChannel.ScaleX, pop, 320f, loop: false);
+            anim.Keyframes(iconRef.Value, AnimChannel.ScaleY, pop, 320f, loop: false);
+        }, done);
+
+        Element mark = current && !failed
+            ? ProgressRing.Indeterminate(16f)
+            : new TextEl(failed ? Icons.Cancel : done ? Icons.Accept : Icons.RadioBullet)
+            {
+                Size = failed || done ? 15f : 11f,
+                FontFamily = Theme.IconFont,
+                Color = failed ? Tok.SystemFillCritical : done ? Tok.AccentDefault : Tok.TextTertiary,
+            };
+
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Height = 26f,
+            Enter = new EnterExit(Dx: -6f, Opacity: 0f, Active: true), Transition = MotionTok.ControlNormal,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 18f, Height = 18f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    OnRealized = h => iconRef.Value = h, Children = [mark],
+                },
+                new TextEl(_label)
+                {
+                    Size = 12f, LineHeight = 16f,
+                    // The current step is the one the user is waiting on — give it the primary weight and let the
+                    // finished and not-yet-started rows recede.
+                    Weight = current ? (ushort)600 : (ushort)400,
+                    Color = current ? Tok.TextPrimary : done ? Tok.TextSecondary : Tok.TextTertiary,
+                },
+            ],
+        };
+    }
+}
+
+// ── The Finalizing progress bar ──────────────────────────────────────────────────────────────────────────────────────
+// Determinate off the step index, so the bar means something instead of sweeping forever. It SNAPS between the four
+// stops: ProgressBar binds its indicator width as a Prop<float> thunk, which the compositor re-evaluates but does not
+// interpolate. With the go-live stall fixed the steps land within a few hundred ms of each other, so the snap reads as
+// a deliberate tick rather than a stutter; smoothing it would mean animating the fill node's ScaleX directly.
+sealed class LoginStepBar : Component
+{
+    readonly Signal<LoginSnapshot> _login;
+    public LoginStepBar(Signal<LoginSnapshot> login) { _login = login; }
+
+    public override Element Render()
+    {
+        var snap = _login.Value;   // subscribe → re-render as the bootstrap advances
+        const float Steps = 4f;    // Connecting / Metadata / Audio / Profile — Done means all four landed
+        float v = Math.Clamp((int)snap.Step / Steps, 0f, 1f);
+        return ProgressBar.Determinate(v, 220f,
+            snap.Phase == LoginPhase.Failed ? ProgressBarState.Error : ProgressBarState.Normal);
     }
 }
 

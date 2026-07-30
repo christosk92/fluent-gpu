@@ -48,6 +48,56 @@ public readonly record struct ScrollTuning(
     public const float FlingSeedGate = 50f;             // |v| ≥ 50 px/s seeds a coast (Android min-fling)
     public const float FlingMaxVelocityPxPerS = 8000f;  // fling seed clamp (Android max-fling)
 
+    // ── Flick projection (the page/index COMMIT ARITHMETIC — deliberately not physics). A release of speed v (px/s)
+    // coasts an extra v / FlickProjectK DIP inside the BOUNDED snap-settle window before resting, so a control that must
+    // decide WHICH page a lift commits to projects the resting offset forward by that much and rails/rounds it. Derived
+    // from this profile's fling decay over the settle window T: coast = v·(1−decay^T)/k with k = −ln(decay), so the
+    // divisor is k/(1−decay^T) — ≈ 5.68 at the shipping decay 0.05/s over 250 ms (i.e. a 1000 px/s lift projects ≈ 176 DIP
+    // of extra travel). The BOUNDED window (not the infinite coast) is the right model for a page snap — a
+    // slow under-threshold drag springs back, a flick navigates. Nothing here touches the glide that follows: that stays
+    // the exact closed form the integrator runs (dt-deterministic).
+    //
+    // NOTE FlipViewCore.FlickProjectK computes the IDENTICAL value from the identical two inputs
+    // (ScrollIntegrator.FlingDecayPerS, Dsl.Motion.ControlNormal). This is the canonical home — fold that private copy
+    // onto this constant the next time FlipView is edited (it was left untouched here to keep the change surface small).
+    public const float FlickProjectWindowS = 0.250f;   // = Dsl.Motion.ControlNormal / 1000 (Animation must not reference Dsl)
+    /// <summary>The flick-projection divisor at the shipping fling decay: <c>projectedExtra = v / FlickProjectK</c>.</summary>
+    public static readonly float FlickProjectK = FlickProjectDivisor(ScrollIntegrator.FlingDecayPerS, FlickProjectWindowS);
+
+    /// <summary>The projection divisor for a per-second velocity SURVIVAL factor over a bounded window (seconds). Pure.</summary>
+    public static float FlickProjectDivisor(float decayPerS, float windowS)
+    {
+        float k = -MathF.Log(decayPerS);                 // the per-second decay rate (−ln survival)
+        float frac = 1f - MathF.Exp(-k * windowS);       // fraction of the full coast reached within the window
+        return frac > 1e-4f ? k / frac : k;              // divisor: projectedExtra = v / divisor = v·frac/k
+    }
+
+    // ── Programmatic-glide dynamic (a PhaseProgrammatic WheelAnimating chase). A full-page shelf jump and a 40 DIP
+    // settle-correction ride the SAME critically-damped closed form, so its half-life is the only feel lever — and one
+    // constant cannot serve both: perceived arrival for a ζ=1 chase is ≈ 4.8·halflife (remaining travel drops under 1% at
+    // y·t ≈ 6.64), so the fixed 95 ms bring-into-view value reads as ~455 ms — right for a page, mushy for a nudge.
+    // The half-life is therefore chosen ONCE, AT ARM TIME, from the arm distance and latched in
+    // ScrollState.ProgrammaticHalflifeMs; the integrator never recomputes it per tick, so the step stays the exact closed
+    // form and the glide remains dt-deterministic. Distance → half-life is SQRT-shaped, not linear (perceived duration
+    // should grow with √distance — the Fitts-like law every premium pager uses; a linear ramp makes mid-range jumps drag).
+    public const float ProgrammaticGlideMinHalflifeMs = 46f;   // ≤ ShortDip travel: arrives in ~220 ms (a crisp correction)
+    public const float ProgrammaticGlideMaxHalflifeMs = 88f;   // ≥ LongDip travel: arrives in ~420 ms (a legible page jump)
+    public const float ProgrammaticGlideShortDip = 96f;        // at/below this travel the MIN half-life applies flat
+    public const float ProgrammaticGlideLongDip = 900f;        // at/above this travel the MAX half-life applies flat
+
+    /// <summary>The programmatic-glide half-life (ms) for a chase that must travel <paramref name="distanceDip"/> DIP —
+    /// the sqrt ramp between <see cref="ProgrammaticGlideMinHalflifeMs"/> and <see cref="ProgrammaticGlideMaxHalflifeMs"/>
+    /// described above. Pure; latched into <c>ScrollState.ProgrammaticHalflifeMs</c> by the arming caller (NaN/negative
+    /// distances fall to the min).</summary>
+    public static float ProgrammaticHalflifeForDistance(float distanceDip)
+    {
+        float d = MathF.Abs(distanceDip);
+        if (!(d > ProgrammaticGlideShortDip)) return ProgrammaticGlideMinHalflifeMs;   // NaN-safe (NaN takes this branch)
+        if (d >= ProgrammaticGlideLongDip) return ProgrammaticGlideMaxHalflifeMs;
+        float t = MathF.Sqrt((d - ProgrammaticGlideShortDip) / (ProgrammaticGlideLongDip - ProgrammaticGlideShortDip));
+        return ProgrammaticGlideMinHalflifeMs + t * (ProgrammaticGlideMaxHalflifeMs - ProgrammaticGlideMinHalflifeMs);
+    }
+
     /// <summary>The shipping default — the felt WinUI-parity profile the real (Win32) app and the engine default use.
     /// The fling/ease/spring values match <see cref="ScrollIntegrator"/>'s documented constants exactly, so non-wheel-distance
     /// mouse-wheel behavior keeps the documented target chase.</summary>

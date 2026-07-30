@@ -89,6 +89,12 @@ public static class Diag
     /// <summary>Aggregate snapshot of all values + counters (for the devtools panel / a dump).</summary>
     public static string Snapshot()
     {
+        // The ONE gate in the engine that cannot take the two-operand `CompiledIn && Enabled` shape: this method returns
+        // a STRING and the compiled-out arm is an early `return`, so adding a non-constant operand would change what it
+        // returns. In a plain RELEASE build (neither DEBUG nor FLUENTGPU_DIAG) `CompiledIn` folds to false, the early
+        // return is taken unconditionally, and the whole remaining body is genuinely unreachable — that CS0162 is the
+        // intended erasure, hence the scoped suppression over the body (not just the guard line).
+#pragma warning disable CS0162 // Unreachable code detected — release-only: const CompiledIn == false takes the early return
         if (!CompiledIn) return "(diagnostics compiled out — define FLUENTGPU_DIAG to enable)";
         var sb = new StringBuilder();
         lock (Gate)
@@ -97,6 +103,7 @@ public static class Diag
             foreach (var kv in Counters) sb.Append(kv.Key).Append(" : ").Append(kv.Value).AppendLine();
         }
         return sb.ToString();
+#pragma warning restore CS0162
     }
 
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]

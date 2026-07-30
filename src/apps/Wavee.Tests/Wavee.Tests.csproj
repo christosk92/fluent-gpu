@@ -13,6 +13,9 @@
          non-cancellable unit tests. -->
     <DefineConstants>$(DefineConstants);WAVEE_TESTS</DefineConstants>
     <NoWarn>$(NoWarn);CA1416;xUnit1051</NoWarn>
+    <!-- Pre-existing warning backlog (CS0436 VirtualCollectionSignalShim type-shim conflicts, xUnit1031 blocking
+         waits); the apps baseline enforces warnings-as-errors — clear the backlog before removing this opt-out. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(WaveeSkipPrivateSources)' != 'true' And Exists('..\Wavee.PlayPlay\Client\InProcessPlayPlayKeyDeriver.cs')">
@@ -46,6 +49,8 @@
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\list_metadata_v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- music-video associations (VIDEO_ASSOCIATIONS payload) — VideoAssociationTests parses this against the wire -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\video_associations.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- upcoming-release identity (kind 138 PRERELEASE) — PreReleaseWireTests build the payload and drive the resolver -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\prerelease.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- playlist membership + collection delta wire types (the Backend mapping logic is unit-tested here) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist_permission.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist4_external.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
@@ -81,12 +86,16 @@
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
+    <Compile Include="..\Wavee\Features\Shell\PlayerBarResponsiveLayout.cs" />
     <!-- progressive-reveal ramp progression (BCL only) — DetailRevealRampTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailRevealRamp.cs" />
     <Compile Include="..\Wavee\Features\Detail\PlaylistTuneMenuModel.cs" />
     <!-- shared detail-track command-bar fit + query/facet predicate (engine-free) -->
     <Compile Include="..\Wavee\Features\Detail\DetailTrackCommandBarLayout.cs" />
     <Compile Include="..\Wavee\Features\Detail\TrackFilterModel.cs" />
+    <!-- the "when does this album actually drop?" ladder (Wavee.Core + BCL only, split out of DetailConfig.cs for exactly
+         this reason — DetailConfig drags FluentGpu.Controls + the Strings table) — PreReleaseModelTests -->
+    <Compile Include="..\Wavee\Features\Detail\PreReleaseDerivation.cs" />
 
     <!-- concert schedule/detail hysteresis + wide-editorial metrics (BCL only) -->
     <Compile Include="..\Wavee\Features\Concerts\ConcertLayout.cs" />
@@ -150,6 +159,10 @@
     <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
+    <!-- the upcoming-release resolver (kind 138) + its seam/null/switchable trio — Backend + Wavee.Core deps only, so
+         PreReleaseWireTests drive the REAL three-key cache, half-link rejection and negative caching over crafted protobuf -->
+    <Compile Include="..\Wavee\SpotifyLive\PreReleaseService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyPreReleaseService.cs" />
     <Compile Include="..\Wavee\SpotifyLive\SpotifyUserProfileService.cs" />
     <!-- the live presence/friend-activity feed (Backend + Wavee.Core deps only) — FriendActivityServiceTests drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyFriendActivityService.cs" />
@@ -170,6 +183,12 @@
          here WITHOUT a FluentGpu.Engine reference, exactly like the source-included VirtualCollection. -->
     <Compile Include="..\Wavee\SpotifyLive\CoverColorPlane.cs" />
     <Compile Include="..\Wavee\SpotifyLive\CoverColorFiller.cs" />
+    <!-- …plus the boundary mapper that turns those roles into chrome colours, so CoverAccentDerivationTests pins the
+         "which role is the cover's HUE" decision against the PRODUCTION derivation rather than a copy of it (that gap is
+         exactly how the textBrightAccent-is-the-accent bug shipped). Its only deps are the engine's Tok/ColorF —
+         already referenced transitively via FluentGpu.WindowsApi — and WaveeColors, hence the sibling token file. -->
+    <Compile Include="..\Wavee\Design\WaveePalette.cs" />
+    <Compile Include="..\Wavee\Design\WaveeTokens.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
          resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
     <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />

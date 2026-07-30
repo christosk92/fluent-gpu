@@ -164,7 +164,9 @@ public sealed class CommandBarFlyout : Component
         float overflowMinWidth = 136f,
         bool touchInputMode = false,
         bool labeledPrimary = false,
-        Element? header = null)
+        // The header is a deliberate mount-time slot ([MountOnceContent]): it derives from the ContextMenu model + the
+        // touch flag, both immutable for the lifetime of one menu mount, so freezing it at first mount is by design.
+        [MountOnceContent] Element? header = null)
         => Embed.Comp(() => new CommandBarFlyoutBody
         {
             Primary = primary,

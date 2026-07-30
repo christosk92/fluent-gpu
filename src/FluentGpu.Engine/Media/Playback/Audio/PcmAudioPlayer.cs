@@ -241,7 +241,6 @@ public sealed class PcmAudioSession : IMediaSession
     private MediaSignalSink? _sink;
     private PlaybackState _state = PlaybackState.Idle;
     private bool _playRequested;
-    private bool _everPlayed;
     private bool _metaPublished;
     private bool _started;
     private bool _disposed;
@@ -572,7 +571,6 @@ public sealed class PcmAudioSession : IMediaSession
     {
         if (_disposed) return ValueTask.CompletedTask;
         _playRequested = true;
-        _everPlayed = true;
         _sink?.PlayRequested(true);
         return ValueTask.CompletedTask;
     }

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.IO;
 using System.IO.Compression;
 using System.Text;
@@ -196,7 +197,11 @@ static class ApiDebugProto
         try
         {
             using var doc = JsonDocument.Parse(body);
-            return JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true });
+            // Re-emit the parsed document with a writer instead of round-tripping it through the (reflection-based,
+            // trim/AOT-unsafe) serializer — the document already holds the shape we want to indent.
+            var buf = new ArrayBufferWriter<byte>();
+            using (var w = new Utf8JsonWriter(buf, new JsonWriterOptions { Indented = true })) doc.WriteTo(w);
+            return Encoding.UTF8.GetString(buf.WrittenSpan);
         }
         catch (Exception ex) { return $"(not JSON: {ex.Message})\n\n{Encoding.UTF8.GetString(body)}"; }
     }

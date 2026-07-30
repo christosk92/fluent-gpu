@@ -16,7 +16,7 @@ public static class Virtual
                                      Func<int, string>? keyOf = null, int overscan = 4)
         => new()
         {
-            ItemCount = itemCount, Layout = new StackVirtualLayout(itemExtent), RenderItem = renderItem,
+            ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
 
@@ -25,7 +25,7 @@ public static class Virtual
                                      Func<int, string>? keyOf = null, int overscan = 2)
         => new()
         {
-            ItemCount = itemCount, Layout = new GridVirtualLayout(columns, itemHeight, gap), RenderItem = renderItem,
+            ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
 
@@ -34,18 +34,18 @@ public static class Virtual
                                        Func<int, string>? keyOf = null, int overscan = 4, bool horizontal = false)
         => new()
         {
-            ItemCount = itemCount, Layout = layout, RenderItem = renderItem,
+            ItemCount = itemCount, ItemLayout = layout, RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Horizontal = horizontal, Grow = 1f,
         };
 
     /// <summary>A vertically-virtualized list of variable-height rows (Fenwick extent table + scroll anchoring) —
-    /// the legacy built-in variable path (<c>Layout = null</c>). The seam-shaped equivalent is
+    /// the legacy built-in variable path (<c>ItemLayout = null</c>). The seam-shaped equivalent is
     /// <see cref="Measured"/> with a <see cref="MeasuredStackVirtualLayout"/> (E11-L0), which custom layouts mirror.</summary>
     public static VirtualListEl VariableList(int itemCount, float estimatedExtent, Func<int, Element> renderItem,
                                              Func<int, string>? keyOf = null, int overscan = 4)
         => new()
         {
-            ItemCount = itemCount, Layout = null, EstimatedExtent = estimatedExtent, RenderItem = renderItem,
+            ItemCount = itemCount, ItemLayout = null, EstimatedExtent = estimatedExtent, RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
 
@@ -57,20 +57,20 @@ public static class Virtual
                                          Func<int, string>? keyOf = null, int overscan = 4, bool horizontal = false)
         => new()
         {
-            ItemCount = itemCount, Layout = layout, RenderItem = renderItem,
+            ItemCount = itemCount, ItemLayout = layout, RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Horizontal = horizontal, Grow = 1f,
         };
 
     /// <summary>The WinUI <c>LinedFlowLayout</c> photo-wall (ItemsView's signature layout): uniform-height lines,
     /// per-item width = aspect × lineHeight, wrapping at the viewport edge. The layout instance is stateful — reuse
-    /// the returned element's <see cref="VirtualListEl.Layout"/> or hoist your own <see cref="LinedFlowLayout"/>.</summary>
+    /// the returned element's <see cref="VirtualListEl.ItemLayout"/> or hoist your own <see cref="LinedFlowLayout"/>.</summary>
     public static VirtualListEl LinedFlow(int itemCount, float lineHeight, Func<int, Element> renderItem,
                                           Func<int, float>? aspectRatio = null, float lineSpacing = 0f, float minItemSpacing = 0f,
                                           Func<int, string>? keyOf = null, int overscan = 8)
         => new()
         {
             ItemCount = itemCount,
-            Layout = new LinedFlowLayout(lineHeight, aspectRatio, lineSpacing, minItemSpacing),
+            ItemLayout = new LinedFlowLayout(lineHeight, aspectRatio, lineSpacing, minItemSpacing),
             RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
 
@@ -85,7 +85,7 @@ public static class Virtual
         layout = new GroupedListVirtualLayout(headerIndices, headerExtent, itemEstimate);
         return new VirtualListEl
         {
-            ItemCount = itemCount, Layout = layout, RenderItem = renderItem,
+            ItemCount = itemCount, ItemLayout = layout, RenderItem = renderItem,
             KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
     }
@@ -97,7 +97,7 @@ public static class Virtual
         => new()
         {
             ItemCount = itemCount,
-            Layout = new SpanningGridVirtualLayout(columns, rowHeight, gap, spanOf),
+            ItemLayout = new SpanningGridVirtualLayout(columns, rowHeight, gap, spanOf),
             RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Grow = 1f,
         };
 
@@ -108,7 +108,7 @@ public static class Virtual
         => new()
         {
             ItemCount = itemCount,
-            Layout = new HorizontalGridVirtualLayout(rows, itemWidth, gap),
+            ItemLayout = new HorizontalGridVirtualLayout(rows, itemWidth, gap),
             RenderItem = renderItem, KeyOf = keyOf, Overscan = overscan, Horizontal = true, Grow = 1f,
         };
 
@@ -118,9 +118,9 @@ public static class Virtual
     /// <c>SourceBind</c>/<c>PlaceholderBind</c>), never a captured value. The fastest path for huge uniform lists
     /// (the WaveeMusic 100k track list under a scrollbar thumb-drag).</summary>
     public static VirtualListEl ListBound(int itemCount, float itemExtent, Func<IReadSignal<int>, Element> row, int overscan = 4)
-        => new() { ItemCount = itemCount, Layout = new StackVirtualLayout(itemExtent), RowBind = row, Overscan = overscan, Grow = 1f };
+        => new() { ItemCount = itemCount, ItemLayout = new StackVirtualLayout(itemExtent), RowBind = row, Overscan = overscan, Grow = 1f };
 
     /// <summary>Signals-first BOUND uniform card grid — <see cref="ListBound"/> semantics over <see cref="GridVirtualLayout"/>.</summary>
     public static VirtualListEl GridBound(int itemCount, int columns, float itemHeight, float gap, Func<IReadSignal<int>, Element> row, int overscan = 2)
-        => new() { ItemCount = itemCount, Layout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Overscan = overscan, Grow = 1f };
+        => new() { ItemCount = itemCount, ItemLayout = new GridVirtualLayout(columns, itemHeight, gap), RowBind = row, Overscan = overscan, Grow = 1f };
 }

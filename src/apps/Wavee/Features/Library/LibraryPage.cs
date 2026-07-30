@@ -772,23 +772,65 @@ sealed class LibraryPage : Component
 
 // A thin drag-to-resize seam between two library columns. Reuses the engine's eager pointer capture (BoxEl.OnDrag) and
 // reconstructs the true window-X each frame (the grip moves as the column resizes). Invisible at rest, a hairline on hover.
+//
+// OPT-IN COLLAPSE DETENT (WP-η). By default this is the plain hard-clamp splitter every library column has always used:
+// the width tracks the cursor 1:1 inside [min,max], drag-end commits, and NOTHING else happens. Passing a `collapsed`
+// signal + a non-zero `forcePush` ARMS the sidebar's detent gesture on this grip instead (SidebarResizeGrip is the
+// mechanics being ported): below `min` the column RESISTS and its content fades, and only a force-push past the
+// threshold collapses it to nothing; re-opening needs a deliberate pull past a higher `reExpand` point (hysteresis) or
+// — for keyboard/touch — a bare click on the surviving seam.
+// The two paths are strictly separated — every detent behaviour, including the AppResize motion suppression, is inside
+// `if (Detent)` / behind the cached `_onReleased`, so LibraryPage's three splitters keep byte-identical behaviour with
+// the defaults (their release handler IS the `onCommit` delegate they always passed).
 sealed class ColumnGrip : Component
 {
+    // Detent tuning that no call site needs to vary (the collapse geometry — min/forcePush/reExpand — is per-surface and
+    // therefore a ctor argument; these two are feel constants shared with SidebarResizeGrip).
+    const float DetentResist = 0.28f;   // residual shrink inside the resist zone (lower = stickier)
+    const float DetentMinFade = 0.35f;  // content-opacity floor at the collapse edge
+
     readonly Signal<float> _width;
     readonly float _min, _max;
     readonly Action _onCommit;
+    // Detent arming (all optional). `_collapsed` is the host's collapse state (written from the gesture, read by the
+    // host to drop the column); `_fade` is the host's paint-bound content opacity; `_forcePush`/`_reExpand` the
+    // collapse and re-open distances in DIP. Null / 0 ⇒ the plain grip.
+    readonly Signal<bool>? _collapsed;
+    readonly Signal<float>? _fade;
+    readonly float _forcePush, _reExpand;
+    // Cached handler identities: the plain grip publishes the EXACT delegates it always did (`_onCommit` itself as the
+    // release edge, no cancel handler), so its node's prop diff is unchanged.
+    readonly Action _onReleased;
+    readonly Action? _onCanceled;
     NodeHandle _self;
     float _startW, _startPx;
-    public ColumnGrip(Signal<float> width, float min, float max, Action onCommit) { _width = width; _min = min; _max = max; _onCommit = onCommit; }
+    bool _startedCollapsed;
+    bool _moved;   // a zero-movement click on the seam is not a width/collapse preference — only a real drag commits
+
+    public ColumnGrip(Signal<float> width, float min, float max, Action onCommit,
+        Signal<bool>? collapsed = null, Signal<float>? fade = null, float forcePush = 0f, float reExpand = 0f)
+    {
+        _width = width; _min = min; _max = max; _onCommit = onCommit;
+        _collapsed = collapsed; _fade = fade; _forcePush = forcePush; _reExpand = reExpand;
+        _onReleased = Detent ? new Action(OnReleased) : onCommit;
+        _onCanceled = Detent ? new Action(OnCanceled) : null;
+    }
+
+    // Armed only with BOTH a collapse target and a real force-push distance — a caller that passes just a fade signal
+    // gets the plain grip rather than a half-wired detent.
+    bool Detent => _collapsed is not null && _forcePush > 0f;
 
     public override Element Render() => new BoxEl
     {
         // A persistent 1px divider centred in a 7px hit strip (always visible = the column seam; the strip is the drag
-        // target). Brightens slightly on hover to cue that it's draggable.
+        // target). Brightens slightly on hover to cue that it's draggable. When the host has collapsed the column it
+        // widens its wrapper (the seam is then the ONLY re-open affordance, so it needs a bigger grab target) — that is
+        // the host's business; this component just fills whatever strip it is given.
         Grow = 1f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Cursor = CursorId.SizeWE,
         OnRealized = h => _self = h, OnPointerDown = OnDown, OnDrag = OnMove,
-        OnClick = _onCommit,   // for an OnDrag node, OnClick IS the release/commit edge (drag-end) — persist the chosen width
+        OnClick = _onReleased,   // for an OnDrag node, OnClick IS the release/commit edge (drag-end) — persist the chosen width
+        OnDragCanceled = _onCanceled,
         Children = [new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault, HoverFill = Tok.TextTertiary }],
     };
 
@@ -799,6 +841,23 @@ sealed class ColumnGrip : Component
         // NOTE: deliberately do NOT flip Motion.ReducedMotion here (SidebarResizeGrip does, to kill its width spring).
         // Column widths aren't sprung, so there's nothing to suppress — and toggling that global mid-drag is exactly what
         // shifted UseSoftReveal/UseEntrance's hook count and crashed (now also hardened engine-side).
+        // The DETENT path is different: collapsing/re-opening is a real structural layout change, so it does gate geometry
+        // transitions — and it must be set SYNCHRONOUSLY here, because the first drag move can batch with pointer-down in
+        // the same frame and ApplyProjections would otherwise see the collapse spring for live width writes. Scoped to
+        // MotionSuppressionSource.AppResize (an arbiter source, not the global reduced-motion flag).
+        if (Detent)
+        {
+            Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, true);
+            _moved = false;
+            _startedCollapsed = _collapsed!.Peek();
+            // Collapsed seed is 0 even when the host keeps a compact identity strip (DetailShell WP-κ): the strip is a
+            // separate fixed-width child, not `_width`, so the pointer's travel from the seam still IS the prospective
+            // expanded column width (same origin as the expanded column). Sidebar keeps its own compact width because
+            // THAT width IS the sidebar's `_width` signal.
+            _startW = _startedCollapsed ? 0f : _width.Peek();
+            _startPx = local.X + s.AbsoluteRect(_self).X;
+            return;
+        }
         _startW = _width.Peek();
         _startPx = local.X + s.AbsoluteRect(_self).X;
     }
@@ -808,7 +867,75 @@ sealed class ColumnGrip : Component
         var s = Context.Scene;
         if (s is null || _self.IsNull || !s.IsLive(_self)) return;
         float px = local.X + s.AbsoluteRect(_self).X;
-        _width.Value = Math.Clamp(_startW + (px - _startPx), _min, _max);
+        float rawW = _startW + (px - _startPx);
+        if (!Detent) { _width.Value = Math.Clamp(rawW, _min, _max); return; }
+
+        _moved = true;
+        var collapsed = _collapsed!;
+        if (_startedCollapsed)
+        {
+            // Currently collapsed: only a deliberate pull past the re-expand point opens it (hysteresis above the
+            // collapse point, so the column can't flicker shut/open at the seam).
+            if (rawW >= _reExpand)
+            {
+                _startedCollapsed = false;
+                collapsed.Value = false;
+                _width.Value = Math.Clamp(rawW, _min, _max);
+                if (_fade is not null) _fade.Value = 1f;
+            }
+            return;
+        }
+
+        if (rawW >= _min)   // SnapThreshold == the min width: at/above it the column resizes 1:1
+        {
+            collapsed.Value = false;
+            _width.Value = Math.Clamp(rawW, _min, _max);
+            if (_fade is not null) _fade.Value = 1f;
+            return;
+        }
+
+        // Resist zone: the column sticks (shrinks only a little) and its content fades; force-push past → collapse.
+        float into = _min - rawW;                          // how far into the zone (>0)
+        _width.Value = _min - into * DetentResist;         // sticky width (deliberately a hair below _min while held)
+        if (_fade is not null)
+            _fade.Value = Math.Clamp(1f - (into / _forcePush) * (1f - DetentMinFade), DetentMinFade, 1f);
+        if (into >= _forcePush)
+        {
+            collapsed.Value = true;
+            _startedCollapsed = true;                       // further drag in THIS gesture now uses re-expand
+            if (_fade is not null) _fade.Value = 1f;
+        }
+    }
+
+    // The DETENT-armed release edge only — a plain grip wires `_onCommit` itself as its click handler (above), so this
+    // never runs there and `Motion` is never touched on that path.
+    void OnReleased()
+    {
+        // Release the geometry suppression BEFORE the discrete detent clamp so the final settle uses its authored recipe.
+        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
+        // Settle the sticky sub-min width back to the min. Unconditional (the sidebar guards this on !compact because its
+        // collapsed pane keeps a width of its own; a collapsed COLUMN has none, and the value here is what gets persisted
+        // — so a sub-min sticky width must never survive the release in either state).
+        _width.Value = Math.Clamp(_width.Peek(), _min, _max);
+        if (_fade is not null) _fade.Value = 1f;
+        if (_moved) { _onCommit(); return; }   // a real drag: persist the width + collapse decision it produced
+
+        // A BARE click (zero movement) on the seam of a COLLAPSED column RE-OPENS it. This is the non-drag re-open path:
+        // the grip is a focusable clickable node, so a keyboard Enter lands here, and a touch tap that doesn't wander
+        // does too — otherwise a collapsed column could only ever be recovered by a 220-DIP pointer drag.
+        // Deliberately ASYMMETRIC: a bare click never COLLAPSES an open column (far too easy to hit by accident on a thin
+        // seam); collapsing stays the deliberate force-push gesture only.
+        if (!_collapsed!.Peek()) return;   // bare click on an open seam changed nothing — commit nothing
+        _collapsed.Value = false;
+        _onCommit();
+    }
+
+    void OnCanceled()
+    {
+        // Capture loss mid-gesture: unwind the suppression + the fade cue, but commit nothing.
+        Motion.SetLayoutTransitionsSuppressed(MotionSuppressionSource.AppResize, false);
+        _width.Value = Math.Clamp(_width.Peek(), _min, _max);
+        if (_fade is not null) _fade.Value = 1f;
     }
 }
 
@@ -929,9 +1056,10 @@ sealed class LibraryDetailPane : Component
         Padding = new Edges4(Spacing.XL, 0f, Spacing.XL, Spacing.M),
         Children =
         [
-            new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Corners = CornerRadius4.All(20f), Padding = new Edges4(18f, 9f, 18f, 9f),
-                Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.97f, Shadow = Elevation.Card, OnClick = play,
-                Children = [Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary), new TextEl(Loc.Get(Strings.Detail.Play)) { Size = 14f, Weight = 700, Color = Tok.TextOnAccentPrimary }] },
+            // The shared media pill on the SYSTEM accent (no artwork extraction on this surface). WaveeCta picks the
+            // on-fill ink from the fill's WCAG luminance, so for Tok.AccentDefault it resolves what Tok.OnAccent bakes —
+            // the accent-keyed ink, not the theme-keyed TextOnAccentPrimary the stock ramp uses.
+            WaveeCta.Play(Tok.AccentDefault, play),
             Fab(Icons.Shuffle, shuffle),
             _show ? Embed.Comp(() => new FollowButton(uri, name)) : Embed.Comp(() => new SaveButton(uri, name: name)),
         ],

@@ -1068,9 +1068,14 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Resolve the shared recyclable-item clip owned by a virtual viewport from its direct content node.
     /// The returned prefix count maps directly to the content node's leading child ordinals.</summary>
     public bool TryGetVirtualItemBand(NodeHandle content, out int persistentPrefixCount, out float topInset)
+        => TryGetVirtualItemBand(content, out persistentPrefixCount, out topInset, out _);
+
+    /// <summary>Resolve the shared recyclable-item clip and optional top alpha-feather owned by a virtual viewport.</summary>
+    public bool TryGetVirtualItemBand(NodeHandle content, out int persistentPrefixCount, out float topInset, out float topFadeBand)
     {
         persistentPrefixCount = 0;
         topInset = float.NaN;
+        topFadeBand = 0f;
         if (content.IsNull || !IsLive(content)) return false;
         NodeHandle viewport = Parent(content);
         if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var sc)
@@ -1078,6 +1083,7 @@ public sealed class SceneStore : ISceneBackend
             return false;
         persistentPrefixCount = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
         topInset = MathF.Max(0f, sc.ItemClipTopInset);
+        topFadeBand = MathF.Max(0f, sc.ItemClipTopFadeBand);
         return true;
     }
 
@@ -1120,6 +1126,11 @@ public sealed class SceneStore : ISceneBackend
         int idx = (int)h.Raw.Index;
         if (project is null || action is null) { _scrollObs.Remove(idx); return; }
         ref var row = ref System.Runtime.InteropServices.CollectionsMarshal.GetValueRefOrAddDefault(_scrollObs, idx, out _);
+        // The row is keyed by NODE INDEX, which the handle allocator RECYCLES. A new node landing on a retired index
+        // inherits the previous scroller's projected key, and the change-only gate then swallows the new observer's FIRST
+        // projection — the very fire it needs to seed itself (a shelf remounted onto a recycled index rests off-grid
+        // forever because its settle key happened to equal the dead one's). The key belongs to the node, not the slot.
+        if (row.Node != h) { row.LastKey = 0L; row.HasLast = false; }
         row.Node = h; row.Project = project; row.Action = action;
     }
     public void ClearScrollObserver(NodeHandle h) => _scrollObs.Remove((int)h.Raw.Index);

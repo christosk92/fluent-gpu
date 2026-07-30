@@ -1,3 +1,4 @@
+using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -24,6 +25,18 @@ namespace Wavee;
 // page's lifetime; Uri/Artist updates flow through Props instead of a remount, so there is never more than one pill.
 static class ArtistShyPill
 {
+    /// <summary>The compact header lane's height: a 36px avatar plus Spacing.XXS top and bottom. The old 56px surface
+    /// forced every sticky facet header below a hero-sized blank strip across the whole viewport even though only the
+    /// centred pill occupied it.</summary>
+    public const float Height = 40f;
+    /// <summary>The pill overlay slot's top padding on the artist page. This is also part of the sticky-header inset, so
+    /// keep it to the smallest token that still detaches the acrylic capsule from the command chrome.</summary>
+    public const float TopMargin = Spacing.XS;
+    /// <summary>Vertical space the floating pill claims at the viewport top. ANYTHING that pins to the artist page's
+    /// viewport top must start below this or it slides under the pill — which is what the sticky discography facet
+    /// header did. Consumed by the overlay slot's padding AND by the header's PinTop, so the two cannot drift.</summary>
+    public const float Clearance = TopMargin + Height;   // 44
+
     internal sealed record Props(string Uri, Loadable<Artist> Artist, Services Svc, Signal<bool> Pinned);
 
     public static Element Create(string uri, Loadable<Artist> artist, Services svc, Signal<bool> pinned)
@@ -34,15 +47,21 @@ sealed class ArtistShyPillCore : Component
 {
     static readonly LayoutTransition Presence = new(
         TransitionChannels.Opacity,
-        TransitionDynamics.Tween(280f, Easing.SmoothOut),
-        Enter: new EnterExit(Dy: -12f, Sx: 0.96f, Sy: 0.96f, Opacity: 0f, Active: true, Blur: 3f),
-        Exit: new EnterExit(Dy: -8f, Sx: 0.985f, Sy: 0.985f, Opacity: 0f, Active: true, Blur: 2f),
-        ExitDynamics: TransitionDynamics.Tween(170f, Easing.SmoothOut));
+        MotionTok.ControlNormal.ToDynamics(),
+        Enter: new EnterExit(Dy: -Spacing.M, Sx: 0.96f, Sy: 0.96f, Opacity: 0f, Active: true, Blur: 3f),
+        Exit: new EnterExit(Dy: -Spacing.S, Sx: 0.985f, Sy: 0.985f, Opacity: 0f, Active: true, Blur: 2f),
+        ExitDynamics: MotionTok.ControlFast.ToDynamics());
 
     public override Element Render()
     {
         var p = UsePropsOrDefault<ArtistShyPill.Props>();
         if (p is null) return new BoxEl();
+        // Watch this artist's OWN picture, so a LATE-landing grading recolours the pill's Play (Surface below derives the
+        // chrome accent from it). The pill cannot ride the page's re-render for this: its props are re-pushed through an
+        // EQUALITY-GATED update, so an unchanged Props record does not re-run this Render — without its own subscription
+        // the pill would keep whatever accent existed on the frame it mounted (the semantic blue) while the hero beside
+        // it repainted in the cover's hue. Same one-cover idiom as ArtistPage.cs / DetailShell.cs, never the global epoch.
+        _ = SpotifyLive.CoverColorPlane.Current.Watch(ArtistPage.PaletteImageUrl(p.Artist.Value.Value)).Value;
         // Gate on Ready, not just pinned: the pill is a scrolled-past-hero affordance, so showing its real avatar +
         // monthly-listeners over the page's loading skeleton both leaks real data early and floats a solid card on top
         // of the shimmer grid. While Pending/Failed it stays hidden; on Ready, if still scrolled past the hero, it
@@ -65,23 +84,26 @@ sealed class ArtistShyPillCore : Component
 
     static Element Surface(string uri, Artist a, Services svc)
     {
-        // Match the page's cover-extracted accent (lifted) so the floating pill isn't default-blue over an accented page.
-        ColorF accent = Surfaces.SchemeFor(a.Image?.Url) is { } pal ? WaveePalette.Lift(WaveePalette.Accent(pal)) : Tok.AccentDefault;
+        // Match the page's cover-extracted CHROME accent exactly (ArtistPage.cs) — the pill's Play sits in the same
+        // visual sentence as the hero's, so the two must not differ in chroma.
+        ColorF accent = Surfaces.ChromeSchemeFor(ArtistPage.PaletteImageUrl(a)) is { } pal
+            ? WaveePalette.ChromeAccent(pal)
+            : Tok.AccentDefault;
         return new BoxEl
         {
-            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(Spacing.S, Spacing.S, Spacing.L, Spacing.S),
-            Corners = CornerRadius4.All(28f), Acrylic = Tok.AcrylicFlyout, Fill = Tok.FillLayerDefault, Shadow = Elevation.Card,
+            Direction = 0, Height = ArtistShyPill.Height, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.S, Spacing.XXS, Spacing.L, Spacing.XXS),
+            Corners = Radii.FullAll, Acrylic = Tok.AcrylicFlyout, Fill = Tok.FillLayerDefault, Shadow = Elevation.Card,
             BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
             Children =
             [
-                new BoxEl { Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), ClipToBounds = true,
-                    Children = [ Surfaces.Artwork(a.Image, a.Id.GetHashCode() & 0x7fffffff, 40f, 40f, 20f, decodePx: 256) ] },
+                new BoxEl { Width = 36f, Height = 36f, Shrink = 0f, Corners = Radii.Circle(36f), ClipToBounds = true,
+                    Children = [ Surfaces.Artwork(a.Image, a.Id.GetHashCode() & 0x7fffffff, 36f, 36f, Radii.Full, decodePx: 256) ] },
                 // The subline carries the upcoming release INSTEAD of the listener count while one is pending. The pill
                 // exists precisely for the scrolled-past state, which is exactly when the hero's own countdown pill has
                 // gone — so this is the only place the announcement survives, and it is worth more than a stat that has
-                // not changed since the page loaded. The row is ~56px with an avatar, name, Play and Follow already in
-                // it, so this replaces rather than adds.
+                // not changed since the page loaded. This replaces rather than adds a third text fact, keeping the
+                // compact 40-DIP lane quiet and single-purpose.
                 new BoxEl { Direction = 1, Gap = 1f,
                     Children =
                     [
@@ -92,14 +114,10 @@ sealed class ArtistShyPillCore : Component
                             : new TextEl(Strings.Artist.MonthlyListeners(a.MonthlyListeners.ToString("N0")))
                                 { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     ] },
-                new BoxEl
-                {
-                    Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                    Corners = CornerRadius4.All(18f), Padding = new Edges4(16f, 8f, 16f, 8f),
-                    Fill = accent, HoverScale = 1.04f, PressScale = 0.97f,
-                    OnClick = () => _ = svc.Player.PlayAsync(uri, 0),
-                    Children = [ Icon(Icons.Play, 14f, ColorContrast.PickContrast(accent)), new TextEl(Loc.Get(Strings.Artist.Play)) { Size = 13f, Weight = 700, Color = ColorContrast.PickContrast(accent) } ],
-                },
+                // The WaveeCta media pill on the page's lifted cover accent. Its 32-DIP compact variant fits inside the
+                // 40-DIP lane without making the overlay reserve hero-sized vertical space.
+                WaveeCta.Accent(Loc.Get(Strings.Artist.Play), accent, () => _ = svc.Player.PlayAsync(uri, 0),
+                    minHeight: 32f),
                 Embed.Comp(() => new FollowButton(uri, a.Name)) with { Key = "artist-pill-follow:" + uri },
             ],
         };

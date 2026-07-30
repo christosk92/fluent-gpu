@@ -845,10 +845,12 @@ public sealed class PlaybackBridge
             // including on a backend with no store at all (overrides work without Spotify).
             if (!has && _overrides is { } ov) has = ov.Has(uri);
         }
+        bool rawHas = has;
         has = HasVideoLatch.Apply(has, uri, ref _hasVideoLatchedUri);
         // A PROVEN "no video media for this playable" beats the glitch-suppression latch above (which exists only to
         // absorb a transient read). This is what unmounts a surface the backend has already stopped feeding.
         has = VideoMediaLatch.Apply(has, uri, _videoDeadUri);
+        LogVideoAffordance(uri, rawHas, has);
         CurrentTrackHasVideo.SetIfChanged(has);   // the badge ALWAYS updates — the player-bar affordance lights immediately
         // …and so does the CONNECT wire. This sits ABOVE the deferred-upgrade return on purpose: a badge-only land is
         // precisely the case where no host swap (and therefore no playback event, and therefore no PutState) happens, yet
@@ -869,6 +871,38 @@ public sealed class PlaybackBridge
         // something to play. Gen-fenced at publish, so this is safe to call redundantly (last request wins).
         if (has && VideoActive() && PopOutVideoSource.Peek() is null)
             RequestPopOutSource(uri);
+    }
+
+    // ── the now-playing video affordance, as a decision record ────────────────────────────────────────────────────────
+    // RecomputeHasVideo runs on EVERY store change relevant to the current track (and on every bulk — which is what a
+    // detect slice produces), so this logs only on a real edge: a new uri, or the same uri's verdict flipping. That keeps
+    // one line per track change plus one when an association lands late and heals the badge.
+    string? _videoDiagUri;
+    bool _videoDiagHas;
+    bool _videoDiagSeen;
+
+    void LogVideoAffordance(string? uri, bool planeAnswer, bool afterLatches)
+    {
+        if (_videoDiagSeen
+            && string.Equals(_videoDiagUri, uri, StringComparison.Ordinal)
+            && _videoDiagHas == afterLatches) return;
+        _videoDiagUri = uri; _videoDiagHas = afterLatches; _videoDiagSeen = true;
+        if (!WaveeLog.Instance.IsEnabled(WaveeLogLevel.Debug)) return;
+        var assoc = string.IsNullOrEmpty(uri) ? null : _store?.GetVideoAssociation(uri);
+        WaveeLog.Instance.Event(WaveeLogLevel.Debug, "playback", "video.assoc.nowplaying",
+            "now-playing video affordance evaluated",
+            fields:
+            [
+                WaveeLogField.Of("uri", uri ?? "-"),
+                // The three inputs, separately, so a "no video" verdict names its own cause: no association row at all,
+                // a row that says no, a user attachment, or a latch/proven-dead override of a true plane answer.
+                WaveeLogField.Of("assoc", assoc is null ? "none" : assoc.HasVideo ? "hasVideo" : "noVideo"),
+                WaveeLogField.Of("gid", assoc?.VideoGidHex ?? "-"),
+                WaveeLogField.Of("counterpart", assoc?.CounterpartUri ?? "-"),
+                WaveeLogField.Of("override", !string.IsNullOrEmpty(uri) && _overrides is { } o && o.Has(uri)),
+                WaveeLogField.Of("plane", planeAnswer), WaveeLogField.Of("final", afterLatches),
+                WaveeLogField.Of("latched", _hasVideoLatchedUri ?? "-"), WaveeLogField.Of("dead", _videoDeadUri ?? "-"),
+            ]);
     }
 
     /// <summary>An <see cref="ILoginProgress"/> the live-login bootstrap reports to off the UI thread; each snapshot is

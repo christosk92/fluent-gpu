@@ -122,14 +122,28 @@ public sealed class CoverColorPlane
     // getDynamicColorsByUris takes `spotify:image:<full id>`. Hence two accessors over the same URL.
     const int ImageIdLength = 40;
     const int SizePrefixLength = 16;
+    /// <summary>The provider-token form of an image reference: what <c>getDynamicColorsByUris</c> takes, and also what an
+    /// un-normalized <c>Image.Url</c> still carries before <c>ImageSource.Normalize</c> rewrites it to the CDN url.</summary>
+    const string ImageUriPrefix = "spotify:image:";
 
     /// <summary>The full image id (the segment after <c>/image/</c>), which is what the filler asks about.
-    /// Returned as a SLICE of the input — the hot read path must not mint a string per art slot per render.</summary>
+    /// Returned as a SLICE of the input — the hot read path must not mint a string per art slot per render.
+    /// Accepts BOTH url shapes a caller may hold (the CDN url and the raw <c>spotify:image:</c> token), so this is the
+    /// one place the app has to normalize a cover reference.</summary>
     public static ReadOnlySpan<char> IdSpan(ReadOnlySpan<char> url)
     {
+        url = url.Trim();
         if (url.IsEmpty) return default;
         int q = url.IndexOf('?');
         if (q >= 0) url = url[..q];
+        // The provider-token form has no "/image/" segment — in fact no '/' at all — so without this arm the WHOLE token
+        // became the id. Two consequences, both silent: it keyed a DIFFERENT entry from the same cover's CDN url (so page
+        // chrome asking `SchemeFor(Image.Url)` never met the grading the art tile had already stored under the real
+        // identity, and its Watch signal never fired), and the fetch went out as `spotify:image:spotify:image:<id>`.
+        // Normalizing HERE rather than at each call site covers every path at once — TryGetTint, TryGetScheme, Watch,
+        // SetDark — and stays allocation-free, which ImageSource.Normalize (a string) could not be on the render path.
+        if (url.StartsWith(ImageUriPrefix, StringComparison.OrdinalIgnoreCase))
+            return url[ImageUriPrefix.Length..].Trim();
         int img = url.LastIndexOf("/image/", StringComparison.OrdinalIgnoreCase);
         if (img >= 0) return url[(img + "/image/".Length)..];
         int slash = url.LastIndexOf('/');
@@ -146,9 +160,30 @@ public sealed class CoverColorPlane
 
     public static string KeyForUrl(string? url) => string.IsNullOrEmpty(url) ? "" : KeySpan(url).ToString();
 
+    /// <summary>Whether <paramref name="url"/> carries the provider's full 40-hex image id and can therefore be sent to
+    /// <c>getDynamicColorsByUris</c>. Playlist mosaics and custom-cover URLs still key the local plane (a kind-179
+    /// visual-identity payload may have seeded them), but a render-path miss for those URLs cannot be filled by the
+    /// dynamic-colour endpoint. Callers that own richer context can use this to choose a stable, gradeable fallback
+    /// instead of waiting forever on an impossible request.</summary>
+    public static bool CanGrade(string? url)
+    {
+        if (string.IsNullOrEmpty(url)) return false;
+        var id = IdSpan(url);
+        if (id.Length != ImageIdLength) return false;
+        for (int i = 0; i < id.Length; i++)
+        {
+            char c = id[i];
+            if (!((uint)(c - '0') <= 9u
+                || (uint)(c - 'a') <= 5u
+                || (uint)(c - 'A') <= 5u))
+                return false;
+        }
+        return true;
+    }
+
     /// <summary>The <c>spotify:image:&lt;id&gt;</c> form <c>getDynamicColorsByUris</c> takes — it does NOT accept the
     /// https URL that <c>fetchExtractedColors</c> did.</summary>
-    public static string ImageUri(string key) => "spotify:image:" + key;
+    public static string ImageUri(string key) => ImageUriPrefix + key;
 
     // ── the render-path read ────────────────────────────────────────────────────────────────────────────────────
     /// <summary>The art placeholder colour for a cover URL, or false when unknown (⇒ caller paints the neutral tile).

@@ -70,6 +70,27 @@ public static class ReuseGuard
         if (ThrowOnViolation) throw new FrozenPropException(msg);
     }
 
+    /// <summary>Report a <c>Key</c> the reconciler structurally CANNOT honour: a keyed element sitting in a SINGLE-child
+    /// slot (a component's root output, a provider body, a <c>Show</c> body). <c>TreeReconciler.ReconcileSingleChild</c>
+    /// pairs old↔new by <c>ElementTypeId</c> alone — only <c>ReconcileChildren</c> reads <c>Key</c> — so a changed key
+    /// there is a silently-dropped remount request and every field frozen at that child's mount stays frozen. The fix is
+    /// to make it a keyed CHILD: wrap it in a container element (<c>new BoxEl { Children = [keyed] }</c>).
+    /// <para>Report-only by design — it does NOT honour <see cref="ThrowOnViolation"/>. The semantic is unchanged (the
+    /// subtree is still updated in place), so this is a diagnostic about a request that was dropped, not a corrupted
+    /// state, and it must not brick a debug run for a pre-existing inert key.</para></summary>
+    public static void KeyIgnoredInSingleChildSlot(string elementType, string? oldKey, string? newKey)
+    {
+        Violations++;
+        string msg = $"[reuseguard] {elementType}.Key '{oldKey}' → '{newKey}' in a SINGLE-child slot was IGNORED "
+                   + "(ReconcileSingleChild pairs by element type; only ReconcileChildren honors Key), so the subtree was "
+                   + "UPDATED in place instead of remounted and its frozen fields kept their mount-time values. "
+                   + "Wrap the keyed element in a container so the key lands on a keyed CHILD "
+                   + "— see design/subsystems/component-props-contract.md";
+        LastViolation = msg;
+        if (Diag.Sink is { } sink) sink(msg);
+        else Console.Error.WriteLine(msg);
+    }
+
     /// <summary>Shorthand for the common scalar-field case (a label / glyph / flag that froze at mount and changed on
     /// reuse). Names the standard fix idioms.</summary>
     public static void ScalarChanged(Component owner, string field) =>

@@ -20,6 +20,10 @@ public interface IAppSettings
 static class WaveeSettings
 {
     public static readonly SettingKey<float> SidebarWidth = new("sidebar.width", 300f);
+    // Whether SidebarWidth is a USER CHOICE or just the last responsive default. False (the default) means the pane width
+    // follows ShellResponsiveLayout.NavPaneDefaultFor of the live viewport; the first seam-drag commit sets it true and the
+    // persisted width becomes authoritative for good. Collapsing/expanding the pane is NOT a width choice and must not set it.
+    public static readonly SettingKey<bool> SidebarWidthUserSet = new("sidebar.width.userSet", false);
     public static readonly SettingKey<bool> SidebarCollapsed = new("sidebar.collapsed", false);
     public static readonly SettingKey<bool> PlayerBarShowRemaining = new("playerbar.duration.remaining", true);
     // Theme preference: 0 = System (follow the OS live), 1 = Light, 2 = Dark. Default System so a fresh install matches
@@ -40,11 +44,25 @@ static class WaveeSettings
     public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);
     public static readonly SettingKey<bool> DisableMarquee = new("appearance.marquee.disabled", false);
     public static readonly SettingKey<bool> DisableColorWashes = new("appearance.colorWashes.disabled", false);
+    // The DWM window material. FALSE (the default) = Mica ALT (DWMSBT_TABBEDWINDOW — the flatter, neutral File-Explorer
+    // tint the whole shell ladder is solved against); TRUE = base Mica (DWMSBT_MAINWINDOW — more wallpaper-tinted, the
+    // stock "main window" backdrop). A bool, not an enum: DWM offers exactly these two Mica kinds, and acrylic is not a
+    // window-level option here (mica:false is the engine's no-Mica path, not a user choice). Seeds AppOptions.MicaAlt at
+    // startup and is applied LIVE on change via FluentApp.SetWindowMaterialAlt — deliberately a setting, not an env var.
+    public static readonly SettingKey<bool> WindowMaterialBaseMica = new("appearance.windowMaterial.baseMica", false);
     // Wide two-column detail pages: user-resizable left metadata rail. Album-like and playlist-like surfaces keep
     // separate widths because their authored defaults differ (280 vs 240 DIP). Responsive mid/narrow modes ignore these
     // values and retain their breakpoint widths; the saved width returns when the page is wide again.
+    // The stored value is only ever CLAMPED at the seed (DetailShell) to the live grip bounds — a width persisted by an
+    // older build with a different floor must never seed the layout raw.
     public static readonly SettingKey<float> DetailAlbumRailWidth = new("detail.rail.album.width", WaveeSize.RailAlbum);
     public static readonly SettingKey<float> DetailPlaylistRailWidth = new("detail.rail.playlist.width", WaveeSize.RailPlaylist);
+    // …and whether that rail is DRAGGED SHUT (the grip's force-push detent, WP-η). Separate from the width so re-opening
+    // restores the width the user chose rather than a default. Collapse is a WIDE-layout (mode 0) preference only: the
+    // responsive mid/narrow modes always compose their breakpoint rail, and the collapsed preference returns with the
+    // wide layout — exactly the rule the widths above already follow. Written by the same drag-end commit as the width.
+    public static readonly SettingKey<bool> DetailAlbumRailCollapsed = new("detail.rail.album.collapsed", false);
+    public static readonly SettingKey<bool> DetailPlaylistRailCollapsed = new("detail.rail.playlist.collapsed", false);
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
     public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");

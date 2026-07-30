@@ -108,7 +108,8 @@ public class LiveContextResolverTests
 
     sealed class NullMetadataSource : IMetadataSource
     {
-        public Task FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct) => Task.CompletedTask;
+        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+            => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
     }
 
     sealed class RouteTransport(Func<string, string, Resp> respond) : ITransport

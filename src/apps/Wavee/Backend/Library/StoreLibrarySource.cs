@@ -4,6 +4,7 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Localization;
+using Wavee.Backend;
 using Wavee.Backend.Playlists;
 using Wavee.Core;
 
@@ -38,6 +39,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// Songs is the caller that needs it — it never routes through <see cref="OnDemandFetch"/> (<c>EnsureFetchedAsync</c>
     /// gates playlist/album/artist only), so nothing else would ever detect its rows. Fire-and-forget; null in tests.</summary>
     public Func<IReadOnlyList<string>, Task>? DetectVideos { get; set; }
+
+    /// <summary>Paged member hydrate on liked-open (S2). Same fire-and-forget shape as <see cref="DetectVideos"/> —
+    /// pages at 300 through MetadataService.SyncAllAsync so thin album names / tracks close via the chokepoint without
+    /// one giant SyncAll over 10k members. Null in tests.</summary>
+    public Func<IReadOnlyList<string>, Task>? HydrateMembers { get; set; }
 
     /// <summary>Set by the go-live block: the single library-sync loop. When present, playlist opens route through it (SWR —
     /// blocking first fetch / background revalidate); null offline/in tests → the OnDemandFetch path (album/artist unchanged).</summary>
@@ -157,7 +163,16 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         foreach (var a in all) if (AggregateCatalog.KindMatches(a.Kind, kind)) filtered.Add(a);   // shared kind filter (Singles ⇒ Single/EP)
         if (limit <= 0) return new DiscographyPage(Array.Empty<Album>(), filtered.Count);   // total-only probe
         var window = new List<Album>();
-        for (int i = offset; i < filtered.Count && window.Count < limit; i++) window.Add(filtered[i]);
+        for (int i = offset; i < filtered.Count && window.Count < limit; i++)
+        {
+            var a = filtered[i];
+            // Heal a count-less card from the resident album row. ArtistDiscography.Assemble keeps TrackCount when the
+            // full row is resident (it strips only Tracks), but a card re-fattened from a persisted stub written before
+            // the stub carried a count still arrives as 0 — and the artist page's inline drawer reserves height from
+            // this number. This heals existing stores with no migration; the stub field keeps new writes whole.
+            if (a.TrackCount == 0 && _store.GetAlbum(a.Uri) is { TrackCount: > 0 } row) a = a with { TrackCount = row.TrackCount };
+            window.Add(a);
+        }
         // The same fire-and-forget hook the track reads use — here it resolves each card's cover tint (kind 179), so a
         // page of albums paints its placeholders in their own colours instead of as a grid of identical grey squares.
         // Self-filtering and negatively cached, so re-paging over albums already resolved costs nothing.
@@ -212,7 +227,25 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
                 // SWR/etag-cheap and resident-skipping by design.
                 || a.AlbumsTotal + a.SinglesTotal + a.CompilationsTotal > a.TopAlbums.Count;
         }
+        else if (uri.StartsWith("spotify:show:", StringComparison.Ordinal))
+        {
+            // ShowV4 lands the header + episode membership; without either the page reads "0 episodes" forever.
+            need = _store.GetShow(uri) is null || !_store.HasMembership(uri);
+        }
         if (need) { try { await fetch(uri, ct).ConfigureAwait(false); } catch { } }
+
+        // Show-open: hydrate the first episode page through the chokepoint (paged HydrateMembers / SyncAllAsync).
+        if (uri.StartsWith("spotify:show:", StringComparison.Ordinal) && HydrateMembers is { } hydrateEps)
+        {
+            var members = _store.Membership(uri);
+            if (members.Count > 0)
+            {
+                int n = Math.Min(members.Count, 300);
+                var eps = new List<string>(n);
+                for (int i = 0; i < n; i++) eps.Add(members[i].ItemUri);
+                try { _ = hydrateEps(eps); } catch { }
+            }
+        }
     }
 
     // Shared with the live EnsureAlbumAsync callback. `Full` describes the detail envelope that was mapped; it does not
@@ -231,7 +264,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     static bool HasUnnamedTrack(IReadOnlyList<Track> tracks)
     {
-        for (int i = 0; i < tracks.Count; i++) if (tracks[i].Title.Length == 0) return true;
+        for (int i = 0; i < tracks.Count; i++) if (StoreEntityGaps.TrackUnnamed(tracks[i])) return true;
         return false;
     }
 
@@ -284,6 +317,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             var uris = new List<string>(list.Count);
             for (int i = 0; i < list.Count; i++) uris.Add(list[i].Uri);
             try { _ = detect(uris); } catch { }   // fire-and-forget: the read never waits on (or fails from) detection
+        }
+        if (HydrateMembers is { } hydrate && items.Count > 0)
+        {
+            var uris = new List<string>(items.Count);
+            for (int i = 0; i < items.Count; i++) uris.Add(items[i].Uri);
+            try { _ = hydrate(uris); } catch { }   // fire-and-forget paged SyncAll — closes thin album/track refs
         }
         return Task.FromResult<IReadOnlyList<Track>>(list);
     }
@@ -413,7 +452,18 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     // ── IPodcastSource ──
     public Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("shows", _store.GetShow));
-    public Task<Show?> GetShowAsync(string uri, CancellationToken ct = default) => Task.FromResult(_store.GetShow(uri));
+    public async Task<Show?> GetShowAsync(string uri, CancellationToken ct = default)
+    {
+        await EnsureFetchedAsync(uri, ct).ConfigureAwait(false);
+        var show = _store.GetShow(uri);
+        if (show is null) return null;
+        var members = _store.Membership(uri);
+        if (members.Count == 0) return show;
+        var eps = new List<Episode>(members.Count);
+        for (int i = 0; i < members.Count; i++)
+            if (_store.GetEpisode(members[i].ItemUri) is { } e) eps.Add(e);
+        return show with { Episodes = eps.Count > 0 ? eps : show.Episodes };
+    }
 
     // ── joins ──
     // Every library set reads in ADD order, newest first (the Spotify collection default); unknown timestamps (0) sink

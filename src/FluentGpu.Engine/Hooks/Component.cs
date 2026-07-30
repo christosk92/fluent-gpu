@@ -171,6 +171,7 @@ public abstract class Component
     {
         Context.BeginRender();
         Element el;
+#pragma warning disable CS0162 // const CompiledIn folds: exactly one of these arms is live per build config
         if (FluentGpu.Hosting.RenderBudget.CompiledIn)
         {
             long rbStart = FluentGpu.Hosting.RenderBudget.Begin();
@@ -178,6 +179,7 @@ public abstract class Component
             FluentGpu.Hosting.RenderBudget.End(this, rbStart);
         }
         else el = Render();
+#pragma warning restore CS0162
         Context.EndRender();
         return el;
     }

@@ -5,6 +5,9 @@ namespace Wavee.Features.Detail;
 /// <summary>Which way the track-detail Hero composes: desktop side-by-side, immersive full-width, or compact thumbnail.</summary>
 public enum DetailHeroOrientation { SideBySide, Immersive, Compact }
 
+/// <summary>Identity of one slot in the vertical playlist's measured viewport.</summary>
+internal enum DetailVerticalItemRole { Hero, Chrome, ExpandableTrack, Empty }
+
 /// <summary>Pure width→layout rules for the Apple-Music-inspired vertical track-detail hero. BCL-only (no FluentGpu
 /// types) so it is source-included by Wavee.Tests. The persisted page-layout preference is an int (<see cref="PageAuto"/> ·
 /// <see cref="PageHero"/>) that selects the page SYSTEM (rail-when-wide vs always-hero); the hero's own side-by-side ↔
@@ -25,19 +28,14 @@ public static class DetailVerticalLayout
     public const float CompactPillMaxWidth = 480f;
     public const float CompactPillViewportRatio = 0.46f;
     public const float ImmersiveIdentityTokenSize = 44f;
-    public const float IdentityVisibleFraction = 0.68f;
-    public const float MorphHysteresis = 24f;
-    public const float ToolsEnterProgress = 0.62f;
-    public const float ToolsExitProgress = 0.50f;
     public const float SideHeroBottomPad = 0f;
     public const float SideToolbarTopPad = 0f;
     public const float ExpandedToolbarTopPad = 8f;
     public const float ExpandedToolbarBottomPad = 4f;
     public const float ExpandedContentFadeDistance = 96f;
-    public const float ExpandedToolbarFadeDistance = 72f;
     public const float ChromeHeaderHeight = 36f;
     public const float ChromeDividerHeight = 1f;
-    public const float StickyClipInset = CompactIdentityHeight + ChromeHeaderHeight + ChromeDividerHeight; // 93 DIP
+    public const float StickyFadeBand = 22f;
     public const float ImmersiveNominalW = 580f;
     public const float ImmersiveEnterW = 560f;
     public const float ImmersiveLeaveW = 600f;
@@ -105,33 +103,33 @@ public static class DetailVerticalLayout
     public static float CollapseDistance(float expandedHeight)
         => MathF.Max(1f, expandedHeight - CompactIdentityHeight);
 
-    /// <summary>Late, geometry-derived shared-transition edge. The shared source keeps 68% of its useful identity before
-    /// it yields to the shy pill; immersive uses its 44-DIP bottom token, never the full-bleed background.</summary>
-    public static float IdentityMorphEnterOffset(DetailHeroOrientation orientation, float artworkSize, float collapseDistance)
-    {
-        float raw = orientation switch
+    /// <summary>Actual pinned list-chrome extent. The optional Liked filter rail is part of the same sticky plate, so
+    /// paint and input must both account for its 48-DIP rail+gap instead of assuming the base header.</summary>
+    public static float ChromeExtent(float contentFilterExtent = 0f)
+        => ChromeHeaderHeight + ChromeDividerHeight + MathF.Max(0f, contentFilterExtent);
+
+    public static float StickyClipInset(float contentFilterExtent = 0f)
+        => CompactIdentityHeight + ChromeExtent(contentFilterExtent);
+
+    /// <summary>The first two slots are persistent chrome; every live suffix slot is an expandable track container.
+    /// Keeping this decision pure prevents the vertical playlist from accidentally bypassing the drawer host.</summary>
+    internal static DetailVerticalItemRole ItemRole(int itemIndex, int visibleTracks)
+        => itemIndex switch
         {
-            DetailHeroOrientation.SideBySide => HeroPad + artworkSize * (1f - IdentityVisibleFraction),
-            DetailHeroOrientation.Compact => CompactHeroPad + artworkSize * (1f - IdentityVisibleFraction),
-            _ => artworkSize - HeroPad - ImmersiveIdentityTokenSize * IdentityVisibleFraction,
+            0 => DetailVerticalItemRole.Hero,
+            1 => DetailVerticalItemRole.Chrome,
+            _ when itemIndex >= 2 && itemIndex - 2 < Math.Max(0, visibleTracks)
+                => DetailVerticalItemRole.ExpandableTrack,
+            _ => DetailVerticalItemRole.Empty,
         };
-        float hi = MathF.Max(1f, collapseDistance - 48f);
-        float lo = MathF.Min(72f, hi);
-        return Math.Clamp(raw, lo, hi);
-    }
 
-    public static float IdentityMorphExitOffset(float enterOffset)
-        => MathF.Max(0f, enterOffset - MorphHysteresis);
+    /// <summary>The expanded hero stays readable until its final 96 DIP, then yields continuously to compact identity.</summary>
+    public static float ExpandedFadeStart(float collapseDistance)
+        => MathF.Max(0f, collapseDistance - ExpandedContentFadeDistance);
 
-    /// <summary>The search/play cluster follows the identity rather than arriving in the same flush. On short heroes the
-    /// progress curve wins; on immersive heroes the lower token edge keeps tools after the shared identity.</summary>
-    public static float ToolsEnterOffset(float collapseDistance, float identityEnter)
-        => MathF.Min(MathF.Max(1f, collapseDistance - 8f),
-            MathF.Max(identityEnter + 16f, collapseDistance * ToolsEnterProgress));
-
-    public static float ToolsExitOffset(float collapseDistance, float identityExit)
-        => MathF.Min(MathF.Max(0f, collapseDistance - 12f),
-            MathF.Max(identityExit + 8f, collapseDistance * ToolsExitProgress));
+    /// <summary>The compact identity's quiet crossfade/4-DIP slide occupies only its own final-height window.</summary>
+    public static float CompactRevealStart(float collapseDistance)
+        => MathF.Max(0f, collapseDistance - CompactPillHeight);
 
     public static float CompactPillWidthCap(float viewportWidth)
         => MathF.Min(CompactPillMaxWidth,

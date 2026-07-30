@@ -32,7 +32,9 @@ static class ArtistWatchFeedPicture
         float radius = size / 2f;
 
         // The portrait itself. PersonPicture gives the WinUI initials fallback for an artist with no image at all, so a
-        // missing photo is still an intentional-looking portrait rather than a hole.
+        // missing photo is still an intentional-looking portrait rather than a hole. Retained as a DEFENSIVE path: the
+        // artist hero's strict gate (ArtistPage.Hero.cs) requires a usable still before calling here, so the initials
+        // circle is unreachable from that call site — but a future caller without such a gate still gets a portrait.
         Element portrait = still?.Url is { Length: > 0 } url
             ? new BoxEl
             {
@@ -50,7 +52,9 @@ static class ArtistWatchFeedPicture
         // The watch-feed loop, composited OVER the still (which stays as the poster underneath, so the circle is never
         // empty while the clip opens and never black if it fails). Only a resolved canvas URL qualifies — the mapper
         // sets CanvasUrl solely for `videoType: "URL"`, so an opaque file id or an absent video node leaves the still
-        // in place. Reduced motion keeps the still and never starts a decoder.
+        // in place. Reduced motion keeps the still and never starts a decoder. The artist hero now gates on this same
+        // field BEFORE calling here (ArtistPage.Hero.cs), so this is the second of two checks — kept because other
+        // callers may not pre-gate.
         if (!Motion.ReducedMotion && watch?.CanvasUrl is { Length: > 0 } clip)
             layers.Add(new BoxEl
             {

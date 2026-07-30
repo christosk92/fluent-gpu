@@ -18,34 +18,10 @@ namespace Wavee;
 // for the plain elements; Embed.Comp children freeze exactly as BuildHeader's do). Composition adapts to the resolved
 // orientation: fixed artwork BESIDE a flexing info column, full-width artwork carrying its identity/actions in the
 // lower edge fade, or an ultra-compact 96/64-DIP thumbnail row. The inline cover (desktop or compact), or the immersive
-// hero's small lower-edge token, morphs into the shy header; the full-bleed immersive media itself stays static.
+// hero's small lower-edge token, fades out over the final collapse band while compact identity fades/slides in. The
+// handoff is scroll-driven and reversible—no threshold snap or attention-grabbing shared-element flight.
 static class DetailVerticalHero
 {
-    // The pill's EXIT is the search box's expand seen from the other side: opening search unmounts the identity pill
-    // while the field grows across the same row. Running it on the field's own duration and easing keeps that one
-    // motion instead of a 150ms snap racing a 260ms growth. (The same leg also covers scrolling back up, where a
-    // slightly softer fade reads fine.)
-    static readonly LayoutTransition CompactPillPresence = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(280f, Easing.FluentDecelerate),
-        Enter: new EnterExit(Dy: 3f, Opacity: 0f, Active: true),
-        Exit: new EnterExit(Dy: -2f, Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(TrackList.SearchExpandMs, Easing.SmoothOut),
-        DelayMs: 80f,
-        ExitDelayMs: 0f);
-
-    static readonly LayoutTransition CompactToolPresence = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(220f, Easing.FluentDecelerate),
-        Enter: new EnterExit(Dy: 2f, Opacity: 0f, Active: true),
-        Exit: new EnterExit(Dy: -1f, Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(120f, Easing.FluentAccelerate),
-        DelayMs: 24f,
-        ExitDelayMs: 0f);
-
-    static readonly MotionTokenDef ExpandedCrossfade =
-        MotionTokenDef.Eased(210f, Easing.FluentStandard, ReducedMotionPolicy.KeepFade);
-
     static readonly LayoutTransition HeroGeometryMotion = new(
         TransitionChannels.Bounds,
         TransitionDynamics.Tween(280f, Easing.SmoothOut),
@@ -58,10 +34,10 @@ static class DetailVerticalHero
 
     public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> full,
                                 DetailHeroOrientation o, float artSize, float availW,
-                                float compactLeft, IReadSignal<bool> collapsed,
-                                IReadSignal<bool> compactInteractive, IReadSignal<bool> toolsVisible,
+                                float compactLeft, float collapseDistance,
+                                IReadSignal<bool> compactInteractive,
                                 IReadSignal<bool> searchExpanded, IReadSignal<bool> selectionCommandsVisible,
-                                string morphKey, Element toolbar, Element compactSearch, Element compactSelection)
+                                Element toolbar, Element compactSearch, Element compactSelection)
     {
         bool side = o == DetailHeroOrientation.SideBySide;
         bool compact = o == DetailHeroOrientation.Compact;
@@ -69,6 +45,7 @@ static class DetailVerticalHero
         bool inlineArtwork = side || compact;
         bool minimal = compact && artSize <= DetailVerticalLayout.MinimalHeroArtworkSize;
         bool editable = m.Capabilities.CanEditMetadata && m.ContextUri is { Length: > 0 };
+        bool compactCanHit = compactInteractive.Value;
 
         // Bucket the available width to 8 DIP before deriving the content width, so the InlineEdit facades' width-folding
         // keys (title/description) don't churn a remount on every sub-pixel resize frame.
@@ -96,8 +73,7 @@ static class DetailVerticalHero
             ? DetailVerticalLayout.HeroPad
             : 0f;
         float fullArtY = inlineArtwork ? DetailVerticalLayout.HeroPad : 0f;
-        // Side-by-side: pin Opacity/Trans to identity and morph in place. (In-flow cover — no overlay.)
-        // connected:false avoids a Hero-fly dest that can leave the slot empty if the fly handoff glitches.
+        // Side-by-side cover stays in flow. No morph key: scroll owns one quiet whole-presentation crossfade.
         int heroDecodePx = immersive ? DetailVerticalLayout.ImmersiveArtworkDecodePx(artSize) : 256;
         Element artworkBox = new BoxEl
         {
@@ -114,33 +90,26 @@ static class DetailVerticalHero
             [
                 editable
                     ? PlaylistInlineEdit.Cover(full, artSize, inlineArtwork ? Radii.Card : 0f, shadow: inlineArtwork,
-                        morphKey: inlineArtwork ? morphKey : null, decodePx: heroDecodePx, preferLargest: immersive)
+                        morphKey: null, decodePx: heroDecodePx, preferLargest: immersive)
                     // Apple oversaturates album art for a punchier look under the hero scrim — applied in both hero
                     // layouts (immersive/stacked and the wide side-by-side rail).
                     : DetailRail.HeroArtwork(m, artSize, inlineArtwork ? Radii.Card : 0f, connected: false,
-                        saturation: 1.18f, morphKey: inlineArtwork ? morphKey : null, decodePx: heroDecodePx,
+                        saturation: 1.18f, morphKey: null, decodePx: heroDecodePx,
                         preferLargest: immersive)
             ],
         };
 
         var infoKids = new List<Element>(6);
 
-        // Identity: album/single → type/year badges + billed-artist face pile; playlist → owner/collaborators block.
-        string eyebrow;
-        if (cfg.Badges == BadgeStyle.TypeYear)
-            eyebrow = m.BadgeType is { Length: > 0 } type && m.Year is { Length: > 0 } year
-                ? type + " · " + year
-                : m.BadgeType ?? m.Year ?? "";
-        else if (cfg.Badges == BadgeStyle.OwnerRow) eyebrow = Loc.Get(Strings.Nav.Playlist);
-        else eyebrow = Loc.Get(Strings.Nav.YourLibrary);
+        // Identity: album/single → the type/year eyebrow + billed-artist face pile; playlist → owner/collaborators block.
+        // The STRING and the RUN both come from DetailRail (EyebrowText / EyebrowRun) — the rail, the narrow header and
+        // this hero must never word or style the same release two ways across a layout cross. Composition below is
+        // unchanged: only the fact's authorship moved.
+        string eyebrow = DetailRail.EyebrowText(m, cfg);
         // Apple's immersive hierarchy starts directly with the release title. Type/year remains useful in the wider
         // desktop adaptation, but duplicating it above the title on a phone-sized hero pushes the useful copy too high.
         if (side && eyebrow.Length > 0)
-            infoKids.Add(Fade(new TextEl(eyebrow)
-            {
-                Size = 11f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 40f,
-                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-            }));
+            infoKids.Add(Fade(DetailRail.EyebrowRun(eyebrow)));
 
         // Immersive type is Apple Music display hierarchy — NOT the Fluent Title ramp (Semibold + 36 LH). Short titles
         // punch larger; long titles stay Bold but step down so two lines still read as one cluster. Tracking is slight
@@ -194,7 +163,7 @@ static class DetailVerticalHero
             description = Fade(PlaylistInlineEdit.Description(full, contentW, descLines, h, onMedia: immersive));
         else if (!compact && m.Description is { Length: > 0 })
             description = Fade(RichText.Expandable(m.Description, immersive ? 13f : 12f,
-                immersive ? ColorF.FromRgba(255, 255, 255) with { A = 0.58f } : Tok.TextSecondary,
+                immersive ? Tok.OnMediaSecondary : Tok.TextSecondary,
                 immersive ? Tok.OnMediaPrimary : Tok.AccentTextPrimary,
                 contentW, descLines, m.ContextUri ?? m.Title,
                 u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
@@ -205,7 +174,7 @@ static class DetailVerticalHero
                 ? new TextEl(m.MetaLine)
                 {
                     Size = 12f, Weight = 400, LineHeight = 16f,
-                    Color = ColorF.FromRgba(255, 255, 255) with { A = 0.58f },
+                    Color = Tok.OnMediaSecondary,
                     MaxWidth = contentW, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 }
                 : WaveeType.TrackMeta(m.MetaLine) with
@@ -246,14 +215,22 @@ static class DetailVerticalHero
         ColorF glassHover = ImmersiveGlassHover;
         ColorF glassPress = ImmersiveGlassPress;
         float actionSize = compact ? 36f : side ? 32f : 40f;
-        // Immersive Play is a plain white pill in the Apple 3-control row (no morph slot → no 48-DIP wrapper offset).
-        // Side-by-side keeps the morphing Play that compositor-transforms into the compact header control.
-        Element playButton = ActionButton(Icons.Play, Loc.Get(Strings.Detail.Play), actionSize,
-            immersive ? Tok.OnMediaPrimary : h.Accent,
-            immersive ? ColorF.FromRgba(0, 0, 0) : onAccent,
-            h.PlayAll, pill: immersive || compact,
-            width: immersive ? 132f : compact ? 92f : float.NaN,
-            labelSize: immersive ? 15f : 13f);
+        // ONE labeled Play across all three orientations: the shared WaveeCta media pill (Button internals — focus ring,
+        // automation role, 83ms brush — wearing the capsule, the hand cursor and the scale cue) with only the color axis
+        // swapped: the immersive white-on-media pair, or the page's artwork accent plus its resolved ink. The immersive
+        // pill declares a transparent stroke: the on-accent elevation ramp is white-alpha and would be invisible on a
+        // white fill regardless. Each orientation keeps its own slot (width/height), so the surrounding layout is
+        // unchanged — minHeight must be passed too, because Style.MinHeight is a FLOOR that would otherwise raise the
+        // 32-DIP side-by-side slot to the pill default.
+        Element playButton = WaveeCta.Pill(Loc.Get(Strings.Detail.Play), h.PlayAll,
+            palette: immersive
+                ? WaveeCta.Palette(Tok.OnMediaPrimary, ColorF.FromRgba(0, 0, 0), GradientSpec.Solid(ColorF.Transparent))
+                : WaveeCta.Palette(h.Accent, onAccent),
+            glyph: Icons.Play, minHeight: actionSize) with
+        {
+            Height = actionSize, Shrink = 0f,
+            Width = immersive ? 132f : compact ? 92f : float.NaN,
+        };
         Element expandedPlay = Fade(playButton);
         var actions = new List<Element>(5);
         if (compact)
@@ -265,15 +242,19 @@ static class DetailVerticalHero
         else if (immersive)
         {
             actions.Add(Fade(ActionButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), actionSize,
-                glass, Tok.OnMediaPrimary, h.Shuffle, iconOnly: true, pill: true,
+                glass, Tok.OnMediaPrimary, h.Shuffle,
                 hoverFill: glassHover, pressedFill: glassPress, hairline: true)));
             actions.Add(expandedPlay);
         }
         else
         {
             actions.Add(expandedPlay);
-            actions.Add(Fade(ActionButton(Icons.Shuffle, Loc.Get(Strings.Detail.Shuffle), actionSize,
-                Tok.FillSubtleSecondary, Tok.TextPrimary, h.Shuffle)));
+            // Labeled neutral secondary action → the media pill on the stock Standard ramp verbatim (nothing here is
+            // artwork-derived, so there is no palette to preserve): FillControlDefault + ControlElevationBorder, capsule
+            // geometry so it ladders with the Play pill beside it rather than reading as a utility rectangle.
+            actions.Add(Fade(WaveeCta.Pill(Loc.Get(Strings.Detail.Shuffle), h.Shuffle, ButtonAppearance.Standard,
+                    glyph: Icons.Shuffle, minHeight: actionSize)
+                with { Height = actionSize, Shrink = 0f }));
         }
         if (!compact && m.ContextUri is { Length: > 0 } saveUri && cfg.Heart != HeartMode.None)
             actions.Add(Fade(immersive
@@ -311,7 +292,7 @@ static class DetailVerticalHero
                 Animate = HeroReflowMotion,
                 Children =
                 [
-                    Flow.Show(() => !collapsed.Value, artworkBox, artworkPlaceholder),
+                    artworkBox,
                     new BoxEl
                     {
                         Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
@@ -346,10 +327,6 @@ static class DetailVerticalHero
         {
             Direction = 1,
             Animate = HeroReflowMotion,
-            // Keep the measured tree mounted so the virtual prefix height cannot collapse into a blank band. One
-            // equality-gated compositor binding hides the whole expanded presentation at the identity edge.
-            Opacity = Prop.Of(() => collapsed.Value ? 0f : 1f),
-            Transition = ExpandedCrossfade,
             Children =
             [
                 inlineArtwork
@@ -384,17 +361,17 @@ static class DetailVerticalHero
         } : null;
 
         static ColorF Scrim(float alpha) => ColorF.FromRgba(0, 0, 0) with { A = alpha };
-        // Mid-band contrast only: EdgeFade dissolves the bitmap into the opaque page wash; this veil sits ABOVE the
-        // faded media and BELOW the copy so white identity stays readable, then releases to transparent at the page
-        // seam so it never fights the melt (artist-hero pattern). Cap = 4 GradientSpec stops.
+        // Contrast veil: EdgeFade dissolves the bitmap into the page wash while this layer stays above the artwork and
+        // below the copy. It enters before the identity block, reaches full support behind the controls, and retains a
+        // quieter lower veil through the seam so bright artwork cannot erase metadata. Cap = 4 GradientSpec stops.
         Element copyContrast = new BoxEl
         {
             Width = viewportW, Height = artSize, HitTestPassThrough = true,
             Gradient = GradientDown(
-                new GradientStop(0.50f, Scrim(0f)),
-                new GradientStop(0.74f, Scrim(0.46f)),
-                new GradientStop(0.90f, Scrim(0.26f)),
-                new GradientStop(1f, Scrim(0f))),
+                new GradientStop(0.38f, Scrim(0f)),
+                new GradientStop(0.60f, Scrim(0.58f)),
+                new GradientStop(0.82f, Scrim(0.68f)),
+                new GradientStop(1f, Scrim(0.52f))),
             OpacityGroup = true,
         };
 
@@ -402,7 +379,7 @@ static class DetailVerticalHero
         if (m.ShareUrl is { Length: > 0 } shareUrl)
             utilityKids.Add(ActionButton(Icons.Share, Loc.Get(Strings.Menu.Share), 36f,
                 glass, Tok.OnMediaPrimary,
-                () => InputHooks.Current.Default.OpenUri?.Invoke(shareUrl), iconOnly: true, pill: true,
+                () => InputHooks.Current.Default.OpenUri?.Invoke(shareUrl),
                 hoverFill: glassHover, pressedFill: glassPress, hairline: true));
         utilityKids.Add(Embed.Comp(() => new DetailHeroMoreButton(full, cfg, h, 36f, onMedia: true))
             with { Key = $"vhero-more-media:{m.ContextUri}" });
@@ -412,8 +389,6 @@ static class DetailVerticalHero
             Padding = new Edges4(0f, 12f, 14f, 0f),
             AlignItems = FlexAlign.Start, Justify = FlexJustify.End,
             HitTestVisible = true,
-            Opacity = Prop.Of(() => collapsed.Value ? 0f : 1f),
-            Transition = ExpandedCrossfade,
             Children = utilityKids.ToArray(),
         };
 
@@ -428,14 +403,8 @@ static class DetailVerticalHero
             Children =
             [
                 DetailRail.HeroArtwork(m, DetailVerticalLayout.ImmersiveIdentityTokenSize,
-                    radius: 6f, connected: false, morphKey: morphKey, decodePx: 256)
+                    radius: 6f, connected: false, morphKey: null, decodePx: 256)
             ],
-        };
-        Element immersiveTokenPlaceholder = new BoxEl
-        {
-            Width = DetailVerticalLayout.ImmersiveIdentityTokenSize,
-            Height = DetailVerticalLayout.ImmersiveIdentityTokenSize,
-            Shrink = 0f, HitTestVisible = false,
         };
         Element immersiveTokenLayer = new BoxEl
         {
@@ -443,7 +412,7 @@ static class DetailVerticalHero
             Padding = new Edges4(DetailVerticalLayout.HeroPad, 0f, 0f, DetailVerticalLayout.HeroPad),
             AlignItems = FlexAlign.Start, Justify = FlexJustify.End,
             HitTestPassThrough = true,
-            Children = [Flow.Show(() => !collapsed.Value, immersiveToken, immersiveTokenPlaceholder)],
+            Children = [immersiveToken],
         };
 
         Element compactArtwork = new BoxEl
@@ -455,7 +424,7 @@ static class DetailVerticalHero
             Children =
             [
                 DetailRail.HeroArtwork(m, DetailVerticalLayout.CompactArtworkSize, radius: 4f,
-                    connected: false, morphKey: morphKey, decodePx: 256)
+                    connected: false, morphKey: null, decodePx: 256)
             ],
         };
         Element compactPlay = new BoxEl
@@ -475,17 +444,18 @@ static class DetailVerticalHero
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Children = [Icon(Icons.Play, 14f, onAccent)],
                 },
-                Flow.Show(() => compactInteractive.Value, new BoxEl
+                new BoxEl
                 {
                     Width = DetailVerticalLayout.CompactPlaySize,
                     Height = DetailVerticalLayout.CompactPlaySize,
                     Corners = CornerRadius4.All(DetailVerticalLayout.CompactPlaySize * 0.5f),
+                    HitTestVisible = compactCanHit,
                     Cursor = CursorId.Hand, Role = AutomationRole.Button, OnClick = h.PlayAll,
                     HoverScale = 1.06f, PressScale = 0.94f,
-                }),
+                },
             ],
         };
-        // Presence owns the pill fade/offset; the connected overlay independently carries the artwork between endpoints.
+        // Search presence swaps this pill in-place; the scroll-bound compact wrapper below owns its reveal and 4-DIP slide.
         string compactMeta = m.OwnerName ?? m.MetaLine ?? eyebrow;
         float compactPillMax = DetailVerticalLayout.CompactPillWidthCap(viewportW);
         float compactTextMax = MathF.Max(80f,
@@ -501,7 +471,8 @@ static class DetailVerticalHero
             Corners = CornerRadius4.All(DetailVerticalLayout.CompactPillHeight * 0.5f),
             Fill = compactPillFill, Shadow = Elevation.Card,
             BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
-            HitTestVisible = false, Animate = CompactPillPresence,
+            // Scroll owns the 4-DIP handoff; this house recipe applies only when search replaces the pill.
+            HitTestVisible = false, Animate = MotionRecipes.PageFade,
             TransformOriginX = 0f, TransformOriginY = 0.5f,
             Children =
             [
@@ -533,7 +504,7 @@ static class DetailVerticalHero
         Element compactTools = new BoxEl
         {
             Direction = 0, Shrink = 0f, Gap = Spacing.M,
-            AlignItems = FlexAlign.Center, Animate = CompactToolPresence,
+            AlignItems = FlexAlign.Center,
             Children = [compactSearchHost, compactPlay],
         };
         Element normalCompactIdentity = new BoxEl
@@ -543,9 +514,9 @@ static class DetailVerticalHero
             AlignItems = FlexAlign.Center, HitTestPassThrough = true,
             Children =
             [
-                Flow.Show(() => collapsed.Value && !searchExpanded.Value, compactPill),
+                Flow.Show(() => !searchExpanded.Value, compactPill),
                 new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
-                Flow.Show(() => toolsVisible.Value, compactTools),
+                compactTools,
             ],
         };
         Element selectionCompactIdentity = new BoxEl
@@ -571,23 +542,39 @@ static class DetailVerticalHero
         Element compactIdentity = new BoxEl
         {
             ZStack = true, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
-            HitTestPassThrough = true,
+            HitTestVisible = compactCanHit, HitTestPassThrough = true,
+            ScrollBinds =
+            [
+                new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
+                    Range = ScrollRange.Px(DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance),
+                    OutStart = 0f, OutEnd = 1f, Ease = Easing.Linear },
+                new() { From = ScrollChannel.Offset, To = BindSink.TransY,
+                    Range = ScrollRange.Px(DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance),
+                    OutStart = Spacing.XS, OutEnd = 0f, Ease = Easing.Linear },
+            ],
             Children =
             [
-                // Once compact, swallow clicks in the transparent gaps so the still-mounted faded controls cannot
-                // receive input. This node remains inside the scroller, so wheel/touch routing still reaches it.
-                Flow.Show(() => collapsed.Value, new BoxEl
-                {
-                    Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
-                }),
                 compactIdentityContent,
             ],
         };
 
-        return immersive
-            ? ZStack(artworkLayer!, copyContrast, expanded,
-                immersiveUtilities, immersiveTokenLayer, compactIdentity) with { Direction = 1 }
-            : ZStack(expanded, compactIdentity) with { Direction = 1 };
+        Element expandedPresentation = (immersive
+            ? ZStack(artworkLayer!, copyContrast, expanded, immersiveUtilities, immersiveTokenLayer)
+            : ZStack(expanded)) with
+        {
+            Direction = 1,
+            HitTestVisible = !compactCanHit,
+            ScrollBinds =
+            [
+                new() { From = ScrollChannel.Offset, To = BindSink.TransY,
+                    Range = ScrollRange.Px(0f, collapseDistance),
+                    OutStart = 0f, OutEnd = -collapseDistance, Ease = Easing.Linear },
+                new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
+                    Range = ScrollRange.Px(DetailVerticalLayout.ExpandedFadeStart(collapseDistance), collapseDistance),
+                    OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+            ],
+        };
+        return ZStack(expandedPresentation, compactIdentity) with { Direction = 1 };
     }
 
     // White-alpha plates over the art-derived wash — Apple's "accent-aware" circle controls (vibrancy without blur).
@@ -647,17 +634,19 @@ static class DetailVerticalHero
         };
     }
 
-    static Element ActionButton(string glyph, string label, float height, ColorF fill, ColorF fg, Action onClick,
-        bool iconOnly = false, bool pill = false, float width = float.NaN,
-        ColorF? hoverFill = null, ColorF? pressedFill = null, bool hairline = false, float labelSize = 13f)
+    /// <summary>An ICON-ONLY circular affordance over media (the immersive Shuffle, the artwork-edge Share) — round
+    /// geometry plus the scale cue is the whole point of these, so they stay hand-rolled and tooltip-labelled. Every
+    /// LABELED CTA on this surface goes through the shared <see cref="WaveeCta"/> pill (stock Button internals) instead
+    /// — see <c>playButton</c>.</summary>
+    static Element ActionButton(string glyph, string label, float size, ColorF fill, ColorF fg, Action onClick,
+        ColorF? hoverFill = null, ColorF? pressedFill = null, bool hairline = false)
     {
         bool subtleBorder = hairline || fill == Tok.FillSubtleSecondary;
         BoxEl button = new()
         {
-            Direction = 0, Width = float.IsNaN(width) ? (iconOnly ? height : float.NaN) : width, Height = height,
-            Padding = iconOnly ? Edges4.All(0f) : new Edges4(14f, 0f, 16f, 0f), Gap = 6f,
+            Direction = 0, Width = size, Height = size,
             Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(pill || iconOnly ? height * 0.5f : Radii.Control), Fill = fill,
+            Corners = CornerRadius4.All(size * 0.5f), Fill = fill,
             HoverFill = hoverFill ?? ColorF.Transparent,
             PressedFill = pressedFill ?? ColorF.Transparent,
             BrushTransitionMs = hoverFill.HasValue ? 100f : 0f,
@@ -665,11 +654,9 @@ static class DetailVerticalHero
             BorderColor = hairline ? ImmersiveGlassStroke : Tok.StrokeControlDefault,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button, OnClick = onClick,
             HoverScale = 1.03f, PressScale = 0.97f,
-            Children = iconOnly
-                ? [Icon(glyph, 14f, fg)]
-                : [Icon(glyph, labelSize + 1f, fg), new TextEl(label) { Size = labelSize, Weight = 600, Color = fg, MaxLines = 1 }],
+            Children = [Icon(glyph, 14f, fg)],
         };
-        return iconOnly ? ToolTip.Wrap(button, label) : button;
+        return ToolTip.Wrap(button, label);
     }
 }
 

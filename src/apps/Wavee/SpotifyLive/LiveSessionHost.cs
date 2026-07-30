@@ -58,6 +58,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
         Action<Action>? uiPost = null)
     {
         var report = progress ?? NullLoginProgress.Instance;
+        // No dispatcher (the CLI demo / tests) ⇒ run the posted action inline, the same fallback the bridges use.
+        Action<Action> postUi = uiPost ?? (static a => a());
         var adapter = new AuthStateAdapter(report, interactive, useBrowser, quietPhases);
         string op = "live-" + Guid.NewGuid().ToString("N")[..8];
         var connectLog = log.Sink is null ? new WaveeLogger(svc.Log, "connect") : log;
@@ -91,7 +93,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
         var live = await SpotifyLiveSpclient.ConnectAsync(connectLog, ct, retainApChannel: true,
             allowDeviceCode: interactive && !useBrowser, authObserver: adapter,
-            onCredentialAcquired: () => report.Report(new LoginSnapshot(LoginPhase.Finalizing)),
+            onCredentialAcquired: () => report.Report(new LoginSnapshot(LoginPhase.Finalizing, Step: LoginStep.Connecting)),
             allowBrowser: interactive && useBrowser, language: svc.Locale.SpotifyLanguage).ConfigureAwait(false);
         if (live is null)
         {
@@ -128,9 +130,17 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // The transport's token provider RE-MINTS on reconnect/expiry (not a captured constant). The WHOLE dealer host
         // list is passed (failover across hosts), and a Connectivity signal is driven by the socket lifecycle so a drop
         // shows in the UI as "Reconnecting…" (not silent stale playback) — surfaced via svc.Connectivity on go-live.
+        // §G go-live marks: everything from here to `stack.state` is ONE synchronous block on the apresolve continuation —
+        // no awaits — so any cost in it lands directly on the login splash. It was 5–27 s in the field and invisible,
+        // because the only two log lines bracket the whole region. These per-step marks are permanent regression
+        // detectors, not scaffolding: they are what names the next offender without a repro.
+        long goLiveStart = Environment.TickCount64;
+        report.Report(new LoginSnapshot(LoginPhase.Finalizing, Step: LoginStep.Metadata));
+
         var connectivity = new Connectivity();
         var transport = new LiveDealerTransport(dealerHosts, live.TokenProvider, live.Pipeline, () => live.BaseUrl, dealerLog, connectivity,
             forceRefreshToken: live.ForceTokenProvider);   // G6 — force-mint after a failed wss handshake
+        long transportMs = Environment.TickCount64 - goLiveStart;
 
         // Context resolution (inbound Connect play + UI play) needs the metadata stack to hydrate the resolved order, so
         // build it up front — over the SAME store the catalog reads — and hand the controller a unified context resolver.
@@ -139,13 +149,20 @@ public sealed class LiveSessionHost : IAsyncDisposable
         Wavee.Backend.Metadata.ExtensionEtagCache? extensionCache = null;
         Wavee.Backend.Metadata.MetadataService? metadata = null;
         IContextResolver? contexts = null;
+        long extMetaMs = -1, extCacheMs = -1, metadataMs = -1, contextsMs = -1;
         if (svc.RealStore is { } mdStore)
         {
+            long t = Environment.TickCount64;
             extendedMetadata = new Wavee.Backend.Metadata.ExtendedMetadataSource(live.Pipeline, () => live.BaseUrl, () => live.Session);
+            extMetaMs = Environment.TickCount64 - t; t = Environment.TickCount64;
+            // O(1) since the bulk seed was deleted — the cold tier is now point-read per miss (HydrateFromCold).
             extensionCache = new Wavee.Backend.Metadata.ExtensionEtagCache(extendedMetadata, () => live.Session, connectLog,
                 persistent: svc.RealCold);
+            extCacheMs = Environment.TickCount64 - t; t = Environment.TickCount64;
             metadata = new Wavee.Backend.Metadata.MetadataService(extendedMetadata, mdStore, () => live.Session, extensionCache: extensionCache);
+            metadataMs = Environment.TickCount64 - t; t = Environment.TickCount64;
             contexts = new LiveContextResolver(transport, metadata, mdStore, () => live.Session, connectLog);
+            contextsMs = Environment.TickCount64 - t;
         }
 
         // Local audio (Stage H): wire the in-process decode/output stack when extended metadata can resolve file IDs.
@@ -153,15 +170,30 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // Dedicated "audio" log category — persisted Info+ to wavee.log (WaveeLog special-cases it) so the whole
         // fetch→key→derive→decrypt pipeline is tailable/diagnosable in a windowed/AOT build with no console.
         var audioLog = new WaveeLogger(svc.Log, "audio");
+        report.Report(new LoginSnapshot(LoginPhase.Finalizing, Step: LoginStep.Audio));
+        long audioStart = Environment.TickCount64;
         AudioPlaybackStack? audio = extendedMetadata is not null
             ? new AudioPlaybackStack(transport, live.Pipeline, () => live.ApChannel, () => live.Session, extendedMetadata, svc.Settings, audioLog)
             : null;
+        long audioMs = Environment.TickCount64 - audioStart;
         audioLog.Info(audio is not null
             ? "local-audio stack active in-process (file IDs via extended-metadata TRACK_V4/AUDIO_FILES)"
             : "local-audio stack OFF - no metadata store; playback stays remote-only");
         svc.Log.Event(WaveeLogLevel.Info, "audio", "stack.state", audio is not null ? "Local audio stack active" : "Local audio stack off",
             operationId: op,
             fields: [WaveeLogField.Of("active", audio is not null), WaveeLogField.Of("metadata", extendedMetadata is not null)]);
+        // The go-live block's own budget. `elapsed` here IS the hosts.resolved → stack.state gap that used to have to be
+        // reconstructed from two timestamps; the per-step fields say WHICH construction owns it.
+        svc.Log.Event(WaveeLogLevel.Info, "connect", "golive.stack", "Go-live stack built",
+            operationId: op, elapsedMs: Environment.TickCount64 - goLiveStart, fields:
+        [
+            WaveeLogField.Of("golive.transport_ms", transportMs),
+            WaveeLogField.Of("golive.extmeta_ms", extMetaMs),
+            WaveeLogField.Of("golive.extcache_ms", extCacheMs),
+            WaveeLogField.Of("golive.metadata_ms", metadataMs),
+            WaveeLogField.Of("golive.contexts_ms", contextsMs),
+            WaveeLogField.Of("golive.audio_ms", audioMs),
+        ]);
         // Remember-volume: seed the device's announced/local volume from the persisted setting (0.7 default when off).
         double initialVolume = svc.Settings.Get(WaveeSettings.RememberVolume)
             ? Math.Clamp(svc.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f) : 0.7;
@@ -178,6 +210,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         transport.Start();
         // Profile (name + avatar) fetched before go-live so CurrentUser is complete on the first render (no refresh hook).
         // Best-effort — a failure just omits that field.
+        report.Report(new LoginSnapshot(LoginPhase.Finalizing, Step: LoginStep.Profile));
         var (displayName, avatarUrl, profileFetched) = await FetchProfileAsync(live.Pipeline, live.BaseUrl, live.Username, ct).ConfigureAwait(false);
         var liveSession = new LiveSpotifySession(live.Username, displayName, avatarUrl, live.Session.Tier == Tier.Premium);
 
@@ -259,7 +292,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // Output-device control + local-output picker (Phase A/B/C). Only when the audio stack is wired (local playback is
         // real): seed the persisted output BEFORE first play, surface device notices as toasts, reflect Windows session
         // volume/mute, and stand up the main-process picker service (its own device monitor, separate from the child's).
-        if (audio is not null && audio.Host is IAudioOutputDeviceControl odc)
+        // Through LiveConnect.OutputDeviceControl, never audio.Host directly: that composite is what also carries mute to the
+        // video host, so muting the app keeps a music video muted too (and a video that starts later opens muted).
+        if (audio is not null && connect.OutputDeviceControl is { } odc)
         {
             var persistedId = svc.Settings.Get(WaveeSettings.OutputDeviceId);
             string? seedId = string.IsNullOrEmpty(persistedId) ? null : persistedId;
@@ -285,11 +320,14 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.Playback.AttachLocalOutputs(localOutputs);
             // …and let the CONNECT wire name the endpoint we render to (desktop publishes it on every PutState).
             connect.AudioOutputDeviceName = localOutputs.CurrentOutputDeviceName;
-            localOutputs.Activate(uiPost);
+            localOutputs.Activate(postUi);
         }
         // The picker's local rows are truthful/enabled iff local playback is actually supported (an audio stack exists) —
         // fixes the stale unconditional "Unavailable" (OnLocalPlaybackRejected is only wired when audio is null).
-        uiPost(() => svc.Playback.LocalPlaybackSupported.Value = audio is not null);
+        postUi(() => svc.Playback.LocalPlaybackSupported.Value = audio is not null);
+        // The last step lands BEFORE GoLive: GoLive flips AuthStatus.Authenticated, which unmounts the splash, so a report
+        // after it would never be seen. This one gets the checkmarks on screen for the frame before the shell takes over.
+        report.Report(new LoginSnapshot(LoginPhase.Finalizing, Step: LoginStep.Done));
         svc.GoLive(connect.Controller, connect.Devices, liveSession, connectivity, lyrics);
         // Diagnostic one-shot: WAVEE_PLAYPLAY_PROBE=1 (or a file-id hex) fetches that file's PlayPlay obf+aes on the LIVE
         // session and compares to the reference ogg-vorbis-160 golden vector — isolates "is our live obf the vector's value".
@@ -334,7 +372,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
             var collections = new Wavee.Backend.Collections.CollectionFetcher(live.Pipeline, () => live.BaseUrl, () => live.Username, store,
                 s => cold.GetCollectionRevision(s),
                 (s, r) => cold.SetCollectionRevision(s, r, DateTimeOffset.UtcNow.ToUnixTimeSeconds()),
-                (uris, c) => md.SyncAllAsync(uris, c),
+                (uris, c) => md.SyncAllAsync(uris, c),   // SyncAllAsync closes blank AlbumRefs / thin tracks itself (S2)
                 (s, u) => svc.RealMutations!.HasPending(s, u));
             var signalClient = new Wavee.Backend.Playlists.PlaylistSignalsClient(
                 live.Pipeline, () => live.BaseUrl, () => live.Session.Locale);
@@ -366,6 +404,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 try
                 {
                     await hydrated.Task.ConfigureAwait(false);
+                    // Paged liked-member hydrate (S2): closes thin album/track refs for rows cached by an earlier session
+                    // without one giant SyncAll over 10k members (CollectionFetcher page size = 300).
+                    _ = PagedHydrateAsync(md, store.SavedUris("liked"), cts.Token);
                     await Wavee.Backend.Metadata.DiscographyPrefetcher.RunAsync(md, store, syncLog, cts.Token).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) { }
@@ -471,10 +512,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // video detector, and rides the same hooks below.
             var adornments = new SpotifyTrackAdornmentService(em, store, metadataLog, extensionCache);
             svc.TrackAdornments = adornments;
-            var detectVideos = DetectHook(svc.Video, adornments, cts.Token);
-            popularTracks.DetectVideos = detectVideos;
-            svc.Playback.DetectVideos = detectVideos;
-            sync.OnPlaylistHydrated = uri => DetectContainerVideos(svc.Video, adornments, store, uri, cts.Token);
+            // One hook per SURFACE (they differ only by the diagnostic tag): the association-plane log is only readable as
+            // a coverage map if a batch names who asked for it.
+            popularTracks.DetectVideos = DetectHook(svc.Video, adornments, cts.Token, "artist.popular", metadataLog);
+            svc.Playback.DetectVideos = DetectHook(svc.Video, adornments, cts.Token, "queue", metadataLog);
+            var detectSearch = DetectHook(svc.Video, adornments, cts.Token, "search", metadataLog);
+            sync.OnPlaylistHydrated = uri => DetectContainerVideos(svc.Video, adornments, store, uri, cts.Token, metadataLog);
             if (svc.RealLibrarySource is { } libSrc)
             {
                 libSrc.Sync = sync;   // on-open SWR: playlists route through the loop (blocking first fetch / background revalidate)
@@ -487,10 +530,16 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     else if (uri.StartsWith("spotify:album:", StringComparison.Ordinal)) await EnsureAlbumAsync(md, pathfinderResource, store, uri, c).ConfigureAwait(false);
                     else if (uri.StartsWith("spotify:artist:", StringComparison.Ordinal))
                         await Wavee.Backend.Metadata.ArtistDiscography.EnsureAsync(md, store, uri, c, hydrateAppearsOn: true).ConfigureAwait(false);   // V4 ensure; appears-on hydrated lazily on open
+                    else if (uri.StartsWith("spotify:show:", StringComparison.Ordinal))
+                        await md.SyncAllAsync(new[] { uri }, c).ConfigureAwait(false);   // ShowV4 → membership + episode rows
                     // Detect music videos for the just-hydrated tracklist (batch, off the critical path → the movie icons fill in).
-                    DetectContainerVideos(svc.Video, adornments, store, uri, c);
+                    DetectContainerVideos(svc.Video, adornments, store, uri, c, metadataLog);
                 };
-                libSrc.DetectVideos = detectVideos;   // Liked Songs never routes through OnDemandFetch
+                // Liked Songs never routes through OnDemandFetch. NOTE: GetDiscographyAsync fires this same hook with
+                // ALBUM uris — DetectAsync drops every one of them (`notTrackUri` in the request line), only the adornment
+                // pass consumes them. That is by design, not a coverage hole.
+                libSrc.DetectVideos = DetectHook(svc.Video, adornments, cts.Token, "library", metadataLog);
+                libSrc.HydrateMembers = uris => PagedHydrateAsync(md, uris, cts.Token);
                 libSrc.LiveHomeFetch = c => homeCache.GetAsync(c);   // cached editorial home + separately refreshed recents
                 libSrc.LiveSearch = async (q, facet, offset, limit, c) =>
                 {
@@ -501,7 +550,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
                     {
                         var trackUris = new List<string>(results.Tracks.Count);
                         foreach (var t in results.Tracks) trackUris.Add(t.Uri);
-                        _ = detectVideos(trackUris);
+                        _ = detectSearch(trackUris);
                     }
                     return results;
                 };   // paged online search
@@ -691,13 +740,37 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // failures die here rather than surfacing as an unobserved exception.
     // Adornments (kind 179 tint + kind 222 tempo/key) ride the SAME hook: every surface that already detects videos
     // for its rows needs the same rows tinted, and both services batch ≤300 uris with their own etag caching.
+    /// <summary>Page SyncAllAsync at CollectionFetcher's page size (300) so a 10k liked set never becomes one
+    /// giant ProjectCachedExtensions ToByteArray. Fire-and-forget from liked-open / post-InitialHydrate.</summary>
+    static Task PagedHydrateAsync(Wavee.Backend.Metadata.MetadataService md, IReadOnlyList<string> uris, CancellationToken ct)
+    {
+        if (uris.Count == 0) return Task.CompletedTask;
+        return Task.Run(async () =>
+        {
+            const int page = 300;
+            for (int i = 0; i < uris.Count; i += page)
+            {
+                ct.ThrowIfCancellationRequested();
+                int n = Math.Min(page, uris.Count - i);
+                var batch = new string[n];
+                for (int j = 0; j < n; j++) batch[j] = uris[i + j];
+                try { await md.SyncAllAsync(batch, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { throw; }
+                catch { /* best-effort — next open retries */ }
+            }
+        }, ct);
+    }
+
+    // `surface` names WHICH list asked, so the association-plane log can be read as a coverage map (which surfaces ever
+    // request kind 99, and with which uri sets) rather than an undifferentiated stream of batches.
     static Func<IReadOnlyList<string>, Task> DetectHook(IVideoService video, SpotifyTrackAdornmentService? adorn,
-                                                       CancellationToken ct)
+                                                       CancellationToken ct, string surface, WaveeLogger log)
         => uris =>
         {
             if (uris.Count > 0)
                 _ = Task.Run(async () =>
                 {
+                    LogDetectSurface(log, surface, null, uris);
                     try { await video.DetectAsync(uris, ct).ConfigureAwait(false); } catch { }
                     if (adorn is not null)
                     {
@@ -709,10 +782,30 @@ public sealed class LiveSessionHost : IAsyncDisposable
             return Task.CompletedTask;
         };
 
+    /// <summary>Who asked for an association batch, and with WHICH uris. The bounded uri sample is the whole point: the
+    /// "playlist shows no video but search does" report is only decidable by comparing the uri a playlist row carries with
+    /// the uri the search response carried for the same song, and these two lines are where both are written down.</summary>
+    static void LogDetectSurface(WaveeLogger log, string surface, string? contextUri, IReadOnlyList<string> uris)
+    {
+        if (!log.IsEnabled(WaveeLogLevel.Debug)) return;
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < uris.Count && i < 6; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append(uris[i].StartsWith("spotify:track:", StringComparison.Ordinal) ? uris[i]["spotify:track:".Length..] : uris[i]);
+        }
+        log.Event(WaveeLogLevel.Debug, "video.assoc.surface", "surface requested music-video associations",
+            fields:
+            [
+                WaveeLogField.Of("surface", surface), WaveeLogField.Of("contextUri", contextUri ?? "-"),
+                WaveeLogField.Of("uris", uris.Count), WaveeLogField.Of("sample", sb.Length == 0 ? "-" : sb.ToString()),
+            ]);
+    }
+
     // After a container's tracklist hydrates, batch-detect which of its tracks have a music video (fills the row indicator).
     // Fire-and-forget off the open path — best-effort, etag-cached, and a no-op when the container has no resident tracks yet.
     static void DetectContainerVideos(IVideoService video, SpotifyTrackAdornmentService? adorn, IStore store,
-                                      string uri, CancellationToken ct)
+                                      string uri, CancellationToken ct, WaveeLogger log = default)
     {
         List<string>? uris = null;
         if (uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
@@ -741,10 +834,18 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 foreach (var t in top) uris.Add(t.Uri);
             }
         }
-        if (uris is not { Count: > 0 }) return;
+        if (uris is not { Count: > 0 })
+        {
+            // A container whose tracklist is not resident yet detects NOTHING and is never retried for this open — worth a
+            // line, because it is the one way an on-open detect can silently cover zero rows.
+            log.Event(WaveeLogLevel.Debug, "video.assoc.surface", "container open detected no resident tracks",
+                fields: [WaveeLogField.Of("surface", "container"), WaveeLogField.Of("contextUri", uri), WaveeLogField.Of("uris", 0)]);
+            return;
+        }
         var list = uris;
         _ = Task.Run(async () =>
         {
+            LogDetectSurface(log, "container", uri, list);
             try { await video.DetectAsync(list, ct).ConfigureAwait(false); } catch { }
             if (adorn is not null)
                 try { await adorn.EnsureAsync(list, ct).ConfigureAwait(false); } catch { }
@@ -1107,15 +1208,22 @@ public sealed class LiveSessionHost : IAsyncDisposable
 
     // Connect's player_state can be thin. Resolve the full TrackV4 through extended-metadata; TrackV4's album ref carries
     // cover_group, and StoreEntityMerge keeps that richer image if a later thin cluster/store write arrives.
+    //
+    // The "already good enough" early-outs test all THREE fields the player bar renders — art, artists, AND the album
+    // NAME. The album name used to be missing from the test, which made a row whose album ref carries a uri but no title
+    // (a name-less TrackV4 album sub-message, or a row seeded by the artist-overview chart) count as fully resolved: the
+    // getTrack upgrade below — the one source that always carries albumOfTrack.name — was never reached, so the bar and
+    // the now-playing surfaces stayed album-less for the whole track. Both sites must agree, or the second one re-admits
+    // the bug the first one just rejected.
     static async Task<Track?> ResolveNowPlayingTrackAsync(string uri, Wavee.Backend.Metadata.MetadataService metadata,
         PathfinderResource pathfinder, IStore store, CancellationToken ct)
     {
         var track = store.GetTrack(uri);
-        if (track?.Image is not null && track.Artists.Count > 0) return track;
+        if (StoreEntityGaps.NowPlayingReady(track)) return track;
 
         await metadata.SyncAllAsync(new[] { uri }, ct).ConfigureAwait(false);
         track = store.GetTrack(uri);
-        if (track?.Image is not null && track.Artists.Count > 0) return track;
+        if (StoreEntityGaps.NowPlayingReady(track)) return track;
 
         using var doc = await pathfinder.QueryAsync(PathfinderOps.GetTrack, PathfinderOps.GetTrackHash,
             w => w.WriteString("uri", uri), PathfinderClient.Platform.WebPlayer, ct).ConfigureAwait(false);

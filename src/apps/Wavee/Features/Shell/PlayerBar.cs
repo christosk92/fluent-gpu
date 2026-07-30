@@ -25,82 +25,6 @@ namespace Wavee;
 // (compositor-only), and the time labels + volume glyph are isolated sub-components that re-render at ~1 Hz.
 enum PlayerState : byte { NoTrack, Loading, Reconnecting, Error, Active }
 
-readonly record struct PlayerBarLayout(
-    int Band,
-    bool ShowExpand,
-    bool ShowDevices,
-    bool ShowQueue,
-    bool ShowVolumeSlider,
-    bool ShowShuffleRepeat,
-    bool ShowLikeSlot,
-    bool ShowVolumeButton,
-    bool ShowTimesElapsed,
-    bool ShowPrevNext,
-    bool ShowSubtitle,
-    float ButtonBox,
-    float ButtonGlyph,
-    float PrimaryBox,
-    float PrimaryGlyph,
-    float LeftW,
-    float ArtSize,
-    float RowGap,
-    float RowPad,
-    float ClusterGap,
-    float LeftGap,
-    float SeekGap,
-    float RightGap,
-    float TopEdgeWidth)
-{
-    public static PlayerBarLayout FromWidth(float w)
-    {
-        int band = w >= 1240f ? 15 :
-                   w >= 1180f ? 14 :
-                   w >= 1100f ? 13 :
-                   w >= 1010f ? 12 :
-                   w >= 900f  ? 11 :
-                   w >= 860f  ? 10 :
-                   w >= 760f  ? 9  :
-                   w >= 700f  ? 8  :
-                   w >= 680f  ? 7  :
-                   w >= 620f  ? 6  :
-                   w >= 560f  ? 5  :
-                   w >= 540f  ? 4  :
-                   w >= 520f  ? 3  :
-                   w >= 440f  ? 2  :
-                   w >= 400f  ? 1  : 0;
-
-        return new PlayerBarLayout(
-            Band: band,
-            ShowExpand: w >= 1240f,
-            ShowDevices: true,   // the device picker is the ONLY way to play (local playback unsupported) → always visible
-            ShowQueue: w >= 1100f,
-            ShowVolumeSlider: w >= 1010f,
-            ShowShuffleRepeat: w >= 680f,
-            ShowLikeSlot: w >= 760f,
-            ShowVolumeButton: w >= 540f,
-            ShowTimesElapsed: w >= 540f,
-            ShowPrevNext: w >= 440f,
-            ShowSubtitle: w >= 620f,
-            ButtonBox: w >= 900f ? 32f : w >= 620f ? 30f : w >= 440f ? 28f : 26f,
-            ButtonGlyph: w >= 620f ? 16f : w >= 440f ? 15f : 14f,
-            PrimaryBox: w >= 760f ? 36f : w >= 560f ? 34f : 30f,
-            PrimaryGlyph: w >= 760f ? 20f : w >= 560f ? 18f : 16f,
-            LeftW: w >= 1180f ? 260f :
-                   w >= 860f ? 210f :
-                   w >= 680f ? 172f :
-                   w >= 520f ? 132f :
-                   w >= 400f ? 96f : 44f,
-            ArtSize: w >= 680f ? WaveeSize.ArtPlayerBar : 40f,
-            RowGap: w >= 900f ? 8f : w >= 620f ? 6f : w >= 440f ? 4f : 3f,
-            RowPad: w >= 700f ? 12f : w >= 520f ? 8f : 6f,
-            ClusterGap: w >= 760f ? 4f : w >= 520f ? 3f : 2f,
-            LeftGap: w >= 700f ? 8f : 6f,
-            SeekGap: w >= 760f ? 6f : w >= 520f ? 5f : 4f,
-            RightGap: w >= 760f ? 2f : w >= 520f ? 1f : 0f,
-            TopEdgeWidth: 2400f);
-    }
-}
-
 sealed class PlayerBar : Component
 {
     static readonly bool DiagEnabled = Diag.EnvFlag("WAVEE_PLAYERBAR_DIAG");
@@ -108,19 +32,23 @@ sealed class PlayerBar : Component
     public override Element Render()
     {
         var viewport = UseContextSignal(Viewport.Size);
-        var layout = UseSignal(PlayerBarLayout.FromWidth(viewport.Peek().Width));
+        float initialWidth = viewport.Peek().Width;
+        var layout = UseSignal(PlayerBarLayout.Initial(initialWidth));
+        var initialized = UseRef(initialWidth > 0f);
 
         UseSignalEffect(() =>
         {
-            var next = PlayerBarLayout.FromWidth(viewport.Value.Width);
             var prev = layout.Peek();
+            float width = viewport.Value.Width;
+            var next = PlayerBarLayout.Resolve(width, in prev, initialized.Value);
+            if (width > 0f) initialized.Value = true;
             if (next.Equals(prev)) return;
             if (DiagEnabled)
                 WaveeLog.Instance.Event(WaveeLogLevel.Debug, "ui", "playerbar.layout_band", "Player bar layout band changed",
                     fields:
                     [
-                        WaveeLogField.Of("from", prev.Band),
-                        WaveeLogField.Of("to", next.Band),
+                        WaveeLogField.Of("from", (int)prev.Tier),
+                        WaveeLogField.Of("to", (int)next.Tier),
                         WaveeLogField.Of("viewportW", viewport.Peek().Width),
                     ]);
             layout.Value = next;
@@ -193,11 +121,11 @@ sealed class PlayerBarContent : Component
                 fields:
                 [
                     WaveeLogField.Of("render", ++s_renderCount),
-                    WaveeLogField.Of("band", L.Band),
+                    WaveeLogField.Of("band", (int)L.Tier),
                 ]);
 
         if (b is null)
-            return new BoxEl { Height = WaveeSize.PlayerBarH, Fill = WaveeColors.PlayerBar };
+            return new BoxEl { Height = WaveeSize.PlayerBarH, Fill = Prop.Of(() => WaveeColors.PlayerBar) };
 
         // ── state derivation (low-frequency signals only) ──────────────────────────────────────────
         var track = b.CurrentTrack.Value;
@@ -220,13 +148,14 @@ sealed class PlayerBarContent : Component
                             PlayerState.Active;
         bool active = st == PlayerState.Active;
         bool canTransport = active || buffering || reconnecting;
-        var remoteDevice = active ? RemoteDevice(b) : null;
+        var remoteDevice = active && L.ShowRemoteDeviceLine ? RemoteDevice(b) : null;
         // Primary is live for Active/Buffering and for Error (a retry); dead only for NoTrack/Loading.
         bool primaryEnabled = st != PlayerState.NoTrack && st != PlayerState.Loading;
         // (SeekBar derives its own enabled state reactively from the bridge signals — see SeekBar.Render.)
 
         // ── responsive breakpoints (coarse layout signal; no raw viewport subscription in this component) ──
-        // Below 440 ⇒ only art+title, Primary, SeekBar. Play + SeekBar ALWAYS render at every width.
+        // Identity-first pressure ladder: art + title + artist + heart, Play, SeekBar and Devices survive every tier.
+        // Secondary commands fall into More; Play + SeekBar never leave the row.
         bool showExpand = L.ShowExpand;
         bool showDevices = L.ShowDevices;
         bool showQueue = L.ShowQueue;
@@ -234,6 +163,7 @@ sealed class PlayerBarContent : Component
         bool showShuffleRepeat = L.ShowShuffleRepeat;
         bool showLike = L.ShowLikeSlot && active;
         bool showVolumeButton = L.ShowVolumeButton;
+        bool showLyrics = L.ShowLyrics;
 
         // Heart pop (transitions.dev icon swap) on the SAME-track unsaved→saved edge only: a track change flips
         // `liked` but also the uri (no pop); unlike stays a plain swap. Imperative seed on the captured button node —
@@ -250,7 +180,7 @@ sealed class PlayerBarContent : Component
             if (edge && showLike && !likeNode.Value.IsNull && Context.Anim is { } a)
                 a.IconSwapIn(likeNode.Value);   // kit recipe — honors Motion.ReducedMotion internally
         }, (track?.Uri ?? "") + (liked ? "|1" : "|0"));
-        bool showTimesRemaining = true;            // duration is a priority; keep it before secondary controls
+        bool showTimesRemaining = L.ShowTimesRemaining;
         bool showTimesElapsed = L.ShowTimesElapsed;
         bool showPrevNext = L.ShowPrevNext;
         bool showLeft = true;
@@ -345,7 +275,8 @@ sealed class PlayerBarContent : Component
         var metaCol = new BoxEl
         {
             Key = "meta", Animate = MoveMotion,
-            Direction = 1, Grow = 1f, Shrink = 1f, Gap = 2f, Justify = FlexJustify.Center, ClipToBounds = true,
+            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Shrink = 1f,
+            Gap = 2f, Justify = FlexJustify.Center, ClipToBounds = true,
             // The shared hover target: the title marquee reads titleHover, so hovering anywhere on the meta column pauses it.
             OnHoverMove = _ => { if (!titleHover.Peek()) titleHover.Value = true; },
             OnPointerExit = () => { if (titleHover.Peek()) titleHover.Value = false; },
@@ -356,7 +287,7 @@ sealed class PlayerBarContent : Component
         if (showArtwork)
             leftKids.Add(new BoxEl
             {
-                Key = "art", Width = artSize, Height = artSize, Animate = ItemMotion,
+                Key = "art", Width = artSize, Height = artSize, Shrink = 0f, Animate = ItemMotion,
                 Cursor = albumNav ? CursorId.Hand : (CursorId?)null,
                 OnClick = albumNav ? NavAlbum : null,   // album art → the album
                 Children = [Surfaces.Artwork(track?.Image, SeedOf(track), artSize, artSize, 6f)]
@@ -365,7 +296,7 @@ sealed class PlayerBarContent : Component
         if (showLike)
             leftKids.Add(Transport(liked ? Icons.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
                     onRealized: h => likeNode.Value = h)
-                with { Key = "like", Animate = ItemMotion });
+                with { Key = "like", Shrink = 0f, Animate = ItemMotion });
 
         var left = new BoxEl
         {
@@ -397,7 +328,7 @@ sealed class PlayerBarContent : Component
             Gap = 0f, Animate = MoveMotion, Children = transport.ToArray(),
         };
 
-        // Stable Keys so keyed matching preserves SeekBar identity across the 440 breakpoint (all three children are
+        // Stable Keys so keyed matching preserves SeekBar identity across the 760-DIP time-label breakpoint (all three children are
         // ComponentEl/ElementTypeId 3 — without keys, dropping the elapsed label shifts SeekBar to index 0 where it is
         // matched against the old TimeText node, a ComponentType mismatch that REMOUNTS SeekBar, losing its scrub state /
         // interpolation anchor / cached width on resize-during-playback).
@@ -435,6 +366,15 @@ sealed class PlayerBarContent : Component
         }
         if (!showLike && active)
             overflowCommands.Add(new AppBarCommand(liked ? Icons.HeartFill : Icons.Heart, Loc.Get(Strings.Player.Like), () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, AppBarCommandKind.ToggleButton, liked, true));
+        bool volumeInOverflow = !showVolumeButton && active;
+        if (!showLyrics && ui is not null && active)
+            overflowCommands.Add(new AppBarCommand(
+                new IconRef { Glyph = WaveeIcons.Lyrics, Font = WaveeIcons.Font },
+                Loc.Get(Strings.Player.Lyrics),
+                () => ui.Toggle(RailMode.Lyrics),
+                AppBarCommandKind.ToggleButton,
+                ui.RailOpen.Value && ui.Mode.Value == RailMode.Lyrics,
+                true));
         // In the small-window overflow, Queue / Now Playing open their right-rail panels (the rail floats over the
         // content when it doesn't fit inline).
         if (!showQueue)
@@ -452,8 +392,8 @@ sealed class PlayerBarContent : Component
                 () => CycleRepeat(b), canTransport, repeat != RepeatMode.Off, accent, buttonBox, buttonGlyph)
                 with { Key = "repeat", Animate = ItemMotion });
         }
-        // The mute glyph is SECONDARY: drop it below 440 so the <440 row is center-controls-only (play/pause + seek),
-        // per the responsive table. The slider→icon collapse above 440 is already handled by showVolumeSlider.
+        // Volume progressively degrades slider → popup glyph → live overflow item. The open-time overflow item reads
+        // the bridge with Peek, so hot volume changes never subscribe this parent bar.
         if (showVolumeButton)
             rightKids.Add(new BoxEl
             {
@@ -471,7 +411,7 @@ sealed class PlayerBarContent : Component
                 Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, options: VolumeSliderOptions,
                     length: 96f, thickness: 16f, style: RailStyle)],
             });
-        if (ui is not null && active)
+        if (showLyrics && ui is not null && active)
             rightKids.Add(Transport(WaveeIcons.Lyrics,
                 () => ui.Toggle(RailMode.Lyrics),
                 true,
@@ -565,7 +505,8 @@ sealed class PlayerBarContent : Component
             rightKids.Add(Transport(Icons.ChevronUp, () => ui?.Toggle(RailMode.Details), ui is not null,
                 ui?.RailOpen.Value == true && ui.Mode.Value == RailMode.Details, accent, buttonBox, buttonGlyph)
                 with { Key = "expand", Animate = ItemMotion });
-        rightKids.Add(MoreButton(overflowCommands, buttonBox, buttonGlyph));
+        if (overflowCommands.Count > 0 || volumeInOverflow)
+            rightKids.Add(MoreButton(overflowCommands, buttonBox, buttonGlyph, b, volumeInOverflow));
 
         var right = new BoxEl
         {
@@ -575,9 +516,19 @@ sealed class PlayerBarContent : Component
         };
 
         // ── assemble: top activity edge + the single centered row ───────────────────────────────────
+        // The dock's top seam, drawn on the translucent body plate. Dark keeps the stock divider (#15FFFFFF): white-alpha,
+        // so the plate and the Mica behind it still read through, where a black card stroke would be a dark scar. Light
+        // uses the black@6% ALPHA literal rather than StrokeCardDefault: that token is #0F000000 only in the stock
+        // palette — every seeded light preset derives it as an OPAQUE gray (warm #DCDAD4; slate/accent Darken(page,
+        // 0.08)), and an opaque gray line across a translucent plate is its own small disjoint slab. Same reasoning as
+        // TabStrip's baseline hairline and separators.
         Element topEdge = (loading || buffering || reconnecting)
             ? ProgressBar.Indeterminate(L.TopEdgeWidth)
-            : new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault };
+            : new BoxEl
+            {
+                Height = 1f,
+                Fill = Prop.Of(() => Theme.Dark ? Tok.StrokeDividerDefault : ColorF.FromRgba(0, 0, 0, 0x0F)),
+            };
 
         var rowKids = new List<Element>(3);
         if (showLeft) rowKids.Add(left);
@@ -593,7 +544,9 @@ sealed class PlayerBarContent : Component
 
         return new BoxEl
         {
-            Direction = 1, Height = WaveeSize.PlayerBarH, Fill = WaveeColors.PlayerBar, ClipToBounds = true,
+            // BOUND fill (not a static read): the dock is a long-lived literal, so only a bind is re-fired by the host's
+            // live re-theme (RethemeAll) and cross-fades with the rest of the shell.
+            Direction = 1, Height = WaveeSize.PlayerBarH, Fill = Prop.Of(() => WaveeColors.PlayerBar), ClipToBounds = true,
             Shadow = Elevation.DockTop,
             Children = [topEdge, row],
         };
@@ -867,20 +820,21 @@ sealed class PlayerBarContent : Component
         };
     }
 
-    internal static Element MoreButton(IReadOnlyList<AppBarCommand> commands, float box, float glyphSize)
+    internal static Element MoreButton(
+        IReadOnlyList<AppBarCommand> commands,
+        float box,
+        float glyphSize,
+        PlaybackBridge bridge,
+        bool includeVolume)
     {
         // Open the overflow as a PLAIN MenuFlyout through the overlay service (the same path the toolbar "⋯" uses) so it
         // gets the engine's clean MenuPopupThemeTransition clip-reveal. We do NOT use CommandBarFlyout here: it layers
         // its own overflow-expand clip on top of the OverlayHost reveal, which made the chrome pop empty then fill in
         // (two out-of-sync clips → the "ugly open"). Toggle commands become E73E-checked ToggleMenuFlyoutItems.
-        var items = new List<MenuFlyoutItem>(commands.Count);
-        int vh = commands.Count;
+        int vh = commands.Count * 31 + (includeVolume ? 1 : 0);
         for (int i = 0; i < commands.Count; i++)
         {
             var c = commands[i];
-            items.Add(c.Kind == AppBarCommandKind.ToggleButton
-                ? MenuFlyoutItem.Toggle(c.Label, c.IsChecked, c.Invoke, c.Icon, c.Enabled)
-                : new MenuFlyoutItem(c.Label, c.Icon, c.Enabled, c.Invoke));
             // Cheap, alloc-light version: the command SET only changes at breakpoint crossings / toggle flips (not per
             // resize pixel), so fold a hash so the menu component re-mounts with fresh rows when the set actually changes.
             vh = vh * 31 + c.Icon.GetHashCode();
@@ -892,7 +846,7 @@ sealed class PlayerBarContent : Component
         return new BoxEl
         {
             Key = "more", Width = box, Height = box, Animate = ItemMotion,
-            Children = [Embed.Comp(() => new PlayerMoreMenu(items, box, glyphSize)) with { Key = version }],
+            Children = [Embed.Comp(() => new PlayerMoreMenu(commands, bridge, includeVolume, box, glyphSize)) with { Key = version }],
         };
     }
 
@@ -902,9 +856,23 @@ sealed class PlayerBarContent : Component
     // fought the reveal (empty-then-fill flash) and read darker/heavier than a WinUI MenuFlyout.
     sealed class PlayerMoreMenu : Component
     {
-        readonly IReadOnlyList<MenuFlyoutItem> _items;
+        readonly IReadOnlyList<AppBarCommand> _commands;
+        readonly PlaybackBridge _bridge;
+        readonly bool _includeVolume;
         readonly float _box, _glyph;
-        public PlayerMoreMenu(IReadOnlyList<MenuFlyoutItem> items, float box, float glyph) { _items = items; _box = box; _glyph = glyph; }
+        public PlayerMoreMenu(
+            IReadOnlyList<AppBarCommand> commands,
+            PlaybackBridge bridge,
+            bool includeVolume,
+            float box,
+            float glyph)
+        {
+            _commands = commands;
+            _bridge = bridge;
+            _includeVolume = includeVolume;
+            _box = box;
+            _glyph = glyph;
+        }
 
         public override Element Render()
         {
@@ -915,9 +883,31 @@ sealed class PlayerBarContent : Component
             void Toggle()
             {
                 if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+                if (_commands.Count == 0 && !_includeVolume) return;
+
+                // Build at open time so the software/session mute label reflects the live device state without making
+                // the whole player bar subscribe to the hot volume signal.
+                var items = new List<MenuFlyoutItem>(_commands.Count + (_includeVolume ? 1 : 0));
+                for (int i = 0; i < _commands.Count; i++)
+                {
+                    var c = _commands[i];
+                    items.Add(c.Kind == AppBarCommandKind.ToggleButton
+                        ? MenuFlyoutItem.Toggle(c.Label, c.IsChecked, c.Invoke, c.Icon, c.Enabled)
+                        : new MenuFlyoutItem(c.Label, c.Icon, c.Enabled, c.Invoke));
+                }
+                if (_includeVolume)
+                {
+                    bool muted = _bridge.OutputMuted.Peek() || _bridge.Volume.Peek() <= 0.001f;
+                    items.Add(new MenuFlyoutItem(
+                        Loc.Get(muted ? Strings.Player.Unmute : Strings.Player.Mute),
+                        muted ? Icons.Volume : Icons.Mute,
+                        true,
+                        () => VolumeButton.ToggleMute(_bridge)));
+                }
+
                 handle.Value = svc.Open(
                     () => anchor.Value,
-                    () => MenuFlyout.Create(_items, () => handle.Value?.Close()),
+                    () => MenuFlyout.Create(items, () => handle.Value?.Close()),
                     FlyoutPlacement.TopEdgeAlignedRight,
                     new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
                 handle.Value.ClosedAction = () => handle.Value = null;
@@ -1037,7 +1027,7 @@ sealed class VolumeButton : Component
         string g = (muted || v <= 0.001f) ? Icons.Mute : Icons.Volume;
         void TogglePopup()
         {
-            if (!_popup) { ToggleMute(); return; }
+            if (!_popup) { ToggleMute(_b); return; }
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = svc.Open(
                 () => anchor.Value,
@@ -1049,21 +1039,21 @@ sealed class VolumeButton : Component
         return PlayerBarContent.Transport(g, TogglePopup, true, false, Tok.AccentDefault, _box, _glyphSize, h => anchor.Value = h);
     }
 
-    void ToggleMute()
+    internal static void ToggleMute(PlaybackBridge b)
     {
         // With a real output-device control (local audio wired) mute the Windows session directly (Phase B4); our own
         // session set is filtered by the engine's context guard, so update the optimistic UI here. Otherwise (fake
         // backend) keep today's software 0 ⇄ 0.7 toggle.
-        if (_b.LocalOutputs is { } lo)
+        if (b.LocalOutputs is { } lo)
         {
-            bool nowMuted = !_b.OutputMuted.Peek();
-            _b.OutputMuted.Value = nowMuted;
+            bool nowMuted = !b.OutputMuted.Peek();
+            b.OutputMuted.Value = nowMuted;
             lo.SetMuted(nowMuted);
             return;
         }
-        float v = _b.Volume.Peek();
+        float v = b.Volume.Peek();
         float nv = v > 0.001f ? 0f : 0.7f;       // mute ⇄ restore (a fuller mute-with-memory is the device-panel pass)
-        _b.Volume.Value = nv; _ = _b.Player.SetVolumeAsync(nv);
+        b.Volume.Value = nv; _ = b.Player.SetVolumeAsync(nv);
     }
 }
 

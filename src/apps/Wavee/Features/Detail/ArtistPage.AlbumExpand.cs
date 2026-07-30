@@ -14,239 +14,19 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// iTunes-style inline album expansion for the artist discography grids. Clicking an album card opens a FULL-WIDTH track
-// drawer directly after that album's ROW (so the row's neighbours stay put and the rows below slide down), revealing the
-// album's tracks in place — no navigation. Clicking the album again collapses it; clicking another moves the drawer.
-//
-// Layout: a self-measuring responsive grid (one component owns the measured width AND the expanded-uri state, so both a
-// resize and a toggle rebuild it). The column count is derived from the measured width; each row is a flex row of equal
-// cells (the last row padded so card width stays uniform). The drawer is a sibling inserted between rows, full width.
-sealed class ExpandableAlbumGrid : Component
+// iTunes-style inline album expansion for the artist discography grids: DiscographySection → DiscoGrid →
+// AlbumDrawerPanel. Clicking an album card opens a FULL-WIDTH track drawer directly after that album's ROW (so the
+// row's neighbours stay put and the rows below slide down), revealing the album's tracks in place — no navigation.
+// Clicking the album again collapses it; clicking another moves the drawer. The grid is the virtualized LazyGrid
+// (DiscoGrid owns the expanded index + the one full-album fetch); the drawer body is AlbumDrawerPanel, fed LIVE via
+// re-pushed props. (The earlier non-virtualized ExpandableAlbumGrid/AlbumDrawer pair is deleted — DiscoGrid subsumed it.)
+
+// Task<T> is invariant, so the Task<Album> the catalog returns is not a Task<Album?> — and the UseResource seed pins
+// T = Album?. Awaiting and re-wrapping is the conversion; the loaders below all go through it.
+static class AlbumLoader
 {
-    readonly IReadOnlyList<Album> _albums;
-    readonly Services _svc;
-    readonly Action<string, string?> _go;
-    readonly Action<string> _play;
-    const float MinCol = 180f;
-    static readonly float Gap = Spacing.M;
-
-    readonly Signal<string?> _expanded = new(null);
-
-    public ExpandableAlbumGrid(IReadOnlyList<Album> albums, Services svc, Action<string, string?> go, Action<string> play)
-    { _albums = albums; _svc = svc; _go = go; _play = play; }
-
-    // The engine's AutoGrid (GridEl, repeat(auto-fill, minmax(MinCol, 1fr))) owns ALL the sizing — responsive column count
-    // + equal card widths, resolved against the live width, no hand-computed widths. For the iTunes inline drawer we split
-    // the album list at the expanded item's ROW boundary and drop the drawer between two AutoGrids; both grids resolve the
-    // SAME column count from the same width (GridColCount: floor((w+gap)/(MinCol+gap))) so the two halves stay aligned.
-    // Responsive.Of supplies the width ONLY to find that split row; the grids themselves size on their own. _expanded is
-    // read inside the build (ResponsiveBox's reactive scope), so a toggle rebuilds just this section.
-    public override Element Render() => Responsive.Of(BuildGrid, fallback: 900f);
-
-    Element BuildGrid(float w)
-    {
-        string? expanded = _expanded.Value;                  // subscribe (ResponsiveBox re-renders on expand/collapse)
-        int idx = expanded is null ? -1 : IndexOf(expanded);
-        if (idx < 0) return Grid("agrid-before", 0, _albums.Count);   // collapsed → one grid (shares the before-grid key)
-
-        int cols = Math.Max(1, (int)((w + Gap) / (MinCol + Gap)));   // mirrors FlexLayout.GridColCount
-        int rowEnd = Math.Min(((idx / cols) + 1) * cols, _albums.Count);   // first index AFTER the expanded item's row
-
-        // STABLE keys: the drawer + both grids persist across an album switch, so switching A→B resizes/moves the SAME
-        // drawer (it reads _expanded reactively and Size-reflows) instead of unmount→remount — no collapse-then-reshow.
-        var children = new List<Element>(3)
-        {
-            Grid("agrid-before", 0, rowEnd),
-            Embed.Comp(() => new AlbumDrawer(_albums, _expanded, _svc, _go, _play)) with { Key = "albumdrawer" },
-        };
-        if (rowEnd < _albums.Count) children.Add(Grid("agrid-after", rowEnd, _albums.Count));
-        return new BoxEl { Direction = 1, Gap = Gap, Children = children.ToArray() };
-    }
-
-    // An AutoGrid over _albums[from..to) with a STABLE key so the before/after halves reconcile their cells in place
-    // (matched by index) across a switch instead of remounting.
-    Element Grid(string key, int from, int to)
-    {
-        var cells = new Element[to - from];
-        for (int i = from; i < to; i++) cells[i - from] = Cell(_albums[i]);
-        return AutoGrid(MinCol, Gap, float.NaN, cells) with { Key = key };
-    }
-
-    Element Cell(Album al)
-    {
-        string subtitle = al.Year > 0 ? al.Year + "  " + ArtistPage.KindLabel(al.Kind) : ArtistPage.KindLabel(al.Kind);
-        // The grid track sizes the card (GridCard's cover fills its cell, CSS aspect-ratio 1) — nothing hand-sized here.
-        // Click toggles the inline drawer (the iTunes affordance); the cover's hover FAB still plays; the drawer header
-        // links to the full album page, so navigation stays reachable.
-        return MediaCard.GridCard(al.Cover, al.Name, subtitle, al.Uri,
-            onClick: () => _expanded.Value = _expanded.Peek() == al.Uri ? null : al.Uri,
-            onPlay: () => _play(al.Uri),
-            onNavigate: () => _go("album:" + al.Uri, al.Name),
-            accent: Surfaces.SchemeFor(al.Cover?.Url) is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null);
-    }
-
-    int IndexOf(string uri)
-    {
-        for (int i = 0; i < _albums.Count; i++) if (_albums[i].Uri == uri) return i;
-        return -1;
-    }
-}
-
-// The full-width track drawer — ONE persistent node (stable key) shared across album switches. It reads the expanded uri
-// from the signal and resolves the album, so switching A→B swaps content IN PLACE; the Size/Reflow transition eases the
-// height (e.g. 3→2 tracks resizes down, the rows below reflow) instead of the node collapsing and re-showing. A header
-// repeats the album name (→ open the full page), year/kind, and a play-all; each row plays the album from that track.
-sealed class AlbumDrawer : Component
-{
-    readonly IReadOnlyList<Album> _albums;
-    readonly Signal<string?> _expanded;
-    readonly Services _svc;
-    readonly Action<string, string?> _go;
-    readonly Action<string> _play;
-    Album? _last;   // keeps the last album during the close frame so the EXIT animates with real content, not an empty box
-    public AlbumDrawer(IReadOnlyList<Album> albums, Signal<string?> expanded, Services svc, Action<string, string?> go, Action<string> play)
-    { _albums = albums; _expanded = expanded; _svc = svc; _go = go; _play = play; }
-
-    // Position + Opacity drive enter (open) / exit (close); Size = Reflow eases the height when the content changes on a
-    // switch, with the rows below reflowing through real layout each tick (no snap).
-    static readonly LayoutTransition Reveal = new(
-        TransitionChannels.Opacity | TransitionChannels.Position | TransitionChannels.Size,
-        TransitionDynamics.Spring(0.32f, 0.92f),
-        Size: SizeMode.Reflow,
-        Enter: new EnterExit(Dy: -10f, Opacity: 0f, Active: true),
-        Exit: new EnterExit(Dy: -10f, Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(150f, Easing.SmoothOut));
-
-    public override Element Render()
-    {
-        var bridge = UseContext(PlaybackBridge.Slot);
-        var lib = UseContext(LibraryBridge.Slot);
-        string? uri = _expanded.Value;                       // subscribe → content swaps in place when the album changes
-        var album = uri is not null ? Find(uri) : null;
-        if (album is not null) _last = album;
-        var show = album ?? _last;
-        // Fetch the full album (the discography album is thin — no tracklist). Unconditional hook (stable order); keyed by
-        // uri so it re-fetches per album. Cached by GetAlbumAsync, so a re-expand is instant.
-        var full = UseResource(
-            ct => show is null ? System.Threading.Tasks.Task.FromResult<Album?>(null) : _svc.Library.GetAlbumAsync(show.Uri, ct),
-            (Album?)null, show?.Uri ?? "").Loadable;
-        // Fluent now-playing cues on thin rows: subscribe so # EQ + accent title refresh on track skip / pause.
-        _ = bridge?.Identity.Value;
-        _ = bridge?.IsPlaying.Value;
-        _ = bridge?.IsBuffering.Value;
-        if (show is null) return new BoxEl();
-
-        var ts = (full.Value.Value?.Tracks ?? show.Tracks) ?? System.Array.Empty<Track>();
-        Element body = ts.Count > 0 ? Rows(show, ts, bridge, lib)
-                     : full.State.Value == (byte)LoadState.Pending ? ShimmerRows(show.TrackCount)
-                     : EmptyNote();
-        return new BoxEl
-        {
-            Direction = 1, Gap = Spacing.S, Animate = Reveal,
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
-            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
-            Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Children = [ Header(show), body ],
-        };
-    }
-
-    Element Header(Album album) => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-        Padding = new Edges4(0f, 0f, 0f, Spacing.XS),
-        Children =
-        [
-            new BoxEl   // play all (album context from the top)
-            {
-                Width = 36f, Height = 36f, Shrink = 0f, Corners = CornerRadius4.All(18f), Fill = Tok.AccentDefault,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverScale = 1.06f, PressScale = 0.94f,
-                OnClick = () => _play(album.Uri),
-                Children = [ Icon(Icons.Play, 14f, Tok.TextOnAccentPrimary) ],
-            },
-            new BoxEl   // album name → open the full album page
-            {
-                Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f, OnClick = () => _go("album:" + album.Uri, album.Name),
-                Children =
-                [
-                    new TextEl(album.Name) { Size = 15f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(album.Year > 0 ? album.Year + "  " + ArtistPage.KindLabel(album.Kind) : ArtistPage.KindLabel(album.Kind))
-                        { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                ],
-            },
-            AlbumNavAction.Create(() => _go("album:" + album.Uri, album.Name)),
-        ],
-    };
-
-    Element Rows(Album album, IReadOnlyList<Track> tracks, PlaybackBridge? bridge, LibraryBridge? lib)
-    {
-        var rows = new Element[tracks.Count];
-        for (int i = 0; i < tracks.Count; i++) rows[i] = Row(album, i + 1, tracks[i], bridge, lib);
-        return new BoxEl { Direction = 1, Children = rows };
-    }
-
-    Element Row(Album album, int num, Track t, PlaybackBridge? bridge, LibraryBridge? lib)
-    {
-        var st = TrackRow.StateOf(bridge, lib, t);
-        int idx = num - 1;
-        void Play() => TrackRow.Invoke(bridge, t, () => _ = _svc.Player.PlayAsync(album.Uri, idx));
-        return new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
-            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
-            Role = AutomationRole.Button, OnClick = Play,
-            // Interactive ancestor for NumberCell's hover play/pause reveal (TrackRow.Row idiom).
-            OnPointerExit = static () => { },
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 24f, Height = 24f, Shrink = 0f,
-                    Children = [TrackRow.NumberCell(idx, st.IsNow, st.IsPlaying, st.IsBuffering, false, Play)],
-                },
-                new TextEl(t.Title)
-                {
-                    Grow = 1f, Basis = 0f, MinWidth = 0f, Size = 14f, Weight = 600,
-                    Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
-                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                },
-                new TextEl(Dur(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary },
-            ],
-        }.Interactive(Interaction.Subtle);
-    }
-
-    static Element EmptyNote() => new BoxEl
-    {
-        Padding = new Edges4(Spacing.S, Spacing.M, Spacing.S, Spacing.M),
-        Children = [ new TextEl(Loc.Get(Strings.Search.NoResults)) { Size = 13f, Color = Tok.TextTertiary } ],
-    };
-
-    // Skeleton rows while the album's tracklist loads (the count from the thin album's TrackCount).
-    static Element ShimmerRows(int count)
-    {
-        int n = Math.Clamp(count, 3, 10);
-        var rows = new Element[n];
-        for (int i = 0; i < n; i++)
-            rows[i] = new BoxEl
-            {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Height = 40f,
-                Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
-                Children =
-                [
-                    new BoxEl { Width = 18f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
-                    new BoxEl { Grow = 1f, Basis = 0f, Height = 12f, MaxWidth = 260f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
-                    new BoxEl { Width = 32f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
-                ],
-            };
-        return new BoxEl { Direction = 1, Children = rows };
-    }
-
-    Album? Find(string uri)
-    {
-        for (int i = 0; i < _albums.Count; i++) if (_albums[i].Uri == uri) return _albums[i];
-        return null;
-    }
-
-    static string Dur(long ms) { var t = TimeSpan.FromMilliseconds(ms); return t.Hours > 0 ? $"{t.Hours}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes}:{t.Seconds:D2}"; }
+    internal static async System.Threading.Tasks.Task<Album?> LoadAlbumAsync(Services svc, string uri, System.Threading.CancellationToken ct)
+        => await svc.Library.GetAlbumAsync(uri, ct).ConfigureAwait(false);
 }
 
 // ── Discography facets (Albums / Singles / Compilations) ───────────────────────────────────────────────
@@ -279,22 +59,32 @@ static class DiscoVc
         }, pageSize: 60, post: post, ct: ct);
 }
 
-// The reusable, virtualized discography grid over a (host-owned) VirtualCollection<Album>, with iTunes-style inline track
-// drawers. cap > 0 limits the rendered count (artist page); cap == 0 renders the whole facet (the dedicated facet page).
-// The DiscoGrid expand drawer body: the discography album is THIN (no tracklist), so this FETCHES the full album on
-// expand (cached by GetAlbumAsync) and shimmers the right number of rows while it loads — then reveals the real rows.
+// The DiscoGrid expand drawer body. The discography album is THIN (no tracklist); the one full-album fetch lives in
+// DiscoGrid (where the drawer SLOT is sized), and this panel receives the album + tracks + row/state verdict as
+// RE-PUSHED props — so the reserved height and the rendered rows derive from the SAME DrawerState and cannot disagree.
 sealed class AlbumDrawerPanel : Component
 {
-    readonly Services _svc; readonly Album _thin; readonly float _panelH;
+    readonly Services _svc;
     readonly Action<string> _play; readonly Action<string, string?> _go;
     readonly Func<ColorF> _accent;
     readonly SelectionModel _sel = new();
     readonly SwipeGroup _swipeGroup = new();
     readonly Func<bool> _showChecks;
+    // Non-reactive fields written from Render (the existing `_rows` pattern): the frozen selection-bar / context-menu
+    // lambdas below read THESE, so they always see the current album/tracks without re-registration.
+    Album _thin = null!;
     IReadOnlyList<Track> _rows = Array.Empty<Track>();
-    public AlbumDrawerPanel(Services svc, Album thin, float panelH, Action<string> play, Action<string, string?> go, Func<ColorF> accent)
+
+    /// <summary>LIVE drawer slots re-pushed from DiscoGrid on every render (the SelectorBar/ToolTip props idiom). The
+    /// panel's rows and loading/empty state all change AFTER mount (Pending → Ready on the same uri), and ctor args
+    /// freeze — which is exactly how the old frozen <c>panelH</c> ctor argument locked the panel to the height computed
+    /// on the expand frame. An immutable record so an unchanged re-push coalesces (no child re-render). The
+    /// <c>"drawer:"+uri</c> Key still remounts per ALBUM, so per-album SelectionModel / SwipeGroup state stays scoped.</summary>
+    internal sealed record Props(Album Thin, IReadOnlyList<Track> Tracks, int Rows, bool Loading, bool ReadyEmpty, Action Retry);
+
+    public AlbumDrawerPanel(Services svc, Action<string> play, Action<string, string?> go, Func<ColorF> accent)
     {
-        _svc = svc; _thin = thin; _panelH = panelH; _play = play; _go = go; _accent = accent;
+        _svc = svc; _play = play; _go = go; _accent = accent;
         _showChecks = () => { _ = _sel.Version.Value; return _sel.SelectedCount > 1; };   // 2+ only (a plain click must not summon checkboxes)
     }
 
@@ -309,17 +99,22 @@ sealed class AlbumDrawerPanel : Component
         var lib = UseContext(LibraryBridge.Slot);
         var acts = UseContext(ActionServices.Slot);
         var menuOverlay = UseContext(Overlay.Service);   // row context menus (right-click / long-press / the "…" cell)
-        var full = UseResource(ct => _svc.Library.GetAlbumAsync(_thin.Uri, ct), (Album?)null, _thin.Uri).Loadable;
-        var tracks = (full.Value.Value?.Tracks ?? _thin.Tracks) ?? System.Array.Empty<Track>();
-        _rows = tracks;
-        bool loading = tracks.Count == 0 && full.State.Value == (byte)LoadState.Pending;
-        int n = loading ? Math.Clamp(_thin.TrackCount, 1, 10) : Math.Min(tracks.Count, 10);
+        var p = UsePropsOrDefault<Props>();              // subscribes → a re-push (Pending → Ready) re-renders here
+        if (p is null) return new BoxEl();               // mounted without props (never happens from DiscoGrid)
+        _thin = p.Thin;
+        _rows = p.Tracks;
+        int n = p.Rows;                                  // the ONE row verdict — same DrawerState the slot was sized from
 
-        Element body = loading ? ShimmerRows(n) : Rows(tracks, n, bridge, lib, acts, menuOverlay);
+        Element body = p.ReadyEmpty ? EmptyNote(p.Retry)
+                     : p.Loading ? ShimmerRows(n)
+                     : Rows(p.Tracks, n, bridge, lib, acts, menuOverlay);
 
+        // No Height here: the panel HUGS its content — the OUTER drawer slot (DiscoGrid.DrawerHeight) owns the reserved
+        // number, and both read the same DrawerState, so the slot never clips a row mid-row. ClipToBounds stays as the
+        // belt-and-braces card clip.
         return new BoxEl
         {
-            Direction = 1, Height = _panelH, ClipToBounds = true,
+            Direction = 1, ClipToBounds = true,
             Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S),
             Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
@@ -327,7 +122,9 @@ sealed class AlbumDrawerPanel : Component
             [
                 Head(),
                 ZStack(body, Embed.Comp(() => new SelectionCommandBar(_sel,
-                    i => (uint)i < (uint)Math.Min(_rows.Count, 10) ? _rows[i] : null,
+                    // Live _rows/RowCap read (NOT a captured `n`): this factory freezes at mount — while the panel is
+                    // still loading, a frozen row count would index past the empty track list.
+                    i => (uint)i < (uint)Math.Min(_rows.Count, DiscoGrid.RowCap) ? _rows[i] : null,
                     bottomPadding: Spacing.S))),
             ],
         };
@@ -340,7 +137,9 @@ sealed class AlbumDrawerPanel : Component
         [
             new BoxEl { Width = 30f, Height = 30f, Shrink = 0f, Corners = CornerRadius4.All(15f), Fill = _accent(),
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, OnClick = () => _play(_thin.Uri),
-                Children = [ Icon(Icons.Play, 12f, Tok.TextOnAccentPrimary) ] },
+                // Artwork-derived fill ⇒ ink from the FILL's luminance (the WaveeCta.Palette rule), never the theme's
+                // on-accent token: the lifted cover accent is often pale, where TextOnAccentPrimary's glyph vanished.
+                Children = [ Icon(Icons.Play, 12f, ColorContrast.PickContrast(_accent())) ] },
             new BoxEl { Grow = 1f, Basis = 0f, OnClick = () => _go("album:" + _thin.Uri, _thin.Name),
                 Children = [ new TextEl(_thin.Name) { Size = 14f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ] },
             AlbumNavAction.Create(() => _go("album:" + _thin.Uri, _thin.Name), 32f),
@@ -419,6 +218,23 @@ sealed class AlbumDrawerPanel : Component
         }
     }
 
+    // READY BUT EMPTY. GetAlbumAsync swallows its fetch failure (StoreLibrarySource.EnsureFetchedAsync's `catch { }`)
+    // and returns whatever the store holds, so the resource legitimately settles Ready on a trackless album — offline,
+    // a failed envelope, or a cold-restored stub. That used to be a 0-row slot with nothing in it and no way out:
+    // VirtualCollection has no invalidation, so the stale snapshot never healed. Retry re-runs the loader keeping the
+    // current value visible (Resource.Refresh — stale-while-revalidate). Sized by DiscoGrid.NoteRows in the slot.
+    static Element EmptyNote(Action retry) => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+        Padding = new Edges4(Spacing.S, Spacing.M, Spacing.S, Spacing.M),
+        Children =
+        [
+            new TextEl(Loc.Get(Strings.Detail.Empty.NoTracks))
+                { Grow = 1f, Basis = 0f, MinWidth = 0f, Size = 13f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            Button.Standard(Loc.Get(Strings.Common.Retry), retry),
+        ],
+    };
+
     static Element ShimmerRows(int n)
     {
         var rows = new Element[n];
@@ -464,6 +280,24 @@ sealed class DiscoGrid : Component
     const float BottomGap  = 30f;       // drawer → next row (breathing room below it)
     const float DrawerHeaderH = 56f;
 
+    /// <summary>Max rows the inline drawer shows. THE single definition — it used to be a literal 10 repeated in
+    /// PanelHeight, the panel's shimmer clamp and row clamp, and the selection-bar index guard, all free to drift.</summary>
+    internal const int RowCap = 10;
+    /// <summary>Rows reserved while loading when the card carries no usable count (a cold-restored stub): enough to
+    /// read as "something is coming" without reserving a screenful for what may be a 2-track single.</summary>
+    const int MinShimmerRows = 3;
+    /// <summary>Rows' worth of height the Ready-but-empty note + retry occupies.</summary>
+    const int NoteRows = 2;
+
+    /// <summary>Rows the drawer will actually render, and why. ONE derivation, read by BOTH the slot sizing
+    /// (PanelHeight/DrawerHeight) and the panel body (via the re-pushed Props) — so reserved height and rendered rows
+    /// cannot disagree, which is what clipped rows mid-row and left trackless albums with a 0-row slot.</summary>
+    readonly record struct DrawerState(string Uri, int Rows, bool Loading, bool ReadyEmpty);
+
+    Resource<Album?> _full;             // the ONE full-album fetch for the open drawer (re-assigned every render)
+    Memo<DrawerState>? _drawer;         // the ONE row/state derivation (see Render)
+    Action? _retryFull;                 // stable delegate so the re-pushed Props coalesce (a fresh lambda would defeat record equality)
+
     // The inline drawer's open/close + switch motion. Opacity+Position animate the enter (drop-in) / exit (lift-out);
     // Size=Reflow eases the height when switching to an album with a different track count (the rows below reflow).
     static readonly LayoutTransition DrawerReveal = new(
@@ -481,6 +315,44 @@ sealed class DiscoGrid : Component
     {
         _acts = UseContext(ActionServices.Slot);
         _menuOverlay = UseContext(Overlay.Service);
+
+        // ONE fetch for the open drawer, keyed by uri (collapsed ⇒ "" ⇒ a completed no-op task, never a request).
+        // Lifted out of AlbumDrawerPanel so the row count is known where the drawer's SLOT is sized. GetAlbumAsync is
+        // cached, so re-expanding the same album costs nothing.
+        _ = _vc.Version.Value;                       // subscribe → the expanded uri resolves once its page lands
+        int expandedIdx = _expanded.Value;           // subscribe → the fetch re-keys on expand/collapse/switch
+        string expandedUri = (expandedIdx >= 0 ? _vc[expandedIdx]?.Uri : null) ?? "";
+        _full = UseResource(ct => expandedUri.Length == 0
+                ? System.Threading.Tasks.Task.FromResult<Album?>(null)
+                : AlbumLoader.LoadAlbumAsync(_svc, expandedUri, ct),
+            (Album?)null, expandedUri);
+
+        // A MEMO, not a field and not a signal. The LazyGrid below is a propless Embed.Comp: its ctor delegates freeze
+        // at mount and it re-renders only on its OWN subscriptions, so a field written here would be read stale. The
+        // frozen DrawerHeight/DrawerFor delegates read this memo, which subscribes LazyGrid to the resource
+        // transitively — correct invalidation with zero writes (a write from Render would be a backwards write).
+        // NOTE: UseComputed keeps the FIRST closure for the component's lifetime, so the compute derives everything
+        // from signals/fields it reads itself — no per-render local may be captured here.
+        _drawer = UseComputed(() =>
+        {
+            _ = _vc.Version.Value;
+            int idx = _expanded.Value;
+            var al = idx >= 0 ? _vc[idx] : null;
+            if (al is null || al.Uri.Length == 0) return new DrawerState("", 0, false, false);
+            var l = _full.Loadable;
+            // Same fallback chain as the props push in DrawerFor (keep the two in lockstep): the fetched tracklist,
+            // else whatever the thin card already carries (usually null in a discography), else empty.
+            IReadOnlyList<Track> tracks = l.Value.Value?.Tracks ?? al.Tracks ?? Array.Empty<Track>();
+            bool pending = l.State.Value == (byte)LoadState.Pending;
+            // LOADING semantics: a resolved SHORT list must not be treated as loading just because the card's stub
+            // count is larger — but a still-Pending fetch that has produced nothing yet stays loading no matter how
+            // small the hint is. `tracks.Count == 0 && pending` is exactly that rule.
+            bool loading = tracks.Count == 0 && pending;
+            bool readyEmpty = !pending && tracks.Count == 0;   // Ready OR Failed with nothing to show → note + retry
+            int rows = loading ? Math.Clamp(al.TrackCount, MinShimmerRows, RowCap) : Math.Min(tracks.Count, RowCap);
+            return new DrawerState(al.Uri, rows, loading, readyEmpty);
+        });
+
         return Embed.Comp(() => new LazyGrid(
         // Capped to _cap when >0 (the artist page); cap 0 → the full facet. The count delegate reads the live total.
         count: () => { _ = _vc.Version.Value; int t = _vc.CountOr0; return _cap > 0 ? Math.Min(_cap, t) : t; },
@@ -558,7 +430,16 @@ sealed class DiscoGrid : Component
         ],
     };
 
-    float PanelHeight(int idx) { int n = Math.Min(_vc?[idx]?.TrackCount ?? 0, 10); return DrawerHeaderH + n * TrackRow.CompactListItemExtent; }
+    // Reserve EXACTLY what the panel will render. `rows` comes from the same DrawerState the panel body reads, so a
+    // stale/absent stub TrackCount can no longer under-reserve (0 rows for a trackless card while the panel clamped
+    // its shimmer to >=1, which ClipToBounds then cut mid-row).
+    float PanelHeight(int idx)
+    {
+        _ = idx;                                        // LazyGrid's Func<int,float> shape; sizing is per-DRAWER and only one is open
+        var d = _drawer?.Value ?? default;
+        int rows = d.ReadyEmpty ? NoteRows : d.Rows;
+        return DrawerHeaderH + rows * TrackRow.CompactListItemExtent;
+    }
     // The preceding grid row already includes RowGap, so the drawer starts beyond the card's shadow halo. Its own slot
     // only needs to reserve the panel plus the breathing room before the following row.
     float DrawerHeight(int idx) => PanelHeight(idx) + BottomGap;
@@ -567,9 +448,17 @@ sealed class DiscoGrid : Component
     {
         var al = _vc?[idx];
         if (al is null) return new BoxEl();
-        // The discography album is THIN (Tracks null) — the drawer fetches the full album on expand + shimmers while it
-        // loads. Keyed by uri so each album gets its own fetch (the slot is reused across expands).
-        var panel = Embed.Comp(() => new AlbumDrawerPanel(_svc, al, PanelHeight(idx), _play, _go, _accent)) with { Key = "drawer:" + al.Uri };
+        var d = _drawer?.Value ?? default;
+        _retryFull ??= () => _full.Refresh();
+        // Re-pushed PROPS, not ctor args. The panel's rows and loading/empty state all change AFTER mount
+        // (Pending → Ready on the same uri), and ctor args freeze — which is exactly how the old frozen `panelH` ctor
+        // argument locked the panel to the height computed on the expand frame. The Key still remounts per ALBUM, so
+        // per-album SelectionModel / SwipeGroup state stays scoped.
+        var panel = Embed.Comp(
+            new AlbumDrawerPanel.Props(al, _full.Loadable.Value.Value?.Tracks ?? al.Tracks ?? Array.Empty<Track>(),
+                                       d.Rows, d.Loading, d.ReadyEmpty, _retryFull),
+            () => new AlbumDrawerPanel(_svc, _play, _go, _accent))
+            with { Key = "drawer:" + al.Uri };
 
         // Connector: a short accent bar at the panel's top edge, spanning exactly the expanded card's column → reads as
         // "this drawer belongs to THAT card" (paired with the card's accent border).
@@ -594,8 +483,6 @@ sealed class DiscoGrid : Component
             Children = [ inner ],
         };
     }
-
-    static string Dur(long ms) { var t = TimeSpan.FromMilliseconds(ms); return t.Hours > 0 ? $"{t.Hours}:{t.Minutes:D2}:{t.Seconds:D2}" : $"{t.Minutes}:{t.Seconds:D2}"; }
 }
 
 // One artist-page discography facet: a collapsible header + the first Cap items (DiscoGrid), and a "See all N {facet}" link
@@ -609,14 +496,25 @@ sealed class DiscographySection : Component
     readonly Action<string> _play;
     readonly Func<ColorF> _accent;
     readonly Signal<bool> _collapsed = new(false);
+    // :stuck — true only while the body's sticky clip is actually cutting (ScrollBindDsl.OnFlag edge, never per-frame).
+    readonly Signal<bool> _stickyClipped = new(false);
     VirtualCollection<Album>? _vc;
     System.Threading.CancellationTokenSource? _cts;   // per-instance; cancelled on unmount (feeds the VC + the seed probe)
     bool _seeded;                                      // one-shot latch: guards the provisional Seed (Seed bumps Version)
 
     const int Cap = DiscographyRoute.PreviewCap;
 
-    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play, Func<ColorF> accent)
-    { _artistUri = artistUri; _artistName = artistName; _kind = kind; _title = title; _svc = svc; _go = go; _play = play; _accent = accent; }
+    /// <param name="stickyClearance">Viewport-top offset the sticky header pins BELOW — the artist page passes
+    /// <see cref="ArtistShyPill.Clearance"/> so the pinned header never slides under the floating shy pill; the default
+    /// 0 is for hosts with no top overlay (DiscographyPage). STATIC on purpose (a ctor float, never a reactive
+    /// `pinned.Value` read): every facet sits ≥1000px below the sentinel flip, so a reactive read would evaluate to
+    /// the clearance in every reachable state while costing a two-section re-render + ScrollBinds re-bake per flip;
+    /// the one wrong state (header pinned, pill hidden) only exists while Artist != Ready, where the page shows
+    /// skeleton/error, not a scrollable grid.</param>
+    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play, Func<ColorF> accent, float stickyClearance = 0f)
+    { _artistUri = artistUri; _artistName = artistName; _kind = kind; _title = title; _svc = svc; _go = go; _play = play; _accent = accent; _pinTop = stickyClearance; }
+
+    readonly float _pinTop;   // see the ctor doc: the sticky header's viewport-top offset (ArtistShyPill.Clearance / 0)
 
     public override Element Render()
     {
@@ -666,11 +564,14 @@ sealed class DiscographySection : Component
         if (!collapsed)
             body = ((BoxEl)body) with
             {
-                ScrollBinds = [new() { ClipTopAtViewport = HeaderClipInset }],
+                ScrollBinds = [new() { ClipTopAtViewport = HeaderClipInset, OnFlag = on => _stickyClipped.Value = on }],
                 // The sticky clip is a hard cut: cards vanish on an exact pixel line under the pinned header, which
                 // reads as content being sliced rather than passing behind it. A short top band softens that line into
-                // a dissolve, the same cue the shelves already use at their scroll edges.
-                EdgeFade = new EdgeFadeSpec(EdgeMask.Top, 0f, StickyFadeBand, 0f, 0f),
+                // a dissolve, the same cue the shelves already use at their scroll edges. ONLY while the clip is cutting
+                // (the OnFlag :stuck edge): at rest there is no cut to soften, so the band instead feathered the FIRST
+                // card row's own tops (the "black card tops" defect) and forced the whole facet body through an
+                // offscreen RT for a fade that had nothing to fade.
+                EdgeFade = _stickyClipped.Value ? new EdgeFadeSpec(EdgeMask.Top, 0f, StickyFadeBand, 0f, 0f) : null,
             };
 
         return new BoxEl
@@ -718,29 +619,44 @@ sealed class DiscographySection : Component
         catch { /* OCE (nav away) or a failed probe → _seeded stays clear so a remount retries */ }
     }
 
-    // The pinned header's strip: its own height (accent bar 22 + 2×XS padding ≈ 30) plus a small breath — the
-    // sticky-clip line the section body vanishes at while the header is pinned. Keep the two in lockstep: a taller
-    // header with a stale inset lets card pixels peek under the pinned text.
-    const float HeaderClipInset = 38f;
+    /// <summary>The header's text row. RailHeader's 20px type measures ~28 DIP with its line box; the accent bar's
+    /// MinHeight 22 is shorter, so the text sets the row height.</summary>
+    const float HeaderRowH = 28f;
+    /// <summary>Header padding ABOVE the text row. Deliberately tighter than the pad below (and than the symmetric
+    /// Spacing.M it replaced): a symmetric 12/12 made the pinned band 52px tall, which — stacked under the shy pill's
+    /// own 56px — ate ~120px of viewport before the first card. The heading only needs to clear the pill, not float in
+    /// the middle of its own strip. Keep in lockstep with Header()'s Padding — PinnedHeaderH derives from it.</summary>
+    const float HeaderPadTop = Spacing.XS;
+    /// <summary>Header padding BELOW the text row — larger than <see cref="HeaderPadTop"/> so the heading sits ON its
+    /// content (the optical grouping every heading wants) rather than centred in a band.</summary>
+    const float HeaderPadBottom = Spacing.XS;
+    /// <summary>The header's real pinned height. This used to be a hand-written 38 against an actual 44, so ~6px of
+    /// card leaked above the clip line on every scroll. Derived now, so a padding or type change cannot desync it.</summary>
+    const float PinnedHeaderH = HeaderRowH + HeaderPadTop + HeaderPadBottom;   // 36
+    /// <summary>Where the section body's sticky clip cuts: everything above (the overlay clearance the pill owns, plus
+    /// the pinned header itself) must be free of card pixels. 44 + 36 = 80 on the artist page; 36 with no clearance.</summary>
+    float HeaderClipInset => _pinTop + PinnedHeaderH;
 
-    /// <summary>Depth of the dissolve at the sticky-clip line. Deep enough to read as a fade rather than a seam, short
-    /// enough that a card is only ghosted for the last few pixels of its travel under the header.</summary>
-    const float StickyFadeBand = 14f;
+    /// <summary>Depth of the dissolve at the sticky-clip line. Widened from 14: the clip line sits ~80px down the
+    /// viewport with a translucent acrylic pill immediately above it, where a 14px feather still read as a cut.</summary>
+    const float StickyFadeBand = 22f;
 
     Element Header(int total, bool collapsed) => new BoxEl
     {
         // Left padding 0 so the accent bar aligns with the non-collapsible AccentHeader sections (Top tracks / Appears on).
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
         Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-        // Breathing room while PINNED. At PinTop 0 with a tight vertical pad the header sat flush under the search
-        // chrome and hard against the right edge — it read as a strip wedged into the gap rather than as a heading.
-        // The extra top and right space is what lets it float clear of both.
-        Padding = new Edges4(0f, Spacing.S, Spacing.L, Spacing.S),
-        // CSS-sticky wayfinding: the header pins at the viewport top while ITS section (the parent column = the
-        // containing block) is in view, clamps at the section's end, and releases on scroll-back — so mid-grid the
-        // user always sees which facet (Albums / Singles & EPs) they're in. The header itself never changes looks;
-        // the section BODY's sticky-clip (below) keeps the page backdrop behind it.
-        ScrollBinds = [ new() { PinTop = 0f } ],
+        // Breathing room while PINNED, ASYMMETRIC: the named HeaderPadTop/HeaderPadBottom (PinnedHeaderH derives from
+        // them — keep them in lockstep). Less above than below, so the heading reads as attached to its own grid rather
+        // than centred in a fat strip, and the pinned band stays slim enough to leave the cards the viewport. The right
+        // pad keeps it clear of the edge.
+        Padding = new Edges4(0f, HeaderPadTop, Spacing.L, HeaderPadBottom),
+        // CSS-sticky wayfinding: the header pins BELOW the floating shy pill (_pinTop = ArtistShyPill.Clearance on the
+        // artist page; 0 on hosts with no overlay) while ITS section (the parent column = the containing block) is in
+        // view, clamps at the section's end, and releases on scroll-back — so mid-grid the user always sees which facet
+        // (Albums / Singles & EPs) they're in. STATIC by design — see the ctor's stickyClearance doc. The header itself
+        // never changes looks; the section BODY's sticky-clip (below) keeps the page backdrop behind it.
+        ScrollBinds = [ new() { PinTop = _pinTop } ],
         OnClick = () => _collapsed.Value = !_collapsed.Peek(),
         Children =
         [

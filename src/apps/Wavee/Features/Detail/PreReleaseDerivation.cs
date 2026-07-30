@@ -31,8 +31,10 @@ public static class PreReleaseDerivation
         return ReleaseInstant(a.ReleaseDate) is { } rd && rd > now ? rd : null;
     }
 
-    /// <summary>The album's ISO release date as an instant, or null when absent/unparseable (a precision-reduced
-    /// "2026" or "2026-09" still parses; anything else is simply not a fact we have). Invariant culture + assumed-UTC:
+    /// <summary>The album's ISO release date as an instant, or null when absent/unparseable. A precision-reduced
+    /// "2026-09" still parses (→ the 1st); a bare "2026" does NOT — which is fine, because the mapper normalises
+    /// YEAR precision to "yyyy-01-01" before it ever reaches <c>Album.ReleaseDate</c> (SpotifyExportMapper.IsoDate),
+    /// and a countdown to January 1 of a year-only date would be a lie anyway. Invariant culture + assumed-UTC:
     /// this is a wire value, not user input.</summary>
     public static DateTimeOffset? ReleaseInstant(string? iso)
         => !string.IsNullOrWhiteSpace(iso)

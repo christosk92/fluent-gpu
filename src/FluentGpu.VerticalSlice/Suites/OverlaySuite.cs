@@ -2400,6 +2400,78 @@ static class OverlaySuite
                 $"open={open} afterBubble={afterBubbleWheel:0.#} afterFar={afterFarWheel:0.#}");
         }
 
+        // e4popup.7c — a ToolTip must not ORPHAN its bubble, and a RECYCLED owner must not show the previous entity's
+        // text. Two regressions with one root cause: the overlay ENTRY outlives the component that opened it (it leaves
+        // Entries only via Closing → AfterAnimations → Finalize), and the entry captured the OPENING render's closures.
+        //   (a) staleness — ToolTip.Wrap re-pushes props, so a text change re-renders the component IN PLACE and the
+        //       pending show-delay clock keeps its frozen OnElapsed (a ctor prop, mount-time only). The old OpenNow
+        //       closed over the `text` LOCAL of the render that armed it, so the bubble opened with the PREVIOUS
+        //       entity's tooltip (A→B navigation showed A's title). The content thunk now reads a Ref written every
+        //       render, so it resolves the CURRENT text at open time.
+        //   (b) orphaning — the target unmounting while the bubble is open used to leave a live entry whose rect thunk
+        //       resolved against a DEAD node (⇒ abs = default ⇒ a synthetic point rect), and the placement pass
+        //       re-places rect-anchored entries on every OverlayHost render — so the bubble walked to the viewport's
+        //       top-left corner and stayed there forever. ToolTip's mount-once cleanup now closes the handle, and
+        //       AfterAnimations' orphaned-owner prune is the belt-and-braces backstop. A CLOSING entry keeps its last
+        //       placement while it fades, so the bubble must fade IN PLACE — never snap to the origin.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4tiporphan", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new E4ToolTipOrphanProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+
+            NodeHandle Tip(string s) => FindTextNode(host.Scene, strings, host.Scene.Root, s);
+            void Hover(float x, float y) { window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(x, y), 0, 0)); host.RunFrame(); }
+            void Step(float ms) { clock.Advance(ms); host.RunFrame(); }
+            void Poll() { for (int i = 0; i < 4; i++) host.RunFrame(); }   // drain frame-granularity anim latency at dt=0
+
+            Hover(50f, 50f);                  // pointer enters the target → the 800ms show-delay clock arms
+            Poll();
+            Step(400f);                       // mid-delay: the clock is pending with its frozen OnElapsed
+            Poll();
+            bool closedMidDelay = Tip("tip-orphan").IsNull && Tip("tip-fresh").IsNull;
+
+            // Recycle the owner: re-pushed props re-render the ToolTip IN PLACE (same key ⇒ the clock is reused, its
+            // factory does NOT re-run). Pre-fix the bubble would open with "tip-orphan".
+            root.Tip.Value = "tip-fresh";
+            Poll();
+            Step(500f);                       // 900ms total ≥ 800 → the delay elapses and the bubble opens
+            Poll();
+            var freshNode = Tip("tip-fresh");
+            bool freshText = !freshNode.IsNull;
+            bool noStaleText = Tip("tip-orphan").IsNull;
+            RectF openRect = freshText ? host.Scene.AbsoluteRect(freshNode) : default;
+            // A real placement sits BELOW the target (the 40,40 target leaves no room above, so Top flips to Bottom ⇒
+            // y ≳ 92). The dead-anchor failure mode resolves abs = default, placing the bubble in the y ≈ 20-30 band at
+            // the viewport's top-left — so a single y threshold separates "placed" from "clamped to the origin".
+            bool placedOffOrigin = openRect.Y > 60f;
+
+            // Unmount the wrapped target while the bubble is open. One frame: the ToolTip's cleanup closes the handle,
+            // the entry goes Closing and KEEPS its last placement while it fades.
+            root.Mounted.Value = false;
+            host.RunFrame();
+            var midNode = Tip("tip-fresh");
+            RectF midRect = midNode.IsNull ? default : host.Scene.AbsoluteRect(midNode);
+            bool heldPlacement = !midNode.IsNull
+                && MathF.Abs(midRect.X - openRect.X) < 1.5f && MathF.Abs(midRect.Y - openRect.Y) < 1.5f;
+
+            for (int i = 0; i < 5; i++) Step(60f);   // 300ms > RawFadeMs (167) → the fade settles → Finalize
+            Poll();
+            bool bubbleGone = Tip("tip-fresh").IsNull && Tip("tip-orphan").IsNull;
+            bool noOrphanEntry = ((OverlayServiceImpl)root.Service!).Entries.Count == 0;
+
+            Check("e4popup.7c owner unmount closes the tooltip bubble (no orphaned entry, never re-placed at the origin) and a recycled owner shows the NEW text",
+                closedMidDelay && freshText && noStaleText && placedOffOrigin && heldPlacement && bubbleGone && noOrphanEntry,
+                $"closedMidDelay={closedMidDelay} fresh={freshText} noStale={noStaleText} offOrigin={placedOffOrigin} "
+                + $"held={heldPlacement} gone={bubbleGone} entries=0:{noOrphanEntry} "
+                + $"(open=({openRect.X:0.#},{openRect.Y:0.#}) mid=({midRect.X:0.#},{midRect.Y:0.#}))");
+        }
+
         // e4popup.8 — focus restores to the pre-open node when the close STARTS, not when the fade finishes: WinUI
         // restores the popup's SavedFocusState synchronously in Hide()/CPopup::Close (Popup_Partial.h:63-64;
         // FlyoutBase returns focus to the invoker on Hide, not after the close animation) — the popup is still on

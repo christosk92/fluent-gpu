@@ -2392,6 +2392,39 @@ static class AnimSuite
         Check("30a. edge-fade layer carries effective composite clip + stable source id",
             edgeClipOk, $"deviceH={edgeLayer.DeviceRect.H:0.#} clip=({edgeLayer.CompositeClip.W:0.#}x{edgeLayer.CompositeClip.H:0.#}) id={edgeLayer.LayerId}");
 
+        // An authored/local ClipRect is the visible boundary of the fade. Sticky ClipTopAtViewport drives this same paint
+        // column while scrolling; anchoring the layer at the node's un-clipped top puts the top ramp above the scissor,
+        // making the sticky edge a hard cut. Exercise the recorder seam directly so this stays independent of scroll-bind
+        // evaluation and fails only if fade geometry regresses.
+        var clippedEdgeScene = new SceneStore();
+        new TreeReconciler(clippedEdgeScene, strings).ReconcileRoot(new BoxEl
+        {
+            Width = 200, Height = 160, Fill = ColorF.FromRgba(20, 20, 20),
+            EdgeFade = new EdgeFadeSpec(EdgeMask.Top, 0f, 24f, 0f, 0f),
+            Children = [new BoxEl { Width = 200, Height = 160, Fill = ColorF.FromRgba(255, 255, 255) }],
+        }, null);
+        new FlexLayout(clippedEdgeScene, new HeadlessFontSystem(strings)).Run(clippedEdgeScene.Root);
+        clippedEdgeScene.Paint(clippedEdgeScene.Root).ClipRect = RectF.FromLTRB(0f, 60f, 200f, 160f);
+        var clippedEdgeDl = new DrawList();
+        SceneRecorder.Record(clippedEdgeScene, clippedEdgeDl);
+        var clippedEdgeDev = new HeadlessGpuDevice();
+        clippedEdgeDev.SubmitDrawList(clippedEdgeDl.Bytes, clippedEdgeDl.SortKeys,
+            new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+        PushLayerCmd clippedEdgeLayer = default;
+        foreach (var l in clippedEdgeDev.LastLayers)
+            if (l.Kind == (int)LayerKind.EdgeFade) { clippedEdgeLayer = l; break; }
+        bool clippedEdgeOk = clippedEdgeLayer.Kind == (int)LayerKind.EdgeFade
+            && Near(clippedEdgeLayer.DeviceRect.X, 0f) && Near(clippedEdgeLayer.DeviceRect.Y, 60f)
+            && Near(clippedEdgeLayer.DeviceRect.W, 200f) && Near(clippedEdgeLayer.DeviceRect.H, 100f)
+            && Near(clippedEdgeLayer.CompositeClip.X, 0f) && Near(clippedEdgeLayer.CompositeClip.Y, 60f)
+            && Near(clippedEdgeLayer.CompositeClip.W, 200f) && Near(clippedEdgeLayer.CompositeClip.H, 100f)
+            && Near(clippedEdgeLayer.FadeBandT, 24f) && clippedEdgeLayer.FadeEdges == (int)EdgeMask.Top;
+        Check("30a2. explicit EdgeFade anchors its ramp to the finite ClipRect's visible boundary",
+            clippedEdgeOk,
+            $"device=({clippedEdgeLayer.DeviceRect.X:0.#},{clippedEdgeLayer.DeviceRect.Y:0.#},{clippedEdgeLayer.DeviceRect.W:0.#}x{clippedEdgeLayer.DeviceRect.H:0.#}) " +
+            $"clip=({clippedEdgeLayer.CompositeClip.X:0.#},{clippedEdgeLayer.CompositeClip.Y:0.#},{clippedEdgeLayer.CompositeClip.W:0.#}x{clippedEdgeLayer.CompositeClip.H:0.#}) " +
+            $"bandT={clippedEdgeLayer.FadeBandT:0.#} edges={clippedEdgeLayer.FadeEdges}");
+
         var nestedScene = new SceneStore();
         new TreeReconciler(nestedScene, strings).ReconcileRoot(new BoxEl
         {

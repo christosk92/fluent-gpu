@@ -71,7 +71,7 @@ public static partial class Ui
             Corners = CornerRadius4.All(corners),
             Placeholder = placeholder ?? ColorF.FromRgba(0x33, 0x33, 0x33),
             BlurHash = blurHash,
-            Transition = transition,
+            RevealTransition = transition,
         };
 
     /// <summary>An async image whose pending placeholder comes from a CSS-style hex color code.</summary>
@@ -93,7 +93,7 @@ public static partial class Ui
             Corners = CornerRadius4.All(corners),
             Placeholder = placeholder ?? ColorF.FromRgba(0x33, 0x33, 0x33),
             BlurHash = blurHash,
-            Transition = transition,
+            RevealTransition = transition,
         };
 
     /// <summary>A responsive image whose pending placeholder comes from a CSS-style hex color code.</summary>

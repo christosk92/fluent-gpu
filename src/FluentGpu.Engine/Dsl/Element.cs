@@ -702,8 +702,9 @@ public sealed record ImageEl : Element
     /// until the full-res art lands. Falls back to the flat <see cref="Placeholder"/> tint when null.</summary>
     public string? BlurHash { get; init; }
     /// <summary>Override the placeholder→image reveal transition (duration + easing). Null ⇒ <see cref="ImageTransition.Default"/>;
-    /// pass <see cref="ImageTransition.None"/> to disable the fade (instant).</summary>
-    public ImageTransition? Transition { get; init; }
+    /// pass <see cref="ImageTransition.None"/> to disable the fade (instant). Distinct from the base
+    /// <see cref="Element.Transition"/> (the declarative motion token that governs bound-channel interpolation).</summary>
+    public ImageTransition? RevealTransition { get; init; }
     /// <summary>Optional static bitmap blur. The engine derives a persistent image once; scrolling then remains one
     /// ordinary image draw instead of a per-frame scene blur layer.</summary>
     public BakedBlurSpec? BakedBlur { get; init; }
@@ -809,6 +810,10 @@ public sealed record ScrollEl : Element
     /// <summary>Auto edge fade: feather only the edges that currently OVERFLOW (more content past them), ramped with the
     /// scroll offset — the discoverable-overflow affordance as a true alpha fade. Ignored when <see cref="EdgeFade"/> is set.</summary>
     public bool AutoEdgeFade { get; init; }
+    /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>. 0 (default) = the engine's standard band, so every
+    /// call site that only flips the bool is unchanged. Ignored unless <see cref="AutoEdgeFade"/> is set. A surface whose
+    /// trailing content must stay crisp (a table's duration column) narrows the band here rather than dropping the fade.</summary>
+    public float AutoEdgeFadeBand { get; init; }
     /// <summary>Clip-escape root for a hover-elevated descendant. The recorder hoists the deferred child after this
     /// viewport's clip and edge-fade scopes close, so only the hovered subtree can paint into the surrounding halo
     /// gutter while resting scroll content remains clipped.</summary>
@@ -817,6 +822,16 @@ public sealed record ScrollEl : Element
     /// auto-hide that only reveals on hover/scroll. Hover still expands the rail to the full draggable bar. For navigation
     /// surfaces (a sidebar) where a discoverable, always-present scroll affordance is wanted (WinUI 11 nav behavior).</summary>
     public bool AlwaysShowScrollbar { get; init; }
+
+    /// <summary>Declarative scroll-snap points for this viewport — <c>SnapSpec.Every(rowHeight)</c> for a uniform grid,
+    /// <c>SnapSpec.At(...)</c> for an explicit set. A touch/touchpad FLING then retargets its friction decay to land
+    /// EXACTLY on a snap value; a wheel/keyboard/programmatic offset stays hard-clamped (never snapped), so a control that
+    /// wants a wheel to REST on a boundary re-snaps itself through the programmatic path.
+    /// <para>Null (default) means the reconciler NEVER touches this viewport's snap fields, so a control that writes
+    /// <c>ScrollState.SnapInterval</c> onto the scene after mount keeps it across every reconcile. A non-null value makes
+    /// THIS element the owner: it is re-asserted on every patch, so an interval computed per render stays current. Only
+    /// declare a value the element can recompute each render — an interval derived from a frozen options record cannot.</para></summary>
+    public FluentGpu.Scene.SnapSpec? Snap { get; init; }
 
     /// <summary>Nested-scroll chaining policy (the CSS <c>overscroll-behavior</c> analog). Default <see cref="ScrollChainingMode.Auto"/>:
     /// a touch pan that reaches this scroller's edge hands the residual to the nearest same-axis ancestor scroller

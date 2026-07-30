@@ -288,7 +288,10 @@ static class Program
                 return WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             };
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
-            // micaAlt:true → Mica BaseAlt (the flatter File-Explorer tint), matching WaveeMusic's MicaBackdrop Kind="BaseAlt".
+            // micaAlt → Mica BaseAlt (the flatter File-Explorer tint, matching WaveeMusic's MicaBackdrop Kind="BaseAlt")
+            // unless the user picked base Mica in Settings ▸ Appearance (WaveeSettings.WindowMaterialBaseMica). This is the
+            // STARTUP seed only; the Settings toggle re-applies the material live on the running window through
+            // FluentApp.SetWindowMaterialAlt, so the two paths agree without an env var.
             // NO AmbientFps here any more (it used to hard-code 60): the pacing of PERPETUAL ambient motion — the
             // always-playing seek playhead, the now-playing equalizer, skeleton shimmer, buffering spinner, the karaoke
             // lyrics wipe — is now AmbientPowerPolicy's call, attached above. A fixed 60 was wrong twice: it beat against
@@ -300,8 +303,12 @@ static class Program
             FluentAppHarness.Run(() => new WaveeApp(settings, appLocale),
                 new AppOptions
                 {
+                    // MinWidth 300 (DIP): the shell is verified sound below 360 — the detail surface is in vertical mode,
+                    // the track table is at tier 6 and the hero artwork is at its 64-DIP floor — and 360 DIP was a hard
+                    // ~564 physical-px floor at 150% DPI (300 → ~450) that stopped the window fitting a half-screen split.
                     Title = "Wavee Music", Width = 1180, Height = 760,
-                    MinWidth = 360, CustomFrame = true, MicaAlt = true,
+                    MinWidth = 300, CustomFrame = true,
+                    MicaAlt = !settings.Get(WaveeSettings.WindowMaterialBaseMica),
                 },
                 new HarnessOptions { Frames = frames, Screenshot = screenshot });
         }

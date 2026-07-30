@@ -34,13 +34,13 @@ namespace FluentGpu.SourceGen.Gallery
 
         private static readonly DiagnosticDescriptor NotComponent = new(
             "FGG011", "[GalleryPage] class must derive Component",
-            "[GalleryPage] class '{0}' must derive FluentGpu.Hooks.Component (a gallery page resolves to a page component).",
+            "[GalleryPage] class '{0}' must derive FluentGpu.Hooks.Component (a gallery page resolves to a page component)",
             "FluentGpu.Gallery", DiagnosticSeverity.Error, true);
 
         private static readonly DiagnosticDescriptor NoCtor = new(
             "FGG012", "[GalleryPage] class needs a parameterless constructor",
             "[GalleryPage] class '{0}' has no accessible parameterless constructor — the generated factory builds it as "
-            + "'new {0}()'.",
+            + "'new {0}()'",
             "FluentGpu.Gallery", DiagnosticSeverity.Error, true);
 
         public void Initialize(IncrementalGeneratorInitializationContext context)

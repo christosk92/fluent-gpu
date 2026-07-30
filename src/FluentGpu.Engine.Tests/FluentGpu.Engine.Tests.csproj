@@ -10,6 +10,9 @@
     <!-- A test assembly is never published AOT; don't emit doc XML for it. -->
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <IsPublishable>false</IsPublishable>
+    <!-- Pre-existing warning backlog (xUnit1051 cancellation-token nags across the media suites); the solution
+         baseline enforces warnings-as-errors — clear the backlog before removing this opt-out. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
 
   <ItemGroup>

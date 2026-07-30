@@ -43,6 +43,12 @@ public sealed class LiveConnect : IDisposable
         get => _stateBuilder.AudioOutputDeviceName;
         set => _stateBuilder.AudioOutputDeviceName = value;
     }
+    /// <summary>The output-device control for the LOCAL media stack — the audio host's own control with mute additionally
+    /// fanned out to the video host (see <see cref="LocalMediaOutputControl"/>). Null when the wired audio host exposes no
+    /// device control (the silent/fake backend), which is exactly the case where the picker/mute affordances stay hidden.
+    /// The composition root wires the picker service and the notice/volume subscriptions to THIS, never to the audio host
+    /// directly, so a mute can never be lost at a video boundary.</summary>
+    public IAudioOutputDeviceControl? OutputDeviceControl { get; }
     /// <summary>Re-publish the player state for a wire-visible change that produced no playback event (a music-video
     /// association landing under the playing track). One PutState, no host/kind change.</summary>
     public void RepublishPlayerState() => _publisher.PublishStateChanged();
@@ -102,6 +108,13 @@ public sealed class LiveConnect : IDisposable
         // self-contained — a resolved PopOutVideoSource carries its own descriptor/relay), so the SilentAudioHost path still
         // has a real video host available for the swap.
         _videoHost = new FluentVideoMediaHost(playbackLog);
+        // Mute is a property of the CURRENT MEDIA, not of its audio half: the player bar / picker set it through
+        // IAudioOutputDeviceControl, which only the audio host implements, so a mute set while (or before) a music video is
+        // the current media used to be dropped on the floor. The composite routes it to both hosts; everything else is the
+        // audio host's control verbatim. Null on the silent/fake backend, where no device affordances are shown at all.
+        OutputDeviceControl = _host is IAudioOutputDeviceControl audioDeviceControl
+            ? new LocalMediaOutputControl(audioDeviceControl, _videoHost)
+            : null;
         var resolver = audio?.TrackResolver ?? (ITrackResolver)new StubTrackResolver();
         // Instant-start: when the local-audio stack is present, resolve head+key in parallel and start on the clear head.
         var fast = audio is not null

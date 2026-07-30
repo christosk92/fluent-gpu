@@ -366,4 +366,11 @@ public static class VideoPresence
     public static bool HasVideo(string? playableUri)
         => (playableUri is { Length: > 0 } u && _store?.GetVideoAssociation(u) is { HasVideo: true })
            || HasOverride(playableUri);
+
+    /// <summary>DIAGNOSTIC ONLY — the raw association record behind <see cref="HasVideo(string?)"/>, so an off-render-path
+    /// sweep can tell "no row at all" (never asked / nothing came back) apart from "a row that says no" (a cached negative
+    /// verdict). Never call this from a row or a frame: <see cref="HasVideo(Track)"/> is the render-path answer, and it
+    /// stays a single boolean probe precisely so it never has to hand a record out.</summary>
+    public static VideoAssociation? Association(string? playableUri)
+        => playableUri is { Length: > 0 } u ? _store?.GetVideoAssociation(u) : null;
 }

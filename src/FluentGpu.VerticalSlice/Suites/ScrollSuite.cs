@@ -61,6 +61,7 @@ static class ScrollSuite
         ScrollV2ValidationChecks(strings);
         TouchpadFeelChecks(strings);
         E11VirtChecks(strings);
+        PagerSnapChecks(strings);
         ListConsolidationChecks(strings);
         D1CollectionHostSizingChecks(strings);
         Cp2ConsolidationChecks(strings);
@@ -304,6 +305,352 @@ static class ScrollSuite
     {
         scene.TryGetScroll(vp, out var sc);
         return sc.OffsetY;
+    }
+
+    /// <summary>WP-G1 — the standardized pager/scroll-snap surface: the DECLARATIVE snap prop (declaration-gated, so a
+    /// declaring element owns the columns while a non-declaring one keeps an imperative post-mount write), the PagedShelf
+    /// page-snap opt-in (a wheel settle at a fractional offset re-snaps to the boundary; default None never does), and the
+    /// dt-determinism of the distance-derived programmatic glide.</summary>
+    static void PagerSnapChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+
+        // (a) gate.snap.declarative — the declared interval lands in ScrollState AND survives a reconcile that patches a
+        // DIFFERENT scroll field; the sibling that declares nothing keeps a post-mount imperative write across the same
+        // reconcile (the contract every shipped SnapInterval writer depends on).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("snap-declarative", new Size2(480, 260), 1f)); window.Show();
+            var probe = new SnapDeclProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+
+            var scene = host.Scene;
+            NodeHandle decl = NodeHandle.Null, plain = NodeHandle.Null;
+            void Visit(NodeHandle n)
+            {
+                if (n.IsNull) return;
+                if (scene.HasScroll(n)) { if (decl.IsNull) decl = n; else if (plain.IsNull) plain = n; }
+                for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) Visit(c);
+            }
+            Visit(scene.Root);
+
+            bool found = !decl.IsNull && !plain.IsNull;
+            scene.TryGetScroll(decl, out var d0);
+            bool declared = found && Near(d0.SnapInterval, SnapDeclProbe.DeclaredInterval) && d0.HasSnap;
+            // The non-declaring sibling: nothing was written, so the patch left it snapless. Now write it imperatively.
+            scene.TryGetScroll(plain, out var p0);
+            bool plainClean = found && p0.SnapInterval == 0f && !p0.HasSnap;
+            if (found) scene.ScrollRef(plain).SnapInterval = SnapDeclProbe.WrittenInterval;
+
+            // Reconcile with a different scroll field changed (AlwaysShowScrollbar) — the patch must touch neither.
+            probe.Toggle.Value = true;
+            host.RunFrame();
+            for (int i = 0; i < 3 && host.HasActiveWork; i++) host.RunFrame();
+            scene.TryGetScroll(decl, out var d1);
+            scene.TryGetScroll(plain, out var p1);
+            bool declSurvived = found && Near(d1.SnapInterval, SnapDeclProbe.DeclaredInterval) && d1.AlwaysShowBar;
+            bool writeSurvived = found && Near(p1.SnapInterval, SnapDeclProbe.WrittenInterval) && p1.AlwaysShowBar;
+            Check("gate.snap.declarative ScrollEl.Snap lands the declared interval in ScrollState and is re-asserted across a reconcile that patches another scroll field; a viewport that declares NO Snap is left snapless by the patch and keeps a post-mount imperative SnapInterval write across that same reconcile",
+                declared && plainClean && declSurvived && writeSurvived,
+                $"declared={d0.SnapInterval:0.##}→{d1.SnapInterval:0.##} plain={p0.SnapInterval:0.##}→{p1.SnapInterval:0.##} bar={d1.AlwaysShowBar}/{p1.AlwaysShowBar} found={found}");
+        }
+
+        // (b) gate.snap.shelf-page — ShelfSnap.Page: the viewport's snap interval becomes the LIVE page stride, and a WHEEL
+        // settle at a fractional offset (the engine hard-clamps wheels and never snaps them) re-snaps to the nearest page
+        // boundary afterwards. The default (ShelfSnap.None) shelf, same geometry, rests exactly where the wheel left it.
+        {
+            float snapped = WheelShelfSettle(strings, fonts, snap: true, out float snapInterval, out float pages);
+            float free = WheelShelfSettle(strings, fonts, snap: false, out float freeInterval, out _);
+            bool intervalIsStride = Near(snapInterval, PagedShelfSnapProbe.PageW, 0.5f);
+            bool reSnapped = Near(snapped, PagedShelfSnapProbe.PageW, 0.75f);            // 400 → the page-1 boundary 330
+            bool freeUntouched = freeInterval == 0f && free > PagedShelfSnapProbe.PageW + 20f;   // still mid-page (~400)
+            Check("gate.snap.shelf-page ShelfSnap.Page writes the LIVE page stride as the viewport's SnapInterval and re-snaps a settled WHEEL offset to the nearest page boundary (the engine snaps flings only); ShelfSnap.None keeps no interval and rests mid-page",
+                intervalIsStride && reSnapped && freeUntouched,
+                $"interval={snapInterval:0.##}/stride={PagedShelfSnapProbe.PageW:0.##} snappedOff={snapped:0.##} freeOff={free:0.##} freeInterval={freeInterval:0.##} pages={pages:0}");
+        }
+
+        // (c) gate.snap.page-glide-dt-invariant — the programmatic page glide (distance-derived half-life, latched ONCE at
+        // arm time) is a closed form in dt: the same nav replayed at dt ∈ {8.33,16.67,33.3} ms is at the SAME mid-flight
+        // offset after ~200 ms of simulated time and lands on the EXACT page boundary at every dt.
+        {
+            var g833 = PageGlideTrace(strings, 8.33f, 24);
+            var g1667 = PageGlideTrace(strings, 16.67f, 12);
+            var g333 = PageGlideTrace(strings, 33.3f, 6);
+            bool midMatch = Near(g833.Mid, g1667.Mid, 0.75f) && Near(g1667.Mid, g333.Mid, 0.75f);
+            bool inFlight = g1667.Mid > 1f && g1667.Mid < PagedShelfSnapProbe.PageW - 1f;   // a real glide, not two settled reads
+            bool landed = Near(g833.Final, PagedShelfSnapProbe.PageW, 0.5f)
+                       && Near(g1667.Final, PagedShelfSnapProbe.PageW, 0.5f)
+                       && Near(g333.Final, PagedShelfSnapProbe.PageW, 0.5f);
+            Check("gate.snap.page-glide-dt-invariant the programmatic page glide (half-life latched once at arm from the travel distance) is dt-deterministic: identical mid-flight offsets after ~200ms of simulated time at dt ∈ {8.33,16.67,33.3}ms, and an exact landing on the page boundary at every dt",
+                midMatch && inFlight && landed,
+                $"mid=({g833.Mid:0.##},{g1667.Mid:0.##},{g333.Mid:0.##}) inFlight={inFlight} final=({g833.Final:0.##},{g1667.Final:0.##},{g333.Final:0.##}) target={PagedShelfSnapProbe.PageW:0.##}");
+        }
+
+        // (d) gate.snap.shelf-subhalf — the SUB-HALF-STRIDE wheel: 120 DIP over a 330 stride. The rounded page is still 0,
+        // so a projection keyed on the page ALONE produces no key change, the change-only observer never fires, and the
+        // strip rests 120 off-grid — the exact hole ShelfSnap.Page exists to close. The coarse OFFSET term in the settled
+        // observer's projection is what makes this settle back on the boundary.
+        {
+            float off = WheelShelfSettle(strings, fonts, snap: true, out float interval, out _, wheelDip: 120f);
+            Check("gate.snap.shelf-subhalf a wheel SHORTER than half a page stride (120 of 330 — the rounded page never changes) still settles on a page boundary: the settled-offset projection carries a coarse offset term, so a settle that leaves the page unchanged still fires the change-only re-snap",
+                Near(off, 0f, 0.75f) && Near(interval, PagedShelfSnapProbe.PageW, 0.5f),
+                $"off={off:0.##} (expect 0) interval={interval:0.##}/{PagedShelfSnapProbe.PageW:0.##}");
+        }
+
+        // (e) gate.snap.shelf-chart-rows — the rows:5 VIRTUALIZED chart. Page snapping must work through the ItemsView
+        // controller seam (not just the measured ScrollEl path), the snap grid must be BOUNDED at the last whole boundary,
+        // and — the multi-row half — NOTHING in the shelf subtree may arm hover-elevate: a dense chart has no lift and no
+        // halo, so a park/hoist there only lets the hovered row escape the strip's clip over the column beside it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("shelf-chart-rows", new Size2(640, 360), 1f)); window.Show();
+            var probe = new PagedShelfChartProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int i = 0; i < 12; i++) host.RunFrame();   // measure → fit → realize the multi-row strip
+
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            float pageW = PagedShelfChartProbe.PageW(PagedShelfChartProbe.WideW);
+            host.Scene.TryGetScroll(vp, out var s0);
+            bool intervalIsStride = Near(s0.SnapInterval, pageW, 0.5f);
+            // Bounded end grid: SnapEnd is the last WHOLE boundary ≤ maxX, so a fling into a partial last page can never
+            // retarget past the content clamp. Open (End ≤ Start) would leave that hole.
+            float maxX = MathF.Max(0f, s0.ContentW - s0.ViewportW);
+            bool endBounded = s0.SnapEnd > s0.SnapStart && OnGrid(s0.SnapEnd, pageW, 0.5f) && s0.SnapEnd <= maxX + 0.5f;
+            int elevate = CountHoverElevate(host.Scene, host.Scene.Root);
+
+            bool previousReduced = Motion.ReducedMotion;
+            try
+            {
+                Motion.ReducedMotion = true;
+                // 400 over a 330 stride: the rounded page is 1, so a NON-ZERO boundary is the expected rest (0 would pass
+                // an on-grid test trivially, which is why `settled > 1f` rides along in the assertion).
+                window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150f, 60f), 0, 0, 400f));
+                SettleScroll(host, vp);
+            }
+            finally { Motion.ReducedMotion = previousReduced; }
+            host.Scene.TryGetScroll(vp, out var rested);
+            float settled = rested.OffsetX;
+
+            Check("gate.snap.shelf-chart-rows a rows:5 VIRTUALIZED page shelf writes the live page stride as its SnapInterval through the ItemsView controller seam, bounds the grid at the last WHOLE boundary, re-snaps a settled wheel onto the grid, and arms NO hover-elevate park/hoist anywhere in its subtree (a multi-row chart has no lift and no halo to make room for)",
+                intervalIsStride && endBounded && elevate == 0 && settled > 1f && OnGrid(settled, pageW, 0.75f),
+                $"interval={s0.SnapInterval:0.##}/{pageW:0.##} snapEnd={s0.SnapEnd:0.##} maxX={maxX:0.##} elevateNodes={elevate} settled={settled:0.##}");
+        }
+
+        // (f) gate.snap.shelf-refit-reseat — a fit change UNDER a strip resting mid-page. Narrowing the shelf breaks a
+        // column (3 → 2), which moves every page boundary: the offset that WAS page 1's boundary is now mid-page, and
+        // without a re-seat the strip rests off the new grid until the user scrolls again. The re-seat is a CORRECTION,
+        // not a navigation, so it must not animate — but the assertion here is the resting position, which is what the
+        // user sees: on the NEW grid, inside the NEW clamp.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("shelf-refit-reseat", new Size2(640, 360), 1f)); window.Show();
+            var probe = new PagedShelfChartProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int i = 0; i < 12; i++) host.RunFrame();
+
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            float wideStride = PagedShelfChartProbe.PageW(PagedShelfChartProbe.WideW);
+            float narrowStride = PagedShelfChartProbe.PageW(PagedShelfChartProbe.NarrowW);
+
+            bool previousReduced = Motion.ReducedMotion;
+            float before = 0f;
+            try
+            {
+                Motion.ReducedMotion = true;
+                probe.Pager.Next();                      // page 0 → 1: rest ON the wide grid first
+                SettleScroll(host, vp);
+                host.Scene.TryGetScroll(vp, out var mid);
+                before = mid.OffsetX;
+
+                probe.Width.Value = PagedShelfChartProbe.NarrowW;   // 3 columns → 2: every boundary moves
+                SettleScroll(host, vp);
+            }
+            finally { Motion.ReducedMotion = previousReduced; }
+
+            host.Scene.TryGetScroll(vp, out var reseated);
+            float after = reseated.OffsetX;
+            float newMaxX = MathF.Max(0f, reseated.ContentW - reseated.ViewportW);
+            bool startedOnWideGrid = OnGrid(before, wideStride, 1f) && before > 1f;
+            bool intervalRefit = Near(reseated.SnapInterval, narrowStride, 0.5f);
+            bool onNewGrid = OnGrid(after, narrowStride, 1f) && after >= -0.5f && after <= newMaxX + 0.5f;
+            Check("gate.snap.shelf-refit-reseat a resize that breaks a column under a strip RESTING mid-page re-seats it onto the NEW page grid (the fit is in the bring-into-view dep) and re-fits the snap interval to the new stride — the strip never rests between boundaries after a re-fit",
+                startedOnWideGrid && intervalRefit && onNewGrid,
+                $"before={before:0.##} (wideStride={wideStride:0.##}) after={after:0.##} (narrowStride={narrowStride:0.##}) interval={reseated.SnapInterval:0.##} maxX={newMaxX:0.##}");
+        }
+
+        // (g) gate.snap.shelf-live-phase — WP-ε1, the ROOT of the touchpad snap-back defect. The settled-offset observer's
+        // gate must be the scroll PHASE, not UserScrollActive: that bit is a per-frame MOTION bit and it goes false ~14–20 ms
+        // into ANY micro-pause of a live two-finger pan (the phase-7 resampler clamps at the newest sample ⇒ no offset write
+        // ⇒ movingNow false) while Phase is STILL TouchpadTracking. Re-snapping there armed ScrollIntoView.ScrollTo, which
+        // sets Phase = WheelAnimating|PhaseProgrammatic UNCONDITIONALLY — nothing restores TouchpadTracking, so the rest of
+        // the gesture's packets landed on a dead viewport and the glide yanked the strip back. Reproduced structurally: park
+        // the viewport in TouchpadTracking at a FRACTIONAL offset (a paused pan) and force the observer to re-project.
+        // Reduced motion pins the pre-fix failure to an immediate direct write, so the assertion is exact, not time-integrated.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("shelf-live-phase", new Size2(640, 240), 1f)); window.Show();
+            var probe = new PagedShelfSnapProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int i = 0; i < 8; i++) host.RunFrame();      // measure → fit → realize the strip (same warm-up as (b))
+
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            const float MidPan = 400f;   // mid-page over the 330 stride — a re-snap would target the boundary at 330
+            bool previousReduced = Motion.ReducedMotion;
+            try
+            {
+                Motion.ReducedMotion = true;
+                {
+                    ref ScrollState mid = ref host.Scene.ScrollRef(vp);
+                    mid.Phase = ScrollIntegrator.TouchpadTracking;   // a LIVE contact pan…
+                    mid.OffsetX = MidPan;                            // …resting between two boundaries…
+                    mid.UserScrollActive = false;                    // …whose per-frame motion bit has already dropped
+                }
+                // The node is NOT armed, so the integrator never ticks it (ScrollIntegrator.Tick walks its active set only)
+                // and the phase persists exactly as a held pan's would. Forced Paints because a settled host has no active
+                // work: RunFrame would idle-skip both the observer pass and the frame clock. 40 × 16 ms is well past
+                // PagedShelf.SnapGraceMs, so even the debounced snap would have fired by now.
+                for (int i = 0; i < 40; i++) host.Paint(0);
+            }
+            finally { Motion.ReducedMotion = previousReduced; }
+
+            host.Scene.TryGetScroll(vp, out var held);
+            bool stillTracking = held.Phase == ScrollIntegrator.TouchpadTracking;   // the case was really exercised
+            bool notResnapped = Near(held.OffsetX, MidPan, 0.5f) && float.IsNaN(held.PendingTargetX);
+            Check("gate.snap.shelf-live-phase a page shelf must NOT re-snap while the viewport is still in a LIVE gesture phase: the settled-offset observer gates on Phase == Idle (∧ no pending chase), not on the per-frame UserScrollActive motion bit, which drops during any micro-pause of a two-finger pan — a re-snap there would overwrite TouchpadTracking with the programmatic chase and kill the gesture",
+                stillTracking && notResnapped,
+                $"phase={held.Phase} (want {ScrollIntegrator.TouchpadTracking}) off={held.OffsetX:0.##} (want {MidPan:0.##}) pending={held.PendingTargetX:0.##} (want NaN)");
+        }
+
+        // (h) gate.snap.shelf-directional-commit — WP-ε3, the commit RULE as pure math (PagedShelfCore.CommitPage). Driving a
+        // real release velocity through the dispatcher headlessly would pin the sampler, not the rule; the rule is what has to
+        // hold. Four properties: a lift past CommitFraction advances; a short slow lift springs BACK (this is the case the
+        // old nearest-boundary rule got wrong — 50% of a ~612 DIP page is unreachable by panning, so every pan was yanked
+        // home); velocity carries a short FLICK past the threshold anyway; and the commit is RAILED to ±1 page. Plus the
+        // degenerate contract every non-gesture settle depends on: no anchor ⇒ the nearest page, verbatim.
+        {
+            const float PageW = 612f;      // the artist-chart page stride the defect was measured on
+            const int PageCount = 4;
+            // 30% of a page with a forward lift → the NEXT page.
+            int fwd30 = PagedShelfCore.CommitPage(0.30f * PageW, 0f, 400f, PageW, PageCount, 0);
+            // 10% with ZERO velocity → back to the page it started on (a slow, short drag is not a navigation).
+            int slow10 = PagedShelfCore.CommitPage(0.10f * PageW, 0f, 0f, PageW, PageCount, 0);
+            // 10% but FLICKED: the projected resting offset (v / ScrollTuning.FlickProjectK ≈ v/5.7) carries it past 25%.
+            int flick10 = PagedShelfCore.CommitPage(0.10f * PageW, 0f, 1500f, PageW, PageCount, 0);
+            // Backward: anchored on page 2, dragged 30% toward page 1 with a backward lift → page 1.
+            int back = PagedShelfCore.CommitPage(2f * PageW - 0.30f * PageW, 2f * PageW, -300f, PageW, PageCount, 2);
+            // RAIL: three pages of travel in one gesture still advances exactly one.
+            int railed = PagedShelfCore.CommitPage(3f * PageW, 0f, 0f, PageW, PageCount, 3);
+            // No anchor (a wheel notch / keyboard / chevron re-arm / a glide's own settle) ⇒ the nearest page, untouched.
+            int noAnchor = PagedShelfCore.CommitPage(0.90f * PageW, float.NaN, 9999f, PageW, PageCount, 1);
+            // A tiny nudge that ENDS just past a page midpoint (so the anchor rounds UP to that page) must not read as
+            // "0.4 pages backwards" and commit backward: the step has to agree with the gesture's net travel.
+            int nudge = PagedShelfCore.CommitPage(0.62f * PageW, 0.60f * PageW, 0f, PageW, PageCount, 1);
+            Check("gate.snap.shelf-directional-commit the page a settled gesture commits to is anchor-relative, velocity-projected, travel-signed and railed to ±1 (a 30% lift advances, a 10% slow lift springs back, a 10% FLICK still advances, three pages of travel advances one, a nudge past a midpoint never commits backward) — and with no gesture anchor it degenerates to the nearest page verbatim, so every wheel/keyboard/chevron settle keeps its pre-existing behaviour",
+                fwd30 == 1 && slow10 == 0 && flick10 == 1 && back == 1 && railed == 1 && noAnchor == 1 && nudge == 1,
+                $"fwd30={fwd30}(1) slow10={slow10}(0) flick10={flick10}(1) back={back}(1) railed={railed}(1) noAnchor={noAnchor}(1) nudge={nudge}(1) K={ScrollTuning.FlickProjectK:0.###}");
+        }
+    }
+
+    /// <summary>Count nodes in a subtree that arm EITHER hover-elevate bit (the deferral PARK on a cell, or the clip-root
+    /// HOIST on a viewport). The pair arms together or not at all, so a multi-row shelf must report exactly 0.</summary>
+    static int CountHoverElevate(SceneStore s, NodeHandle n)
+    {
+        if (n.IsNull) return 0;
+        const uint both = InteractionInfo.HoverElevatePaintBit | InteractionInfo.HoverElevateClipRootBit;
+        int count = (s.Interaction(n).HandlerMask & both) != 0 ? 1 : 0;
+        for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c)) count += CountHoverElevate(s, c);
+        return count;
+    }
+
+    /// <summary>Wheel a page-shelf a FRACTIONAL distance (<paramref name="wheelDip"/> over a 330 stride), let the chase
+    /// settle, and report the resting offset. Reduced motion pins the re-snap to a direct write so the assertion is exact
+    /// rather than time-integrated (the same choice the sibling PagedShelf gate makes).</summary>
+    static float WheelShelfSettle(StringTable strings, HeadlessFontSystem fonts, bool snap, out float snapInterval, out float pages,
+                                  float wheelDip = 400f)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc(snap ? "shelf-pagesnap" : "shelf-freepan", new Size2(640, 240), 1f));
+        window.Show();
+        Component probe = snap ? new PagedShelfSnapProbe() : (Component)new PagedShelfMeasuredProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+        host.RunFrame();
+        for (int i = 0; i < 8; i++) host.RunFrame();      // fixed warm-up: measure → fit → realize the strip
+
+        var vp = FindScrollable(host.Scene, host.Scene.Root);
+        pages = probe is PagedShelfSnapProbe ps ? ps.Pager.PageCount : ((PagedShelfMeasuredProbe)probe).Pager.PageCount;
+
+        bool previousReduced = Motion.ReducedMotion;
+        try
+        {
+            Motion.ReducedMotion = true;
+            // A vertical wheel over a chain with NO vertical scroller falls back to the horizontal shelf (WinUI semantics).
+            // 400 DIP lands well inside page 1 (boundaries 0/330/660) — distinguishable from both the boundary and 0.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150f, 30f), 0, 0, wheelDip));
+            SettleScroll(host, vp);
+        }
+        finally { Motion.ReducedMotion = previousReduced; }
+
+        host.Scene.TryGetScroll(vp, out var settled);
+        snapInterval = settled.SnapInterval;
+        return settled.OffsetX;
+    }
+
+    /// <summary>Run frames until this viewport is idle, then a fixed tail so the post-settle observer (and any re-snap it
+    /// arms, plus THAT glide's own settle) lands. One helper so every shelf-snap gate settles identically.
+    /// <para>The idle test is <c>Phase</c> and <c>UserScrollActive</c> only — deliberately NOT
+    /// <c>ScrollFlags.MovingNowBit</c>: ScrollFlags is computed for BIND-OWNING viewports only
+    /// (<c>ScrollBindEval.ApplyPinAndFlagPass</c>), and a shelf viewport owns no bind, so that bit reads 0 on every frame
+    /// and would make the condition look stricter than it is.</para></summary>
+    static void SettleScroll(AppHost host, NodeHandle vp)
+    {
+        for (int round = 0; round < 4; round++)
+        {
+            for (int i = 0; i < 400; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.Phase == 0 && !s.UserScrollActive && i > 8) break;
+            }
+            // FORCED tail — Paint, not RunFrame. The shelf's post-settle re-snap is LIFT-DEBOUNCED (PagedShelf.SnapGraceMs
+            // ≈ 180 ms of wall clock: the grace window that keeps a micro-paused two-finger pan from being snapped
+            // mid-gesture), and a settled host has no active work, so RunFrame takes its idle early-out — which skips both
+            // the observer pass AND the headless frame clock (the timer base advances only inside Paint). The clock would
+            // freeze and the debounce could never come due. host.Paint(0) is the established headless idiom for exactly
+            // this (see gate.timer.*); 28 × 16 ms ≈ 450 ms is comfortably past the grace window plus the glide it arms.
+            for (int i = 0; i < 28; i++) host.Paint(0);
+        }
+    }
+
+    /// <summary>Is <paramref name="off"/> on the page grid — a whole multiple of <paramref name="stride"/> within
+    /// <paramref name="tol"/>? Compares the distance to the NEAREST multiple, so it is symmetric about a boundary
+    /// (a remainder test alone reads 329.8 of a 330 stride as maximally off-grid).</summary>
+    static bool OnGrid(float off, float stride, float tol)
+        => stride > 1f && MathF.Abs(off - MathF.Round(off / stride) * stride) <= tol;
+
+    /// <summary>Drive one programmatic page glide at a FIXED timestep: the offset after <paramref name="midFrames"/> ticks
+    /// (mid-flight) and after full settle. Every host runs the identical frame script, so only dt differs.</summary>
+    static (float Mid, float Final) PageGlideTrace(StringTable strings, float dtMs, int midFrames)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("page-glide-dt", new Size2(640, 240), 1f)); window.Show();
+        var probe = new PagedShelfSnapProbe();
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe,
+                                     frameTime: new FixedFrameTimeSource(dtMs));
+        host.RunFrame();
+        for (int i = 0; i < 8; i++) host.RunFrame();      // fixed warm-up (dt-independent in FRAME count)
+
+        var vp = FindScrollable(host.Scene, host.Scene.Root);
+        probe.Pager.Next();                               // page 0 → 1: a 330 DIP programmatic glide
+        for (int i = 0; i < midFrames; i++) host.RunFrame();
+        host.Scene.TryGetScroll(vp, out var mid);
+        for (int i = 0; i < 4000; i++) { host.RunFrame(); host.Scene.TryGetScroll(vp, out var s); if (s.Phase == 0) break; }
+        host.Scene.TryGetScroll(vp, out var fin);
+        return (mid.OffsetX, fin.OffsetX);
     }
 
     static void TwoAxisScrollChecks(StringTable strings)
@@ -2885,8 +3232,9 @@ static class ScrollSuite
                 && probe.PrefixSignals[0].Peek() == 0 && probe.PrefixSignals[1].Peek() == 1;
             bool stableRoots = p0 == q0 && p1 == q1;
             bool bounded = census0 == normal0 + 2 && census1 == normal1 + 2;
-            bool bandState = host.Scene.TryGetVirtualItemBand(content, out int bandPrefix, out float bandInset)
-                && bandPrefix == 2 && Near(bandInset, 80f);
+            bool bandState = host.Scene.TryGetVirtualItemBand(
+                    content, out int bandPrefix, out float bandInset, out float bandFade)
+                && bandPrefix == 2 && Near(bandInset, 80f) && Near(bandFade, 22f);
             var vpRect = host.Scene.AbsoluteRect(vp);
             bool bandClip = false;
             for (int i = 0; i < device.LastClips.Count; i++)
@@ -2915,6 +3263,19 @@ static class ScrollSuite
             bool suffixOnlyClip = heroDraw.Order >= 0 && chromeDraw.Order >= 0 && rowDraw.Order >= 0
                 && heroDraw.ClipDepth == chromeDraw.ClipDepth
                 && rowDraw.ClipDepth == heroDraw.ClipDepth + 1;
+            bool suffixFade = false;
+            for (int i = 0; i < device.LastLayers.Count; i++)
+            {
+                var layer = device.LastLayers[i];
+                if (layer.Kind == (int)LayerKind.EdgeFade
+                    && layer.FadeEdges == (int)EdgeMask.Top
+                    && Near(layer.DeviceRect.Y, vpRect.Y + 80f, 0.5f)
+                    && Near(layer.FadeBandT, 22f, 0.5f))
+                {
+                    suffixFade = true;
+                    break;
+                }
+            }
 
             var heroHit = host.Input.HitTest(new Point2(160f, 20f));
             var chromeHit = host.Input.HitTest(new Point2(160f, 60f));
@@ -2923,10 +3284,10 @@ static class ScrollSuite
 
             Check("e11virt.5c persistent prefix stays fixed/hittable while one shared item-band clip bounds the recyclable suffix of a deep virtual window",
                 sc0.PersistentPrefixCount == 2 && sc1.PersistentPrefixCount == 2 && sc1.FirstRealized > 2
-                && fixedSignals && stableRoots && bounded && bandState && bandClip && suffixOnlyClip && hitBand
-                && device.ClipBalance == 0,
+                && fixedSignals && stableRoots && bounded && bandState && bandClip && suffixOnlyClip && suffixFade && hitBand
+                && device.ClipBalance == 0 && device.LayerBalance == 0,
                 $"first={sc1.FirstRealized} prefixSignals={probe.PrefixSignals.Count} roots={stableRoots} census={census0}/{normal0}+2->{census1}/{normal1}+2 " +
-                $"band={bandState}/{bandClip} depths={heroDraw.ClipDepth}/{chromeDraw.ClipDepth}/{rowDraw.ClipDepth} hits={heroHit.Raw.Index}/{chromeHit.Raw.Index}/{rowHit.Raw.Index}");
+                $"band={bandState}/{bandClip}/{suffixFade} depths={heroDraw.ClipDepth}/{chromeDraw.ClipDepth}/{rowDraw.ClipDepth} hits={heroHit.Raw.Index}/{chromeHit.Raw.Index}/{rowHit.Raw.Index}");
         }
 
         // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an

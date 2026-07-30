@@ -270,9 +270,7 @@ sealed class GalleryShell : Component
         ) with { Grow = 1 };
 
         var content = ShowDiagnosticsHud ? ZStack(paletteLane, DiagnosticsOverlay()) with { Grow = 1 } : paletteLane;
-#pragma warning disable FGRP001
         return Embed.Comp(() => new OverlayHost { Child = content });
-#pragma warning restore FGRP001
     }
 
     static Element DiagnosticsOverlay() => new BoxEl

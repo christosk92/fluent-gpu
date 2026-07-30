@@ -331,7 +331,10 @@ public sealed record Track(
     // Descriptor tags from extension kind 6 (TRACK_DESCRIPTOR): the genre/mood/activity concepts Spotify itself uses
     // for the Liked Songs content-filter chips. Presentation form ("K-Pop", "Energetic"), in the server's own order,
     // which is descending weight. Null = not fetched; empty is a real "this track has none".
-    IReadOnlyList<string>? Tags = null);
+    IReadOnlyList<string>? Tags = null,
+    // Linked-URI canonical playable (TrackV4 canonical_uri). Null = unknown-or-self. Null-coalesce merge like Isrc;
+    // EntityJson omit-null → free persist. Video miss-bridge + recovery promotion stamp it.
+    string? CanonicalUri = null);
 
 /// <summary>A per-track credit. <paramref name="RoleGroup"/> groups rows such as composition, production, or performers.</summary>
 public sealed record TrackCredit(string Name, string Role, string? RoleGroup = null,

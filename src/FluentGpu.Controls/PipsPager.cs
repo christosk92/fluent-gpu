@@ -23,7 +23,11 @@ public enum PipsPagerButtonVisibility : byte
 /// (glyphs EDDB/EDDC at 8px, rotated -90° in the horizontal orientation — PipsPager_themeresources.xaml:102-106,
 /// PipsPager.xaml:59-79). Keyboard: Left/Up move focus to the previous pip and Right/Down to the next regardless of
 /// orientation (PipsPager.cpp:161-191); focus enters the strip at the SELECTED pip (the OnPipsAreaGettingFocus
-/// redirect, PipsPager.cpp:590-612 — implemented as a roving single tab stop). Controlled.</summary>
+/// redirect, PipsPager.cpp:590-612 — implemented as a roving single tab stop). Controlled.
+/// <para>Clicking the ALREADY-selected pip is a no-op for <c>onChange</c> (WinUI raises SelectedIndexChanged only through a
+/// real DP change) — it fires the additive <c>onReselect</c> callback instead. A host whose content can sit BETWEEN pages
+/// (a free-pannable paged shelf) needs that edge: the pip still reads "page 2" while the strip rests mid-page, and the
+/// re-click is the user asking to be put back on the boundary.</para></summary>
 public static class PipsPager
 {
     // Template parts (see TemplateParts). Each part's doc lists the props the control OWNS (re-asserted after any
@@ -39,9 +43,10 @@ public static class PipsPager
                                  int maxVisiblePips = 5,
                                  PipsPagerButtonVisibility previousButtonVisibility = PipsPagerButtonVisibility.Collapsed,
                                  PipsPagerButtonVisibility nextButtonVisibility = PipsPagerButtonVisibility.Collapsed,
-                                 bool vertical = false)
+                                 bool vertical = false,
+                                 Action<int>? onReselect = null)
         => Embed.Comp(new Props(count, selectedIndex, onChange, parts, maxVisiblePips,
-                                previousButtonVisibility, nextButtonVisibility, vertical),
+                                previousButtonVisibility, nextButtonVisibility, vertical, onReselect),
                       () => new PipsPagerCore());
 
     /// <summary>Controlled props RE-PUSHED to the core (<c>Embed.Comp(props, …)</c>) — a reused ComponentEl never
@@ -49,7 +54,8 @@ public static class PipsPager
     /// (the RadioButtons convention). The selected index is a caller <see cref="Signal{T}"/> (null ⇒ auto-materialize).</summary>
     internal sealed record Props(int Count, Signal<int>? Selected, Action<int>? OnChange, TemplateParts? Parts,
                                  int MaxVisiblePips, PipsPagerButtonVisibility PrevVisibility,
-                                 PipsPagerButtonVisibility NextVisibility, bool Vertical);
+                                 PipsPagerButtonVisibility NextVisibility, bool Vertical,
+                                 Action<int>? OnReselect = null);
 }
 
 /// <summary>The stateful core: pointer-over/focus reveal for the nav buttons, the scroll-to-center strip animation,
@@ -81,12 +87,11 @@ internal sealed class PipsPagerCore : Component
         var focusWithin = UseSignal(false);
         var own = UseSignal(0);   // auto-materialize (unconditional hook)
 
-        var p = props;
-        var sig = p?.Selected ?? own;   // caller's value signal, else the internal one (one code path)
-        int count = Math.Max(0, p?.Count ?? 0);
+        var sig = props.Selected ?? own;   // caller's value signal, else the internal one (one code path)
+        int count = Math.Max(0, props.Count);
         int selected = (uint)sig.Value < (uint)count ? sig.Value : 0;   // clamp like OnSelectedPageIndexChanged (PipsPager.cpp:419-428)
-        int maxVisible = Math.Max(0, p?.MaxVisiblePips ?? 5);
-        bool vertical = p?.Vertical ?? false;
+        int maxVisible = Math.Max(0, props.MaxVisiblePips);
+        bool vertical = props.Vertical;
 
         // Animated scroll-to-center: the strip translates so the selected pip is centred in the clipped viewport —
         // WinUI UpdateSelectedPip → ScrollToCenterOfViewport with AnimationDesired(true) (PipsPager.cpp:240-272).
@@ -111,7 +116,7 @@ internal sealed class PipsPagerCore : Component
             anim.Animate(stripRef.Value, ch, from, to, Motion.ControlNormal, Easing.FluentPopOpen);
         }, DepKey.From(HashCode.Combine(selected, count, maxVisible, vertical)));
 
-        var parts = p.Parts;
+        var parts = props.Parts;
 
         while (handles.Count < count) handles.Add(NodeHandle.Null);
 
@@ -136,8 +141,8 @@ internal sealed class PipsPagerCore : Component
 
         // Pointer-over / focus-within reveal state, tracked only when a button is VisibleOnPointerOver (the signals
         // re-render the pager on transitions; m_isPointerOver/m_isFocused — PipsPager.cpp:613-647, :568-588).
-        bool needsReveal = p.PrevVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver
-                        || p.NextVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver;
+        bool needsReveal = props.PrevVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver
+                        || props.NextVisibility == PipsPagerButtonVisibility.VisibleOnPointerOver;
         bool revealOn = needsReveal && (pointerOver.Value || focusWithin.Value);
         // WinUI counts only non-pointer focus (FocusState != Pointer, PipsPager.cpp:570-583); the engine does not
         // surface the focus source, so a pointer-acquired focus also reveals — sanctioned small deviation.
@@ -149,9 +154,14 @@ internal sealed class PipsPagerCore : Component
         {
             int index = i;
             bool isSelected = index == selected;
-            // Same-value select is a no-op: WinUI raises SelectedIndexChanged only through an actual DP change
-            // (PipsPager.cpp:418-448).
-            Action select = () => { if (index != selected) { sig.Value = index; p.OnChange?.Invoke(index); } };
+            // Same-value select is a no-op for the VALUE channel: WinUI raises SelectedIndexChanged only through an actual
+            // DP change (PipsPager.cpp:418-448). The re-click is surfaced on the separate OnReselect channel instead, so a
+            // host that can rest between pages can re-arm its glide without the signal ever changing.
+            Action select = () =>
+            {
+                if (index != selected) { sig.Value = index; props.OnChange?.Invoke(index); }
+                else props.OnReselect?.Invoke(index);
+            };
             // Glyph EA3B in the icon font; selected 6px / normal 4px (PipsPagerButtonBaseStyle + SelectedPipButtonStyle,
             // PipsPager_themeresources.xaml:209, :282). The wrapper carries the state size morph as a composited scale:
             // PointerOver → the selected size 6 (:229-231), Pressed → back to the normal size 4 (:245-247). WinUI swaps
@@ -283,24 +293,24 @@ internal sealed class PipsPagerCore : Component
         {
             if (count <= 1) return;
             int ni = Math.Max(0, selected - 1);
-            if (ni != selected) { sig.Value = ni; p.OnChange?.Invoke(ni); }
+            if (ni != selected) { sig.Value = ni; props.OnChange?.Invoke(ni); }
         };
         Action nextClick = () =>
         {
             if (count <= 1) return;
             int ni = Math.Min(selected + 1, count - 1);
-            if (ni != selected) { sig.Value = ni; p.OnChange?.Invoke(ni); }
+            if (ni != selected) { sig.Value = ni; props.OnChange?.Invoke(ni); }
         };
 
-        bool prevMounted = p.PrevVisibility != PipsPagerButtonVisibility.Collapsed;
-        bool nextMounted = p.NextVisibility != PipsPagerButtonVisibility.Collapsed;
+        bool prevMounted = props.PrevVisibility != PipsPagerButtonVisibility.Collapsed;
+        bool nextMounted = props.NextVisibility != PipsPagerButtonVisibility.Collapsed;
         var children = new Element[1 + (prevMounted ? 1 : 0) + (nextMounted ? 1 : 0)];
         int ci = 0;
         if (prevMounted)
-            children[ci++] = NavButton(PrevGlyph, hiddenOnEdge: selected == 0, p.PrevVisibility, prevClick);
+            children[ci++] = NavButton(PrevGlyph, hiddenOnEdge: selected == 0, props.PrevVisibility, prevClick);
         children[ci++] = viewport;
         if (nextMounted)
-            children[ci] = NavButton(NextGlyph, hiddenOnEdge: selected == count - 1, p.NextVisibility, nextClick);
+            children[ci] = NavButton(NextGlyph, hiddenOnEdge: selected == count - 1, props.NextVisibility, nextClick);
 
         var root = new BoxEl
         {

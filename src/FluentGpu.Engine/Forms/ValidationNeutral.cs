@@ -18,6 +18,7 @@ namespace FluentGpu.Forms;
 internal static class ValidationNeutral
 {
     [ModuleInitializer]
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Usage", "CA2255", Justification = "Zero-config neutral loc floor: the validation.* keys must resolve before any app code runs; identical to the generated control-kit initializer (FluentGpuLocRegisterNeutral).")]
     internal static void Register()
     {
         Localization.Localization.RegisterNeutral(new Dictionary<string, string>

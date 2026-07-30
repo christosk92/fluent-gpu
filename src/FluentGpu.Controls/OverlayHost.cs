@@ -208,6 +208,7 @@ internal sealed class OverlayEntry
     public PopupChrome Chrome;
     public bool ConstrainToRootBounds = true;
     public bool PinsAnchor = true;    // WS3 P6 anchor-liveness: pins the anchor's auto-hide scope while open
+    public bool OwnerWasLive;         // latch: this entry's owner node has been observed live at least once
     public int ParentId = -1;         // nested flyout chain: the entry whose subtree contains this entry's anchor
     public int PopupWindowToken = -1; // host popup-window lease for an out-of-bounds popup (-1 = none/in-window)
     public OverlayPhase Phase;
@@ -556,6 +557,33 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if (surfaceSettled && scrimSettled) Finalize(e);
         }
 
+        // Orphaned-owner prune (belt-and-braces for a control that forgets its unmount teardown — ToolTip's was the
+        // reported case). An entry whose OWNER node was realized and is now gone from the scene has lost the component
+        // that opened it: nothing will ever call Close(), the rect-thunk form is re-placed against a dead node on every
+        // OverlayHost render (:835-839) and walks to the origin, and the node-anchored form freezes on stale geometry.
+        // Close it the normal animated way so the fade + Finalize path (and any ClosedAction) still run.
+        //
+        // The OwnerWasLive LATCH is what keeps legitimate ownerless popups alive: OpenAt's owner defaults to
+        // `static () => NodeHandle.Null` (:271), so a point-placed popup with no owner, or an entry opened before its
+        // owner is realized, never satisfies the latch and is never pruned. A context menu opened via OpenAtLocal DOES
+        // pass a real owner (ContextMenu.cs:124) and SHOULD close when that row leaves the tree — a WinUI flyout does
+        // not outlive its anchor. Modal is excluded unconditionally: a ContentDialog is app-modal, not owner-scoped.
+        for (int i = Entries.Count - 1; i >= 0; i--)
+        {
+            var e = Entries[i];
+            if (e.Phase == OverlayPhase.Closing) continue;
+            if (e.Chrome == PopupChrome.Modal || e.DismissBehavior == DismissBehavior.Modal) continue;
+            var owner = e.Anchor();
+            if (!owner.IsNull && scene.IsLive(owner)) { e.OwnerWasLive = true; continue; }
+            if (!e.OwnerWasLive) continue;
+            // One-shot: clear the latch BEFORE closing. A VETOED close (Handle.ClosingAction returning false — an app
+            // Closing handler with Cancel = true) leaves the entry non-Closing, and without this the prune would
+            // re-fire that app event every single frame. Re-latches (and so retries once) only if the owner is realized
+            // again and then dies again. A successful close sets Phase = Closing, which the loop skips from then on.
+            e.OwnerWasLive = false;
+            BeginClose(e, OverlayCloseCause.Programmatic);
+        }
+
         for (int i = 0; i < Entries.Count; i++)
         {
             var e = Entries[i];
@@ -669,12 +697,12 @@ public sealed class OverlayHost : Component
     /// <summary>The base app content wrapped by the overlay host (always the first ZStack child, so opening/closing an
     /// overlay never remounts it). Prefer <see cref="Create"/> (the documented factory); the property-init field stays
     /// public because the in-repo headless probes + shells compose the host via <c>new OverlayHost { Child = … }</c>.</summary>
-    public Element Child = new BoxEl();
+    [MountOnceContent] public Element Child = new BoxEl();
 
     /// <summary>The one canonical factory: wrap <paramref name="child"/> (the app root) in an overlay host that hosts
     /// anchored flyouts / menus / dialogs / toasts in a top-level ZStack. Resolve the service inside via
     /// <c>UseContext(Overlay.Service)</c>.</summary>
-    public static Element Create(Element child) => Embed.Comp(() => new OverlayHost { Child = child });
+    public static Element Create([MountOnceContent] Element child) => Embed.Comp(() => new OverlayHost { Child = child });
 
     // WinUI MenuPopupThemeTransition timings: s_OpenDuration=250 / s_OpacityChangeDuration=83
     // (MenuPopupThemeTransition_Partial.h:23-24); ClosedRatio=0.5 for root menus (MenuFlyout_Partial.cpp:253

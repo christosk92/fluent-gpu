@@ -172,7 +172,7 @@ The bug this fixes: the old override stored one flat color and every accent FILL
 themes, so light theme showed the washed-out dark-theme shade (strip icons, progress bar, sliders). Gate:
 `gate.theme.accent-ramp`.
 
-### 2.2bis T0 multi-palette axis (SHIPPED — `ThemePalette` + `PaletteSeed`, Mica-first both themes)
+### 2.2bis T0 multi-palette axis (SHIPPED — `ThemePalette` + `PaletteSeed`, MUX tabbed-window ladder both themes)
 
 Beyond the Light/Dark kind switch, T0 tokens support **N base-color presets** (shadcn-style semantic slots +
 multiple value sets). Owner: `src/FluentGpu.Engine/Dsl/{Tokens,PaletteBuilder}.cs`.
@@ -183,23 +183,64 @@ multiple value sets). Owner: `src/FluentGpu.Engine/Dsl/{Tokens,PaletteBuilder}.c
 | `PaletteBuilder` | Build-time generator → paired `TokenSet` + `ShellPalette` per seed |
 | `ThemePalette` | `{ Id, Light, Dark, LightShell, DarkShell }` — one preset |
 | `Tok.Use(ThemePalette, ThemeKind)` | Pointer swap + `Epoch++` (palette-only changes bump Epoch) |
-| `MicaRef` (`Foundation`) | Reference DWM Mica tones (`Light/Dark` × `Default/Bright/Dim`, ±0x14 assumed swing) — the flatten targets for anchor solving + gates |
+| `TokenSet.LayerOnMicaBaseAlt` | The app-body **plate** material (WinUI `LayerOnMicaBaseAltFillColorDefault`), per-preset since the tabbed ladder — its value is MIRRORED into `ShellPalette.{Toolbar,Sidebar,PlayerBar}` (the shell builders run before the `TokenSet`, so a `TokenSet`→shell read would be circular); the `palette.ladder` gate asserts the mirror |
+| `MicaRef` (`Foundation`) | Reference DWM Mica tones (`Light/Dark` × `Default/Bright/Dim`, ±0x14 assumed swing) — the flatten targets for the tertiary-ink solve, the gates, and the opaque plate/pane equivalents a floating pane needs |
 | `ColorContrast.Flatten` | Straight-alpha composite of a translucent surface over an opaque backdrop (what actually renders) |
 | `ColorRamp.Tinted` | No-softening HSL tint — chrome tints that survive at extreme lightness (`Neutral`'s extreme-L chroma softening crushes them) |
 | Presets | `warm` (default), `slate` (230°), `neutral`, `accent` (OS-accent-tinted; `SetAccent` rebuilds it AND re-points the active palette) |
 
-**Both theme shells are translucent-over-Mica** (Mica-first). Dark keeps the WinUI stack (seed-tinted
-`LayerOnMicaBaseAlt`-class bars @0x73 + white-alpha page/rows). Light mirrors it: the seed's luminance anchors
-are solved as **flattened targets** — `tintL = (anchorL − micaL·(1−a)) / a` against `MicaRef.LightDefault` — so
-the frame < rail < page ladder holds on the reference backdrop and compresses (never inverts) under wallpaper
-swings; bars @0x73, frame/page @0x8C; rows are neutral overlays (white-alpha zebra, ink-alpha hover/press) so
-row states are preset-independent. `TokenSet` values stay opaque (`WindowBackground` remains the inactive-window
-fallback the host flattens to when DWM stops the backdrop).
+**Both theme shells are the MUX tabbed-window ladder over Mica Alt** (Notepad / File Explorer; reference
+resources `TabView_themeresources.xaml` — `TabViewBackground = SubtleFillColorTransparent`,
+`TabViewItemHeaderBackgroundSelected = SolidBackgroundFillColorTertiaryBrush` — and
+`Common_themeresources_any.xaml` — `LayerOnMicaBaseAltFillColorDefault` `#733A3A3A` dark / `#B3FFFFFF` light,
+`LayerFillColorDefault` `#4C3A3A3A` dark / `#80FFFFFF` light). Four rungs, neutral values in both themes:
+**rung 0**, the tab-rail band, is **unpainted** — bare Mica Alt (`#202020` dark / ≈`#EDEDED` light) is the
+frame behind the tabs. Rung 0 is a paint-site **omission, not a token**: no shell field carries "transparent
+chrome", and a preset cannot re-paint the rail. **Rung 1**, the app-body **plate** —
+`LayerOnMicaBaseAltFillColorDefault` published as `ShellPalette.{Toolbar,Sidebar,PlayerBar}` and painted behind
+the content pane — composites to `#2C2C2C` dark / `#FAFAFA` light. **Rung 2**, the content pane —
+`LayerFillColorDefault` ON the plate — lands at `#303030` dark / `#FCFCFC` light, seamed with
+`CardStrokeColorDefault` and the 8,0,0,0 corner; **rung 3** (light) is the opaque card on the pane. Seeded
+exemplars (flattened plate → pane): warm dark `#312E26` → `#383328`, slate dark `#252832` → `#272A38`; warm
+light `#F7F6F5` → `#F9F8F7`, slate light `#F5F5F7` → `#F7F7F9`. The dark plate is the stock value at sat 0 **by
+construction** (`Tinted(0.227, ·, 0)` = `#3A3A3A`), so neutral needs no branch; the light plate is seeded —
+raw `#B3FFFFFF` (70% pure white) would bleach the preset hue out of the largest surface in the app, so only the
+neutral seed gets the verbatim stock literal. Both rungs use a FIXED lightness per theme (dark 0.227, light
+0.98 — as close to stock white as HSL admits while still carrying chroma, since L = 1.0 collapses every
+saturation to white); the retired bar recipe's flattened-anchor solve (`tintL = (anchorL − micaL·(1−a)) / a`)
+stays gone: the plate is the whole body's one step off Mica, so it must hold that step for every seed, and a
+seed-luminance anchor cannot — a cool tint spends its chroma on the two heavy luminance channels and lands the
+composite back on the backdrop. The preset tint now rides BOTH rungs, so dark preset identity roughly doubles
+vs the retired pane-only ladder (composite tint coverage α 0.298 → 0.615); LIGHT presets still separate by only
+≤6/255 even summed across both rungs — light separation is **stroke-borne** (the ~2/255 pane step is authentic
+WinUI) and light preset identity lives in the opaque `TokenSet` (canvas, cards, strokes, ink). Rows stay
+neutral overlays (white-alpha zebra, ink-alpha hover/press) so row states are preset-independent. `TokenSet`
+values stay opaque (`WindowBackground` remains the inactive-window fallback the host flattens to when DWM stops
+the backdrop; at plate alpha 0xB3 the visible deactivate swing is smaller than the retired ladder's).
 
-Wavee app shell surfaces (`WaveeColors`) read `Tok.Palette.LightShell` / `DarkShell`; persistence via
-`WaveeSettings.PaletteId`. Regression: VerticalSlice `palette.*` checks assert on **flattened** colors — warm
-calibration anchors, AA text tiers vs the brightest composited hosting surface, the ≥5% flattened luminance
-ladder, and pairwise preset distinctness (flattened-toolbar max-channel delta floors, relaxed for accent pairs).
+Wavee app shell surfaces (`WaveeColors`) read `Tok.Palette.LightShell` / `DarkShell` AS PUBLISHED (no app-side
+alpha re-multiply); persistence via `WaveeSettings.PaletteId`. Wavee's selected tab deliberately paints the
+**raw translucent body plate**, not MUX's literal opaque `SolidBackgroundFillColorTertiary`: the toolbar below
+is itself translucent over live wallpaper-dependent Mica, so any reference-Mica flatten becomes a fixed neutral
+chip as the real rail and toolbar change hue/luminance. Reusing the exact plate material gives Δ0 fusion on every
+backdrop. The selected silhouette is carried by the low-alpha card-stroke rim plus the TabView baseline, which
+runs continuously across the rail and stops at the selected curve-out flares; it is not carried by a second
+luminance step. This is a paint-site override only — `TabStrip.SelectedFill` keeps the stock solid-tertiary
+default for opaque TabView content hosts. `WaveeColors.FloatingChrome` / `FloatingPane` remain the opaque
+equivalents of the rung they replace (plate for the nav drawer; pane-through-plate for the floating right rail —
+one flatten per rung, or the floating surface desyncs from the docked one it stands in for); flyout acrylic
+(`AcrylicSpec.InAppDefault`, dark tint+fallback `#2C2C2C`) intentionally reads at plate tone — shadow + stroke
+carry the separation, as in MUX. Regression: VerticalSlice `palette.*` checks assert on **flattened** colors —
+`palette.ladder` (replaces the retired transparent-chrome contract: one plate material across the three chrome
+bands == `TokenSet.LayerOnMicaBaseAlt` at rounded-byte alpha 0x73/0xB3, plate ≥5% off bare Mica, pane ≥8% dark /
+≥1.2% light off the plate, light pane→card ≥1.5%; rung 0 gets no token assert — bareness is an app-side paint
+omission the slice cannot see), `palette.files.filearea` (the neutral shell is the verbatim MUX recipe: plate
+`#B3FFFFFF`/`#733A3A3A` flattening to `#FAFAFA`/`#2C2C2C`, pane on it to `#FCFCFC`/`#303030`, WinUI card fill),
+`palette.warm.calibration` (the seeded light exemplar: plate `#FCFAF8B3` ≈`#F7F6F5`, pane ≈`#F9F8F7`, card +
+tertiary ink anchors), `palette.contrast` (AA text tiers vs the brightest composited host — zebra row on the
+pane on the plate on bright Mica; the tertiary-ink solves in `PaletteBuilder` flatten through the same
+two-rung host so solve and gate agree), and `palette.distinct` (pairwise DARK pane-through-plate max-channel
+delta, floors 6 / 4-with-accent; light is not asserted — see above).
 `HoverFill`/`PressedFill` are bindable `Prop<ColorF>` channels (like `Fill`), so recycled list rows re-fire on
 `Epoch` (`prop-net.hoverfill` gate).
 

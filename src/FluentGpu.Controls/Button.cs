@@ -113,8 +113,10 @@ public static partial class Button
 
     /// <summary>The <b>appearance</b>-axis color bundle — the four interaction-state ramps (fill, foreground, border) +
     /// the WinUI BackgroundSizing, selected by ONE 4-arm switch (<see cref="For"/>) over the live <see cref="Tok"/>. This
-    /// is the only place variant colors live; there are no per-variant <see cref="Style"/> copies.</summary>
-    internal readonly record struct ButtonPalette(StateBrush Background, StateBrush Foreground, BorderRamp Border, BackgroundSizing Sizing)
+    /// is the only place variant colors live; there are no per-variant <see cref="Style"/> copies.
+    /// PUBLIC so an app can substitute a runtime-derived fill (an artwork-extracted accent) into the stock ramp and keep
+    /// the stock GEOMETRY — the color axis without the <see cref="Style"/> full-override escape hatch.</summary>
+    public readonly record struct ButtonPalette(StateBrush Background, StateBrush Foreground, BorderRamp Border, BackgroundSizing Sizing)
     {
         /// <summary>The ONE 4-arm appearance switch. Reads Tok fresh on every call, so it is theme-live like the old
         /// computed styles were.</summary>
@@ -167,8 +169,9 @@ public static partial class Button
     }
 
     /// <summary>The border sibling of <see cref="StateBrush"/>: the four interaction-state border gradients (a
-    /// WinUI elevation gradient or a solid via <c>GradientSpec.Solid</c>). Null legs = no stroke.</summary>
-    internal readonly record struct BorderRamp(GradientSpec? Rest, GradientSpec? Hover, GradientSpec? Pressed, GradientSpec? Disabled)
+    /// WinUI elevation gradient or a solid via <c>GradientSpec.Solid</c>). Null legs = no stroke.
+    /// PUBLIC because it is a member of the public <see cref="ButtonPalette"/>.</summary>
+    public readonly record struct BorderRamp(GradientSpec? Rest, GradientSpec? Hover, GradientSpec? Pressed, GradientSpec? Disabled)
     {
         /// <summary>The same gradient in all four states (a border that doesn't react to interaction).</summary>
         public static BorderRamp Flat(GradientSpec g) => new(g, g, g, g);
@@ -183,11 +186,15 @@ public static partial class Button
     /// <summary>Composes the full 24-member <see cref="Style"/> for a point on the (<paramref name="appearance"/>,
     /// <paramref name="size"/>) axes: the <see cref="StyleHook"/> wins if it returns non-null, else the
     /// <see cref="ButtonPalette"/> (colors) + <see cref="ControlMetrics"/> (geometry) fold into the record. Everything
-    /// else (BorderWidth 1, Center content alignment, FocusVisualMargin −3, 83ms brush) keeps the record defaults.</summary>
-    public static Style DefaultStyle(ButtonAppearance appearance, ControlSize size = ControlSize.Medium)
+    /// else (BorderWidth 1, Center content alignment, FocusVisualMargin −3, 83ms brush) keeps the record defaults.
+    /// <paramref name="palette"/> substitutes the color axis only (a runtime-derived fill), leaving every geometric and
+    /// timing default on the stock ladder; null = the appearance switch, so existing call sites are unchanged. The
+    /// <see cref="StyleHook"/> still wins first — it is the global full override and outranks both.</summary>
+    public static Style DefaultStyle(ButtonAppearance appearance, ControlSize size = ControlSize.Medium,
+        ButtonPalette? palette = null)
     {
         if (StyleHook is { } hook && hook(appearance, size) is { } custom) return custom;
-        var p = ButtonPalette.For(appearance);
+        var p = palette ?? ButtonPalette.For(appearance);
         var m = ControlMetrics.For(size);
         return new Style
         {
@@ -224,12 +231,16 @@ public static partial class Button
 
     /// <summary>The canonical factory: a button on the orthogonal <paramref name="appearance"/> × <paramref name="size"/>
     /// axes, with an optional leading <paramref name="glyph"/> (icon-font codepoint). Pass a <see cref="Style"/> to
-    /// fully override both axes (the escape hatch); restyle internals via <paramref name="parts"/>.</summary>
+    /// fully override both axes (the escape hatch); restyle internals via <paramref name="parts"/>.
+    /// <paramref name="palette"/> swaps ONLY the color axis (see <see cref="DefaultStyle(ButtonAppearance, ControlSize, ButtonPalette?)"/>)
+    /// — the one seam for a runtime-derived fill that must keep stock button geometry. Ignored when
+    /// <paramref name="style"/> is supplied.</summary>
     public static BoxEl Create(string label, Action onClick, ButtonAppearance appearance = ButtonAppearance.Standard,
-        ControlSize size = ControlSize.Medium, string? glyph = null, Style? style = null, bool isEnabled = true, TemplateParts? parts = null)
+        ControlSize size = ControlSize.Medium, string? glyph = null, Style? style = null, bool isEnabled = true,
+        TemplateParts? parts = null, ButtonPalette? palette = null)
     {
         var cs = ClampSize(size);
-        return Build(label, onClick, glyph, ControlMetrics.For(cs).IconSize, style ?? DefaultStyle(appearance, cs), isEnabled, parts);
+        return Build(label, onClick, glyph, ControlMetrics.For(cs).IconSize, style ?? DefaultStyle(appearance, cs, palette), isEnabled, parts);
     }
 
     /// <summary>Sugar: an accent (primary) button. One-line forwarder to <see cref="Create"/> — signature preserved so

@@ -77,7 +77,9 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
    re-implements the engine's own TokenSet swap, and an `else =` one theme reads as "defaults to that theme." Instead
    hold two baked `Palette` records (light / dark) and select with ONE switch (`Active => Tok.Theme == Light ? Light :
    Dark`), mirroring `Tok.T`; for a standard WinUI material prefer a real engine token — the layer-over-Mica chrome is
-   now `Tok.LayerOnMicaBaseAlt` (light `#B3FFFFFF` / dark `#733A3A3A`). Still bind the surfaces that use it (see #1).
+   now `Tok.LayerOnMicaBaseAlt`, the app-body plate, and it is **per-preset**: dark is the seed-tinted
+   `Tinted(0.227, hue, sat, 0x73)` (= stock `#733A3A3A` at sat 0), light is `Tinted(0.98, hue, sat, 0xB3)` with the
+   raw stock `#B3FFFFFF` reserved for the **neutral** preset only. Still bind the surfaces that use it (see #1).
 4. **`Flow.For` / `Flow.Show` rows are not component re-renders.** They're boundary effects in `_nodeBindings`;
    `RethemeAll` re-fires them. If you add a **new** reactive-boundary kind, register its effect via `AddBinding` or it
    won't re-theme.
@@ -87,7 +89,8 @@ UseContext(ThemeControl.Request)?.Invoke(250f);        // host: in-place re-rend
 6. **Mica / DWM backdrop follows the OS, not the app theme.** Flipping `DWMWA_USE_IMMERSIVE_DARK_MODE` (via
    `OnApplyThemeMaterial`) re-themes the **caption**; the Mica **tint** is system-driven (OS theme + wallpaper), so a
    light app on a dark OS still gets a dark-ish backdrop. **Mitigation:** use a theme-aware *translucent light* layer
-   (e.g. light `Tok.LayerOnMicaBaseAlt` = `#B3FFFFFF`, 70% white) over the Mica to mask it. For a guaranteed-light look
+   (e.g. light `Tok.LayerOnMicaBaseAlt` — `#B3FFFFFF` for the neutral preset, near-white seed-tinted otherwise) over
+   the Mica to mask it. For a guaranteed-light look
    regardless of OS, drop Mica passthrough in light theme and paint an opaque `Tok` background instead (trade-off: no
    Mica translucency).
 7. **Render memos that cache an element tree must include `Tok.Epoch` in their key.** A `Component` that memoizes its

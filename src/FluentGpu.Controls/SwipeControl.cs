@@ -608,7 +608,7 @@ internal sealed class SwipeControlCore : Component
         Context.UseSignalEffect(() =>
         {
             bool o = isOpen.Value;
-            if (p?.Group is { } g && groupCloseAction.Value is { } token)
+            if (p.Group is { } g && groupCloseAction.Value is { } token)
             {
                 if (o) g.MarkOpen(token); else g.MarkClosed(token);
                 Reactive.OnCleanup(() => g.MarkClosed(token));
@@ -777,7 +777,7 @@ internal sealed class SwipeControlCore : Component
         // present CLOSED the same frame — snap TranslateX to 0 via a const keyframe (cancels any in-flight settle
         // spring, no animation) and clear the pan/open state. Button/morph springs die with the side unmount (the
         // engine reclaims a dead node's rows). No-op on first mount and on an already-closed steady key.
-        int resetKey = p?.ResetKey?.Value ?? 0;   // subscribe → the effect re-runs on a recycle bump
+        int resetKey = p.ResetKey?.Value ?? 0;   // subscribe → the effect re-runs on a recycle bump
         UseEffect(() =>
         {
             if (contentRef.Value.IsNull) return;

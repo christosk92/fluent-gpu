@@ -141,7 +141,7 @@ sealed class ArtistGalleryLightbox : Component
         DecodePx = MathF.Min(MathF.Max(vp.Width, vp.Height), 2048f),
         Placeholder = ColorF.FromRgba(0, 0, 0, 0),
         BlurHash = photo.BlurHash,
-        Transition = ImageTransition.Fade(140f),
+        RevealTransition = ImageTransition.Fade(140f),
     };
 
     // ── zoomed: pan/zoom surface (FlipView unmounted — no input arbitration) ────────────────

@@ -211,9 +211,11 @@ internal static class TrackRow
         // single-artist albums/singles/EPs).
         if (set.Thumb)
             Add(CellKey.Art, CenterCell(Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, thumb, thumb, Radii.Control)));
-        bool showInlineVideo = showListBadges && !set.Video && VideoPresence.HasVideo(t);
-        bool showMeta = showTrackArtist || showAlbumInMeta
-            || (showListBadges && t.IsExplicit) || showInlineVideo;
+        // The video glyph is NOT part of the metadata subline: it lives in the trailing Video/More lane at every tier
+        // that keeps one (see set.Video), so a row states "has a video" in exactly ONE place. A subline copy meant the
+        // same fact moved lanes across a breakpoint cross — the film icon jumping from the trailing chrome into the
+        // artist line and back.
+        bool showMeta = showTrackArtist || showAlbumInMeta || (showListBadges && t.IsExplicit);
         var titleCol = new BoxEl
         {
             // MinWidth=0: this stack sits in the STAR track, which the overflow guard collapses to 0 first. Without the
@@ -223,11 +225,10 @@ internal static class TrackRow
             // grid cannot reach into it to swap a token — but it can hand the whole column back a step in the hierarchy,
             // which is the same signal and works for every title variant.
             Opacity = notYetOut ? 0.45f : 1f,
-            // At compact playlist tiers the dedicated Album/Video lanes disappear. Preserve their information on the
-            // existing artist subline instead of simply dropping it: Explicit · artists · album, plus the video glyph.
+            // At compact playlist tiers the dedicated Album lane disappears. Preserve its information on the existing
+            // artist subline instead of simply dropping it: Explicit · artists · album.
             Children = showMeta
-                ? [title, MetadataLine(t, go, showTrackArtist, showAlbumInMeta,
-                                       showListBadges && t.IsExplicit, showInlineVideo)]
+                ? [title, MetadataLine(t, go, showTrackArtist, showAlbumInMeta, showListBadges && t.IsExplicit)]
                 : [title],
         };
         Add(CellKey.Title, new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, ClipToBounds = true, Children = [titleCol] });
@@ -475,7 +476,7 @@ internal static class TrackRow
     /// column to go under pressure: a row must always keep title, duration and its transport, never a BPM readout.</summary>
     internal static bool ShowTempo(in ColumnSet set) => set.Tempo && set.Tier <= 3;
 
-    /// <summary>"101.5 4A" with the Camelot-wheel colour as a leading swatch — colour carries the identity so the
+    /// <summary>"101.5 · 4A" with the Camelot-wheel colour as a leading swatch — colour carries the identity so the
     /// text stays short enough for a narrow lane. One key token only (Camelot preferred, else standard). Renders EMPTY
     /// (not "0 BPM" / "—") when the adornment has not landed: kind 222 arrives asynchronously, and a placeholder dash
     /// would flicker to a real value a moment later.</summary>
@@ -483,16 +484,23 @@ internal static class TrackRow
     {
         if (t.TempoBpm is not { } bpm || bpm <= 0d) return new BoxEl();
 
-        var parts = new List<Element>(3);
+        var parts = new List<Element>(4);
         if (t.CamelotColor is { } argb)
             parts.Add(new BoxEl
             {
-                Width = 8f, Height = 8f, Corners = CornerRadius4.All(2f),
+                // 6px, dimmed: a server-supplied Camelot hue is fully saturated, and at 8px opaque it out-shouted the
+                // title on an otherwise quiet row. Small and slightly veiled still reads as the key's colour identity.
+                Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
                 Fill = WaveePalette.ToColor(argb), AlignSelf = FlexAlign.Center,
             });
         parts.Add(new TextEl(DetailFormat.Bpm(bpm)) { Size = 12.5f, Color = Tok.TextSecondary });
         if (KeyLabel(t) is { Length: > 0 } key)
+        {
+            // Separator: two bare numeric-ish tokens ("110 7B") read as one mangled value. The middot is the same
+            // metadata-joining glyph the sublines use.
+            parts.Add(new TextEl("·") { Size = 12.5f, Color = Tok.TextTertiary });
             parts.Add(new TextEl(key) { Size = 12.5f, Color = Tok.TextTertiary });
+        }
 
         return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Children = parts.ToArray() };
     }
@@ -552,7 +560,7 @@ internal static class TrackRow
     // The responsive playlist/Liked metadata subline. Artist and album remain separate hyperlinks even though they share
     // one ellipsized text run; the middle-dot separator makes the compact fallback read as one deliberate metadata line.
     static Element MetadataLine(Track t, Action<string, string?> go, bool showArtists, bool showAlbum,
-                                bool showExplicit, bool showVideo)
+                                bool showExplicit)
     {
         var spans = new List<TextSpan>(t.Artists.Count * 2 + 2);
         if (showArtists)
@@ -580,8 +588,6 @@ internal static class TrackRow
                 Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
                 Grow = 1f, Basis = 0f, MinWidth = 0f,
             });
-        if (showVideo) kids.Add(Icon(Icons.Movie, 13f, Tok.TextTertiary));
-
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 4f,
@@ -591,12 +597,31 @@ internal static class TrackRow
     }
 
     // The album cell as a single clickable hyperlink (navigates to the album page).
-    internal static Element AlbumLink(AlbumRef album, Action<string, string?> go) =>
-        new SpanTextEl([new TextSpan(album.Name, OnClick: () => go("album:" + album.Uri, album.Name))])
+    //
+    // A row can carry a KNOWN album uri with an EMPTY name (a name-less TrackV4 album sub-message; the artist-overview
+    // chart, whose wire shape has no album name at all). That rendered as a BLANK lane, which reads as broken rather than
+    // as pending — so a name-less album states the absence with the same `Dash` + TextTertiary treatment the Plays and
+    // Duration cells use for a not-yet-out track, never a fabricated title. The click survives whenever a uri exists
+    // (opening the album is itself one of the things that hydrates its name) and is dropped when it does not — a span
+    // that navigated to a bare "album:" was a dead link. MetadataService.SyncAllAsync closure (blank AlbumRef scan)
+    // closes the gap for liked rows that hydrate with a known album URI and an empty name — this is what the row looks
+    // like until it does.
+    internal static Element AlbumLink(AlbumRef album, Action<string, string?> go)
+    {
+        bool named = album.Name.Length > 0;
+        Action? open = null;
+        if (album.Uri.Length > 0)
         {
-            Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            string uri = album.Uri, title = album.Name;   // captured by value — no AlbumRef held by the closure
+            open = () => go("album:" + uri, title.Length > 0 ? title : null);
+        }
+        return new SpanTextEl([new TextSpan(named ? album.Name : Dash, OnClick: open)])
+        {
+            Size = 13f, Color = named ? Tok.TextSecondary : Tok.TextTertiary,
+            Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
             Grow = 1f, Basis = 0f, MinWidth = 0f,   // yield to a squeezed Album track instead of flooring at the name's width
         };
+    }
 
     // The Added-by cell: resolved profile when available, otherwise the raw playlist membership id.
     internal static Element AddedByCell(string? by, Owner? profile = null)

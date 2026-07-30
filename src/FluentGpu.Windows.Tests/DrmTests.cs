@@ -257,6 +257,7 @@ public sealed class DrmTests
         var player = new FakeProtectedVideoPlayer
         {
             PlayAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
+            PauseAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
             SeekAck = new(TaskCreationOptions.RunContinuationsAsynchronously),
         };
         var backend = new ProtectedMediaBackend(() => player);
@@ -270,6 +271,11 @@ public sealed class DrmTests
         Assert.False(play.IsCompleted);
         player.PlayAck.SetResult(true);
         await play.WaitAsync(Bound);
+
+        Task pause = session.PauseAsync().AsTask();
+        Assert.False(pause.IsCompleted);
+        player.PauseAck.SetResult(true);
+        await pause.WaitAsync(Bound);
 
         Task seek = session.SeekAsync(TimeSpan.FromSeconds(2), SeekMode.Accurate).AsTask();
         Assert.False(seek.IsCompleted);

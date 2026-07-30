@@ -113,6 +113,7 @@ public class RecentCardsTests
         }
         """));
 
+        Assert.NotNull(artist.TopAlbums);
         Assert.Single(artist.TopAlbums);
         var al = artist.TopAlbums[0];
         Assert.Equal("https://i.scdn.co/disc-cover", al.Cover?.Url);

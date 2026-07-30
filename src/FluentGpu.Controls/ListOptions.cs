@@ -16,12 +16,27 @@ public sealed record ScrollOptions
     public bool SuppressScrollBar { get; init; }
     /// <summary>Premium alpha-mask edge fade: feather the content's own alpha at the overflowing edges (one offscreen RT).</summary>
     public bool AutoEdgeFade { get; init; }
+    /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>; 0 (default) = the engine's standard band. Forwarded
+    /// onto the built viewport — see <c>ScrollEl.AutoEdgeFadeBand</c>.</summary>
+    public float AutoEdgeFadeBand { get; init; }
     /// <summary>Scroll-geometry observer (project a scalar, get the change) forwarded onto the viewport.</summary>
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged { get; init; }
+    /// <summary>Declarative scroll-snap points for the virtualized viewport (see <c>ScrollEl.Snap</c>): flings land exactly
+    /// on a snap value; wheel/keyboard/programmatic stay hard-clamped. Null (default) ⇒ the reconciler never touches the
+    /// snap fields, so a post-mount scene write survives.
+    /// <para>This record is UNPACKED at factory time and FROZEN at mount (the component-props contract), so declare only a
+    /// CONSTANT interval here — a row height, a fixed page stride. An interval that re-fits with the viewport width (a
+    /// size-reactive pager's page stride) cannot be expressed declaratively; that owner writes
+    /// <c>ScrollState.SnapInterval</c> onto its realized viewport instead (see <c>ItemsViewController.Viewport</c>).</para></summary>
+    public FluentGpu.Scene.SnapSpec? Snap { get; init; }
     /// <summary>Optional viewport-space TOP inset that clips only recyclable items after
     /// <see cref="ListOptions.PersistentPrefixCount"/>. Persistent prefix items (for example a hero + sticky chrome)
     /// remain unclipped. The recorder applies one shared band clip without per-row paint writes; NaN disables it.</summary>
     public float ItemClipTopInset { get; init; } = float.NaN;
+    /// <summary>Optional top alpha-feather, in DIP, applied to the same recyclable suffix as
+    /// <see cref="ItemClipTopInset"/>. The hard inset remains authoritative for paint and input; this only softens the
+    /// visible edge immediately below pinned prefix chrome. Zero (default) disables it.</summary>
+    public float ItemClipTopFadeBand { get; init; }
 }
 
 /// <summary>

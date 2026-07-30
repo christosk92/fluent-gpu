@@ -734,7 +734,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (!RouteLocal()) { await Forward("set_shuffling_context", ct, ("value", on)).ConfigureAwait(false); return; }
         await _lock.WaitAsync(ct).ConfigureAwait(false);   // SetShuffle rebuilds the context list — one lock per mutation
-        try { EmitSnap(_session.SetShuffle(on), EvKind.OptionsChanged); }
+        try
+        {
+            bool changed = _session.Shuffle != on;
+            var snap = _session.SetShuffle(on);
+            PlaybackBucketDiagnostics.ShuffleToggle("local", on, changed, snap);
+            EmitSnap(snap, EvKind.OptionsChanged);
+        }
         finally { _lock.Release(); }
     }
 
@@ -1139,7 +1145,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _projection.SetContextMetadata(resolved.Metadata ?? state.ContextMetadata);
             _snap = _session.SetTransferredContext(contextUri, resolved.Tracks, current, clearUserQueue: true);
             if (transferredQueue.Count > 0) _snap = _session.EnqueueUser(transferredQueue);
+            bool shuffleChanged = _session.Shuffle != state.Shuffle;
             _snap = _session.SetShuffle(state.Shuffle);
+            PlaybackBucketDiagnostics.ShuffleToggle("transfer", state.Shuffle, shuffleChanged, _snap);
             _snap = _session.SetRepeat(state.Repeat);
             _nextPageUrl = string.IsNullOrEmpty(resolved.NextPageUrl) ? null : resolved.NextPageUrl;
             _contextIsInfinite = resolved.IsInfinite || ContextResolve.IsInfinite(contextUri);
@@ -1358,7 +1366,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             try
             {
                 QueueSnapshot snap = _snap;
-                if (shuffle is { } s) snap = _session.SetShuffle(s);
+                if (shuffle is { } s)
+                {
+                    bool shuffleChanged = _session.Shuffle != s;
+                    snap = _session.SetShuffle(s);
+                    PlaybackBucketDiagnostics.ShuffleToggle("set_options", s, shuffleChanged, snap);
+                }
                 if (repeat is { } r) snap = _session.SetRepeat(r);
                 EmitSnap(snap, EvKind.OptionsChanged);
             }
@@ -1371,7 +1384,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task RemoteSetShuffleAsync(bool on)
     {
         await _lock.WaitAsync().ConfigureAwait(false);
-        try { EmitSnap(_session.SetShuffle(on), EvKind.OptionsChanged); }
+        try
+        {
+            bool changed = _session.Shuffle != on;
+            var snap = _session.SetShuffle(on);
+            PlaybackBucketDiagnostics.ShuffleToggle("remote", on, changed, snap);
+            EmitSnap(snap, EvKind.OptionsChanged);
+        }
         finally { _lock.Release(); }
     }
 
@@ -1520,11 +1539,12 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         try
         {
             _projection.NoteLocalCommand();
-            _snap = _session.Next();
+            QueueEntry? advanced = null;
+            if (_session.Next() is { } snap) { _snap = snap; advanced = snap.Current; }
             // Attribution: a queue STEP and a fresh context PLAY both end in the same silent LoadAndPlayCurrentAsync, so
             // without this line the log cannot tell "the user pressed Next" from "something re-resolved the context".
-            _log.Info($"queue advance → {_snap.Current?.Track.Uri ?? "(end of context)"}");
-            if (_snap.Current is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+            _log.Info($"queue advance → {advanced?.Track.Uri ?? "(end of context)"}");
+            if (advanced is not null) await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
             else if (await TryContinueContextAsync(ct).ConfigureAwait(false)) { }
             else { _currentHost.Stop(); Emit(BuildEvent(EvKind.Ended, null, 0, reasonEnd: "endplay")); }   // end-of-context
         }
@@ -2069,8 +2089,8 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 return false;
             }
 
-            _snap = _session.Next();
-            var next = _snap.Current;
+            QueueEntry? next = null;
+            if (_session.Next() is { } snap) { _snap = snap; next = snap.Current; }
             if (next is null)
             {
                 PlaybackBucketDiagnostics.Continuation("continuation.trackend-no-next", "continuation appended but queue had no playable next track",

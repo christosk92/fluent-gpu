@@ -52,12 +52,32 @@ public static class Surfaces
     internal static SpotifyLive.CoverColorPlane.Scheme? SchemeFor(string? url) =>
         SpotifyLive.CoverColorPlane.Current.TryGetScheme(url, Tok.Theme == ThemeKind.Light);
 
+    /// <summary>The artwork grading used by solid chrome such as Play and Verified pills. The contrast branch is
+    /// intentionally opposite the page branch: light-theme grading is the softer/lower-chroma treatment that sits
+    /// comfortably on a dark hero, while dark-theme grading carries the stronger chroma a solid CTA needs against a
+    /// pale wash. This is the provider's paired treatment, not an invented HSV transform. A dark-only visual-identity
+    /// entry falls back to its available branch.</summary>
+    internal static SpotifyLive.CoverColorPlane.Scheme? ChromeSchemeFor(string? url)
+    {
+        var plane = SpotifyLive.CoverColorPlane.Current;
+        bool pageIsLight = Tok.Theme == ThemeKind.Light;
+        return plane.TryGetScheme(url, lightTheme: !pageIsLight)
+            ?? plane.TryGetScheme(url, lightTheme: pageIsLight);
+    }
+
     // A restrained, top-anchored accent fade (Spotify's top-of-page colour band): a soft tint over the header that
     // fades out well before the tracklist, so the art colour reads as an accent — never a full-page flood. The peak
     // alpha is low and the falloff is steep (transparent by ~55% down, clear below); the previous solid WinUI-parity
     // fill (dark α≈0.235 / light α≈0.149, both stops equal — no fade) overpowered a strongly-coloured cover.
     const float HeroWashDarkA = 0.15f;    // peak at the top edge; was 60f/255f ≈0.235 painted solid
-    const float HeroWashLightA = 0.10f;   // peak at the top edge; was 38f/255f ≈0.149 painted solid
+    // Light peaks slightly ABOVE dark, which looks backwards until you look at what each paints. Dark paints the art's
+    // `backgroundBase` — a near-black tone over a charcoal card, where a little alpha already reads. Light paints the
+    // LIFTED accent, whose strongest channel is pinned to 210 precisely so it cannot bruise the off-white card: a pale,
+    // low-chroma tone, and 0.10 of it over a near-white surface is below the "is there a wash at all?" threshold on
+    // anything but the most saturated cover. 0.16 is the smallest step that makes the band legible on desaturated art;
+    // 0.18+ starts to read as a coloured cast at the very top edge on saturated art. Note the stop schedule below:
+    // this alpha is the PEAK at y=0 and reaches 0 by HeroWashFade (55%), so the strong value only shows in the top band.
+    const float HeroWashLightA = 0.16f;   // peak at the top edge; was 0.10 (and before that 38f/255f ≈0.149 solid)
     const float HeroWashFade = 0.55f;     // top→transparent by this fraction of the page; nothing below it
 
     /// <summary>Page wash over Mica — a soft top-anchored accent fade (not an edge-to-edge fill).</summary>

@@ -86,7 +86,8 @@ sealed class DetailPage : Component
                     DetailKind.Liked => c.IsBulk || c.Kind == Wavee.Core.CollectionKind.Liked,
                     // An open ALBUM refreshes on a Bulk only: the async music-video detection folds its per-track
                     // HasVideo flips into one bulk change, which would otherwise stay invisible until re-navigation.
-                    DetailKind.Album => c.IsBulk,
+                    DetailKind.Album when pid is not null => c.IsBulk || c.Uri == pid,
+                    DetailKind.Show when pid is not null => c.IsBulk || c.Uri == pid,
                     _ => false,
                 };
                 if (!relevant) return;
@@ -289,6 +290,7 @@ sealed class DetailPage : Component
         try { count = await saves.WaitAsync(SaveCountGrace, ct).ConfigureAwait(false); }
         catch (TimeoutException) { }              // slow counter → header renders without the segment
         catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+        if (playlist is null) return DetailModel.Empty;
         return MapPlaylist(playlist, count);
     }
 
@@ -317,6 +319,7 @@ sealed class DetailPage : Component
             if (VideoPresence.HasVideo(tracks[i])) hasVideo = true;   // a user-attached mp4 also earns the Video column
             if (tracks[i].AddedBy is { } by) contributors.Add(by);
         }
+        LogVideoSweep("playlist", p.Uri, tracks);
         return new DetailModel(
             Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
             BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: p.Owner?.Avatar,
@@ -330,6 +333,50 @@ sealed class DetailPage : Component
             BasePermissionRevision: p.BasePermissionRevision,
             Tuning: p.Tuning,
             ShareUrl: SpotifyPlaylistWebUrl(p.Uri));
+    }
+
+    // ── the per-page-open association sweep (video.assoc.page) ────────────────────────────────────────────────────────
+    // Runs where the HasVideo roll-up is computed — inside the async LOAD (LoadAsync / the debounced live re-map), never on
+    // a render or a frame. VideoPresence.HasVideo stays the row path's single silent boolean probe; this walks the same
+    // tracks once more through the DIAGNOSTIC accessor to split the "no" into its two very different causes:
+    //   noRow    — the plane holds nothing for this uri: either nobody ever requested it (a coverage hole) or the request
+    //              came back with no kind-99 entry at all.
+    //   negative — a row that says "no video": a real 404/empty-200 verdict, or a sealed miss cached from one.
+    // The uri SAMPLE is the load-bearing field: the reported symptom ("the playlist says no, searching the same song says
+    // yes") is only decidable by comparing the uri a playlist row carries against the uri the search response carried, and
+    // relinked/alternative track uris are the expected way for those to differ. The app persists no alias→canonical map
+    // (only SpotifyVideoService.RecoverCanonicalAsync derives one, transiently), so an "an alternate uri HAS a video"
+    // count cannot be computed here without inventing a resolver — read `video.assoc.recover*` for that half instead.
+    static void LogVideoSweep(string kind, string contextUri, IReadOnlyList<Track> tracks)
+    {
+        var log = WaveeLog.Instance;
+        if (!log.IsEnabled(WaveeLogLevel.Info)) return;
+        int withVideo = 0, overrideOnly = 0, noRow = 0, negative = 0;
+        var missSample = new System.Text.StringBuilder();
+        int sampled = 0;
+        for (int i = 0; i < tracks.Count; i++)
+        {
+            var uri = tracks[i].Uri;
+            var assoc = VideoPresence.Association(uri);
+            if (assoc is { HasVideo: true }) { withVideo++; continue; }
+            if (VideoPresence.HasOverride(uri)) { overrideOnly++; continue; }
+            if (assoc is null) noRow++; else negative++;
+            if (sampled < 6 && uri.StartsWith("spotify:track:", StringComparison.Ordinal))
+            {
+                if (sampled > 0) missSample.Append(',');
+                missSample.Append(uri["spotify:track:".Length..]);
+                sampled++;
+            }
+        }
+        log.Event(WaveeLogLevel.Info, "detail", "video.assoc.page", "detail-page music-video roll-up computed",
+            fields:
+            [
+                WaveeLogField.Of("kind", kind), WaveeLogField.Of("contextUri", contextUri),
+                WaveeLogField.Of("tracks", tracks.Count), WaveeLogField.Of("withVideo", withVideo),
+                WaveeLogField.Of("overrideOnly", overrideOnly), WaveeLogField.Of("noRow", noRow),
+                WaveeLogField.Of("negative", negative),
+                WaveeLogField.Of("missIds", missSample.Length == 0 ? "-" : missSample.ToString()),
+            ]);
     }
 
     static IReadOnlyDictionary<string, Owner>? UserProfileMap(Playlist p)
@@ -356,6 +403,7 @@ sealed class DetailPage : Component
     static DetailModel MapLiked(IReadOnlyList<Track> tracks)
     {
         string meta = Strings.Detail.MetaLine(Strings.Detail.SongCount(tracks.Count), DetailFormat.TotalTime(DetailFormat.TotalMs(tracks)));
+        LogVideoSweep("liked", "spotify:collection:tracks", tracks);
         return new DetailModel(
             Title: Loc.Get(Strings.Detail.LikedSongs), Cover: null, ContextUri: "spotify:collection:tracks",
             BadgeType: null, Year: null, OwnerName: null, OwnerImage: null,
@@ -384,6 +432,7 @@ sealed class DetailPage : Component
         };
         string meta = Strings.Detail.MetaLineYear(
             Strings.Detail.SongCount(a.TrackCount), DetailFormat.TotalTime(DetailFormat.TotalMs(tracks)), a.Year);
+        LogVideoSweep("album", a.Uri, tracks);
         return new DetailModel(
             Title: a.Name, Cover: a.Cover, ContextUri: a.Uri,
             BadgeType: badge, Year: a.Year.ToString(), OwnerName: null, OwnerImage: null,

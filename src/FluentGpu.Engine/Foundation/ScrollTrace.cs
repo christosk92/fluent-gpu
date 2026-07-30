@@ -95,14 +95,33 @@ public enum ScrollWriter : byte
 /// <c>tMs</c>, or exactly via <c>ack</c> → the row whose publishSeq matches. Debug pays one disabled
 /// branch per guarded call. Release erases those call sites entirely unless <c>FLUENTGPU_DIAG</c> is explicitly defined.
 /// Default output: <c>%TEMP%\fg-scrolltrace.csv</c> (overwritten per run).
+///
+/// GUARD SHAPE — every call site (here and in every consumer assembly) spells the armed condition as the TWO-operand
+/// <c>if (ScrollTrace.CompiledIn &amp;&amp; ScrollTrace.Enabled)</c>, or <c>if (!CompiledIn || !Enabled) return;</c> for
+/// an early exit. Both operands are required: the const <see cref="CompiledIn"/> is what the optimizer folds to erase
+/// the body, while the non-const <see cref="Enabled"/> keeps the guard from being a *constant expression*, which is what
+/// stops the compiler flagging the (intentionally) dead body as CS0162 unreachable code in a plain Release build. There
+/// is deliberately no single combined <c>On</c> flag — a lone const-false gate warns at every one of ~56 sites.
 /// </summary>
 public static class ScrollTrace
 {
-    /// <summary>True iff <c>FG_SCROLL_TRACE</c> was set (non-empty, not "0") at process start.</summary>
+    /// <summary>Compile-time master switch — <c>false</c> unless <c>DEBUG</c> or <c>FLUENTGPU_DIAG</c> is defined, so the
+    /// jit/AOT folds <c>CompiledIn &amp;&amp; Enabled</c> to <c>false</c> and erases every guarded body from the shipping
+    /// binary. Mirrors <see cref="Diag.CompiledIn"/>. Pair it with <see cref="Enabled"/> at EVERY guard site: the
+    /// two-operand form keeps the guard a NON-constant expression, which is what stops the compiler from reporting the
+    /// (intentionally) dead body as CS0162 unreachable code while still permitting the fold.</summary>
 #if DEBUG || FLUENTGPU_DIAG
-    public static readonly bool On;
+    public const bool CompiledIn = true;
 #else
-    public const bool On = false;
+    public const bool CompiledIn = false;
+#endif
+
+    /// <summary>Runtime gate (only meaningful when <see cref="CompiledIn"/>): true iff <c>FG_SCROLL_TRACE</c> was set
+    /// (non-empty, not "0") at process start. The armed condition is <c>CompiledIn &amp;&amp; Enabled</c>.</summary>
+#if DEBUG || FLUENTGPU_DIAG
+    public static readonly bool Enabled;
+#else
+    public static readonly bool Enabled = false;
 #endif
 
     private static readonly string s_path = "";
@@ -112,7 +131,7 @@ public static class ScrollTrace
     private static readonly Rec[] s_buf = Array.Empty<Rec>();
 #endif
     private static readonly double s_msPerTick = 1000.0 / Stopwatch.Frequency;
-    private static readonly long s_t0;
+    private static readonly long s_t0 = 0;   // initialized here (not #if-fenced) because FlushLocked() reads it unfenced
     private static int s_count;
     private static int s_frame;
     private static int s_idleFrames;
@@ -139,9 +158,11 @@ public static class ScrollTrace
     static ScrollTrace()
     {
         string? v = Environment.GetEnvironmentVariable("FG_SCROLL_TRACE");
-        On = !string.IsNullOrEmpty(v) && v != "0";
-        if (!On) { s_buf = Array.Empty<Rec>(); return; }
-        s_path = v == "1" ? Path.Combine(Path.GetTempPath(), "fg-scrolltrace.csv") : v!;
+        // Same predicate as before (Enabled ⇔ FG_SCROLL_TRACE set, non-empty, not "0"), inverted first so `v` is
+        // provably non-null below without a null-forgiving operator.
+        if (string.IsNullOrEmpty(v) || v == "0") { s_buf = Array.Empty<Rec>(); return; }
+        Enabled = true;
+        s_path = v == "1" ? Path.Combine(Path.GetTempPath(), "fg-scrolltrace.csv") : v;
         s_buf = new Rec[1 << 17];   // ~36 s of worst-case continuous gesture records between flushes
         s_t0 = Stopwatch.GetTimestamp();
         AppDomain.CurrentDomain.ProcessExit += static (_, _) => Flush();
@@ -193,7 +214,7 @@ public static class ScrollTrace
                 " qpc=" + s_anchorQpc.ToString(CultureInfo.InvariantCulture) +
                 " qpcFreq=" + Stopwatch.Frequency.ToString(CultureInfo.InvariantCulture) +
                 " tMs=0 pid=" + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) +
-                " trace=" + (On ? "1" : "0") +
+                " trace=" + (CompiledIn && Enabled ? "1" : "0") +
                 " exeSize=" + size.ToString(CultureInfo.InvariantCulture) +
                 " exeMtimeUtc=" + mtime.ToString(CultureInfo.InvariantCulture) +
                 " exePath=" + exe);
@@ -216,7 +237,7 @@ public static class ScrollTrace
     /// inertia → settle) a human phase marker structurally cannot record. Values are clamped to the slot width.</summary>
     public static void SetState(ScrollTraceState slot, int value)
     {
-        if (!On) return;   // const false in plain Release ⇒ the whole body folds away and the call inlines to nothing
+        if (!CompiledIn || !Enabled) return;   // CompiledIn is const false in plain Release ⇒ the body folds away and the call inlines to nothing
         int i = (int)slot;
         if ((uint)i >= (uint)s_stateShift.Length) return;
         int mask = s_stateMask[i], shift = s_stateShift[i];
@@ -245,7 +266,7 @@ public static class ScrollTrace
     /// still measurable without the spin exhausting the ring and forcing mid-gesture flushes. Drives the idle flush.</summary>
     public static void Frame(float dtMs, int pumped, bool scrollActive)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         s_frame++;
         // Busy-spin guard: a skip-submit loop can run this tens of thousands of times per second.
         if (pumped == 0 && dtMs < 1f && scrollActive && ++s_spinSuppressed < 64) return;
@@ -266,14 +287,14 @@ public static class ScrollTrace
     /// i2=phase seq, f0=emitted DIP, f1=gap since previous wheel packet (ms), aux=packet QPC.</summary>
     public static void RawWheel(int notch, int flags, int seq, float dip, float gapMs, long qpc)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.RawWheel, I0 = notch, I1 = flags, I2 = seq, F0 = dip, F1 = gapMs, Aux = qpc });
     }
 
     /// <summary>Hi-res silence lift (synthesized ScrollEnd): f0=observed silence ms, aux=last packet's QPC.</summary>
     public static void FbLift(float silenceMs, long lastQpc)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.FbLift, F0 = silenceMs, Aux = lastQpc });
     }
 
@@ -283,7 +304,7 @@ public static class ScrollTrace
     /// after, aux=incoming packet QPC.</summary>
     public static void Coalesce(byte evKind, float addY, float addX, float sumY, float sumX, long qpc)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.Coalesce, I0 = evKind, F0 = addY, F1 = addX, F2 = sumY, F3 = sumX, Aux = qpc });
     }
 
@@ -291,7 +312,7 @@ public static class ScrollTrace
     /// axis mapping — this records what was actually stored), i0=ms stamp, aux=QPC stamp.</summary>
     public static void VelDeposit(float x, float y, uint ms, long qpc)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.VelDeposit, F0 = x, F1 = y, I0 = unchecked((int)ms), Aux = qpc });
     }
 
@@ -301,7 +322,7 @@ public static class ScrollTrace
     /// f0=ΔY (coalesced), f1=ΔX, f2=gesture accumX BEFORE this event folded, f3=accumY before, aux=event QPC.</summary>
     public static void Phase(byte evKind, int deviceFlags, int seq, float dY, float dX, float accX, float accY, long qpc)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.Phase, I0 = evKind, I1 = deviceFlags, I2 = seq, F0 = dY, F1 = dX, F2 = accX, F3 = accY, Aux = qpc });
     }
 
@@ -309,7 +330,7 @@ public static class ScrollTrace
     /// f1=accumX at latch, f2=accumY at latch.</summary>
     public static void Latch(int nodeIdx, int deviceHoriz, float anchor, float accX, float accY)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.Latch, I0 = nodeIdx, I1 = deviceHoriz, F0 = anchor, F1 = accX, F2 = accY });
     }
 
@@ -317,7 +338,7 @@ public static class ScrollTrace
     /// f1=sampled pos Y, f2=live Vx after, f3=live Vy after, aux=sample QPC.</summary>
     public static void VelSample(int src, float px, float py, float vx, float vy, long qpc)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.VelSample, I0 = src, F0 = px, F1 = py, F2 = vx, F3 = vy, Aux = qpc });
     }
 
@@ -326,7 +347,7 @@ public static class ScrollTrace
     /// aux=lift QPC.</summary>
     public static void Release(int flags, float vx, float vy, float chosen, float band, long qpc, float trailing = 0f)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.Release, I0 = flags, F0 = vx, F1 = vy, F2 = chosen, F3 = band, F4 = trailing, Aux = qpc });
     }
 
@@ -334,7 +355,7 @@ public static class ScrollTrace
     /// 4=target died), i1=wasMomentum, f0=band handed to the spring.</summary>
     public static void GestureEnd(int reason, int wasMomentum, float band)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.GestureEnd, I0 = reason, I1 = wasMomentum, F0 = band });
     }
 
@@ -342,7 +363,7 @@ public static class ScrollTrace
     /// f1=offset after clamp, f2=past-edge excess, f3=band written, f4=max offset, f5=outer offset (chained only).</summary>
     public static void ApplyPan(int nodeIdx, int chained, float raw, float offAfter, float excess, float band, float max, float outerOff)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.ApplyPan, I0 = nodeIdx, I1 = chained, F0 = raw, F1 = offAfter, F2 = excess, F3 = band, F4 = max, F5 = outerOff });
     }
 
@@ -350,14 +371,14 @@ public static class ScrollTrace
     /// f0=notch DIP delta, f1=fling velocity after, f2=offset.</summary>
     public static void WheelSeed(int nodeIdx, int flags, float deltaDip, float v, float off)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.WheelSeed, I0 = nodeIdx, I1 = flags, F0 = deltaDip, F1 = v, F2 = off });
     }
 
     /// <summary>Live gesture cancelled by a detented wheel: f0=offset at takeover, f1=band snapped away.</summary>
     public static void WheelCancel(float off, float band)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.WheelCancel, F0 = off, F1 = band });
     }
 
@@ -371,11 +392,12 @@ public static class ScrollTrace
     /// f2=fling velocity, f3=band px, f4=band spring velocity, f5=frame dtMs.</summary>
     public static void AnimTick(int nodeIdx, int mode, float off, float tgt, float v, float band, float bandVel, float dtMs)
     {
-        if (!On) return;
-        long key = nodeIdx | ((long)mode << 24)
-                 ^ ((long)BitConverter.SingleToInt32Bits(off) << 8)
-                 ^ ((long)BitConverter.SingleToInt32Bits(band) << 20)
-                 ^ ((long)BitConverter.SingleToInt32Bits(v) << 32);
+        if (!CompiledIn || !Enabled) return;
+        long key = (long)((ulong)(uint)nodeIdx
+                 ^ ((ulong)(uint)mode << 24)
+                 ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(off) << 8)
+                 ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(band) << 20)
+                 ^ ((ulong)(uint)BitConverter.SingleToInt32Bits(v) << 32));
         if (key == s_lastAnimKey && ++s_animSuppressed < 64) return;   // unchanged physics on a spinning loop
         s_lastAnimKey = key;
         Add(new Rec { K = ScrollTraceKind.AnimTick, I0 = nodeIdx, I1 = mode, I2 = s_animSuppressed, F0 = off, F1 = tgt, F2 = v, F3 = band, F4 = bandVel, F5 = dtMs });
@@ -386,7 +408,7 @@ public static class ScrollTrace
     /// retarget, 3=spring settle, 4=fling seed), f0..f2 = per-event payload (documented at the call sites).</summary>
     public static void AnimEvent(int nodeIdx, int ev, float f0, float f1, float f2)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.AnimEvent, I0 = nodeIdx, I1 = ev, F0 = f0, F1 = f1, F2 = f2 });
     }
 
@@ -407,7 +429,7 @@ public static class ScrollTrace
     /// Next free engine code: 105 (also 106-109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
     public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.Note, I0 = code, F0 = f0, I1 = i1, I2 = i2, F1 = f1 });
     }
 
@@ -418,7 +440,7 @@ public static class ScrollTrace
     public static void FrameTiming(float flushMs, float layoutMs, float animMs, float recordMs, float submitMs,
         float fenceWaitMs, float presentMs, int measureCount, int shapeMisses, float rawDtMs)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         int packed = (measureCount << 10) | Math.Min(shapeMisses, 1023);
         Add(new Rec
         {
@@ -453,7 +475,7 @@ public static class ScrollTrace
         float lagDip, float wakeOverheadMs, float frameOverrunMs, float clockSampleSkewMs,
         float presentIntervalMs, float velocityDipPerMs, long genQpc, ulong ackedPublishSeq = 0UL)
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec
         {
             K = ScrollTraceKind.Latency,
@@ -466,12 +488,12 @@ public static class ScrollTrace
 
     // ── §8 single-writer offset-write trace + audit ──────────────────────────────────────────────────────────────
     // The v2 offset-write chokepoint records one row per real offset move, carrying the §2.2 Phase and the ScrollWriter
-    // id. A lightweight, ALWAYS-AVAILABLE, 0-alloc audit (independent of the CSV ring / <see cref="On"/>) lets the §8
+    // id. A lightweight, ALWAYS-AVAILABLE, 0-alloc audit (independent of the CSV ring / <see cref="Enabled"/>) lets the §8
     // single-writer gate assert (a) no write carries a writer ≠ Integrator on the phase path, and (b) at most one offset
     // write happens per active node per frame — without turning on the (StreamWriter-backed) CSV. All state is static
     // POD; the gate calls <see cref="AuditBegin"/> / per-frame <see cref="AuditResetFrame"/> / <see cref="AuditStop"/>.
 
-    /// <summary>Gate-only offset-write audit toggle (0-alloc; separate from the CSV <see cref="On"/> path).</summary>
+    /// <summary>Gate-only offset-write audit toggle (0-alloc; separate from the CSV <see cref="Enabled"/> path).</summary>
     public static bool Audit;
     /// <summary>Sticky across the audited run: an offset write carried a writer ≠ <see cref="ScrollWriter.Integrator"/>.</summary>
     public static bool AuditForeignWriter;
@@ -495,7 +517,8 @@ public static class ScrollTrace
     public static void AuditStop() { Audit = false; }
 
     /// <summary>Record ONE real offset write (scroll-feel-rework-v2 §8): the sole offset-mutation chokepoint calls this
-    /// after an actual move. Feeds the 0-alloc single-writer audit always, and the CSV ring when <see cref="On"/>. Never
+    /// after an actual move. Feeds the 0-alloc single-writer audit always, and the CSV ring when the trace is armed
+    /// (<see cref="CompiledIn"/> &amp;&amp; <see cref="Enabled"/>). Never
     /// allocates.</summary>
     [Conditional("DEBUG"), Conditional("FLUENTGPU_DIAG")]
     public static void OffsetWrite(int nodeIdx, byte phase, ScrollWriter writer, float offset)
@@ -505,7 +528,7 @@ public static class ScrollTrace
             AuditWritesThisFrame++;
             if (writer != ScrollWriter.Integrator) AuditForeignWriter = true;
         }
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         Add(new Rec { K = ScrollTraceKind.OffsetWrite, I0 = nodeIdx, I1 = phase, I2 = (int)writer, F0 = offset });
     }
 
@@ -526,7 +549,7 @@ public static class ScrollTrace
     /// <summary>Write all pending records to the CSV (called automatically on idle + process exit).</summary>
     public static void Flush()
     {
-        if (!On) return;
+        if (!CompiledIn || !Enabled) return;
         lock (s_gate) FlushLocked();
     }
 

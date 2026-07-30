@@ -226,6 +226,15 @@ public struct ScrollState
     public float FlingFromOffset;         // the offset captured when the fling was seeded (the impulse "ignored value" anchor)
     public float FlingSnapTarget;         // the exact snap value a retargeted fling lands on (the ScrollIntegrator writes THIS
                                           // on settle, so discrete-integration drift never leaves it a fraction off the snap). NaN = no snap target.
+    public float LastReleaseVelocity;     // the LIFT velocity of the most recent contact gesture on this viewport (px/s, signed
+                                          // in OFFSET space along Orientation). Recorded UNCONDITIONALLY at the release —
+                                          // including below ScrollTuning.FlingSeedGate, where no coast is seeded and the value
+                                          // used to be discarded, which is exactly the case that needs it: a page-snapping
+                                          // control must commit a FLICK and a slow drag that end at the SAME offset
+                                          // differently (PagedShelf's directional commit). NOT physics — the integrator never
+                                          // reads it (FlingVelocity is the live coast state); this is a release RECORD.
+                                          // Cleared when the next gesture latches on this viewport, so it can never be read
+                                          // as the release of a gesture that never happened. 0 = no lift recorded.
     public bool  ContentSized;            // auto-size to content then clamp (popup lists); false = hard viewport
     // Pinch-zoom (WinUI ScrollPresenter ZoomFactor; opt-in like ScrollingZoomMode — default Disabled). When Zoomable, a
     // SECOND touch contact over this viewport scales the content about the gesture midpoint (Input owns ZoomFactor; it is
@@ -245,6 +254,12 @@ public struct ScrollState
     // zone boundary between two adjacent points being their midpoint (SnapPoint.cpp Influence(), :453/:474). Snapping
     // applies to flings only (a wheel/keyboard/programmatic offset is hard-clamped, never snapped — matching the clamp
     // contract); the offset axis is Orientation's.
+    // WRITER CONTRACT: these four fields are DECLARATION-GATED. The reconciler writes them ONLY when the element carries a
+    // non-null Snap (ScrollEl.Snap / VirtualListEl.Snap ⇒ SnapSpec.ApplyTo) — for every other viewport the patch never
+    // touches them, so a control/probe that writes SnapInterval onto the scene after mount keeps it across every
+    // reconcile. A declaring element OWNS them and re-asserts on each patch; a control whose interval is a live layout
+    // measure (a page stride that re-fits on resize) therefore writes the scene directly instead of declaring, because a
+    // frozen-at-mount options record cannot re-declare a width-reactive value.
     public float SnapInterval;            // uniform snap spacing (DIP) on the scroll axis; ≤ 0 = no interval snapping
     public float SnapStart;               // first snap value / lower bound of the repeated zone (DIP; default 0)
     public float SnapEnd;                 // upper bound of the repeated zone (DIP); ≤ SnapStart = open (clamp-max bound)
@@ -284,6 +299,13 @@ public struct ScrollState
     public float ProgrammaticZeta;        // damping ratio; 0 (default) ⇒ legacy critically-damped chase
     public float ProgrammaticOmega;       // natural frequency ω0 rad/s; settle ≈ 4/(ζ·ω0)
     public float ProgrammaticSettleVelocity; // optional per-viewport landing speed (DIP/s); 0 ⇒ legacy WheelSettleVelPxPerS
+    public float ProgrammaticHalflifeMs;  // ζ=1 branch only: the half-life LATCHED AT ARM TIME for this chase (see
+                                          // ScrollTuning.ProgrammaticHalflifeForDistance — a short correction must be
+                                          // crisper than a full-page jump). Constant for the whole chase, so the per-tick
+                                          // step stays the exact closed form (dt-deterministic). 0 ⇒ the fixed legacy
+                                          // ScrollIntegrator.ProgrammaticSpringHalflifeMs. Cleared by the integrator when
+                                          // the chase ends, so a caller that arms without setting it can never inherit a
+                                          // stale value from a previous glide on the same viewport.
     // Persistent scrollbar: keep the bar visible (thin rail) whenever content overflows, bypassing the auto-hide FadeT
     // gate at record time (hover still expands it). Set by the reconciler from ScrollEl.AlwaysShowScrollbar.
     public bool  AlwaysShowBar;
@@ -334,6 +356,7 @@ public struct ScrollState
     public int   Overscan;                // rows realized beyond the viewport on each side
     public int   PersistentPrefixCount;   // leading logical items retained before the recyclable [First,Last) window
     public float ItemClipTopInset;         // viewport-space top clip for recyclable items; NaN = disabled
+    public float ItemClipTopFadeBand;      // top alpha feather for recyclable items; 0 = disabled
     public int   FirstRealized, LastRealized;
     public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
     public NodeHandle ContentNode;        // the single content child carrying the -ScrollOffset LocalTransform
@@ -378,6 +401,43 @@ public struct ScrollState
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });
+}
+
+/// <summary>
+/// The DECLARATIVE snap-point spec: one POD an element (<c>ScrollEl.Snap</c> / <c>VirtualListEl.Snap</c>) or a control
+/// (<c>ScrollOptions.Snap</c>) hands the reconciler to configure a viewport's <see cref="ScrollState"/> snap fields.
+/// Mirrors the two WinUI kinds 1:1 (the math is <see cref="ScrollSnap"/>'s): a uniform <see cref="Interval"/> (the
+/// <c>RepeatedScrollSnapPoint</c>) and/or an explicit ascending <see cref="Points"/> list (the irregular
+/// <c>ScrollSnapPoint</c>). Both empty ⇒ no snapping.
+/// <para>Snapping applies to FLINGS only — a wheel/keyboard/programmatic offset stays hard-clamped (the clamp contract),
+/// so a control that wants a wheel/settle to REST on a boundary re-snaps itself through the programmatic path.</para>
+/// <para>Declaring is OPT-IN and gated: null ⇒ the reconciler never touches the snap fields (a post-mount scene write
+/// survives every reconcile); non-null ⇒ this element owns them and <see cref="ApplyTo"/> re-asserts on every patch. The
+/// only allocation is the optional <see cref="Points"/> array the author supplies (the patch itself is alloc-free).</para>
+/// </summary>
+public readonly record struct SnapSpec(float Interval, float Start = 0f, float End = 0f, float[]? Points = null)
+{
+    /// <summary>A uniform grid every <paramref name="interval"/> DIP anchored at <paramref name="start"/> (a row height, a
+    /// page stride). <paramref name="end"/> ≤ <paramref name="start"/> (the default) leaves the upper bound open, so the
+    /// content clamp is the only bound.</summary>
+    public static SnapSpec Every(float interval, float start = 0f, float end = 0f) => new(interval, start, end);
+
+    /// <summary>An explicit ASCENDING-sorted set of snap offsets (the irregular case — variable-extent sections).</summary>
+    public static SnapSpec At(params float[] points) => new(0f, 0f, 0f, points);
+
+    /// <summary>True when this spec configures nothing — applying it CLEARS the viewport's snapping.</summary>
+    public readonly bool IsEmpty => Interval <= 0f && (Points is null || Points.Length == 0);
+
+    /// <summary>Write this declaration onto a viewport's snap fields. The single translation from spec → columns: the
+    /// reconciler patch sites call it, and so does a control writing the scene directly, so the two paths can never
+    /// disagree about field semantics.</summary>
+    public readonly void ApplyTo(ref ScrollState sc)
+    {
+        sc.SnapInterval = Interval > 0f ? Interval : 0f;
+        sc.SnapStart = Start;
+        sc.SnapEnd = End;
+        sc.SnapPoints = Points is { Length: > 0 } p ? p : null;
+    }
 }
 
 /// <summary>

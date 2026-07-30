@@ -72,6 +72,12 @@ public sealed class EntityCacheGc : IDisposable
         set { if (value > 0) { Interlocked.Exchange(ref _budgetBytes, value); try { _cold.SetCacheBudgetBytes(value); } catch (Exception) { } } }
     }
 
+    /// <summary>The extension tier's slice of the overall byte budget. Extensions are pure wire-response cache — always
+    /// re-fetchable, and losing one costs a full body instead of a 304 — so they get a minority share and the entity tier
+    /// (which backs offline browsing) keeps the rest. A floor keeps the tier useful on a tiny user-set budget.</summary>
+    internal static long ExtensionBudgetBytes(long totalBudget)
+        => Math.Max(8L * 1024 * 1024, totalBudget / 4);
+
     /// <summary>The last completed pass's report (diagnostics / tests).</summary>
     public EntityGcReport LastReport { get; private set; }
 
@@ -221,6 +227,17 @@ public sealed class EntityCacheGc : IDisposable
                 r.BudgetRows += rows;
                 r.BytesFreed += bytes;
             }
+
+            // 6b. extension-tier byte cap (v7). The entity sweep above CANNOT touch these rows, so before this leg the
+            // extension payloads were an un-evictable floor inside `cache_bytes` — the reason GcEnforceBudget had to be
+            // retriggered off GcEvictableBytes rather than the real counter. Its own slice of the overall budget keeps
+            // that floor bounded instead of merely excluded.
+            if (!ct.IsCancellationRequested)
+            {
+                var (rows, bytes) = _cold.GcTrimExtensions(ExtensionBudgetBytes(BudgetBytes), ct);
+                r.BudgetRows += rows;
+                r.BytesFreed += bytes;
+            }
         }
         catch (Exception ex)
         {
@@ -237,10 +254,14 @@ public sealed class EntityCacheGc : IDisposable
 
         // 7. reclaim — slices, never a routine full VACUUM (§C.7: the Spotify SSD-wear incident).
         if (!ct.IsCancellationRequested && r.TotalRows > 0)
-        {
             try { _cold.RunIncrementalVacuum(VacuumPagesPerPass); } catch (Exception) { }
+        // The checkpoint is UNCONDITIONAL, unlike the vacuum above. It used to be gated on this pass having deleted
+        // something, but the WAL grows from ordinary writes (every extension upsert, every touch flush) far more than from
+        // GC deletes — so on a browse-heavy, delete-light profile it simply never ran and the WAL climbed without bound
+        // (51 MB against a 125 MB db, measured). Every page a cold read touches resolves through that WAL, so an unbounded
+        // one silently taxes every later launch. Still NOT at open: that would put the cost on the startup path instead.
+        if (!ct.IsCancellationRequested)
             try { _cold.CheckpointWal(); } catch (Exception) { }
-        }
 
         r.DurationMs = Environment.TickCount64 - startTicks;
         r.Cancelled = ct.IsCancellationRequested;
@@ -272,6 +293,13 @@ public sealed class EntityCacheGc : IDisposable
         [
             WaveeLogField.Of("boot.sqlite_open_ms", OpenMillis),
             WaveeLogField.Of("boot.identity_load_ms", IdentityLoadMillis),
+            // The two O(library) legs INSIDE identity_load, split out so a regression names itself rather than hiding in
+            // the total. Watch the row counts: they are what grows, and the ms only follows once the working set stops
+            // fitting in the page cache.
+            WaveeLogField.Of("boot.saved_ms", _store.SavedMillis),
+            WaveeLogField.Of("boot.saved_rows", _store.SavedRows),
+            WaveeLogField.Of("boot.videoassoc_ms", _store.VideoAssocMillis),
+            WaveeLogField.Of("boot.videoassoc_rows", _store.VideoAssocRows),
             WaveeLogField.Of("boot.warm_ms", _store.WarmMillis),
             WaveeLogField.Of("boot.warm_rows", _store.WarmRows),
         ]);

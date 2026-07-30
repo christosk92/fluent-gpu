@@ -12,7 +12,7 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 // The fixed-width left metadata rail (album / single / playlist) in its own vertical scroller. Stack order:
-// cover → badges → big hero title → owner/artist row → meta line → CTA cluster → tools/actions → description.
+// cover → eyebrow → big hero title → owner/artist row → meta line → CTA cluster → tools/actions → description.
 // Every clamped run gets an EXPLICIT Width (= cover edge) so a long title/owner never widens the rail (MediaCard's
 // discipline). The cover edge is a constant per config (RailWidth − side padding), so no SizeChanged hack is needed.
 static class DetailRail
@@ -53,14 +53,13 @@ static class DetailRail
             Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover, saturation: 1.18f)],
         });
 
-        // Badges row.
+        // Identity eyebrow — the type/year fact as ONE tracked-out run, occupying exactly the row the type/year pills
+        // held (nothing below it moves). Same treatment as the vertical hero's eyebrow, from the same helper, so the
+        // two layouts state the release kind identically. Playlists keep the owner/collaborator block instead.
         if (cfg.Badges == BadgeStyle.TypeYear)
         {
-            var pills = new List<Element>(2);
-            if (m.BadgeType is { Length: > 0 }) pills.Add(BadgePill(m.BadgeType));
-            if (m.Year is { Length: > 0 }) pills.Add(BadgePill(m.Year));
-            if (pills.Count > 0)
-                kids.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Children = pills.ToArray() });
+            if (EyebrowText(m, cfg) is { Length: > 0 } eyebrow)
+                kids.Add(EyebrowRun(eyebrow) with { Width = cover });
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
@@ -155,11 +154,55 @@ static class DetailRail
         };
     }
 
+    // Compact identity strip (WP-κ): cover + truncated title + expand control. Collapse no longer vanishes the rail —
+    // playlists especially need the title when art is weak/generic. Same HeroArtwork decode path as the full rail so
+    // the cover texture stays warm across the detent. expand restores the full rail (persisted by the caller).
+    public static Element BuildCompact(DetailModel m, float stripW, Action expand)
+    {
+        const float pad = Spacing.S;   // 8 — tighter than the full rail; cover still fills the strip
+        float cover = MathF.Max(48f, stripW - pad - pad);
+        Element coverHit = new BoxEl
+        {
+            Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
+            Shadow = Elevation.Card, ClipToBounds = true, Shrink = 0f, OnClick = expand,
+            Children = [HeroArtwork(m, cover, saturation: 1.18f)],
+        };
+        Element title = new TextEl(m.Title)
+        {
+            Size = 12f, Weight = 600, Color = Tok.TextPrimary,
+            Width = cover, MinWidth = 0f, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+            Wrap = TextWrap.WrapWholeWords,
+        };
+        Element expandHit = new BoxEl
+        {
+            Width = cover, Height = 28f, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(Radii.Control),
+            HoverFill = Tok.FillSubtleSecondary, OnClick = expand,
+            Children = [Icon(Icons.ChevronRight, 14f, Tok.TextSecondary)],
+        };
+        Element strip = new BoxEl
+        {
+            Key = "detail-rail-compact",
+            Direction = 1, Width = stripW, Shrink = 0f, Gap = Spacing.S,
+            Padding = new Edges4(pad, Spacing.L, pad, Spacing.L),
+            Fill = Tok.FillLayerDefault, ClipToBounds = true,
+            Children =
+            [
+                coverHit,
+                title,
+                new BoxEl { Grow = 1f, MinHeight = 0f },   // push the chevron to the foot
+                expandHit,
+            ],
+        };
+        return ToolTip.Wrap(strip, m.Title);
+    }
+
     // The header for the VERTICAL (narrow) layout, fixed above the scrolling track list. The cover sits on the LEFT with
     // the metadata (badges/owner, title, artist, meta) BESIDE it (filling the width to the right of the art); the PLAY
     // cluster + the context actions (copy-to-playlist / add-to-queue) stack full-width below. Center-aligned so the cover
     // and the text block balance (only a small symmetric gap, never a big wedge under the cover). The title wraps to
-    // ≤3 lines (no truncation). The list's own command bar follows below (in the track list chrome). Drops the pills + description.
+    // ≤3 lines (no truncation). The list's own command bar follows below (in the track list chrome). Drops the description.
     public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> modelSource, bool includeReleasePanel = true)
     {
         const float coverSz = 140f;
@@ -167,10 +210,9 @@ static class DetailRail
 
         if (cfg.Badges == BadgeStyle.TypeYear)
         {
-            var pills = new List<Element>(2);
-            if (m.BadgeType is { Length: > 0 }) pills.Add(BadgePill(m.BadgeType));
-            if (m.Year is { Length: > 0 }) pills.Add(BadgePill(m.Year));
-            if (pills.Count > 0) info.Add(new BoxEl { Direction = 0, Gap = Spacing.S, Children = pills.ToArray() });
+            // The info column already clamps (Grow/Basis 0) — the run's MaxLines/ellipsis carries the rest, so it needs
+            // no explicit Width here (unlike the fixed-cover-edge rail above).
+            if (EyebrowText(m, cfg) is { Length: > 0 } eyebrow) info.Add(EyebrowRun(eyebrow));
         }
         else if (cfg.Badges == BadgeStyle.OwnerRow && m.OwnerName is { Length: > 0 })
         {
@@ -319,15 +361,31 @@ static class DetailRail
     internal static bool ShowCollaborators(DetailModel m)
         => m.Collaborators is { Count: > 0 } members && (m.Capabilities.IsCollaborative || members.Count >= 2);
 
-    internal static Element BadgePill(string text) => new BoxEl
+    /// <summary>The identity EYEBROW string, for every detail header (this rail, the narrow header, the vertical hero).
+    /// ONE composition so the same release can never be worded two ways across a layout cross: "ALBUM · 2019", the kind
+    /// alone when the year is unknown (a show, an undated release), the year alone when the kind is, and "" when neither
+    /// is known.</summary>
+    internal static string EyebrowText(DetailModel m, DetailConfig cfg)
+        => cfg.Badges switch
+        {
+            BadgeStyle.TypeYear => m.BadgeType is { Length: > 0 } type && m.Year is { Length: > 0 } year
+                ? type + " · " + year
+                : m.BadgeType ?? m.Year ?? "",
+            BadgeStyle.OwnerRow => Loc.Get(Strings.Nav.Playlist),
+            _ => Loc.Get(Strings.Nav.YourLibrary),
+        };
+
+    /// <summary>The eyebrow RUN — small, heavy, tracked-out tertiary metadata on one line. Shared with the vertical
+    /// hero: the type/year fact must look identical in both layouts, so the styling has exactly one definition.</summary>
+    internal static TextEl EyebrowRun(string text) => new(text)
     {
-        Corners = CornerRadius4.All(14f), Padding = new Edges4(10f, 3f, 10f, 5f),
-        Fill = Tok.FillSubtleSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-        Children = [new TextEl(text) { Size = 11f, Weight = 600, Color = Tok.TextSecondary, CharSpacing = 40f }],
+        Size = 11f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 40f,
+        MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
     };
 
+    // The WaveeCta media pill on the cover-extracted accent (WaveeCta resolves the WCAG on-fill ink itself).
     static Element PlayPill(ColorF accent, Action onPlay)
-        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Detail.Play), accent, ColorContrast.PickContrast(accent), onPlay);
+        => WaveeCta.Play(accent, onPlay, Loc.Get(Strings.Detail.Play));
 
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {

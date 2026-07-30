@@ -149,6 +149,121 @@ public class ExtensionEtagCacheTests
         response.ExtendedMetadata.Add(array);
         return response.ToByteArray();
     }
+
+    [Fact]
+    public async Task Missing404_PersistsWithoutEtag_AndRefetchSendsNoEtag()
+    {
+        const string uri = "spotify:track:missing";
+        string path = Path.Combine(Path.GetTempPath(), "wavee-ext-miss-" + Guid.NewGuid().ToString("N") + ".db");
+        static void DeleteDb(string p)
+        {
+            foreach (string suffix in new[] { "", "-wal", "-shm" })
+                try { File.Delete(p + suffix); } catch { }
+        }
+
+        try
+        {
+            string? secondEtag = "sentinel";
+            using (var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "en"))
+            {
+                var http = new FakeExchange((req, call) =>
+                {
+                    var body = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body!));
+                    var query = Assert.Single(Assert.Single(body.EntityRequest).Query);
+                    if (call == 2) secondEtag = query.Etag;
+                    // Wire offers an ETag on 404 — Fold must refuse to adopt it onto Missing.
+                    return new HttpResp(200, new Dictionary<string, string>(),
+                        ExtensionResponse(uri, Xm.ExtensionKind.TrackV4, 404, "should-not-stick", null));
+                });
+                var source = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
+                var cache = new ExtensionEtagCache(source, () => Ctx, persistent: cold);
+
+                var first = await cache.GetAsync([(uri, Xm.ExtensionKind.TrackV4)], TestContext.Current.CancellationToken);
+                Assert.True(first[(uri, Xm.ExtensionKind.TrackV4)].Missing);
+                Assert.Null(first[(uri, Xm.ExtensionKind.TrackV4)].Etag);
+                cold.Flush();
+
+                var rows = cold.LoadExtensions([uri], (int)Xm.ExtensionKind.TrackV4);
+                Assert.True(Assert.Single(rows).Missing);
+                Assert.Null(Assert.Single(rows).Etag);
+
+                cache.MarkStale(uri, Xm.ExtensionKind.TrackV4);
+                await cache.GetAsync([(uri, Xm.ExtensionKind.TrackV4)], TestContext.Current.CancellationToken);
+                Assert.True(string.IsNullOrEmpty(secondEtag));
+                Assert.Equal(2, http.Calls);
+            }
+        }
+        finally { DeleteDb(path); }
+    }
+
+    [Fact]
+    public async Task AbsentFromResponse_DoesNotSeed_AndDoesNotInventMissing()
+    {
+        const string present = "spotify:track:present";
+        const string absent = "spotify:track:absent";
+        var http = new FakeExchange((_, _) =>
+            new HttpResp(200, new Dictionary<string, string>(),
+                ExtensionResponse(present, Xm.ExtensionKind.TrackV4, 200, "v1", ByteString.CopyFromUtf8("payload"))));
+        // Response deliberately omits `absent` — GetAsync must not Seed a synthetic Missing for it.
+        var source = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
+        var cache = new ExtensionEtagCache(source, () => Ctx);
+
+        var values = await cache.GetAsync(
+            [(present, Xm.ExtensionKind.TrackV4), (absent, Xm.ExtensionKind.TrackV4)],
+            TestContext.Current.CancellationToken);
+
+        Assert.False(values[(present, Xm.ExtensionKind.TrackV4)].Missing);
+        Assert.False(values.ContainsKey((absent, Xm.ExtensionKind.TrackV4)));
+
+        // Second call: present is fresh (no network); absent still misses → network again for the omitted key.
+        await cache.GetAsync(
+            [(present, Xm.ExtensionKind.TrackV4), (absent, Xm.ExtensionKind.TrackV4)],
+            TestContext.Current.CancellationToken);
+        Assert.Equal(2, http.Calls);
+    }
+
+    [Fact]
+    public async Task MissingCannot304_PastTtl_RequiresFullBody()
+    {
+        const string uri = "spotify:track:ghost";
+        // Pre-seed a Missing row WITH an etag via cold tier (legacy wedge shape), then MarkStale + 304 from wire —
+        // FetchBatch must refuse the 304 and leave the key unsealed for a full-body retry.
+        string path = Path.Combine(Path.GetTempPath(), "wavee-ext-304miss-" + Guid.NewGuid().ToString("N") + ".db");
+        static void DeleteDb(string p)
+        {
+            foreach (string suffix in new[] { "", "-wal", "-shm" })
+                try { File.Delete(p + suffix); } catch { }
+        }
+
+        try
+        {
+            using var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, "en");
+            long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            cold.UpsertExtension(new ColdExtension(uri, (int)Xm.ExtensionKind.TrackV4, null, "legacy-etag", 0,
+                Missing: true, now + 3600, now));
+            cold.Flush();
+
+            int calls = 0;
+            var http = new FakeExchange((req, _) =>
+            {
+                calls++;
+                var body = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body!));
+                // HydrateFromCold strips ETag on Missing → no conditional; if a 304 somehow arrives with Missing
+                // prior, Fold/FetchBatch must not adopt it. Force a 304 body to exercise the guard.
+                return new HttpResp(200, new Dictionary<string, string>(),
+                    ExtensionResponse(uri, Xm.ExtensionKind.TrackV4, 304, "legacy-etag", null));
+            });
+            var source = new ExtendedMetadataSource(http, () => "https://spclient.test", () => Ctx);
+            var cache = new ExtensionEtagCache(source, () => Ctx, persistent: cold);
+            cache.MarkStale(uri, Xm.ExtensionKind.TrackV4);
+
+            var values = await cache.GetAsync([(uri, Xm.ExtensionKind.TrackV4)], TestContext.Current.CancellationToken);
+            // 304-on-Missing is dropped from FetchBatch result → key stays out of the values dict (unsealed).
+            Assert.False(values.ContainsKey((uri, Xm.ExtensionKind.TrackV4)));
+            Assert.Equal(1, calls);
+        }
+        finally { DeleteDb(path); }
+    }
 }
 
 public class BulkMetadataEtagTests

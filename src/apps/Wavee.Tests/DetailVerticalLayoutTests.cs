@@ -96,7 +96,23 @@ public class DetailVerticalLayoutTests
     {
         Assert.Equal(56f, DetailVerticalLayout.CompactIdentityHeight);
         Assert.Equal(36f, DetailVerticalLayout.CompactArtworkSize);
-        Assert.Equal(93f, DetailVerticalLayout.StickyClipInset);
+        Assert.Equal(37f, DetailVerticalLayout.ChromeExtent());
+        Assert.Equal(85f, DetailVerticalLayout.ChromeExtent(contentFilterExtent: 48f));
+        Assert.Equal(93f, DetailVerticalLayout.StickyClipInset());
+        Assert.Equal(141f, DetailVerticalLayout.StickyClipInset(contentFilterExtent: 48f));
+    }
+
+    [Fact]
+    public void VerticalViewport_MapsEveryLiveTrackToExpandableSlot()
+    {
+        const int visibleTracks = 4;
+        Assert.Equal(DetailVerticalItemRole.Hero, DetailVerticalLayout.ItemRole(0, visibleTracks));
+        Assert.Equal(DetailVerticalItemRole.Chrome, DetailVerticalLayout.ItemRole(1, visibleTracks));
+        for (int i = 2; i < 2 + visibleTracks; i++)
+            Assert.Equal(DetailVerticalItemRole.ExpandableTrack,
+                DetailVerticalLayout.ItemRole(i, visibleTracks));
+        Assert.Equal(DetailVerticalItemRole.Empty,
+            DetailVerticalLayout.ItemRole(2 + visibleTracks, visibleTracks));
     }
 
     [Theory]
@@ -106,52 +122,17 @@ public class DetailVerticalLayoutTests
     public void CollapseDistance_EndsAtCompactIdentity(float expanded, float expected)
         => Assert.Equal(expected, DetailVerticalLayout.CollapseDistance(expanded));
 
-    [Fact]
-    public void SideIdentityMorph_IsLateAndHysteretic()
-    {
-        float enter = DetailVerticalLayout.IdentityMorphEnterOffset(
-            DetailHeroOrientation.SideBySide,
-            DetailVerticalLayout.SideArtworkSize,
-            collapseDistance: 240f);
-
-        Assert.Equal(88f, enter);
-        Assert.Equal(64f, DetailVerticalLayout.IdentityMorphExitOffset(enter));
-    }
-
-    [Fact]
-    public void ImmersiveIdentityMorph_TracksBottomTokenGeometry()
-    {
-        float enter = DetailVerticalLayout.IdentityMorphEnterOffset(
-            DetailHeroOrientation.Immersive,
-            artworkSize: 580f,
-            collapseDistance: 600f);
-
-        Assert.Equal(526.08f, enter, 2);
-        Assert.Equal(502.08f, DetailVerticalLayout.IdentityMorphExitOffset(enter), 2);
-    }
-
-    [Fact]
-    public void CompactIdentityMorph_UsesThumbnailGeometry()
-    {
-        float enter = DetailVerticalLayout.IdentityMorphEnterOffset(
-            DetailHeroOrientation.Compact,
-            DetailVerticalLayout.CompactHeroArtworkSize,
-            collapseDistance: 240f);
-
-        Assert.Equal(72f, enter);
-        Assert.Equal(48f, DetailVerticalLayout.IdentityMorphExitOffset(enter));
-    }
-
     [Theory]
-    [InlineData(204f, 88f, 64f, 126.48f, 102f)]
-    [InlineData(568f, 520f, 496f, 536f, 504f)]
-    public void CompactTools_ArriveAfterIdentityAndLeaveBeforeIt(
-        float collapse, float identityEnter, float identityExit, float toolsEnter, float toolsExit)
+    [InlineData(204f, 108f, 160f)]
+    [InlineData(568f, 472f, 524f)]
+    [InlineData(40f, 0f, 0f)]
+    public void ScrollHandoff_UsesLateOverlappingWindows(float collapse, float expandedStart, float compactStart)
     {
-        Assert.Equal(toolsEnter, DetailVerticalLayout.ToolsEnterOffset(collapse, identityEnter), 2);
-        Assert.Equal(toolsExit, DetailVerticalLayout.ToolsExitOffset(collapse, identityExit), 2);
-        Assert.True(toolsEnter > identityEnter);
-        Assert.True(toolsExit > identityExit);
+        Assert.Equal(expandedStart, DetailVerticalLayout.ExpandedFadeStart(collapse));
+        Assert.Equal(compactStart, DetailVerticalLayout.CompactRevealStart(collapse));
+        // Compact identity starts before the expanded presentation reaches zero, so there is no dead visual interval.
+        Assert.True(compactStart < collapse);
+        Assert.True(expandedStart <= compactStart);
     }
 
     [Theory]

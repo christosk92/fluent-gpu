@@ -14,7 +14,9 @@ namespace FluentGpu.Controls;
 /// (cause-mapped — a programmatic close, i.e. the caller writing <c>false</c>, does NOT echo <c>onOpenChanged</c>). The
 /// flip/nudge/live-anchor-follow/focus-restore/light-dismiss all come free from the overlay host + FlyoutPositioner.
 /// The signal freezes at mount (bind wiring is mount-only) — swapping the signal requires a re-key (the controlled-input
-/// contract). For an event-driven, self-managed flyout button use <see cref="Flyout.Attach"/>.
+/// contract); the <paramref name="anchor"/> and <paramref name="content"/>, by contrast, are RE-PUSHED live on every
+/// parent re-render (<see cref="Popup.Props"/> + <c>UseProps</c>), so a re-rendered trigger stays current. For an
+/// event-driven, self-managed flyout button use <see cref="Flyout.Attach"/>.
 /// </summary>
 public static class Popup
 {
@@ -32,15 +34,21 @@ public static class Popup
         Action<bool>? onOpenChanged = null,
         FlyoutPlacement placement = FlyoutPlacement.BottomLeft,
         PopupOptions options = default)
-        => Embed.Comp(() => new PopupCore
+        => Embed.Comp(new Props(anchor, content), () => new PopupCore
         {
-            Anchor = anchor,
-            Content = content,
             IsOpenSignal = isOpen,
             OnOpenChanged = onOpenChanged,
             Placement = placement,
             Options = options.Equals(default) ? new PopupOptions(Chrome: PopupChrome.Popup) : options,
         });
+
+    /// <summary>The RE-PUSHED half of the popup's inputs (<c>Embed.Comp(props, …)</c>): the anchor element and the
+    /// content factory are rebuilt by the caller on every parent re-render, so they ride the props channel and stay
+    /// LIVE on the reused core (a reused ComponentEl never re-runs its factory — see
+    /// design/subsystems/component-props-contract.md). The core reads them with <c>UseProps</c>. Everything else
+    /// (the open signal, onOpenChanged, placement, options) is a documented MOUNT-ONLY seed: the bind/effect wiring
+    /// is mount-only, so those stay plain fields set in the factory closure and a swap requires a re-key.</summary>
+    internal sealed record Props(Element Anchor, Func<Element> Content);
 }
 
 /// <summary>Internal controlled-popup component: captures the anchor node (<see cref="BoxEl.OnRealized"/>), resolves the
@@ -49,8 +57,8 @@ public static class Popup
 /// back + fires onOpenChanged(false) once.</summary>
 internal sealed class PopupCore : Component
 {
-    public required Element Anchor;
-    public required Func<Element> Content;
+    // Mount-only seeds (the controlled-input contract: the bind/effect wiring below is mount-once). The LIVE inputs —
+    // the anchor element + the content factory — arrive through Popup.Props (UseProps in Render).
     public Signal<bool>? IsOpenSignal;
     public Action<bool>? OnOpenChanged;
     public FlyoutPlacement Placement = FlyoutPlacement.BottomLeft;
@@ -58,6 +66,8 @@ internal sealed class PopupCore : Component
 
     public override Element Render()
     {
+        // Re-pushed props (anchor + content stay live across parent re-renders); reading them subscribes this render.
+        var p = UseProps<Popup.Props>();
         // Auto-materialize the open signal when the caller passed none (the controlled-input "control made its own
         // signal" contract). The UseSignal call is unconditional (stable hook order); the field only selects which one.
         var owned = UseSignal(false);
@@ -67,7 +77,7 @@ internal sealed class PopupCore : Component
         var handle = UseRef<OverlayHandle?>(null);
         var placement = Placement;
         var options = Options;
-        var content = Content;
+        var content = p.Content;      // latest content factory (the effect body is re-bound every render)
         var onOpenChanged = OnOpenChanged;
 
         // Auto-tracked open/close driver: reading isOpen.Value subscribes this effect, so it re-runs on every open-state
@@ -103,7 +113,7 @@ internal sealed class PopupCore : Component
         {
             AlignSelf = FlexAlign.Start,
             OnRealized = h => anchorRef.Value = h,
-            Children = [Anchor],
+            Children = [p.Anchor],
         };
     }
 }

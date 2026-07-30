@@ -192,15 +192,9 @@ sealed class EpisodeList : Component
         Children = [Icon(Icons.Play, 15f, Tok.TextOnAccentPrimary)],
     };
 
-    static Element ResumePill(Action resume) => new BoxEl
-    {
-        Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Shrink = 0f,
-        Corners = CornerRadius4.All(18f), Padding = new Edges4(Spacing.L, 8f, Spacing.L, 8f),
-        Fill = Tok.AccentDefault, HoverScale = 1.04f, PressScale = 0.96f, OnClick = resume,
-        Children =
-        [
-            Icon(Icons.Play, 13f, Tok.TextOnAccentPrimary),
-            new TextEl(Loc.Get(Strings.Podcast.Resume)) { Size = 13f, Weight = 700, Color = Tok.TextOnAccentPrimary },
-        ],
-    };
+    // The shared media pill on the SYSTEM accent (nothing here is artwork-derived). Shrink 0 so the banner's flexing copy
+    // column gives first — without it the pill is the child that collapses when the title is long.
+    static Element ResumePill(Action resume)
+        => WaveeCta.Accent(Loc.Get(Strings.Podcast.Resume), Tok.AccentDefault, resume)
+            with { Shrink = 0f };
 }

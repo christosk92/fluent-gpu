@@ -270,14 +270,27 @@ public sealed class TitleBar : Component
         {
             // A LEFT-aligned tab strip hugging its content (Shrink=1 so a too-full strip gives way before the captions).
             // It is the ONE Client island; the Grow=1 spacer after it is the Caption drag band (WinUI TabStripFooter).
+            // The island's laid-out rect IS the reported Client region, so it must END where the strip's last real child
+            // does — a strip that padded itself out with a Grow filler would hand that padding to HTCLIENT and make it
+            // undraggable (TabStrip therefore hugs; see its Render).
+            // MinWidth=0 + ClipToBounds: on a narrow window the island is the one part that yields (the WinUI contract —
+            // the caption cluster never moves), so let it shrink past the strip's natural min and clip what doesn't fit
+            // instead of letting the strip paint out over the drag strip and the caption buttons.
             var tabsIsland = new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Stretch, Shrink = 1, Height = ExpandedHeight,
+                Direction = 0, AlignItems = FlexAlign.Stretch, Shrink = 1, MinWidth = 0f, Height = ExpandedHeight,
+                ClipToBounds = true,
                 OnRealized = h => _tabs = h,
                 Children = [tabsFunc()],
             };
             kids.Add(tabsIsland);
-            kids.Add(new BoxEl { Grow = 1, Shrink = 1, Height = ExpandedHeight });   // flexible Caption drag band
+            // Notepad carries the TabView bottom hairline through its TabStripFooter/caption drag band. Continue the
+            // exact same bound ink here; keeping this OUTSIDE tabsIsland preserves the HTCAPTION hit-test contract.
+            kids.Add(TabStrip.RailBaselineHost(grow: 1f) with
+            {
+                Shrink = 1f,
+                Height = ExpandedHeight,
+            });
         }
         else
         {
@@ -314,7 +327,9 @@ public sealed class TitleBar : Component
             });
         }
 
-        kids.Add(new BoxEl { Width = MinDragStrip });             // the guaranteed-grabbable drag strip
+        kids.Add(Tabs is not null
+            ? TabStrip.RailBaselineHost(MinDragStrip) with { Height = ExpandedHeight }
+            : new BoxEl { Width = MinDragStrip });                // the guaranteed-grabbable drag strip
 
         if (ShowCaptionButtons)
         {

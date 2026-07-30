@@ -134,6 +134,13 @@ public sealed class ToolTip : Component
         var lastPointerLocal = UseRef<Point2>(default);   // last hover position (wrapper-local) → Mouse placement
         var dismissedUntilLeave = UseRef(false);          // press- or timeout-dismissed: no re-open until leave + re-enter
         var bubbleNode = UseRef<NodeHandle>(default);     // the open bubble's realized node → its rect joins the safe zone
+        // The bubble's content thunk is captured by the overlay ENTRY at open time and re-invoked by OverlayHost every
+        // render (OverlayHost.cs:1251). Capturing the `text` LOCAL froze the bubble at the text of whichever render
+        // opened it: a recycled owner (ToolTip.Wrap re-pushes props, so the component is reused, not remounted) kept
+        // showing the previous entity's tooltip. A Ref written each render is not reactive — no subscription, no
+        // backwards write — and the thunk reads the CURRENT value.
+        var textRef = UseRef("");
+        textRef.Value = text;
         var openedAtMs = UseRef<long>(0);                 // monotonic ms at open → the 5s dwell survives 2↔3 phase flips
         var safePoll = UseSignal(0);                      // bumped per in-zone safe-zone elapse → remounts the 1s poll clock
 
@@ -147,7 +154,7 @@ public sealed class ToolTip : Component
         var lastClosedAtMs = UseRef<long>(long.MinValue / 2);
         var placementMode = Placement;
 
-        Func<Element> bubbleContent = () => BubbleContent(text, x => bubbleNode.Value = x);
+        Func<Element> bubbleContent = () => BubbleContent(textRef.Value, x => bubbleNode.Value = x);
 
         void OpenNow()
         {
@@ -164,11 +171,12 @@ public sealed class ToolTip : Component
                 // positioner adds FlyoutMargin (4) below a Bottom-placed anchor, so the synthetic point-rect carries
                 // the remaining 7; collisions flip it above the pointer.
                 var local = lastPointerLocal.Value;
-                var node = anchor.Value;
                 h.Value = svc.OpenAt(
                     () =>
                     {
                         var scene = Context.Scene;
+                        var node = anchor.Value;   // LIVE: a re-keyed/remounted target changes the node; a capture
+                                                   // would strand the bubble on a dead handle and clamp it to origin
                         RectF abs = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
                         return new RectF(abs.X + local.X, abs.Y + local.Y + (MousePlacementVerticalOffset - FlyoutPositioner.FlyoutMargin), 0f, 0f);
                     },
@@ -186,11 +194,12 @@ public sealed class ToolTip : Component
                 // The positioner adds FlyoutMargin (4) in the major direction, so the synthetic rect carries the rest;
                 // FlyoutPositioner flips below on a collision.
                 bool keyboard = keyboardMode.Value;
-                var node = anchor.Value;
                 h.Value = svc.OpenAt(
                     () =>
                     {
                         var scene = Context.Scene;
+                        var node = anchor.Value;   // LIVE: a re-keyed/remounted target changes the node; a capture
+                                                   // would strand the bubble on a dead handle and clamp it to origin
                         RectF abs = scene is not null && !node.IsNull && scene.IsLive(node) ? scene.AbsoluteRect(node) : default;
                         float inflate = (keyboard ? KeyboardPlacementOffset : MousePlacementOffset) - FlyoutPositioner.FlyoutMargin;
                         return new RectF(abs.X - inflate, abs.Y - inflate, abs.W + inflate * 2f, abs.H + inflate * 2f);
@@ -296,6 +305,25 @@ public sealed class ToolTip : Component
             autoOpened.Value = true;
             OpenNow();
         }, OpenOnMount);
+
+        // Owner unmount must not orphan the bubble. The component's OverlayHandle is the ONLY thing an unmounting
+        // ToolTip still owns that the host does not: the entry lives in OverlayServiceImpl.Entries and leaves only via
+        // Closing → AfterAnimations → Finalize, so a wrapper that disappears while open leaves a live entry whose rect
+        // thunk now resolves against a DEAD node (scene.IsLive false ⇒ abs = default ⇒ the synthetic point at the
+        // viewport origin) — and the placement pass re-places rect-anchored entries on EVERY OverlayHost render
+        // (OverlayHost.cs:835-839), so the bubble walks to the viewport's top-left corner and stays.
+        //
+        // Handle-only teardown ON PURPOSE: CloseNow() also writes phase / bubbleNode / lastClosedAtMs / keyboardMode,
+        // cells being torn down in this very pass (RunAllCleanups). Those writes cannot throw (a SignalCell is not
+        // disposed) but they are useless — no subscriber survives — and they re-enter a dying reactive graph.
+        UseEffect(() =>
+        {
+            return () =>
+            {
+                if (h.Value is { IsOpen: true } o) o.Close();
+                h.Value = null;
+            };
+        }, DepKey.Empty);
 
         int ph = phase.Value;   // subscribe → re-render when the timer phase changes (mount/unmount the clock)
         int poll = safePoll.Value;   // subscribe → an in-zone safe-zone elapse remounts a fresh 1s poll clock

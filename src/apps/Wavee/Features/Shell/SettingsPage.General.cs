@@ -66,6 +66,19 @@ sealed partial class SettingsPage
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
+        // The window material is the one appearance toggle that is NOT a token read: it is a DWM attribute on the HWND, so
+        // flipping it has to re-invoke DwmSetWindowAttribute on the live window (FluentApp.SetWindowMaterialAlt, which also
+        // becomes what the host re-applies on a later theme flip). Hence its own writer rather than AppearanceToggle.
+        Element WindowMaterialToggle() => ToggleSwitch.Create(
+            new Signal<bool>(settings?.Get(WaveeSettings.WindowMaterialBaseMica) ?? false), onChange: _ =>
+            {
+                if (settings is null) return;
+                bool baseMica = !settings.Get(WaveeSettings.WindowMaterialBaseMica);
+                settings.Set(WaveeSettings.WindowMaterialBaseMica, baseMica);
+                FluentGpu.FluentApp.SetWindowMaterialAlt(!baseMica);   // live: base Mica ⇔ !micaAlt
+                Bump();
+            }, style: SettingsCard.CompactToggleStyle());
+
         void SetTheme(int mode)
         {
             WaveeTheme.ApplyThemeMode(mode, settings);
@@ -105,6 +118,8 @@ sealed partial class SettingsPage
                 AppearanceToggle(WaveeSettings.DisableMarquee), Icons.Font),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.DisableColorWashes), Loc.Get(Strings.Settings.Appearance.DisableColorWashesSub),
                 AppearanceToggle(WaveeSettings.DisableColorWashes), Icons.Brush),
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.WindowMaterial), Loc.Get(Strings.Settings.Appearance.WindowMaterialSub),
+                WindowMaterialToggle(), Icons.Brush),
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
                 PageLayoutCards(pageLayout, SetPageLayout), Icons.List),

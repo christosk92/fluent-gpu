@@ -589,6 +589,13 @@ public sealed class FlexLayout
                     // so ContentExtent is reasonable this frame; arrange + realize-after-layout correct it.
                     if (sc.Layout is IViewportVirtualLayout dvl)
                         dvl.SetViewport(horizontal ? (float.IsInfinity(availW) ? 0f : MathF.Max(0f, availW)) : 0f, cross);
+                    // Natural measured stacks publish their extent to an OUTER scroller. Refresh realized row extents
+                    // before reading ContentExtent so a reflowing drawer pushes trailing page content in this same
+                    // layout pass; waiting for ArrangeVirtualMeasured leaves the parent one frame behind and produces
+                    // the visible album-only clip/snap. Filling list viewports never enter this branch.
+                    if (sc.Layout is MeasuredStackVirtualLayout measured
+                        && !content.IsNull && _scene.IsLive(content))
+                        RefreshNaturalMeasuredStack(in sc, measured, content, cross, horizontal);
                     float main = sc.Layout is not null ? sc.Layout.ContentExtent(sc.ItemCount, cross)
                                : _scene.TryGetExtents(node, out var extents) && extents is not null ? (float)extents.Total
                                : 0f;
@@ -640,6 +647,27 @@ public sealed class FlexLayout
         ref RectF b = ref _scene.Bounds(node);
         b = new RectF(b.X, b.Y, w, h);
         return new Size2(w, h);
+    }
+
+    /// <summary>Updates an auto-main measured stack's intrinsic extent before its viewport is measured. Allocation-free;
+    /// arrange repeats the measure to preserve the normal measured-virtual anchor/deferred-correction contract.</summary>
+    private void RefreshNaturalMeasuredStack(in ScrollState sc, MeasuredStackVirtualLayout layout,
+                                             NodeHandle content, float cross, bool horizontal)
+    {
+        _ = layout.ContentExtent(sc.ItemCount, cross);       // ensure/reset the backing extent table before SetMeasured
+        int ord = 0;
+        for (var row = _scene.FirstChild(content); !row.IsNull; row = _scene.NextSibling(row), ord++)
+        {
+            int index = VirtualIndex(in sc, ord);
+            if ((uint)index >= (uint)sc.ItemCount) continue;
+            var rect = layout.ItemRect(index, cross);
+            ref LayoutInput rli = ref _scene.Layout(row);
+            float measureW = horizontal
+                ? MathF.Max(0f, rect.H - rli.Margin.Top - rli.Margin.Bottom)
+                : MathF.Max(0f, rect.W - rli.Margin.Left - rli.Margin.Right);
+            var measured = Measure(row, measureW);
+            layout.SetMeasured(index, horizontal ? measured.Width : measured.Height, cross);
+        }
     }
 
     private void ArrangeViewport(NodeHandle node, float finalW, float finalH, in LayoutInput li)
@@ -852,7 +880,7 @@ public sealed class FlexLayout
         if (horizontal) { scw.TargetX += delta; if (!float.IsNaN(scw.PendingTargetX)) scw.PendingTargetX += delta; }
         else            { scw.TargetY += delta; if (!float.IsNaN(scw.PendingTargetY)) scw.PendingTargetY += delta; }
         if (!float.IsNaN(scw.PendingRawOffset)) scw.PendingRawOffset += delta;
-        if (ScrollTrace.On) ScrollTrace.Note(100, delta, nodeIdx, anchorIndex, offset);
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, nodeIdx, anchorIndex, offset);
     }
 
     /// <summary>True when the layout participates in estimate-then-correct (not a fixed-geometry grid posing as measured).</summary>
@@ -903,7 +931,7 @@ public sealed class FlexLayout
             // measures the settled value and usually matches, so no pin fires at all).
             bool fresh = ord >= sc.PersistentPrefixCount && (index < prevFirst || index > prevLast);
             if (fresh && index < anchorIndex) { deferred = true; continue; }
-            if (FluentGpu.Foundation.ScrollTrace.On && MathF.Abs(main - oldMain) > 0.5f)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && MathF.Abs(main - oldMain) > 0.5f)
                 FluentGpu.Foundation.ScrollTrace.Note(111, main - oldMain, (int)node.Raw.Index, index, main);   // extent correction: which row, by how much
             layout.SetMeasured(index, main, cross);
         }

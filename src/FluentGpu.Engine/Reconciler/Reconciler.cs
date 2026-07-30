@@ -752,7 +752,13 @@ public sealed class TreeReconciler
         _ => true,
     };
 
-    /// <summary>Mount/update/replace a single optional child under <paramref name="parent"/> (component output, provider, Show).</summary>
+    /// <summary>Mount/update/replace a single optional child under <paramref name="parent"/> (component output, provider, Show).
+    /// <para>CONTRACT: this slot pairs old↔new by <see cref="Element.ElementTypeId"/> ONLY — <see cref="Element.Key"/> is
+    /// honored exclusively by <see cref="ReconcileChildren"/>. A key on a component's ROOT element, a provider body, or a
+    /// Show body is therefore INERT: same type ⇒ update in place, whatever the key says. Honoring it here would turn a
+    /// key change into a remount for every such site in the tree (an audited-unsafe blast radius: keyed roots whose key
+    /// varies with a measured width or an expansion target exist today and rely on being updated), so the semantic stays
+    /// as-is and the DEBUG tripwire below makes the dropped request loud instead of silent.</para></summary>
     private void ReconcileSingleChild(NodeHandle parent, Element? newChild, Element? oldChild)
     {
         var child = _scene.FirstChild(parent);
@@ -770,6 +776,12 @@ public sealed class TreeReconciler
         }
         else if (oldChild is not null && oldChild.ElementTypeId == newChild.ElementTypeId)
         {
+            // DEBUG tripwire (report-only; the const folds the block away in release): the author asked for a REMOUNT via
+            // a changed key and this slot cannot deliver one. Same-type + both keys present + different ⇒ the intent is
+            // unambiguous, so this must never be silent again — it is how a chart froze at its seed count.
+            if (ReuseGuard.CompiledIn && ReuseGuard.Enabled
+                && newChild.Key is { Length: > 0 } nk && oldChild.Key is { Length: > 0 } ok && nk != ok)
+                ReportKeyIgnoredInSingleChildSlot(newChild, oldChild, ok, nk);
             Update(child, newChild, oldChild);
         }
         else
@@ -780,6 +792,24 @@ public sealed class TreeReconciler
             Mount(c, newChild);
             _scene.Mark(parent, NodeFlags.LayoutDirty);
         }
+    }
+
+    /// <summary>The <see cref="ReconcileSingleChild"/> tripwire's report step, split out so the hot slot keeps only the
+    /// const-folded guard. Two things the raw call site got wrong: every <c>ComponentEl</c> shares
+    /// <c>ElementTypeId</c> 3, so a ComponentEl pair whose <c>ComponentType</c> actually DIFFERS is replaced by
+    /// <see cref="Update"/> anyway — the key request IS honored there, and reporting it would be a false positive; and
+    /// "ComponentEl" names nothing an author can act on, so the report carries the component type instead.</summary>
+    private static void ReportKeyIgnoredInSingleChildSlot(Element newChild, Element oldChild, string oldKey, string newKey)
+    {
+        if (newChild is ComponentEl nce)
+        {
+            // The same two conditions Update reuses on (type identity + the skeleton↔real DeriveRenderedOutput edge).
+            if (oldChild is not ComponentEl oce || oce.ComponentType != nce.ComponentType
+                || oce.DeriveRenderedOutput != nce.DeriveRenderedOutput) return;   // replaced ⇒ the key WAS honored
+            ReuseGuard.KeyIgnoredInSingleChildSlot(nce.ComponentType.Name, oldKey, newKey);
+            return;
+        }
+        ReuseGuard.KeyIgnoredInSingleChildSlot(newChild.GetType().Name, oldKey, newKey);
     }
 
     private void ReplaceSingleChild(NodeHandle parent, Element? newChild)
@@ -1661,7 +1691,7 @@ public sealed class TreeReconciler
                     if (!_scene.IsLive(node)) return;
                     string src = sbind is not null ? sbind() : ssig!.Value;
                     int newId = Images is not null && src.Length > 0
-                        ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.Transition).Id : 0;
+                        ? Images.Request(src, dW, dH, ImagePriority.Visible, ime.BlurHash, ime.RevealTransition).Id : 0;
                     ref var paint = ref _scene.Paint(node);
                     int oldId = paint.ImageId;
                     int oldDerived = _scene.TryGetImageEffects(node, out var oldEffects) ? oldEffects.DerivedImageId : 0;
@@ -1715,7 +1745,7 @@ public sealed class TreeReconciler
     private int RequestBakedImage(in ImageEl im, int sourceId, int decodeW, int decodeH)
     {
         if (Images is null || sourceId == 0 || im.BakedBlur is not { } baked || baked.IsNone) return 0;
-        return Images.RequestBakedBlur(new ImageHandle(sourceId), decodeW, decodeH, in baked, im.Transition).Id;
+        return Images.RequestBakedBlur(new ImageHandle(sourceId), decodeW, decodeH, in baked, im.RevealTransition).Id;
     }
 
     private void WriteImageEffects(NodeHandle node, in ImageEl im, int derivedId)
@@ -1892,17 +1922,17 @@ public sealed class TreeReconciler
         VirtualWindowing.DirectionalOverscan(effOverscan, sc.FlingVelocity, avgExtent, out int lowOv, out int highOv);
 
         int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
-        if (ve.Layout is not null)
+        if (ve.ItemLayout is not null)
         {
             // Content cross first: the arrange paths window/measure the layout at the padding-subtracted inner cross
             // (published as ContentW/H on the cross axis) — passing the raw viewport here instead made a width-keyed
             // measured layout reseed its extent table every frame (alternating cross values), flapping the anchor re-pin.
             float cross = horizontal ? (sc.ContentH > 0f ? sc.ContentH : sc.ViewportH > 0f ? sc.ViewportH : Hint(ve.Height))
                                      : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW > 0f ? sc.ViewportW : Hint(ve.Width));
-            ve.Layout.Window(count, cross, viewport, offset, 0, out visibleFirst, out visibleLast);
-            ve.Layout.Window(count, cross, viewport, offset, 1, out mandFirst, out mandLast);   // +1 GUARD ROW each side — row-aligned mandatory band
-            ve.Layout.Window(count, cross, viewport, offset, lowOv, out first, out _);           // splice: low edge from the behind/low overscan
-            ve.Layout.Window(count, cross, viewport, offset, highOv, out _, out last);           //        high edge from the ahead/high overscan
+            ve.ItemLayout.Window(count, cross, viewport, offset, 0, out visibleFirst, out visibleLast);
+            ve.ItemLayout.Window(count, cross, viewport, offset, 1, out mandFirst, out mandLast);   // +1 GUARD ROW each side — row-aligned mandatory band
+            ve.ItemLayout.Window(count, cross, viewport, offset, lowOv, out first, out _);           // splice: low edge from the behind/low overscan
+            ve.ItemLayout.Window(count, cross, viewport, offset, highOv, out _, out last);           //        high edge from the ahead/high overscan
         }
         else
         {
@@ -2921,6 +2951,18 @@ public sealed class TreeReconciler
         };
     }
 
+    /// <summary>Feather width for an <c>AutoEdgeFade</c> viewport: the element's own <c>AutoEdgeFadeBand</c> when it
+    /// declares one, else <see cref="DefaultAutoEdgeFadeBandDip"/>. The DEFAULT is the contract every bool-only call site
+    /// depends on, so a declared 0 must resolve to it (0 in ScrollState means "fade off", which the bool already decided).
+    /// Negative is authoring nonsense and resolves to the default rather than an inverted mask.</summary>
+    private static float ResolveAutoEdgeFadeBand(float declared)
+        => declared > 0f ? declared : DefaultAutoEdgeFadeBandDip;
+
+    /// <summary>The standard auto-edge-fade feather width (DIP) — what every <c>AutoEdgeFade = true</c> surface gets when
+    /// it declares no band of its own. It was a bare literal at the two patch sites, which made a control's own
+    /// <c>edgeFade</c> knob look plumbed while the engine silently used this instead.</summary>
+    private const float DefaultAutoEdgeFadeBandDip = 40f;
+
     /// <summary>[Conditional("DEBUG")] one-transform-owner tripwire — the invariant stated on
     /// <see cref="Element.Transform"/>, now that an unbound static matrix is honored rather than dropped. A node may
     /// declare EITHER an explicit matrix OR the decomposed Offset/Scale/Rotation floats, and neither may be combined with
@@ -3536,12 +3578,14 @@ public sealed class TreeReconciler
                 ss.MinZoom = s.MinZoom; ss.MaxZoom = s.MaxZoom;
                 ss.EdgeCueConfig = ResolveEdgeCues(s.EdgeCues);
                 ss.ItemClipTopInset = float.NaN;
+                ss.ItemClipTopFadeBand = 0f;
                 ss.Chaining = (byte)s.Chaining;                  // nested-scroll hand-off policy (touch pan)
                 // Change-only scroll-geometry observer (the escape hatch; pull-to-refresh / analytics).
                 if (s.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
                 if (s.EdgeFade is { } sef) _scene.SetEdgeFade(node, sef); else _scene.ClearEdgeFade(node);
-                ss.AutoEdgeFade = s.AutoEdgeFade; ss.AutoEdgeFadeBand = s.AutoEdgeFade ? 40f : 0f;
+                ss.AutoEdgeFade = s.AutoEdgeFade;
+                ss.AutoEdgeFadeBand = s.AutoEdgeFade ? ResolveAutoEdgeFadeBand(s.AutoEdgeFadeBand) : 0f;
                 // ScrollEl owns the real clip + edge-fade scope, so it can be the native escape root for a hovered
                 // descendant (PagedShelf's measured realize-all strip). Paint-order only; never a hit-test bit.
                 ref InteractionInfo ii = ref _scene.Interaction(node);
@@ -3549,6 +3593,10 @@ public sealed class TreeReconciler
                 else ii.HandlerMask &= ~InteractionInfo.HoverElevateClipRootBit;
                 ss.AlwaysShowBar = s.AlwaysShowScrollbar;
                 ss.SuppressBar = s.SuppressScrollBar;
+                // DECLARATION-GATED (the ScrollState snap-field writer contract): only a declaring element writes the snap
+                // columns, and then on EVERY patch (so a per-render interval stays current). A null Snap leaves them
+                // exactly as they are, which is what keeps a control's/probe's post-mount SnapInterval write alive.
+                if (s.Snap is { } snapSpec) snapSpec.ApplyTo(ref ss);
                 ApplyScrollKey(node, ref ss, s.ScrollKey, isMount);   // seed (mount) / save+seed (content change) the offset
                 break;
             }
@@ -3570,18 +3618,24 @@ public sealed class TreeReconciler
                 ref ScrollState sc = ref _scene.ScrollRef(node);
                 sc.Orientation = v.Horizontal ? (byte)1 : (byte)0;
                 sc.ItemCount = Math.Max(0, v.ItemCount);
-                sc.Layout = v.Layout;
+                sc.Layout = v.ItemLayout;
                 sc.Overscan = v.Overscan;
                 sc.PersistentPrefixCount = v.RowBind is null ? 0 : Math.Clamp(v.PersistentPrefixCount, 0, sc.ItemCount);
                 sc.ItemClipTopInset = v.RowBind is null || !float.IsFinite(v.ItemClipTopInset)
                     ? float.NaN
                     : MathF.Max(0f, v.ItemClipTopInset);
+                sc.ItemClipTopFadeBand = float.IsFinite(sc.ItemClipTopInset)
+                    ? MathF.Max(0f, v.ItemClipTopFadeBand)
+                    : 0f;
                 sc.EdgeCueConfig = ResolveEdgeCues(v.EdgeCues);
                 if (v.OnScrollGeometryChanged is { } obs) _scene.SetScrollObserver(node, obs.Project, obs.Action);
                 else _scene.ClearScrollObserver(node);
                 if (v.EdgeFade is { } vef) _scene.SetEdgeFade(node, vef); else _scene.ClearEdgeFade(node);
-                sc.AutoEdgeFade = v.AutoEdgeFade; sc.AutoEdgeFadeBand = v.AutoEdgeFade ? 40f : 0f;
+                sc.AutoEdgeFade = v.AutoEdgeFade;
+                sc.AutoEdgeFadeBand = v.AutoEdgeFade ? ResolveAutoEdgeFadeBand(v.AutoEdgeFadeBand) : 0f;
                 sc.SuppressBar = v.SuppressScrollBar;
+                // Declaration-gated, exactly as for ScrollEl above (see the ScrollState snap-field writer contract).
+                if (v.Snap is { } vSnapSpec) vSnapSpec.ApplyTo(ref sc);
                 ApplyScrollKey(node, ref sc, v.ScrollKey, isMount);   // seed BEFORE RealizeWindow → first window at saved row
                 break;
             }
@@ -3650,7 +3704,7 @@ public sealed class TreeReconciler
                 if (!im.Source.IsBound)   // bound rows request via the binding (the effect owns pin/unpin)
                 {
                     int newId = (Images is not null && im.Source.Value.Length > 0)
-                        ? Images.Request(im.Source.Value, decodeW, decodeH, ImagePriority.Visible, im.BlurHash, im.Transition).Id : 0;
+                        ? Images.Request(im.Source.Value, decodeW, decodeH, ImagePriority.Visible, im.BlurHash, im.RevealTransition).Id : 0;
                     if (newId != oldId)
                     {
                         UnpinImageNode(node, oldId);

@@ -59,9 +59,12 @@ internal static partial class WaveeResizeProbe
             1011, 1010, 1009, 901, 900, 899, 861, 860, 859, 761, 760, 759,
             701, 700, 699, 681, 680, 679, 621, 620, 619, 585, 580, 579,
             561, 560, 559, 541, 540, 539, 535, 521, 520, 519, 441, 440, 439, 401, 400, 399,
-            360, 520, 760, 1180, 1500
+            // …down to the real floor: AppOptions.MinWidth is 300 DIP (was 360), so the 300-360 band is now reachable by
+            // a user drag and needs artifact coverage of its own (vertical detail mode + tier-6 table + 64-DIP hero).
+            361, 360, 359, 331, 330, 301, 300,
+            520, 760, 1180, 1500
         ]);
-        int[] screenshots = DipToPx(scale, [1500, 1180, 1010, 760, 680, 585, 580, 579, 561, 560, 559, 541, 540, 539, 535, 440, 360]);
+        int[] screenshots = DipToPx(scale, [1500, 1180, 1010, 760, 680, 585, 580, 579, 561, 560, 559, 541, 540, 539, 535, 440, 360, 330, 300]);
 
         Log.Info($"[wavee-resize-probe] scale={scale:0.00} heightPx={heightPx}");
         WarmupAndNavigateDetail(host, window);

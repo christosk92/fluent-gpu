@@ -1,7 +1,6 @@
 using System;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
-using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
@@ -9,22 +8,14 @@ namespace Wavee;
 /// Play/Shuffle geometry, motion, typography, and palette transitions cannot drift independently.</summary>
 static class HeroCta
 {
+    // The WaveeCta media pill: stock Button internals (focus ring, automation role, 83ms brush ramp) wearing the media
+    // capsule (Radii.Full at 36px, bold label, hover/press scale, hand cursor). `fill`/`foreground` remain the caller's
+    // extracted accent + its resolved ink.
+    // Signature is load-bearing: both the artist hero and the collection rail route through it, so they move together.
     public static Element Pill(string glyph, string label, ColorF fill, ColorF foreground, Action onClick,
                                bool balanced = false)
     {
-        var pill = new BoxEl
-        {
-            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(24f), Padding = new Edges4(22f, 12f, 22f, 12f),
-            Fill = fill, BrushTransitionMs = 420f, Shadow = Elevation.Card,
-            HoverScale = 1.04f, PressScale = 0.97f, Cursor = CursorId.Hand, Role = AutomationRole.Button,
-            OnClick = onClick,
-            Children =
-            [
-                Icon(glyph, 16f, foreground),
-                new TextEl(label) { Size = 15f, Weight = 700, Color = foreground },
-            ],
-        };
+        var pill = WaveeCta.Accent(label, fill, onClick, glyph, foreground);
         return balanced
             ? pill with { Grow = 1f, Basis = 0f, MinWidth = 0f, MaxWidth = 200f }
             : pill;

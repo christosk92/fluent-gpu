@@ -47,9 +47,18 @@ partial class SpotifyVideoService
 
     /// <summary>The manifest-id resolution ORDER — the ONE definition, shared by playback above and the
     /// <c>--spotify-video-manifest</c> probe: the track's OWN TrackV4 (<c>OriginalVideo[0].Gid</c>, hex) first, else its
-    /// <c>VIDEO_ASSOCIATIONS</c> counterpart's TrackV4. <c>Source</c> names the path that produced it
-    /// (<c>track-v4</c> / <c>video-associations</c> / <c>none</c>) so a diagnostic can report it. Throws only what the
-    /// metadata chain throws — callers guard.</summary>
+    /// <c>VIDEO_ASSOCIATIONS</c> counterpart's TrackV4, else the two facts the STORED association already holds.
+    /// <c>Source</c> names the path that produced it (<c>track-v4</c> / <c>video-associations</c> /
+    /// <c>assoc-counterpart</c> / <c>assoc-gid</c> / <c>none</c>) so a diagnostic can report it. Throws only what the
+    /// metadata chain throws — callers guard.
+    ///
+    /// <para>The last two tiers exist because of RELINKED (alias) track ids. Both live tiers above ask the wire about the
+    /// uri we were handed, and for an alias BOTH 404: kind 99 is keyed by the canonical id, and the alias's own TrackV4
+    /// carries no <c>original_video</c>. <c>RecoverCanonicalAsync</c> already resolved that — it stored the
+    /// canonical entity's counterpart uri and the kind-212 video gid UNDER the alias, which is what lit the row's
+    /// indicator and what Connect publishes as <c>associated_video_id</c>. Playback then re-derived from scratch and threw
+    /// that away, so a recovered alias showed a video badge and still played as audio. These tiers are reached ONLY when
+    /// the live pair already produced nothing, so they can turn a null into an answer and never the reverse.</para></summary>
     internal async Task<(string? ManifestId, string Source)> ResolveManifestIdAsync(string trackUri, CancellationToken ct = default)
     {
         // Self-contained first: the track's OWN TrackV4 → OriginalVideo[0].Gid.
@@ -58,6 +67,29 @@ partial class SpotifyVideoService
         // Fallback: the VIDEO_ASSOCIATIONS counterpart (an audio track linking out to its paired video track).
         if (await ResolveLinkedManifestIdAsync(trackUri, ct).ConfigureAwait(false) is { Length: > 0 } linked)
             return (linked, "video-associations");
+
+        // The relink tiers. Read the plane ONCE; a record only exists here if some fetch already landed one.
+        var stored = _store.GetVideoAssociation(trackUri);
+        if (stored is not { HasVideo: true })
+        {
+            _log.Debug($"[video] manifest none track={trackUri} stored={(stored is null ? "no-row" : "no-video")}");
+            return (null, "none");
+        }
+        // The canonical entity's paired video track, as recorded under this (possibly alias) uri.
+        if (stored.CounterpartUri is { Length: > 0 } counterpart
+            && !string.Equals(counterpart, trackUri, StringComparison.Ordinal)
+            && await ResolveManifestIdFromTrackV4Async(counterpart, ct).ConfigureAwait(false) is { Length: > 0 } viaStore)
+        {
+            _log.Debug($"[video] manifest via stored counterpart track={trackUri} counterpart={counterpart} manifest={viaStore}");
+            return (viaStore, "assoc-counterpart");
+        }
+        // Last: the kind-212 gid IS the manifest id (same value Connect publishes as associated_video_id).
+        if (stored.VideoGidHex is { Length: > 0 } gid)
+        {
+            _log.Debug($"[video] manifest via stored gid track={trackUri} manifest={gid}");
+            return (gid, "assoc-gid");
+        }
+        _log.Debug($"[video] manifest none track={trackUri} stored=hasVideo-but-no-counterpart-or-gid");
         return (null, "none");
     }
 

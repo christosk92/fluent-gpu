@@ -1843,6 +1843,102 @@ static class ControlsSuite
             finally { Tok.Use(saved); }
         }
 
+        // B.9c — title-bar TabStrip uses the MUX rail grammar: the selected material is caller-supplied verbatim
+        // (Wavee passes its raw translucent commanding plate), CardStroke defines the dark silhouette, the bottom rail
+        // stops at both four-DIP flares, and the separator left of selection is suppressed.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                var selected = new Signal<int>(1);
+                ColorF livePlate = ColorF.FromRgba(0x3A, 0x48, 0x57, 0x73);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("tabstrip-rail", new Size2(520, 80), 1f));
+                window.Show();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => Embed.Comp(() => new TabStrip
+                        {
+                            Items =
+                            [
+                                new TabViewItem { Header = "one", IsClosable = false },
+                                new TabViewItem { Header = "two", IsClosable = false },
+                                new TabViewItem { Header = "three", IsClosable = false },
+                            ],
+                            SelectedIndex = selected,
+                            IsAddTabButtonVisible = false,
+                            TabWidth = 100f,
+                            MinTabWidth = 100f,
+                            MaxTabWidth = 100f,
+                            SelectedFill = Prop.Of(() => livePlate),
+                        }),
+                    });
+                host.RunFrame();
+
+                var tabs = Roles(host.Scene, AutomationRole.Tab);
+                var shapes = new List<NodeHandle>();
+                var horizontalLines = new List<NodeHandle>();
+                void Collect(NodeHandle n)
+                {
+                    if (n.IsNull) return;
+                    ref var paint = ref host.Scene.Paint(n);
+                    RectF rect = host.Scene.AbsoluteRect(n);
+                    if (paint.VisualKind == VisualKind.TabShape) shapes.Add(n);
+                    if (paint.VisualKind == VisualKind.Box && rect.H is > 0f and <= 1.01f && rect.W > 1f)
+                        horizontalLines.Add(n);
+                    for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Collect(c);
+                }
+                Collect(host.Scene.Root);
+
+                NodeHandle selectedShape = NodeHandle.Null;
+                NodeHandle rimShape = NodeHandle.Null;
+                foreach (var shape in shapes)
+                {
+                    ColorF fill = host.Scene.Paint(shape).Fill;
+                    if (fill == livePlate) selectedShape = shape;
+                    if (fill == Tok.StrokeCardDefault) rimShape = shape;
+                }
+
+                bool flareClear = !selectedShape.IsNull;
+                RectF selectedRect = selectedShape.IsNull ? default : host.Scene.AbsoluteRect(selectedShape);
+                foreach (var line in horizontalLines)
+                {
+                    RectF r = host.Scene.AbsoluteRect(line);
+                    if (r.X < selectedRect.Right && r.Right > selectedRect.X) flareClear = false;
+                }
+
+                float SeparatorOpacity(NodeHandle tab)
+                {
+                    NodeHandle wrapper = host.Scene.Parent(tab);
+                    for (var n = host.Scene.FirstChild(wrapper); !n.IsNull; n = host.Scene.NextSibling(n))
+                    {
+                        for (var leaf = host.Scene.FirstChild(n); !leaf.IsNull; leaf = host.Scene.NextSibling(leaf))
+                        {
+                            RectF r = host.Scene.AbsoluteRect(leaf);
+                            if (r.W is > 0f and <= 1.01f && r.H >= 16f)
+                                return host.Scene.Paint(leaf).Opacity;
+                        }
+                    }
+                    return -1f;
+                }
+
+                bool separators = tabs.Count == 3
+                    && Near(SeparatorOpacity(tabs[0]), 0f)
+                    && Near(SeparatorOpacity(tabs[1]), 0f)
+                    && Near(SeparatorOpacity(tabs[2]), 1f);
+                bool material = !selectedShape.IsNull && host.Scene.Paint(selectedShape).Fill == livePlate
+                    && !rimShape.IsNull && host.Scene.Paint(rimShape).Fill == Tok.StrokeCardDefault;
+                bool baseline = horizontalLines.Count == 4 && flareClear;
+
+                Check("B.9c TabStrip raw selected material + CardStroke rim + continuous flare-cleared rail + MUX separator suppression",
+                    tabs.Count == 3 && material && baseline && separators,
+                    $"tabs={tabs.Count} shapes={shapes.Count} lines={horizontalLines.Count} material={material} clear={flareClear} sep={separators}");
+            }
+            finally { Tok.Use(saved); }
+        }
+
         // B.10 — PersonPicture geometry contract: initials centered in the circle; the badge plate hangs 4px outside
         // the top-right (root UNclipped, left = size+4−plate, top = −4); a negative badge number shows NO badge.
         {

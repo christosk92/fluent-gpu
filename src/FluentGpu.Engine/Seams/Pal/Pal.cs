@@ -193,7 +193,7 @@ public sealed class InputEventRing
             // its target proxy; the newest position survives (the dispatcher re-hit-tests the summed event once).
             if (prev.Kind == InputKind.Wheel && prev.Pointer == e.Pointer && prev.PointerId == e.PointerId)
             {
-                if (ScrollTrace.On)
+                if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
                     ScrollTrace.Coalesce((byte)InputKind.Wheel, e.ScrollDelta, e.ScrollDeltaX,
                         prev.ScrollDelta + e.ScrollDelta, prev.ScrollDeltaX + e.ScrollDeltaX, e.QpcTicks);
                 prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta, ScrollDeltaX = prev.ScrollDeltaX + e.ScrollDeltaX,
@@ -218,7 +218,7 @@ public sealed class InputEventRing
                 // pins the corrected order.)
                 if (e.Kind == InputKind.ScrollUpdate)
                     PushVelocitySample(new PointerVelSample(prev.PointerId, prev.ScrollDeltaX, prev.ScrollDelta, prev.TimestampMs, prev.QpcTicks, prev.ScrollPhaseSeq));
-                if (ScrollTrace.On)
+                if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
                     ScrollTrace.Coalesce((byte)e.Kind, e.ScrollDelta, e.ScrollDeltaX,
                         prev.ScrollDelta + e.ScrollDelta, prev.ScrollDeltaX + e.ScrollDeltaX, e.QpcTicks);
                 prev = prev with { ScrollDelta = prev.ScrollDelta + e.ScrollDelta, ScrollDeltaX = prev.ScrollDeltaX + e.ScrollDeltaX,
@@ -239,7 +239,7 @@ public sealed class InputEventRing
     /// OLDEST (velocity is a trailing estimate — the newest samples carry it); one shift on a rare path, zero growth.</summary>
     public void PushVelocitySample(in PointerVelSample s)
     {
-        if (ScrollTrace.On) ScrollTrace.VelDeposit(s.X, s.Y, s.TimestampMs, s.QpcTicks);
+        if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.VelDeposit(s.X, s.Y, s.TimestampMs, s.QpcTicks);
         if (_velCount == VelCapacity)
         {
             Array.Copy(_vel, 1, _vel, 0, VelCapacity - 1);

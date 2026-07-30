@@ -2094,7 +2094,7 @@ public sealed class AppHost : IDisposable
         sc.FlingRetargeted = false;
         sc.FlingSnapTarget = float.NaN;
         sc.FlingFromOffset = sc.Orientation == 1 ? sc.OffsetX : sc.OffsetY;
-        if (FluentGpu.Foundation.ScrollTrace.On)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.AnimEvent((int)node.Raw.Index, 4, velocityPxPerS, sc.FlingFromOffset, 0f);
         _scrollAnim.Arm(node);
     }
@@ -2273,7 +2273,9 @@ public sealed class AppHost : IDisposable
         }
         if (_memCensus is not null) _memCensus.MaybeReport();
         if (s_allocTypes) AllocTypeProfiler.MaybeReport();
-        if (RenderBudget.CompiledIn) { RenderBudget.FrameBoundary(); RenderBudget.MaybeReport(); }   // FG_RENDER_DIAG tripwire (folds away in release)
+        // FG_RENDER_DIAG tripwire (folds away in release). Both callees already early-out on !Enabled, so hoisting it
+        // into the guard is behaviour-identical — and the non-const operand keeps the folded body off CS0162.
+        if (RenderBudget.CompiledIn && RenderBudget.Enabled) { RenderBudget.FrameBoundary(); RenderBudget.MaybeReport(); }
         return painted;
     }
 
@@ -2611,7 +2613,7 @@ public sealed class AppHost : IDisposable
             // 7 implicit BrushTransition: the cross-fade T is now driven by the unified engine (AnimChannel.BrushFade,
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
             // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                 FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _scrollAnim.HasActive || _dispatcher.GestureActive);
             // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − ScrollTuning.ResampleLatencyMs
             // (12ms as shipped, NOT the 5ms of the original design — four comments drifted on that and are now fixed).
@@ -2949,7 +2951,7 @@ public sealed class AppHost : IDisposable
             PublishFrameStats(LastStats);
             // Hitch attribution into the scroll trace (>12ms frames only): the per-phase split lands in the SAME CSV as
             // the offset writes, so a lurch is directly attributable (GPU fence stall vs realize vs record vs shaping).
-            if (FluentGpu.Foundation.ScrollTrace.On && dtMs > 12f)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && dtMs > 12f)
             {
                 float rawDt = _frameTime is StopwatchFrameTimeSource sfts ? sfts.LastRawDeltaMs : dtMs;
                 FluentGpu.Foundation.ScrollTrace.FrameTiming(
@@ -2970,7 +2972,7 @@ public sealed class AppHost : IDisposable
             // Latency row — ONE per scroll-active frame, and deliberately NOT gated on a hitch threshold the way the
             // FrameTiming row above is. The case this whole facility exists for ("cadence looks perfect, feel is bad")
             // produces no hitch rows at all, so a dt-gated sensor would go silent exactly when it is needed.
-            if (FluentGpu.Foundation.ScrollTrace.On && scrollActive) EmitLatencyRow(dtMs);
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && scrollActive) EmitLatencyRow(dtMs);
             // (the frame-clock publish moved to phase 3, just before the flush — see the drain block there)
             if (s_allocDiag) Probe(SegPublish, db, dt0);   // alloc-05: frame-stat box + frameclock long-box were untracked
             return LastStats;

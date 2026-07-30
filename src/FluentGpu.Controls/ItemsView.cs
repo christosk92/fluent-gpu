@@ -19,6 +19,13 @@ public sealed class ItemsViewController
     internal Func<int>? GetCurrent;
     internal Action<float>? ScrollByImpl;
     internal Func<float>? GetOffsetImpl;
+    internal Func<NodeHandle>? GetViewportImpl;
+
+    /// <summary>The REALIZED virtualized viewport node (<c>Null</c> before mount and for a non-virtual host). The seam a
+    /// composing control needs to write per-viewport <c>ScrollState</c> knobs that a frozen-at-mount options record cannot
+    /// express reactively — chiefly a snap interval derived from a live layout fit (a size-reactive pager's page stride).
+    /// Read it inside a layout effect; the node is generation-checked by every <c>SceneStore</c> accessor.</summary>
+    public NodeHandle Viewport => GetViewportImpl?.Invoke() ?? NodeHandle.Null;
 
     /// <summary>The live scroll offset along the view's scroll axis (DIP; 0 before the viewport realizes / for a
     /// non-virtual host). The scroll-anchoring read: pair with <see cref="ScrollBy"/> to keep the visible content
@@ -220,6 +227,9 @@ public sealed class ItemsView : Component
     /// gradient wash), this works over ANY background. One offscreen RT for the viewport. Forwarded onto the built
     /// VirtualListEl. Default false.</summary>
     public bool AutoEdgeFade;
+    /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>; 0 (default) = the engine's standard band. Forwarded
+    /// onto the built VirtualListEl — see <c>ScrollEl.AutoEdgeFadeBand</c>.</summary>
+    public float AutoEdgeFadeBand;
     /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its
     /// pager, not a draggable bar). Forwarded onto the built VirtualListEl. Default false.</summary>
     public bool SuppressScrollBar;
@@ -229,7 +239,13 @@ public sealed class ItemsView : Component
     /// <summary>Viewport-space top clip applied as one shared band to recyclable items after
     /// <see cref="PersistentPrefixCount"/>. NaN disables it.</summary>
     public float ItemClipTopInset = float.NaN;
+    /// <summary>Top alpha-feather for the recyclable item band. Zero disables it.</summary>
+    public float ItemClipTopFadeBand;
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
+    /// <summary>Declarative scroll-snap points forwarded onto the built VirtualListEl (see <c>ScrollEl.Snap</c>). Frozen at
+    /// mount like every other unpacked option — a width-reactive interval must be written through
+    /// <see cref="ItemsViewController.Viewport"/> instead. Null ⇒ the reconciler never touches the snap fields.</summary>
+    public FluentGpu.Scene.SnapSpec? Snap;
 
     // ── research adjustment #16 — virtualization knobs (forwarded to the built VirtualListEl / applied per-container) ──
     /// <summary>Recycle-pool discriminator (bound path): heterogeneous rows only rebind within their content-type pool.</summary>
@@ -281,8 +297,11 @@ public sealed class ItemsView : Component
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
+            ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
+            AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
+            Snap = o.Scroll?.Snap,
             Transition = o.Transition,
             Selector = o.Selector,
             ItemDisplacement = o.Reorder?.ItemDisplacement,
@@ -331,8 +350,11 @@ public sealed class ItemsView : Component
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
+            ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
+            AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
+            Snap = o.Scroll?.Snap,
             ItemDisplacement = o.Reorder?.ItemDisplacement,
             DisplacementVersion = o.Reorder?.DisplacementVersion,
             DraggedSlot = o.Reorder?.DraggedSlot,
@@ -923,6 +945,7 @@ public sealed class ItemsView : Component
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
+            ctl.GetViewportImpl = () => viewportNode.Value;
             ctl.GetOffsetImpl = () =>
             {
                 if (sceneRef is null) return 0f;
@@ -1145,7 +1168,7 @@ public sealed class ItemsView : Component
             ? new VirtualListEl
             {
                 ItemCount = count,
-                Layout = layout,
+                ItemLayout = layout,
                 RowBind = rowBind,
                 StaggerColdRealize = StaggerColdRealize,
                 Overscan = OverscanItems,
@@ -1157,10 +1180,13 @@ public sealed class ItemsView : Component
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
+                AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
                 ItemClipTopInset = ItemClipTopInset,
+                ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
+                Snap = Snap,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
             }
@@ -1168,7 +1194,7 @@ public sealed class ItemsView : Component
             ? new VirtualListEl
             {
                 ItemCount = count,
-                Layout = layout,
+                ItemLayout = layout,
                 RenderItem = realizeTemplate,
                 KeyOf = KeyOf,
                 Overscan = OverscanItems,
@@ -1176,10 +1202,13 @@ public sealed class ItemsView : Component
                 Horizontal = horizontal,
                 EdgeCues = EdgeCues,
                 AutoEdgeFade = AutoEdgeFade,
+                AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
                 ItemClipTopInset = ItemClipTopInset,
+                ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
+                Snap = Snap,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent
                 // (the gallery card shape; D1).

@@ -59,8 +59,13 @@ public sealed record TokenSet
     public required ColorF FillCardSecondary { get; init; }
     public required ColorF FillLayerDefault { get; init; }       // flyout / expander body
     public required ColorF FillLayerAlt { get; init; }           // WinUI LayerFillColorAltBrush (ContentDialog top overlay)
-    // WinUI LayerOnMicaBaseAltFillColorDefault — the translucent "layer over Mica" chrome material (nav pane / address
-    // bar / selected tab). THEME-AWARE: dark #733A3A3A (a translucent dark layer), light #B3FFFFFF (translucent white).
+    // WinUI LayerOnMicaBaseAltFillColorDefault — the translucent "layer over Mica" material that is the APP-BODY PLATE
+    // of a MUX tabbed window (toolbar / nav pane / player dock / content-pane backing; the TAB RAIL band is NOT it —
+    // that row is unpainted so bare Mica Alt shows). THEME-AWARE and now PER-PRESET: dark ColorRamp.Tinted(0.227, hue,
+    // sat, 0x73) (= the stock #733A3A3A at sat 0), light #B3FFFFFF for the neutral seed and Tinted(0.98, hue, sat, 0xB3)
+    // for the tinted ones. The value is MIRRORED into ShellPalette.{Toolbar,Sidebar,PlayerBar} rather than read from
+    // here, because the shell builders run before the TokenSet (BuildWinUILight calls BuildFilesLightShell, so a
+    // TokenSet -> ShellPalette read would be circular); the palette.ladder gate asserts the mirror.
     public required ColorF LayerOnMicaBaseAlt { get; init; }
     public required ColorF FillSolidBase { get; init; }          // page background
     public required ColorF FillSolidBaseAlt { get; init; }       // pane / lower surface

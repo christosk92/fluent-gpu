@@ -385,7 +385,7 @@ static class DiagnosticsSuite
             // round-trip is vacuously true; the gate still proves the packing arithmetic under FLUENTGPU_DIAG.
             bool packOk = true;
             string detail = "trace-off";
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             {
                 foreach (var (slot, write, expect) in slots) FluentGpu.Foundation.ScrollTrace.SetState(slot, write);
                 int word = FluentGpu.Foundation.ScrollTrace.StateWord;
@@ -426,7 +426,7 @@ static class DiagnosticsSuite
             long delta = System.GC.GetAllocatedBytesForCurrentThread() - before;
             FluentGpu.Foundation.ScrollTrace.SetState(FluentGpu.Foundation.ScrollTraceState.Repetition, 0);
             Check("gate.latency.alloc-zero 256 latency/state/note emissions allocate 0 managed bytes (an instrument that allocates perturbs the cadence it measures)",
-                delta == 0, $"delta={delta}B armed={FluentGpu.Foundation.ScrollTrace.On}");
+                delta == 0, $"delta={delta}B armed={FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled}");
         }
 
         // ── latency.join-forward — the join contract, asserted against the real publisher rather than restated in prose.
@@ -628,25 +628,46 @@ static class DiagnosticsSuite
     static void PaletteContrastChecks()
     {
         var warm = Tok.WarmPalette;
-        // Warm calibration: flattened shell anchors (values verified against the anchor-solve math) + the untouched
-        // opaque warm TokenSet anchors.
-        bool warmFrame = PaletteBuilder.NearColor(ColorContrast.Flatten(warm.LightShell.Toolbar, MicaRef.LightDefault), ColorF.FromRgba(0xE4, 0xDF, 0xD3));
-        bool warmFile = PaletteBuilder.NearColor(ColorContrast.Flatten(warm.LightShell.FileArea, MicaRef.LightDefault), ColorF.FromRgba(0xF0, 0xF0, 0xEE));
+        // Warm calibration: the seeded light anchors on the MUX tabbed ladder. The body PLATE is the seed hue at the
+        // fixed near-white plate lightness carrying MUX's LayerOnMicaBaseAlt alpha (0xB3 → #FCFAF8B3, ≈#F7F6F5 over the
+        // reference Mica), and the content pane is the LayerFillColorDefault step ON that plate (≈#F9F8F7) — not on bare
+        // Mica, which is why the old #F4F4F3 pane anchor is retired. Plus the untouched opaque warm TokenSet anchors.
+        bool warmPlate = PaletteBuilder.NearColor(warm.LightShell.Toolbar, ColorF.FromRgba(0xFC, 0xFA, 0xF8, 0xB3))
+            && (int)MathF.Round(warm.LightShell.Toolbar.A * 255f) == 0xB3
+            && PaletteBuilder.NearColor(ColorContrast.Flatten(warm.LightShell.Toolbar, MicaRef.LightDefault), ColorF.FromRgba(0xF7, 0xF6, 0xF5));
+        bool warmFile = PaletteBuilder.NearColor(
+            ColorContrast.Flatten(warm.LightShell.FileArea, ColorContrast.Flatten(warm.LightShell.Toolbar, MicaRef.LightDefault)),
+            ColorF.FromRgba(0xF9, 0xF8, 0xF7));
         bool warmCard = PaletteBuilder.NearColor(warm.Light.FillCardDefault, ColorF.FromRgba(0xFC, 0xFB, 0xF9));
         bool warmTert = PaletteBuilder.NearColor(warm.Light.TextTertiary, ColorF.FromRgba(0x65, 0x64, 0x60));
-        Check("palette.warm.calibration flattened shell + token anchors (toolbar, file area, card fill, tertiary text)",
-            warmFrame && warmFile && warmCard && warmTert, $"frame={warmFrame} file={warmFile} card={warmCard} tertiary={warmTert}");
+        Check("palette.warm.calibration seeded light anchors on the MUX tabbed ladder (tinted LayerOnMicaBaseAlt plate + LayerFill pane on it, card fill, tertiary text)",
+            warmPlate && warmFile && warmCard && warmTert, $"plate={warmPlate} file={warmFile} card={warmCard} tertiary={warmTert}");
 
         var neutral = Tok.NeutralPalette;
-        bool filesFileAreaRaw = PaletteBuilder.NearColor(neutral.LightShell.FileArea, PaletteBuilder.FilesLightFileArea);
-        bool filesFileAreaFlat = PaletteBuilder.NearColor(
-            ColorContrast.Flatten(neutral.LightShell.FileArea, MicaRef.LightDefault),
-            ColorContrast.Flatten(PaletteBuilder.FilesLightFileArea, MicaRef.LightDefault));
-        bool filesChrome = PaletteBuilder.NearColor(neutral.LightShell.Toolbar, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3));
+        // The neutral seed IS the verbatim MUX recipe in both themes: a LayerOnMicaBaseAltFillColorDefault body plate
+        // (#B3FFFFFF light ≈#FAFAFA over Mica, #733A3A3A dark ≈#2C2C2C) with LayerFillColorDefault as the content pane
+        // ON it (#80FFFFFF light ≈#FCFCFC, #4C3A3A3A dark ≈#303030). The RAW pane values are unchanged — only the
+        // backdrop they flatten against moved from bare Mica to the plate.
+        bool stockLayerLight = PaletteBuilder.NearColor(neutral.LightShell.FileArea, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80))
+            && neutral.LightShell.FileArea.A == 0x80 / 255f;
+        bool stockLayerLightFlat = PaletteBuilder.NearColor(
+            ColorContrast.Flatten(neutral.LightShell.FileArea, ColorContrast.Flatten(neutral.LightShell.Toolbar, MicaRef.LightDefault)),
+            ColorF.FromRgba(0xFC, 0xFC, 0xFC));
+        bool stockLayerDark = PaletteBuilder.NearColor(neutral.DarkShell.FileArea, ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x4C))
+            && PaletteBuilder.NearColor(
+                ColorContrast.Flatten(neutral.DarkShell.FileArea, ColorContrast.Flatten(neutral.DarkShell.Toolbar, MicaRef.DarkDefault)),
+                ColorF.FromRgba(0x30, 0x30, 0x30));
+        bool stockPlate =
+            PaletteBuilder.NearColor(neutral.LightShell.Toolbar, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3))
+            && (int)MathF.Round(neutral.LightShell.Toolbar.A * 255f) == 0xB3
+            && PaletteBuilder.NearColor(ColorContrast.Flatten(neutral.LightShell.Toolbar, MicaRef.LightDefault), ColorF.FromRgba(0xFA, 0xFA, 0xFA))
+            && PaletteBuilder.NearColor(neutral.DarkShell.Toolbar, ColorF.FromRgba(0x3A, 0x3A, 0x3A, 0x73))
+            && (int)MathF.Round(neutral.DarkShell.Toolbar.A * 255f) == 0x73
+            && PaletteBuilder.NearColor(ColorContrast.Flatten(neutral.DarkShell.Toolbar, MicaRef.DarkDefault), ColorF.FromRgba(0x2C, 0x2C, 0x2C));
         bool filesCard = PaletteBuilder.NearColor(neutral.Light.FillCardDefault, ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3));
-        Check("palette.files.filearea neutral shell matches Files #C0FCFCFC + LayerOnMica chrome + WinUI card fill",
-            filesFileAreaRaw && filesFileAreaFlat && filesChrome && filesCard,
-            $"raw={filesFileAreaRaw} flat={filesFileAreaFlat} chrome={filesChrome} card={filesCard}");
+        Check("palette.files.filearea neutral shell is the verbatim MUX tabbed ladder — LayerOnMicaBaseAltFillColorDefault plate + LayerFillColorDefault pane on it (light + dark) + WinUI card fill",
+            stockLayerLight && stockLayerLightFlat && stockLayerDark && stockPlate && filesCard,
+            $"light={stockLayerLight} lightFlat={stockLayerLightFlat} dark={stockLayerDark} plate={stockPlate} card={filesCard}");
 
         ThemePalette[] all = [Tok.WarmPalette, Tok.SlatePalette, Tok.NeutralPalette, Tok.AccentTintedPalette];
         bool contrastOk = true;
@@ -661,36 +682,70 @@ static class DiagnosticsSuite
             })
             {
                 // The hardest background for a theme's ink is its BRIGHTEST composited surface (dark-on-light and
-                // light-on-dark both max the ratio's denominator there): the zebra row flattened over the
-                // translucent page card on the brightest assumed Mica, or (light only) the opaque card if lighter.
+                // light-on-dark both max the ratio's denominator there): the zebra row flattened over the translucent
+                // pane on the PLATE on the brightest assumed Mica — both shell rungs, the same host the ink solves in
+                // PaletteBuilder build against — or (light only) the opaque card if lighter.
                 // Ink alpha is intentionally ignored (as before): tiers assert at full ink strength — WinUI's own
                 // translucent dark tiers would fail a strict flattened-ink check and they're not ours to redesign.
                 ColorF micaBright = themeKind == ThemeKind.Light ? MicaRef.LightBright : MicaRef.DarkBright;
-                ColorF zebraHost = ColorContrast.Flatten(shell.RowZebra, ColorContrast.Flatten(shell.FileArea, micaBright));
+                ColorF zebraHost = ColorContrast.Flatten(shell.RowZebra,
+                    ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, micaBright)));
                 ColorF hardestHost = themeKind == ThemeKind.Light && ColorContrast.RelativeLuminance(set.FillCardDefault) >= ColorContrast.RelativeLuminance(zebraHost)
                     ? set.FillCardDefault : zebraHost;
                 if (!ColorContrast.MeetsAaText(set.TextPrimary, hardestHost)) { contrastOk = false; detail.Append($" {p.Id}/{themeKind}/primary"); }
                 if (!ColorContrast.MeetsAaText(set.TextSecondary, hardestHost)) { contrastOk = false; detail.Append($" {p.Id}/{themeKind}/secondary"); }
                 if (!ColorContrast.MeetsAaText(set.TextTertiary, hardestHost)) { contrastOk = false; detail.Append($" {p.Id}/{themeKind}/tertiary"); }
-                if (themeKind == ThemeKind.Light)
-                {
-                    ColorF fFrame = ColorContrast.Flatten(shell.Toolbar, MicaRef.LightDefault);
-                    ColorF fRail = ColorContrast.Flatten(shell.Sidebar, MicaRef.LightDefault);
-                    ColorF fPage = ColorContrast.Flatten(shell.FileArea, MicaRef.LightDefault);
-                    // Files-faithful neutral uses the same LayerOnMica token for toolbar + sidebar — skip frame≈rail.
-                    // Rail≈page is also intentionally flat (Files separates the file area via border + ThemeShadow, not luminance).
-                    if (p.Id != "neutral" && ColorContrast.LuminanceDelta(fFrame, fRail) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/frame-rail"); }
-                    if (p.Id != "neutral" && ColorContrast.LuminanceDelta(fRail, fPage) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/rail-page"); }
-                    if (ColorContrast.LuminanceDelta(fPage, set.FillCardDefault) < 0.05f) { ladderOk = false; detail.Append($" {p.Id}/page-card"); }
-                }
+                // The MUX tabbed-window ladder REPLACED the retired transparent-chrome contract (this revision): an
+                // unpainted band is now the TAB RAIL's job alone, so a transparent chrome band here would be a hole in
+                // the body plate, not stock NavigationView fidelity. Rung 0 (the bare rail) gets NO token assert —
+                // bareness is a paint-site omission in the app shell (WaveeColors), which this slice cannot see.
+                ColorF micaDefault = themeKind == ThemeKind.Light ? MicaRef.LightDefault : MicaRef.DarkDefault;
+                bool light = themeKind == ThemeKind.Light;
+                // Rung 1 — ONE plate material for all three chrome bands, mirroring TokenSet.LayerOnMicaBaseAlt (the
+                // shell builders run before the TokenSet, so the shell mirrors the value; a TokenSet read would be
+                // circular). Alpha is MUX's LayerOnMicaBaseAltFillColorDefault: 0xB3 light / 0x73 dark.
+                bool oneMaterial = shell.Toolbar == shell.Sidebar && shell.Sidebar == shell.PlayerBar;
+                int wantA = light ? 0xB3 : 0x73;
+                bool plateAlpha = (int)MathF.Round(shell.Toolbar.A * 255f) == wantA;   // ROUNDED BYTE, not float equality
+                // NearColor, not bit-equality: warm light's TokenSet carries the hand-calibrated LITERAL (#FCFAF8B3)
+                // while the shell computes LightPlate(seed) in float HSL — same color, different float bits.
+                bool plateMirrors = PaletteBuilder.NearColor(shell.Toolbar, set.LayerOnMicaBaseAlt)
+                    && (int)MathF.Round(set.LayerOnMicaBaseAlt.A * 255f) == wantA;
+                if (!oneMaterial || !plateAlpha || !plateMirrors)
+                { ladderOk = false; detail.Append($" {p.Id}/{themeKind}/plate(one={oneMaterial} alpha={plateAlpha} mirror={plateMirrors})"); }
+                // Rung 0->1: the plate LIFTS off bare Mica (>=5% luminance delta, strictly lighter). Measured minima:
+                // 31.8% dark / 7.5% light (slate).
+                ColorF fPlate = ColorContrast.Flatten(shell.Toolbar, micaDefault);
+                bool plateLifts = ColorContrast.RelativeLuminance(fPlate) > ColorContrast.RelativeLuminance(micaDefault);
+                if (!plateLifts || ColorContrast.LuminanceDelta(fPlate, micaDefault) < 0.05f)
+                { ladderOk = false; detail.Append($" {p.Id}/{themeKind}/mica-plate"); }
+                // Rung 1->2: the LayerFill pane composites ON the PLATE, one further step LIGHTER. Floors 8% dark /
+                // 1.2% light — light is intrinsically 1.6-2.3% (the ~2/255 step is authentic WinUI; light separation
+                // is stroke-borne: CardStroke + the 8,0,0,0 corner). Measured minima 11.9% dark / 1.64% light (slate).
+                ColorF fPane = ColorContrast.Flatten(shell.FileArea, fPlate);
+                bool paneLifts = ColorContrast.RelativeLuminance(fPane) > ColorContrast.RelativeLuminance(fPlate);
+                if (!paneLifts || ColorContrast.LuminanceDelta(fPane, fPlate) < (light ? 0.012f : 0.08f))
+                { ladderOk = false; detail.Append($" {p.Id}/{themeKind}/plate-pane"); }
+                // Rung 2->3 (light only): pane -> the opaque card, >=1.5% (measured min 2.31%, warm). The dark card
+                // fill is a white alpha, and RelativeLuminance ignores ink/fill alpha, so the dark pane↔card
+                // comparison would just be "is the pane darker than white".
+                if (light && ColorContrast.LuminanceDelta(fPane, set.FillCardDefault) < 0.015f)
+                { ladderOk = false; detail.Append($" {p.Id}/pane-card"); }
             }
         }
-        Check("palette.contrast all presets pass AA text tiers on the brightest composited hosting surface", contrastOk, detail.ToString());
-        Check("palette.ladder light shell adjacent flattened surfaces have >=5% luminance delta", ladderOk, detail.ToString());
+        Check("palette.contrast all presets pass AA text tiers on the brightest composited hosting surface (zebra row on the pane on the plate on bright Mica)", contrastOk, detail.ToString());
+        Check("palette.ladder MUX tabbed ladder — bare Mica Alt rail -> one LayerOnMicaBaseAlt body plate (== TokenSet.LayerOnMicaBaseAlt, alpha 0x73/0xB3, >=5% off Mica) -> LayerFill pane ON the plate (>=8% dark / >=1.2% light) -> (light) the opaque card", ladderOk, detail.ToString());
 
-        // Preset distinctness: pairwise max-channel delta of the flattened chrome bar must be perceptible in both
-        // themes. Accent-involving pairs get a relaxed floor — the accent seed legitimately converges on its blue
-        // neighbors while the (default 210°) OS accent is blue; it diverges with any non-blue accent.
+        // Preset distinctness: pairwise max-channel delta of the CONTENT PANE flattened through BOTH shell rungs (pane
+        // on plate on reference Mica) — the preset tint now rides the plate AND the pane, so rung 2 is the most tinted
+        // point of the ladder and the composited tint roughly doubles vs the retired pane-only ladder. DARK only: the
+        // light plate/pane sit at L 0.98, where HSL admits almost no chroma (L=1 collapses every saturation to white),
+        // so light presets converge to ≤6/255 at the pane even summed across both rungs — asserting a light floor
+        // would either fail the stock recipe or be vacuous. Light preset identity lives in the OPAQUE token set, which
+        // palette.contrast and palette.ladder cover. The dark floors are plate-composited minima: measured pairwise
+        // deltas 16/8/16/9/6/8, minima 6 (non-accent pairs) and 4 (accent-involving). Accent-involving pairs keep the
+        // relaxed floor — the accent seed legitimately converges on its blue neighbors while the (default 210°) OS
+        // accent is blue; it diverges with any non-blue accent.
         static int MaxChannelDelta(in ColorF a, in ColorF b)
         {
             static int Ch(float f) => (int)MathF.Round(f * 255f);
@@ -703,21 +758,18 @@ static class DiagnosticsSuite
             for (int j = i + 1; j < all.Length; j++)
             {
                 bool involvesAccent = all[i].Id == "accent" || all[j].Id == "accent";
-                int lightDelta = MaxChannelDelta(
-                    ColorContrast.Flatten(all[i].LightShell.Toolbar, MicaRef.LightDefault),
-                    ColorContrast.Flatten(all[j].LightShell.Toolbar, MicaRef.LightDefault));
                 int darkDelta = MaxChannelDelta(
-                    ColorContrast.Flatten(all[i].DarkShell.Toolbar, MicaRef.DarkDefault),
-                    ColorContrast.Flatten(all[j].DarkShell.Toolbar, MicaRef.DarkDefault));
-                int lightFloor = involvesAccent ? 5 : 8, darkFloor = involvesAccent ? 3 : 6;
-                if (lightDelta < lightFloor || darkDelta < darkFloor)
+                    ColorContrast.Flatten(all[i].DarkShell.Content, ColorContrast.Flatten(all[i].DarkShell.Toolbar, MicaRef.DarkDefault)),
+                    ColorContrast.Flatten(all[j].DarkShell.Content, ColorContrast.Flatten(all[j].DarkShell.Toolbar, MicaRef.DarkDefault)));
+                int darkFloor = involvesAccent ? 4 : 6;
+                if (darkDelta < darkFloor)
                 {
                     distinctOk = false;
-                    dDetail.Append($" {all[i].Id}-{all[j].Id}(L{lightDelta}/D{darkDelta})");
+                    dDetail.Append($" {all[i].Id}-{all[j].Id}(D{darkDelta})");
                 }
             }
         }
-        Check("palette.distinct presets read visibly different (pairwise flattened-toolbar max-channel delta)", distinctOk, dDetail.ToString());
+        Check("palette.distinct presets read visibly different (pairwise flattened dark content-layer max-channel delta)", distinctOk, dDetail.ToString());
 
         int e0 = Tok.Epoch;
         var kind = Tok.Theme;

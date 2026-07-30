@@ -8,11 +8,11 @@ namespace FluentGpu.Reconciler;
 
 /// <summary>
 /// A virtualized collection viewport: ONE retained node + a window of keyed children. Each frame the visible range is
-/// dirty, the reconciler asks the <see cref="Layout"/> for <c>[first,last)</c>, calls <see cref="RenderItem"/> for just
+/// dirty, the reconciler asks the <see cref="ItemLayout"/> for <c>[first,last)</c>, calls <see cref="RenderItem"/> for just
 /// that window, keys each row, and feeds it to the existing keyed-LIS diff — so recycling IS CreateNode/FreeNode over
 /// the slab free-list (no second pool). Scroll is layout-free (the <c>-ScrollOffset</c> is the content's transform).
 ///
-/// <see cref="Layout"/> is a pluggable <see cref="IVirtualLayout"/> (stack / grid / custom — pure, allocation-free).
+/// <see cref="ItemLayout"/> is a pluggable <see cref="IVirtualLayout"/> (stack / grid / custom — pure, allocation-free).
 /// E11-L1: the viewport consumes BOTH seam kinds — an <see cref="IMeasuredVirtualLayout"/> gets the variable-extent
 /// estimate-then-correct arrange (measured rows + scroll anchoring) through the SAME property; when the layout is
 /// null, the legacy built-in Fenwick extent-table path runs (kept source/behavior-compatible).
@@ -31,7 +31,9 @@ public sealed record VirtualListEl : Element
     /// (TextBind/FillBind/SourceBind/…) re-run — zero element rebuild, zero reconcile, zero keys. When set,
     /// <see cref="RenderItem"/>/<see cref="KeyOf"/> are ignored.</summary>
     public Func<IReadSignal<int>, Element>? RowBind { get; init; }
-    public IVirtualLayout? Layout { get; init; }      // fixed OR measured (IMeasuredVirtualLayout) seam; null ⇒ legacy variable Fenwick
+    /// <summary>The pluggable item layout seam (distinct from the base <see cref="Element.Layout"/> auto-FLIP channel):
+    /// fixed OR measured (IMeasuredVirtualLayout); null ⇒ legacy variable Fenwick extent-table path.</summary>
+    public IVirtualLayout? ItemLayout { get; init; }
     public float EstimatedExtent { get; init; } = 48f;// legacy variable path: seed extent for unmeasured rows
     public int Overscan { get; init; } = 4;
     /// <summary>Opt out of the shared per-frame overscan budget and realize the requested halo on the mount frame.
@@ -52,6 +54,9 @@ public sealed record VirtualListEl : Element
     /// <see cref="PersistentPrefixCount"/>. The recorder emits one band clip around the contiguous recyclable child
     /// range and hit-testing applies the same boundary. NaN disables it.</summary>
     public float ItemClipTopInset { get; init; } = float.NaN;
+    /// <summary>Optional top alpha-feather for the recyclable item band. The hard
+    /// <see cref="ItemClipTopInset"/> still owns paint/input clipping; zero disables the feather.</summary>
+    public float ItemClipTopFadeBand { get; init; }
     /// <summary>Research adjustment #16 — recycle-pool discriminator for the BOUND path (<see cref="RowBind"/>):
     /// <c>index → contentType</c>. A slot only rebinds to an index whose content-type matches the type it was built for;
     /// a cross-type reuse falls back to a full element rebuild (fresh slot). Null ⇒ one homogeneous pool (today's cheap
@@ -119,9 +124,17 @@ public sealed record VirtualListEl : Element
     public EdgeFadeSpec? EdgeFade { get; init; }
     /// <summary>Auto edge fade: feather only the overflowing edges, ramped with the offset. Ignored when EdgeFade is set.</summary>
     public bool AutoEdgeFade { get; init; }
+    /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>; 0 (default) = the engine's standard band. See
+    /// <see cref="ScrollEl.AutoEdgeFadeBand"/> for the contract.</summary>
+    public float AutoEdgeFadeBand { get; init; }
     /// <summary>Never draw the conscious scrollbar for this viewport (a paged shelf navigates by its pager, not a
     /// draggable bar; the offset is still programmatically scrolled). Edge-fade cues are unaffected.</summary>
     public bool SuppressScrollBar { get; init; }
+
+    /// <summary>Declarative scroll-snap points for the virtualized viewport (see <see cref="ScrollEl.Snap"/> for the full
+    /// contract): flings land exactly on a snap value, wheel/keyboard/programmatic stay hard-clamped, and a NULL
+    /// declaration leaves the snap fields untouched so a post-mount scene write survives every reconcile.</summary>
+    public SnapSpec? Snap { get; init; }
 
     /// <summary>Scroll-position restoration key — a STABLE per-content identity (see <see cref="ScrollEl.ScrollKey"/>).
     /// For a huge virtualized list this is what makes a revisit land at the saved row on the FIRST realized window (the

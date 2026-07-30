@@ -2847,7 +2847,7 @@ public sealed class InputDispatcher
             {
                 // Drop class 4: the element ate the notch, so no viewport ever scrolls and no seed row is written — in a
                 // capture this looks exactly like a routing miss. Mark it (see the WheelDrop* remarks above ScrollAxis).
-                if (FluentGpu.Foundation.ScrollTrace.On)
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                     FluentGpu.Foundation.ScrollTrace.WheelSeed((int)n.Raw.Index,
                         WheelDropMarker | WheelDropElementHandled | (e.ScrollDelta == 0f && e.ScrollDeltaX != 0f ? WheelDropHorizontal : 0),
                         e.ScrollDelta != 0f ? e.ScrollDelta : e.ScrollDeltaX, 0f, 0f);
@@ -2925,7 +2925,7 @@ public sealed class InputDispatcher
 
             // Device crossover is an explicit ownership boundary — snap the visual-only band away now instead of letting
             // its spring compete with the incoming wheel.
-            if (FluentGpu.Foundation.ScrollTrace.On) FluentGpu.Foundation.ScrollTrace.WheelCancel(offset, oldBand);
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled) FluentGpu.Foundation.ScrollTrace.WheelCancel(offset, oldBand);
             sc.OverscrollPx = 0f;
             sc.OverscrollVel = 0f;
             sc.Overscrolling = false;
@@ -2956,7 +2956,7 @@ public sealed class InputDispatcher
     /// ScrollEnd (≈0 after a completed tail then silence — no double inertia, §4.3).</summary>
     private void OnScrollPhase(in InputEvent e)
     {
-        if (FluentGpu.Foundation.ScrollTrace.On)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.Phase((byte)e.Kind,
                 e.DeviceClassRaw | (_sgLatched ? 1 << 8 : 0) | (_sgMomentum ? 1 << 9 : 0),
                 e.ScrollPhaseSeq, e.ScrollDelta, e.ScrollDeltaX, _sgAccumX, _sgAccumY, e.QpcTicks);
@@ -2971,7 +2971,7 @@ public sealed class InputDispatcher
                 _sgAccumX = 0f; _sgAccumY = 0f;
                 _sgWheelFallback = false;   // a fresh gesture re-resolves scroller-vs-wheel from scratch
                 _sgVel.Reset(default, e.TimestampMs, e.QpcTicks);
-                if (FluentGpu.Foundation.ScrollTrace.On)
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                     FluentGpu.Foundation.ScrollTrace.VelSample(2, 0f, 0f, 0f, 0f, e.QpcTicks);
                 AccumulateContactDelta(in e);
                 break;
@@ -2984,7 +2984,7 @@ public sealed class InputDispatcher
                 if (_sgLatched)
                 {
                     _sgVel.Sample(new Point2(_sgAccumX, _sgAccumY), e.TimestampMs, e.QpcTicks);
-                    if (FluentGpu.Foundation.ScrollTrace.On)
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                         FluentGpu.Foundation.ScrollTrace.VelSample(1, _sgAccumX, _sgAccumY, _sgVel.Vx, _sgVel.Vy, e.QpcTicks);
                 }
                 break;
@@ -3001,13 +3001,18 @@ public sealed class InputDispatcher
                     _sgVel.ComputeReleaseVelocity(e.TimestampMs, e.QpcTicks);
                     float v = _sgHoriz ? _sgVel.Vx : _sgVel.Vy;    // synthetic-position slope: + = offset increasing
                     ref ScrollState sc = ref _scene.ScrollRef(_sgTarget);
+                    // Record the lift velocity UNCONDITIONALLY, BEFORE the seed gate. Below FlingSeedGate no coast is
+                    // seeded and this value was previously dropped on the floor — which is precisely the case a
+                    // page-snapping control needs (ScrollState.LastReleaseVelocity): a slow drag and a flick that end at
+                    // the same offset must commit to different pages. Never read by the integrator (not physics).
+                    sc.LastReleaseVelocity = v;
                     bool seedFling = sc.OverscrollPx == 0f && MathF.Abs(v) >= ScrollTuning.FlingSeedGate;   // one gate: |v| ≥ FlingSeedGate (§4.3)
                     // Nested-scroll hand-off parity with the touch path (ChainFlingTarget): a pan whose past-edge
                     // excess chained to an outer scroller throws the OUTER at lift — the latched inner is parked at
                     // its edge, and flinging it would convert the residual velocity into a spurious edge bounce.
                     NodeHandle flingTarget = (!_chainOuter.IsNull && _scene.IsLive(_chainOuter) && _scene.HasScroll(_chainOuter))
                         ? _chainOuter : _sgTarget;
-                    if (FluentGpu.Foundation.ScrollTrace.On)
+                    if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                         FluentGpu.Foundation.ScrollTrace.Release(
                             (_sgHoriz ? 1 : 0) | (seedFling ? 2 : 0) | (flingTarget != _sgTarget ? 4 : 0),
                             _sgVel.Vx, _sgVel.Vy, v, sc.OverscrollPx, e.QpcTicks, 0f);
@@ -3107,6 +3112,9 @@ public sealed class InputDispatcher
             s0.PhaseFlags = 0; s0.FlingVelocity = 0f;
             s0.FlingRetargeted = false; s0.FlingSnapTarget = float.NaN;
             s0.PendingTargetX = float.NaN; s0.PendingTargetY = float.NaN;
+            // A fresh gesture invalidates the previous lift record (see ScrollState.LastReleaseVelocity): a control that
+            // reads it on the next settle must never see the velocity of a gesture two pans ago.
+            s0.LastReleaseVelocity = 0f;
             _sgAnchorOffset = horiz ? s0.OffsetX : s0.OffsetY;
             // A gesture landing over a still-easing band continues the stretch seamlessly (no one-frame erase): fold the
             // live band back into the anchor as excess so the resampler's rawOffset = anchor + Σδ reproduces it (§2.4).
@@ -3117,7 +3125,7 @@ public sealed class InputDispatcher
             // Record TouchpadTracking intent + latch the resampler anchor (this sets Phase = TouchpadTracking + arms).
             OnScrollTrackBegin?.Invoke(vp, horiz, _sgAnchorOffset);
             _sgVel.Reset(new Point2(_sgAccumX, _sgAccumY), e.TimestampMs, e.QpcTicks);
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             {
                 FluentGpu.Foundation.ScrollTrace.Latch((int)vp.Raw.Index,
                     _sgDevice | (horiz ? 1 << 8 : 0) | (sticky ? 1 << 9 : 0) | (_sgLastHoriz ? 1 << 10 : 0),
@@ -3165,7 +3173,7 @@ public sealed class InputDispatcher
             ref readonly PointerVelSample s = ref _velSamples[i];
             if (s.PointerId != pointerId) continue;
             _sgVel.Sample(new Point2(baseX + s.X, baseY + s.Y), s.TimestampMs, s.QpcTicks);
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                 FluentGpu.Foundation.ScrollTrace.VelSample(0, baseX + s.X, baseY + s.Y, _sgVel.Vx, _sgVel.Vy, s.QpcTicks);
         }
     }
@@ -3185,7 +3193,7 @@ public sealed class InputDispatcher
         // Stamp provenance for the latency row: the producer sets the positive claim (hardware vs receive) because only
         // it knows which API stamped the packet; here we can only DOWNGRADE — a packet that arrived with no QPC at all
         // is millisecond-resolution message time, and a bundle must never publish sub-tick percentiles off that.
-        if (FluentGpu.Foundation.ScrollTrace.On && e.QpcTicks == 0)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && e.QpcTicks == 0)
             FluentGpu.Foundation.ScrollTrace.ContactStampQuality = FluentGpu.Foundation.GenStampQuality.Tick;
         OnScrollTrackSample?.Invoke((int)_sgTarget.Raw.Index, ContactSampleSec(e.TimestampMs, e.QpcTicks), axisAccum);
         OnScrollArmed?.Invoke(_sgTarget);   // stay armed (BeginTracking armed it; re-arm each packet is idempotent)
@@ -3214,7 +3222,7 @@ public sealed class InputDispatcher
             _sgLastHoriz = _sgHoriz;
             _sgLastEndMs = endMs;
         }
-        if (FluentGpu.Foundation.ScrollTrace.On && _sgLatched)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled && _sgLatched)
         {
             float traceBand = (_scene.IsLive(_sgTarget) && _scene.HasScroll(_sgTarget)) ? _scene.ScrollRef(_sgTarget).OverscrollPx : 0f;
             FluentGpu.Foundation.ScrollTrace.GestureEnd(traceReason, _sgMomentum ? 1 : 0, traceBand);
@@ -3469,7 +3477,7 @@ public sealed class InputDispatcher
         // at its top/bottom edge (TryScrollNode returned false) keeps the delta rather than leaking it sideways.
         if (oppositeFallback && !sawSameAxis && !fallback.IsNull && TryScrollNode(fallback, delta, isNotch, timestampMs)) return true;
         // The notch dies HERE, with no row of its own — emit one drop marker naming which of the silent paths ate it.
-        if (FluentGpu.Foundation.ScrollTrace.On)
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
         {
             int cls, dropIdx = -1;
             if (sawSameAxis) cls = WheelDropSameAxisExhausted;
@@ -3513,7 +3521,7 @@ public sealed class InputDispatcher
             bool atEdge = (delta < 0f && off <= 0.5f) || (delta > 0f && off >= max - 0.5f);
             if (max <= 0f || atEdge)
             {
-                if (FluentGpu.Foundation.ScrollTrace.On)
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                     FluentGpu.Foundation.ScrollTrace.WheelSeed((int)n.Raw.Index, 2, delta, 0f, off);
                 return false;   // nothing to scroll / pinned at this edge → bubble to an outer scroller
             }
@@ -3536,7 +3544,7 @@ public sealed class InputDispatcher
             sc.FlingSnapTarget = float.NaN;
             sc.IdleMs = 0f;
             OnScrollArmed?.Invoke(n);
-            if (FluentGpu.Foundation.ScrollTrace.On)
+            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                 FluentGpu.Foundation.ScrollTrace.WheelSeed((int)n.Raw.Index, (sameWheel ? 1 : 0) | (reversed ? 2 : 0), delta, newPending, off);
             if (FluentGpu.Foundation.ScrollLog.On)
                 FluentGpu.Foundation.ScrollLog.Line($"  scrollBy WHEEL-CHASE {(horizontal ? "x" : "y")} delta={delta:0.0} pending={newPending:0} off={off:0}");

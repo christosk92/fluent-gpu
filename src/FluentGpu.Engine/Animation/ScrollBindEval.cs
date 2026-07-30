@@ -78,6 +78,15 @@ public static class ScrollBindEval
     //  Phase-7 pin + predicate pass — replaces AppHost.ApplyStickyOffsets. Runs every frame after the integrator
     //  settles: pin ops (need the laid-out containing-block clamp), then the per-scroller ScrollFlags bitfield, firing
     //  edge-only OnFlag callbacks on a flip. Iterates every scroller that owns binds.
+    //
+    //  SCOPE CONSTRAINT (the one thing to know before reading ScrollFlags anywhere): this pass iterates
+    //  ScrollBindTable.ScrollerIndices — BIND OWNERS ONLY. A viewport with no ScrollBind row never has ComputeFlags run
+    //  on it, so its ScrollState.ScrollFlags stays 0 forever. Flags is therefore NOT a general per-viewport channel, and
+    //  ScrollGeometry.Flags is 0 for every observer-only scroller (see the note there). Consumers wanting motion state on
+    //  an arbitrary viewport read ScrollState.UserScrollActive / Phase, which the integrator maintains for every ARMED
+    //  viewport. Widening this pass to every observer-owning scroller was considered and rejected: the flag channel's
+    //  whole point is edge-fired OnFlag binds, and computing it for scrollers with no bind to fire buys nothing but a
+    //  second O(scrollers) walk per frame.
     // ─────────────────────────────────────────────────────────────────────────────────────────────────────────
     public static void ApplyPinAndFlagPass(SceneStore scene)
     {

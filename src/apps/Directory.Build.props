@@ -16,7 +16,9 @@
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
 
-    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Warning-clean is enforced (mirrors src/Directory.Build.props); Wavee.Tests and vendored NVorbis opt out
+         per-csproj until their pre-existing warning backlog is cleared. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RootNamespace>$(MSBuildProjectName)</RootNamespace>
   </PropertyGroup>
 
