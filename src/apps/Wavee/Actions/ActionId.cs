@@ -14,4 +14,7 @@ public enum ActionId : ushort
     // The Video ▸ submenu (local video overrides): attach/replace are the same verb over the uri primary key, so they
     // are still two IDENTITIES — the label, the icon and the undo semantics differ.
     AttachVideo, ReplaceVideo, LocateVideo, RemoveVideo, ShowVideoInExplorer,
+    // The pin pair's second half. PinToSidebar was already reserved above; pin/unpin are an ABSOLUTE-STATE pair
+    // (Menus.VisibilityItem's precedent), not one toggle — so they are two IDENTITIES with two labels and two icons.
+    UnpinFromSidebar,
 }

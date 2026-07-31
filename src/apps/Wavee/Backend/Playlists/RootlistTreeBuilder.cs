@@ -10,45 +10,72 @@ namespace Wavee.Backend.Playlists;
 // resolved from the shared Store via the injected resolver, so this stays pure + unit-testable.
 public static class RootlistTreeBuilder
 {
+    /// <summary>The ONE marker shape the tree walk understands — the shared shape of a cold row and a live row, so the
+    /// parse loop exists once and both public overloads are thin adapters over it.</summary>
+    public readonly record struct RootlistMarker(int Kind, string Uri, string? GroupName);
+
+    /// <summary>Cold (persisted) rows → the tree.</summary>
     public static IReadOnlyList<PlaylistNode> Build(IReadOnlyList<ColdRootlistEntry> entries, Func<string, PlaylistSummary> resolve)
     {
-        var top = new List<PlaylistNode>();
-        var open = new Stack<(string Id, string Name, List<PlaylistSummary> Items)>();
+        var markers = new RootlistMarker[entries.Count];
+        for (int i = 0; i < entries.Count; i++) markers[i] = new RootlistMarker(entries[i].Kind, entries[i].Uri, entries[i].GroupName);
+        return BuildCore(markers, resolve);
+    }
 
-        foreach (var e in entries)
+    /// <summary>Live (in-memory Store) rows → the tree. Same parse, no duplicated loop — StoreLibrarySource reads
+    /// <c>_store.Rootlist()</c>, which is the RootlistEntry shape.</summary>
+    public static IReadOnlyList<PlaylistNode> Build(IReadOnlyList<RootlistEntry> entries, Func<string, PlaylistSummary> resolve)
+    {
+        var markers = new RootlistMarker[entries.Count];
+        for (int i = 0; i < entries.Count; i++) markers[i] = new RootlistMarker(entries[i].Kind, entries[i].Uri, entries[i].GroupName);
+        return BuildCore(markers, resolve);
+    }
+
+    // Folders are RECURSIVE: an end-group pushes a PlaylistFolder NODE into its parent's node list (it no longer
+    // flattens its children up one level), so folder-in-folder survives to the sidebar. The marker rows' own Depth
+    // column is deliberately NOT read — nesting depth is derived from the start/end markers alone, so a malformed depth
+    // value can never reshape the tree.
+    static IReadOnlyList<PlaylistNode> BuildCore(IReadOnlyList<RootlistMarker> markers, Func<string, PlaylistSummary> resolve)
+    {
+        var top = new List<PlaylistNode>();
+        var open = new Stack<(string Id, string Name, List<PlaylistNode> Items)>();
+
+        for (int i = 0; i < markers.Count; i++)
         {
+            var e = markers[i];
             switch (e.Kind)
             {
                 case 1:   // start-group
-                    open.Push((GroupId(e.Uri), e.GroupName ?? "", new List<PlaylistSummary>()));
+                    open.Push((GroupId(e.Uri), e.GroupName ?? "", new List<PlaylistNode>()));
                     break;
 
-                case 2:   // end-group
+                case 2:   // end-group (an end without a matching start is ignored — nothing to close)
                     if (open.Count > 0)
                     {
                         var f = open.Pop();
-                        // Sidebar's folder model is one level deep: a nested folder's playlists flatten into its parent.
-                        if (open.Count > 0) open.Peek().Items.AddRange(f.Items);
-                        else top.Add(new PlaylistFolder(f.Id, f.Name, f.Items));
+                        var folder = new PlaylistFolder(f.Id, f.Name, f.Items);
+                        (open.Count > 0 ? open.Peek().Items : top).Add(folder);
                     }
                     break;
 
                 default:  // a playlist (or any item) uri
                     if (e.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal))
                     {
-                        var ps = resolve(e.Uri);
-                        if (open.Count > 0) open.Peek().Items.Add(ps);
-                        else top.Add(new PlaylistLeaf(ps));
+                        var leaf = new PlaylistLeaf(resolve(e.Uri));
+                        (open.Count > 0 ? open.Peek().Items : top).Add(leaf);
                     }
                     break;
             }
         }
 
-        // Unbalanced markers (a missing end-group) must not swallow the folder + its children — flush what's still open.
+        // Unbalanced markers (a missing end-group) must not swallow the folder + its children — flush what's still open,
+        // INNERMOST FIRST, each into the folder that was open around it, so the result is still a well-formed nested tree
+        // instead of a pile of sibling folders at the top level.
         while (open.Count > 0)
         {
             var f = open.Pop();
-            top.Add(new PlaylistFolder(f.Id, f.Name, f.Items));
+            var folder = new PlaylistFolder(f.Id, f.Name, f.Items);
+            (open.Count > 0 ? open.Peek().Items : top).Add(folder);
         }
         return top;
     }

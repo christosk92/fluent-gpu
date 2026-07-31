@@ -152,7 +152,13 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
    swaps to real on load. `Loadable<T>` + `Skel.Region` + `UseResource` (SWR); incremental per-field, onFailed, groups.
 10. **[professional-media-lab.md](./professional-media-lab.md)** — the public DASH/HLS/PlayReady fixture catalog,
     behavior-coverage matrix, live diagnostics and on-device media verification pass.
-11. **[localizing-the-control-kit.md](./localizing-the-control-kit.md)** — the control kit is a **localizable SDK**:
+11. **[sidebar-extension-platform.md](./sidebar-extension-platform.md)** — the **Wavee app**'s sidebar as a
+    platform: three designs (Classic / Library V3 / Wavee Curated) as three *documents* over ONE `SidebarPane`
+    renderer, the full-page live customizer + its command/undo pipeline, the versioned local `sidebar-layout.json`
+    v2 wire format (with a real example and the preserve-don't-destroy rules), and the extension contracts as they
+    exist today — trusted first-party `"wavee"` only: `WaveeExtensionRegistry`, `WaveeActionDescriptor`,
+    `ISidebarDataSource` — plus a worked end-to-end example of adding a data source and a bindable action.
+12. **[localizing-the-control-kit.md](./localizing-the-control-kit.md)** — the control kit is a **localizable SDK**:
     the neutral-fallback floor (zero-config = neutral English unchanged), the JSON-source-of-truth + generated
     `Strings` keys + `Loc.Bind`/`Loc.Get`, how an app ships translations, the pseudo-locale QA pass, the CultureInfo-
     derived vs shipped-string split, and the `FGRP008` no-hardcoded-string analyzer.

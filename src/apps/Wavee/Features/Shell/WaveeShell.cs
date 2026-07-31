@@ -60,21 +60,27 @@ sealed class WaveeShell : Component
     readonly Signal<int> _selectedTab = new(0);
 
     readonly Signal<string> _searchText = new("");
-    // Sidebar state. Collapsed and (once pinned by a drag) width are seeded in the ctor from the injected settings so the
-    // FIRST layout already uses the saved values — no startup animation; written back on change via SaveSidebar.
+    // Sidebar state. Collapsed and (once pinned by a drag) width are seeded by SidebarPreferences' own constructor, from
+    // the ACTIVE design's keys, so the FIRST layout already uses the saved values — no startup animation; written back on
+    // change via SaveSidebar, which delegates to that service.
     readonly IAppSettings _settings;
     readonly Signal<bool> _drawerExpanded = new(false);
     Signal<bool>? _narrowShellState;
     Signal<bool>? _narrowDrawerState;
     Signal<bool>? _presentedCompactState;
-    readonly Signal<bool> _sidebarCompact;
-    readonly Signal<float> _sidebarWidth;                       // expanded width (drag-resizable, persisted)
+    // The sidebar's PANE STATE now belongs to SidebarPreferences (one owner for all three designs, per-design remembered
+    // state, and the same instance the Settings page + customizer write). These two fields are ALIASES of that service's
+    // signals, kept under their historical names so every binding/read below is unchanged — the shell binds them, it no
+    // longer owns them. SwitchDesign writes a new VALUE into the same signal instances, never new signals, so every bound
+    // prop stays live across a design switch.
+    readonly SidebarPreferences _sidebar;
+    readonly Signal<bool> _sidebarCompact;                      // == _sidebar.Collapsed (the user's collapse preference)
+    readonly Signal<float> _sidebarWidth;                       // == _sidebar.Width (expanded width, drag-resizable, persisted)
     readonly Signal<bool> _sidebarDragging = new(false);       // ON during a seam drag → snaps all layout transitions (1:1 resize)
-    // Latches true on the first seam-drag commit (mirrors WaveeSettings.SidebarWidthUserSet). While false the pane width is
-    // a responsive default owned by the viewport effect below; once true, the persisted width is the user's and nothing
-    // else may write it. Plain field, not a signal: only the effect reads it, and it never needs to re-trigger a render.
-    bool _sidebarWidthUserSet;
+    // The width-pin latch lives on the service now (per DESIGN — pinning V3's width must not freeze Classic's ladder), so
+    // the effect below reads _sidebar.WidthUserSet instead of a shell field.
     bool _navPaneTierSeeded;                                   // false until the first effect run with a real viewport width
+    SidebarDesign _tierDesign;                                 // which design the tier ladder is currently seeded against
     readonly Signal<float> _sidebarFade = new(1f);             // content-opacity cue as a resize nears the collapse detent
     Action<float>? _requestTheme;                              // ambient ThemeControl.Request: live animated re-theme (captured in Render)
 
@@ -153,25 +159,31 @@ sealed class WaveeShell : Component
     internal static Action<bool>? ProbeSidebarCompact;
     internal static Action? ProbeSidebarDragBegin, ProbeSidebarDragEnd;
     internal static Action<float>? ProbeSidebarDragWidth;
+    internal static Action<int>? ProbeSidebarMode;   // switch the active sidebar DESIGN (WAVEE_SIDEBAR_MODE_SHOT)
+    internal static Action<int>? ProbeSidebarDesign;     // alias of ProbeSidebarMode, named for the design shots (WAVEE_SIDEBAR_MODE_SHOT)
+    internal static Action<int>? ProbeSidebarV3View;     // Library-V3 presentation: a SidebarV3View ordinal (WAVEE_SIDEBAR_V3_SHOT)
+    internal static Action<int>? ProbeSidebarV3Filter;   // Library-V3 kind filter: a SidebarV3Filter ordinal (WAVEE_SIDEBAR_V3_SHOT)
+    internal static Action<bool>? ProbeSidebarDrawer;    // open/close the real narrow overlay drawer
+    internal static Func<SidebarPaneFrameSnapshot>? ProbeSidebarPaneFrame; // settled rendered-width invariant probe
+    NodeHandle _sidebarPaneNode;
+    InputHooks? _inputHooks;
 
-    public WaveeShell(IAppSettings settings)
+    public WaveeShell(IAppSettings settings, SidebarPreferences sidebar)
     {
         _settings = settings;
-        _sidebarCompact = new(settings.Get(WaveeSettings.SidebarCollapsed));
-        _sidebarWidthUserSet = settings.Get(WaveeSettings.SidebarWidthUserSet);
-        // A dragged width is a preference and seeds verbatim. An undragged one is only the last responsive default, so it
-        // seeds from the tier ladder instead — the viewport is not known here (no bounds callback yet), so this takes the
-        // pre-measure fallback and the viewport effect in Render (which runs at mount, before the first layout) commits
-        // the real tier without a visible step.
-        _sidebarWidth = new(_sidebarWidthUserSet
-            ? Math.Clamp(settings.Get(WaveeSettings.SidebarWidth), ShellResponsiveLayout.NavPaneMinW, ShellResponsiveLayout.NavPaneMaxW)
-            : ShellResponsiveLayout.InitialNavPaneDefaultForViewport(0f));
+        _sidebar = sidebar;
+        // The service already seeded the ACTIVE design's pane triple in its own constructor (a dragged width verbatim, an
+        // undragged one from that design's tier ladder at the pre-measure fallback), so the FIRST layout is already correct
+        // and the viewport effect in Render commits the real tier without a visible step.
+        _sidebarCompact = sidebar.Collapsed;
+        _sidebarWidth = sidebar.Width;
+        _tierDesign = sidebar.Design.Peek();
 
         // Inert probe (screenshot / UI iteration only): open the right rail to the Lyrics panel at startup.
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
         if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Details; }
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_RAIL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH"))
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_RAIL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH") || Diag.EnvFlag("WAVEE_SIDEBAR_MODE_SHOT") || Diag.EnvFlag("WAVEE_SIDEBAR_V3_SHOT") || Diag.EnvFlag("WAVEE_SIDEBAR_VISUAL_SHOT"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             ProbeRail = m => { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = (RailMode)m; };
@@ -211,6 +223,16 @@ sealed class WaveeShell : Component
                 _sidebarDragging.Value = false;
                 SyncDragSuppression();
             };
+            // Drive a real design switch through the real service (snapshot/restore + remount), not by poking a signal:
+            // the mode-shot probe must exercise the same path the Settings picker does.
+            ProbeSidebarMode = mode => _sidebar.SwitchDesign(SidebarDesignInfo.FromInt(mode));
+            ProbeSidebarDesign = ProbeSidebarMode;   // one hook, two names: the design shots read better against SidebarDesign
+            // The Library-V3 view state goes through the same PERSISTING setters the sort/view flyout and the filter chips
+            // call — not a bare signal write — so a shot reflects what the mode actually renders after a real user change.
+            ProbeSidebarV3View = view => _sidebar.SetV3View(view);
+            ProbeSidebarV3Filter = filter => _sidebar.SetV3Filter(filter);
+            ProbeSidebarDrawer = open => _narrowDrawerState?.SetIfChanged(open);
+            ProbeSidebarPaneFrame = ReadSidebarPaneFrame;
         }
 
         _historyStore.Init(HistoryFilePath());
@@ -219,6 +241,24 @@ sealed class WaveeShell : Component
         _historyStore.Add(new Route("home"));   // record this session's first visit
         if (_historyStore.Entries.Count == 1)   // only seed fake data on a fresh install (nothing loaded from disk)
             SeedFakeHistory();
+    }
+
+    SidebarPaneFrameSnapshot ReadSidebarPaneFrame()
+    {
+        bool presented = _presentedCompactState?.Peek() ?? _sidebarCompact.Peek();
+        float rendered = 0f;
+        if (!_sidebarPaneNode.IsNull && _inputHooks?.GetNodeRect is { } rectOf)
+            rendered = rectOf(_sidebarPaneNode).W;
+        return new SidebarPaneFrameSnapshot(
+            _sidebar.Design.Peek(),
+            _sidebarCompact.Peek(),
+            presented,
+            _sidebarWidth.Peek(),
+            rendered,
+            presented ? 0f : 1f,
+            presented ? 1f : 0f,
+            ExpandedHitTestVisible: !presented,
+            RailHitTestVisible: presented);
     }
 
     void SeedFakeHistory()
@@ -256,13 +296,12 @@ sealed class WaveeShell : Component
     // widthUserSet is the DRAG-COMMIT edge only: it pins the width as a preference so the responsive tier ladder stops
     // writing it. The collapse toggle also persists through here and must leave the flag alone — collapsing the pane is
     // not a width choice, and pinning on it would freeze every user at whatever tier they happened to collapse from.
+    // Both arms now DELEGATE to SidebarPreferences, which owns the per-design keys and the clamp; the shell no longer
+    // touches the (legacy, migration-only) global sidebar.width / sidebar.collapsed keys.
     void SaveSidebar(bool widthUserSet = false)
     {
-        _settings.Set(WaveeSettings.SidebarWidth, _sidebarWidth.Peek());
-        _settings.Set(WaveeSettings.SidebarCollapsed, _sidebarCompact.Peek());
-        if (!widthUserSet || _sidebarWidthUserSet) return;
-        _sidebarWidthUserSet = true;
-        _settings.Set(WaveeSettings.SidebarWidthUserSet, true);
+        if (widthUserSet) _sidebar.CommitWidthDrag(_sidebarWidth.Peek());
+        else _sidebar.SetCollapsed(_sidebarCompact.Peek());
     }
 
     void CommitSidebarDrag() => SaveSidebar(widthUserSet: true);
@@ -284,6 +323,7 @@ sealed class WaveeShell : Component
 
     public override Element Render()
     {
+        _inputHooks = UseContext(InputHooks.Current);
         _requestTheme = UseContext(ThemeControl.Request);   // host's live re-theme trigger (animated in-place; no remount)
         // Float the auto-mounted toast lane ABOVE the fixed bottom player bar (idempotent static write — the
         // ToastHost-registration idiom): reserve the player-bar height on the docked (bottom) edge.
@@ -316,19 +356,24 @@ sealed class WaveeShell : Component
         // The nav-pane's responsive DEFAULT width (stock OpenPaneLength-per-window-class). Same band discipline as the
         // narrow-shell effect above: it reads the hot viewport width but only writes when a hysteretic tier flips, and it
         // is never debounced (a deferred structural width is a frame rendered at the wrong tier — ShellUi's note).
-        // Three writers must never fight over _sidebarWidth, so this one yields to both of the others:
-        //   • a pinned width — _sidebarWidthUserSet, latched by the drag commit, is a permanent opt-out;
+        // Three writers must never fight over the pane width, so this one yields to both of the others:
+        //   • a pinned width — SidebarPreferences.WidthUserSet (per design), latched by the drag commit, is a permanent opt-out;
         //   • a live drag — Peek-gated (no subscription): OnMove owns the width 1:1 while the pointer is down. A drag ends
         //     with SaveSidebar(widthUserSet: true), so after any committed drag this effect is inert anyway.
-        // vpSig is read FIRST and unconditionally: an early return before the read would drop the subscription and the
-        // tier would never update again. The pane's SidebarPaneAnim animates whatever this commits, for free.
+        // vpSig AND Design are read FIRST and unconditionally: an early return before either read would drop that
+        // subscription and the tier would never update again. Subscribing to Design is what makes a design switch RE-SEED
+        // the ladder against the incoming design's tier set (Classic 240/280/320 · V3 300/340/380 · Curated 280/320/360)
+        // instead of holding the outgoing design's tier. The pane's SidebarPaneAnim animates whatever this commits, for free.
         UseSignalEffect(() =>
         {
             float w = vpSig.Value.Width;
-            if (_sidebarWidthUserSet || _sidebarDragging.Peek()) return;
-            float next = ShellResponsiveLayout.NavPaneDefaultFor(w, _sidebarWidth.Peek(), _navPaneTierSeeded);
+            var design = _sidebar.Design.Value;
+            if (design != _tierDesign) { _tierDesign = design; _navPaneTierSeeded = false; }
+            _sidebar.SetViewportWidth(w);   // the service needs the live viewport to tier-seed an incoming design
+            if (_sidebar.WidthUserSet || _sidebarDragging.Peek()) return;
+            float next = ShellResponsiveLayout.NavPaneDefaultFor(w, _sidebarWidth.Peek(), _navPaneTierSeeded, _sidebar.Tiers);
             if (w > 0f) _navPaneTierSeeded = true;
-            _sidebarWidth.SetIfChanged(next);
+            _sidebar.SetResponsiveWidth(next);
         });
         UseSignalEffect(() =>
             presentedCompact.SetIfChanged(narrowShell.Value || _sidebarCompact.Value));
@@ -357,6 +402,16 @@ sealed class WaveeShell : Component
         _actions.Go = GoNav;
         _actions.Post = post;
         _actions.VideoOverrides = _actions.Svc?.VideoOverrides;
+        _actions.Sidebar = _sidebar;   // the pin store behind Pin/Unpin to sidebar (reference-stable → never churns consumers)
+        _actions.CurrentRoute ??= () => _route.Peek().Name;   // the ActiveRoute target-mode resolver (Peek: invoke-time read, not a render dep)
+        if (_actions.Extensions is null)
+        {
+            // The extension registry, built ONCE per shell: the first-party "wavee" actions + the nine sidebar data
+            // sources land in one enumerable catalog (the customizer's action/section pickers read it in order).
+            var registry = WaveeExtensionRegistry.Build(_actions);
+            _actions.Svc?.RegisterSidebarSources(registry);
+            _actions.Extensions = registry;
+        }
         // The row indicator / "Videos only" filter read the association plane + the curation through a process-wide
         // probe rather than context, because they run per ROW (a context read or a signal subscription per row is not
         // affordable there). Both halves of the has-video answer are attached here, and nothing else answers it.
@@ -423,6 +478,7 @@ sealed class WaveeShell : Component
                         new BoxEl
                         {
                             Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
+                            OnRealized = h => _sidebarPaneNode = h,
                             Width = Prop.Of(() => presentedCompact.Value
                                 ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value),
                             // SidebarPaneAnim eases the COLLAPSE toggle (56↔expanded) as a clip+translate reveal — the pane
@@ -432,12 +488,14 @@ sealed class WaveeShell : Component
                             Children =
                             [
                                 // Content fades (compositor-only) toward the collapse detent; the chrome fill stays solid.
-                                // Column wrapper so WaveeSidebar's Grow=1f fills our HEIGHT (its ScrollView needs a definite one).
+                                // Column wrapper so the mode component's Grow=1f fills our HEIGHT (its ScrollView needs a
+                                // definite one). SidebarHost is the ONE mount seam: it re-renders on a design switch and
+                                // remounts the selected mode under a design-derived Key.
                                 new BoxEl
                                 {
                                     Direction = 1, Grow = 1f,
                                     Opacity = Prop.Of(() => _sidebarFade.Value),
-                                    Children = [ Embed.Comp(() => new WaveeSidebar(_route, GoNav, presentedCompact, _sidebarWidth)) ],
+                                    Children = [ Embed.Comp(() => new SidebarHost(_route, GoNav, presentedCompact, _sidebarWidth)) ],
                                 },
                             ],
                         },
@@ -715,6 +773,13 @@ sealed class WaveeShell : Component
         };
         var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, fileDropLayer,
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
+            // Zero-size chrome INSIDE the OverlayHost subtree (so UseContext(Overlay.Service) resolves the real service —
+            // the same reason ActionServicesOverlayBinder lives here): opens the one-time design chooser once per install,
+            // after the first painted frame.
+            Embed.Comp(() => new SidebarOnboardingChrome(_settings)),
+            // The sidebar projection binder's pump — zero-size, always-mounted, BELOW the HistoryStore provide so the
+            // visited feed resolves (see SidebarProjectionBinder remarks). Nothing rebuilds the projection without it.
+            _actions.Svc?.SidebarBinder.MountPoint() ?? new BoxEl { HitTestVisible = false, Shrink = 0f },
             Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
             Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings })) with { Grow = 1f };
 
@@ -725,7 +790,8 @@ sealed class WaveeShell : Component
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
                Ctx.Provide(ActionServices.Slot, _actions,
-               OverlayHost.Create(shellWithOverlays))))))));
+               Ctx.Provide(WaveeExtensionRegistry.Slot, _actions.Extensions,
+               OverlayHost.Create(shellWithOverlays)))))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip
@@ -1014,7 +1080,9 @@ sealed class ShellNarrowDrawerPane : Component
             BorderWidth = 1f, BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
             Corners = new CornerRadius4(0f, Radii.Card, Radii.Card, 0f),
             Shadow = Elevation.Dialog, HitTestVisible = open,
-            Children = [Embed.Comp(() => new WaveeSidebar(_route, _go, _drawerCompact, _expandedWidth))],
+            // A SECOND, independent SidebarHost mount (its own hooks / scroll / mode-component instance) sharing the same
+            // width signal and the same SidebarPreferences — one mode, one state, two mounts.
+            Children = [Embed.Comp(() => new SidebarHost(_route, _go, _drawerCompact, _expandedWidth, inDrawer: true))],
         };
     }
 }

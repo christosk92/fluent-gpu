@@ -37,7 +37,23 @@ public sealed class LibraryStore
     public Loadable<IReadOnlyList<Show>> Shows { get; } = Loadable<IReadOnlyList<Show>>.Pending(Array.Empty<Show>());
     public Loadable<LibraryStats> Stats { get; } = Loadable<LibraryStats>.Pending(new LibraryStats(0, 0, 0, 0));
 
+    /// <summary>The folder-capable playlist TREE. The flat <see cref="Playlists"/> cell stays — Menus/AddTo, the Classic
+    /// sidebar list and every other pre-folder consumer read it — so this is an ADDITIVE sibling, not a replacement.
+    /// Same in-place Refresh discipline: a rootlist delta swaps the tree without a skeleton flash.</summary>
+    public Loadable<IReadOnlyList<PlaylistNode>> PlaylistTree { get; } =
+        Loadable<IReadOnlyList<PlaylistNode>>.Pending(Array.Empty<PlaylistNode>());
+
+    /// <summary>uri → added-at (unix ms) for the timestamped saved collections (albums / artists / shows). The Store HAS
+    /// these stamps (SavedItem.AddedAtMs) but the Album/Artist/Show records have nowhere to carry them, so they ride this
+    /// side-channel instead of a breaking record change. Absent uri ⇒ unknown (the sidebar's sort falls back honestly).</summary>
+    public Loadable<IReadOnlyDictionary<string, long>> AddedAt { get; } =
+        Loadable<IReadOnlyDictionary<string, long>>.Pending(EmptyAddedAt);
+
+    /// <summary>The shared empty added-at map (also the Pending seed, so a reader never null-checks).</summary>
+    public static IReadOnlyDictionary<string, long> EmptyAddedAt => SidebarTree.NoAddedAt;
+
     bool _albumsLoaded, _artistsLoaded, _playlistsLoaded, _likedLoaded, _showsLoaded, _statsLoaded;
+    bool _treeLoaded, _addedAtLoaded;
 
     // ── per-entity detail caches (master-detail right pane + detail revisits) ──
     readonly Dictionary<string, Loadable<DetailModel>> _details = new(StringComparer.Ordinal);
@@ -62,8 +78,14 @@ public sealed class LibraryStore
     public void EnsureLiked() { if (_likedLoaded) return; _likedLoaded = true; Fill(Liked, _lib.GetLikedSongsAsync); }
     public void EnsureShows() { if (_showsLoaded) return; _showsLoaded = true; Fill(Shows, _lib.GetShowsAsync); }
     public void EnsureStats() { if (_statsLoaded) return; _statsLoaded = true; Fill(Stats, _lib.GetStatsAsync); }
-    /// <summary>Eager warm of the cheap collections (Liked is large + lazy). Synthetic data is synchronous → Ready next frame.</summary>
-    public void WarmCheap() { EnsureAlbums(); EnsureArtists(); EnsurePlaylists(); EnsureShows(); EnsureStats(); }
+    /// <summary>Idempotent warmer for the folder-capable tree (mirrors <see cref="EnsurePlaylists"/>).</summary>
+    public void EnsurePlaylistTree() { if (_treeLoaded) return; _treeLoaded = true; Fill(PlaylistTree, _lib.GetPlaylistTreeAsync); }
+    /// <summary>Idempotent warmer for the added-at side-channel (a cheap local read of the saved sets).</summary>
+    public void EnsureAddedAt() { if (_addedAtLoaded) return; _addedAtLoaded = true; Fill(AddedAt, _lib.GetLibraryAddedAtAsync); }
+    /// <summary>Eager warm of the cheap collections (Liked is large + lazy). Synthetic data is synchronous → Ready next frame.
+    /// The tree + added-at cells are cheap local reads too, so a V3/Curated sidebar paints from warm cells on its first
+    /// frame exactly as Classic does today.</summary>
+    public void WarmCheap() { EnsureAlbums(); EnsureArtists(); EnsurePlaylists(); EnsurePlaylistTree(); EnsureAddedAt(); EnsureShows(); EnsureStats(); }
 
     void Fill<T>(Loadable<T> cell, Func<CancellationToken, Task<T>> read)
     {
@@ -98,11 +120,13 @@ public sealed class LibraryStore
         {
             if (_likedLoaded) Refresh(Liked, _lib.GetLikedSongsAsync);
             if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);    // the liked count lives in stats
+            if (_addedAtLoaded) Refresh(AddedAt, _lib.GetLibraryAddedAtAsync);   // a save/unsave moves a "recently added" stamp
             _details.Remove("liked"); _detailLru.Remove("liked");    // the liked track SET changed → reload its detail fresh
         })));
         _subs.Add(_pls.PlaylistsChanged.Subscribe(_ => post(() =>
         {
             if (_playlistsLoaded) Refresh(Playlists, _lib.GetPlaylistsAsync);
+            if (_treeLoaded) Refresh(PlaylistTree, _lib.GetPlaylistTreeAsync);   // the rootlist delta reshapes the tree too
             if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);
             InvalidateWhere(k => k.Contains("playlist", StringComparison.Ordinal));
         })));
@@ -122,6 +146,10 @@ public sealed class LibraryStore
             case CollectionKind.Playlists when _playlistsLoaded: Refresh(Playlists, _lib.GetPlaylistsAsync); break;
             case CollectionKind.Liked when _likedLoaded: Refresh(Liked, _lib.GetLikedSongsAsync); break;
         }
+        // The tree rides the Playlists arm (the rootlist is what changed); the added-at map rides EVERY kind, because any
+        // save/unsave in any collection moves a stamp.
+        if (kind == CollectionKind.Playlists && _treeLoaded) Refresh(PlaylistTree, _lib.GetPlaylistTreeAsync);
+        if (_addedAtLoaded) Refresh(AddedAt, _lib.GetLibraryAddedAtAsync);
         if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);
     }
 

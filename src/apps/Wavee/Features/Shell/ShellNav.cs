@@ -18,6 +18,10 @@ static class ShellNav
         // glyph — without this it would fall through to the "Your Library" default in the tab strip and breadcrumb.
         if (key.StartsWith("prerelease:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Album), Icons.Album);
         if (key.StartsWith("artist:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Artist), Icons.Contact);
+        // A podcast/show renders the shared detail surface (ContentHost.IsDetail) exactly like album/artist, so it needs its
+        // own label + glyph here — without this it falls through to the "Your Library" default in the tab strip, the history
+        // rows, and the sidebar's pinned rows (whose pin id IS the route key). Icons.RadioTower is the podcasts glyph below.
+        if (key.StartsWith("show:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Show), Icons.RadioTower);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {
@@ -37,6 +41,10 @@ static class ShellNav
             "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
             "settings" => ("Settings", Icons.Settings),
             "api-console" => ("API Console", Icons.Code),
+            // The full-page sidebar customizer (§C4.1) — a real destination, so the tab strip / breadcrumb need its label
+            // and glyph here like any other page. The key is `SidebarLayoutMenu.CustomizeRoute`, spelled as a LITERAL
+            // because this file is source-included by src/apps/Wavee.Tests and that engine-bound file is not.
+            "sidebar-customize" => (Loc.Get(Strings.Sidebar.Customizer.Title), Icons.Edit),
             _          => (Loc.Get(Strings.Nav.YourLibrary), Icons.MusicNote),
         };
     }

@@ -351,7 +351,10 @@ public sealed class ToolTip : Component
 
         return new BoxEl
         {
-            AlignSelf = FlexAlign.Start,
+            // The service wrapper must be layout-transparent on the parent's cross axis. Pinning it to Start pulled
+            // every wrapped toolbar button to the top of a centred row and every compact-rail tile to the left edge.
+            // Auto preserves the alignment the target would have inherited before ToolTip.Wrap introduced this node.
+            AlignSelf = FlexAlign.Auto,
             OnRealized = x => anchor.Value = x,
             OnHoverMove = OnEnter,         // mouse-enter trigger (makes the target hit-testable for hover)
             OnPointerExit = OnLeave,       // mouse-leave → cancel pending / close open

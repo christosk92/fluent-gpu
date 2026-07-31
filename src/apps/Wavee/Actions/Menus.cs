@@ -212,8 +212,9 @@ public static class Menus
 
     // ── Containers ───────────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>A media-card menu inferred from the card's uri (cards carry only uri + title). Albums/artists/playlists
-    /// get Primary [Play · Save/Follow] + rows [Follow/Unfollow (artist only), Open, Share ▸]; a track uri gets the thin
-    /// track shape (no Track object → no album/artist rows); unknown schemes get no menu.</summary>
+    /// get Primary [Play · Save/Follow] + rows [Follow/Unfollow (artist only), Open, Pin/Unpin, Share ▸]; a track uri gets
+    /// the thin track shape (no Track object → no album/artist rows, and no pin row — tracks are never pinnable);
+    /// unknown schemes get no menu.</summary>
     public static ContextMenuModel? Card(ActionServices s, string uri, string name,
         Image? image = null, string? subtitle = null, bool circular = false)
     {
@@ -232,7 +233,7 @@ public static class Menus
         var primary = liked
             ? new[] { ContainerActions.PlayContext.ToBarCommand(ctx) }   // Liked Songs can't be un-saved
             : new[] { ContainerActions.PlayContext.ToBarCommand(ctx), ContainerActions.SaveContext.ToBarCommand(ctx) };
-        var rows = new List<MenuFlyoutItem>(3);
+        var rows = new List<MenuFlyoutItem>(5);   // Follow · ArtistRadio · Open · Pin/Unpin · Share
         // Follow / Unfollow as a ROW on artist menus (Spotify shows it as a row, not only the strip toggle).
         if (target.Kind == TargetKind.Artist)
         {
@@ -240,6 +241,9 @@ public static class Menus
             rows.Add(ContainerActions.GoToArtistRadio.ToMenuItem(ctx));
         }
         rows.Add(ContainerActions.OpenItem.ToMenuItem(ctx));
+        // Pin/Unpin immediately after Open (F.5.3 / §3.2.11). A non-pinnable uri (a track card) gets no row at all —
+        // decided in ONE place by SidebarPinId, never per menu. Liked Songs inherits it for free through its own arm above.
+        if (PinActions.Row(in ctx) is { } pinRow) rows.Add(pinRow);
         rows.Add(ShareItem(in ctx));
         string kind = target.Kind switch
         {
@@ -285,40 +289,207 @@ public static class Menus
         => s is null ? null : new MenuAttach(overlay, () => TrackContextMenu.BuildSingle(s, track));
 
     // ── Sidebar playlist row (rows-only vertical menu) ───────────────────────────────────────────────────────────────
-    /// <summary>Play · Open · — · Rename (owner) · Visibility ▸ (owner, live) · Invite collaborators (owner, live) ·
-    /// Share ▸ · — · Delete playlist (owner). Pin is reserved (no pin store yet).</summary>
+    /// <summary>Play · Open · — · <b>Pin to sidebar / Unpin from sidebar</b> · Rename (owner) · Visibility ▸ (owner, live) ·
+    /// Invite collaborators (owner, live) · Share ▸ · — · Delete playlist (owner).
+    ///
+    /// <para>The pin row sits IMMEDIATELY AFTER the first separator, before any owner-gated management verb (F.5.3):
+    /// pinning is available to every playlist regardless of ownership, so placing it inside the owner block would make it
+    /// look like part of it. It is gated on nothing but the pin store's presence.</para></summary>
     public static ContextMenuModel SidebarPlaylist(ActionServices s, PlaylistSummary p)
+        => new(SidebarPlaylistRows(s, p.Uri, p.Name, p.IsOwner, p.CanEdit),
+            header: Header(p.Cover, p.Uri, p.Name, p.OwnerName is { Length: > 0 } ? p.OwnerName : "Playlist"));
+
+    /// <summary>The playlist row list itself, shared by <see cref="SidebarPlaylist"/> and <see cref="SidebarEntry"/>'s
+    /// playlist arm — one builder, so the V3/Curated row menu and the Classic sidebar row menu can never drift.</summary>
+    static List<MenuFlyoutItem> SidebarPlaylistRows(ActionServices s, string uri, string name, bool isOwner, bool canEdit)
     {
         // Sidebar summaries carry only CanEdit/IsOwner — mapped onto the capabilities shape the actions gate on.
         var caps = new PlaylistCapabilities(
-            CanView: true, CanEditItems: p.CanEdit, CanEditMetadata: p.IsOwner,
-            IsCollaborative: p.CanEdit && !p.IsOwner, IsOwner: p.IsOwner,
-            CanAdministratePermissions: p.IsOwner);
-        var host = new PlaylistHost(p.Uri, caps, Array.Empty<PlaylistRowRef>());
-        var ctx = new ActionContext(ActionTarget.ForPlaylist(p.Uri, p.Name, host), s);
+            CanView: true, CanEditItems: canEdit, CanEditMetadata: isOwner,
+            IsCollaborative: canEdit && !isOwner, IsOwner: isOwner,
+            CanAdministratePermissions: isOwner);
+        var host = new PlaylistHost(uri, caps, Array.Empty<PlaylistRowRef>());
+        var ctx = new ActionContext(ActionTarget.ForPlaylist(uri, name, host), s);
 
         bool live = PlaylistInlineEdit.SpotifyEditsLive(s.Svc);
-        var rows = new List<MenuFlyoutItem>(9)
+        var rows = new List<MenuFlyoutItem>(10)
         {
             ContainerActions.PlayContext.ToMenuItem(ctx),
             ContainerActions.OpenItem.ToMenuItem(ctx),
             MenuFlyoutItem.Separator,
         };
-        if (p.IsOwner)
+        if (PinActions.Row(in ctx) is { } pinRow) rows.Add(pinRow);
+        if (isOwner)
             rows.Add(ContainerActions.RenamePlaylist.ToMenuItem(ctx));
-        if (p.IsOwner && live)
+        if (isOwner && live)
         {
-            rows.Add(VisibilityItem(s, p.Uri));
+            rows.Add(VisibilityItem(s, uri));
             rows.Add(ContainerActions.InviteCollaborators.ToMenuItem(ctx));
         }
         rows.Add(ShareItem(in ctx));
-        if (p.IsOwner)
+        if (isOwner)
         {
             rows.Add(MenuFlyoutItem.Separator);
             rows.Add(ContainerActions.DeletePlaylist.ToMenuItem(ctx));
         }
-        return new ContextMenuModel(rows,
-            header: Header(p.Cover, p.Uri, p.Name, p.OwnerName is { Length: > 0 } ? p.OwnerName : "Playlist"));
+        return rows;
+    }
+
+    // ── Sidebar projected row (Library V3 + Curated) ─────────────────────────────────────────────────────────────────
+    /// <summary>The menu EVERY V3/Curated row uses — one builder with a per-kind arm (§3.2.11), because a single entry
+    /// record already carries the kind and every fact each arm needs. Rows-only (no command strip: a 240-DIP pane is not
+    /// where an Explorer-style labeled strip belongs), destructive-last, with the pin row in the same place every arm.
+    ///
+    /// <list type="bullet">
+    /// <item><b>Playlist</b> — the full <see cref="SidebarPlaylist"/> row list (Play · Open · — · Pin · owner block ·
+    /// Share ▸ · — · Delete), so the two surfaces cannot drift.</item>
+    /// <item><b>Album / Artist</b> — the container card model's rows: Play · Save/Follow (artist also gets its radio) ·
+    /// Open · Pin · Share ▸.</item>
+    /// <item><b>Show / podcast</b> — Play · Open · Pin · — · Copy link, built from explicit rows rather than a new
+    /// <c>TargetKind.Show</c>. <b>Explicit non-goal</b> (§3.2.11): adding <c>TargetKind.Show</c> /
+    /// <c>ActionTarget.ForShow</c>; if that lands later this arm migrates onto it.</item>
+    /// <item><b>Folder</b> — Expand/Collapse (label switches) · Pin, and NOTHING else. Spotify folder create/rename/move/
+    /// delete is deferred (locked decision 9) and must not appear, not even disabled: a greyed-out "Delete folder" is a
+    /// promise we are not keeping. A folder has no uri, so there is nothing to play and nothing to share.</item>
+    /// <item><b>App route</b> — Open · Pin.</item>
+    /// </list>
+    ///
+    /// <paramref name="toggleFolder"/> is the surface's own expansion closure (null ⇒ the folder arm omits the
+    /// expand/collapse row rather than showing a dead one).</summary>
+    public static ContextMenuModel? SidebarEntry(ActionServices s, in SidebarLibraryEntry e,
+        Action? toggleFolder = null, bool folderExpanded = false)
+    {
+        switch (e.Kind)
+        {
+            case SidebarEntryKind.Playlist:
+                return new ContextMenuModel(SidebarPlaylistRows(s, e.Uri, e.Name, e.IsOwner, e.CanEdit),
+                    header: Header(e.Cover, e.Uri, e.Name,
+                        e.OwnerName is { Length: > 0 } owner ? owner : Loc.Get(Strings.Sidebar.V3.Kind.Playlist)));
+
+            case SidebarEntryKind.Album:
+            case SidebarEntryKind.Artist:
+                // The album/artist arms ARE the card menu — same target kinds, same verbs, same pin placement.
+                return Card(s, e.Uri, e.Name, e.Cover,
+                    e.Creator is { Length: > 0 } ? e.Creator : null, e.Circular);
+
+            case SidebarEntryKind.Show:
+                return SidebarShowMenu(s, in e);
+
+            case SidebarEntryKind.Folder:
+                return SidebarFolderMenu(s, in e, toggleFolder, folderExpanded);
+
+            case SidebarEntryKind.AppRoute:
+                return SidebarRouteMenu(s, in e);
+
+            case SidebarEntryKind.Track:
+                return SidebarTrackMenu(s, in e);
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>Feed TRACK rows — the only producers are the track-yielding data sources (<c>wavee.queue</c>,
+    /// <c>wavee.nowPlaying</c>, <c>wavee.artist.topTracks</c>); <c>SidebarProjection</c> never emits one. Play next ·
+    /// Add to queue · — · Copy link.
+    ///
+    /// <para>Three deliberate ABSENCES. No pin row: locked decision 4 keeps tracks unpinnable and
+    /// <c>SidebarPinId.FromEntry</c> refuses them, so a row here would be a promise the store rejects. No Open row: a
+    /// track has no detail route (<c>RouteKey</c> is null by construction). No Play row: activating the row already
+    /// plays it, and the queue verbs are the two things a click cannot do.</para></summary>
+    static ContextMenuModel SidebarTrackMenu(ActionServices s, in SidebarLibraryEntry e)
+    {
+        var ctx = new ActionContext(ActionTarget.ForTracks([TrackFromEntry(in e)]), s);
+        var rows = new List<MenuFlyoutItem>(4)
+        {
+            TrackActions.PlayNext.ToMenuItem(ctx),
+            TrackActions.AddToQueue.ToMenuItem(ctx),
+        };
+        if (SpotifyLink.WebUrl(e.Uri) is { } url)
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.CopyLink), ActionIcons.Resolve(ActionIcons.Link),
+                s.Clipboard is not null, () => CopyText(s, url, Strings.Menu.LinkCopied)));
+        }
+        return new ContextMenuModel(rows, Header(e.Cover, e.Uri, e.Name,
+            e.FirstArtistName is { Length: > 0 } artist ? artist : e.Creator is { Length: > 0 } ? e.Creator : null));
+    }
+
+    /// <summary>The minimal <see cref="Track"/> the queue verbs need from a projected row. <c>SidebarSourceMap.FromTrack</c>
+    /// keeps only what a ROW draws, so the original Track is gone by the time a menu opens — this rebuilds exactly the
+    /// fields <c>DetailQueueActions.BuildMetadata</c> puts on the wire (title · artist · image) and leaves the rest at
+    /// their honest zero: duration 0 and a blank album ref, because a projected row genuinely does not know them, and
+    /// <c>Availability</c> unknown, because only <c>getAlbum</c>/<c>getTrack</c> carry a server verdict and inventing one
+    /// here would make "nobody told us" indistinguishable from "confirmed playable".</summary>
+    static Track TrackFromEntry(in SidebarLibraryEntry e) => new(
+        Id: e.Id, Uri: e.Uri, Title: e.Name,
+        Artists: e.FirstArtistName is { Length: > 0 } artist
+            ? [new ArtistRef("", "", artist)]
+            : Array.Empty<ArtistRef>(),
+        Album: new AlbumRef("", "", ""),
+        DurationMs: 0, IsExplicit: false, Image: e.Cover);
+
+    /// <summary>Show / podcast rows. Built explicitly (no <c>TargetKind.Show</c> — see <see cref="SidebarEntry"/>).</summary>
+    static ContextMenuModel SidebarShowMenu(ActionServices s, in SidebarLibraryEntry e)
+    {
+        string uri = e.Uri;
+        string name = e.Name;
+        string? route = e.RouteKey;
+        var rows = new List<MenuFlyoutItem>(5)
+        {
+            new(Loc.Get(Strings.Detail.Play), ActionIcons.Resolve(ActionIcons.Play),
+                s.Svc?.Player is not null && uri.Length > 0, () => { _ = s.Svc?.Player.PlayAsync(uri); }),
+            new(Loc.Get(Strings.Menu.Open), ActionIcons.Resolve(ActionIcons.Open),
+                s.Go is not null && route is { Length: > 0 }, () => s.Go?.Invoke(route!, name)),
+        };
+        if (PinActions.RowForEntry(s, in e) is { } pinRow) rows.Add(pinRow);
+        if (SpotifyLink.WebUrl(uri) is { } url)
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.CopyLink), ActionIcons.Resolve(ActionIcons.Link),
+                s.Clipboard is not null, () => CopyText(s, url, Strings.Menu.LinkCopied)));
+        }
+        return new ContextMenuModel(rows, Header(e.Cover, uri, name,
+            e.Publisher is { Length: > 0 } publisher ? publisher : Loc.Get(Strings.Sidebar.V3.Kind.Show)));
+    }
+
+    /// <summary>Playlist-folder rows: expand/collapse + pin. NO folder CRUD (locked decision 9).</summary>
+    static ContextMenuModel SidebarFolderMenu(ActionServices s, in SidebarLibraryEntry e, Action? toggle, bool expanded)
+    {
+        var rows = new List<MenuFlyoutItem>(2);
+        if (toggle is not null)
+            rows.Add(new MenuFlyoutItem(
+                Loc.Get(expanded ? Strings.Sidebar.Item.CollapseFolder : Strings.Sidebar.Item.ExpandFolder),
+                new IconRef { Glyph = expanded ? Icons.ChevronUp : Icons.ChevronDown, Font = Theme.IconFont },
+                true, toggle));
+        if (PinActions.RowForEntry(s, in e) is { } pinRow) rows.Add(pinRow);
+        return new ContextMenuModel(rows, Header(null, e.Id, e.Name,
+            Strings.Sidebar.V3.ItemCount(e.ChildCount)));
+    }
+
+    /// <summary>Pinned/static app-route rows: Open · Pin.</summary>
+    static ContextMenuModel SidebarRouteMenu(ActionServices s, in SidebarLibraryEntry e)
+    {
+        string? route = e.RouteKey;
+        string name = e.Name;
+        var rows = new List<MenuFlyoutItem>(2)
+        {
+            new(Loc.Get(Strings.Menu.Open), ActionIcons.Resolve(ActionIcons.Open),
+                s.Go is not null && route is { Length: > 0 }, () => s.Go?.Invoke(route!, name)),
+        };
+        if (PinActions.RowForEntry(s, in e) is { } pinRow) rows.Add(pinRow);
+        return new ContextMenuModel(rows, Header(null, e.Id, name, null));
+    }
+
+    /// <summary>Clipboard write + the shared "copied" toast/announcement (the <c>TrackActions.CopyLink</c> path, reused
+    /// so the show arm cannot invent a second clipboard behaviour).</summary>
+    static void CopyText(ActionServices s, string text, string toastLocKey)
+    {
+        if (s.Clipboard is not { } clip) return;
+        try { clip.SetText(text); }
+        catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
+        InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
+        Toast.Show(Loc.Get(toastLocKey), new ToastOptions { Severity = InfoBarSeverity.Success });
     }
 
     // Explicit absolute-state rows (not a toggle): the sidebar summary carries no live IsPublic, and a mis-checked

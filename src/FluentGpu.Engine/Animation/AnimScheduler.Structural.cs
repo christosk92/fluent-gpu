@@ -22,7 +22,7 @@ public sealed partial class AnimEngine
 {
     private const Easing TweenDefault = Easing.FluentDecelerate;
 
-    // ── declarative-token seeding (the authoring bake target; Reconciler/AnimBake calls these) ──────────
+    // ── declarative-token seeding (the authoring bake target; Reconciler/AnimBake + token-aware controls call these) ──
     /// <summary>Enter terminal → identity, driven by a <see cref="MotionTokenDef"/> (the declarative Element.Enter +
     /// Element.Transition path; no LayoutTransition needed).</summary>
     public void SeedEnter(NodeHandle node, in EnterExit e, in MotionTokenDef m, float delayMs = 0f)
@@ -59,11 +59,35 @@ public sealed partial class AnimEngine
         SeedChannel(node, AnimChannel.BlurSigma, t.Blur, in m, null, 0f);
     }
 
-    private void SeedChannel(NodeHandle node, AnimChannel ch, float to, in MotionTokenDef m, float? initial, float delayMs)
+    /// <summary>Seed (or retarget) ONE channel toward <paramref name="to"/> under a NAMED motion token — the focused,
+    /// token-aware entry point a control uses INSTEAD of hand-rolling a duration/curve on <see cref="Animate"/> /
+    /// <see cref="Spring"/>. The token carries the dynamics (eased duration+curve OR spring) AND its
+    /// <see cref="ReducedMotionPolicy"/>, so reduced motion is enforced HERE — a non-Exempt token places the channel at
+    /// <paramref name="to"/> immediately — instead of at each call site (the reduced-motion-as-a-VALUE rule: authoring
+    /// code must never branch on <c>Motion.ReducedMotion</c>, which is a mutable global and therefore a hook-order
+    /// hazard). <paramref name="from"/> is the start value on the FRESH-seed path (a FLIP/placement "first"); null ⇒ the
+    /// engine reads the node's live value, which on an in-flight spring row is a velocity-continuous retarget rather
+    /// than a restart (see <see cref="Spring"/>). <paramref name="velocity"/> injects v0 on a fresh spring seed only (a
+    /// gesture release handing its lift speed to the settle spring); the eased path ignores it. A spring token seeds
+    /// 0-alloc; an eased token routes through <see cref="Animate"/> (one Keyframe[] per call), so seed on edges —
+    /// never inside frame phases 6–13.</summary>
+    public void SeedValue(NodeHandle node, AnimChannel channel, float to, in MotionTokenDef motion,
+                          float? from = null, float velocity = 0f, float delayMs = 0f)
+        => SeedChannel(node, channel, to, in motion, from, delayMs, velocity);
+
+    /// <summary>Token-ID overload of the <see cref="MotionTokenDef"/> <see cref="SeedValue"/>: resolves
+    /// <paramref name="token"/> through <see cref="MotionTok.Get"/> (the default table today; the per-theme table once
+    /// theming owns it) so the caller names the MOTION and never its numbers.</summary>
+    public void SeedValue(NodeHandle node, AnimChannel channel, float to, MotionTokenId token,
+                          float? from = null, float velocity = 0f, float delayMs = 0f)
+        => SeedChannel(node, channel, to, MotionTok.Get(token), from, delayMs, velocity);
+
+    private void SeedChannel(NodeHandle node, AnimChannel ch, float to, in MotionTokenDef m, float? initial, float delayMs,
+                             float initialVelocity = 0f)
     {
         if (ReducedSnap(ch, m.Reduced)) { SnapTo(node, ch, to); return; }
         if (m.Mode == IntegrationMode.Spring)
-            Spring(node, ch, to, m.Spring, initial, delayMs: delayMs);
+            Spring(node, ch, to, m.Spring, initial, initialVelocity, delayMs: delayMs);
         else
             Animate(node, ch, initial ?? CurrentValue(node, ch), to, m.DurationMs, m.Easing, delayMs: delayMs);
     }

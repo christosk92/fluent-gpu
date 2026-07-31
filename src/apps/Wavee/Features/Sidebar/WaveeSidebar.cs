@@ -1,73 +1,49 @@
 using System;
-using System.Collections.Generic;
-using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
-using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
-using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
-using static FluentGpu.Dsl.Ui;
+using Wavee.Core.Sidebar;
 
 namespace Wavee;
 
-// Row 2 left — the bespoke WaveeMusic SidebarView (SidebarView.xaml / SidebarStyles.xaml): 300 expanded / 56 compact,
-// with Pinned (drop-zone), Your Library (async count badges + Local "Soon"), and Playlists (async, shimmer-skeleton).
-// Differentiated chrome — art thumbnails, count pills, the dashed drop-zone, tracked section headers — NOT a flat list.
+// MODE A / "CLASSIC" of the three-mode sidebar (spec §3.1). Mounted only by SidebarHost, under the "sidebar.classic" key.
 //
-// MOTION (NavigationView-grade, adapted to the bespoke shape):
-//   • width   — owned by the shell-wrapper pane (WaveeShell.cs): its width (56/300) animates via SizeMode.Reflow on the
-//               row's direct child, so the content column re-solves and tiles against it frame-by-frame — gap-free, no fill.
-//   • sections— Expander's reveal idiom: an always-mounted clip wrapper whose height eases 0↔auto (rows below reflow).
-//   • rows    — ItemReflowTransition: enter-fade on mount (skeleton→real) + slide to new Y on reorder.
-//   • body    — compact and expanded layouts stay mounted at stable widths; the shell reveals the expanded tree through
-//               its animated pane clip. This mirrors WinUI SplitView and prevents remount/text-reflow flicker.
-//   • pill    — a single overlay accent pill that GLIDES to the selected row (NavIndicator), positioned by MEASURING
-//               the row's laid-out rect (robust to collapsible sections + async playlists — no hand-computed geometry).
+// R3.0.2 — WHAT THIS FILE USED TO BE, AND WHY IT ISN'T ANY MORE. Classic shipped as a hand-built pane: its own expanded
+// body, its own pinned section + reorder wiring + drop zone, its own 56-DIP rail, its own row builders, its own count
+// badge, its own per-kind subtitle table, its own selection mechanism. Curated and V3 shipped their own of each. Three
+// containers sharing only leaf primitives is why the user's screenshot review found four left insets, accent count pills
+// in one mode and quiet numbers in another, no section rhythm and no collapse motion: nothing could be fixed in one place.
+//
+// Classic is now a LOCKED BUILT-IN DOCUMENT (`SidebarBuiltInDocuments.Classic`) rendered by the ONE `SidebarPane`. This
+// component is the mode shell: it supplies the document, routes a header click to Classic's own persisted section flags,
+// declares itself READ-ONLY (no customizer entry — the quick menu's "Customize" still switches to Curated first, which is
+// landed behaviour), and hands the rail its create-playlist affordance. Everything visual comes from the shared renderer.
+//
+// THE PRESERVATION CONTRACT (§3.1.1) IS HONOURED AT THE PIXEL LEVEL, NOT THE IMPLEMENTATION LEVEL — the user's explicit
+// choice in R3.0. What survives verbatim: the pane padding (8,8,8,12) and therefore the 8+6=14 row inset; the 44-DIP row
+// height for every band (see the document's Display options); the 12/600/TextSecondary header typography; the leading
+// `rule:` dividers; the 4-state NavigationViewItem backplate ramp; 32-DIP playlist covers with the song-count subtitle;
+// the async count badges (now quiet numbers — the ONE badge the user asked for); the always-mounted expanded + rail layers
+// measured at the persisted open width; the DevTools entry; the pinned drop zone; the quick layout menu on the first
+// header and on the pane's background context menu. The DEVIATIONS are listed in the handoff, not hidden: selection is the
+// per-row indicator (a recycling list cannot host a measured overlay pill), the pinned list is virtualized and therefore
+// uncapped (no "Show all (n)" row), and pinned reorder uses the displacement channel rather than a live projection.
+//
+// MOTION: pane width is still the shell wrapper's (WaveeShell.cs SizeMode.Reflow); section chevrons rotate on
+// MotionTok.ControlFast; a collapse/expand fades + glides the rows it adds or displaces (SidebarPane.Choreograph);
+// reordering is MotionTok.ItemPlacement.
 sealed class WaveeSidebar : Component
 {
     readonly Signal<Route> _route;
     readonly Action<string, string?> _go;
     readonly Signal<bool> _compact;
     readonly Signal<float> _expandedWidth;
-    readonly Signal<bool> _pinnedOpen = new(true);
-    readonly Signal<bool> _libOpen = new(true);
-    readonly Signal<bool> _plOpen = new(true);
 
-    // Mount-time node handles for the selectable rows (key → node) + the scroll-content ZStack, so the overlay pill
-    // can measure the selected row's laid-out Y. Plain instance fields: this component is mounted once and persists.
-    readonly Dictionary<string, NodeHandle> _rowNodes = new();
-    NodeHandle _contentNode;
-    LibraryBridge? _lib;   // Mutations: create-playlist + the playlist-list refresh version (set each render)
-    ActionServices? _acts;           // the action system behind the playlist-row context menus (set each render)
-    IOverlayService? _menuOverlay;   // the overlay service those menus open through (set each render)
-
-    // ── overlay selection-pill geometry ──────────────────────────────────────────────────────────
-    internal const float PillH = 16f;        // SelectionIndicator height (WinUI 3×16)
-    const float PillX = 14f;                 // left inset = ExpandedBody pad-left(8) + row pad-left(6) → over the gutter
-
-    // The pill target, recomputed each render and read by WaveeSelPill (mirrors NavigationView.IndicatorTarget): the
-    // selectable row key to measure, the visibility decision, and a layout dep-string so the pill re-measures whenever
-    // a section open-state / playlist load changes the row's Y.
-    internal readonly record struct PillState(bool Visible, string RowKey, string Dep);
-    internal static readonly Context<PillState> Pill = new(new PillState(false, "", ""));
-
-    // ── motion specs ─────────────────────────────────────────────────────────────────────────────
-    // (The pane WIDTH animation lives on the shell-wrapper pane in WaveeShell.cs — SizeMode.Reflow on the row's direct
-    //  child, so the content column tracks it. Here we only own the in-pane motions below.)
-    // Rows below an opened/closed section (or newly-resolved playlists) carry from their old Y to the new Y; a row
-    // appearing for the first time fades + slides in from the left. Small engine-authored stagger.
-    static LayoutTransition ItemReflowTransition(int visualIndex) => new(
-        TransitionChannels.Position, TransitionDynamics.Spring(0.18f, 1f), SizeMode.Reveal,
-        Enter: new EnterExit(Dx: -8f, Opacity: 0f, Active: true),
-        DelayMs: MathF.Min(visualIndex * 8f, 48f));
-    // Section open/close reveal: the body's layout height eases 0↔auto through real layout so rows below reflow,
-    // riding the content's bottom edge (slide-out-from-under-the-header). Mirrors Expander.cs:83-87.
-    static readonly LayoutTransition SectionReveal = new(
-        TransitionChannels.Size, TransitionDynamics.Tween(220f, Easing.SmoothOut),
-        Size: SizeMode.Reflow, Anchor: SizeAnchor.Trailing);
+    SidebarPreferences? _prefs;
+    LibraryBridge? _lib;
 
     public WaveeSidebar(Signal<Route> route, Action<string, string?> go, Signal<bool> compact, Signal<float> expandedWidth)
     {
@@ -76,385 +52,64 @@ sealed class WaveeSidebar : Component
 
     public override Element Render()
     {
-        var store = UseContext(LibraryStore.Slot);
+        // Refreshed each render; the frozen config's delegates read these fields, so they always see the live services.
+        _prefs = UseContext(SidebarPreferences.Slot);
         _lib = UseContext(LibraryBridge.Slot);
-        _acts = UseContext(ActionServices.Slot);        // playlist-row context menus (Menus.SidebarPlaylist)
-        _menuOverlay = UseContext(Overlay.Service);
-        store?.EnsureStats();
-        store?.EnsurePlaylists();
-        // Cached + off-page-fresh: the Your-Library counts (Liked etc.) update live when you like a song on another page.
-        var stats = store?.Stats ?? Loadable<LibraryStats>.Ready(new LibraryStats(0, 0, 0, 0));
-        // Playlists via the root LibraryStore cell (§4.3, kills R3 + R4): it refreshes IN PLACE (SetReady, never re-Pending)
-        // on inbound rootlist/collection deltas AND on user-created wavee:playlist:* — its PlaylistsChanged subscription is
-        // the SAME UserPlaylistSource that feeds LibraryBridge.PlaylistsVersion, and GetPlaylistsAsync already federates
-        // both sources. So a follow/unfollow animates the one keyed row instead of re-keying the whole list into a skeleton
-        // flash. The skeleton shows ONLY while the cell is genuinely Pending (first load); after the first SetReady it stays
-        // Ready forever (Refresh never flips it back), so no delta ever flashes it.
-        var playlists = store?.Playlists ?? Loadable<IReadOnlyList<PlaylistSummary>>.Ready(Array.Empty<PlaylistSummary>());
 
-        bool compact = _compact.Value;        // subscribe (width)
-        string sel = _route.Value.Name;       // subscribe (selection pill)
-        bool pinnedOpen = _pinnedOpen.Value;  // subscribe (so the pill dep re-measures on section toggle)
-        bool libOpen = _libOpen.Value;
-        bool plOpen = _plOpen.Value;
-
-        var pillState = ComputePillState(sel, pinnedOpen, libOpen, plOpen, playlists);
-        if (compact) pillState = pillState with { Visible = false };
-        Element expandedContent = ZStack(
-            new BoxEl { Key = "full", Direction = 1, Grow = 1f, Children = [ ExpandedBody(stats, playlists, sel) ] },
-            Ctx.Provide(Pill, pillState, Embed.Comp(() => new WaveeSelPill(_rowNodes, () => _contentNode)))
-        ) with { OnRealized = h => _contentNode = h };
-
-        // Both variants remain mounted. The expanded branch always measures at the persisted OPEN width, even while the
-        // outer pane is compact, so its text never wraps at 56 DIP and never flashes through intermediate line breaks.
-        // Toggling only changes which retained branch is painted/hit-testable; the outer shell owns the visible clip.
-        Element expandedLayer = new BoxEl
+        var config = UseMemo(() => new SidebarPaneConfig
         {
-            Key = "expanded-layer", Direction = 1, Grow = 1f, Shrink = 0f,
-            Width = Prop.Of(() => _expandedWidth.Value), ClipToBounds = true,
-            Opacity = compact ? 0f : 1f, HitTestVisible = !compact,
-            Children = [ ScrollView(expandedContent) with { Grow = 1f, AutoEdgeFade = true } ],
-        };
-        Element compactLayer = new BoxEl
-        {
-            Key = "compact-layer", Direction = 1, Grow = 1f, Shrink = 0f, Width = 56f,
-            Opacity = compact ? 1f : 0f, HitTestVisible = compact,
-            // The compact rail is only 56 DIP wide. Its standard overlay scrollbar occupies the same visual gutter as
-            // the shell resize affordance and reads as a tall, page-spanning border. Keep wheel/touch scrolling, but do
-            // not paint a scrollbar in compact mode (the expanded library keeps the normal auto-hide scrollbar).
-            Children = [ ScrollView(CompactBody(sel, playlists)) with
-            {
-                Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
-            } ],
-        };
+            Design = SidebarDesign.Classic,
+            ScrollKeyPrefix = "sidebar.classic",
+            Document = BuildDocument,
+            // Classic's collapse state is NOT document state: it lives in three persisted preference flags so the docked
+            // pane and the narrow drawer (two independent mounts) agree and it survives a design round-trip. Reading them
+            // in ModeEpoch is what makes the pane re-plan — and the realized rows re-skin — on a toggle.
+            ModeEpoch = SectionEpoch,
+            SetSectionCollapsed = SetSection,
+            // A LOCKED document: no inline EntityList controls, no "Remove item" verb, no empty-pane customize CTA.
+            ReadOnly = true,
+            // Classic has no library-only search head (its Playlists section is a tree, not an EntityList).
+            SearchHead = false,
+            OnCreatePlaylist = CreatePlaylist,
+            // The rail's create-playlist affordance. A rail plan is tiles-from-sections and cannot express authored
+            // chrome, so Classic's landed 40-DIP "+" tile is appended by the pane instead of planned.
+            RailFooter = () => Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, SidebarRailItem.Box, 16f)),
+        }, DepKey.Empty);
 
-        return new BoxEl
-        {
-            // Fill the shell pane. Its model width commits directly to 56/open-width; SizeMode.Reveal animates only the
-            // presented clip, while the retained expanded layer above remains measured at its stable open width.
-            Grow = 1f,
-            // No corners: the sidebar is flush chrome anchored to the toolbar/title chrome — NOT a detached rounded card
-            // (the WaveeMusic Sidebar.BackgroundBrush = LayerOnMicaBaseAlt pane, App.xaml:38, is part of the shell frame).
-            // No Fill here: the SidebarPane (WaveeShell.cs) owns the chrome fill, so the resize content-fade dims the
-            // CONTENT over a solid chrome backing instead of dissolving the chrome to the transparent root.
-            Direction = 1, ZStack = true, ClipToBounds = true,
-            // AutoEdgeFade: the engine's opt-in premium edge-scroller — a TRUE alpha fade that feathers only the edge(s)
-            // that currently overflow (top when scrolled down, bottom when more is below), ramped with the scroll offset,
-            // so rows dissolve into the sidebar chrome as they leave the viewport. (The default surface-colour EdgeCues is
-            // invisible on our translucent chrome, hence the explicit alpha fade.)
-            // The scrollbar uses the standard auto-hide behavior; hover/wheel now reaches this ScrollView because the
-            // shell resize overlay no longer covers the sidebar hit-test branch.
-            Children = [ expandedLayer, compactLayer ],
-        };
+        return Embed.Comp(() => new SidebarPane(config, _route, _go, _compact, _expandedWidth));
     }
 
-    // Decide where the overlay pill should be (and whether it shows) from data only — the actual Y is MEASURED later.
-    PillState ComputePillState(string sel, bool pinnedOpen, bool libOpen, bool plOpen, Loadable<IReadOnlyList<PlaylistSummary>> playlists)
+    /// <summary>Classic's locked document, rebuilt from its three live collapse flags. The section ids are STABLE strings,
+    /// so the pane's reorder bands and collapse routing survive every rebuild.</summary>
+    SidebarCustomLayout BuildDocument()
     {
-        bool isLib = sel is "albums" or "artists" or "liked" or "podcasts" or "local";
-        bool isPl = sel.StartsWith("pl:", StringComparison.Ordinal);
-
-        int plCount = 0; bool plLoaded = false;
-        if ((LoadState)playlists.State.Value == LoadState.Ready && playlists.Value.Value is { } arr)
-        {
-            plCount = arr.Count;
-            if (isPl) foreach (var p in arr) if ("pl:" + p.Uri == sel) { plLoaded = true; break; }
-        }
-
-        bool sectionOpen = isLib ? libOpen : isPl ? plOpen : false;
-        bool visible = sectionOpen && (isLib || plLoaded);
-        // Re-measure trigger: anything that moves the selected row's Y (selection, any section open-state, playlist load).
-        string dep = string.Concat(sel, "|", pinnedOpen ? "1" : "0", libOpen ? "1" : "0", plOpen ? "1" : "0", "|", plCount.ToString());
-        return new PillState(visible, sel, dep);
+        var prefs = _prefs;
+        // `prefs == null` (an isolated harness mount) keeps every section open and simply has no pins — the same defensive
+        // shape the landed component used.
+        return SidebarBuiltInDocuments.Classic(
+            prefs?.ClassicPinnedOpen.Value ?? true,
+            prefs?.ClassicLibraryOpen.Value ?? true,
+            prefs?.ClassicPlaylistsOpen.Value ?? true);
     }
 
-    // ── expanded (300) ──────────────────────────────────────────────────────────────────────────
-    Element ExpandedBody(Loadable<LibraryStats> stats, Loadable<IReadOnlyList<PlaylistSummary>> playlists, string sel) => new BoxEl
+    /// <summary>The three section flags folded into the pane's mode epoch. Reading them with <c>.Value</c> IS the
+    /// subscription (the pane invokes this inside its own render and inside every realized row's epoch read).</summary>
+    int SectionEpoch()
     {
-        // Grow=1f fills the pane's WIDTH: bodyWrapped is a ROW (a bare BoxEl defaults to Direction=0), so this column is
-        // on its horizontal MAIN axis and would otherwise hug to the rows' natural width and left-align — leaving dead
-        // space on the right once the pane is dragged wider than that natural width (same reason CompactBody sets it).
-        // Filling the width lets every row cross-stretch so its Grow=1f label pushes the trailing badge to the edge.
-        Grow = 1f,
-        Direction = 1, Gap = Spacing.S, Padding = new Edges4(8f, 8f, 8f, 12f),
-        Children =
-        [
-            Section(Loc.Get(Strings.Sidebar.Pinned), _pinnedOpen, PinnedDropZone()),
-            Section(Loc.Get(Strings.Sidebar.YourLibrary), _libOpen, new BoxEl
-            {
-                Direction = 1, Gap = 2f,
-                Children =
-                [
-                    LibRow("albums",   Icons.Album,      Loc.Get(Strings.Sidebar.Albums),     sel, 0, CountBadge(stats, s => s.Albums)),
-                    LibRow("artists",  Icons.Contact,    Loc.Get(Strings.Sidebar.Artists),    sel, 1, CountBadge(stats, s => s.Artists)),
-                    LibRow("liked",    Icons.Heart,    Loc.Get(Strings.Sidebar.LikedSongs), sel, 2, CountBadge(stats, s => s.LikedSongs)),
-                    LibRow("podcasts", Icons.RadioTower, Loc.Get(Strings.Sidebar.Podcasts),   sel, 3, CountBadge(stats, s => s.Podcasts)),
-                    LocalRow(sel),
-                ],
-            }, rule: true),
-            Section(Loc.Get(Strings.Sidebar.Playlists), _plOpen, Skel.Region(
-                playlists,
-                shimmerSource: () => new BoxEl
-                {
-                    Direction = 1, Gap = SkeletonStyle.Default.RowGap,
-                    Children = [PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow(), PlaylistSkeletonRow()],
-                },
-                content: arr => Flow.For(() => arr, p => p.Uri, (p, i) => PlaylistRow(p, sel, i)),
-                reveal: SkelReveal.StaggerRows,
-                onFailed: () => ErrorState.Build(playlists.Error),
-                isEmpty: arr => arr is null || arr.Count == 0, onEmpty: () => EmptyState.Default()),
-                action: Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder)), rule: true),
-            DevToolsRow(sel),
-        ],
-    };
-
-    // `action` (optional) is a trailing affordance (e.g. the Playlists "+" create button) placed before the chevron.
-    // Click dispatch targets the nearest clickable self-or-ancestor, so a clickable action consumes its own clicks
-    // without toggling the section (the header toggle only fires on the non-clickable title/spacer/chevron).
-    // `rule` draws the stock NavigationViewItemSeparator above the header: every group EXCEPT the first is preceded by a
-    // 1px divider + an 8-DIP lead-in, so the pane reads as grouped bands instead of one undifferentiated column. Expanded
-    // pane only — the 56-DIP rail composes CompactBody, which never calls Section (its own short CompactDivider stands in).
-    Element Section(string title, Signal<bool> open, Element body, Element? action = null, bool rule = false)
-    {
-        bool isOpen = open.Value;             // subscribe
-        return new BoxEl
-        {
-            Direction = 1, Gap = 2f,
-            Children =
-            [
-                .. (rule
-                    ? new Element[] { Divider() with { Margin = new Edges4(0f, 8f, 0f, 0f) } }
-                    : Array.Empty<Element>()),
-                new BoxEl
-                {
-                    Direction = 0, Height = 28f, AlignItems = FlexAlign.Center, Gap = 4f,
-                    Padding = new Edges4(8f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-                    HoverFill = Tok.FillSubtleSecondary, OnClick = () => open.Value = !open.Peek(),
-                    Children =
-                    [
-                        // Stock NavigationViewItemHeader typography: Caption-scale 12 at BodyStrong weight in the SECONDARY
-                        // text colour. 11/Tertiary read as disabled micro-copy rather than as a group label.
-                        new TextEl(title) { Size = 12f, Weight = 600, Color = Tok.TextSecondary },
-                        new BoxEl { Grow = 1f },
-                        .. (action is null ? Array.Empty<Element>() : new[] { action }),
-                        Icon(isOpen ? Icons.ChevronUp : Icons.ChevronDown, 10f, Tok.TextTertiary),
-                    ],
-                },
-                // Always-mounted reveal wrapper (Expander PartClip idiom): the body's layout height eases 0↔auto, so
-                // sections below reflow smoothly. The body stays mounted while collapsed (clip height 0) — that also
-                // keeps the selected-row node measurable for the pill (it just goes hidden when its section is closed).
-                new BoxEl
-                {
-                    Direction = 1, ClipToBounds = true,
-                    Height = isOpen ? float.NaN : 0f,
-                    Animate = SectionReveal,
-                    Children = [ body ],
-                },
-            ],
-        };
+        var prefs = _prefs;
+        if (prefs is null) return 0;
+        return (prefs.ClassicPinnedOpen.Value ? 1 : 0)
+             | (prefs.ClassicLibraryOpen.Value ? 2 : 0)
+             | (prefs.ClassicPlaylistsOpen.Value ? 4 : 0);
     }
 
-    Element LibRow(string key, string glyph, string label, string sel, int index, Element trailing)
+    void SetSection(string sectionId, bool collapsed)
     {
-        bool selected = sel == key;
-        return new BoxEl
-        {
-            Key = key,
-            Animate = ItemReflowTransition(index),
-            OnRealized = h => _rowNodes[key] = h,
-            Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
-            Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-            // Stock NavigationViewItem backplate ramp (NavigationView.cs:1174-1176 / NavigationView_themeresources): rest
-            // Transparent · Selected=Secondary; hover Secondary · SelectedPointerOver=Tertiary; pressed Tertiary ·
-            // SelectedPressed=Secondary. The selected row must DARKEN on hover, never flatten into its own rest fill.
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-            OnClick = () => _go(key, null),
-            Children =
-            [
-                SelGutter(),     // 3px reserve; the moving accent is the overlay WaveeSelPill
-                Icon(glyph, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary),
-                Body(label) with { Grow = 1f, Trim = TextTrim.CharacterEllipsis },
-                trailing,
-            ],
-        };
+        if (SidebarBuiltInDocuments.ClassicSectionOf(sectionId) is not { } section) return;
+        _prefs?.SetClassicSection(section, !collapsed);
     }
 
-    // Local Files — now a real source (LocalSource owns wavee:local:*). Opens the local collection through the shared
-    // detail surface (route "local" → DetailPage → GetPlaylistAsync("wavee:local:all")). A selectable row like the rest.
-    Element LocalRow(string sel)
-    {
-        bool selected = sel == "local";
-        return new BoxEl
-        {
-            Key = "local",
-            Animate = ItemReflowTransition(4),
-            OnRealized = h => _rowNodes["local"] = h,
-            Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 12f,
-            Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // ramp as LibRow (stock NavigationViewItem)
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-            OnClick = () => _go("local", null),
-            Children =
-            [
-                SelGutter(),
-                Icon(Icons.Folder, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary),
-                Body(Loc.Get(Strings.Sidebar.LocalFiles)) with { Grow = 1f, Trim = TextTrim.CharacterEllipsis },
-            ],
-        };
-    }
-
-    Element DevToolsRow(string sel) => LibRow("api-console", Icons.Code, "API Console", sel, 0, new BoxEl());
-
-    Element PinnedDropZone() => new BoxEl
-    {
-        Height = 56f, Margin = new Edges4(4f, 4f, 4f, 8f),
-        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = CornerRadius4.All(4f),
-        BorderColor = Tok.TextTertiary with { A = 0.5f }, BorderWidth = 1f, BorderDashOn = 4f, BorderDashOff = 3f,
-        Children = [ new TextEl(Loc.Get(Strings.Sidebar.DropToPin)) { Size = 12f, Color = Tok.TextTertiary with { A = 0.8f } } ],
-    };
-
-    Element CountBadge(Loadable<LibraryStats> stats, Func<LibraryStats, int> pick)
-    {
-        var st = (LoadState)stats.State.Value;          // subscribe
-        if (st == LoadState.Ready && stats.Value.Value is { } s) return InfoBadge.Count(pick(s));
-        return new BoxEl { Width = 22f, Height = 16f, Corners = CornerRadius4.All(8f), Fill = Tok.FillSubtleSecondary };
-    }
-
-    Element PlaylistRow(PlaylistSummary p, string sel, int index)
-    {
-        string key = "pl:" + p.Uri;
-        bool selected = sel == key;
-        var row = new BoxEl
-        {
-            Key = key,
-            Animate = ItemReflowTransition(index),
-            OnRealized = h => _rowNodes[key] = h,
-            Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 10f,
-            Padding = new Edges4(6f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // ramp as LibRow (stock NavigationViewItem)
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-            OnClick = () => _go(key, p.Name),
-            Children =
-            [
-                SelGutter(),
-                Surfaces.Artwork(p.Cover, SeedFrom(p.Uri), 32f, 32f, 6f),
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Gap = 1f,
-                    Children =
-                    [
-                        Body(p.Name) with { Trim = TextTrim.CharacterEllipsis, MaxLines = 1 },
-                        Caption(Strings.Sidebar.SongCount(p.TrackCount)).Secondary(),
-                    ],
-                },
-                // Hover-revealed trailing "…": opens the SAME sidebar playlist menu the row shows on right-click,
-                // anchored at the button — ClickRequestsContext re-enters the context-request funnel here and the walk
-                // finds the row's OnContextRequested (the WithContextMenu attach below). Zero-width when no menu system.
-                _acts is not null && _menuOverlay is not null
-                    ? new BoxEl
-                    {
-                        Opacity = 0f, HoverOpacity = 1f, Shrink = 0f,
-                        Children =
-                        [
-                            new BoxEl
-                            {
-                                Width = 26f, Height = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                                Corners = CornerRadius4.All(13f),
-                                HoverFill = Tok.FillSubtleTertiary,
-                                Role = AutomationRole.Button, Cursor = CursorId.Hand,
-                                ClickRequestsContext = true,
-                                Children = [Icon(Icons.More, 14f, Tok.TextSecondary)],
-                            },
-                        ],
-                    }
-                    : new BoxEl(),
-            ],
-        };
-        // Right-click / Menu key / long-press: the sidebar playlist menu (Play · Open · owner management · Copy link ·
-        // Delete). Attach chains onto the row's existing OnRealized (the pill measurement capture) — never clobbers.
-        if (_acts is { } acts && _menuOverlay is { } menuSvc)
-            return row.WithContextMenu(menuSvc, () => Menus.SidebarPlaylist(acts, p));
-        return row;
-    }
-
-    // The 3px reserve where the selection accent sits — the moving pill is the overlay WaveeSelPill (so it can glide
-    // between rows). Keeping the reserve means the row content does not shift when selection moves.
-    static Element SelGutter() => new BoxEl { Width = 3f };
-
-    static Element PlaylistSkeletonRow() => new BoxEl
-    {
-        Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = 10f, Padding = new Edges4(9f, 0f, 8f, 0f),
-        Children =
-        [
-            new BoxEl { Width = 32f, Height = 32f, Corners = CornerRadius4.All(6f), Fill = Tok.FillSubtleSecondary },
-            new BoxEl
-            {
-                Direction = 1, Grow = 1f, Gap = 4f,
-                Children =
-                [
-                    new BoxEl { Width = 140f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
-                    new BoxEl { Width = 80f, Height = 10f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
-                ],
-            },
-        ],
-    };
-
-    // ── compact rail (56) — centered library icons + create + playlist art (Spotify-style) ────────
-    Element CompactBody(string sel, Loadable<IReadOnlyList<PlaylistSummary>> playlists)
-    {
-        var st = (LoadState)playlists.State.Value;     // subscribe → the rail fills in when playlists resolve
-        IReadOnlyList<PlaylistSummary> arr = st == LoadState.Ready && playlists.Value.Value is { } a ? a : Array.Empty<PlaylistSummary>();
-
-        var kids = new List<Element>
-        {
-            CompactIcon("albums",   Icons.Album,      sel),
-            CompactIcon("artists",  Icons.Contact,    sel),
-            CompactIcon("liked",    Icons.Heart,    sel),
-            CompactIcon("podcasts", Icons.RadioTower, sel),
-            CompactIcon("local",    Icons.Folder,   sel),
-            CompactDivider(),
-            Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, CreateFolder, 40f, 16f)),
-            CompactIcon("api-console", Icons.Code, sel),
-        };
-        if (st == LoadState.Ready) foreach (var p in arr) kids.Add(CompactArt(p, sel));
-        else for (int i = 0; i < 4; i++) kids.Add(CompactSkeleton());
-
-        return new BoxEl
-        {
-            // Grow=1f fills the rail's WIDTH (bodyWrapped is a row, so without it this column hugs to the 40-DIP tiles and
-            // left-aligns). Filling the width lets AlignItems=Center actually center the tiles in the 56-DIP rail.
-            Grow = 1f,
-            Direction = 1, Gap = 6f, Padding = new Edges4(0f, 8f, 0f, 12f), AlignItems = FlexAlign.Center,
-            Children = [.. kids],
-        };
-    }
-
-    Element CompactIcon(string key, string glyph, string sel)
-    {
-        bool selected = sel == key;
-        return new BoxEl
-        {
-            Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(6f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,   // ramp as LibRow (stock NavigationViewItem)
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
-            OnClick = () => _go(key, null),
-            Children = [ Icon(glyph, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary) ],
-        };
-    }
-
-    // A short centered rule between the library icons and the create/playlist section.
-    static Element CompactDivider() => new BoxEl
-    {
-        Width = 24f, Height = 1f, Margin = new Edges4(0f, 4f, 0f, 4f), Fill = Tok.TextTertiary with { A = 0.3f },
-    };
-
-    // Create-affordance handlers — POST a real empty playlist, then navigate to it.
+    /// <summary>Create-affordance handler — POST a real empty playlist, then navigate to it.</summary>
     void CreatePlaylist()
     {
         if (_lib is not { } lib) return;
@@ -466,206 +121,13 @@ sealed class WaveeSidebar : Component
                 string uri = await lib.CreatePlaylistAsync(Loc.Get(Strings.Sidebar.NewPlaylist)).ConfigureAwait(false);
                 _go("pl:" + uri, null);
             }
-            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
-        }
-    }
-    void CreateFolder() { }
-
-    // A playlist as its cover art only (the rail's compact analogue of the expanded PlaylistRow); accent ring when selected.
-    Element CompactArt(PlaylistSummary p, string sel)
-    {
-        string key = "pl:" + p.Uri;
-        bool selected = sel == key;
-        return new BoxEl
-        {
-            Key = key,
-            Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(8f),
-            BorderColor = selected ? Tok.AccentDefault : ColorF.Transparent, BorderWidth = selected ? 2f : 0f,
-            OnClick = () => _go(key, p.Name),
-            Children = [ Surfaces.Artwork(p.Cover, SeedFrom(p.Uri), 36f, 36f, 6f) ],
-        }.Interactive(Interaction.Subtle);
-    }
-
-    static Element CompactSkeleton() => new BoxEl
-    {
-        Width = 40f, Height = 40f, Corners = CornerRadius4.All(8f), Fill = Tok.FillSubtleSecondary,
-    };
-
-    static int SeedFrom(string uri)
-    {
-        int h = 17;
-        foreach (char c in uri) h = h * 31 + c;
-        return h & 0x7fffffff;
-    }
-}
-
-// The single overlay selection pill (WinUI NavigationView.NavIndicator). Glides to the selected row by MEASURING the
-// row's laid-out AbsoluteRect (robust to collapsible sections + async playlists). On first mount it snaps; on
-// subsequent moves it plays the WinUI NavigationView stretch animation (PlayIndicatorAnimations, 600ms):
-//   • ScaleY: 1 → peakScale (FluentAccelerate, 0→200ms) → 1 (FluentDecelerate, 200→600ms)
-//   • TranslateY: hold at fromY while scale reaches across the gap, then ease to toY while scale contracts.
-//   • TransformOriginY pins the edge nearest fromY (top when moving down, bottom when moving up), so the stretch grows
-//     toward the selected row instead of scaling in place at the destination.
-// peakScale = abs(to - from) / PillH + 1 — the scale that makes the pill span the full old→new distance.
-sealed class WaveeSelPill : Component
-{
-    readonly Dictionary<string, NodeHandle> _rows;
-    readonly Func<NodeHandle> _content;
-    NodeHandle _self;
-    bool _seeded;
-    float _prevY;   // last target Y (needed as fromY for the stretch animation on the NEXT move)
-    float _originY = 0.5f;
-
-    const float StretchDuration = 600f;
-    const float StretchPeak = 0.333f;   // WinUI c_frame1 break-point (200ms of 600ms)
-
-    public WaveeSelPill(Dictionary<string, NodeHandle> rows, Func<NodeHandle> content)
-    {
-        _rows = rows; _content = content;
-    }
-
-    public override Element Render()
-    {
-        var st = UseContext(WaveeSidebar.Pill);   // re-render when selection / visibility / layout-dep changes
-        bool visible = st.Visible;
-
-        // Measure AFTER layout (UseLayoutEffect runs post-layout, so AbsoluteRect is valid this frame). Re-runs whenever
-        // st.Dep changes (selection, any section toggle, playlist load) — i.e. whenever the row's Y can move.
-        UseLayoutEffect(() =>
-        {
-            if (!visible) return;
-            var anim = Context.Anim; var scene = Context.Scene;
-            if (anim is null || scene is null) return;
-            if (_self.IsNull || !scene.IsLive(_self)) return;
-            var content = _content();
-            if (!_rows.TryGetValue(st.RowKey, out var row) || row.IsNull || content.IsNull) return;
-            if (!scene.IsLive(row) || !scene.IsLive(content)) return;
-
-            RectF rr = scene.AbsoluteRect(row);
-            RectF cr = scene.AbsoluteRect(content);
-            float targetY = (rr.Y - cr.Y) + (rr.H - WaveeSidebar.PillH) * 0.5f;
-
-            if (!_seeded)
+            catch (Exception ex)
             {
-                // First mount: snap immediately (no stretch on initial placement).
-                _seeded = true;
-                _prevY = targetY;
-                anim.Spring(_self, AnimChannel.TranslateY, targetY, MotionSprings.NavPill, initial: targetY);
-                return;
+                WaveeLog.Instance.Error("sidebar", "sidebar.action.failed", "Could not create playlist", ex,
+                    WaveeLogField.Of("action", "createPlaylist"),
+                    WaveeLogField.Of("design", "classic"));
+                Toast.Show(Loc.Get(Strings.Common.ErrorTitle), new ToastOptions { Severity = InfoBarSeverity.Error });
             }
-
-            float fromY = anim.TryGetTrackValue(_self, AnimChannel.TranslateY, out var liveY)
-                ? liveY
-                : scene.Paint(_self).LocalTransform.Dy;
-            if (MathF.Abs(targetY - fromY) < 0.5f)
-            {
-                // Negligible move (layout settle, same row) — don't restart animation.
-                _prevY = targetY;
-                return;
-            }
-            _prevY = targetY;
-
-            // WinUI-parity stretch animation. peakScale makes the pill visually span old→new row.
-            float peakScale = MathF.Abs(targetY - fromY) / WaveeSidebar.PillH + 1f;
-            bool movingDown = targetY > fromY;
-            _originY = movingDown ? 0f : 1f;
-            ref var paint = ref scene.Paint(_self);
-            paint.OriginY = _originY;
-            scene.Mark(_self, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-
-            // ScaleY: same shape for both directions — 1 → peakScale (FluentAccelerate) → 1 (FluentDecelerate).
-            anim.Keyframes(_self, AnimChannel.ScaleY,
-            [
-                new Keyframe(0f,          1f,         Easing.Linear),
-                new Keyframe(StretchPeak, peakScale,  Easing.FluentAccelerate),
-                new Keyframe(1f,          1f,         Easing.FluentDecelerate),
-            ], StretchDuration);
-
-            // Hold while stretching across the gap; then use the same decel phase as ScaleY so the far edge stays
-            // visually pinned while the pill contracts onto the destination row.
-            anim.Keyframes(_self, AnimChannel.TranslateY,
-            [
-                new Keyframe(0f,          fromY,   Easing.Linear),
-                new Keyframe(StretchPeak, fromY,   Easing.Linear),
-                new Keyframe(1f,          targetY, Easing.FluentDecelerate),
-            ], StretchDuration);
-        }, (st.Dep, visible));
-
-        // Opacity fade with WinUI selection-indicator timing (150ms EaseOut). Capture _seeded before the effect is
-        // queued: on the very first mount with visible=false, skip the animation to avoid a startup flash at Y=0.
-        bool skipOpacityInit = !_seeded && !visible;
-        UseLayoutEffect(() =>
-        {
-            if (skipOpacityInit) return;
-            var a = Context.Anim; var hn = Context.HostNode;
-            if (a is null || hn.IsNull) return;
-            a.Animate(hn, AnimChannel.Opacity, visible ? 0f : 1f, visible ? 1f : 0f, 150f, Easing.EaseOut);
-        }, visible);
-
-        return new BoxEl
-        {
-            Width = 3f, Height = WaveeSidebar.PillH,
-            Margin = new Edges4(14f, 0f, 0f, 0f),     // PillX: over the row gutter
-            AlignSelf = FlexAlign.Start,
-            TransformOriginY = _originY,
-            Corners = CornerRadius4.All(2f),
-            Fill = Tok.AccentDefault,
-            Opacity = visible ? 1f : 0f,   // terminal value (WriteColumns writes this when no track is active)
-            HitTestVisible = false,
-            OnRealized = h => _self = h,
-        };
-    }
-}
-
-// A "+" create affordance: a subtle icon button that opens a light-dismiss MenuFlyout offering "Playlist" / "Folder"
-// (the same overlay path WinUI's DropDownButton uses — Overlay.Service + MenuFlyout). Reused by the expanded Playlists
-// header (24px) and the compact rail (40px). The flyout anchors below-left and re-click / Escape / click-outside dismiss.
-sealed class SidebarCreateButton : Component
-{
-    readonly Action _onPlaylist, _onFolder;
-    readonly float _box, _glyph;
-
-    public SidebarCreateButton(Action onPlaylist, Action onFolder, float box = 24f, float glyph = 14f)
-    {
-        _onPlaylist = onPlaylist; _onFolder = onFolder; _box = box; _glyph = glyph;
-    }
-
-    public override Element Render()
-    {
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
-
-        // The menu labels are built at OPEN time, not at render time. Loc.Get reads Localization.CultureEpoch, so
-        // resolving them here would subscribe this otherwise-static button to the culture epoch and re-render it on
-        // every flush that touches it — ×4, since the sidebar keeps both the expanded and compact bodies mounted and
-        // the shell mounts a second sidebar for the narrow drawer. Deferring also picks up a culture change that
-        // happened while the flyout was closed.
-        void Toggle()
-        {
-            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            var items = new MenuFlyoutItem[]
-            {
-                new(Loc.Get(Strings.Sidebar.CreatePlaylist), Invoke: _onPlaylist),
-                new(Loc.Get(Strings.Sidebar.CreateFolder),   Invoke: _onFolder),
-            };
-            handle.Value = svc.Open(
-                () => anchor.Value,
-                () => MenuFlyout.Create(items, () => handle.Value?.Close()),
-                FlyoutPlacement.BottomLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss) { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () => handle.Value = null;
         }
-
-        return new BoxEl
-        {
-            Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(4f),
-            Role = AutomationRole.Button,
-            OnRealized = h => anchor.Value = h,
-            OnClick = Toggle,
-            Children = [ Icon(Icons.Add, _glyph, Tok.TextSecondary) ],
-        }.Interactive(Interaction.Subtle);
     }
 }

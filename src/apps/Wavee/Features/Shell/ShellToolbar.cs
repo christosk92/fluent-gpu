@@ -8,13 +8,21 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Core.Sidebar;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// Row 1 — the WaveeMusic navigation toolbar (NavigationToolbar.xaml): a 48px row with sidebar-toggle + back/forward/home
-// on the left, the omnibar in the centre, and the account/friends/bell/theme cluster on the right. Reads the
-// shell route signals (home pill, back/forward-enabled) and PlaybackBridge (auth/user) so it reacts to navigation and login.
+// Row 1 — the WaveeMusic navigation toolbar (NavigationToolbar.xaml): a 48px row with sidebar-toggle + back/forward +
+// the CUSTOMIZABLE shortcut band on the left, the omnibar in the centre, and the account/friends/bell/theme cluster on
+// the right. Reads the shell route signals (selection mark, back/forward-enabled) and PlaybackBridge (auth/user) so it
+// reacts to navigation and login.
+//
+// WHAT IS FIXED AND WHAT IS NOT. The hamburger, back, forward, the centred omnibar and the right-side chips are FIXED
+// chrome — not user-editable. The slots between forward and the omnibar are the SHORTCUT BAND, rendered from
+// SidebarPreferences.TopBar (one global list on the sidebar-layout document, so it shares that document's reducer, undo
+// ring, autosave and rejection contract). Its default is exactly the single Home button this file used to hard-code, so
+// an untouched install is a zero-pixel diff; an emptied band renders nothing, because Home is genuinely removable.
 //
 // RESPONSIVE (mirrors PlayerBar): the right cluster collapses at width thresholds (band-gated via the Viewport signal so
 // it only re-renders when a threshold is crossed, not every resize frame) — otherwise the fixed account/icon cluster
@@ -34,6 +42,14 @@ sealed class ShellToolbar : Component
     readonly List<Route> _backHistory;
     readonly List<Route> _forwardHistory;
 
+    // The shortcut band's services. PLAIN FIELDS refreshed on every Render (the mode-component pattern): these are
+    // reference-stable singletons, and Bar()/OverflowItems() run inside the CHILD's render — a ctor arg would freeze at
+    // mount, which is the whole hazard the component-props contract warns about.
+    SidebarPreferences? _prefs;
+    ActionServices? _acts;
+    WaveeExtensionRegistry? _registry;
+    IOverlayService? _menuOverlay;
+
     public ShellToolbar(Signal<Route> route, Signal<bool> canBack, Signal<bool> canForward,
                         Action<string, string?> go, Action back, Action forward, Action home,
                         Signal<string> searchText, Action toggleSidebar, Action toggleTheme,
@@ -49,6 +65,12 @@ sealed class ShellToolbar : Component
     {
         var b = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);   // the right-rail chrome state — the Friends button toggles the Friends panel
+        _prefs = UseContext(SidebarPreferences.Slot);
+        _acts = UseContext(ActionServices.Slot);
+        _menuOverlay = UseContext(Overlay.Service);
+        // The registry is the ONE lookup path for a bound Action shortcut (never AppActions.All — the extension-platform
+        // guardrail). Context first, then the action bag, so a host that provides only one of them still resolves.
+        _registry = UseContext(WaveeExtensionRegistry.Slot) ?? _acts?.Extensions;
         var viewport = UseContextSignal(Viewport.Size);
         var layout = UseSignal(ToolbarLayout.FromWidth(viewport.Peek().Width));
         // Band-gate: recompute on every viewport move but only push a new value (→ re-render) when a threshold flips.
@@ -65,16 +87,16 @@ sealed class ShellToolbar : Component
     internal Element Bar(IReadSignal<ToolbarLayout> layout, PlaybackBridge? b, ShellUi? ui)
     {
         ToolbarLayout L = layout.Value;
-        bool onHome = _route.Value.Name == "home";        // subscribe (home pill)
+        string sel = _route.Value.Name;                  // subscribe (the selection mark under the active shortcut)
         var nav = NavStyle;
 
         var kids = new List<Element>
         {
-            // ── left: sidebar toggle · back · forward · home ────────────────────────────
+            // ── left: sidebar toggle · back · forward · the customizable shortcut band ──────────
             // Back/forward use NavHistoryButton so they also support right-click/hold history flyouts.
             // The compact rail is centred at x=28 while the toolbar's 6-DIP inset put this 36-DIP button at x=24.
             // Shift only the hamburger's painted slot four DIPs; the negative trailing margin keeps every later item
-            // (back/forward/home/search) at its existing position.
+            // (back/forward/the band/search) at its existing position.
             IconButton.Create(Icons.Menu, _toggleSidebar, nav) with
             {
                 Margin = new Edges4(4f, 0f, -4f, 0f),
@@ -84,7 +106,7 @@ sealed class ShellToolbar : Component
         if (L.ShowPrimaryNav)
         {
             kids.Add(Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go)));
-            kids.Add(HomeButton(nav, onHome));
+            AddShortcutBand(kids, nav, sel);
         }
 
             // ── centre: omnibar, CENTRED in the free space (the stock NavigationView search placement) ──
@@ -157,15 +179,255 @@ sealed class ShellToolbar : Component
         };
     }
 
-    Element HomeButton(IconButton.Style nav, bool onHome) => new BoxEl
+    // ── the CUSTOMIZABLE shortcut band ───────────────────────────────────────────────────────────────────────────────
+    // One tile per SidebarPreferences.TopBar entry, with the SIDEBAR's item semantics unforked: Route/Entity navigate,
+    // Track plays, Action resolves through WaveeExtensionRegistry and renders visible-but-disabled with its reason when
+    // unavailable (a vanishing shortcut makes the user's own chrome look broken). The band collapses into the "⋯" overflow
+    // together with the primary nav, so nothing becomes unreachable on a narrow window.
+
+    /// <summary>The artwork edge inside a cover tile — <c>SidebarCover.S28</c>, one of the six canonical sidebar art sizes,
+    /// so a top-bar cover shares the sidebar's decode-cache bucket instead of minting a size of its own.</summary>
+    const float CoverEdge = SidebarCover.S28;
+
+    void AddShortcutBand(List<Element> kids, IconButton.Style nav, string sel)
     {
-        Direction = 1, Width = 40f, AlignItems = FlexAlign.Center, Gap = 2f,
-        Children =
-        [
-            IconButton.Create(Icons.Home, _home, nav),
-            new BoxEl { Width = 16f, Height = 3f, Corners = CornerRadius4.All(2f), Fill = onHome ? Tok.AccentDefault : ColorF.Transparent },
-        ],
+        var prefs = _prefs;
+        // Subscribe to the layout document: TopBar is a plain property, so THIS read is what re-renders the toolbar after a
+        // band edit or an undo (the SidebarPane.SubscribeEpoch contract). Discarded deliberately — the value is unused.
+        if (prefs is not null) _ = prefs.LayoutVersion.Value;
+        // No preference service (a probe / headless mount) still gets the built-in band rather than empty chrome.
+        var band = prefs?.TopBar ?? SidebarCustomLayout.DefaultTopBar;
+        for (int i = 0; i < band.Count; i++) kids.Add(ShortcutTile(band[i], nav, sel));
+    }
+
+    Element ShortcutTile(SidebarItemSpec item, IconButton.Style nav, string sel) => item.Target switch
+    {
+        SidebarItemTarget.Entity => EntityTile(item, sel),
+        SidebarItemTarget.Track => TrackTile(item),
+        SidebarItemTarget.Action => ActionTile(item, nav),
+        _ => RouteTile(item, nav, sel),
     };
+
+    Element RouteTile(SidebarItemSpec item, IconButton.Style nav, string sel)
+    {
+        var dest = ShellNav.Dest(item.Key);
+        string key = item.Key;
+        string title = item.LabelOverride is { Length: > 0 } alias ? alias : dest.Title;
+        // "home" keeps the shell's OWN home entry point, so the tile, the overflow row and any future keyboard verb stay on
+        // one path (Go("home", null) — identical to GoNav, but this is the documented affordance).
+        Action click = string.Equals(key, "home", StringComparison.Ordinal) ? _home : () => _go(key, null);
+        return TileColumn(item, IconButton.Create(SidebarIcons.For(item, dest.Glyph), click, nav),
+            selected: string.Equals(key, sel, StringComparison.Ordinal), tooltip: title);
+    }
+
+    Element EntityTile(SidebarItemSpec item, string sel)
+    {
+        // The uri → route-key map is the pin scheme's (one owner): a playlist/album/artist/show id IS its route key. A uri
+        // it refuses (an episode, a hand-edited document) has nowhere to navigate, so the tile renders dimmed and inert
+        // rather than lying about a destination.
+        string? route = SidebarPinId.FromUri(item.Key);
+        string title = item.LabelOverride is { Length: > 0 } alias ? alias
+            : item.FallbackTitle is { Length: > 0 } cached ? cached
+            : route is { Length: > 0 } known ? ShellNav.Dest(known).Title
+            : Loc.Get(SidebarPaneLoc.MissingEntity);
+        Action? click = null;
+        if (route is { Length: > 0 } target) click = () => _go(target, title);
+        var cover = SidebarCover.Art(SidebarPaneText.FallbackImage(item), null, item.Key, CoverEdge,
+            circular: item.EntityKind == SidebarEntityKind.Artist);
+        return TileColumn(item, CoverPlate(cover, click),
+            selected: route is { Length: > 0 } r && string.Equals(r, sel, StringComparison.Ordinal),
+            tooltip: click is null ? Loc.Get(SidebarPaneLoc.MissingEntity) : title);
+    }
+
+    Element TrackTile(SidebarItemSpec item)
+    {
+        string uri = item.Key;
+        string title = item.LabelOverride is { Length: > 0 } alias ? alias
+            : item.FallbackTitle is { Length: > 0 } cached ? cached
+            : SidebarPaneText.ShortUri(uri);
+        var player = _acts?.Svc?.Player;
+        Action? click = null;
+        if (player is not null) click = () => { _ = player.PlayTrackAsync(uri); };
+        var cover = SidebarCover.Art(SidebarPaneText.FallbackImage(item), null, uri, CoverEdge);
+        return TileColumn(item, CoverPlate(cover, click), selected: false, tooltip: title);
+    }
+
+    Element ActionTile(SidebarItemSpec item, IconButton.Style nav)
+    {
+        var binding = item.Action;
+        string label = item.LabelOverride ?? "";
+        var icon = default(IconRef);
+        bool enabled = false;
+        // The default reason covers the two host-shaped cases (no registry / no action bag yet): the tile still renders,
+        // disabled, saying so.
+        string? reason = Loc.Get(SidebarPaneLoc.ExtensionNotNow);
+        Action? click = null;
+
+        if (binding is null)
+        {
+            reason = Loc.Get(SidebarPaneLoc.ExtensionMissing);   // an Action item with no binding: a hand-edited document
+        }
+        else
+        {
+            var bound = binding;   // non-nullable local: Execute takes it by `in`
+            var reg = _registry;
+            if (reg is not null && reg.TryGetAction(bound, out var descriptor))
+            {
+                if (label.Length == 0) label = descriptor.Label();
+                icon = descriptor.Icon();
+            }
+            if (reg is not null && _acts is { } services)
+            {
+                var resolution = reg.Resolve(services, bound);
+                enabled = resolution.Available;
+                reason = resolution.ReasonLocKey is { } key ? Loc.Get(key) : null;
+                var registry = reg;
+                if (enabled) click = () => registry.Execute(services, in bound);
+            }
+        }
+        if (label.Length == 0) label = Loc.Get(SidebarPaneLoc.ExtensionManage);
+
+        // An authored icon override is the user's explicit choice and resolves against the standard icon font; only the
+        // DESCRIPTOR's own mark may carry a font override, and forwarding it is what keeps an app-local codepoint
+        // (WaveeIcons) from rendering as tofu.
+        string glyph = SidebarIcons.Glyph(item.IconOverride, icon.Glyph ?? Icons.More);
+        var style = item.IconOverride is null && icon.Font is { Length: > 0 } font ? nav with { IconFont = font } : nav;
+        // Disabled ⇒ the tooltip IS the reason (that is the whole visible-but-disabled contract); enabled ⇒ the label.
+        string tip = !enabled && reason is { Length: > 0 } why ? why : label;
+        return TileColumn(item, IconButton.Create(glyph, click ?? NoAction, style, isEnabled: enabled),
+            selected: false, tooltip: tip);
+    }
+
+    static readonly Action NoAction = static () => { };
+
+    /// <summary>The 40-DIP tile column: the affordance plus the 16×3 accent selection mark under it — IDENTICAL geometry to
+    /// the hard-coded Home button this replaced, which is what makes a default (single Home) band a zero-pixel diff. The
+    /// per-tile context menu hangs off the COLUMN so right-clicking anywhere in the tile (mark included) opens it.</summary>
+    Element TileColumn(SidebarItemSpec item, Element affordance, bool selected, string tooltip)
+    {
+        var column = new BoxEl
+        {
+            Direction = 1, Width = 40f, AlignItems = FlexAlign.Center, Gap = 2f,
+            Children =
+            [
+                affordance,
+                new BoxEl
+                {
+                    Width = 16f, Height = 3f, Corners = CornerRadius4.All(2f),
+                    Fill = selected ? Tok.AccentDefault : ColorF.Transparent,
+                },
+            ],
+        };
+        if (_menuOverlay is { } svc && _prefs is { } prefs)
+            column = column.WithContextMenu(svc, () => TopBarMenu(prefs, item));
+        return tooltip.Length > 0 ? ToolTip.Wrap(column, tooltip) : column;
+    }
+
+    /// <summary>A cover-bearing tile face on the icon-button footprint (36×32 at ControlCornerRadius), so an artwork
+    /// shortcut sits on exactly the same rhythm as a glyph one. A null click is an unresolvable target: dimmed and inert,
+    /// never removed.</summary>
+    static Element CoverPlate(Element cover, Action? onClick) => new BoxEl
+    {
+        Width = 36f, Height = 32f, Shrink = 0f,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = Radii.ControlAll,
+        Role = AutomationRole.Button, Focusable = true,
+        Cursor = onClick is null ? (CursorId?)null : CursorId.Hand,
+        Opacity = onClick is null ? 0.5f : 1f,
+        OnClick = onClick,
+        Children = [cover],
+    }.Interactive(Interaction.Subtle);
+
+    /// <summary>Right-click a shortcut: exactly two verbs. Dropping it is undoable through the pin-style toast (restored at
+    /// its FORMER index); adding and reordering belong to the customizer, not to a context menu.</summary>
+    ContextMenuModel? TopBarMenu(SidebarPreferences prefs, SidebarItemSpec item)
+    {
+        string id = item.Id;
+        string name = TileName(item);
+        return new ContextMenuModel(
+        [
+            new MenuFlyoutItem(Loc.Get(TopBarLoc.Remove), ActionIcons.Resolve(ActionIcons.Remove), true,
+                () => RemoveShortcut(prefs, id, name)),
+            MenuFlyoutItem.Separator,
+            new MenuFlyoutItem(Loc.Get(TopBarLoc.Customize), ActionIcons.Resolve(ActionIcons.Rename), true,
+                () => _go(SidebarLayoutMenu.CustomizeRoute, SidebarLayoutMenu.TopBarFocusArg)),
+        ]);
+    }
+
+    /// <summary>Drop a shortcut + raise the undo toast whose action restores it at its former index. Snapshots the item
+    /// BEFORE the removal, because the index is only knowable while it is still in the band (the
+    /// <c>PinActions.Unpin</c> precedent — the toast IS the undo surface here, not the activity log).</summary>
+    void RemoveShortcut(SidebarPreferences prefs, string itemId, string name)
+    {
+        int at = prefs.TopBarIndexOf(itemId);
+        if (at < 0) return;
+        var removed = prefs.TopBar[at];
+        if (prefs.RemoveTopBarShortcut(itemId) != SidebarRejectReason.None) return;
+        Toast.Show(Loc.Format(TopBarLoc.Removed, ("name", name)), new ToastOptions
+        {
+            Severity = InfoBarSeverity.Informational,
+            ActionLabel = Loc.Get(Strings.Sidebar.Pin.Undo),
+            // A FORWARD command, not prefs.Undo(): the undo ring is shared with the customizer, so replaying it from a
+            // toast could revert an unrelated later edit. Re-adding at `at` restores the exact band (the item's id is free
+            // again, so AddTopBarItem keeps it) and is itself one undoable step.
+            OnAction = () => prefs.AddTopBarShortcut(removed, at),
+        });
+    }
+
+    /// <summary>A shortcut's display name — the alias, then the retained last-known title, then whatever its target can
+    /// name itself. Never blank: the toast and the overflow row both have to be a sentence.</summary>
+    string TileName(SidebarItemSpec item)
+    {
+        if (item.LabelOverride is { Length: > 0 } alias) return alias;
+        if (item.FallbackTitle is { Length: > 0 } cached) return cached;
+        return item.Target switch
+        {
+            SidebarItemTarget.Route => ShellNav.Dest(item.Key).Title,
+            SidebarItemTarget.Entity => SidebarPinId.FromUri(item.Key) is { Length: > 0 } route
+                ? ShellNav.Dest(route).Title
+                : SidebarPaneText.ShortUri(item.Key),
+            SidebarItemTarget.Track => SidebarPaneText.ShortUri(item.Key),
+            _ => _registry is { } reg && item.Action is { } bound && reg.TryGetAction(bound, out var descriptor)
+                ? descriptor.Label()
+                : Loc.Get(SidebarPaneLoc.ExtensionManage),
+        };
+    }
+
+    /// <summary>One overflow row per shortcut, for the widths where the whole band collapses. Null = a shortcut this host
+    /// cannot invoke at all (no player, an unresolvable entity, a missing action) — a dead row would be worse than none.</summary>
+    MenuFlyoutItem? ShortcutRow(SidebarItemSpec item)
+    {
+        string name = TileName(item);
+        switch (item.Target)
+        {
+            case SidebarItemTarget.Entity:
+                return SidebarPinId.FromUri(item.Key) is { Length: > 0 } route
+                    ? new MenuFlyoutItem(name, SidebarIcons.For(item, ShellNav.Dest(route).Glyph),
+                        Invoke: () => _go(route, name))
+                    : null;
+            case SidebarItemTarget.Track:
+            {
+                var player = _acts?.Svc?.Player;
+                string uri = item.Key;
+                return player is null ? null
+                    : new MenuFlyoutItem(name, SidebarIcons.For(item, Icons.MusicNote),
+                        Invoke: () => { _ = player.PlayTrackAsync(uri); });
+            }
+            case SidebarItemTarget.Action:
+                // The descriptor builds its OWN row, so the row's disabled state and its reason can never disagree with
+                // the tile's — one resolution path, two surfaces.
+                return _registry is { } reg && _acts is { } acts && item.Action is { } bound
+                    && reg.TryGetAction(bound, out var descriptor)
+                        ? descriptor.ToMenuItem(acts, bound)
+                        : null;
+            default:
+            {
+                string key = item.Key;
+                Action go = string.Equals(key, "home", StringComparison.Ordinal) ? _home : () => _go(key, null);
+                return new MenuFlyoutItem(name, SidebarIcons.For(item, ShellNav.Dest(key).Glyph), Invoke: go);
+            }
+        }
+    }
 
     Element ProfileChip(PlaybackBridge? b, bool showName)
     {
@@ -185,7 +447,12 @@ sealed class ShellToolbar : Component
         {
             items.Add(new MenuFlyoutItem(Loc.Get(Strings.Nav.Forward), Icons.Forward,
                 Enabled: _canForward.Value, Invoke: _forward));
-            items.Add(new MenuFlyoutItem(Loc.Get(Strings.Nav.Home), Icons.Home, Invoke: _home));
+            // The shortcut band collapses with the primary nav, so every tile folds in here as a plain row — the same
+            // "whatever dropped off the bar stays reachable" contract the rest of this menu keeps. It used to be the one
+            // hard-coded Home row.
+            var band = _prefs?.TopBar ?? SidebarCustomLayout.DefaultTopBar;
+            for (int i = 0; i < band.Count; i++)
+                if (ShortcutRow(band[i]) is { } row) items.Add(row);
             items.Add(MenuFlyoutItem.Separator);
         }
         if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Icons.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
@@ -193,6 +460,20 @@ sealed class ShellToolbar : Component
         if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Icons.Sun : Icons.Moon, Invoke: _toggleTheme));
         return items;
     }
+}
+
+/// <summary>The top-bar band's loc KEYS as literals, in one place — the <c>SidebarPaneLoc</c> / <c>CzLoc</c> precedent.
+/// Spelled here rather than through the generated <c>Strings</c> table because the generator only emits members for keys
+/// already present in <c>assets/loc/en-US.json</c>; a key that has not landed yet renders loudly as <c>[key]</c> instead of
+/// breaking the build. Keys the band REUSES (<c>Strings.Sidebar.Pin.Undo</c>, <c>SidebarPaneLoc.*</c>) are not restated.</summary>
+static class TopBarLoc
+{
+    public const string Remove = "sidebar.topbar.remove";
+    public const string Removed = "sidebar.topbar.removed";
+    public const string Customize = "sidebar.topbar.customize";
+    /// <summary>Surfaced by the customizer when an add hits <c>SidebarLayoutReducer.MaxTopBarItems</c>. Declared here — the
+    /// cap is the band's, so its message belongs with the band's other keys — and consumed by the customizer's Top bar card.</summary>
+    public const string CapReached = "sidebar.topbar.capReached";
 }
 
 // The reactive body: re-renders when the band-gated layout (or route/auth/back signals read in Bar) changes — but NOT

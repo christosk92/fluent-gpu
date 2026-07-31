@@ -26,6 +26,9 @@ public sealed record HistoryEntry(Route Route, DateTime VisitedAt)
 {
     public string Kind =>
         Route.Name.StartsWith("pl:", StringComparison.Ordinal) ? "playlist" :
+        // A show route opens the shared detail surface (like album/artist), so it is an ENTITY visit, not a generic page —
+        // it gets its own kind so the filter chips and the row label stay truthful now that ShellNav.Dest names it.
+        Route.Name.StartsWith("show:", StringComparison.Ordinal) ? "show" :
         Route.Name is "albums" or "artists" or "liked" or "podcasts" or "local" ? "library" :
         Route.Name == "search" ? "search" :
         "page";
@@ -139,13 +142,16 @@ sealed class HistoryPage : Component
     readonly Signal<int>    _filterIndex = new(0);   // index into s_filterLabels
     readonly Signal<int>    _sortIndex   = new(0);   // 0=Most recent, 1=Most visited
 
-    enum FilterKind { All, Playlists, Library, Search, Pages }
+    // Shows sits after Playlists (the two entity kinds together) and before the generic buckets. Appending a chip is safe
+    // for the persisted filter index only because nothing persists it — _filterIndex is per-mount page state.
+    enum FilterKind { All, Playlists, Shows, Library, Search, Pages }
     enum SortKind   { Recent, MostVisited }
 
     static readonly string[] s_filterLabels =
     [
         Loc.Get(Strings.Nav.History.Filter.All),
         Loc.Get(Strings.Nav.History.Filter.Playlists),
+        Loc.Get(Strings.Nav.History.Filter.Shows),
         Loc.Get(Strings.Nav.History.Filter.Library),
         Loc.Get(Strings.Nav.History.Filter.Search),
         Loc.Get(Strings.Nav.History.Filter.Pages),
@@ -239,6 +245,7 @@ sealed class HistoryPage : Component
     static bool PassesFilter(HistoryEntry e, FilterKind f) => f switch
     {
         FilterKind.Playlists => e.Kind == "playlist",
+        FilterKind.Shows     => e.Kind == "show",
         FilterKind.Library   => e.Kind == "library",
         FilterKind.Search    => e.Kind == "search",
         FilterKind.Pages     => e.Kind == "page",
@@ -394,6 +401,7 @@ sealed class HistoryPage : Component
         string kindLabel = e.Kind switch
         {
             "playlist" => Loc.Get(Strings.Nav.History.Kind.Playlist),
+            "show"     => Loc.Get(Strings.Nav.History.Kind.Show),
             "library"  => Loc.Get(Strings.Nav.History.Kind.Library),
             "search"   => Loc.Get(Strings.Nav.History.Kind.Search),
             _          => Loc.Get(Strings.Nav.History.Kind.Page),

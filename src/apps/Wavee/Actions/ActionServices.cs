@@ -38,6 +38,22 @@ public sealed class ActionServices
     /// kill switch. Mutations go through this service, whose <c>OnChanged</c> is wired to the bridge's single
     /// <c>NotifyVideoOverrideChanged</c> entry point; the actions never poke the bridge's cache themselves.</summary>
     public VideoOverrideService? VideoOverrides;
+    /// <summary>The user's sidebar preferences — the pin store behind <c>Pin to sidebar</c> / <c>Unpin from sidebar</c>.
+    /// Null on a host without one (the actions then render disabled, or the row is omitted entirely), which is the
+    /// feature's kill switch. Refreshed each render by the shell like every other field; the instance is reference-stable
+    /// for the process lifetime, so this write never churns context consumers.</summary>
+    public SidebarPreferences? Sidebar;
+    /// <summary>The ACTIVE page's nav route key (<c>home</c>, <c>pl:spotify:playlist:…</c>) — the resolver behind a bound
+    /// action's <c>SidebarActionTargetMode.ActiveRoute</c> target ("pin this page", "play this page"). A FUNC, not a
+    /// value: the bag is refreshed per render but a bound invoke happens later, and re-reading at invoke time is the only
+    /// way the answer is the page the user is actually looking at. Null on a host that supplies none (the vertical slice,
+    /// a test) — an ActiveRoute binding then resolves <c>WaveeActionUnavailable.NoActiveRoute</c> and renders
+    /// visible-but-disabled with a reason, rather than guessing.</summary>
+    public Func<string?>? CurrentRoute;
+    /// <summary>The contribution registry (<see cref="WaveeExtensionRegistry"/>) — the ONE lookup path for anything BOUND
+    /// (a Curated action-shortcut row, the customizer's action picker, a contributed data source). Null before the
+    /// composition root builds it; bound UI then renders its rows disabled rather than throwing.</summary>
+    public WaveeExtensionRegistry? Extensions;
 }
 
 /// <summary>The action context an <see cref="AppAction"/> receives: the WHAT (<see cref="Target"/>) + the HOW

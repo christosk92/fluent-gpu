@@ -1,7 +1,7 @@
 namespace Wavee;
 
 /// <summary>The identity-first player-dock pressure tiers, ordered from the 300-DIP floor to the full desktop bar.</summary>
-internal enum PlayerBarTier : byte
+public enum PlayerBarTier : byte
 {
     Minimal,
     Compact,

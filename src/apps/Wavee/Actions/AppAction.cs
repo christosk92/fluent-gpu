@@ -85,7 +85,12 @@ public sealed class AppAction
 }
 
 /// <summary>The flat identity table (shortcut map / command palette forward path). Composition never scans this —
-/// menus are plain code in <see cref="Menus"/>.</summary>
+/// menus are plain code in <see cref="Menus"/>.
+///
+/// <para>NOT the extension-platform path. Anything BOUND (a Curated action-shortcut row, the customizer's action picker,
+/// a contributed action) resolves through <see cref="WaveeExtensionRegistry"/> instead, whose first-party descriptors wrap
+/// these same verbs — REVISION 2's guardrail is that <b>no new UI code looks up <see cref="All"/> directly</b>. Existing
+/// call sites stay as they are; new ones go through the registry.</para></summary>
 public static class AppActions
 {
     public static readonly AppAction[] All =
@@ -98,5 +103,6 @@ public static class AppActions
         VideoActions.RemoveVideo, VideoActions.ShowVideoInExplorer,
         ContainerActions.PlayContext, ContainerActions.SaveContext, ContainerActions.OpenItem,
         ContainerActions.RenamePlaylist, ContainerActions.InviteCollaborators, ContainerActions.DeletePlaylist,
+        PinActions.PinToSidebar, PinActions.UnpinFromSidebar,
     ];
 }

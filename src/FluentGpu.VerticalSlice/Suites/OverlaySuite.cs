@@ -2472,6 +2472,37 @@ static class OverlaySuite
                 + $"(open=({openRect.X:0.#},{openRect.Y:0.#}) mid=({midRect.X:0.#},{midRect.Y:0.#}))");
         }
 
+        // e4popup.7d — KeepAlive pages remain generation-live while inactive, but their subtree is Parked. A targeted
+        // overlay owned by that page must close exactly like an orphan instead of leaking over the newly active route.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e4tipparked", new Size2(480, 360), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            var root = new E4ToolTipOrphanProbe();
+            var clock = new ManualFrameTimeSource();
+            using var host = new AppHost(app, window, device, fonts, strings, root, frameTime: clock);
+            host.RunFrame();
+
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(50f, 50f), 0, 0));
+            host.RunFrame();
+            clock.Advance(900f);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            bool opened = !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-orphan").IsNull;
+
+            host.Scene.Flags(root.Target) |= NodeFlags.Parked;
+            host.RunFrame();
+            bool closing = ((OverlayServiceImpl)root.Service!).Entries.Count == 1
+                && ((OverlayServiceImpl)root.Service!).Entries[0].Phase == OverlayPhase.Closing;
+            for (int i = 0; i < 5; i++) { clock.Advance(60f); host.RunFrame(); }
+            bool gone = FindTextNode(host.Scene, strings, host.Scene.Root, "tip-orphan").IsNull
+                && ((OverlayServiceImpl)root.Service!).Entries.Count == 0;
+
+            Check("e4popup.7d a Parked KeepAlive owner closes its targeted overlay",
+                opened && closing && gone, $"opened={opened} closing={closing} gone={gone}");
+        }
+
         // e4popup.8 — focus restores to the pre-open node when the close STARTS, not when the fade finishes: WinUI
         // restores the popup's SavedFocusState synchronously in Hide()/CPopup::Close (Popup_Partial.h:63-64;
         // FlyoutBase returns focus to the invoker on Hide, not after the close animation) — the popup is still on

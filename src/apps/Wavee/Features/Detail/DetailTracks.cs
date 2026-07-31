@@ -2843,11 +2843,33 @@ sealed class PlaylistTuneButton : Component
         var handle = UseRef<OverlayHandle?>(null);
         var command = UseAsyncCommand();
         var post = Context.UsePost();
+        // The first-run teaching tip's settings seam comes from CONTEXT, never a frozen ctor prop (component props freeze
+        // at mount, and this button is embedded through a factory that runs once).
+        var services = UseContext(Services.Slot);
         var model = _full.Value.Value;
         var source = _source.Value;
-        if (!PlaylistTuneMenuModel.IsEligible(model.Tuning, source is not null)
-            || model.ContextUri is not { Length: > 0 })
-            return new BoxEl();
+        // The command's own visibility gate — and therefore the teaching tip's page gate too. Tune is playlist-only
+        // (a tuning source + at least one named choice + a context uri), so an album/artist page can never arm the tip;
+        // there is deliberately no second page-kind test to drift from this one.
+        bool eligible = PlaylistTuneMenuModel.IsEligible(model.Tuning, source is not null)
+            && model.ContextUri is { Length: > 0 };
+
+        // First-run teaching tip, via the app-wide service: WaveeTips owns the acknowledged-id set, the once-per-launch
+        // latch, one-tip-at-a-time and the after-first-paint scheduling, and it renders through the engine's WinUI-parity
+        // TeachingTip control — this call site owns only the anchor and the copy. EVERY hook above and this effect run on
+        // every render; the eligibility early-return sits BELOW them, so the hook order can never change.
+        UseEffect(() =>
+        {
+            if (eligible)
+                WaveeTips.TryShow(overlay, services?.Settings, post, WaveeTipIds.DetailTuning,
+                    () => anchor.Value, () => Context.Scene,
+                    "detail.tuning.tipTitle", "detail.tuning.tipBody");
+            // Navigation away / eligibility loss takes the tip DOWN without acknowledging it: the user never answered, so
+            // it earns one more chance next launch (the service's per-launch latch stops it re-opening before then).
+            return (Action?)(() => WaveeTips.Close(WaveeTipIds.DetailTuning));
+        }, eligible);
+
+        if (!eligible) return new BoxEl();
 
         bool busy = command.IsRunning;
         bool active = model.Tuning!.SelectedIdentifier is not null;
@@ -2900,6 +2922,9 @@ sealed class PlaylistTuneButton : Component
         void Toggle()
         {
             if (busy || overlay is null) return;
+            // Using the command IS the acknowledgement the teaching tip was asking for — burn the id and take the tip
+            // down before the menu opens over it. No-op when no tip is up.
+            WaveeTips.Acknowledge(services?.Settings, WaveeTipIds.DetailTuning);
             if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
             handle.Value = overlay.Open(
                 () => anchor.Value,

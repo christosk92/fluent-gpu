@@ -33,6 +33,9 @@ public static class ActionIcons
     public const string Replace = "replace";
     public const string Locate = "locate";
     public const string RevealFolder = "reveal-folder";
+    public const string Pin = "pin";
+    public const string Unpin = "unpin";
+    public const string Folder = "folder";
 
     /// <summary>Key → an <see cref="IconRef"/>. Keys the ThemedIcon starter set covers resolve to a layered vector name
     /// with a glyph fallback (<c>IconRef.Themed</c>); the rest are plain Segoe Fluent glyphs (implicit string → IconRef).
@@ -70,6 +73,10 @@ public static class ActionIcons
         Replace => Icons.Refresh,
         Locate => Icons.Search,
         RevealFolder => Icons.FolderOpen,
+        // Pin / Unpin (the sidebar pin pair). Segoe Fluent's UnPin glyph (E77A) is in the engine table.
+        Pin => Icons.Pin,
+        Unpin => Icons.UnPin,
+        Folder => IconRef.Themed("Folder", Icons.Folder),
         _ => Icons.More,
     };
 }

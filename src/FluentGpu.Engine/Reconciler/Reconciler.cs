@@ -3315,6 +3315,16 @@ public sealed class TreeReconciler
                     ia.PressDurationMs = float.IsNaN(b.PressDurationMs) ? InteractionAnim.ControlFasterMs : b.PressDurationMs;
                     ia.HoverEasing = b.HoverEasing;
                     ia.PressEasing = b.PressEasing;
+
+                    // A lazy hover affordance can mount AFTER its card/row received the pointer-enter edge (media-card
+                    // play FABs are the canonical case). Seed it from the NEAREST interactive ancestor's live scope;
+                    // stopping at that ancestor is load-bearing, otherwise a hovered list/pane would light newly mounted
+                    // reveals in every sibling row. Existing nodes keep their own eased progress untouched.
+                    if (isMount && MountsInsideHoveredScope(node))
+                    {
+                        if (Anim is { } hoverAnim) hoverAnim.SetHover(node, true);
+                        else ia.HoverT = ia.HoverTarget = 1f;
+                    }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -3907,6 +3917,17 @@ public sealed class TreeReconciler
         }
 
         if (!isMount) { _scene.Mark(node, NodeFlags.PaintDirty); _reconciled = true; }
+    }
+
+    private bool MountsInsideHoveredScope(NodeHandle node)
+    {
+        const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+        for (var parent = _scene.Parent(node); !parent.IsNull && _scene.IsLive(parent); parent = _scene.Parent(parent))
+        {
+            if ((_scene.Interaction(parent).HandlerMask & interactive) == 0) continue;
+            return (_scene.Flags(parent) & (NodeFlags.Hovered | NodeFlags.HoverWithin)) != 0;
+        }
+        return false;
     }
 
     /// <summary>Wire (or clear) read-only text selection on a text leaf (rtb-02): the SelectableTextBit makes it

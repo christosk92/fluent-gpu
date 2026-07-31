@@ -36,7 +36,9 @@ public interface ICredentialStore
 
 public sealed class LocalCredentialStore : ICredentialStore
 {
-    const string Key = "spotify.credential";
+    /// <summary>The ILocalStore key the credential blob is stored under. PUBLIC so the fresh-install probe
+    /// (<c>SidebarBootstrap.IsFreshInstall</c>) can ask "are there stored credentials?" without duplicating the literal.</summary>
+    public const string CredentialKey = "spotify.credential";
 
     readonly ILocalStore _store;
     readonly ICredentialProtector _protector;
@@ -55,12 +57,12 @@ public sealed class LocalCredentialStore : ICredentialStore
         var dto = new CredentialDto(c.Kind.ToString(), c.Username, c.Secret, c.Refresh);
         var json = JsonSerializer.Serialize(dto, CredentialJson.Default.CredentialDto);
         var blob = _protector.Protect(Encoding.UTF8.GetBytes(json));
-        _store.Set(Key, _protector.Scheme + ":" + Convert.ToBase64String(blob));   // scheme-tagged
+        _store.Set(CredentialKey, _protector.Scheme + ":" + Convert.ToBase64String(blob));   // scheme-tagged
     }
 
     public Credential? Load()
     {
-        var raw = _store.Get(Key);
+        var raw = _store.Get(CredentialKey);
         if (string.IsNullOrEmpty(raw)) return null;
         int idx = raw.IndexOf(':');
         if (idx < 0 || raw[..idx] != _protector.Scheme) return null;   // different scheme (moved machine/platform) → re-auth
@@ -74,7 +76,7 @@ public sealed class LocalCredentialStore : ICredentialStore
         catch { return null; }
     }
 
-    public void Clear() => _store.Remove(Key);
+    public void Clear() => _store.Remove(CredentialKey);
 }
 
 internal sealed record CredentialDto(string Kind, string Username, string Secret, string? Refresh);

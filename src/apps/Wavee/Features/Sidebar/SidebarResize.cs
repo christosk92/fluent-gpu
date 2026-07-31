@@ -22,8 +22,9 @@ sealed class SidebarResizeGrip : Component
 {
     // Tuning (DIP) — all empirical, safe to tweak live.
     const float CompactWidth = 56f;     // the collapsed rail width (matches WaveeShell's pane)
-    // The clamp bounds are ShellResponsiveLayout's (one owner — the probe seam and the responsive tier ladder clamp through
-    // the same pair); the detent tuning below stays local to the gesture.
+    // The clamp bounds are ShellResponsiveLayout's (one owner — the probe seam, the responsive tier ladder and
+    // SidebarPreferences.CommitWidthDrag all clamp through the same pair, for EVERY sidebar design: the per-design tier
+    // triples differ, the clamp does not); the detent tuning below stays local to the gesture.
     const float MinWidth = ShellResponsiveLayout.NavPaneMinW, MaxWidth = ShellResponsiveLayout.NavPaneMaxW;
     const float SnapThreshold = MinWidth;   // at/below this the pane enters the sticky resist zone
     const float ForcePush = 44f;        // push this far past the threshold (→ rawW < 196) to actually collapse
@@ -33,6 +34,9 @@ sealed class SidebarResizeGrip : Component
 
     readonly Signal<bool> _compact, _dragging;
     readonly Signal<float> _width, _fade;
+    // The drag-end commit. Supplied by WaveeShell and now lands on SidebarPreferences.CommitWidthDrag, which clamps +
+    // persists the width for the ACTIVE DESIGN and latches that design's WidthUserSet. The grip itself is unchanged: it
+    // knows nothing about designs, and the _moved gate below is still what decides whether a commit happens at all.
     readonly Action _onCommit;
 
     NodeHandle _self;
@@ -126,7 +130,7 @@ sealed class SidebarResizeGrip : Component
         // persisting the slightly-sub-min sticky value.
         if (!_compact.Peek()) _width.Value = Math.Clamp(_width.Peek(), MinWidth, MaxWidth);
         _fade.Value = 1f;        // settle the content opacity (collapsed shows the full rail; expanded shows full content)
-        if (_moved) _onCommit(); // persist the chosen width + collapsed state (drag-end); a plain click changed nothing and must not pin SidebarWidthUserSet
+        if (_moved) _onCommit(); // persist the chosen width + collapsed state (drag-end); a plain click changed nothing and must not pin the design's WidthUserSet
         _dragging.Value = false;
     }
 

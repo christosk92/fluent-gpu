@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Features.Detail;
@@ -123,6 +124,12 @@ sealed partial class SettingsPage
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
                 PageLayoutCards(pageLayout, SetPageLayout), Icons.List),
+            // The sidebar design is the last item of the Appearance group — beside the other layout choices, before the
+            // Language header (§C6.3). A Component rather than an inline block: the card needs SidebarPreferences and the
+            // nav action from CONTEXT, and GeneralTab runs only while the General tab is selected, so a hook added here
+            // would be a conditional hook (it would vanish from the page's hook order the moment another tab renders).
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Sidebar.Title), Icons.SplitView),
+            Embed.Comp(() => new SidebarSettingsCard()),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Language.Title), Icons.Globe),
             SettingsRow(Loc.Get(Strings.Settings.Language.Label), Loc.Get(Strings.Settings.Language.RestartSub),
                 ComboBox.Create(languageOptions.Labels, _language, width: 260f, isEnabled: settings is not null,
@@ -338,4 +345,62 @@ sealed partial class SettingsPage
         };
     }
 
+    // ── the Sidebar group (§C6.3) ─────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>One grouped card (the <c>DensityBlock</c> idiom) holding the shared three-card design picker and — only
+    /// while Wavee Curated is the active design — the "Customize sidebar" link row.
+    ///
+    /// <para>NESTED inside <see cref="SettingsPage"/> so it can use the page's own <c>SettingsRow</c>/<c>Divider</c>
+    /// helpers (a sibling class could not), and a <see cref="Component"/> so it can take
+    /// <see cref="SidebarPreferences"/>, <see cref="Services"/> and the nav action from CONTEXT rather than from frozen
+    /// props — GeneralTab is not a render body of its own, so it cannot hold the hooks these need.</para>
+    ///
+    /// <para>No page-epoch <c>Bump()</c> is involved: the card subscribes to <c>prefs.Design</c> directly, so a switch
+    /// made from the sidebar's own layout menu while this page is open re-renders the cards AND appears/disappears the
+    /// link row live. Ctor-arg-free, so the frozen-props contract is trivially satisfied.</para></summary>
+    sealed class SidebarSettingsCard : Component
+    {
+        public override Element Render()
+        {
+            var prefs = UseContext(SidebarPreferences.Slot);
+            var svc = UseContext(Services.Slot);
+            var go = UseContext(HistoryStore.NavCtx);
+            var settings = svc?.Settings;
+
+            // The LIVE design (a subscription when the service is present; the persisted value when the page is mounted
+            // in isolation without one). Both paths coerce through the same table, so a hand-edited value cannot make the
+            // picker show nothing selected.
+            var design = prefs is not null
+                ? prefs.Design.Value
+                : SidebarDesignGating.ActiveDesign(settings);
+
+            var kids = new List<Element>(3)
+            {
+                SettingsRow(Loc.Get(Strings.Settings.Sidebar.Design), Loc.Get(Strings.Settings.Sidebar.DesignSub),
+                    // Compact cards: this row shares a page column with the header/description block, and the compact
+                    // ladder keeps all three visible on a narrow window before the row has to wrap.
+                    SidebarDesignPicker.Row(prefs, settings, compact: true),
+                    Icons.SplitView, align: SettingsCard.ContentAlignment.Vertical),
+            };
+
+            // Rendered only while Curated is active (§C6.3): the customizer edits the Curated document, so offering it
+            // for Classic/Library would navigate to an editor for something the user is not looking at. The quick layout
+            // menu's "Customize sidebar…" row is the path that switches first — this one never switches silently.
+            if (SidebarDesignGating.CanCustomize(design))
+            {
+                kids.Add(Divider());
+                kids.Add(SettingsRow(Loc.Get(Strings.Settings.Sidebar.Customize),
+                    Loc.Get(Strings.Settings.Sidebar.CustomizeSub), control: null, icon: Icons.Edit,
+                    isClickEnabled: true, onClick: () => go(SidebarLayoutMenu.CustomizeRoute, null)));
+            }
+
+            return new BoxEl
+            {
+                Direction = 1, AlignSelf = FlexAlign.Stretch,
+                Corners = CornerRadius4.All(Radii.Card),
+                Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                ClipToBounds = true,
+                Children = kids.ToArray(),
+            };
+        }
+    }
 }

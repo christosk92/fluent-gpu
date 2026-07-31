@@ -36,12 +36,24 @@ public sealed partial class AnimEngine
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
+            // A nested control owns a NEW hover scope. The dispatcher publishes HoverWithin for every interactive
+            // ancestor, so allowing a pane/list ancestor to recurse through an interactive row made that ancestor turn
+            // on the reveal affordances of EVERY sibling row (all sidebar ellipses at once). A boundary can itself be
+            // the row-owned reveal, though (TrackRow's clickable play surface), so drive that node and stop beneath it.
+            bool boundary = IsNestedHoverBoundary(c);
             // Only a REVEAL/scale affordance follows its CONTAINER's hover (a list-row #-cell play glyph fading in on row
             // hover via HoverOpacity, a part that scales). A pure-fill control (♥/like: HoverFill, no HoverOpacity/scale)
             // tracks the ACTUAL pointer, so the container hover must not light it up. Recurse unconditionally.
             if (FollowsContainerHover(c)) SetHoverCore(c, on, force: false);
+            if (boundary) continue;
             SetHoverDescendants(c, on);
         }
+    }
+
+    private bool IsNestedHoverBoundary(NodeHandle node)
+    {
+        const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+        return (_scene.Interaction(node).HandlerMask & interactive) != 0;
     }
 
     /// <summary>A descendant follows its container's hover only for a reveal (HoverOpacity/PressedOpacity) or a

@@ -3635,6 +3635,7 @@ sealed class E4ToolTipOrphanProbe : Component
     public readonly Signal<bool> Mounted = new(true);
     public readonly Signal<string> Tip = new("tip-orphan");
     public IOverlayService? Service;
+    public NodeHandle Target;
     public override Element Render() => Embed.Comp(() => new OverlayHost { Child = Embed.Comp(() => new E4ToolTipOrphanInner(this)) });
 }
 
@@ -3651,7 +3652,11 @@ sealed class E4ToolTipOrphanInner : Component
         {
             Width = 480, Height = 360, Padding = Edges4.All(40),
             Children = mounted
-                ? [ToolTip.Wrap(new BoxEl { Width = 120, Height = 32, Fill = ColorF.FromRgba(40, 40, 40) }, tip)]
+                ? [ToolTip.Wrap(new BoxEl
+                {
+                    Width = 120, Height = 32, Fill = ColorF.FromRgba(40, 40, 40),
+                    OnRealized = handle => _p.Target = handle,
+                }, tip)]
                 : [new BoxEl { Width = 120, Height = 32 }],
         };
     }

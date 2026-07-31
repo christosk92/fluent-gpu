@@ -86,6 +86,39 @@
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
+    <Compile Include="..\Wavee\Features\Shell\ShellNav.cs" />
+    <!-- the sidebar's engine-free model/data/persistence layer (System + Wavee.Core only). ShellNavDestTests carries
+         its own minimal Icons/Route shims; Signal<T> is satisfied by VirtualCollectionSignalShim.cs (see above). -->
+    <Compile Include="..\Wavee\Features\Sidebar\SidebarDesign.cs" />
+    <Compile Include="..\Wavee\Features\Sidebar\SidebarDesignGating.cs" />
+    <Compile Include="..\Wavee\Features\Sidebar\SidebarPaneInvariant.cs" />
+    <Compile Include="..\Wavee\Features\Sidebar\SidebarPinStore.cs" />
+    <Compile Include="..\Wavee\Features\Sidebar\Data\*.cs" />
+    <Compile Include="..\Wavee\Features\Sidebar\Persistence\*.cs" />
+    <!-- Classic's LOCKED built-in document (R3.0.2). Engine-free by construction (System + Wavee.Core.Sidebar only) — the
+         rest of Features\Sidebar\Pane\ is the engine-bound renderer and is deliberately NOT included. This is what lets
+         SidebarBuiltInDocumentTests pin Classic's IA and its 44-DIP density intent without a GPU. -->
+    <Compile Include="..\Wavee\Features\Sidebar\Pane\SidebarBuiltInDocuments.cs" />
+    <!-- Library V3's PURE halves (R3.0.3): the synthesized EPHEMERAL document (view state → sections + query + display) and
+         the content ORDER (tree re-grouping, the drill slice, the materialized custom order). Engine-free by construction —
+         System + Wavee.Core(.Sidebar) + the Data\ entry record — so LibraryV3DocumentTests drives the REAL mapping and
+         grouping rules. The rest of Modes\LibraryV3\ is engine-bound chrome and is deliberately NOT included. -->
+    <Compile Include="..\Wavee\Features\Sidebar\Modes\LibraryV3\LibraryV3Document.cs" />
+    <Compile Include="..\Wavee\Features\Sidebar\Modes\LibraryV3\LibraryV3View.cs" />
+    <!-- the full-page customizer's PURE model (tier ladder + palette table/filter + outline flattening/drag + the
+         display projection + the opaque extension-config rewriter). Engine-free by construction, exactly like Data\
+         above, so SidebarCustomizerLayoutTests drive the REAL rules. The rest of Features\Sidebar\Curated\ is
+         engine-bound UI and is deliberately NOT included. -->
+    <Compile Include="..\Wavee\Features\Sidebar\Curated\SidebarCustomizerLayout.cs" />
+    <Compile Include="..\Wavee\App\SidebarBootstrap.cs" Link="SidebarBootstrap.cs" />
+    <Compile Include="..\Wavee\App\PlayLogStore.cs" Link="PlayLogStore.cs" />
+    <!-- the teaching-tip service's PURE half: the acknowledged-id set codec + the one gating decision (System + BCL only;
+         the engine-bound WaveeTips.cs service that consumes it is deliberately NOT included) — WaveeTipsCoreTests -->
+    <Compile Include="..\Wavee\App\WaveeTipsCore.cs" Link="WaveeTipsCore.cs" />
+    <!-- the engine-free core of the extension registry (System + Wavee.Core + SidebarPinId only) — WaveeExtensionRegistryTests -->
+    <Compile Include="..\Wavee\Actions\Extensibility\WaveeRegistryTable.cs" />
+    <Compile Include="..\Wavee\Actions\Extensibility\WaveeActionTargeting.cs" />
+    <Compile Include="..\Wavee\Actions\Extensibility\PinRowRule.cs" />
     <Compile Include="..\Wavee\Features\Shell\PlayerBarResponsiveLayout.cs" />
     <!-- progressive-reveal ramp progression (BCL only) — DetailRevealRampTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailRevealRamp.cs" />

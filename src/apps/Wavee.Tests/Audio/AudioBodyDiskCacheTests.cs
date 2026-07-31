@@ -127,6 +127,50 @@ public class AudioBodyDiskCacheTests
     }
 
     [Fact]
+    public void Constructor_DoesNotScan_WarmScanReconciles()
+    {
+        var dir = TempDir();
+        Directory.CreateDirectory(Path.Combine(dir, "ab"));
+        string staleTmp = Path.Combine(dir, "ab", "stale.tmp");
+        File.WriteAllBytes(staleTmp, new byte[16]);
+        File.SetLastWriteTimeUtc(staleTmp, DateTime.UtcNow - TimeSpan.FromHours(1));
+        string freshTmp = Path.Combine(dir, "ab", "fresh.tmp");
+        File.WriteAllBytes(freshTmp, new byte[16]);
+        string orphanEnc = Path.Combine(dir, "ab", "0123456789abcdef.enc");
+        File.WriteAllBytes(orphanEnc, new byte[32]);
+        string badMap = Path.Combine(dir, "ab", "deadbeefdeadbeef.map");
+        File.WriteAllBytes(badMap, new byte[8]);
+
+        var cache = new AudioBodyDiskCache(dir);
+        // Construction must stay CHEAP — the ctor-time sweep was the 16–31 s "Starting audio" login stall
+        // (golive.audio_ms). The crashed-session leftovers are still on disk until the off-path WarmScan runs.
+        Assert.True(File.Exists(staleTmp));
+        Assert.True(File.Exists(orphanEnc));
+        Assert.True(File.Exists(badMap));
+
+        var data = A.Bytes(6, AudioBodyDiskCache.ChunkBytes);
+        cache.SetSize("live", data.Length);
+        cache.WriteChunk("live", 0, data);
+
+        cache.WarmScan();
+        Assert.False(File.Exists(staleTmp));    // crashed-session leftovers reaped…
+        Assert.False(File.Exists(orphanEnc));
+        Assert.False(File.Exists(badMap));
+        Assert.True(File.Exists(freshTmp));     // …but a fresh tmp (a possibly-live EnsureMap intermediate) survives
+        var buf = new byte[AudioBodyDiskCache.ChunkBytes];
+        Assert.True(cache.TryReadChunk("live", 0, buf, out int len));   // valid pairs untouched
+        Assert.Equal(data.Length, len);
+
+        // Idempotent: the owed scan was claimed above, so a second call is a no-op (a new orphan is NOT reaped).
+        string orphan2 = Path.Combine(dir, "cd", "fedcba9876543210.enc");
+        Directory.CreateDirectory(Path.Combine(dir, "cd"));
+        File.WriteAllBytes(orphan2, new byte[32]);
+        cache.WarmScan();
+        Assert.True(File.Exists(orphan2));
+        Directory.Delete(dir, true);
+    }
+
+    [Fact]
     public async Task Relocation_MoveCopiesVerifiedChunksAndDeletesOldPairs()
     {
         var oldRoot = TempDir();

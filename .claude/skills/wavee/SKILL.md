@@ -23,4 +23,8 @@ Read [wiring-discipline.md](wiring-discipline.md) before any seam/composition-ro
 ## Sub-skills
 
 - [wiring-discipline.md](wiring-discipline.md) — required deps, fail-loud stubs, go-live hooks
+- **`wavee-sidebar` skill** (`.claude/skills/wavee-sidebar/`) — the left sidebar: the three designs as documents
+  over ONE `SidebarPane` renderer, the layout document/reducer/persistence, the projection→binder→planner
+  pipeline, the customizer, and the extension registries. Read it before touching `Features/Sidebar/**`,
+  `Wavee.Core/Sidebar/**` or `Actions/Extensibility/**`.
 - `wavee-playlist-mutations/` — Spotify playlist editing (when present)

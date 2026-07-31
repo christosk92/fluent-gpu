@@ -169,6 +169,27 @@ public sealed class Services
     public IAppSettings Settings { get; }
     /// <summary>The immutable UI/Spotify locale captured at process startup.</summary>
     public AppLocale Locale { get; }
+    /// <summary>All sidebar state: the active design, per-design pane/view state, the shared unlimited pin store, the entry
+    /// projection cell, and the Curated layout document with its 50-step undo stack. Owned HERE (not by the shell) so the
+    /// pin store, the Settings picker and the customizer's undo history survive the login-gate shell swap; provided at the
+    /// app root via <c>SidebarPreferences.Slot</c>. Constructed in the shared private ctor, so both CreateFake and
+    /// CreateReal get one — local preferences are real on every backend (the settings store already is).</summary>
+    public SidebarPreferences Sidebar { get; }
+    /// <summary>The local "recently played" log (§C1.8.1) — a ring of the last 200 playback starts beside
+    /// <c>history.json</c>. Appended by <see cref="PlaybackBridge"/> at every real track boundary and read by the
+    /// sidebar's <c>wavee.history.played</c> source. Local state, so it is real on BOTH backends (the settings-store
+    /// precedent).</summary>
+    public PlayLogStore PlayLog { get; } = new();
+    /// <summary>The sidebar's contribution lookup: the nine first-party data sources, keyed by their namespaced ids
+    /// (<c>wavee.library</c>, <c>wavee.artist.topTracks</c>, …). This is what a section's contribution id resolves through
+    /// — nothing in the UI may <c>switch</c> on an extension id. Published into the platform registry by
+    /// <see cref="RegisterSidebarSources"/>.</summary>
+    public SidebarDataSourceTable SidebarSources { get; }
+    /// <summary>The ONE driver of <c>SidebarPreferences.Entries</c> and of the Curated planner input: it rebuilds the
+    /// unified projection whenever the library / history / play log / pins / view state / culture move, and resolves every
+    /// extension section to a row slice. Mount <c>SidebarBinder.MountPoint()</c> once at the app root (see its remarks) —
+    /// the binder does nothing until that pump is alive.</summary>
+    public SidebarProjectionBinder SidebarBinder { get; }
     /// <summary>The cross-arena memory-shedding coordinator (Backend/Residency/MemoryGovernor.cs), instantiated + wired here
     /// and driven by a periodic OS-memory-pressure poll (WaveeApp). Steady-state growth is already bounded by each cache's
     /// own LRU cap; the governor sheds FURTHER under real memory pressure. (Was dead code — only referenced by tests.)</summary>
@@ -212,6 +233,10 @@ public sealed class Services
         Friends = new SwitchableFriendActivityService(new NullFriendActivityService());
         Settings = settings;
         Locale = appLocale;
+        // Sidebar preferences + the sidebar-layout document. Both CreateFake and CreateReal funnel through this ctor, so
+        // both backends get one; the store's Load() is the only I/O and it never throws (a missing file is a first run, a
+        // bad one is a fault that suppresses writes and loads the built-in Curated default in memory).
+        Sidebar = new SidebarPreferences(settings, SidebarLayoutStore.ForApp());
         Playback = new PlaybackBridge(player, devices, session);
         // Seed the movable video surface from persisted settings BEFORE the first frame, so the remembered placement is
         // already in effect rather than popping in after the shell mounts.
@@ -230,6 +255,24 @@ public sealed class Services
         Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
             new ActivityUndoExecutor(LibraryBridge, library, Activity));
         LibraryStore = new LibraryStore(library, mutations, userPlaylists, library as ICollectionEvents);
+
+        // ── the local play log + the extension platform + the sidebar projection driver (M1) ──
+        // Both Create paths funnel through this ctor, so the fake backend gets the same wiring over its own fake stores.
+        // The play log is LOCAL state (like the settings store), so it is real on both backends.
+        PlayLog.Init(PlayLogStore.DefaultPath());
+        PlayLog.LoadFromDisk();
+        Playback.AttachPlayLog(PlayLog);
+
+        // The binder IS the sources' projection snapshot, so it is constructed first and handed to the registration.
+        // The ACTION half of the first-party extension (BuiltInExtensionTable) is registered by
+        // WaveeExtensionRegistry.Build(ActionServices) from the shell — it needs the service bag the shell owns — and this
+        // table is published into that registry by RegisterSidebarSources below. The sidebar never waits for it: its own
+        // host resolves the first-party table directly, and consults the registry only for contributed (third-party) ids.
+        SidebarBinder = new SidebarProjectionBinder(Sidebar, LibraryStore, PlayLog, Playback);
+        SidebarSources = WaveeBuiltInDataSources.RegisterAll(registrar: null, SidebarBinder, library,
+            ArtistPopularTracks, WhatsNew, Concerts, Playback);
+        SidebarBinder.UseHost(new WaveeBuiltInDataSources.ContributionHost(SidebarSources), SidebarSources);
+        Sidebar.Binder = SidebarBinder;
         // Wire the detail caches as a sheddable arena (priority 2 = shed under MODERATE+ pressure, so at-rest A→B→A stays
         // instant; the LRU insert-cap already bounds steady state). The entity-store "unpinned drop" (priority 3/4) is the
         // documented follow-up — it needs a reachability pin-set to evict live entities safely.
@@ -261,6 +304,14 @@ public sealed class Services
         (RealStore as Wavee.Backend.Persistence.CachedStore)?.CollectSavedHeads(pins, SavedHeadPinCount);
         return pins;
     }
+
+    /// <summary>Publish the first-party sidebar data sources into the platform registry. Call it ONCE from the composition
+    /// root immediately after <c>WaveeExtensionRegistry.Build(actionServices)</c> — that build owns the ACTION half (it
+    /// needs the shell's service bag), and this adds the DATA-SOURCE half, so the customizer's palette and M3's permission
+    /// checks see one complete "wavee" extension. Skipping it does not break the sidebar (its host resolves
+    /// <see cref="SidebarSources"/> directly); only the registry's enumeration would be incomplete.</summary>
+    public void RegisterSidebarSources(WaveeExtensionRegistry registry)
+        => WaveeBuiltInDataSources.Publish(registry, SidebarSources);
 
     /// <summary>One compact app census line for the FG_MEM_DIAG report (see <see cref="MemCensusHook"/>). Built on demand.</summary>
     public string CensusLine()

@@ -32,6 +32,13 @@ public sealed class FakeSource : ICatalogSource
         => Task.FromResult<IReadOnlyList<LibraryItem>>(System.Array.Empty<LibraryItem>());
     public Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<PlaylistSummary>>(System.Array.Empty<PlaylistSummary>());
+
+    /// <summary>The synthetic FOLDER-CAPABLE tree. The interface default would project this source's (empty) flat list, so
+    /// the demo backend would have no folders at all and every folder path — recursion, expand/collapse, folder pins,
+    /// search flattening — would be untestable against the fakes. <see cref="FakeData.PlaylistTree"/> is the same
+    /// structure <c>FakeData.UserPlaylists</c> flattens, so the leaves and the flat list agree by construction.</summary>
+    public Task<IReadOnlyList<PlaylistNode>> GetPlaylistTreeAsync(CancellationToken ct = default)
+        => Task.FromResult(FakeData.PlaylistTree());
     public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Track>>(System.Array.Empty<Track>());
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)

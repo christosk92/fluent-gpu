@@ -19,12 +19,26 @@ public interface IAppSettings
 // Storage names are an internal detail of the keys; nothing else references the raw strings.
 static class WaveeSettings
 {
+    // ── LEGACY (v0) global pane keys — READ ONLY BY THE v0→v1 MIGRATION (SidebarBootstrap.MigrateLegacyPaneKeys, F.3.3).
+    // The pane state is now PER DESIGN and lives in SidebarKeys.Width/WidthUserSet/Collapsed. These three are deliberately
+    // NOT deleted and are still written by nothing: a downgrade to an older build must still find a sane pane width.
+    // The WidthUserSet contract carries over verbatim, now per design: while a design's WidthUserSet is false its width
+    // follows that design's tier ladder; the first committed seam drag in that design latches it forever, for that design
+    // only. Collapsing/expanding the pane is NOT a width choice and must never set it.
     public static readonly SettingKey<float> SidebarWidth = new("sidebar.width", 300f);
-    // Whether SidebarWidth is a USER CHOICE or just the last responsive default. False (the default) means the pane width
-    // follows ShellResponsiveLayout.NavPaneDefaultFor of the live viewport; the first seam-drag commit sets it true and the
-    // persisted width becomes authoritative for good. Collapsing/expanding the pane is NOT a width choice and must not set it.
     public static readonly SettingKey<bool> SidebarWidthUserSet = new("sidebar.width.userSet", false);
     public static readonly SettingKey<bool> SidebarCollapsed = new("sidebar.collapsed", false);
+    // The active sidebar DESIGN as a SidebarDesign int (the RowDensity/ThemeMode/DetailPageLayout convention —
+    // AppDataSettings has no enum arm). DEFAULT 0 = Classic IS LOAD-BEARING: an existing install that never wrote the key
+    // silently stays Classic (locked decision 5). Fresh installs get 2 (Curated) written explicitly by SidebarBootstrap.
+    public static readonly SettingKey<int> SidebarDesign = new("sidebar.design", 0);
+    // The one-time design-chooser marker. SidebarBootstrap sets it true for EXISTING installs so they never see the
+    // chooser; a fresh install leaves it false and every exit path of the chooser sets it true.
+    public static readonly SettingKey<bool> SidebarOnboardingSeen = new("sidebar.onboarding.seen", false);
+    // Monotonic "which sidebar startup migrations have run". 0 = never; current target 1. Guards the fresh-install probe
+    // and the legacy-key migration so both run exactly once (IAppSettings has no key-exists probe — Get returns the
+    // default for an absent key — so "never written" is otherwise indistinguishable from "written as the default").
+    public static readonly SettingKey<int> SidebarBootstrapVersion = new("sidebar.bootstrap.version", 0);
     public static readonly SettingKey<bool> PlayerBarShowRemaining = new("playerbar.duration.remaining", true);
     // Theme preference: 0 = System (follow the OS live), 1 = Light, 2 = Dark. Default System so a fresh install matches
     // the OS; an explicit in-app toggle pins Light/Dark and stops following the OS. Seeded at startup before the first frame.
@@ -63,6 +77,13 @@ static class WaveeSettings
     // wide layout — exactly the rule the widths above already follow. Written by the same drag-end commit as the width.
     public static readonly SettingKey<bool> DetailAlbumRailCollapsed = new("detail.rail.album.collapsed", false);
     public static readonly SettingKey<bool> DetailPlaylistRailCollapsed = new("detail.rail.playlist.collapsed", false);
+    // ── Teaching tips (WaveeTips) — ONE key for EVERY tip, ever ───────────────────────────────────────────────────────
+    // The set of ACKNOWLEDGED teaching-tip ids, newline-joined (the SavedLibrary precedent — AppDataStore round-trips
+    // scalars only). A tip id lands in here the first time the user acknowledges that tip (its ✕, or invoking the thing it
+    // points at), after which that tip never appears again on any launch. Deliberately a SET, not a key per tip: adding a
+    // tip must not add a SettingKey (nor churn Wavee.Tests' settings shim), and "Show tips again" is one write of "".
+    // Ids are PERSISTED — see WaveeTipIds (append-only, never renamed). Empty default = nothing acknowledged yet.
+    public static readonly SettingKey<string> TipsSeen = new("tips.seen", "");
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
     public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");
@@ -143,6 +164,45 @@ static class LibraryStateKeys
     public static SettingKey<bool> AlbumDesc(string k) => new($"library.{k}.album.desc", false);
     public static SettingKey<int> AlbumView(string k) => new($"library.{k}.album.view", 3);   // Grid — matches today's fixed grid
     public static SettingKey<int> AlbumSize(string k) => new($"library.{k}.album.size", 1);
+}
+
+// The per-design persisted sidebar state (F.3.1). Keys are built per design SLUG at runtime (the LibraryStateKeys pattern)
+// — plain record construction, AOT-clean — so the three designs keep fully independent last-used state and switching
+// designs is a snapshot/restore over these keys. SidebarDesignInfo.Slug is the single source of truth for the slug, and
+// SLUGS ARE PERSISTED: never rename them.
+//
+// What deliberately does NOT live here: Curated section collapse (per user-defined section ⇒ sections[].collapsed in
+// sidebar-layout.json, there is no fixed key set for user-created sections), V3 folder expansion (an unbounded id set,
+// same document), and the V3 filter TEXT (session-only, starts empty each launch — the LibraryStateKeys precedent).
+static class SidebarKeys
+{
+    // ── pane (per design) ──
+    public static SettingKey<float> Width(SidebarDesign d)
+        => new($"sidebar.{SidebarDesignInfo.Slug(d)}.width", SidebarDesignInfo.Tiers(d).Narrow);
+    public static SettingKey<bool> WidthUserSet(SidebarDesign d)
+        => new($"sidebar.{SidebarDesignInfo.Slug(d)}.width.userSet", false);
+    public static SettingKey<bool> Collapsed(SidebarDesign d)
+        => new($"sidebar.{SidebarDesignInfo.Slug(d)}.collapsed", false);
+
+    // ── Classic section expansion ──
+    public static readonly SettingKey<bool> ClassicPinnedOpen = new("sidebar.classic.section.pinned", true);
+    public static readonly SettingKey<bool> ClassicLibraryOpen = new("sidebar.classic.section.library", true);
+    public static readonly SettingKey<bool> ClassicPlaylistsOpen = new("sidebar.classic.section.playlists", true);
+
+    // ── Library V3 view state ──
+    public static readonly SettingKey<int> V3Filter = new("sidebar.v3.filter", 0);        // SidebarV3Filter
+    public static readonly SettingKey<int> V3Qualifier = new("sidebar.v3.qualifier", 0);  // SidebarV3Qualifier
+    public static readonly SettingKey<int> V3Sort = new("sidebar.v3.sort", 0);            // SidebarV3Sort (Recents)
+    // Ignored while V3Sort == Custom (the direction affordance is hidden); the stored value is PRESERVED so returning to
+    // another sort restores it.
+    public static readonly SettingKey<bool> V3Desc = new("sidebar.v3.desc", false);
+    public static readonly SettingKey<int> V3View = new("sidebar.v3.view", 1);            // SidebarV3View (List)
+    public static readonly SettingKey<int> V3GridSize = new("sidebar.v3.size", 1);        // 0 S · 1 M · 2 L
+    public static readonly SettingKey<bool> V3SearchOpen = new("sidebar.v3.search.open", false);
+
+    // ── Curated ──
+    public static readonly SettingKey<string> CuratedTemplateId = new("sidebar.curated.template", "wavee.curated.default");
+    public static readonly SettingKey<bool> CuratedRailLabels = new("sidebar.curated.rail.labels", false);
 }
 
 // IAppSettings backed by the engine's AppDataStore (HKCU registry, unpackaged). Every access is DEFENSIVE — a storage

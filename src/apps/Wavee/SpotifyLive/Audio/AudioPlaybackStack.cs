@@ -47,7 +47,7 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
 #else
         Provisioner = NullPlayPlayProvisioner.Instance;
 #endif
-        BodyDiskCache = AudioBodyDiskCache.FromSettings(settings);
+        BodyDiskCache = AudioBodyDiskCache.FromSettings(settings, log);
         LicenseDiskCache = LicenseKeyDiskCache.FromSettings(settings);
         // M6: the ONE real audio host — the unified FluentGpu.Media engine, in-process. The old out-of-proc supervision +
         // AudioPlayEngine/DecodePipeline/WasapiRenderer path is deleted; there is no fallback engine.
@@ -121,6 +121,11 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         // discards) a real endpoint, which on a cold start can stall for seconds. This is off the go-live path but still
         // well ahead of first play, so the user pays it in neither place.
         if (Host is FluentMediaAudioHost fluent) fluent.WarmBackend();
+        // Same treatment for the body cache's reconcile/measure sweep: it walks the whole cache tree (an open+SHA per
+        // .map), which on a cold-NTFS multi-GB cache is 16–31 s — it used to run inside our ctor, i.e. on the login
+        // splash's "Starting audio" step (golive.audio_ms named it). Task.Run because THIS method runs synchronously on
+        // the go-live thread between the Profile and Done splash steps.
+        if (BodyDiskCache is { } bodyDisk) _ = Task.Run(bodyDisk.WarmScan, ct);
         _ = ProvisionAndBindAsync(ct);
     }
 

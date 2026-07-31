@@ -107,5 +107,8 @@
   "Calendar": "E787",
   "MapPin": "E707",
   "Info": "E946",
-  "Delete": "E74D"
+  "Delete": "E74D",
+  "Undo": "E7A7",
+  "Redo": "E7A6",
+  "UnPin": "E77A"
 }

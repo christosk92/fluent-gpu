@@ -40,6 +40,11 @@ static class Program
         // Launch-scoped by design: the Settings picker persists a new value, and the next process applies it atomically
         // to UI strings, Spotify metadata requests, and locale-partitioned caches.
         AppLocale appLocale = AppLocaleBootstrap.Initialize(settings);
+        // Fresh-install probe + the legacy sidebar pane-key migration (F.3.3 + F.4.3). MUST run before anything constructs
+        // Services / opens library.db — WaveeApp's ctor does, and probing after that point would make every install look
+        // "existing". Settings writes only; the one-time chooser is armed via WaveeSettings.SidebarOnboardingSeen and shown
+        // later by SidebarOnboardingChrome, once the shell has painted.
+        SidebarBootstrap.Run(settings);
         string logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Wavee", "logs");
         string logPath = Path.Combine(logDir, "wavee.log");
 #if DEBUG

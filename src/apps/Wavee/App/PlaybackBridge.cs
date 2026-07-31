@@ -77,6 +77,9 @@ public sealed class PlaybackBridge
     // The user's local video-override curation (warm, synchronous). Wired by the bootstrap via AttachVideoOverrides; null
     // ⇒ every override path below is unreachable, which is the feature's kill switch.
     VideoOverrideService? _overrides;
+    // The local "recently played" log (§C1.8.1). Wired by Services via AttachPlayLog; null ⇒ nothing is recorded, which
+    // is the sidebar feature's kill switch. Appended ONLY at a real track boundary (see PushState).
+    PlayLogStore? _playLog;
     Action<Action>? _post;
     bool _storeWired;
     string? _lastQueueDiagSig;
@@ -705,6 +708,11 @@ public sealed class PlaybackBridge
     /// <summary>The attached curation, for the menu/settings surfaces (null when the backend has none).</summary>
     public VideoOverrideService? VideoOverrides => _overrides;
 
+    /// <summary>Attach the local play log, so the sidebar's "Recently played" feed has something to read. Safe before or
+    /// after <see cref="Activate"/>; UI-thread only, like the store it appends to. Null (never attached) simply records
+    /// nothing — the bridge holds no opinion about whether the feature exists.</summary>
+    public void AttachPlayLog(PlayLogStore? playLog) => _playLog = playLog;
+
     /// <summary>Opens the video-override management surface (Settings → Playback). Wired by the shell; null (e.g. a
     /// headless/test bridge) means the override toasts below simply carry no action button rather than a dead one.</summary>
     public Action<string>? OpenVideoOverrideManager;
@@ -961,6 +969,10 @@ public sealed class PlaybackBridge
         RecomputeHasVideo(commitUpgrade: trackBoundary);
         CurrentContext.Value = s.ContextUri;
         Identity.Value = new PlaybackIdentity(s.ContextUri, s.CurrentTrack);
+        // The local play log (§C1.8.1) — the sidebar's "Recently played" source. ONLY at a real track boundary: PushState
+        // also fires on every pause/volume/heartbeat push, and the store's own 1 s (track, context) idempotence is a
+        // second line of defence, not the gate. Null-safe: an unattached log records nothing.
+        if (trackBoundary && s.CurrentTrack is { } played) _playLog?.Append(played.Uri, s.ContextUri);
         // Coarse gate for the now-playing card overlays: true iff any card COULD match (mirrors NowPlayingOverlay.Matches,
         // which is false when both context and track are empty). Equality-gated by the setter, so an idle→idle push is free.
         HasActiveContext.Value = !string.IsNullOrEmpty(s.ContextUri) || s.CurrentTrack is not null;

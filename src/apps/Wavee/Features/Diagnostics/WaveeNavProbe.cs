@@ -60,7 +60,10 @@ internal static class WaveeNavProbe
         bool lyricsProbe = Diag.EnvFlag("WAVEE_LYRICS_PROBE");
         bool liveLyricsScroll = Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE");
         bool advanceProbe = Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE");
-        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !railProbe && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe) return false;
+        bool sidebarModeShot = Diag.EnvFlag("WAVEE_SIDEBAR_MODE_SHOT");
+        bool sidebarV3Shot = Diag.EnvFlag("WAVEE_SIDEBAR_V3_SHOT");
+        bool sidebarVisualShot = Diag.EnvFlag("WAVEE_SIDEBAR_VISUAL_SHOT");
+        if (!Diag.EnvFlag("WAVEE_NAV_PROBE") && !connStress && !trackShot && !heroShot && !shelfShot && !railShot && !railProbe && !homeScroll && !lyricsProbe && !liveLyricsScroll && !advanceProbe && !sidebarModeShot && !sidebarV3Shot && !sidebarVisualShot) return false;
         WaveeLog.Instance.SetEcho(Console.Error.WriteLine);   // env-gated run only: mirror probe progress to the terminal
         if (window is not Win32Window w || device is not D3D12Device gpu)
         {
@@ -70,10 +73,13 @@ internal static class WaveeNavProbe
         // DiagnosticRun fires straight after window.Show(), BEFORE the first frame — so WaveeShell hasn't mounted yet
         // and ProbeNav is still null. Pump warmup frames until the shell wires its nav hook (fixes the mount race that
         // made earlier shot runs flakily report "nav hook not wired").
-        int hookFrames = (liveLyricsScroll || advanceProbe || heroShot || shelfShot || railShot) ? Math.Max(240, EnvInt("WAVEE_PROBE_AUTH_FRAMES", 7200, 240, 36000)) : 240;
+        // The sidebar shots render the LIBRARY projection (playlists / albums / artists / podcasts), so like the rail and
+        // hero shots they need the authenticated first sync to have landed — not just the shell to have mounted.
+        bool needsAuth = liveLyricsScroll || advanceProbe || heroShot || shelfShot || railShot || sidebarModeShot || sidebarV3Shot || sidebarVisualShot;
+        int hookFrames = needsAuth ? Math.Max(240, EnvInt("WAVEE_PROBE_AUTH_FRAMES", 7200, 240, 36000)) : 240;
         for (int i = 0; i < hookFrames && WaveeShell.ProbeNav is null && !w.IsClosed; i++)
         {
-            if (liveLyricsScroll || advanceProbe || heroShot || shelfShot || railShot)
+            if (needsAuth)
             {
                 host.RunFrame();
                 w.WaitForWork(Math.Min(host.RecommendedWaitMs(), 16));
@@ -91,6 +97,9 @@ internal static class WaveeNavProbe
             return true;
         }
         if (heroShot) RunHeroCollapseShot(host, w, gpu);
+        else if (sidebarVisualShot) RunSidebarVisualShot(host, w, gpu);
+        else if (sidebarModeShot) RunSidebarModeShot(host, w, gpu);
+        else if (sidebarV3Shot) RunSidebarV3Shot(host, w, gpu);
         else if (railProbe) RunRailProbe(host, w, gpu);
         else if (railShot) RunRailShot(host, w, gpu);
         else if (shelfShot) RunShelfFadeShot(host, w, gpu);
@@ -102,6 +111,103 @@ internal static class WaveeNavProbe
         else if (lyricsProbe) RunLyricsProbe(host, w, gpu);
         else Run(host, w, gpu);
         return true;
+    }
+
+    // WAVEE_SIDEBAR_VISUAL_SHOT=1: the two user-reported failure viewports plus the wide customizer canvas. This is the
+    // mandatory visual-remediation loop: Curated must not regress into billboard empty states/rule noise, the customizer
+    // command bar must keep Done fully visible, and the docked pane must settle at 56 DIP or its valid expanded width.
+    // Output -> sidebar_visual_curated_577x987.png, sidebar_visual_customizer_1395x1107.png,
+    //           sidebar_visual_customizer_canvas_1776x1107.png. Set WAVEE_SIDEBAR_VISUAL_STAGE to
+    //           curated/customizer/canvas for one capture, or expanded for sidebar_visual_curated_expanded_1395x1107.png.
+    static void RunSidebarVisualShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { Directory.CreateDirectory(ProbeArtifacts.Dir); } catch { }
+        string stage = (Environment.GetEnvironmentVariable("WAVEE_SIDEBAR_VISUAL_STAGE") ?? "")
+            .Trim().ToLowerInvariant();
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor(name + ".png"), px, cw, ch);
+            Log.Info($"[sidebar-visual-shot] wrote {name}.png ({cw}x{ch})");
+        }
+
+        if (WaveeShell.ProbeSidebarDesign is null || WaveeShell.ProbeSidebarCompact is null
+            || WaveeShell.ProbeSidebarDrawer is null || WaveeShell.ProbeSidebarPaneFrame is null)
+        {
+            Log.Warn("[sidebar-visual-shot] sidebar probe hooks not wired - aborting");
+            return;
+        }
+
+        void AssertPane(string stage)
+        {
+            var snapshot = WaveeShell.ProbeSidebarPaneFrame!();
+            var fault = SidebarPaneInvariant.Inspect(in snapshot);
+            if (fault == SidebarPaneInvariantFault.None) return;
+            WaveeLog.Instance.Event(WaveeLogLevel.Error, "sidebar", "sidebar.pane.invariant_failed",
+                "Sidebar pane did not settle in a valid terminal state",
+                fields:
+                [
+                    WaveeLogField.Of("stage", stage),
+                    WaveeLogField.Of("design", snapshot.Design.ToString()),
+                    WaveeLogField.Of("presentedCompact", snapshot.PresentedCompact),
+                    WaveeLogField.Of("preferredWidth", snapshot.PreferredExpandedWidth),
+                    WaveeLogField.Of("renderedWidth", snapshot.RenderedPaneWidth),
+                    WaveeLogField.Of("fault", SidebarPaneInvariant.FaultName(fault)),
+                ]);
+            throw new InvalidOperationException($"sidebar pane invariant failed at {stage}: {fault}");
+        }
+
+        WaveeShell.ProbeNav!("home", null);
+        WaveeShell.ProbeSidebarDesign!(2 /* Curated */);
+        WaveeShell.ProbeSidebarCompact!(false);
+        Settle(90); System.Threading.Thread.Sleep(900); Settle(90);
+        SendMessageW(window.Handle.Value, 0x0006 /*WM_ACTIVATE*/, 1 /*WA_ACTIVE*/, 0);
+
+        if (stage.Length == 0 || stage == "curated")
+        {
+            window.SetClientSize(577, 987);
+            Settle(90); System.Threading.Thread.Sleep(500); Settle(60);
+            AssertPane("curated_577x987_docked");
+            WaveeShell.ProbeSidebarDrawer!(true);
+            Settle(60); System.Threading.Thread.Sleep(300); Settle(45);
+            Shot("sidebar_visual_curated_577x987");
+            WaveeShell.ProbeSidebarDrawer!(false);
+            if (stage == "curated") { Log.Info("[sidebar-visual-shot] done (curated)"); return; }
+        }
+
+        if (stage == "expanded")
+        {
+            window.SetClientSize(1395, 1107);
+            WaveeShell.ProbeSidebarDrawer!(false);
+            WaveeShell.ProbeSidebarCompact!(false);
+            Settle(120); System.Threading.Thread.Sleep(500); Settle(60);
+            AssertPane("curated_expanded_1395x1107");
+            Shot("sidebar_visual_curated_expanded_1395x1107");
+            Log.Info("[sidebar-visual-shot] done (expanded)");
+            return;
+        }
+
+        if (stage.Length == 0 || stage == "customizer")
+        {
+            window.SetClientSize(1395, 1107);
+            WaveeShell.ProbeNav!("sidebar-customize", null);
+            Settle(120); System.Threading.Thread.Sleep(700); Settle(90);
+            AssertPane("customizer_1395x1107");
+            Shot("sidebar_visual_customizer_1395x1107");
+            if (stage == "customizer") { Log.Info("[sidebar-visual-shot] done (customizer)"); return; }
+        }
+
+        if (stage.Length == 0 || stage == "canvas")
+        {
+            window.SetClientSize(1776, 1107);
+            WaveeShell.ProbeNav!("sidebar-customize", null);
+            Settle(120); System.Threading.Thread.Sleep(500); Settle(60);
+            AssertPane("customizer_canvas_1776x1107");
+            Shot("sidebar_visual_customizer_canvas_1776x1107");
+        }
+        Log.Info("[sidebar-visual-shot] done");
     }
 
     // WAVEE_TRACKLIST_SHOT=1: navigate to each surface that shows tracks and capture a PNG, so the unified track row (the
@@ -233,6 +339,127 @@ internal static class WaveeNavProbe
         WaveeShell.ProbeRail!(0 /*Lyrics*/); Settle(60); System.Threading.Thread.Sleep(800); Settle(60); Shot("lyrics");
         WaveeShell.ProbeRail!(1 /*Queue*/); Settle(60); System.Threading.Thread.Sleep(500); Settle(60); Shot("queue");
         Log.Info("[rail-shot] done");
+    }
+
+    // The three sidebar designs, in SidebarDesign ordinal order (Classic=0, LibraryV3=1, Curated=2). The shot name is the
+    // design's short name so the artifacts sort into design-then-pane-state pairs.
+    static readonly (int Design, string Name)[] SidebarDesignShots =
+    [
+        (0, "classic"), (1, "v3"), (2, "curated"),
+    ];
+
+    // WAVEE_SIDEBAR_MODE_SHOT=1: capture every sidebar DESIGN in both pane states — expanded and the collapsed rail — so
+    // the three modes can be reviewed side by side. Both switches go through the REAL seams: the design flip is
+    // SidebarPreferences.SwitchDesign (snapshot → reseed → remount), the exact path the Settings picker takes, and the
+    // collapse is the real pane commit — so what lands in the PNG is what a user would see, not a poked signal.
+    // Output → <logs>\artifacts\sidebar_{classic,v3,curated}_{expanded,rail}.png (6 PNGs).
+    static void RunSidebarModeShot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { Directory.CreateDirectory(ProbeArtifacts.Dir); } catch { }
+        window.SetClientSize(1500, 950);   // wide → the pane takes its WIDE tier, the width the designs are drawn for
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"sidebar_{name}.png"), px, cw, ch);
+            Log.Info($"[sidebar-mode-shot] wrote sidebar_{name}.png ({cw}x{ch})");
+        }
+        if (WaveeShell.ProbeSidebarDesign is null || WaveeShell.ProbeSidebarCompact is null)
+        {
+            Log.Warn("[sidebar-mode-shot] sidebar probe hooks not wired — aborting");
+            return;
+        }
+
+        // Home, fully settled: the sidebar lists the library projection, which only has content once the first sync has
+        // landed. Same warmup budget the rail shot uses.
+        WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(2500); Settle(120);
+        // A real WM_ACTIVATE activate through the wndproc: an inactive window paints the unfocused chrome/Mica arm, which
+        // is not the state these shots get reviewed in.
+        SendMessageW(window.Handle.Value, 0x0006 /*WM_ACTIVATE*/, 1 /*WA_ACTIVE*/, 0);
+        Settle(20);
+
+        foreach (var (design, name) in SidebarDesignShots)
+        {
+            // A switch to the ALREADY-active design is a documented no-op, so the first iteration is correct whatever
+            // design the profile happens to have persisted — every design still gets both shots.
+            WaveeShell.ProbeSidebarDesign!(design);
+            Settle(60); System.Threading.Thread.Sleep(700); Settle(60);   // remount + the width/collapse animation
+            WaveeShell.ProbeSidebarCompact!(false);
+            Settle(60); System.Threading.Thread.Sleep(400); Settle(60);
+            Shot($"{name}_expanded");
+            WaveeShell.ProbeSidebarCompact!(true);
+            Settle(60); System.Threading.Thread.Sleep(400); Settle(60);
+            Shot($"{name}_rail");
+        }
+
+        // Leave the pane expanded: a follow-up scenario in the same run should not inherit the rail.
+        WaveeShell.ProbeSidebarCompact!(false); Settle(30);
+        Log.Info("[sidebar-mode-shot] done");
+    }
+
+    // The Library-V3 presentations (SidebarV3View) and kind filters (SidebarV3Filter), by ordinal.
+    static readonly (int View, string Name)[] SidebarV3ViewShots =
+    [
+        (0, "compactlist"), (1, "list"), (2, "compactgrid"), (3, "grid"),
+    ];
+    static readonly (int Filter, string Name)[] SidebarV3FilterShots =
+    [
+        (1, "playlists"), (2, "podcasts"), (3, "albums"), (4, "artists"),
+    ];
+
+    // WAVEE_SIDEBAR_V3_SHOT=1: the Library-V3 design's view × filter matrix — each of the four presentations at the All
+    // filter, then the List presentation under each kind filter. Both axes go through the real persisting setters
+    // (SetV3View / SetV3Filter), the ones the sort/view flyout and the filter chips write, so a shot shows the mode as a
+    // user's own change would leave it. Output → <logs>\artifacts\sidebar_v3_view_*.png + sidebar_v3_filter_*.png (8 PNGs).
+    static void RunSidebarV3Shot(AppHost host, Win32Window window, D3D12Device gpu)
+    {
+        try { Directory.CreateDirectory(ProbeArtifacts.Dir); } catch { }
+        window.SetClientSize(1500, 950);
+        void Frame() { if (!window.IsClosed) { gpu.SuppressLatencyWaitOnce(); gpu.SuppressVsyncOnce(); host.RunFrame(); } }
+        void Settle(int n) { for (int i = 0; i < n && !window.IsClosed; i++) Frame(); }
+        void Shot(string name)
+        {
+            var px = gpu.CaptureBgra(out int cw, out int ch);
+            PngWriter.WriteBgra(ProbeArtifacts.PathFor($"sidebar_v3_{name}.png"), px, cw, ch);
+            Log.Info($"[sidebar-v3-shot] wrote sidebar_v3_{name}.png ({cw}x{ch})");
+        }
+        if (WaveeShell.ProbeSidebarDesign is null || WaveeShell.ProbeSidebarV3View is null ||
+            WaveeShell.ProbeSidebarV3Filter is null || WaveeShell.ProbeSidebarCompact is null)
+        {
+            Log.Warn("[sidebar-v3-shot] sidebar probe hooks not wired — aborting");
+            return;
+        }
+
+        WaveeShell.ProbeNav!("home", null); Settle(60); System.Threading.Thread.Sleep(2500); Settle(120);
+        SendMessageW(window.Handle.Value, 0x0006 /*WM_ACTIVATE*/, 1 /*WA_ACTIVE*/, 0);
+        Settle(20);
+
+        WaveeShell.ProbeSidebarCompact!(false);
+        WaveeShell.ProbeSidebarDesign!(1 /*LibraryV3*/);
+        Settle(60); System.Threading.Thread.Sleep(900); Settle(60);
+
+        // 1) The four presentations at the All filter (0) — list vs grid, compact vs regular.
+        WaveeShell.ProbeSidebarV3Filter!(0 /*All*/); Settle(40); System.Threading.Thread.Sleep(300); Settle(40);
+        foreach (var (view, name) in SidebarV3ViewShots)
+        {
+            WaveeShell.ProbeSidebarV3View!(view);
+            Settle(50); System.Threading.Thread.Sleep(400); Settle(50);
+            Shot($"view_{name}");
+        }
+
+        // 2) Each kind filter at the List presentation (1) — the chip row's selected state plus the filtered rows.
+        WaveeShell.ProbeSidebarV3View!(1 /*List*/); Settle(40); System.Threading.Thread.Sleep(300); Settle(40);
+        foreach (var (filter, name) in SidebarV3FilterShots)
+        {
+            WaveeShell.ProbeSidebarV3Filter!(filter);
+            Settle(50); System.Threading.Thread.Sleep(400); Settle(50);
+            Shot($"filter_{name}");
+        }
+
+        // Restore the neutral view state so the shots are not order-dependent across runs.
+        WaveeShell.ProbeSidebarV3Filter!(0 /*All*/); WaveeShell.ProbeSidebarV3View!(1 /*List*/); Settle(30);
+        Log.Info("[sidebar-v3-shot] done");
     }
 
     // WAVEE_SHELF_SHOT=1: navigate home and force a horizontal PagedShelf strip to a MID-PAGE offset (what a touchpad

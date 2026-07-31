@@ -65,4 +65,15 @@ public interface ICatalogSource : ISource
         => new(await SuggestAsync(query, ct).ConfigureAwait(false), System.Array.Empty<SearchSuggestionItem>());
     Task<HomeContribution> GetHomeAsync(CancellationToken ct = default);
     Task<LibraryStats> GetStatsAsync(CancellationToken ct = default);
+
+    /// <summary>This source's FOLDER-CAPABLE playlist tree. Default: a leaves-only projection of
+    /// <see cref="GetPlaylistsAsync"/> — a source with no rootlist markers has no folders to report, and every existing
+    /// source (and test fake) keeps compiling untouched. Only the store-backed source overrides it.</summary>
+    async Task<IReadOnlyList<PlaylistNode>> GetPlaylistTreeAsync(CancellationToken ct = default)
+        => SidebarTree.FromFlat(await GetPlaylistsAsync(ct).ConfigureAwait(false));
+
+    /// <summary>uri → added-at (unix ms) for this source's timestamped saved collections (albums / artists / shows).
+    /// Default: empty — a source with no save timestamps reports nothing rather than fabricating an order.</summary>
+    Task<IReadOnlyDictionary<string, long>> GetLibraryAddedAtAsync(CancellationToken ct = default)
+        => Task.FromResult(SidebarTree.NoAddedAt);
 }

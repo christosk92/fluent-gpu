@@ -33,6 +33,7 @@ public sealed class AudioBodyDiskCache
     static readonly byte[] Magic = "WAC2"u8.ToArray();
 
     readonly Func<Policy>? _policyProvider;
+    readonly WaveeLogger _log;
     readonly object _stateGate = new();
     readonly object _trimLock = new();
     readonly ConcurrentDictionary<string, object> _fileLocks = new(StringComparer.OrdinalIgnoreCase);
@@ -41,19 +42,24 @@ public sealed class AudioBodyDiskCache
     long _staticBudget;
     string _activeDirectory = "";
     long _approxBytes;
+    bool _scanPending;   // a WarmScan is owed for the current _activeDirectory (guarded by _stateGate)
+    int _scanGen;        // bumped on every directory switch so a stale scan can't publish over the new root's count
 
     readonly record struct Policy(bool WriteEnabled, string Directory, AudioCacheBudgetMode Mode, long FixedBytes, int Percent);
     readonly record struct MapHeader(long TotalSize, int ChunkCount);
 
-    public AudioBodyDiskCache(string directory, long budgetBytes = DefaultFixedBudgetBytes, int maxFiles = 0, TimeSpan? maxAge = null)
+    public AudioBodyDiskCache(string directory, long budgetBytes = DefaultFixedBudgetBytes, int maxFiles = 0, TimeSpan? maxAge = null,
+        WaveeLogger log = default)
     {
+        _log = log;
         _staticDirectory = Path.GetFullPath(directory);
         _staticBudget = Math.Max(MinBudgetBytes, budgetBytes);
         EnsureActiveDirectory(CurrentPolicy().Directory);
     }
 
-    AudioBodyDiskCache(Func<Policy> policyProvider)
+    AudioBodyDiskCache(Func<Policy> policyProvider, WaveeLogger log)
     {
+        _log = log;
         _policyProvider = policyProvider;
         var policy = CurrentPolicy();
         _staticDirectory = policy.Directory;
@@ -61,7 +67,7 @@ public sealed class AudioBodyDiskCache
         EnsureActiveDirectory(policy.Directory);
     }
 
-    public static AudioBodyDiskCache FromSettings(IAppSettings settings) => new(() =>
+    public static AudioBodyDiskCache FromSettings(IAppSettings settings, WaveeLogger log = default) => new(() =>
     {
         string directory = ResolveDirectory(settings.Get(WaveeSettings.AudioBodyCacheBasePath));
         var mode = (AudioCacheBudgetMode)Math.Clamp(settings.Get(WaveeSettings.AudioBodyCacheBudgetMode), 0, 2);
@@ -71,7 +77,7 @@ public sealed class AudioBodyDiskCache
             mode,
             Math.Max(MinBudgetBytes, settings.Get(WaveeSettings.AudioBodyCacheBudgetBytes)),
             Math.Clamp(settings.Get(WaveeSettings.AudioBodyCacheBudgetPercent), 0, 90));
-    });
+    }, log);
 
     public static string DefaultDirectory()
     {
@@ -89,6 +95,12 @@ public sealed class AudioBodyDiskCache
     Policy CurrentPolicy() => _policyProvider?.Invoke()
         ?? new Policy(true, _staticDirectory, AudioCacheBudgetMode.FixedBytes, Volatile.Read(ref _staticBudget), 0);
 
+    // Activation is CHEAP by contract: create-directory + marker only. The reconcile/measure sweep that used to run here
+    // (five recursive enumerations, an open+SHA per .map) sat synchronously inside the AudioPlaybackStack ctor — i.e. on
+    // the login splash's "Starting audio" step — and cost 16–31 s against a cold-NTFS 3.5k-file cache (golive.audio_ms).
+    // It is owed instead (armed via _scanPending) and paid off-path by WarmScan, the same treatment as the WASAPI
+    // mix-format probe (FluentMediaAudioHost.Backend). Until the scan lands, _approxBytes undercounts: reads never
+    // consult it, and the write-side budget check self-corrects on the next TrimInternal (which re-measures from disk).
     string EnsureActiveDirectory(string directory)
     {
         directory = Path.GetFullPath(directory);
@@ -96,16 +108,99 @@ public sealed class AudioBodyDiskCache
         {
             if (string.Equals(_activeDirectory, directory, StringComparison.OrdinalIgnoreCase)) return directory;
             _activeDirectory = directory;
+            _scanGen++;
+            _scanPending = true;
+            _approxBytes = 0;
             try
             {
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(Path.Combine(directory, ".wavee-audio-cache"), "Wavee encrypted audio cache v2");
-                Reconcile(directory);
-                _approxBytes = Measure(directory);
             }
-            catch { _approxBytes = 0; }
+            catch { }
             return directory;
         }
+    }
+
+    /// <summary>Run the owed reconcile + measure sweep for the active root, if any. Idempotent per directory switch;
+    /// runs on the CALLER's thread (callers background it — AudioPlaybackStack.StartProvisioning schedules it alongside
+    /// the WASAPI backend warm). This is where torn .tmp files, invalid maps and orphan .enc bodies from crashed sessions
+    /// get cleaned, and where the budget byte-count is seeded. Never throws.</summary>
+    public void WarmScan()
+    {
+        string root;
+        int gen;
+        lock (_stateGate)
+        {
+            if (!_scanPending) return;
+            _scanPending = false;
+            root = _activeDirectory;
+            gen = _scanGen;
+        }
+        long start = Environment.TickCount64;
+        long bytes = 0;
+        int files = 0, dropped = 0;
+        try { (bytes, files, dropped) = ReconcileAndMeasure(root); }
+        catch { }
+        lock (_stateGate)
+        {
+            if (gen == _scanGen) Interlocked.Exchange(ref _approxBytes, bytes);
+        }
+        _log.Event(WaveeLogLevel.Info, "audio.cache.scan", "Audio body cache reconciled + measured",
+            elapsedMs: Environment.TickCount64 - start,
+            fields:
+            [
+                WaveeLogField.Of("files", files),
+                WaveeLogField.Of("bytes", bytes),
+                WaveeLogField.Of("dropped", dropped),
+            ]);
+    }
+
+    /// <summary>The old ctor-time Reconcile + Measure folded into ONE enumeration pass (they were five). Deletions match
+    /// the old semantics with one addition: .tmp files belonging to THIS process, or younger than 10 minutes, are live
+    /// EnsureMap intermediates now that the scan runs concurrently with traffic — they are skipped, not reaped.</summary>
+    (long Bytes, int Files, int Dropped) ReconcileAndMeasure(string root)
+    {
+        if (!Directory.Exists(root)) return (0, 0, 0);
+        long bytes = 0;
+        int files = 0, dropped = 0;
+        string pidMarker = "." + Environment.ProcessId + ".";
+        var maps = new List<string>();
+        var encs = new List<string>();
+        foreach (string file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
+        {
+            if (file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase))
+            {
+                if (file.Contains(pidMarker, StringComparison.Ordinal)) continue;
+                try { if (DateTime.UtcNow - File.GetLastWriteTimeUtc(file) < TimeSpan.FromMinutes(10)) continue; } catch { }
+                TryDelete(file);
+                dropped++;
+            }
+            else if (file.EndsWith(".map", StringComparison.OrdinalIgnoreCase)) maps.Add(file);
+            else if (file.EndsWith(".enc", StringComparison.OrdinalIgnoreCase)) encs.Add(file);
+            else bytes += SafeLength(file);   // the .wavee-audio-cache marker
+        }
+        var validStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (string map in maps)
+        {
+            if (!ValidMapFile(map))
+            {
+                TryDelete(map);
+                TryDelete(Path.ChangeExtension(map, ".enc"));
+                dropped++;
+                continue;
+            }
+            validStems.Add(Path.ChangeExtension(map, null));
+            bytes += SafeLength(map);
+            files++;
+        }
+        foreach (string enc in encs)
+        {
+            if (!validStems.Contains(Path.ChangeExtension(enc, null))) { TryDelete(enc); dropped++; continue; }
+            bytes += SafeLength(enc);
+            files++;
+        }
+        RemoveEmptyDirectories(root);
+        return (bytes, files, dropped);
     }
 
     static string Stem(string fileId)
@@ -566,20 +661,6 @@ public sealed class AudioBodyDiskCache
         }
         dstEnc.Flush(true);
         dstMap.Flush(true);
-    }
-
-    void Reconcile(string root)
-    {
-        if (!Directory.Exists(root)) return;
-        foreach (string tmp in Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories)) TryDelete(tmp);
-        foreach (string map in Directory.EnumerateFiles(root, "*.map", SearchOption.AllDirectories))
-        {
-            string enc = Path.ChangeExtension(map, ".enc");
-            if (!ValidMapFile(map)) { TryDelete(map); TryDelete(enc); }
-        }
-        foreach (string enc in Directory.EnumerateFiles(root, "*.enc", SearchOption.AllDirectories))
-            if (!File.Exists(Path.ChangeExtension(enc, ".map"))) TryDelete(enc);
-        RemoveEmptyDirectories(root);
     }
 
     static bool ValidMapFile(string map)

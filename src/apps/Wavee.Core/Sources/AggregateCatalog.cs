@@ -83,6 +83,31 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return r;
     }
 
+    /// <summary>The folder-capable tree, CONCATENATED in source-registration order (the same merge shape as
+    /// <see cref="GetPlaylistsAsync"/>), so a source's user-created <c>wavee:playlist:*</c> leaves federate in alongside
+    /// another source's folder tree. Nothing is re-nested across sources — a source owns its own folder structure.</summary>
+    public async Task<IReadOnlyList<PlaylistNode>> GetPlaylistTreeAsync(CancellationToken ct = default)
+    {
+        var r = new List<PlaylistNode>();
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetPlaylistTreeAsync(ct).ConfigureAwait(false));
+        return r;
+    }
+
+    /// <summary>Merged uri → added-at map. First writer wins per uri (registration order), matching the "first owning
+    /// source answers" rule for single-item reads; a later source never overwrites an earlier source's timestamp.</summary>
+    public async Task<IReadOnlyDictionary<string, long>> GetLibraryAddedAtAsync(CancellationToken ct = default)
+    {
+        Dictionary<string, long>? merged = null;
+        foreach (var s in _reg.CatalogSources)
+        {
+            var part = await s.GetLibraryAddedAtAsync(ct).ConfigureAwait(false);
+            if (part.Count == 0) continue;
+            merged ??= new Dictionary<string, long>(part.Count, StringComparer.Ordinal);
+            foreach (var kv in part) merged.TryAdd(kv.Key, kv.Value);
+        }
+        return merged ?? SidebarTree.NoAddedAt;
+    }
+
     public async Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default)
     {
         var r = new List<Album>();

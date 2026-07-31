@@ -296,6 +296,34 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         return Task.FromResult<IReadOnlyList<PlaylistSummary>>(list);
     }
 
+    /// <summary>The FOLDER-CAPABLE tree over the very same rootlist rows <see cref="GetPlaylistsAsync"/> flattens: the
+    /// builder keeps the kind-1/2 group markers as real (recursive) folder nodes instead of dropping them. The flat
+    /// sibling above stays exactly as it was — every pre-folder consumer keeps its shape.</summary>
+    public Task<IReadOnlyList<PlaylistNode>> GetPlaylistTreeAsync(CancellationToken ct = default)
+        => Task.FromResult(RootlistTreeBuilder.Build(_store.Rootlist(), SummaryOf));
+
+    /// <summary>The uri → added-at side-channel for the timestamped saved sets. These are the very timestamps
+    /// <see cref="JoinSet"/> reads for ordering and then discards (the read-model records have nowhere to carry them), so
+    /// the sidebar's "Recently added" sort gets a REAL server stamp for albums/artists/shows. Playlists are absent by
+    /// construction: the rootlist is an ordered marker stream with no per-item date.</summary>
+    public Task<IReadOnlyDictionary<string, long>> GetLibraryAddedAtAsync(CancellationToken ct = default)
+    {
+        var map = new Dictionary<string, long>(StringComparer.Ordinal);
+        AddSet(map, "albums"); AddSet(map, "artists"); AddSet(map, "shows");
+        return Task.FromResult<IReadOnlyDictionary<string, long>>(map);
+
+        void AddSet(Dictionary<string, long> into, string setId)
+        {
+            var items = _store.SavedItems(setId);
+            for (int i = 0; i < items.Count; i++)
+            {
+                var it = items[i];
+                if (it.AddedAtMs <= 0) continue;                                  // unknown stamp → absent, never faked
+                if (!into.TryGetValue(it.Uri, out var cur) || it.AddedAtMs > cur) into[it.Uri] = it.AddedAtMs;
+            }
+        }
+    }
+
     public Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("albums", _store.GetAlbum));
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("artists", _store.GetArtist));
 

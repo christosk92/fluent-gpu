@@ -479,27 +479,30 @@ public static class FakeData
         return new PlaylistSummary($"spotify:playlist:pl{seed}", name, owner, count, Cover(seed + 100, 300));
     }
 
-    /// <summary>The sidebar playlist tree: loose playlists + one collapsible folder (WaveeMusic's hierarchical shape).</summary>
+    /// <summary>The sidebar playlist tree: loose playlists + a collapsible folder that itself contains a folder — the
+    /// demo backend deliberately exercises the RECURSION (folders hold nodes, not summaries), so a mode that only
+    /// handles one level shows up immediately against the fakes.</summary>
     public static IReadOnlyList<PlaylistNode> PlaylistTree() =>
     [
         new PlaylistLeaf(PlaylistSummary(0)),
         new PlaylistLeaf(PlaylistSummary(1)),
-        new PlaylistFolder("folder:cafe", "Cafe & chill", [PlaylistSummary(2), PlaylistSummary(4), PlaylistSummary(3)]),
+        // Ids are ROOTLIST GROUP ids (bare, unprefixed) — the sidebar's pin id adds the "folder:" prefix itself.
+        new PlaylistFolder("cafe", "Cafe & chill",
+        [
+            new PlaylistLeaf(PlaylistSummary(2)),
+            new PlaylistFolder("latenight", "Late night",
+            [
+                new PlaylistLeaf(PlaylistSummary(4)),
+            ]),
+            new PlaylistLeaf(PlaylistSummary(3)),
+        ]),
         new PlaylistLeaf(PlaylistSummary(5)),
         new PlaylistLeaf(PlaylistSummary(6)),
     ];
 
-    /// <summary>Flattened playlist summaries (folders expanded) — used to seed the "+ New playlist" growth list.</summary>
-    public static IReadOnlyList<PlaylistSummary> UserPlaylists()
-    {
-        var list = new List<PlaylistSummary>();
-        foreach (var node in PlaylistTree())
-        {
-            if (node is PlaylistLeaf leaf) list.Add(leaf.Playlist);
-            else if (node is PlaylistFolder f) list.AddRange(f.Items);
-        }
-        return list;
-    }
+    /// <summary>Flattened playlist summaries (folders expanded at EVERY depth) — used to seed the "+ New playlist"
+    /// growth list. Delegates to the one flatten helper so it can never drift from the tree's nesting rules.</summary>
+    public static IReadOnlyList<PlaylistSummary> UserPlaylists() => SidebarTree.Flatten(PlaylistTree());
 
     public static LibraryItem[] Library()
     {

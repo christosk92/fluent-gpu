@@ -574,7 +574,15 @@ internal sealed class OverlayServiceImpl : IOverlayService
             if (e.Phase == OverlayPhase.Closing) continue;
             if (e.Chrome == PopupChrome.Modal || e.DismissBehavior == DismissBehavior.Modal) continue;
             var owner = e.Anchor();
-            if (!owner.IsNull && scene.IsLive(owner)) { e.OwnerWasLive = true; continue; }
+            // Flow.KeepAlive intentionally leaves an inactive page's nodes live while marking the whole subtree Parked.
+            // A targeted popup must not survive that transition: its owner is no longer presented even though its handle
+            // is generation-valid. Treat parked exactly like orphaned so cached pages cannot leak tips/flyouts over the
+            // newly active route.
+            if (!owner.IsNull && scene.IsLive(owner) && (scene.Flags(owner) & NodeFlags.Parked) == 0)
+            {
+                e.OwnerWasLive = true;
+                continue;
+            }
             if (!e.OwnerWasLive) continue;
             // One-shot: clear the latch BEFORE closing. A VETOED close (Handle.ClosingAction returning false — an app
             // Closing handler with Cancel = true) leaves the entry non-Closing, and without this the prune would

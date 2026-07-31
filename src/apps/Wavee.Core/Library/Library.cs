@@ -133,10 +133,23 @@ public interface IMusicLibrary
     Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default);
 
-    // Sidebar IA read paths — the "Your Library" badge counts and the (flat) playlist list. Async so the shell can
-    // skeleton-load them like everything else (the folder-capable tree is a later enhancement).
+    // Sidebar IA read paths — the "Your Library" badge counts, the FLAT playlist list (what every pre-folder consumer
+    // reads), and the folder-capable TREE beside it. Async so the shell can skeleton-load them like everything else.
     Task<LibraryStats> GetStatsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default);
+
+    /// <summary>The FOLDER-CAPABLE playlist tree. Default: a leaves-only projection of <see cref="GetPlaylistsAsync"/> —
+    /// a source with no rootlist markers has no folders to report, so every existing implementation keeps compiling
+    /// untouched. Flat consumers keep reading <see cref="GetPlaylistsAsync"/> (or <see cref="SidebarTree.Flatten(IReadOnlyList{PlaylistNode})"/>).</summary>
+    async Task<IReadOnlyList<PlaylistNode>> GetPlaylistTreeAsync(CancellationToken ct = default)
+        => SidebarTree.FromFlat(await GetPlaylistsAsync(ct).ConfigureAwait(false));
+
+    /// <summary>uri → added-at (unix ms) for the timestamped library collections (saved albums / artists / shows). The
+    /// side-channel exists because <see cref="Album"/>/<see cref="Artist"/>/<see cref="Show"/> have nowhere to carry the
+    /// stamp the store already has, and a breaking record change to add one is not worth it. Default: empty (a source
+    /// that cannot date its saves reports nothing rather than fabricating an order).</summary>
+    Task<IReadOnlyDictionary<string, long>> GetLibraryAddedAtAsync(CancellationToken ct = default)
+        => Task.FromResult(SidebarTree.NoAddedAt);
 
     // Streamed track loading (skeleton-then-stream): the detail header loads via GetPlaylist/GetAlbum, then the rows
     // page in from here so a big context fills progressively instead of blocking on the whole list.

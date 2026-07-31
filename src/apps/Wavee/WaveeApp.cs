@@ -135,6 +135,7 @@ sealed class WaveeApp : Component
             friendsBridge.Activate(post);
             notifications.Activate(post);
             store.Activate(post);
+            _services.Sidebar.Activate(post);
             // The cover-colour plane bumps its epoch from background batch completions; art tiles subscribe to it, so
             // the bump has to land on the UI thread like every other bridge signal.
             Wavee.SpotifyLive.CoverColorPlane.Current.Activate(post);
@@ -224,7 +225,7 @@ sealed class WaveeApp : Component
         bool authed = !Diag.EnvFlag("WAVEE_FAKE_CHALLENGE")
                    && (bridge.Auth.Value == AuthStatus.Authenticated || (!Services.UseRealBackend && !wasAuthed.Value));
         Element leaf = authed
-            ? Embed.Comp(() => new WaveeShell(_services.Settings))
+            ? Embed.Comp(() => new WaveeShell(_services.Settings, _services.Sidebar))
             : Services.UseRealBackend
                 ? Embed.Comp(() => new LoginView(StartBrowser, RestartCode, CloseApp))
                 : Embed.Comp(() => new LoginView(FakeSignIn, SeedDemoChallenge, CloseApp));
@@ -235,7 +236,11 @@ sealed class WaveeApp : Component
             Ctx.Provide(FriendsBridge.Slot, friendsBridge,
             Ctx.Provide(NotificationCenterBridge.Slot, notifications,
             Ctx.Provide(LibraryStore.Slot, store,
-                leaf))))));
+            // The sidebar design + per-design state + shared pin store. Provided at the APP ROOT (above the login gate) so
+            // the Settings page, the customizer route and the pin actions all read the SAME reference-stable instance, and
+            // so the pin store / undo stack survive the takeover ↔ shell swap.
+            Ctx.Provide(SidebarPreferences.Slot, _services.Sidebar,
+                leaf)))))));
 
         // Debug-build FPS HUD on top (const-folds out of Release; subscribes to the host's per-frame stats). The HUD pill is
         // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike

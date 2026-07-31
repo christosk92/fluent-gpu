@@ -63,6 +63,7 @@ static class AnimSuite
         AnimHookChecks(strings);
         MarqueeChecks(strings);
         CrossfadeChecks(strings);
+        NestedHoverBoundaryChecks(strings);
         WaveeSkeletonChecks(strings);
         BrushTransitionChecks(strings);
         AnimRestChecks(strings);
@@ -2572,6 +2573,78 @@ static class AnimSuite
         float settled = Grey();
         bool done = settled > 0.99f && !ia.HasActive;
         Check("58. hover cross-fade eases in linear light, then settles", eased && done, $"mid={mid:0.00} settled={settled:0.00}");
+    }
+
+    static void NestedHoverBoundaryChecks(StringTable strings)
+    {
+        var scene = new SceneStore();
+        var anim = new AnimEngine(scene);
+        var recon = new TreeReconciler(scene, strings) { Anim = anim };
+        static Element Row() => new BoxEl
+        {
+            OnClick = static () => { },
+            Children =
+            [
+                new BoxEl { Opacity = 0f, HoverOpacity = 1f },
+                new BoxEl
+                {
+                    Opacity = 0f, HoverOpacity = 1f,
+                    OnClick = static () => { },
+                },
+            ],
+        };
+        recon.ReconcileRoot(new BoxEl
+        {
+            OnPointerMoveWithin = static _ => { },
+            Children = [Row(), Row()],
+        }, null);
+
+        var root = scene.Root;
+        var first = scene.FirstChild(root);
+        var second = scene.NextSibling(first);
+        var firstReveal = scene.FirstChild(first);
+        var secondReveal = scene.FirstChild(second);
+        var firstAction = scene.NextSibling(firstReveal);
+        var secondAction = scene.NextSibling(secondReveal);
+
+        // HoverWithin on an interactive list/pane ancestor must stop at the nested row controls. Each row receives its
+        // own hover edge from input dispatch; recursively driving through the ancestor was the "all ellipses" defect.
+        anim.SetHover(root, true);
+        bool ancestorStopped = scene.TryGetInteract(firstReveal, out var firstAtRoot)
+            && scene.TryGetInteract(secondReveal, out var secondAtRoot)
+            && scene.TryGetInteract(firstAction, out var firstActionAtRoot)
+            && scene.TryGetInteract(secondAction, out var secondActionAtRoot)
+            && firstAtRoot.HoverTarget < 0.01f && secondAtRoot.HoverTarget < 0.01f
+            && firstActionAtRoot.HoverTarget < 0.01f && secondActionAtRoot.HoverTarget < 0.01f;
+        anim.SetHover(first, true);
+        bool rowScoped = scene.TryGetInteract(firstReveal, out var firstAtRow)
+            && scene.TryGetInteract(secondReveal, out var secondAtRow)
+            && scene.TryGetInteract(firstAction, out var firstActionAtRow)
+            && scene.TryGetInteract(secondAction, out var secondActionAtRow)
+            && firstAtRow.HoverTarget > 0.99f && secondAtRow.HoverTarget < 0.01f
+            && firstActionAtRow.HoverTarget > 0.99f && secondActionAtRow.HoverTarget < 0.01f;
+
+        // A lazy card affordance is mounted by the hover-triggered render, after the original enter cascade. It must
+        // seed from its nearest interactive ancestor's live HoverWithin scope instead of waiting for a direct hit.
+        var lazyScene = new SceneStore();
+        var lazyAnim = new AnimEngine(lazyScene);
+        var lazyRecon = new TreeReconciler(lazyScene, strings) { Anim = lazyAnim };
+        lazyRecon.ReconcileRoot(new BoxEl { OnClick = static () => { }, Children = [] }, null);
+        var lazyRoot = lazyScene.Root;
+        lazyScene.Flags(lazyRoot) |= NodeFlags.HoverWithin;
+        lazyAnim.SetHover(lazyRoot, true);
+        lazyRecon.ReconcileRoot(new BoxEl
+        {
+            OnClick = static () => { },
+            Children = [new BoxEl { Key = "lazy-reveal", Opacity = 0f, HoverOpacity = 1f }],
+        }, null);
+        var lazyReveal = lazyScene.FirstChild(lazyRoot);
+        bool lazyMountedOn = lazyScene.TryGetInteract(lazyReveal, out var lazyAtMount)
+            && lazyAtMount.HoverTarget > 0.99f;
+
+        Check("58b. container hover stops at nested rows but still drives that row's clickable reveal",
+            ancestorStopped && rowScoped && lazyMountedOn,
+            $"ancestorStopped={ancestorStopped} rowScoped={rowScoped} lazyMountedOn={lazyMountedOn}");
     }
 
     static void BrushTransitionChecks(StringTable strings)

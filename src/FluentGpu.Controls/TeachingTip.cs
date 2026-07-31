@@ -213,36 +213,13 @@ public sealed class TeachingTip : Component
         var closeReason = UseRef(CloseReason.Programmatic);
         var autoOpened = UseRef(false);
 
-        bool hasTitle = Title.Length > 0;
-        bool hasSubtitle = Subtitle.Length > 0;
-        bool hasBody = Body.Length > 0;
-        bool hasIcon = IconGlyph.Length > 0;
-        bool hasHero = HeroContent is not null || HeroImage.Length > 0;
-        bool hasAction = ActionButtonContent.Length > 0;
-        bool hasFooterClose = CloseButtonContent.Length > 0;
-
-        // WinUI CloseButtonLocations VSM (TeachingTip.xaml:75-87): the footer close shows iff CloseButtonContent is
-        // set; otherwise the 40×40 header (alternate) close button — button-content presence ONLY, independent of
-        // IsLightDismissEnabled (the audit's conflation fix; light dismiss affects DISMISSAL, not button location).
-        bool footerCloseUsed = hasFooterClose;
-        bool headerCloseUsed = !footerCloseUsed;
-
-        var (flyoutPlacement, tailSide, tailPin) = Map(PreferredPlacement);
-
-        // Tail is shown for a targeted tip unless explicitly collapsed; never for an untargeted tip (Untargeted VSM).
-        bool tailVisible = HasTarget && TailVisibility != TailVisibilityMode.Collapsed;
-        if (!HasTarget) tailSide = TailSide.None;
-
-        CloseReason ReasonFor(OverlayCloseCause cause) => cause switch
-        {
-            OverlayCloseCause.LightDismiss => CloseReason.LightDismiss,
-            OverlayCloseCause.Escape => CloseReason.Programmatic,
-            _ => closeReason.Value,
-        };
+        // WinUI <c>Target</c>: a targeted tip points at ANOTHER element when one is supplied; with none it falls back to
+        // this component's own trigger wrapper (the pre-Target compat behavior).
+        Func<NodeHandle> anchorThunk = Target ?? (() => anchor.Value);
 
         bool BeforeHostClose(OverlayCloseCause cause)
         {
-            var reason = ReasonFor(cause);
+            var reason = ReasonFor(cause, closeReason.Value);
             var args = new ClosingEventArgs(reason);
             Closing?.Invoke(args);
             if (args.Cancel) return false;
@@ -252,7 +229,7 @@ public sealed class TeachingTip : Component
 
         void AfterHostClosed(OverlayCloseCause cause)
         {
-            var reason = ReasonFor(cause);
+            var reason = ReasonFor(cause, closeReason.Value);
             h.Value = null;
             Closed?.Invoke(reason);
         }
@@ -269,23 +246,8 @@ public sealed class TeachingTip : Component
         {
             if (h.Value is { IsOpen: true }) { RequestClose(CloseReason.Programmatic); return; }
 
-            // IsLightDismissEnabled=false ⇒ DismissBehavior.None (no click-outside; only the close button / Escape).
-            var dismiss = IsLightDismissEnabled ? DismissBehavior.LightDismiss : DismissBehavior.None;
             closeReason.Value = CloseReason.Programmatic;
-            var options = new PopupOptions(FocusTrap: false, DismissBehavior: dismiss, Chrome: PopupChrome.TeachingTip)
-            { ConstrainToRootBounds = ShouldConstrainToRootBounds };
-            // The surface is a placement-aware component: a VERTICAL tail follows the EFFECTIVE placement (the
-            // positioner's fallback may flip Top↔Bottom — WinUI's DetermineEffectivePlacement re-targets the tail
-            // edge the same way), read live from the host's placement signal.
-            Func<Element> content = () => Embed.Comp(() => new TeachingTipSurfaceHost
-            {
-                Owner = this,
-                HasTitle = hasTitle, HasSubtitle = hasSubtitle, HasBody = hasBody, HasIcon = hasIcon,
-                HasHero = hasHero, HasAction = hasAction, HasFooterClose = hasFooterClose,
-                FooterCloseUsed = footerCloseUsed, HeaderCloseUsed = headerCloseUsed,
-                TailVisible = tailVisible, RequestedSide = tailSide, Pin = tailPin,
-                RequestClose = RequestClose,
-            });
+            var (content, options, flyoutPlacement) = BuildOpen(RequestClose);
 
             float margin = PlacementMargin;
             bool centerMode = PreferredPlacement == PlacementMode.Center;
@@ -294,7 +256,7 @@ public sealed class TeachingTip : Component
                 // PlacementMargin / Center mode anchor to a DERIVED rect: the target rect inflated by the margin on
                 // the placement axis (cpp:480/:588), or the target's center POINT for Center (:249-259 — the tail
                 // points at the target middle).
-                var node = anchor.Value;
+                var node = anchorThunk();
                 h.Value = svc.OpenAt(
                     () =>
                     {
@@ -303,11 +265,11 @@ public sealed class TeachingTip : Component
                         if (centerMode) r = new RectF(r.X + r.W * 0.5f, r.Y + r.H * 0.5f, 0f, 0f);
                         return margin > 0f ? new RectF(r.X - margin, r.Y - margin, r.W + margin * 2f, r.H + margin * 2f) : r;
                     },
-                    content, flyoutPlacement, options, owner: () => anchor.Value);
+                    content, flyoutPlacement, options, owner: anchorThunk);
             }
             else
             {
-                h.Value = svc.Open(() => anchor.Value, content, flyoutPlacement, options);
+                h.Value = svc.Open(anchorThunk, content, flyoutPlacement, options);
             }
             h.Value.ClosingAction = BeforeHostClose;
             h.Value.ClosedWithCauseAction = AfterHostClosed;
@@ -329,6 +291,118 @@ public sealed class TeachingTip : Component
             OnRealized = x => anchor.Value = x,
             Children = [Button.Accent(TriggerLabel, Toggle)],
         };
+    }
+
+    /// <summary>WinUI <c>TeachingTipCloseReason</c> resolution: a host cause wins over the pending reason for the two
+    /// causes that carry their own meaning (light dismiss / Escape); otherwise the reason the caller pre-set stands.</summary>
+    static CloseReason ReasonFor(OverlayCloseCause cause, CloseReason pending) => cause switch
+    {
+        OverlayCloseCause.LightDismiss => CloseReason.LightDismiss,
+        OverlayCloseCause.Escape => CloseReason.Programmatic,
+        _ => pending,
+    };
+
+    /// <summary>The surface + chrome for ONE open, shared by the declarative trigger path (<see cref="Render"/>) and the
+    /// imperative <see cref="Show"/> path — the single owner of the placement→tail mapping, the close-button location
+    /// state, the light-dismiss mapping and the <see cref="PopupChrome.TeachingTip"/> options. Each path then owns only
+    /// its own handle bookkeeping (hook refs vs locals).</summary>
+    (Func<Element> Content, PopupOptions Options, FlyoutPlacement Placement) BuildOpen(Action<CloseReason> requestClose)
+    {
+        bool hasTitle = Title.Length > 0;
+        bool hasSubtitle = Subtitle.Length > 0;
+        bool hasBody = Body.Length > 0;
+        bool hasIcon = IconGlyph.Length > 0;
+        bool hasHero = HeroContent is not null || HeroImage.Length > 0;
+        bool hasAction = ActionButtonContent.Length > 0;
+        bool hasFooterClose = CloseButtonContent.Length > 0;
+
+        // WinUI CloseButtonLocations VSM (TeachingTip.xaml:75-87): the footer close shows iff CloseButtonContent is
+        // set; otherwise the 40×40 header (alternate) close button — button-content presence ONLY, independent of
+        // IsLightDismissEnabled (the audit's conflation fix; light dismiss affects DISMISSAL, not button location).
+        bool footerCloseUsed = hasFooterClose;
+        bool headerCloseUsed = !footerCloseUsed;
+
+        var (flyoutPlacement, tailSide, tailPin) = Map(PreferredPlacement);
+
+        // Tail is shown for a targeted tip unless explicitly collapsed; never for an untargeted tip (Untargeted VSM).
+        bool tailVisible = HasTarget && TailVisibility != TailVisibilityMode.Collapsed;
+        if (!HasTarget) tailSide = TailSide.None;
+
+        // IsLightDismissEnabled=false ⇒ DismissBehavior.None (no click-outside; only the close button / Escape).
+        var dismiss = IsLightDismissEnabled ? DismissBehavior.LightDismiss : DismissBehavior.None;
+        var options = new PopupOptions(FocusTrap: false, DismissBehavior: dismiss, Chrome: PopupChrome.TeachingTip)
+        { ConstrainToRootBounds = ShouldConstrainToRootBounds };
+
+        // The surface is a placement-aware component: a VERTICAL tail follows the EFFECTIVE placement (the
+        // positioner's fallback may flip Top↔Bottom — WinUI's DetermineEffectivePlacement re-targets the tail
+        // edge the same way), read live from the host's placement signal.
+        Func<Element> content = () => Embed.Comp(() => new TeachingTipSurfaceHost
+        {
+            Owner = this,
+            HasTitle = hasTitle, HasSubtitle = hasSubtitle, HasBody = hasBody, HasIcon = hasIcon,
+            HasHero = hasHero, HasAction = hasAction, HasFooterClose = hasFooterClose,
+            FooterCloseUsed = footerCloseUsed, HeaderCloseUsed = headerCloseUsed,
+            TailVisible = tailVisible, RequestedSide = tailSide, Pin = tailPin,
+            RequestClose = requestClose,
+        });
+
+        return (content, options, flyoutPlacement);
+    }
+
+    /// <summary>Show a TARGETED tip through <paramref name="overlay"/>, anchored to an EXISTING element and with NO
+    /// trigger UI of its own — WinUI's "set <c>Target</c>, then <c>IsOpen = true</c>" case: the app-scheduled coach mark
+    /// (a first-run tip pointing at a command the user hasn't discovered). The declarative
+    /// <c>Embed.Comp(() =&gt; new TeachingTip { TriggerLabel = … })</c> form keeps its own trigger button; this one has no
+    /// visual footprint of its own at all. Mirrors <c>ContentDialog.Show</c>: configure the instance in
+    /// <paramref name="configure"/> (Title, Subtitle, PreferredPlacement, CloseButtonClick, Closed…), then the returned
+    /// handle closes it programmatically.
+    ///
+    /// <para><paramref name="target"/> is the node thunk the popup follows — capture it with <see cref="BoxEl.OnRealized"/>
+    /// on the element being taught. The tip does not take focus (<c>FocusTrap: false</c>) and, at the WinUI default
+    /// <see cref="IsLightDismissEnabled"/>=false, does not scrim or swallow a click meant for the page: dismissal is the
+    /// ✕, Escape, or the caller. The host closes it automatically if the target leaves the scene (the orphaned-owner
+    /// prune) — so a page teardown cannot leave a tip floating.</para>
+    ///
+    /// <para><see cref="PlacementMargin"/> and <see cref="PlacementMode.Center"/> need the caller's scene to derive their
+    /// anchor rect, which this static path has no access to; both are ignored here (the tip anchors to the target rect
+    /// itself). Use the declarative form when you need them.</para></summary>
+    public static OverlayHandle Show(IOverlayService overlay, Func<NodeHandle> target, Action<TeachingTip> configure)
+    {
+        var tip = new TeachingTip();
+        configure(tip);
+        tip.Target = target;   // keep the instance honest: this IS the targeted form
+        return tip.OpenOn(overlay, target);
+    }
+
+    /// <summary>The imperative open: same surface, options and close pipeline as the trigger path, with the handle and
+    /// the pending close reason held in locals (boxed so the ✕ / host callbacks — invoked after this returns — see the
+    /// live values).</summary>
+    OverlayHandle OpenOn(IOverlayService overlay, Func<NodeHandle> target)
+    {
+        OverlayHandle? handle = null;
+        var pending = new CloseReason[] { CloseReason.Programmatic };
+
+        void RequestClose(CloseReason reason)
+        {
+            if (handle is not { IsOpen: true }) return;
+            pending[0] = reason;
+            handle.Close();
+        }
+
+        var (content, options, placement) = BuildOpen(RequestClose);
+        handle = overlay.Open(target, content, placement, options);
+        handle.ClosingAction = cause =>
+        {
+            var reason = ReasonFor(cause, pending[0]);
+            var args = new ClosingEventArgs(reason);
+            Closing?.Invoke(args);
+            if (args.Cancel) return false;
+            pending[0] = reason;
+            return true;
+        };
+        handle.ClosedWithCauseAction = cause => Closed?.Invoke(ReasonFor(cause, pending[0]));
+        Opened?.Invoke();   // WinUI raises Opened once the popup is shown (synchronous slice)
+        return handle;
     }
 
     /// <summary>Placement-aware surface wrapper: re-renders off the host's placement signal so a vertical tail
@@ -637,13 +711,6 @@ public sealed class TeachingTip : Component
                 _ => anchorAlong,
             };
             float pos = Math.Clamp(along - TailLong * 0.5f, Radii.Overlay, MathF.Max(Radii.Overlay, popupExtent - TailLong - Radii.Overlay));
-            Console.Error.WriteLine($"[beak] render side={Side} hasSig={placement is not null} acx={p.AnchorCenterX:0.0} pw={p.PopupWidth:0.0} pos={pos:0.0}");
-            if (Context.Scene is { } dbgScene)
-            {
-                var chain = new System.Text.StringBuilder();
-                for (var n = Context.AnchorNode; !n.IsNull; n = dbgScene.Parent(n)) chain.Append(n.Raw.Index).Append(' ');
-                Console.Error.WriteLine($"[beak] anchor-chain: {chain}");
-            }
 
             // The two exposed sides of the rotated square, as a polyline (apex points AWAY from the card).
             PolylineStrokeEl stroke = Side switch
@@ -674,6 +741,14 @@ public sealed class TeachingTip : Component
                 },
             };
 
+            // The FILL is the rotated square whose DIAGONAL is the tail's exposed long side: WinUI's TailPolygon is a
+            // 20×10 triangle occluded by s_tailOcclusionAmount = 2 on each exposed edge (TeachingTip.cpp:2299-2318
+            // TailLongSideLength = 20 − 2·2 = 16, TailShortSideLength = 10 − 2 = 8), i.e. a 16-wide, 8-tall visible
+            // wedge. A square of SIDE TailLong has a 22.6 diagonal — it would overhang the stroke outline on all three
+            // sides and get clipped by the popup surface — so the side is TailLong/√2 and the box is centred in the
+            // TailLong×TailLong slot, which makes the diamond exactly inscribe the stroke triangle.
+            const float fillSide = TailLong * 0.70710678f;          // TailLong / √2 ⇒ diagonal == TailLong
+            const float fillInset = (TailLong - fillSide) * 0.5f;   // centre it in the tail slot
             return new BoxEl
             {
                 Width = TailLong,
@@ -684,7 +759,12 @@ public sealed class TeachingTip : Component
                 HitTestVisible = false,
                 Children =
                 [
-                    new BoxEl { Width = TailLong, Height = TailLong, Rotation = 45f, Fill = Tok.FillSolidTertiary, HitTestVisible = false },
+                    new BoxEl
+                    {
+                        Width = fillSide, Height = fillSide,
+                        OffsetX = fillInset, OffsetY = fillInset,
+                        Rotation = 45f, Fill = Tok.FillSolidTertiary, HitTestVisible = false,
+                    },
                     stroke,
                 ],
             };

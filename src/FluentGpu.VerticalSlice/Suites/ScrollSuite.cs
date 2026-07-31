@@ -4606,9 +4606,13 @@ static class ScrollSuite
                 // A few frames while held (real time advances the dwell ticker; keep-alive keeps frames coming).
                 bool aliveLv = host.HasActiveWork;
                 for (int i = 0; i < 3; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); aliveLv &= host.HasActiveWork; }
-                // The 200ms dwell committed target=2 during the loop; the LIVE preset's ItemDisplacement channel seeds
-                // rows 1,2 with the animated -44 part (the 250ms Reposition glide) — settle it, then read row 1.
-                for (int i = 0; i < 3; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); }
+                // The 200ms dwell committed target=2 during the loop; the LIVE preset's ItemDisplacement channel seeded
+                // rows 1,2 with the animated -44 part (MotionTok.ItemPlacement) — SETTLE it, then read row 1.
+                // Sleep-free on purpose: AnimClock.Advance treats a post-wait resume as idle and advances by the 1/60
+                // quantum, so a Sleep(110) frame buys 16.7ms of ANIMATION time, not 110ms. Three such frames left the
+                // track ~50ms in — which only ever read as "parted" because the removed FluentDecelerate literal is
+                // extremely front-loaded (79% of travel by t=0.2). Frames, not sleeps, are what settle a track.
+                for (int i = 0; i < 40; i++) host.RunFrame();
                 var row1Lv = RealizedRow(host.Scene, vp, 1);
                 float lvRow1Dy = row1Lv.IsNull ? 0f : host.Scene.Paint(row1Lv).LocalTransform.Dy;
                 bool lvParted = !row1Lv.IsNull && lvRow1Dy < -30f;   // a displaced sibling parts up toward -44 on the LIVE path (directional: the glide settles asymptotically)
@@ -4661,9 +4665,10 @@ static class ScrollSuite
                 host.RunFrame();
                 bool aliveGv = host.HasActiveWork;
                 for (int i = 0; i < 4; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); aliveGv &= host.HasActiveWork; }   // 300ms grid dwell
-                // The 300ms dwell committed target=2; the LIVE preset's channel seeds tiles 1,2 with the animated
-                // one-column-left part — settle the 250ms glide, then read tile 1 (directional: a column ≈ 110px).
-                for (int i = 0; i < 3; i++) { System.Threading.Thread.Sleep(110); host.RunFrame(); }
+                // The 300ms dwell committed target=2; the LIVE preset's channel seeded tiles 1,2 with the animated
+                // one-column-left part (MotionTok.ItemPlacement) — SETTLE it, then read tile 1 (a column ≈ 110px).
+                // Sleep-free for the same reason as the ListView arm: frames advance the AnimClock, wall time does not.
+                for (int i = 0; i < 40; i++) host.RunFrame();
                 var tile1Gv = RealizedRow(host.Scene, vp, 1);
                 float gvTile1Dx = tile1Gv.IsNull ? 0f : host.Scene.Paint(tile1Gv).LocalTransform.Dx;
                 bool gvParted = !tile1Gv.IsNull && gvTile1Dx < -60f;   // a displaced tile parts one column left on the LIVE path

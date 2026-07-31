@@ -113,10 +113,12 @@ public sealed class ItemsView : Component
 {
     private const float TypeaheadResetMs = 1000f;
     private const int GeometricScan = 512;   // bounded candidate scan for custom-layout arrow nav
-    // Reorder-displacement glide duration. WinUI's MoveItemsForLiveReorder uses TAS_REPOSITION timing, which is a
-    // build-only theme artifact (no readable token), so use the Reposition-class ControlNormal (250ms) with
-    // FluentDecelerate — the closest documented "reposition" cadence (Common_themeresources ControlNormalAnimationDuration).
-    private const float DisplacementAnimMs = Motion.ControlNormal;   // 250ms
+    // Reorder/placement displacement motion (WinUI's MoveItemsForLiveReorder "siblings part to make room"). The timing
+    // is deliberately NOT a literal here: the control names the MOTION — MotionTok.ItemPlacement — and AnimEngine.SeedValue
+    // resolves its dynamics + reduced-motion policy centrally, so a token retune and reduced motion (SnapEnd ⇒ the
+    // displacement lands instantly instead of gliding) apply engine-wide without touching this control.
+    // (Superseded a local Motion.ControlNormal/Easing.FluentDecelerate pair.)
+    private static MotionTokenDef DisplacementMotion => MotionTok.ItemPlacement;
     private const float DisplacementEpsilon = 0.5f;   // sub-pixel: don't re-seed a track that is already at target
 
     /// <summary>Default list slot stride: ListViewItemMinHeight 40 + the 2+2 backplate margins {4,2,4,2}; cp1.a pins 8×44.
@@ -988,13 +990,15 @@ public sealed class ItemsView : Component
         // animation start so a retarget is velocity-continuous. The track (not BoxEl.OffsetX/Y) owns the channel, so the
         // displacement survives every reconcile (ApplyBox only writes LocalTransform from a NON-ZERO static offset,
         // Reconciler.cs:935-947 — the rows carry none, so the AnimEngine track is never clobbered) and is re-seeded on
-        // each realize from ItemDisplacement (recycling-safe). Animate allocates a Keyframe[] per call — fine here because
-        // this body is cold/edge-triggered, never a frame phase.
+        // each realize from ItemDisplacement (recycling-safe). The seed goes through AnimEngine.SeedValue under the
+        // host-owned MotionTok.ItemPlacement token, so the ENGINE owns the dynamics and the reduced-motion policy; this
+        // body is cold/edge-triggered, never a frame phase.
         UseLayoutEffect(() =>
         {
             var disp = ItemDisplacement;
             var anim = Context.Anim;
             if (disp is null || anim is null || sceneRef is null) return;
+            var motion = DisplacementMotion;           // one token read per bump (readonly POD — no per-row resolve, no alloc)
             var flip = ItemFlipFrom;                   // optional FLIP start override (data-reorder glide)
             var fade = ItemFadeFrom;                   // optional opacity seed + stagger delay (added-row ease-in)
             var vp = viewportNode.Value;
@@ -1031,13 +1035,16 @@ public sealed class ItemsView : Component
                 float delay = fd?.delayMs ?? 0f;
                 ref NodePaint p = ref sceneRef.Paint(n);
                 var f = flip?.Invoke(item);            // FLIP "first": start from the OLD visual position, not the live translate
-                float fromX = f?.dx ?? p.LocalTransform.Dx, fromY = f?.dy ?? p.LocalTransform.Dy;
+                float fromX = f?.dx ?? p.LocalTransform.Dx, fromY = f?.dy ?? p.LocalTransform.Dy;   // deadband reference
+                // `from:` is supplied ONLY for the FLIP override; null lets SeedValue read the row's LIVE value, which on
+                // an in-flight placement row is a velocity-continuous retarget instead of a restart (the drag cadence
+                // wants exactly that, and it equals `fromX/fromY` when the row is at rest).
                 if (MathF.Abs(dx - fromX) > DisplacementEpsilon)
-                    anim.Animate(n, AnimChannel.TranslateX, fromX, dx, DisplacementAnimMs, Easing.FluentDecelerate, delayMs: delay);
+                    anim.SeedValue(n, AnimChannel.TranslateX, dx, in motion, from: f?.dx, delayMs: delay);
                 if (MathF.Abs(dy - fromY) > DisplacementEpsilon)
-                    anim.Animate(n, AnimChannel.TranslateY, fromY, dy, DisplacementAnimMs, Easing.FluentDecelerate, delayMs: delay);
+                    anim.SeedValue(n, AnimChannel.TranslateY, dy, in motion, from: f?.dy, delayMs: delay);
                 if (fd is { } o)
-                    anim.Animate(n, AnimChannel.Opacity, o.from, 1f, DisplacementAnimMs, Easing.FluentDecelerate, delayMs: o.delayMs);
+                    anim.SeedValue(n, AnimChannel.Opacity, 1f, in motion, from: o.from, delayMs: o.delayMs);
             }
         }, dispVer);
 
