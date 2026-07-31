@@ -458,6 +458,14 @@ sealed class ShellToolbar : Component
         if (!L.ShowFriends) items.Add(new MenuFlyoutItem(Loc.Get(Strings.Shell.Friends), Icons.Friends, Invoke: () => ui?.Toggle(RailMode.Friends)));
         // Notifications, when collapsed, are handled by OverflowMenu (it anchors the panel to the ⋯ button) — not a plain item.
         if (!L.ShowThemeToggle) items.Add(new MenuFlyoutItem(Theme.Dark ? Loc.Get(Strings.Shell.LightTheme) : Loc.Get(Strings.Shell.DarkTheme), Theme.Dark ? Icons.Sun : Icons.Moon, Invoke: _toggleTheme));
+        // Every durable page gets a discoverable absolute-state Pin/Unpin command, even when it is not a library entity.
+        // The same canonical destination also backs tab drag/context-menu, so these surfaces cannot mint different pins.
+        if (_acts is { } acts && acts.CurrentDestination?.Invoke() is { } destination
+            && PinActions.RowForDestination(acts, in destination) is { } pagePin)
+        {
+            if (items.Count > 0 && !items[^1].IsSeparator) items.Add(MenuFlyoutItem.Separator);
+            items.Add(pagePin);
+        }
         return items;
     }
 }

@@ -28,20 +28,6 @@ namespace Wavee;
 // PURE STATIC by design: a Component per row would cost a mount per slot in a virtualized 10k list. Nothing here
 // allocates beyond the returned records and the children array.
 
-/// <summary>The in-app drag kinds the sidebar emits and accepts. One constant, so a drag SOURCE and a drop TARGET can
-/// never disagree about the discriminator.</summary>
-static class SidebarDragKinds
-{
-    /// <summary>A pinnable sidebar entity (playlist / album / artist / show / folder / app route). TRACKS NEVER USE THIS
-    /// KIND — that is the whole mechanism behind "tracks are not pinnable" (locked decision 4): a track drag simply fails
-    /// every accept test, so no pin affordance appears at all and no per-surface guard is needed.</summary>
-    public const string Entity = "wavee.sidebar.entity";
-}
-
-/// <summary>What an entity drag carries. A value type — the drag layer holds it boxed for the gesture's lifetime only.
-/// <see cref="Id"/> IS the pin id (F.5.4), so a drop target can pin it without re-deriving anything.</summary>
-readonly record struct SidebarDragPayload(SidebarPinKind Kind, string Id, string Uri, string Name);
-
 /// <summary>Row-height + metric rules, split out so a virtualizing surface can size a slot WITHOUT building the row.
 ///
 /// <para>The height / indent ARITHMETIC is not here: it lives in <see cref="SidebarRowGeometry"/> (engine-free, and
@@ -113,6 +99,7 @@ struct SidebarRowSpec
         MenuOverlay = null;
         Menu = null;
         Drag = null;
+        DropTarget = null;
         Animate = null;
         Caption = null;
         Focusable = false;
@@ -190,7 +177,7 @@ struct SidebarRowSpec
     public bool PlayingAnimated;
 
     /// <summary>A TRACK row: the leading art gains a hover-revealed scrim + play glyph, and activation PLAYS rather than
-    /// navigates. Tracks are never pinnable and never drag sources.</summary>
+    /// navigates. Tracks are never pinnable; callers may still supply a drag payload for playlist deposit/reorder.</summary>
     public bool Track;
 
     /// <summary>Render the hover-revealed 26-DIP "…" that re-enters the context-request funnel
@@ -213,9 +200,16 @@ struct SidebarRowSpec
     /// <c>() =&gt; Menus.SidebarEntry(acts, in entry, toggleFolder, expanded)</c>.</summary>
     public Func<ContextMenuModel?>? Menu;
 
-    /// <summary>Makes the row a pin drag SOURCE of <see cref="SidebarDragKinds.Entity"/>. Leave null for track rows and
-    /// for rows already wrapped by <c>Reorderable.Item</c> (which installs its own drag source).</summary>
-    public SidebarDragPayload? Drag;
+    /// <summary>Makes the row a typed Wavee resource drag source. Leave null for rows already wrapped by
+    /// <c>Reorderable.Item</c> (which installs its own source).</summary>
+    public WaveeResourceDragPayload? Drag;
+
+    /// <summary>Optional resource destination (playlist deposit and/or pinned-band insertion).</summary>
+    public DropTargetSpec? DropTarget;
+
+    /// <summary>Cold compatibility cue for a live resource drag. The row keeps its normal fill ramp and gains only an
+    /// accent outline, so before/after/inside targeting never masquerades as selection.</summary>
+    public Func<bool>? DropActive;
 
     /// <summary>The row's layout transition. Leave null when a <c>Reorderable</c> wraps the row — <c>Reorderable.Item</c>
     /// applies <c>LayoutTransition.Slide</c> FLIP itself, and an authored offset hint plus a position track is a
@@ -259,6 +253,7 @@ static class SidebarEntityRow
         float art = float.IsNaN(spec.ArtSize) ? SidebarRowMetrics.ArtFor(spec.Density) : spec.ArtSize;
         bool bareGlyph = spec.Leading is null && spec.Glyph is { Length: > 0 };
         float gap = float.IsNaN(spec.Gap) ? (bareGlyph ? 12f : 10f) : spec.Gap;
+        var dropActive = spec.DropActive; // copy: an `in` parameter cannot be captured by the bound paint thunk
 
         // ── leading column ──────────────────────────────────────────────────────────────────────────────────────────
         Element leading;
@@ -314,13 +309,17 @@ static class SidebarEntityRow
             Fill = enabled && selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
             HoverFill = !enabled ? ColorF.Transparent : selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
             PressedFill = !enabled ? ColorF.Transparent : selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            BorderWidth = dropActive is null ? 0f : 1f,
+            BorderColor = dropActive is null ? ColorF.Transparent
+                : Prop.Of(() => dropActive() ? Tok.AccentDefault : ColorF.Transparent),
             Opacity = enabled ? 1f : 0.55f,
             IsEnabled = enabled,
             OnClick = enabled ? spec.OnClick : null,
             Focusable = spec.Focusable,
-            Draggable = enabled && !spec.Track && spec.Drag is { } payload
-                ? new DragSource(SidebarDragKinds.Entity, () => payload)
+            Draggable = enabled && spec.Drag is { } payload
+                ? new DragSource(WaveeDragKinds.Resource, () => payload)
                 : null,
+            DropTarget = spec.DropTarget,
             Children = kids,
         };
 

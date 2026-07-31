@@ -3303,6 +3303,17 @@ public sealed class InputDispatcher
         return InScrollbarLane(local, in m);
     }
 
+    /// <summary>Refresh a stationary drag after phase-7 edge auto-scroll and virtual catch-up. Reusing the ordinary
+    /// <see cref="DragDropContext.Move"/> path re-resolves the nearest recycled-row target and recomputes its insertion
+    /// slot from the new offset; without this, auto-scroll could commit to the row that used to be under the pointer.</summary>
+    internal void RefreshDragDropAfterAutoScroll()
+    {
+        if (!DragDrop.IsActive) return;
+        var session = DragDrop.Session;
+        DragDrop.Move(HitTestAny(session.Position), session.Position,
+            session.VelocityX, session.VelocityY, session.Mods);
+    }
+
     /// <summary>Stuck-hover fix (input-a11y.md §5.4/§15): a phase-7 scroll offset write moved content under a possibly
     /// STATIONARY mouse/pen cursor, so synthesize the hover re-resolve a real <see cref="InputKind.PointerMove"/> would
     /// have done — HitTest at the last known pointer position and drive the SAME _hovered / scroll-hover / cursor path.

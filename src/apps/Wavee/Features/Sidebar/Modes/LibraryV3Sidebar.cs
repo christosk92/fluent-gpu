@@ -140,6 +140,7 @@ sealed class LibraryV3Sidebar : Component
             IsReorderableSection = IsSectionReorderable,
             CommitReorder = CommitPaneReorder,
             ActivateFolder = session.ActivateFolder,
+            DisclosesFoldersInline = session.DisclosesFoldersInline,
             OnCreatePlaylist = session.CreatePlaylist,
         }, DepKey.Empty);
 
@@ -259,8 +260,9 @@ sealed class LibraryV3Sidebar : Component
     /// <summary>Commit a same-band reorder.
     ///
     /// <para>The PIN band goes through the shared commit (the pin store). The library band writes V3's local overlay and
-    /// NOTHING else — never <c>LibraryBridge</c>, never a playlist mutation source, never Spotify's rootlist (locked
-    /// decision 9). The whole visible order is materialized at that moment (F.7.10), which folds in every stably-appended id
+    /// NOTHING else — never <c>LibraryBridge</c>, never a playlist mutation source, never Spotify's rootlist. Explicit
+    /// resource edge-drops own durable rootlist organization outside this local sorted-view gesture. The whole visible
+    /// order is materialized at that moment (F.7.10), which folds in every stably-appended id
     /// and drops ids the projection no longer has.</para></summary>
     void CommitPaneReorder(SidebarPaneReorder r)
     {

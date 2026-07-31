@@ -2098,6 +2098,39 @@ static class ControlsSuite
                 $"enter={eff1} over={eff2} drop={dropOk} hoverCount={hoverPayloadCount} paths={(dropped is null ? "null" : string.Join("|", dropped))} off(eff={eff4},leaves={leaves})");
         }
 
+        // e5dragdrop.capability — a generic kind match is only the cheap first gate. An incompatible inner target is
+        // transparent, so the nearest compatible ancestor owns the session instead of showing a false drop affordance.
+        {
+            var scene = new SceneStore();
+            int outerEnter = 0, innerEnter = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 200,
+                DropTarget = new DropTargetSpec(["resource"], OnEnter: _ => outerEnter++),
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 100, Height = 100,
+                        DropTarget = new DropTargetSpec(["resource"], OnEnter: _ => innerEnter++)
+                        {
+                            CanAccept = static _ => false,
+                        },
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var p = new Point2(50, 50);
+            bool began = disp.DragDrop.ExternalBegin("resource", "payload", p, KeyModifiers.None);
+            disp.DragDrop.Move(disp.DiagHitTest(p), p, 0f, 0f, KeyModifiers.None);
+            bool passedThrough = began && outerEnter == 1 && innerEnter == 0
+                                 && disp.DragDrop.OverTarget == scene.Root;
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.capability incompatible inner target passes through to compatible ancestor",
+                passedThrough, $"began={began} outer={outerEnter} inner={innerEnter}");
+        }
+
         // e5dragdrop.style — DragSource.Style overrides the lifted ghost's opacity (the default 0.80 → a custom value).
         // A drag promotes on a Draggable carrying Style{Opacity=0.5}; after promotion the node's painted opacity is 0.5.
         {

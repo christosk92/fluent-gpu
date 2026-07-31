@@ -75,6 +75,9 @@ public interface IPlaylistMutationSource
 {
     Task<string> CreatePlaylistAsync(string name, CancellationToken ct = default);
     Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default);
+    /// <summary>Insert an ordered batch before <paramref name="toIndex"/>. Duplicates are membership rows, not entities,
+    /// and therefore remain present and independently movable.</summary>
+    Task InsertTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, int toIndex, CancellationToken ct = default);
     Task RemoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, CancellationToken ct = default);
     Task MoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default);
     Task UpdateDetailsAsync(string playlistUri, string? name, string? description, bool? collaborative, CancellationToken ct = default);
@@ -85,7 +88,12 @@ public interface IPlaylistMutationSource
     Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default);
     Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default);
     Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default);
+    Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
+                               RootlistDropPlacement placement, CancellationToken ct = default);
 }
+
+public readonly record struct RootlistItemRef(string Key, bool IsFolder);
+public enum RootlistDropPlacement : byte { Before, After, Inside }
 
 /// <summary>Applies one server-advertised automatic-playlist tuning option.</summary>
 public interface IPlaylistTuningSource

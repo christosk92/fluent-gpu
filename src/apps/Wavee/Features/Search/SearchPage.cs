@@ -254,7 +254,7 @@ sealed class SearchPage : Component
     {
         var go = UseContext(HistoryStore.NavCtx);
         var model = new Wavee.Features.Browse.BrowseDirectory.Model(
-            OnOpenCategory: uri => go(Wavee.Features.Browse.BrowseRoutes.Page(uri), null),
+            OnOpenCategory: (uri, title) => go(Wavee.Features.Browse.BrowseRoutes.Page(uri), title),
             // Live Events is a BrowseClientFeature, not a page — it routes into the Concerts hub Wavee already has.
             OnOpenFeature: uri => go(string.Equals(uri, "spotify:concerts", StringComparison.Ordinal)
                 ? Wavee.Features.Concerts.ConcertRoutes.Hub

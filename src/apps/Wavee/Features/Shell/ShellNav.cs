@@ -22,6 +22,8 @@ static class ShellNav
         // own label + glyph here — without this it falls through to the "Your Library" default in the tab strip, the history
         // rows, and the sidebar's pinned rows (whose pin id IS the route key). Icons.RadioTower is the podcasts glyph below.
         if (key.StartsWith("show:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Show), Icons.RadioTower);
+        if (key.StartsWith("browse:", StringComparison.Ordinal))
+            return (arg ?? Loc.Get(Strings.Browse.Title), Icons.ExploreContent);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {

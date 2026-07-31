@@ -234,7 +234,7 @@ public class SidebarPinStoreTests
     }
 
     [Fact]
-    public void PinnableRoutes_AreAClosedAllowList()
+    public void PinnableRoutes_SeedThePicker_WhileDynamicDestinationsRemainPinnable()
     {
         for (int i = 0; i < SidebarPinId.PinnableRoutes.Length; i++)
         {
@@ -242,12 +242,35 @@ public class SidebarPinStoreTests
             Assert.Equal(route, SidebarPinId.FromRoute(route));
             Assert.Equal(SidebarPinKind.Route, SidebarPinId.KindOf(route));
         }
-        // Anything outside the list — settings, the api console, a detail route, a browse-family route — is not pinnable.
+        // The picker is intentionally curated, but the pin model accepts any durable app destination.
+        Assert.Equal("browse:spotify:page:music", SidebarPinId.FromRoute("browse:spotify:page:music"));
+        Assert.True(SidebarPinId.IsPinnableRoute("browse:spotify:page:music"));
+        Assert.Equal("concerts", SidebarPinId.FromRoute("concerts"));
+        Assert.Equal("artist-concerts:spotify:artist:x", SidebarPinId.FromRoute("artist-concerts:spotify:artist:x"));
+
+        // Shell-internal surfaces are never sidebar destinations.
         Assert.Null(SidebarPinId.FromRoute("settings"));
+        Assert.False(SidebarPinId.IsPinnableRoute("settings"));
         Assert.Null(SidebarPinId.FromRoute("api-console"));
         Assert.Null(SidebarPinId.FromRoute("sidebar-customize"));
         Assert.Null(SidebarPinId.FromRoute(""));
         Assert.Null(SidebarPinId.FromRoute(null));
+    }
+
+    [Fact]
+    public void Destination_CanonicalizesSearch_AndRetainsBrowseIdentity()
+    {
+        var search = SidebarDestination.FromRoute("search", "one query", "Search");
+        Assert.NotNull(search);
+        Assert.Null(search.Value.Arg);
+        Assert.Equal("search", search.Value.PinId);
+
+        var browse = SidebarDestination.FromRoute("browse:spotify:page:music", "Music", "Music");
+        Assert.NotNull(browse);
+        Assert.Equal("spotify:page:music", browse.Value.Uri);
+        Assert.Equal("Music", browse.Value.Name);
+
+        Assert.Null(SidebarDestination.FromRoute("sidebar-customize", null, "Customize sidebar"));
     }
 
     [Fact]

@@ -36,8 +36,9 @@ public static class SidebarPinId
     public const string ShowPrefix = "show:";
     public const string FolderPrefix = "folder:";
 
-    /// <summary>The pinnable app routes — a CLOSED allow-list. Anything else (settings, api-console, a detail route, a
-    /// concert/browse family route) is not pinnable. Ordinal set.</summary>
+    /// <summary>The pre-seeded app routes shown by pickers. Dynamic route families (browse, concerts, extension pages,
+    /// future registered routes) are also pinnable when reached; they are not enumerated here because their instances
+    /// only exist at runtime.</summary>
     public static readonly string[] PinnableRoutes =
         ["home", "search", "albums", "artists", "liked", "podcasts", "local", "history"];
 
@@ -59,27 +60,19 @@ public static class SidebarPinId
         _ => null,                                                                      // tracks, episodes, everything else
     };
 
-    /// <summary>route key → pin id. Identity for an allow-listed app route or for an already-prefixed entity route key;
-    /// null for anything else (so a detail/settings/browse route is silently unpinnable).</summary>
+    /// <summary>Route key → pin id. Every real application route is stable enough to pin; only internal tooling/editor
+    /// surfaces are refused. Entity routes retain their existing prefixed identities, so pins made from page chrome,
+    /// tabs, cards and sidebar rows converge on one record.</summary>
     public static string? FromRoute(string? routeKey)
     {
-        if (string.IsNullOrEmpty(routeKey)) return null;
-        if (IsPinnableRoute(routeKey)) return routeKey;
-        if (routeKey.StartsWith(PlaylistPrefix, StringComparison.Ordinal)
-            || routeKey.StartsWith(AlbumPrefix, StringComparison.Ordinal)
-            || routeKey.StartsWith(ArtistPrefix, StringComparison.Ordinal)
-            || routeKey.StartsWith(ShowPrefix, StringComparison.Ordinal)
-            || routeKey.StartsWith(FolderPrefix, StringComparison.Ordinal)) return routeKey;
-        return null;
+        if (string.IsNullOrWhiteSpace(routeKey)) return null;
+        if (string.Equals(routeKey, "settings", StringComparison.Ordinal)
+            || string.Equals(routeKey, "api-console", StringComparison.Ordinal)
+            || string.Equals(routeKey, "sidebar-customize", StringComparison.Ordinal)) return null;
+        return routeKey;
     }
 
-    public static bool IsPinnableRoute(string? routeKey)
-    {
-        if (routeKey is null) return false;
-        for (int i = 0; i < PinnableRoutes.Length; i++)
-            if (string.Equals(PinnableRoutes[i], routeKey, StringComparison.Ordinal)) return true;
-        return false;
-    }
+    public static bool IsPinnableRoute(string? routeKey) => FromRoute(routeKey) is not null;
 
     /// <summary>A rootlist group id → its pin id. Folders are pinnable (locked decision 4) even though they never navigate.</summary>
     public static string ForFolder(string folderId) => FolderPrefix + folderId;
@@ -120,11 +113,11 @@ public static class SidebarPinId
     public static string? FromTarget(in ActionTarget t) => FromUri(t.Uri);
 
     /// <summary>The pin id for a projected entry — the entry Id already IS the pin id (F.7.1), so this is the identity
-    /// with the not-pinnable kinds screened out: an app-route row is pinnable only when allow-listed, and a TRACK row
-    /// (queue / now playing / artist top tracks) is never pinnable at all (locked decision 4).</summary>
+    /// with the not-pinnable kinds screened out: internal routes and TRACK rows (queue / now playing / artist top
+    /// tracks) are never pinnable.</summary>
     public static string? FromEntry(in SidebarLibraryEntry e) => e.Kind switch
     {
-        SidebarEntryKind.AppRoute => IsPinnableRoute(e.Id) ? e.Id : null,
+        SidebarEntryKind.AppRoute => FromRoute(e.Id),
         SidebarEntryKind.Track => null,
         _ => e.Id,
     };

@@ -21,8 +21,8 @@ namespace Wavee;
 /// bigger, louder target is actually useful. That is the whole trade the user's screenshot review asked for: the empty
 /// pinned section stops dominating the pane while the generous target survives exactly when it matters.</para>
 ///
-/// <para>A TRACK drag never reaches this: the kind test fails, so no affordance appears at all. That is the whole
-/// mechanism enforcing "tracks are not pinnable" (locked decision 4) — there is no per-surface guard anywhere.</para>
+/// <para>A TRACK drag shares the generic resource discriminator but fails the payload capability test, so no pin
+/// affordance appears. Pin eligibility remains centralized in <c>WaveeResourceDragPayload.CanPin</c>.</para>
 ///
 /// <para>Its own Component so <c>UseDragState</c> — which re-renders its consumer every frame while any typed drag is
 /// live — is scoped to this card instead of the whole sidebar.</para>
@@ -49,12 +49,18 @@ sealed class SidebarPinDropZone : Component
         var drag = UseDragState();
         var over = UseSignal(false);
         var spec = UseMemo(() => new DropTargetSpec(
-            [SidebarDragKinds.Entity],
-            OnEnter: _ => over.Value = true,
+            [WaveeDragKinds.Resource],
+            OnEnter: s => over.Value = WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
+            OnOver: s => over.Value = WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
             OnLeave: _ => over.Value = false,
-            OnDrop: s => { over.Value = false; _accept(s.Payload, 0); }), DepKey.Empty);
+            OnDrop: s => { over.Value = false; _accept(s.Payload, 0); })
+        {
+            CanAccept = static s => WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
+        }, DepKey.Empty);
 
-        bool compatible = drag.Active && string.Equals(drag.Kind, SidebarDragKinds.Entity, StringComparison.Ordinal);
+        bool compatible = drag.Active
+            && string.Equals(drag.Kind, WaveeDragKinds.Resource, StringComparison.Ordinal)
+            && WaveeResourceDrag.Unwrap(drag.Payload) is { CanPin: true };
         bool hovering = over.Value;
         bool active = compatible || hovering;
 
@@ -110,8 +116,8 @@ sealed class SidebarPinDropZone : Component
 /// header, the compact rail's footer and Library V3's header/rail — a MOVE out of <c>WaveeSidebar.cs</c> (unchanged
 /// visuals) so retiring Classic's hand-built body does not take it down with it.
 ///
-/// <para>§3.1.6: it used to open a MenuFlyout offering "Playlist" / "Folder", but Spotify folder create/rename/move/delete
-/// is deferred (locked decision 9) and the "Folder" arm was a no-op — dead UI that promises a command we do not have. The
+/// <para>§3.1.6: it used to open a MenuFlyout offering "Playlist" / "Folder", but Spotify folder create/rename/delete
+/// is deferred and the "Folder" arm was a no-op — dead UI that promises a command we do not have. The
 /// flyout, the Overlay.Service/OverlayHandle plumbing and the anchor ref are gone with it; the button is a direct invoke
 /// wearing the create-playlist tooltip.</para>
 /// </summary>

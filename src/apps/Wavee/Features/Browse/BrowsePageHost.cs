@@ -31,7 +31,7 @@ sealed class BrowsePageHost : Component
 
         var model = new BrowsePage.Model(
             PageUri: pageUri,
-            OnOpenCategory: uri => go(BrowseRoutes.Page(uri), null),
+            OnOpenCategory: (uri, title) => go(BrowseRoutes.Page(uri), title),
             // A client feature is not a browse page: Live Events carries featureUri "spotify:concerts" and routes into
             // the Concerts hub Wavee already has.
             OnOpenFeature: uri => go(FeatureRoute(uri), null),

@@ -6,7 +6,9 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
+using Wavee.Core;
 using Wavee.Core.Sidebar;
 using static FluentGpu.Dsl.Ui;
 
@@ -38,16 +40,9 @@ namespace Wavee;
 // `LayoutVersion` bump → autosave. This pane subscribes `LayoutVersion`, so the customizer never talks to the renderer: it
 // dispatches, and both the live pane and its own preview re-plan from the one document.
 //
-// SELECTION — ONE mechanism for every mode (R3.0.2). Rows recycle inside a virtualized list, so a node-handle map keyed by
-// route is not stable and Classic's MEASURED overlay pill cannot work here. The pane therefore draws selection INSIDE the
-// row: the shared 4-state ramp (`SidebarEntityRow`) plus a 3×16 accent indicator over the row's own selection gutter,
-// matching WinUI's per-NavigationViewItem SelectionIndicator.
-//
-// That indicator MOVES rather than blinking. This component owns the only fact a per-row cue cannot know on its own —
-// that the selection changed, and which way it travelled through the plan (`TrackSelection` → `SelEpoch`/`SelDirection`/
-// `WasDeparting`) — and `SidebarSelectionPill` turns it into a spring: the arriving row's pill stretches in from the side
-// the selection came from while the departing row's contracts out the other way. See that file for why a declared
-// `Transition` could never have done this.
+// SELECTION — ONE mechanism for every mode (R3.0.2). Row-local interaction tint and the 3×16 accent indicator both live
+// in the item container, exactly like WinUI NavigationViewItem. On a route edge the two realized item indicators receive
+// the same outgoing/incoming 600-ms Offset+Scale choreography as NavigationView.cpp; a recycle is a snap, never a replay.
 //
 // MOTION (Revision 2's token table + R3.1.7): section collapse/expand chevrons rotate on `MotionTok.ControlFast`
 // (`SidebarChevron`); the rows a collapse/expand adds or displaces ride the ItemsView's entrance/FLIP seed channel (see
@@ -83,6 +78,11 @@ sealed class SidebarPane : Component
     /// displacement / FLIP / fade tracks over the recycling window.</summary>
     readonly Signal<int> _dispVersion = new(0);
 
+    /// <summary>The virtualized list's public handle. Rootlist drop placement reads its viewport/offset, and selection
+    /// motion uses the realized window to mirror WinUI's "both indicators exist" animation guard.</summary>
+    readonly ItemsViewController _listController = new();
+    readonly Signal<int> _resourceDropRow = new(-1);
+
     /// <summary>One <c>Reorderable</c> per in-place-reorderable section id (§C5.1). Created lazily and kept for the
     /// component's life — a Reorderable holds gesture state and must not be rebuilt.</summary>
     readonly Dictionary<string, Reorderable> _reorder = new(StringComparer.Ordinal);
@@ -103,6 +103,7 @@ sealed class SidebarPane : Component
     Func<int, (float dx, float dy)?>? _flipFrom;
     Func<int, (float from, float delayMs)?>? _fadeFrom;
     string? _toggledSection;
+    string? _toggledFolder;
     bool _toggledExpand;
     float _toggledExtent;
 
@@ -111,8 +112,6 @@ sealed class SidebarPane : Component
 
     /// <summary>An expanded row eases in from a slight rise (the app's add vocabulary).</summary>
     const float EnterRise = 6f;
-    /// <summary>16 ms per row, capped, so a long section reads as dealt top-down instead of blinking together.</summary>
-    const float StaggerStepMs = 16f;
     const int StaggerCap = 8;
 
     // ── published to the bound row slots each render. PLAIN FIELDS by design: a bound slot is a frozen child, so it reads
@@ -136,13 +135,15 @@ sealed class SidebarPane : Component
     bool _countSeeded;
 
     // ── selection travel (R3.0.2 follow-up) ──────────────────────────────────────────────────────────────────────────
-    // The per-row indicator can only MOVE if it knows the selection MOVED and which way. These three plain fields are
-    // that knowledge, recomputed once per real route change in Render (never a signal — the row indicators read them at
-    // THEIR render time, exactly like `Plan`).
+    // Published to the row-owned indicators. The route epoch distinguishes a navigation from recycling; the geometry is
+    // captured once at that navigation edge so every involved row receives one identical WinUI flight.
     string _selRoute = "";
     string _prevSelRoute = "";
     int _selEpoch;
     int _selDir;
+    float _selTravel;
+    bool _selSameDepth;
+    bool _selCanAnimate;
 
     /// <summary>The variable-extent layout object. STATEFUL (a Fenwick estimate-then-correct table + scroll anchoring), so
     /// it is created ONCE per pane instance and never per render.</summary>
@@ -152,6 +153,7 @@ sealed class SidebarPane : Component
     /// A <c>Reorderable.Item</c>-wrapped row must not ALSO carry an authored offset hint (one position owner per node).</summary>
     static readonly LayoutTransition RowPlacement = new(
         TransitionChannels.Position, MotionTok.ItemPlacement.ToDynamics());
+    static readonly RemovalOptions RowRemoval = new() { StaggerMs = WaveeMotion.StaggerMs };
 
     public SidebarPane(SidebarPaneConfig config, Signal<Route> route, Action<string, string?> go, Signal<bool> compact,
                        Signal<float> expandedWidth, bool inDrawer = false)
@@ -191,7 +193,6 @@ sealed class SidebarPane : Component
         // The ONE thing the frozen ItemsView cannot read from a field. A layout effect, so the write lands after render.
         int rows = plan.Rows.Count;
         UseLayoutEffect(() => { _rowCount.Value = rows; }, rows);
-
         ConfigureReorder();
 
         Element expanded = new BoxEl
@@ -291,6 +292,7 @@ sealed class SidebarPane : Component
             CacheExtentPx = 240f,
             Grow = 1f,
             CountSignal = _rowCount,
+            Controller = _listController,
             // One recycle pool per row kind: a header slot never rebinds into an entity row's shape (which is also what
             // makes the per-header/per-folder animated chevron components safe under recycling).
             ContentType = ContentTypeOf,
@@ -314,6 +316,7 @@ sealed class SidebarPane : Component
                 ItemFlipFrom = _flipFrom ??= FlipFrom,
                 ItemFadeFrom = _fadeFrom ??= FadeFrom,
             },
+            Removal = RowRemoval,
         }) with { Key = "plan" };
 
     (float dx, float dy)? FlipFrom(int index) => _flip.TryGetValue(index, out var f) ? f : null;
@@ -473,9 +476,9 @@ sealed class SidebarPane : Component
         is SidebarRowKind.EntityRow or SidebarRowKind.IconRow or SidebarRowKind.Placeholder
         or SidebarRowKind.FolderHeader;
 
-    /// <summary>§C5.1 default: Pinned / StaticLinks / CustomGroup reorder IN PLACE. PlaylistTree and EntityList do NOT —
-    /// the rootlist is never written (locked decision 9) and V3's custom order is its own local overlay, which V3 opts
-    /// into through <see cref="SidebarPaneConfig.IsReorderableSection"/>.</summary>
+    /// <summary>§C5.1 default: Pinned / StaticLinks / CustomGroup reorder IN PLACE. PlaylistTree and EntityList use
+    /// resource-drop destinations instead; V3 may additionally opt a section into its local view-order overlay through
+    /// <see cref="SidebarPaneConfig.IsReorderableSection"/>.</summary>
     bool IsReorderableSection(SidebarSectionKind kind)
         => Config.IsReorderableSection is { } test
             ? test(kind)
@@ -508,7 +511,14 @@ sealed class SidebarPane : Component
         _flip.Clear();
         _fade.Clear();
         string? id = _toggledSection;
+        string? folder = _toggledFolder;
         _toggledSection = null;
+        _toggledFolder = null;
+        if (folder is not null)
+        {
+            ChoreographFolder(plan, folder);
+            return;
+        }
         if (id is null) return;
 
         var rows = plan.Rows;
@@ -530,7 +540,7 @@ sealed class SidebarPane : Component
             for (int i = first; i <= last; i++)
             {
                 _flip[i] = (0f, -EnterRise);
-                _fade[i] = (0f, MathF.Min(ord, StaggerCap) * StaggerStepMs);
+                _fade[i] = (0f, MathF.Min(ord, StaggerCap) * WaveeMotion.StaggerMs);
                 ord++;
             }
             var section = SectionOf(id);
@@ -555,19 +565,76 @@ sealed class SidebarPane : Component
         _dispVersion.Value = _dispVersion.Peek() + 1;
     }
 
+    /// <summary>Folder counterpart to section choreography. A playlist-tree folder owns one contiguous preorder band:
+    /// descendants enter with the standard add rise/fade; on collapse the generic ItemsView removal seam keeps the
+    /// departing realized rows alive while every survivor below FLIPs upward by their old extent.</summary>
+    void ChoreographFolder(SidebarRowPlan plan, string folderId)
+    {
+        int folderIndex = FolderIndexOf(plan, folderId);
+        if (folderIndex < 0) return;
+
+        if (_toggledExpand)
+        {
+            var rows = plan.Rows;
+            var entries = plan.Entries;
+            var folderRow = rows[folderIndex];
+            if ((uint)folderRow.EntryIndex >= (uint)entries.Count) return;
+            int rootDepth = entries[folderRow.EntryIndex].Depth;
+            int first = folderIndex + 1, last = folderIndex;
+            while (last + 1 < rows.Count)
+            {
+                var candidate = rows[last + 1];
+                if (!string.Equals(candidate.SectionId, folderRow.SectionId, StringComparison.Ordinal)
+                    || (uint)candidate.EntryIndex >= (uint)entries.Count
+                    || entries[candidate.EntryIndex].Depth <= rootDepth) break;
+                last++;
+            }
+            if (last < first) return;
+
+            int ord = 0;
+            for (int i = first; i <= last; i++)
+            {
+                _flip[i] = (0f, -EnterRise);
+                _fade[i] = (0f, MathF.Min(ord, StaggerCap) * WaveeMotion.StaggerMs);
+                ord++;
+            }
+            var section = SectionOf(folderRow.SectionId);
+            float grown = (last - first + 1) * (section is null ? SidebarRowMetrics.ClassicHeight
+                                                                : SidebarPaneMetrics.RowHeight(section));
+            for (int i = last + 1; i < rows.Count; i++) _flip[i] = (0f, -grown);
+        }
+        else
+        {
+            if (_toggledExtent <= 0f) return;
+            for (int i = folderIndex + 1; i < plan.Rows.Count; i++) _flip[i] = (0f, _toggledExtent);
+        }
+
+        _dispVersion.Value = _dispVersion.Peek() + 1;
+    }
+
+    static int FolderIndexOf(SidebarRowPlan plan, string folderId)
+    {
+        var rows = plan.Rows;
+        var entries = plan.Entries;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.Kind != SidebarRowKind.FolderHeader || (uint)row.EntryIndex >= (uint)entries.Count) continue;
+            if (string.Equals(entries[row.EntryIndex].FolderId, folderId, StringComparison.Ordinal)) return i;
+        }
+        return -1;
+    }
+
     /// <summary>How much vertical space a section's BODY rows occupy in the CURRENT plan — measured before the collapse so
     /// the glide-up distance is the real one.</summary>
     float BodyExtentOf(string sectionId)
     {
-        var section = SectionOf(sectionId);
-        if (section is null) return 0f;
-        float h = SidebarPaneMetrics.RowHeight(section);
         var rows = Plan.Rows;
-        int n = 0;
+        float extent = 0f;
         for (int i = 0; i < rows.Count; i++)
             if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)
-                && rows[i].Kind != SidebarRowKind.SectionHeader) n++;
-        return n * h;
+                && rows[i].Kind != SidebarRowKind.SectionHeader) extent += RowExtentOf(i);
+        return extent;
     }
 
     // ── reads the bound row slots make ───────────────────────────────────────────────────────────────────────────────
@@ -600,33 +667,87 @@ sealed class SidebarPane : Component
 
     // ── selection travel ─────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Bumped once per REAL selection change. A row indicator compares it against the epoch it last reacted to,
-    /// which is what separates "the selection moved" from "this slot recycled onto another row" — the two cases a
-    /// recycling list makes indistinguishable from the row's point of view.</summary>
+    /// <summary>Bumped once per real route change. A row-owned indicator compares this with the epoch it last handled,
+    /// which separates a navigation from a recycled slot being rebound to another item.</summary>
     internal int SelEpoch => _selEpoch;
 
-    /// <summary>Which way the selection travelled through the plan (+1 down / -1 up / 0 unknown).</summary>
+    /// <summary>Direction through the plan (+1 down / -1 up / 0 unknown).</summary>
     internal int SelDirection => _selDir;
 
-    /// <summary>Was <paramref name="route"/> the selection immediately BEFORE the current change? That row owns the
-    /// outgoing half of the travel.</summary>
+    /// <summary>Signed indicator-top displacement from the previous item to the next item.</summary>
+    internal float SelTravel => _selTravel;
+
+    /// <summary>WinUI animates a worm only when both indicators share a lane/depth.</summary>
+    internal bool SelSameDepth => _selSameDepth;
+
+    /// <summary>WinUI requires both item indicators to exist. An off-window/first-paint selection snaps.</summary>
+    internal bool SelCanAnimate => _selCanAnimate;
+
     internal bool WasDeparting(string? route)
         => route is { Length: > 0 } && string.Equals(route, _prevSelRoute, StringComparison.Ordinal);
 
-    /// <summary>Fold a route change into (previous, epoch, direction). Called from Render with the live route: a plain
-    /// field write during a reactive computation, exactly like <see cref="Plan"/> — the row indicators are frozen
-    /// children that read it at their own render time, so no signal is involved.
-    ///
-    /// <para>Direction is resolved against the CURRENT plan, so a selection arriving from off-plan (a deep link, a row
-    /// inside a collapsed section, the first paint) yields 0 and the indicator honestly fades instead of sliding from an
-    /// invented side.</para></summary>
+    /// <summary>Capture one NavigationView selection transaction. The item containers own the indicator nodes; the pane
+    /// owns only the pair geometry and the realized-window guard that WinUI gets from two non-null UIElements.</summary>
     void TrackSelection(string route)
     {
         if (string.Equals(route, _selRoute, StringComparison.Ordinal)) return;
         _prevSelRoute = _selRoute;
         _selRoute = route;
         _selEpoch++;
-        _selDir = SidebarRowGeometry.DirectionOf(IndexOfRoute(_prevSelRoute), IndexOfRoute(route));
+        int from = IndexOfRoute(_prevSelRoute);
+        int to = IndexOfRoute(route);
+        _selDir = SidebarRowGeometry.DirectionOf(from, to);
+        _selTravel = 0f;
+        _selSameDepth = false;
+        _selCanAnimate = false;
+        if (_selDir == 0 || !IsSelectionRowRealized(from) || !IsSelectionRowRealized(to)) return;
+        if (!TrySelectionGeometry(from, out float fromX, out float fromY)
+            || !TrySelectionGeometry(to, out float toX, out float toY)) return;
+
+        _selTravel = toY - fromY;
+        _selSameDepth = MathF.Abs(fromX - toX) < 0.5f;
+        _selCanAnimate = float.IsFinite(_selTravel) && MathF.Abs(_selTravel) > 0.5f;
+    }
+
+    bool IsSelectionRowRealized(int index)
+    {
+        if (index < 0) return false;
+        var viewport = _listController.Viewport;
+        var scene = Context.Scene;
+        if (viewport.IsNull || !scene.IsLive(viewport)) return false;
+        if (!scene.TryGetScroll(viewport, out var scroll)) return true;
+        int prefix = Math.Clamp(scroll.PersistentPrefixCount, 0, scroll.ItemCount);
+        return index < prefix || (index >= scroll.FirstRealized && index < scroll.LastRealized);
+    }
+
+    bool TrySelectionGeometry(int index, out float x, out float y)
+    {
+        x = y = 0f;
+        var rows = Plan.Rows;
+        if ((uint)index >= (uint)rows.Count) return false;
+        var row = rows[index];
+        var section = SectionOf(row.SectionId);
+        if (section is null) return false;
+
+        int depth = row.Depth;
+        if (row.EntryIndex >= 0 && row.EntryIndex < Plan.Entries.Count
+            && section.Kind == SidebarSectionKind.PlaylistTree)
+            depth = Math.Max(0, row.Depth - Plan.Entries[row.EntryIndex].Depth);
+
+        float height = SidebarPaneMetrics.RowHeight(section);
+        y = SidebarRowGeometry.ContentYOf(index, rows.Count, RowExtentOf)
+            + MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f);
+        x = SidebarRowMetrics.IndentFor(depth);
+        return float.IsFinite(x) && float.IsFinite(y);
+    }
+
+    float RowExtentOf(int index)
+    {
+        float cross = MathF.Max(1f, ExpandedWidth.Peek() - SidebarPaneMetrics.PaneInsetH);
+        var layout = _rowLayout.CustomLayout;
+        if (layout is null) return SidebarRowMetrics.ClassicHeight;
+        float extent = layout.ItemRect(index, cross).H;
+        return float.IsFinite(extent) && extent > 0f ? extent : SidebarRowMetrics.ClassicHeight;
     }
 
     /// <summary>The plan index of the row that navigates to <paramref name="route"/>, or -1. Mirrors the slot's own
@@ -640,6 +761,7 @@ sealed class SidebarPane : Component
         for (int i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
+            if (row.Kind is not (SidebarRowKind.EntityRow or SidebarRowKind.IconRow)) continue;
             if (row.EntryIndex >= 0 && row.EntryIndex < entries.Count)
             {
                 if (string.Equals(entries[row.EntryIndex].RouteKey, route, StringComparison.Ordinal)) return i;
@@ -671,7 +793,7 @@ sealed class SidebarPane : Component
     internal Reorderable ReorderFor(string sectionId)
     {
         if (_reorder.TryGetValue(sectionId, out var ro)) return ro;
-        ro = new Reorderable(SidebarDragKinds.Entity)
+        ro = new Reorderable(WaveeDragKinds.Resource)
         {
             // MANDATORY over a recycling virtualized list: a mid-drag projection would swap content under the lifted
             // node (the window diff recycles positionally). The resting order holds; displacement is the feedback.
@@ -736,11 +858,14 @@ sealed class SidebarPane : Component
         if (row.EntryIndex >= 0 && row.EntryIndex < Plan.Entries.Count)
         {
             var e = Plan.Entries[row.EntryIndex];
-            return new SidebarDragPayload(SidebarPinId.KindOfEntry(e.Kind), e.Id, e.Uri, e.Name);
+            return WaveeResourceDragPayload.FromEntry(e, Acts?.Svc);
         }
         // A hand-placed row (a route shortcut / an unresolved entity): its Key is its identity, which is also its pin id
         // for every pinnable form.
-        return new SidebarDragPayload(SidebarPinId.KindOf(row.Key), row.Key, SidebarPinId.UriOf(row.Key), "");
+        var destination = SidebarDestination.FromRoute(row.Key, null, "");
+        return destination is { } d
+            ? WaveeResourceDragPayload.FromDestination(d, Acts?.Svc)
+            : null;
     }
 
     SidebarPaneBand BandFor(string sectionId)
@@ -786,7 +911,7 @@ sealed class SidebarPane : Component
     internal void AcceptPinDrop(object? payload, int slot)
     {
         if (Prefs is not { } prefs) return;
-        if (SidebarPaneDrag.Unwrap(payload) is not { } p || p.Id.Length == 0) return;
+        if (WaveeResourceDrag.Unwrap(payload) is not { } p || p.Id.Length == 0 || !p.TryPin(out var pinKind)) return;
 
         int at = prefs.Pins.IndexOf(p.Id);
         if (at >= 0)
@@ -796,22 +921,89 @@ sealed class SidebarPane : Component
             prefs.MovePin(at, slot > at ? slot - 1 : slot);
             return;
         }
-        PinActions.Pin(prefs, p.Id, p.Kind, p.Uri, p.Name);   // append + the toast whose action unpins
+        PinActions.Pin(prefs, p.Id, pinKind, p.Uri, p.Name);   // append + the toast whose action unpins
         int now = prefs.Pins.IndexOf(p.Id);
         if (now > slot) prefs.MovePin(now, slot);
     }
 
-    /// <summary>The drop target a PINNED row carries (§C5.1's drop-to-pin, scoped to the pinned band so dragging a
-    /// playlist row across the pane can never pin it by accident).</summary>
-    internal DropTargetSpec PinDropSpec(string sectionId, int slot) => new(
-        [SidebarDragKinds.Entity],
-        OnDrop: s =>
+    /// <summary>One resource target can be both a playlist deposit and a pinned-band insertion. Tracks/albums/playlists
+    /// route to the playlist mutation seam; pinnable resources route to the shared pin store.</summary>
+    internal DropTargetSpec ResourceDropSpec(string sectionId, int slot, string? playlistUri, string? playlistName,
+                                             WaveeResourceDragPayload? rootTarget = null,
+                                             int rootPlanIndex = -1)
+    {
+        bool Compatible(object? payload)
         {
+            var source = WaveeResourceDrag.Unwrap(payload);
+            if (source is null) return false;
+            if (rootTarget is not null && source.RootlistItem
+                && source.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder)
+                return !string.Equals(source.Id, rootTarget.Id, StringComparison.Ordinal);
+            if (playlistUri is { Length: > 0 } && source.CanCopyTracks) return true;
+            return slot >= 0 && source.CanPin;
+        }
+
+        void Hover(DragSession s) => _resourceDropRow.Value = Compatible(s.Payload) ? rootPlanIndex : -1;
+        void Leave(DragSession _) { if (_resourceDropRow.Peek() == rootPlanIndex) _resourceDropRow.Value = -1; }
+
+        void CommitDrop(DragSession s)
+        {
+            Leave(s);
+            var source = WaveeResourceDrag.Unwrap(s.Payload);
+            if (rootTarget is { } root && Acts is { } rootActs
+                && source is { RootlistItem: true,
+                    Kind: WaveeResourceKind.Playlist or WaveeResourceKind.Folder })
+            {
+                bool canDepositIntoPlaylist = root.Kind == WaveeResourceKind.Playlist
+                    && playlistUri is { Length: > 0 } && source.CanCopyTracks;
+                var placement = RootlistPlacementFor(rootPlanIndex,
+                    root.Kind == WaveeResourceKind.Folder, canDepositIntoPlaylist, s.Position);
+                // The centre of an editable playlist is an entity destination; its edge bands remain rootlist
+                // before/after targets. This preserves both "playlist into playlist" and durable organization.
+                if (placement != RootlistDropPlacement.Inside || !canDepositIntoPlaylist)
+                {
+                    WaveeResourceDrop.MoveRootlist(rootActs, s.Payload, root, placement);
+                    return;
+                }
+            }
+            if (playlistUri is { Length: > 0 } target && Acts is { } acts
+                && WaveeResourceDrop.CanDepositTracks(s.Payload))
+            {
+                WaveeResourceDrop.DepositTracks(acts, target, playlistName ?? "", s.Payload, insertionIndex: null);
+                return;
+            }
             // A SAME-LIST reorder arrives as a ReorderPayload owned by this section's Reorderable — its own gesture
             // completion commits that, so this target must ignore it (double-applying would duplicate the move).
-            if (s.Payload is ReorderPayload rp && ReferenceEquals(rp.Owner, ReorderFor(sectionId))) return;
-            AcceptForeign(sectionId, s.Payload, slot);
-        });
+            if (slot >= 0 && s.Payload is ReorderPayload rp && ReferenceEquals(rp.Owner, ReorderFor(sectionId))) return;
+            if (slot >= 0) AcceptForeign(sectionId, s.Payload, slot);
+        }
+
+        return new DropTargetSpec([WaveeDragKinds.Resource], Hover, Hover, Leave, CommitDrop)
+        {
+            CanAccept = s => Compatible(s.Payload),
+        };
+    }
+
+    internal bool IsResourceDropActive(int planIndex)
+        => planIndex >= 0 && _resourceDropRow.Value == planIndex;
+
+    RootlistDropPlacement RootlistPlacementFor(int planIndex, bool folder, bool allowInsidePlaylist, Point2 pointer)
+    {
+        if (planIndex < 0) return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
+        var viewport = _listController.Viewport;
+        var scene = Context.Scene;
+        if (viewport.IsNull || !scene.IsLive(viewport)) return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
+        var rect = scene.AbsoluteRect(viewport);
+        float contentY = pointer.Y - rect.Y + _listController.ScrollOffset;
+        float top = SidebarRowGeometry.ContentYOf(planIndex, Plan.Rows.Count, RowExtentOf);
+        float extent = MathF.Max(1f, RowExtentOf(planIndex));
+        float t = Math.Clamp((contentY - top) / extent, 0f, 1f);
+        if (!folder && !allowInsidePlaylist)
+            return t < 0.5f ? RootlistDropPlacement.Before : RootlistDropPlacement.After;
+        if (t < 0.25f) return RootlistDropPlacement.Before;
+        if (t > 0.75f) return RootlistDropPlacement.After;
+        return RootlistDropPlacement.Inside;
+    }
 
     // ── commands + navigation the rows raise ──────────────────────────────────────────────────────────────────────────
 
@@ -830,9 +1022,90 @@ sealed class SidebarPane : Component
     {
         if (Config.SetSectionCollapsed is not { } apply) return;
         _toggledSection = sectionId;
+        _toggledFolder = null;
         _toggledExpand = !collapsed;
         _toggledExtent = collapsed ? BodyExtentOf(sectionId) : 0f;
-        apply(sectionId, collapsed);
+        if (!collapsed) { apply(sectionId, false); return; }
+
+        var removed = SectionBodyIndices(sectionId);
+        if (removed.Length == 0) apply(sectionId, true);
+        else _listController.BeginRemoval(removed, () => apply(sectionId, true));
+    }
+
+    /// <summary>Activate a folder through the mode seam while keeping inline disclosure structurally animated. Narrow
+    /// drill/grid modes bypass this path via <see cref="SidebarPaneConfig.DisclosesFoldersInline"/>; Classic, Custom and
+    /// wide LibraryV3 share the same outgoing-orphan + survivor-FLIP choreography.</summary>
+    internal void ActivateFolder(string folderId, string name, int planIndex)
+    {
+        if (folderId.Length == 0 || Prefs is not { } prefs) return;
+        Action commit = Config.ActivateFolder is { } activate
+            ? () => activate(folderId, name)
+            : () => prefs.ToggleFolder(folderId);
+
+        if (!(Config.DisclosesFoldersInline?.Invoke() ?? true)) { commit(); return; }
+
+        bool expanded = prefs.IsFolderExpanded(folderId);
+        _toggledSection = null;
+        _toggledFolder = folderId;
+        _toggledExpand = !expanded;
+        if (!expanded)
+        {
+            _toggledExtent = 0f;
+            commit();
+            return;
+        }
+
+        var removed = FolderDescendantIndices(planIndex);
+        _toggledExtent = ExtentOf(removed);
+        if (removed.Length == 0) commit();
+        else _listController.BeginRemoval(removed, commit);
+    }
+
+    int[] SectionBodyIndices(string sectionId)
+    {
+        var rows = Plan.Rows;
+        int count = 0;
+        for (int i = 0; i < rows.Count; i++)
+            if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)
+                && rows[i].Kind != SidebarRowKind.SectionHeader) count++;
+        if (count == 0) return [];
+        var result = new int[count];
+        int at = 0;
+        for (int i = 0; i < rows.Count; i++)
+            if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)
+                && rows[i].Kind != SidebarRowKind.SectionHeader) result[at++] = i;
+        return result;
+    }
+
+    int[] FolderDescendantIndices(int folderIndex)
+    {
+        var rows = Plan.Rows;
+        var entries = Plan.Entries;
+        if ((uint)folderIndex >= (uint)rows.Count) return [];
+        var folder = rows[folderIndex];
+        if (folder.Kind != SidebarRowKind.FolderHeader || (uint)folder.EntryIndex >= (uint)entries.Count) return [];
+        int depth = entries[folder.EntryIndex].Depth;
+        int end = folderIndex + 1;
+        while (end < rows.Count)
+        {
+            var row = rows[end];
+            if (!string.Equals(row.SectionId, folder.SectionId, StringComparison.Ordinal)
+                || (uint)row.EntryIndex >= (uint)entries.Count
+                || entries[row.EntryIndex].Depth <= depth) break;
+            end++;
+        }
+        int count = end - folderIndex - 1;
+        if (count <= 0) return [];
+        var result = new int[count];
+        for (int i = 0; i < count; i++) result[i] = folderIndex + 1 + i;
+        return result;
+    }
+
+    float ExtentOf(IReadOnlyList<int> indices)
+    {
+        float extent = 0f;
+        for (int i = 0; i < indices.Count; i++) extent += RowExtentOf(indices[i]);
+        return extent;
     }
 
     internal void Navigate(string routeKey, string? arg) => _go(routeKey, arg);

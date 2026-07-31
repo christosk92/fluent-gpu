@@ -45,6 +45,7 @@ static class AnimSuite
     public static void Run(StringTable strings)
     {
         AnimChecks();
+        NavigationSelectionChecks();
         ExpressiveMotionChecks(strings);
         BlurPinKeyChecks(strings);
         SkeletonChecks(strings);
@@ -2573,6 +2574,46 @@ static class AnimSuite
         float settled = Grey();
         bool done = settled > 0.99f && !ia.HasActive;
         Check("58. hover cross-fade eases in linear light, then settles", eased && done, $"mid={mid:0.00} settled={settled:0.00}");
+    }
+
+    static void NavigationSelectionChecks()
+    {
+        var scene = new SceneStore();
+        var outgoing = scene.CreateNode(1);
+        var incoming = scene.CreateNode(1);
+        scene.Root = outgoing;
+        scene.Paint(outgoing).LocalTransform = Affine2D.Identity;
+        scene.Paint(incoming).LocalTransform = Affine2D.Identity;
+        var engine = new AnimEngine(scene);
+
+        const float delta = 48f;
+        NavigationSelectionMotion.StartVertical(engine, outgoing,
+            from: 0f, to: delta, indicatorHeight: 16f, outgoing: true, sameDepth: true);
+        NavigationSelectionMotion.StartVertical(engine, incoming,
+            from: -delta, to: 0f, indicatorHeight: 16f, outgoing: false, sameDepth: true);
+        engine.Tick(0f);
+        engine.Tick(NavigationSelectionMotion.DurationMs * NavigationSelectionMotion.StretchPhase);
+
+        var stretchedOut = scene.Paint(outgoing).LocalTransform;
+        var stretchedIn = scene.Paint(incoming).LocalTransform;
+        bool peak = MathF.Abs(stretchedOut.Dy) < 0.1f
+                    && MathF.Abs(stretchedIn.Dy + delta) < 0.1f
+                    && MathF.Abs(stretchedOut.M22 - 4f) < 0.05f
+                    && MathF.Abs(stretchedIn.M22 - 4f) < 0.05f
+                    && scene.Paint(outgoing).Opacity > 0.99f;
+
+        engine.Tick(NavigationSelectionMotion.DurationMs + 1f);
+        var settledOut = scene.Paint(outgoing).LocalTransform;
+        var settledIn = scene.Paint(incoming).LocalTransform;
+        bool end = MathF.Abs(settledOut.Dy - delta) < 0.1f
+                   && MathF.Abs(settledIn.Dy) < 0.1f
+                   && MathF.Abs(settledOut.M22 - 1f) < 0.01f
+                   && MathF.Abs(settledIn.M22 - 1f) < 0.01f
+                   && scene.Paint(outgoing).Opacity < 0.01f
+                   && scene.Paint(incoming).Opacity > 0.99f;
+        Check("gate.anim.navigationSelectionWorm", peak && end,
+            $"peak=({stretchedOut.Dy:0.0},{stretchedIn.Dy:0.0},{stretchedOut.M22:0.00}) " +
+            $"end=({settledOut.Dy:0.0},{settledIn.Dy:0.0},{settledIn.M22:0.00})");
     }
 
     static void NestedHoverBoundaryChecks(StringTable strings)

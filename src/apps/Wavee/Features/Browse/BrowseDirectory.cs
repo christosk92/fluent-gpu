@@ -23,7 +23,7 @@ namespace Wavee.Features.Browse;
 /// Rendered as Search's empty state: type to search, don't type and you're browsing.</summary>
 sealed class BrowseDirectory : Component
 {
-    internal sealed record Model(Action<string> OnOpenCategory, Action<string> OnOpenFeature);
+    internal sealed record Model(Action<string, string> OnOpenCategory, Action<string> OnOpenFeature);
     internal static readonly Context<Model?> Props = new(null);
 
     // Column widths chosen so a long localised title ("Cooking & Dining", "Fiction & Literature") fits without
@@ -160,7 +160,7 @@ sealed class BrowseDirectory : Component
         {
             // A client feature (Live Events) is NOT a browse page — it routes into the client's own surface.
             if (c.IsClientFeature) model.OnOpenFeature(c.Uri);
-            else model.OnOpenCategory(c.Uri);
+            else model.OnOpenCategory(c.Uri, c.Title);
         },
         Children =
         [

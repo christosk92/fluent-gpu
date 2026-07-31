@@ -437,6 +437,9 @@ public sealed partial class RenderContext
     /// <summary>Host-injected peek: true while ANY viewport is in user scroll (wheel/fling/drag) or inside the post-scroll
     /// hold window. Apps use this to defer heavy per-frame work (e.g. lyrics glow/wipe) so main-content scroll stays smooth.</summary>
     public Func<bool>? PeekMainScrollBusy;
+    /// <summary>Reconciler-injected bound-list removal seam: detach realized logical indices into the exit-orphan layer,
+    /// commit the backing mutation, then remap surviving slot indices without remounting them.</summary>
+    public Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? BeginVirtualRemoval;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal

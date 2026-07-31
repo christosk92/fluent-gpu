@@ -284,6 +284,7 @@ public sealed class DragDropContext
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if (!_scene.TryGetDropTarget(n, out var spec) || spec is null) continue;
             if (!spec.Accepts(_session.Kind)) continue;
+            if (spec.CanAccept is { } canAccept && !canAccept(_session)) continue;
             return n;
         }
         return NodeHandle.Null;

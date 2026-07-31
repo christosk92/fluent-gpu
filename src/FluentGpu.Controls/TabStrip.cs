@@ -56,6 +56,7 @@ public sealed class TabStrip : Component
     {
         _ = ItemsVersion?.Invoke();
         var items = ItemsSource?.Invoke() ?? Items;
+        var menuOverlay = UseContext(Overlay.Service);
         int count = items.Count;
 
         var internalSelected = UseSignal(0);
@@ -93,7 +94,7 @@ public sealed class TabStrip : Component
                                 (CloseButtonOverlayMode != TabViewCloseButtonOverlayMode.OnPointerOver ||
                                  isSelected || hovered == index);
             children[i + 1] = Tab(index, selected, items[index], isSelected, closeVisible,
-                () => Select(index), () => Close(index), hoveredSig);
+                () => Select(index), () => Close(index), hoveredSig, menuOverlay);
         }
 
         if (IsAddTabButtonVisible)
@@ -128,13 +129,13 @@ public sealed class TabStrip : Component
     }
 
     Element Tab(int index, int selectedIndex, TabViewItem item, bool selected, bool closeVisible,
-                Action select, Action close, Signal<int> hoveredSig)
+                Action select, Action close, Signal<int> hoveredSig, IOverlayService menuOverlay)
     {
         float tabW = Math.Clamp(TabWidth, MinTabWidth, MaxTabWidth);
-        var content = new List<Element>(3);
+        var main = new List<Element>(2);
         if (item.Icon is { Length: > 0 } icon)
         {
-            content.Add(new TextEl(icon)
+            main.Add(new TextEl(icon)
             {
                 Size = 16f,
                 FontFamily = Theme.IconFont,
@@ -154,7 +155,17 @@ public sealed class TabStrip : Component
             Shrink = 1f,
             Trim = TextTrim.CharacterEllipsis,
         };
-        content.Add(Parts.Apply(PartTabLabel, label));
+        main.Add(Parts.Apply(PartTabLabel, label));
+
+        var content = new List<Element>(2)
+        {
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Shrink = 1f, MinWidth = 0f,
+                Draggable = item.Drag,
+                Children = main.ToArray(),
+            },
+        };
 
         if (closeVisible)
         {
@@ -204,6 +215,7 @@ public sealed class TabStrip : Component
             Children = content.ToArray(),
         };
         plate = Parts.Apply(PartTabItem, plate) with { OnClick = select, Role = AutomationRole.Tab, Children = plate.Children };
+        if (item.ContextMenu is { } menu) plate = plate.WithContextMenu(menuOverlay, menu);
 
         var layers = new List<Element>(4);
         if (!selected)

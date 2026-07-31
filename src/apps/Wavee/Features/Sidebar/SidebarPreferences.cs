@@ -331,7 +331,7 @@ public sealed class SidebarPreferences
         if (!open) V3Search.SetIfChanged("");
     }
 
-    // ── the local V3 custom order (a LOCAL overlay; Spotify's rootlist is never written — decision 9) ──
+    // ── the local V3 custom order (a view overlay; explicit resource drops may also mutate the rootlist) ──
 
     /// <summary>Entry/pin ids in the user's order (Playlists filter only). Entries absent from this list sort after it in
     /// projection order and stay there stably.</summary>

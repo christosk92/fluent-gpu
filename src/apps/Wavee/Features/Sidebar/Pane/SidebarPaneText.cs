@@ -208,16 +208,3 @@ static class SidebarPaneIcon
         return Icon(Icons.MusicNote, 16f, color);
     }
 }
-
-/// <summary>The one place a dragged sidebar payload is unwrapped. A <c>Reorderable</c> wraps the app payload in a
-/// <c>ReorderPayload</c>; a plain <c>BoxEl.Draggable</c> row carries the payload directly. Both must resolve to the same
-/// <see cref="SidebarDragPayload"/> or drop-to-pin works from one surface and not the other.</summary>
-static class SidebarPaneDrag
-{
-    public static SidebarDragPayload? Unwrap(object? payload) => payload switch
-    {
-        SidebarDragPayload direct => direct,
-        ReorderPayload wrapped => wrapped.Item as SidebarDragPayload?,
-        _ => null,
-    };
-}

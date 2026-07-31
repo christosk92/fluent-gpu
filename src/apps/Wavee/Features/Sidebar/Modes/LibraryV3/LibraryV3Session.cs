@@ -176,6 +176,13 @@ sealed class LibraryV3Session
         else prefs.ToggleFolder(folderId);
     }
 
+    /// <summary>Live renderer seam: only wide list view discloses descendants in place. Grid switches view on activation;
+    /// narrow list pushes a drill level, so neither should seed an inline collapse/expand animation.</summary>
+    public bool DisclosesFoldersInline()
+        => !NarrowFolders.Peek()
+           && Prefs is { } prefs
+           && !LibraryV3Metrics.IsGrid(LibraryV3Metrics.NormalizeView(prefs.V3View.Peek()));
+
     // ── shared commands ───────────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Collapse to the 56-DIP rail. The mode ctor carries no <c>toggleCollapse</c> delegate (the landed

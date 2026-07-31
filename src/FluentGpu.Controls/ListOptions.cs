@@ -1,4 +1,5 @@
 using FluentGpu.Animation;
+using FluentGpu.Dsl;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -68,6 +69,19 @@ public sealed record EntranceOptions
     public Func<int, (float from, float delayMs)?>? ItemFadeFrom { get; init; }
 }
 
+/// <summary>Removal choreography for a bound <see cref="ItemsView"/>. The controller first detaches any realized
+/// matching slots into the engine's exit-orphan layer, then invokes the caller's data mutation exactly once. Unseen
+/// items disappear structurally without being realized just to animate.</summary>
+public sealed record RemovalOptions
+{
+    /// <summary>Presented-space terminal for each realized removed row.</summary>
+    public EnterExit Exit { get; init; } = new(Dy: -Spacing.XS, Opacity: 0f, Active: true);
+    /// <summary>Named exit recipe; defaults to the engine's standard structural exit.</summary>
+    public MotionTokenId Motion { get; init; } = MotionTokenId.StandardExit;
+    /// <summary>Optional per-row deal delay. The composing control chooses the value from its motion vocabulary.</summary>
+    public float StaggerMs { get; init; }
+}
+
 /// <summary>
 /// The consolidated options record for the <see cref="ItemsView"/> creation trio (<c>Create</c> / <c>CreateBound</c>).
 /// The ~20 named factory arguments collapse into this one record + the grouped sub-records
@@ -116,6 +130,8 @@ public record ListOptions
     public ReorderOptions? Reorder { get; init; }
     /// <summary>Entrance / cold-realize choreography (bound path).</summary>
     public EntranceOptions? Entrance { get; init; }
+    /// <summary>Removal choreography invoked through <see cref="ItemsViewController.BeginRemoval"/> (bound path).</summary>
+    public RemovalOptions? Removal { get; init; }
 
     // ── research adjustment #16 — virtualization knobs (opt-in; unset ⇒ byte-identical to the pre-knob path) ──
     /// <summary>Recycle-pool discriminator: <c>index → contentType</c>. Heterogeneous rows only recycle/rebind within

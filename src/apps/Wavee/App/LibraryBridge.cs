@@ -82,6 +82,14 @@ public sealed class LibraryBridge : IUndoTarget
         return WithFailure(_playlistEdits.AddTracksAsync(playlistUri, tracks, ct), id);
     }
 
+    /// <summary>Insert an ordered track batch at a visible playlist slot. The same activity/undo path as append is used;
+    /// the mutation source retains duplicates and chunks the transport without changing order.</summary>
+    public Task InsertTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, int toIndex, CancellationToken ct = default)
+    {
+        long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistAddTracks, playlistUri, null, PayloadFor(tracks));
+        return WithFailure(_playlistEdits.InsertTracksAsync(playlistUri, tracks, toIndex, ct), id);
+    }
+
     /// <summary>Add tracks to the user's default playlist (creating one if none) — the no-picker "Add to playlist".
     /// Returns the target (uri, name) for a confirmation toast.</summary>
     public (string Uri, string Name) AddToDefaultPlaylist(IEnumerable<Track> tracks)
@@ -184,6 +192,12 @@ public sealed class LibraryBridge : IUndoTarget
         }
         return WithFailure(_playlistEdits.MoveRowsAsync(playlistUri, rows, toIndex, ct), id);
     }
+
+    /// <summary>Move one playlist or balanced folder subtree in Spotify's rootlist. The source serializes this revisioned
+    /// write so rapid drag/drop operations cannot race the same base revision.</summary>
+    public Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
+                                      RootlistDropPlacement placement, CancellationToken ct = default)
+        => _playlistEdits.MoveRootlistItemAsync(source, target, placement, ct);
 
     public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
     {

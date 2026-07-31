@@ -189,6 +189,59 @@ public static class RootlistOps
 
     }
 
+    /// <summary>Resolve a playlist row or balanced folder marker range into one rootlist MOV. The destination is expressed
+    /// against the pre-removal marker stream, exactly like <see cref="PlaylistDiffApplier"/>.</summary>
+    public static bool TryBuildMove(IReadOnlyList<RootlistEntry> entries, RootlistItemRef source,
+                                    RootlistItemRef target, RootlistDropPlacement placement, out PlaylistOp? op)
+    {
+        op = null;
+        if (!TryRange(entries, source, out int from, out int end)
+            || !TryRange(entries, target, out int targetFrom, out int targetEnd)) return false;
+        if (from == targetFrom) return false;
+        int to = placement switch
+        {
+            RootlistDropPlacement.Before => targetFrom,
+            RootlistDropPlacement.After => targetEnd,
+            RootlistDropPlacement.Inside when target.IsFolder => Math.Max(targetFrom + 1, targetEnd - 1),
+            _ => -1,
+        };
+        if (to < 0 || (to >= from && to <= end)) return false; // includes folder-into-itself / its descendants
+        op = new PlaylistOp(PlaylistOpKind.Move, FromIndex: from, Length: end - from, ToIndex: to);
+        return true;
+    }
+
+    static bool TryRange(IReadOnlyList<RootlistEntry> entries, RootlistItemRef item, out int start, out int end)
+    {
+        start = -1; end = -1;
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var entry = entries[i];
+            bool match = item.IsFolder
+                ? entry.Kind == 1 && string.Equals(GroupId(entry.Uri), item.Key, StringComparison.Ordinal)
+                : entry.Kind == 0 && string.Equals(entry.Uri, item.Key, StringComparison.Ordinal);
+            if (!match) continue;
+            start = i;
+            if (!item.IsFolder) { end = i + 1; return true; }
+            int nesting = 0;
+            for (int j = i; j < entries.Count; j++)
+            {
+                if (entries[j].Kind == 1) nesting++;
+                else if (entries[j].Kind == 2 && --nesting == 0) { end = j + 1; return true; }
+            }
+            end = entries.Count; // malformed missing end: move the intact remaining subtree
+            return true;
+        }
+        return false;
+    }
+
+    static string GroupId(string uri)
+    {
+        const string prefix = "spotify:start-group:";
+        if (!uri.StartsWith(prefix, StringComparison.Ordinal)) return uri;
+        int name = uri.IndexOf(':', prefix.Length);
+        return name < 0 ? uri[prefix.Length..] : uri[prefix.Length..name];
+    }
+
 }
 
 

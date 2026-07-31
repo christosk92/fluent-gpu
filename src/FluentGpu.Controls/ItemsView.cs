@@ -20,6 +20,7 @@ public sealed class ItemsViewController
     internal Action<float>? ScrollByImpl;
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
+    internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
 
     /// <summary>The REALIZED virtualized viewport node (<c>Null</c> before mount and for a non-virtual host). The seam a
     /// composing control needs to write per-viewport <c>ScrollState</c> knobs that a frozen-at-mount options record cannot
@@ -52,6 +53,32 @@ public sealed class ItemsViewController
     /// The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
     /// the viewport edge (the plan's E5-L3 edge auto-scroll in virtualized lists). No-op for non-virtual hosts.</summary>
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
+
+    /// <summary>Animate currently-realized rows at the supplied logical indices out, then invoke
+    /// <paramref name="commit"/> exactly once to mutate the backing collection. Indices are sorted, de-duplicated and
+    /// negative values discarded; unseen items are never realized merely to animate. Without removal choreography the
+    /// operation degrades to an immediate commit.</summary>
+    public void BeginRemoval(IReadOnlyList<int> indices, Action commit)
+    {
+        ArgumentNullException.ThrowIfNull(indices);
+        ArgumentNullException.ThrowIfNull(commit);
+        if (indices.Count == 0) { commit(); return; }
+
+        var normalized = new int[indices.Count];
+        int count = 0;
+        for (int i = 0; i < indices.Count; i++)
+            if (indices[i] >= 0) normalized[count++] = indices[i];
+        if (count == 0) { commit(); return; }
+        Array.Sort(normalized, 0, count);
+        int unique = 1;
+        for (int i = 1; i < count; i++)
+            if (normalized[i] != normalized[unique - 1]) normalized[unique++] = normalized[i];
+        if (unique != normalized.Length) Array.Resize(ref normalized, unique);
+
+        var begin = BeginRemovalImpl;
+        if (begin is null) commit();
+        else begin(normalized, commit);
+    }
 }
 
 /// <summary>Per-item visual state handed to a custom <see cref="ItemContainerFactory"/> (the L4 skin seam).</summary>
@@ -212,6 +239,8 @@ public sealed class ItemsView : Component
     /// Opacity from the value to 1 after the per-row delay (an added-row ease-in with a stagger, without a slot remount —
     /// bound slots recycle, so mount-keyed Enter can't express this). The delay also staggers the row's translate seed.</summary>
     public Func<int, (float from, float delayMs)?>? ItemFadeFrom;
+    /// <summary>Optional bound-slot removal choreography, invoked through <see cref="ItemsViewController"/>.</summary>
+    public RemovalOptions? Removal;
 
     public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
@@ -315,6 +344,7 @@ public sealed class ItemsView : Component
             PersistentPrefixCount = o.PersistentPrefixCount,
             RepaintBoundary = o.RepaintBoundary,
             ItemCountSignal = o.CountSignal,
+            Removal = o.Removal,
         });
     }
 
@@ -362,6 +392,7 @@ public sealed class ItemsView : Component
             DraggedSlot = o.Reorder?.DraggedSlot,
             ItemFlipFrom = o.Entrance?.ItemFlipFrom,
             ItemFadeFrom = o.Entrance?.ItemFadeFrom,
+            Removal = o.Removal,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
@@ -421,6 +452,7 @@ public sealed class ItemsView : Component
             Scroll = o.Scroll,
             Reorder = o.Reorder,
             Entrance = o.Entrance,
+            Removal = o.Removal,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
@@ -955,6 +987,12 @@ public sealed class ItemsView : Component
                 if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return 0f;
                 return horizontal ? sc.OffsetX : sc.OffsetY;
             };
+            var removal = Removal;
+            var beginRemoval = Context.BeginVirtualRemoval;
+            ctl.BeginRemovalImpl = removal is null || beginRemoval is null
+                ? null
+                : (indices, commit) => beginRemoval(
+                    viewportNode.Value, indices, removal.Exit, removal.Motion, removal.StaggerMs, commit);
         }
 
         // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it.

@@ -27,7 +27,7 @@ sealed class BrowsePage : Component
 {
     internal sealed record Model(
         string PageUri,
-        Action<string> OnOpenCategory,
+        Action<string, string> OnOpenCategory,
         Action<string> OnOpenFeature,
         Action<string, string?> Go,
         Action<string> Play,
@@ -235,7 +235,7 @@ sealed class BrowsePage : Component
                 OnClick = model is null ? null : () =>
                 {
                     if (c.IsClientFeature) model.OnOpenFeature(c.Uri);
-                    else model.OnOpenCategory(c.Uri);
+                    else model.OnOpenCategory(c.Uri, c.Title);
                 },
                 Children = [new TextEl(c.Title)
                 {

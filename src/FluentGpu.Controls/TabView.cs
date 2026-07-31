@@ -30,6 +30,10 @@ public sealed record TabViewItem
     public bool IsClosable { get; init; } = true;
     /// <summary>Selected-tab content (WinUI TabViewItem.Content); invoked per render while selected.</summary>
     public Func<Element>? Content { get; init; }
+    /// <summary>Optional lazy context menu for the tab header (right-click / Menu key / touch hold).</summary>
+    public Func<ContextMenuModel?>? ContextMenu { get; init; }
+    /// <summary>Optional drag source attached to the header body only; the close button is deliberately excluded.</summary>
+    public DragSource? Drag { get; init; }
 }
 
 /// <summary>A WinUI TabView (controls\dev\TabView): a horizontal strip of tab headers atop the selected tab's content.
@@ -144,6 +148,7 @@ public sealed class TabView : Component
     public override Element Render()
     {
         var hooks = UseContext(InputHooks.Current);
+        var menuOverlay = UseContext(Overlay.Service);
         // Subscribe to the client size: a resize re-clamps Equal widths and re-evaluates overflow, WinUI's
         // MeasureOverride → UpdateTabWidths on width change (TabView.cpp:1119-1128).
         var viewportSize = UseContext(Viewport.Size);
@@ -452,10 +457,10 @@ public sealed class TabView : Component
             Action select = () => Select(tabIdx);
             Action close = () => RequestClose(tabIdx);
 
-            var kids = new List<Element>(3);
+            var main = new List<Element>(2);
             if (it.Icon is { } glyph)
             {
-                kids.Add(new TextEl(glyph)
+                main.Add(new TextEl(glyph)
                 {
                     Size = 16f,                          // TabViewItemHeaderIconSize 16 viewbox (themeresources:246; TabView.xaml:568)
                     FontFamily = Theme.IconFont,
@@ -478,8 +483,17 @@ public sealed class TabView : Component
                     Grow = 1f, Shrink = 1f,
                     Trim = TextTrim.Clip,   // width-capped tabs clip like the WinUI ContentPresenter (no TextTrimming set)
                 };
-                kids.Add(Parts.Apply(PartTabLabel, label));
+                main.Add(Parts.Apply(PartTabLabel, label));
             }
+            var kids = new List<Element>(2)
+            {
+                new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Shrink = 1f, MinWidth = 0f,
+                    Draggable = it.Drag,
+                    Children = main.ToArray(),
+                },
+            };
             if (closeVisible)
             {
                 var closeButton = new BoxEl
@@ -568,6 +582,7 @@ public sealed class TabView : Component
                 },
                 Children = kids.ToArray(),
             };
+            if (it.ContextMenu is { } menu) plate = plate.WithContextMenu(menuOverlay, menu);
             // Parts: restyle anything; the select mechanics always win.
             plate = Parts.Apply(PartTabItem, plate) with { OnClick = select, Role = AutomationRole.Tab, Children = plate.Children };
 

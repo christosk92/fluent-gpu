@@ -199,8 +199,7 @@ public static class SidebarSourceMap
 
     /// <summary>One upcoming event. Modelled exactly as <c>SidebarProjectionInput.Concerts</c> documents it: Name = the
     /// event title, Creator = the venue, SortStamp = the event's epoch-ms. <c>Kind == AppRoute</c> with the concert
-    /// DETAIL ROUTE as its id, so the row navigates through the ordinary route seam and is NOT pinnable (the pinnable
-    /// route allow-list does not contain it) — an event is not a library entity.</summary>
+    /// DETAIL ROUTE as its id, so the row navigates and pins through the ordinary durable-route seam.</summary>
     /// <param name="routeKey">The caller passes <c>ConcertRoutes.Detail(uri)</c>; the prefix is owned there, not here.</param>
     public static SidebarLibraryEntry FromEvent(string routeKey, string? title, string? venue, long whenMs,
                                                 Image? image, int order)

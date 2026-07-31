@@ -50,6 +50,10 @@ public sealed class ActionServices
     /// a test) — an ActiveRoute binding then resolves <c>WaveeActionUnavailable.NoActiveRoute</c> and renders
     /// visible-but-disabled with a reason, rather than guessing.</summary>
     public Func<string?>? CurrentRoute;
+    /// <summary>The active page as a canonical pinnable destination, including its exact route argument and offline
+    /// display cache. Tabs, page overflow and drag sources read this at invoke time so they cannot disagree about what
+    /// "this page" means. Null means the active surface is intentionally internal/non-pinnable.</summary>
+    public Func<SidebarDestination?>? CurrentDestination;
     /// <summary>The contribution registry (<see cref="WaveeExtensionRegistry"/>) — the ONE lookup path for anything BOUND
     /// (a Curated action-shortcut row, the customizer's action picker, a contributed data source). Null before the
     /// composition root builds it; bound UI then renders its rows disabled rather than throwing.</summary>

@@ -45,7 +45,7 @@ static class SidebarRailItem
 
     /// <summary>An ART tile — an entity pin or a playlist cover. <paramref name="art"/> comes from
     /// <see cref="SidebarCover"/> at <see cref="ArtEdge"/>; the 2-DIP accent border is the rail's selection cue (the
-    /// overlay pill is expanded-only).</summary>
+    /// item-owned selection pill is expanded-only).</summary>
     public static Element Art(string key, Element art, bool selected, Action? onClick, string? tooltip = null)
     {
         var tile = new BoxEl

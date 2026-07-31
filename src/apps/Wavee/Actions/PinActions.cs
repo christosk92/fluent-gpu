@@ -49,7 +49,7 @@ public static class PinActions
     // ── the ONE row a menu inserts ───────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Whichever of the pair applies to the current pinned state, or null when the target is not pinnable at
-    /// all (tracks, episodes, non-allow-listed routes — refused in ONE place by <see cref="SidebarPinId.FromUri"/>) or
+    /// all (tracks, episodes, or internal editor/tooling routes — refused in ONE place by <see cref="SidebarPinId"/>) or
     /// the pin store is absent. Callers add it guarded: <c>if (PinActions.Row(in ctx) is { } row) rows.Add(row);</c></summary>
     public static MenuFlyoutItem? Row(in ActionContext ctx)
     {
@@ -86,6 +86,10 @@ public static class PinActions
     /// (F.5.4), with the not-pinnable kinds screened out by <see cref="SidebarPinId.FromEntry"/>.</summary>
     public static MenuFlyoutItem? RowForEntry(ActionServices s, in SidebarLibraryEntry e)
         => RowForId(s, SidebarPinId.FromEntry(in e), SidebarPinId.KindOfEntry(e.Kind), e.Uri, e.Name);
+
+    /// <summary>Tab/page overload: the destination already carries the canonical route identity and display cache.</summary>
+    public static MenuFlyoutItem? RowForDestination(ActionServices s, in SidebarDestination destination)
+        => RowForId(s, destination.PinId, destination.Kind, destination.Uri, destination.Name);
 
     // ── mutations (the ONLY two, shared by every projection above) ───────────────────────────────────────────────────
 

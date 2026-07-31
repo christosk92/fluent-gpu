@@ -13,6 +13,9 @@ namespace Wavee.Backend.Playlists;
 /// <summary>Real Spotify playlist editing backed by <see cref="MutationEngine.Edit"/> and direct HTTP for cover/permission.</summary>
 public sealed class PlaylistMutationSource : IPlaylistMutationSource
 {
+    /// <summary>Spotify's public mutation contract caps one item batch at 100. The internal playlist4 wire accepts the
+    /// same ordered operation shape; retaining that cap keeps one drag/drop behavior across transports.</summary>
+    public const int MaxItemBatch = 100;
     readonly MutationEngine _mut;
     readonly ITransport _transport;
     readonly IStore? _store;
@@ -21,6 +24,7 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     readonly Func<SessionContext> _ctx;
     readonly Func<string> _spclientBaseUrl;
     readonly UserPlaylistSource _local;
+    readonly SemaphoreSlim _rootlistLane = new(1, 1);
 
     /// <summary>Set at go-live (§6): routes post-write drains through LibrarySync (same as <see cref="EngineMutationSource.ScheduleDrain"/>).</summary>
     public Func<CancellationToken, Task>? ScheduleDrain { get; set; }
@@ -66,17 +70,39 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
     public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {
         if (IsLocal(playlistUri)) { foreach (var t in tracks) _local.AddTrack(playlistUri, t); return Task.CompletedTask; }
+        return InsertTracksCoreAsync(playlistUri, tracks, toIndex: null, ct);
+    }
+
+    public Task InsertTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, int toIndex, CancellationToken ct = default)
+    {
+        if (IsLocal(playlistUri)) { _local.InsertTracks(playlistUri, tracks, toIndex); return Task.CompletedTask; }
+        if (toIndex < 0) throw new ArgumentOutOfRangeException(nameof(toIndex));
+        return InsertTracksCoreAsync(playlistUri, tracks, toIndex, ct);
+    }
+
+    Task InsertTracksCoreAsync(string playlistUri, IReadOnlyList<Track> tracks, int? toIndex, CancellationToken ct)
+    {
+        if (tracks.Count == 0) return Task.CompletedTask;
         RequireStore();
         // Membership is intentionally thin (URI + row facts). Recommended/search results are not guaranteed to have
         // passed through metadata hydration, so persist the supplied entities before the optimistic membership edit;
         // otherwise JoinMembership drops the new row and the add appears to work only for previously-cached tracks.
         for (int i = 0; i < tracks.Count; i++) _store!.UpsertTrack(tracks[i]);
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var members = new List<PlaylistMember>(tracks.Count);
         string account = _ctx().Account;
-        for (int i = 0; i < tracks.Count; i++)
-            members.Add(new PlaylistMember("", tracks[i].Uri, account, now));
-        long edit = EnqueueEdit(playlistUri, new PlaylistOp(PlaylistOpKind.Add, AddLast: true, Items: members));
+        var ops = new List<PlaylistOp>((tracks.Count + MaxItemBatch - 1) / MaxItemBatch);
+        for (int offset = 0; offset < tracks.Count; offset += MaxItemBatch)
+        {
+            int count = Math.Min(MaxItemBatch, tracks.Count - offset);
+            var members = new PlaylistMember[count];
+            for (int i = 0; i < count; i++)
+                members[i] = new PlaylistMember("", tracks[offset + i].Uri, account, now);
+            ops.Add(new PlaylistOp(PlaylistOpKind.Add,
+                FromIndex: toIndex is { } at ? at + offset : 0,
+                AddLast: toIndex is null,
+                Items: members));
+        }
+        long edit = EnqueueEdit(playlistUri, ops);
         return DrainAsync(edit, ct);
     }
 
@@ -102,6 +128,28 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         if (ops.Count == 0) return Task.CompletedTask;
         long edit = EnqueueEdit(playlistUri, ops);
         return DrainAsync(edit, ct);
+    }
+
+    public async Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
+                                            RootlistDropPlacement placement, CancellationToken ct = default)
+    {
+        RequireStore();
+        await _rootlistLane.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var store = _store!;
+            // One optimistic retry: a 409 refreshes the rootlist/revision inside TryPost, then the move is recomputed
+            // against those new marker indices. Replaying the old positional op would move the wrong subtree.
+            for (int attempt = 0; attempt < 2; attempt++)
+            {
+                if (!RootlistOps.TryBuildMove(store.Rootlist(), source, target, placement, out var move)
+                    || move is null) return;
+                if (await RootlistOps.TryPostRootlistOpsAsync(store, _transport, _spclientBaseUrl, _ctx(), [move!],
+                        source.Key, ct).ConfigureAwait(false)) return;
+            }
+            throw new InvalidOperationException("rootlist revision conflict after retry");
+        }
+        finally { _rootlistLane.Release(); }
     }
 
     /// <summary>Decomposes a (possibly non-contiguous) selection move into sequential MOV ops (one per contiguous run),

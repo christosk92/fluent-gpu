@@ -483,11 +483,12 @@ public class SidebarProjectionTests
     }
 
     [Fact]
-    public void PinId_OnlyAllowListedRoutesArePinnable()
+    public void PinId_AcceptsDurableDestinations_ButRejectsShellInternals()
     {
         Assert.Equal("home", SidebarPinId.FromRoute("home"));
         Assert.Equal("history", SidebarPinId.FromRoute("history"));
         Assert.Equal("pl:spotify:playlist:x", SidebarPinId.FromRoute("pl:spotify:playlist:x"));
+        Assert.Equal("browse:spotify:page:music", SidebarPinId.FromRoute("browse:spotify:page:music"));
         Assert.Null(SidebarPinId.FromRoute("settings"));
         Assert.Null(SidebarPinId.FromRoute("api-console"));
         Assert.Null(SidebarPinId.FromRoute(""));

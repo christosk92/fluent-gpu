@@ -83,8 +83,13 @@ sealed record SidebarPaneConfig
     /// <para>It replaces the row's click AND the expand/collapse verb in its context menu, so the two can never disagree.</para></summary>
     public Action<string, string>? ActivateFolder { get; init; }
 
-    /// <summary>Which section kinds reorder IN PLACE. Default: Pinned / StaticLinks / CustomGroup (§C5.1) — the rootlist
-    /// is never written (locked decision 9) and V3's custom order is its own local overlay.</summary>
+    /// <summary>Whether a folder activation currently expands/collapses descendants inside this pane. Null means true
+    /// (Classic and Custom). A mode with alternate navigation, such as LibraryV3's narrow drill stack, supplies a live
+    /// probe so the shared renderer animates only genuine inline structural changes.</summary>
+    public Func<bool>? DisclosesFoldersInline { get; init; }
+
+    /// <summary>Which section kinds reorder IN PLACE. Default: Pinned / StaticLinks / CustomGroup (§C5.1). PlaylistTree
+    /// uses generic resource-drop destinations unless a mode explicitly opts into a local view-order overlay.</summary>
     public Func<SidebarSectionKind, bool>? IsReorderableSection { get; init; }
 
     /// <summary>Commit a same-list reorder. Null ⇒ <see cref="SidebarPaneReorderCommit.Default"/> (Pinned through the

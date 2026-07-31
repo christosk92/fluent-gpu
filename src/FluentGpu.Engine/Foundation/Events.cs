@@ -294,6 +294,10 @@ public sealed record DropTargetSpec(
     Action<DragSession>? OnLeave = null,
     Action<DragSession>? OnDrop = null)
 {
+    /// <summary>Optional payload/session capability gate evaluated after the cheap kind match. False makes this target
+    /// transparent so discovery may continue to a compatible ancestor; it never receives Enter/Over/Drop.</summary>
+    public Func<DragSession, bool>? CanAccept { get; init; }
+
     /// <summary>Keep the L1 drop-settle glide after OnDrop (reorder targets — the commit's FLIP retarget turns it
     /// into the glide-into-the-new-slot motion). False (default) = the drop suppresses the spring-back and the
     /// source visual snaps home: the "deposited" feel of a foreign-surface drop.</summary>

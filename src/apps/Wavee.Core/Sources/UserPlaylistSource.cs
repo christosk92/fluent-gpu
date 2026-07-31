@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
@@ -7,14 +8,15 @@ namespace Wavee.Core;
 /// <summary>User-created playlists — the Mutations facet's playlist edits (docs/architecture.md §2 "Playlists, mutations
 /// &amp; folders"). An in-process catalog source owning <c>wavee:playlist:*</c> that holds the session's created
 /// playlists + their tracks (snapshots), so a created / added-to playlist appears in the sidebar list and opens through
-/// the shared detail surface; <see cref="ResolveContext"/> lets the player play it. Session-only for now (the saved-state
-/// outbox is the persisted store); item reorder + folder trees are the next increment.</summary>
+/// the shared detail surface; <see cref="ResolveContext"/> lets the player play it. Every membership gets its own stable
+/// row uid, so duplicate tracks remain independently movable.</summary>
 public sealed class UserPlaylistSource : ICatalogSource
 {
     sealed class Entry { public string Name = ""; public readonly List<Track> Tracks = new(); }
     readonly Dictionary<string, Entry> _playlists = new();
     readonly SimpleSubject<int> _changed = new(0);
     int _seq, _version;
+    long _itemSeq;
 
     public string Id => "user-playlists";
     public bool Owns(string uri) => uri.StartsWith("wavee:playlist:", System.StringComparison.Ordinal);
@@ -37,8 +39,58 @@ public sealed class UserPlaylistSource : ICatalogSource
 
     public void AddTrack(string playlistUri, Track track)
     {
-        if (_playlists.TryGetValue(playlistUri, out var e) && e.Tracks.All(t => t.Uri != track.Uri))
-        { e.Tracks.Add(track); Bump(); }
+        if (_playlists.TryGetValue(playlistUri, out var e))
+        { e.Tracks.Add(Stamp(track)); Bump(); }
+    }
+
+    public void InsertTracks(string playlistUri, IReadOnlyList<Track> tracks, int atIndex)
+    {
+        if (!_playlists.TryGetValue(playlistUri, out var e)) return;
+        int at = Math.Clamp(atIndex, 0, e.Tracks.Count);
+        for (int i = 0; i < tracks.Count; i++) e.Tracks.Insert(at + i, Stamp(tracks[i]));
+        if (tracks.Count > 0) Bump();
+    }
+
+    public void RemoveRows(string playlistUri, IReadOnlyList<PlaylistRowRef> rows)
+    {
+        if (!_playlists.TryGetValue(playlistUri, out var e) || rows.Count == 0) return;
+        var indices = ResolveRows(e.Tracks, rows);
+        for (int i = indices.Count - 1; i >= 0; i--) e.Tracks.RemoveAt(indices[i]);
+        if (indices.Count > 0) Bump();
+    }
+
+    public void MoveRows(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex)
+    {
+        if (!_playlists.TryGetValue(playlistUri, out var e) || rows.Count == 0) return;
+        var indices = ResolveRows(e.Tracks, rows);
+        if (indices.Count == 0) return;
+        var moved = new List<Track>(indices.Count);
+        for (int i = 0; i < indices.Count; i++) moved.Add(e.Tracks[indices[i]]);
+        int removedBefore = 0;
+        for (int i = 0; i < indices.Count; i++) if (indices[i] < toIndex) removedBefore++;
+        for (int i = indices.Count - 1; i >= 0; i--) e.Tracks.RemoveAt(indices[i]);
+        int at = Math.Clamp(toIndex - removedBefore, 0, e.Tracks.Count);
+        e.Tracks.InsertRange(at, moved);
+        Bump();
+    }
+
+    Track Stamp(Track track) => track with { ContextUid = "wavee-row:" + (++_itemSeq) };
+
+    static List<int> ResolveRows(IReadOnlyList<Track> tracks, IReadOnlyList<PlaylistRowRef> rows)
+    {
+        var indices = new SortedSet<int>();
+        for (int r = 0; r < rows.Count; r++)
+        {
+            var row = rows[r];
+            int found = -1;
+            if (row.ItemId.Length > 0)
+                for (int i = 0; i < tracks.Count; i++)
+                    if (string.Equals(tracks[i].ContextUid, row.ItemId, StringComparison.Ordinal)) { found = i; break; }
+            if (found < 0 && (uint)row.Index < (uint)tracks.Count
+                && string.Equals(tracks[row.Index].Uri, row.Uri, StringComparison.Ordinal)) found = row.Index;
+            if (found >= 0) indices.Add(found);
+        }
+        return new List<int>(indices);
     }
 
     /// <summary>Ensure at least one user playlist exists (for a no-picker "add to playlist") and return its uri + name.</summary>

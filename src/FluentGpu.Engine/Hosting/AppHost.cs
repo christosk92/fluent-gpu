@@ -2642,7 +2642,8 @@ public sealed class AppHost : IDisposable
             ScrollBindEval.RunObservers(_scene);              // 7 change-only scroll-geometry observers (pull-to-refresh / analytics)
             _repeat.Tick(dtMs);                                // 7 RepeatButton auto-repeat (held → re-fire click)
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
-            _dispatcher.DragDrop.Tick(dtMs);                   // 7 E5 edge auto-scroll (drag near an overflowing viewport edge)
+            // 7 E5 edge auto-scroll (drag near an overflowing viewport edge).
+            bool dragEdgeActive = _dispatcher.DragDrop.Tick(dtMs);
             _dispatcher.Drag.Tick(dtMs);                       // 7 E5 ghost: spring-lag easing + re-pin over the scrolled origin
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             long tAnim = Stopwatch.GetTimestamp();
@@ -2669,6 +2670,9 @@ public sealed class AppHost : IDisposable
                 _invalidator.RunDirty(layoutSize);
                 _scene.ClearLayoutDirty();
             }
+            // A stationary pointer emits no PointerMove while edge auto-scroll moves/recycles the rows beneath it.
+            // Re-hit after catch-up so the nearest target and its insertion slot follow the newly visible content.
+            if (dragEdgeActive) _dispatcher.RefreshDragDropAfterAutoScroll();
             long tRealizeCatchup = Stopwatch.GetTimestamp();   // 7.6 cost was invisibly charged to RecordMs — split it out
 
             // Stuck-hover fix (input-a11y.md §5.4/§15 — "hover re-resolves when content moves under a stationary pointer,

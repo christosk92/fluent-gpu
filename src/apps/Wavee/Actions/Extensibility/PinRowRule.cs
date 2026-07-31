@@ -22,7 +22,7 @@ public static class PinRowRule
 {
     /// <summary>The one rule. <paramref name="hasStore"/> false ⇒ <see cref="PinRowKind.None"/> (a host without
     /// <c>ActionServices.Sidebar</c> has no pins at all, so a row would be a lie); an unpinnable target (a track, an
-    /// episode, a non-allow-listed route — all decided upstream by <see cref="SidebarPinId"/>) ⇒
+    /// episode, or an internal editor/tooling route — all decided upstream by <see cref="SidebarPinId"/>) ⇒
     /// <see cref="PinRowKind.None"/>; otherwise the row is whichever verb applies to the CURRENT pinned state.</summary>
     public static PinRowKind Decide(bool hasStore, string? pinId, bool isPinned)
     {

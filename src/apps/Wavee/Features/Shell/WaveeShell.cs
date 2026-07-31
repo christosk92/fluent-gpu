@@ -404,6 +404,7 @@ sealed class WaveeShell : Component
         _actions.VideoOverrides = _actions.Svc?.VideoOverrides;
         _actions.Sidebar = _sidebar;   // the pin store behind Pin/Unpin to sidebar (reference-stable → never churns consumers)
         _actions.CurrentRoute ??= () => _route.Peek().Name;   // the ActiveRoute target-mode resolver (Peek: invoke-time read, not a render dep)
+        _actions.CurrentDestination ??= CurrentSidebarDestination;
         if (_actions.Extensions is null)
         {
             // The extension registry, built ONCE per shell: the first-party "wavee" actions + the nine sidebar data
@@ -819,8 +820,46 @@ sealed class WaveeShell : Component
     {
         var items = new TabViewItem[_open.Count];
         for (int i = 0; i < items.Length; i++)
-            items[i] = new TabViewItem { Header = _open[i].Label, Icon = _open[i].Glyph, IsClosable = _open.Count > 1 };
+        {
+            var tab = _open[i];
+            var destination = DestinationOf(tab);
+            items[i] = new TabViewItem
+            {
+                Header = tab.Label,
+                Icon = tab.Glyph,
+                IsClosable = _open.Count > 1,
+                ContextMenu = destination is null ? null : () => TabMenu(tab),
+                Drag = destination is { } d
+                    ? new DragSource(WaveeDragKinds.Resource,
+                        () => WaveeResourceDragPayload.FromDestination(d, _actions.Svc))
+                    : null,
+            };
+        }
         return items;
+    }
+
+    SidebarDestination? CurrentSidebarDestination()
+    {
+        var route = _route.Peek();
+        var (title, _) = string.Equals(route.Name, "search", StringComparison.Ordinal)
+            ? ShellNav.Dest("search")
+            : ShellNav.Dest(route);
+        return SidebarDestination.FromRoute(route.Name, route.Arg, title);
+    }
+
+    static SidebarDestination? DestinationOf(OpenTab tab)
+    {
+        string title = string.Equals(tab.Key, "search", StringComparison.Ordinal)
+            ? ShellNav.Dest("search").Title
+            : tab.Label;
+        return SidebarDestination.FromRoute(tab.Key, tab.Arg, title);
+    }
+
+    ContextMenuModel? TabMenu(OpenTab tab)
+    {
+        if (DestinationOf(tab) is not { } destination
+            || PinActions.RowForDestination(_actions, in destination) is not { } row) return null;
+        return new ContextMenuModel([row], new ContextMenuHeader(null, tab.Label));
     }
 
     int ActiveTabId()

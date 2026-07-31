@@ -25,16 +25,25 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
         return Task.CompletedTask;
     }
 
+    public Task InsertTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, int toIndex, CancellationToken ct = default)
+    {
+        RequireLocal(playlistUri);
+        _local.InsertTracks(playlistUri, tracks, toIndex);
+        return Task.CompletedTask;
+    }
+
     public Task RemoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, CancellationToken ct = default)
     {
         RequireLocal(playlistUri);
-        throw NotImplementedLocally("row removal", playlistUri);
+        _local.RemoveRows(playlistUri, rows);
+        return Task.CompletedTask;
     }
 
     public Task MoveRowsAsync(string playlistUri, IReadOnlyList<PlaylistRowRef> rows, int toIndex, CancellationToken ct = default)
     {
         RequireLocal(playlistUri);
-        throw NotImplementedLocally("row reordering", playlistUri);
+        _local.MoveRows(playlistUri, rows, toIndex);
+        return Task.CompletedTask;
     }
 
     public Task UpdateDetailsAsync(string playlistUri, string? name, string? description, bool? collaborative, CancellationToken ct = default)
@@ -69,6 +78,10 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
 
     public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
         => throw SpotifyOnly(playlistUri);
+
+    public Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
+                                      RootlistDropPlacement placement, CancellationToken ct = default)
+        => Task.CompletedTask;
 
     static void RequireLocal(string uri)
     {

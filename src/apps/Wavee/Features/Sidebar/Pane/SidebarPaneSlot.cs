@@ -23,10 +23,8 @@ namespace Wavee;
 // projection / pin / folder / MODE epochs (`SidebarPane.SubscribeEpoch`) and the live ROUTE, so a customizer edit, a
 // library refresh, a pin mutation, a section toggle or a navigation re-skins only the realized window — never the list.
 //
-// SELECTION lives INSIDE the row (the ONE mechanism, R3.0.2): the shared 4-state ramp from `SidebarEntityRow` plus a 3×16
-// accent indicator over the row's own 3-DIP selection gutter. Recycling makes a measured overlay pill impossible, so this
-// is the mechanism for every mode — and the indicator TRAVELS (`Indicator` → `SidebarSelectionPill`), springing in from
-// the direction the selection moved instead of cross-fading in place.
+// SELECTION lives inside the item container, matching WinUI NavigationViewItem: the shared row ramp plus a permanently
+// mounted 3×16 SelectionIndicator. The previous and next realized rows run the exact paired NavigationView timeline.
 //
 // NO HOOKS BELOW Render's prologue. Every builder is a plain method: hook order must be identical across every recycle.
 // (The animated chevrons ARE hook-owning components, but they are CHILDREN — `Embed.Comp` — and each row kind has its own
@@ -41,10 +39,6 @@ sealed class SidebarPaneSlot : Component
     Func<bool>? _headerOpen;
     Func<bool>? _folderOpen;
     Func<SidebarPillState>? _pillProbe;
-
-    /// <summary>The selection-indicator state published for this slot's current row (see <see cref="Indicator"/>). A plain
-    /// field, never a signal: the pill is a frozen child that reads it at ITS render time (the <c>SidebarPane.Plan</c>
-    /// precedent), and a signal write from Render would be a backwards write.</summary>
     SidebarPillState _pillState;
 
     public SidebarPaneSlot(SidebarPane owner, RowScope scope) { _o = owner; _scope = scope; }
@@ -271,9 +265,18 @@ sealed class SidebarPaneSlot : Component
 
         // A Reorderable installs its OWN drag source and position track; a second one is a documented stomp. A TRACK is
         // never a pin drag source at all (locked decision 4 is enforced by the KIND, not per surface).
-        SidebarDragPayload? drag = null;
+        bool rootlistItem = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
+        WaveeResourceDragPayload? resource = rootlistItem
+            ? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem: true)
+            : null;
+        WaveeResourceDragPayload? drag = null;
         if (!reordering && !track)
-            drag = new SidebarDragPayload(SidebarPinId.KindOfEntry(snapshot.Kind), snapshot.Id, snapshot.Uri, snapshot.Name);
+            drag = resource ?? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc);
+        DropTargetSpec? drop = (snapshot.Kind == SidebarEntryKind.Playlist && snapshot.CanEdit) || resource is not null
+            ? _o.ResourceDropSpec(row.SectionId, PinSlot(row.SectionId, index),
+                snapshot.Kind == SidebarEntryKind.Playlist && snapshot.CanEdit ? snapshot.Uri : null,
+                snapshot.Name, resource, index)
+            : PinSpec(section, row.SectionId, index);
 
         var spec = new SidebarRowSpec
         {
@@ -301,13 +304,13 @@ sealed class SidebarPaneSlot : Component
             MenuOverlay = _o.MenuOverlay,
             Menu = menu,
             Drag = drag,
+            DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
+            DropTarget = drop,
         };
         Element built = SidebarEntityRow.Create(spec);
         if (track) built = SidebarEntityRow.WithPlayTrackHint(built);
-        // Tree depth is expressed by connector cells inside the row; keep the selection rail on the section's base
-        // gutter so it never collides with an elbow and selected descendants form one clean vertical lane.
-        built = Indicator(built, selected, baseDepth, height, route);
-        return PinTarget(section, built, index);
+        // Tree connectors own their depth lanes; the selection indicator stays in the row's base gutter.
+        return Indicator(built, selected, baseDepth, height, route);
     }
 
     /// <summary>A rootlist FOLDER: the entity-row geometry with a disclosure chevron and the folder mark. A folder never
@@ -329,14 +332,18 @@ sealed class SidebarPaneSlot : Component
         _ = sel;   // a folder is never the selected ROUTE (it has none)
 
         // Explicit locals, never a ternary against null: a lambda has no natural type in that position.
-        Action activate;
-        var reroute = _o.Config.ActivateFolder;
-        if (reroute is not null) activate = () => reroute(folderId, snapshot.Name);
-        else activate = () => _o.Prefs?.ToggleFolder(folderId);
+        Action activate = () => _o.ActivateFolder(folderId, snapshot.Name, index);
 
         Func<ContextMenuModel?>? menu = null;
         if (_o.Acts is { } acts)
             menu = () => Menus.SidebarEntry(acts, in snapshot, activate, expanded);
+
+        bool reordering = _o.TryBandOf(index, out _);
+        bool rootlistItem = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
+        var resource = WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem);
+        DropTargetSpec? drop = rootlistItem
+            ? _o.ResourceDropSpec(row.SectionId, -1, null, null, resource, index)
+            : PinSpec(section, row.SectionId, index);
 
         var spec = new SidebarRowSpec
         {
@@ -363,8 +370,11 @@ sealed class SidebarPaneSlot : Component
             Overflow = _o.Acts is not null && _o.MenuOverlay is not null,
             MenuOverlay = _o.MenuOverlay,
             Menu = menu,
+            Drag = reordering ? null : resource,
+            DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
+            DropTarget = drop,
         };
-        return SidebarEntityRow.Create(spec);
+        return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key);
     }
 
     /// <summary>Which connector columns continue below a realized tree row. The plan is preorder, so the first later
@@ -408,11 +418,15 @@ sealed class SidebarPaneSlot : Component
         string key = item.Key;
         string title = item.LabelOverride is { Length: > 0 } alias ? alias : dest.Title;
 
-        // A route row is a pin drag source only when the route is actually pinnable (the closed allow-list in
-        // SidebarPinId) and only when a Reorderable is not already the drag owner.
-        SidebarDragPayload? drag = null;
+        // A route row is a pin drag source when it is a durable application destination and a Reorderable is not
+        // already the drag owner. SidebarPinId centrally excludes editor/tooling routes.
+        WaveeResourceDragPayload? drag = null;
         if (!_o.TryBandOf(index, out _) && SidebarPinId.FromRoute(key) is not null)
-            drag = new SidebarDragPayload(SidebarPinKind.Route, key, SidebarPinId.UriOf(key), title);
+        {
+            var destination = SidebarDestination.FromRoute(key, null, title);
+            if (destination is { } d) drag = WaveeResourceDragPayload.FromDestination(d, _o.Acts?.Svc);
+        }
+        var drop = PinSpec(section, section.Id, index);
 
         var spec = new SidebarRowSpec
         {
@@ -429,8 +443,10 @@ sealed class SidebarPaneSlot : Component
             MenuOverlay = _o.MenuOverlay,
             Menu = RouteMenu(item),
             Drag = drag,
+            DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
+            DropTarget = drop,
         };
-        return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key);
+        return SidebarEntityRow.Create(spec);
     }
 
     Func<ContextMenuModel?>? RouteMenu(SidebarItemSpec item)
@@ -975,18 +991,11 @@ sealed class SidebarPaneSlot : Component
         return SidebarCounts.Badge(count);
     }
 
-    /// <summary>The per-row selection indicator — THE ONE selection mechanism for every mode (R3.0.2), and the one that
-    /// MOVES: <see cref="SidebarSelectionPill"/> springs the arriving pill in from the side the selection travelled from
-    /// while the departing row springs its own out the other way, so the pair reads as one pill crossing the rows.
-    ///
-    /// <para>It has to be a child COMPONENT: an animation must be SEEDED (a declared <c>Transition</c> does not animate a
-    /// static value change — that is exactly why the previous cross-fade hard-cut), and seeding needs a node handle plus a
-    /// layout effect, which a recycling row slot cannot grow per row kind. Props freeze at mount, so the pill re-reads its
-    /// state through <see cref="PillState"/>; this method publishes that state as a plain field, so the route, indent and
-    /// height are resolved exactly ONCE — here, by the row builder that already knows them.</para></summary>
+    /// <summary>Attach the item-owned SelectionIndicator. Keeping it shape-stable is load-bearing for recycling: a slot
+    /// never inherits an animated transform from the route it represented one window earlier.</summary>
     Element Indicator(Element row, bool selected, int depth, float height, string? route)
     {
-        if (height <= 0f || float.IsNaN(height)) height = SidebarRowMetrics.ClassicHeight;
+        if (!float.IsFinite(height) || height <= 0f) height = SidebarRowMetrics.ClassicHeight;
         _pillState = new SidebarPillState(
             Route: route,
             Selected: selected,
@@ -994,43 +1003,46 @@ sealed class SidebarPaneSlot : Component
             Direction: _o.SelDirection,
             Epoch: _o.SelEpoch,
             Indent: SidebarRowMetrics.IndentFor(depth),
-            Top: MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f));
+            Top: MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f),
+            Travel: _o.SelTravel,
+            SameDepth: _o.SelSameDepth,
+            CanAnimate: _o.SelCanAnimate);
         return ZStack(row, Embed.Comp(() => new SidebarSelectionPill(_pillProbe ??= PillState)));
     }
 
-    /// <summary>The pill's state channel. Its three signal reads are the pill's ENTIRE subscription: the slot index (a
-    /// recycle re-skins it), the live route (a navigation moves it) and the row epochs (a re-plan can move the row under
-    /// it).
-    ///
-    /// <para>The row's GEOMETRY comes from the field <see cref="Indicator"/> published during this slot's render; the
-    /// SELECTION facts are re-derived here from the row's route. Both slot and pill subscribe the same route signal, and
-    /// the pill is only guaranteed to render after its parent when the parent's own render produced it — so re-deriving
-    /// is what makes the cue correct no matter which computation the runtime flushes first.</para></summary>
     SidebarPillState PillState()
     {
         _ = _scope.Index.Value;
         _ = _o.SubscribeEpoch();
-        string sel = _o.SelectedRoute;
-        var st = _pillState;
-        bool selected = st.Route is { Length: > 0 } && string.Equals(st.Route, sel, StringComparison.Ordinal);
-        return st with
+        string selectedRoute = _o.SelectedRoute;
+        var state = _pillState;
+        bool selected = state.Route is { Length: > 0 }
+            && string.Equals(state.Route, selectedRoute, StringComparison.Ordinal);
+        return state with
         {
             Selected = selected,
-            Departing = !selected && _o.WasDeparting(st.Route),
+            Departing = !selected && _o.WasDeparting(state.Route),
             Direction = _o.SelDirection,
             Epoch = _o.SelEpoch,
+            Travel = _o.SelTravel,
+            SameDepth = _o.SelSameDepth,
+            CanAnimate = _o.SelCanAnimate,
         };
     }
 
     /// <summary>A PINNED row is also a drop target, so dragging a playlist/album/artist onto the pinned band pins it AT
     /// that position. Deliberately scoped to the band (never the whole pane): a pane-wide accept would pin an entity the
     /// moment a row was nudged, which is the accidental-pin hazard Classic avoided by scoping too.</summary>
-    Element PinTarget(SidebarSectionSpec section, Element row, int index)
+    DropTargetSpec? PinSpec(SidebarSectionSpec section, string sectionId, int index)
     {
-        if (section.Kind != SidebarSectionKind.Pinned || row is not BoxEl box) return row;
-        if (!_o.TryBandOf(index, out var band)) return row;
-        return box with { DropTarget = _o.PinDropSpec(section.Id, index - band.Start) };
+        if (section.Kind != SidebarSectionKind.Pinned) return null;
+        int slot = PinSlot(sectionId, index);
+        return slot >= 0 ? _o.ResourceDropSpec(sectionId, slot, null, null, rootPlanIndex: index) : null;
     }
+
+    int PinSlot(string sectionId, int index)
+        => _o.TryBandOf(index, out var band) && string.Equals(band.SectionId, sectionId, StringComparison.Ordinal)
+            ? index - band.Start : -1;
 
     /// <summary>Is THIS row's entity the one playing? Gated on the coarse <c>HasActiveContext</c> bool first, so an idle
     /// app never joins the hot <c>Identity</c> fan-out (the MediaCard rule).</summary>

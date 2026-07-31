@@ -513,6 +513,7 @@ public sealed class TreeReconciler
         ctx.Scene = _scene;
         ctx.ArmScroll = ArmScroll;
         ctx.PeekMainScrollBusy = PeekMainScrollBusy;
+        ctx.BeginVirtualRemoval = BeginVirtualRemoval;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -3009,15 +3010,12 @@ public sealed class TreeReconciler
         for (var p = _scene.Parent(node); !p.IsNull; p = _scene.Parent(p))
             if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
 
-        if (hadTrailing && (!willOwnTrailing || scroller.IsNull))
-        {
-            ref NodePaint p = ref _scene.Paint(node);
-            p.PresentedH = float.NaN;
-            p.ChildShiftY = 0f;
-            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
-        }
         table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
-        if (dsls is null || dsls.Length == 0) return;
+        if (dsls is null || dsls.Length == 0 || scroller.IsNull)
+        {
+            if (hadTrailing) ResetTrailingScrollSink(node);
+            return;
+        }
 
         foreach (var d in dsls)
         {
@@ -3074,6 +3072,164 @@ public sealed class TreeReconciler
             }
             table.Add(nodeIdx, scroller, row);
         }
+
+        if (hadTrailing && (!willOwnTrailing || !table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing)))
+            ResetTrailingScrollSink(node);
+    }
+
+    /// <summary>Detach realized bound slots into the exit-orphan layer before their backing items disappear, then remap
+    /// every retained survivor to its post-removal logical index. The mutation callback is invoked exactly once and is
+    /// deliberately scheduled before survivor signal writes, so the owning plan/count computation queues ahead of the
+    /// recycled row computations.</summary>
+    private void BeginVirtualRemoval(NodeHandle viewport, IReadOnlyList<int> removed, EnterExit exit,
+                                     MotionTokenId motion, float staggerMs, Action commit)
+    {
+        if (removed.Count == 0 || viewport.IsNull || !_scene.IsLive(viewport)
+            || !_virtuals.TryGetValue(viewport, out var entry) || entry.El?.RowBind is null)
+        {
+            commit();
+            return;
+        }
+
+        var ve = entry.El!;
+        var anim = Anim;
+        var motionDef = MotionTok.Get(motion);
+        bool animate = exit.Active && anim is not null;
+
+        void Retire(in BoundSlot slot)
+        {
+            int index = slot.Index.Peek();
+            ve.OnItemClearing?.Invoke(index);
+            var root = slot.Root;
+            if (root.IsNull || !_scene.IsLive(root)) return;
+            UnmountSubtree(root);
+            if (animate)
+            {
+                anim!.CancelAll(root);
+                _scene.Orphan(root);
+                anim!.SeedExit(root, exit, in motionDef, MathF.Max(0f, staggerMs) * RemovedRank(index, removed));
+            }
+            else _scene.FreeSubtree(root);
+            _reconciled = true;
+        }
+
+        static void DetachRemoved(List<BoundSlot>? slots, IReadOnlyList<int> indices, ActionRef<BoundSlot> retire)
+        {
+            if (slots is null) return;
+            for (int i = slots.Count - 1; i >= 0; i--)
+            {
+                var slot = slots[i];
+                if (!ContainsRemoved(slot.Index.Peek(), indices)) continue;
+                retire(in slot);
+                slots.RemoveAt(i);
+            }
+        }
+
+        DetachRemoved(entry.Slots, removed, Retire);
+        DetachRemoved(entry.PrefixSlots, removed, Retire);
+
+        commit();
+
+        // Parked keep-alive rows are invisible, so they hard-retire instead of materializing a global exit ghost.
+        if (entry.Kept is { Count: > 0 } kept)
+        {
+            var snapshot = new KeyValuePair<int, KeptSlot>[kept.Count];
+            int n = 0;
+            foreach (var pair in kept) snapshot[n++] = pair;
+            kept.Clear();
+            for (int i = 0; i < n; i++)
+            {
+                var pair = snapshot[i];
+                if (ContainsRemoved(pair.Key, removed))
+                {
+                    ve.OnItemClearing?.Invoke(pair.Key);
+                    if (_scene.IsLive(pair.Value.Root))
+                    {
+                        UnmountSubtree(pair.Value.Root);
+                        _scene.FreeSubtree(pair.Value.Root);
+                    }
+                    continue;
+                }
+                int mapped = pair.Key - CountBefore(pair.Key, removed);
+                pair.Value.Index.Value = mapped;
+                if (mapped != pair.Key) ve.OnItemIndexChanged?.Invoke(pair.Key, mapped);
+                kept[mapped] = pair.Value;
+            }
+        }
+
+        RemapSurvivors(entry.PrefixSlots, removed, ve);
+        RemapSurvivors(entry.Slots, removed, ve);
+        entry.PrevFirst = Math.Max(0, entry.PrevFirst - CountBefore(entry.PrevFirst, removed));
+        entry.PrevLen = entry.Slots?.Count ?? 0;
+
+        if (_scene.TryGetScroll(viewport, out var current))
+        {
+            ref ScrollState scroll = ref _scene.ScrollRef(viewport);
+            scroll.FirstRealized = entry.PrevFirst;
+            scroll.LastRealized = entry.PrevFirst + entry.PrevLen;
+            if (!current.ContentNode.IsNull && _scene.IsLive(current.ContentNode))
+                _scene.Mark(current.ContentNode, NodeFlags.LayoutDirty);
+        }
+        _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
+        _realizeProgress = true;
+    }
+
+    private delegate void ActionRef<T>(in T value);
+
+    private static void RemapSurvivors(List<BoundSlot>? slots, IReadOnlyList<int> removed, VirtualListEl ve)
+    {
+        if (slots is null) return;
+        for (int i = 0; i < slots.Count; i++)
+        {
+            var slot = slots[i];
+            int old = slot.Index.Peek();
+            int mapped = old - CountBefore(old, removed);
+            if (mapped == old) continue;
+            slot.Index.Value = mapped;
+            ve.OnItemIndexChanged?.Invoke(old, mapped);
+        }
+    }
+
+    private static bool ContainsRemoved(int index, IReadOnlyList<int> removed)
+    {
+        int lo = 0, hi = removed.Count - 1;
+        while (lo <= hi)
+        {
+            int mid = lo + ((hi - lo) >> 1), value = removed[mid];
+            if (value == index) return true;
+            if (value < index) lo = mid + 1; else hi = mid - 1;
+        }
+        return false;
+    }
+
+    private static int CountBefore(int index, IReadOnlyList<int> removed)
+    {
+        int lo = 0, hi = removed.Count;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo) >> 1);
+            if (removed[mid] < index) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    private static int RemovedRank(int index, IReadOnlyList<int> removed)
+    {
+        int lo = 0, hi = removed.Count;
+        while (lo < hi)
+        {
+            int mid = lo + ((hi - lo) >> 1);
+            if (removed[mid] < index) lo = mid + 1; else hi = mid;
+        }
+        return lo;
+    }
+
+    private void ResetTrailingScrollSink(NodeHandle node)
+    {
+        ref NodePaint p = ref _scene.Paint(node);
+        p.PresentedH = float.NaN;
+        p.ChildShiftY = 0f;
+        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
     private static bool OwnsScrollSink(ScrollBindDsl[]? dsls, FluentGpu.Animation.BindSink sink)

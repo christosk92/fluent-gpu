@@ -49,6 +49,18 @@ public sealed partial class AnimEngine
         if (channel == AnimChannel.BlurSigma) RefreshBlurAnimationActive(node);
     }
 
+    /// <summary>Token-policy-aware one-shot keyframes for control primitives whose timeline cannot be represented by a
+    /// two-point motion token. Reduced motion is resolved inside the scheduler: transform channels snap to the terminal
+    /// keyframe while a <see cref="ReducedMotionPolicy.KeepFade"/> opacity track may still run.</summary>
+    public void KeyframesMotion(NodeHandle node, AnimChannel channel, Keyframe[] keys, float durationMs,
+                                ReducedMotionPolicy reduced = ReducedMotionPolicy.SnapEnd,
+                                CompositeOp composite = CompositeOp.Replace, float delayMs = 0f)
+    {
+        float terminal = keys.Length > 0 ? keys[^1].Value : 0f;
+        if (ReducedSnap(channel, reduced)) { SnapTo(node, channel, terminal); return; }
+        Keyframes(node, channel, keys, durationMs, composite: composite, delayMs: delayMs);
+    }
+
     /// <summary>Scroll/value-driven track: progress = clamp01((source − domainMin)/(domainMax − domainMin)), source
     /// sampled from the DrivenClock <paramref name="drivenRef"/>; value = Sample(keys, progress).</summary>
     public void Drive(NodeHandle node, AnimChannel channel, Keyframe[] keys, int drivenRef, float domainMin, float domainMax,

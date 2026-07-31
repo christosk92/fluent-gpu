@@ -12,7 +12,7 @@ namespace Wavee;
 // exactly one ladder and a test can now pin Classic's document and a Curated template to the same number.
 //
 // It also owns the two PURE geometry primitives the pane needs over a planned row list: the cumulative content-space Y of
-// a row (the analytic offset a selection overlay / bring-into-view would position against) and the selection TRAVEL
+// a row (the analytic offset drop placement / bring-into-view uses) and the selection TRAVEL
 // DIRECTION between two plan indices, which is what makes the row's selection indicator move *toward* the new selection
 // instead of cross-fading in place.
 static class SidebarRowGeometry
@@ -49,8 +49,8 @@ static class SidebarRowGeometry
 
     /// <summary>The CONTENT-SPACE top of plan row <paramref name="index"/>: the sum of every earlier row's extent. The
     /// pane's rows are contiguous inside one virtualized list (no inter-row spacing), so this prefix sum IS the row's Y —
-    /// which is what lets a selection overlay be positioned analytically instead of measured (a measured position cannot
-    /// survive recycling). Returns 0 for a negative index and clamps an index past the end to the total extent.
+    /// which is what lets drop placement and navigation geometry survive recycling. Returns 0 for a negative index and
+    /// clamps an index past the end to the total extent.
     /// <para><paramref name="extentOf"/> must report the row's MEASURED height including any rhythm padding the slot
     /// wraps around it, or the result drifts from the rendered layout row by row.</para></summary>
     public static float ContentYOf(int index, int count, Func<int, float> extentOf)

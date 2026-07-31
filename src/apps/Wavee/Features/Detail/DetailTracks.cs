@@ -123,6 +123,7 @@ sealed class TrackList : Component
     // jump-then-snap-back flash): a removed row simply vanishes while the rows below FLIP-glide up to reclaim the space;
     // an added row's neighbors part (FLIP down) and the row itself fades in at its slot. No overlays, no remounts.
     readonly ItemsViewController _listCtl = new();             // scroll anchoring (ScrollOffset/ScrollBy)
+    readonly PlaylistDropLane _playlistDrop;
     readonly Signal<int> _dispVer = new(0);                    // bump → the ItemsView displacement seed re-runs (FLIP/fade)
     readonly Signal<int> _videoDropRow = new(-1);              // slot index a compatible .mp4 file drag is hovering (-1 = none)
     int _resetEpoch;                                          // render-local identity epoch: curated re-cut → keyed remount + fresh scroll state
@@ -233,6 +234,7 @@ sealed class TrackList : Component
         _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeroImmersive = verticalHeroImmersive;
+        _playlistDrop = new PlaylistDropLane(_listCtl);
     }
 
     int TrackStart => _verticalHeader && !_cfg.HasTrailing ? VerticalTrackStart : 0;
@@ -811,6 +813,17 @@ sealed class TrackList : Component
         // playlists, singles and liked songs one shared per-visible-row blur-rise while leaving cold realization and
         // recycling untouched; newly realized overscan/scroll rows do not replay the navigation reveal.
         Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
+        if (model.ContextUri is { Length: > 0 } dropUri && model.Capabilities.CanEditItems
+            && _acts is { } dropActs && _lib is not null)
+        {
+            float leading = _verticalHeader && !_cfg.HasTrailing
+                ? verticalHeroH + DetailVerticalLayout.ChromeExtent(verticalHasContentFilter ? ContentFilterChips.VerticalExtent : 0f)
+                : 0f;
+            _playlistDrop.Configure(Context.Scene, visible, rowH, leading,
+                (payload, displaySlot) => WaveeResourceDrop.DepositTracks(
+                    dropActs, dropUri, model.Title, payload, OriginalInsertionIndex(displaySlot)));
+            list = _playlistDrop.Wrap(list);
+        }
 
         // Key the list by density + filter → either REMOUNTS it (a clean slot template with the right row height /
         // filtered window). Sort is NOT in the key — each bound row re-skins itself to the new order via its
@@ -896,6 +909,51 @@ sealed class TrackList : Component
     Track? DisplayTrack(int itemIndex, int trackStart)
     {
         return _rowItems is { } items && items.TryPeek(itemIndex, out var track, trackStart) ? track : null;
+    }
+
+    int OriginalInsertionIndex(int displaySlot)
+    {
+        var view = View();
+        if (displaySlot <= 0) return view.Length > 0 ? view[0] : 0;
+        if (displaySlot >= view.Length) return _tracks.Count;
+        return view[displaySlot];
+    }
+
+    WaveeResourceDragPayload? TrackDragPayload(int itemIndex, int trackStart)
+    {
+        if (DisplayTrack(itemIndex, trackStart) is not { Uri.Length: > 0 } dragged
+            || _rowsSnapshot is not { } sourceSnapshot) return null;
+        bool carrySelection = _selection.IsSelected(itemIndex);
+        var snapshot = sourceSnapshot.Peek();
+        var view = View(snapshot);
+        var tracks = snapshot.Model.Tracks;
+        var selectedTracks = new List<Track>();
+        var sourceRows = new List<PlaylistRowRef>();
+
+        void Add(int listIndex)
+        {
+            int display = listIndex - trackStart;
+            if ((uint)display >= (uint)view.Length) return;
+            int original = view[display];
+            if ((uint)original >= (uint)tracks.Count) return;
+            var track = tracks[original];
+            selectedTracks.Add(track);
+            sourceRows.Add(new PlaylistRowRef(original, track.Uri, track.ContextUid ?? string.Empty));
+        }
+
+        if (carrySelection)
+        {
+            for (int i = 0; i < _selection.ItemCount; i++)
+                if (_selection.IsSelected(i)) Add(i);
+        }
+        else Add(itemIndex);
+
+        if (selectedTracks.Count == 0) return null;
+        string? source = snapshot.Model.ContextUri is { Length: > 0 } uri && snapshot.Model.Capabilities.CanEditItems
+            ? uri : null;
+        string name = selectedTracks.Count == 1 ? dragged.Title : Strings.Sidebar.SongCount(selectedTracks.Count);
+        return new WaveeResourceDragPayload(WaveeResourceKind.Track, dragged.Uri, dragged.Uri, name,
+            selectedTracks, source, source is null ? null : sourceRows);
     }
 
     // The hosting-playlist descriptor for the context menu / batch bar: only when this context is an editable playlist.
@@ -2676,6 +2734,7 @@ sealed class TrackList : Component
             PressedFill = plainRows ? WaveeColors.RowPressed
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed),
             PressScale = 0.985f,   // subtle push-down on press (a depth cue so the row isn't flat)
+            Draggable = new DragSource(WaveeDragKinds.Resource, () => TrackDragPayload(index.Peek(), trackStart)),
 
             BorderWidth = plainRows ? 0f : 1f,
             // WinUI even rows: CardStroke at rest. BorderColor is Prop<ColorF> — bind to the zebra index.
