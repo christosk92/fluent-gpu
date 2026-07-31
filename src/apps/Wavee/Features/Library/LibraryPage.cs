@@ -718,7 +718,7 @@ sealed class LibraryPage : Component
     Element NavCardContent(NavItem it, bool compact)
     {
         float pad = it.Circular ? 16f : Spacing.S;
-        var children = new List<Element>(2) { Surfaces.ArtworkFill(it.Cover, it.Circular ? 9999f : 6f) };
+        var children = new List<Element>(2) { Surfaces.ArtworkFill(it.Cover, it.Circular ? Radii.Full : 6f) };
         if (!compact) children.Add(new TextEl(it.Title) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, AlignSelf = it.Circular ? FlexAlign.Center : FlexAlign.Start });
         return new BoxEl { Direction = 1, Gap = Spacing.S, ClipToBounds = true, Padding = new Edges4(pad, pad, pad, pad), Children = children.ToArray() };
     }

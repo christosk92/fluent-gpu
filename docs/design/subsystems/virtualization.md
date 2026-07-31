@@ -521,6 +521,21 @@ treats it identically. `GroupHeaderTypeId != 0` forces `MeasureItems=true` (head
   track id is stable across a sort change) so the viewport stays near the same content.
 - It **re-seeds `ContentSize`** from the new flat count.
 
+### 7.1 In-page uniform grids: control-level band projection
+
+`LazyGrid` may project app-supplied bands into one monotone control-local unit space: each band contributes an
+optional fixed-height header unit followed by its uniform card rows. This remains consistent with “the virtualizer
+does not group”: the app owns band boundaries and labels, while the control owns only prefix sums, global-index ↔
+band-row mapping, exact spacer extent, and anchor preservation when the band plan changes. One collection facet uses
+one `LazyGrid`; composing one grid/virtualizer per band is forbidden because each instance would independently observe
+the same page scroller, reserve an estimated extent, and compete to preserve its anchor.
+
+These in-page band headers are deliberately **not sticky**. `LazyGrid` realizes only the current row window, and the
+existing `PinTop` parent clamp cannot express “push this header out at the next unrealized header” without nesting
+competing clip/transform policies. True sticky section headers remain the `LazySection` seam: phase-7
+`NodeFlags.StickyPinned` behavior described below applies when that engine primitive owns the full flattened section
+projection.
+
 **Sticky group headers** are a **phase-7 transform write**, not a layout change and not a special clip:
 
 ```

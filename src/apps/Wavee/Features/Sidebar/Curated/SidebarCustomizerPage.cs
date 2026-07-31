@@ -22,9 +22,9 @@ namespace Wavee;
 //
 // REGIONS (visual-remediation ladder; the rule itself is the pure, unit-tested
 // SidebarCustomizerLayout.Tier):
-//   ≥ 1480 DIP  Palette (232) + Outline (elastic) + Inspector (320) + persistent Preview (360)
-//   1180–1479   Palette + Outline + Inspector
-//   820–1179    Outline + Inspector; Palette and Templates move to command overflow
+//   ≥ 1320 DIP  Palette (232) + Outline (elastic) + Inspector (320) + persistent Preview (360)
+//   1000–1319   Palette + Outline + Inspector
+//   820–999     Outline + Inspector; Palette and Templates move to command overflow
 //   < 820       Outline only; the Inspector is a bottom sheet opened by selecting a section
 //
 // The Inspector is two tabs — Properties and Preview — and the Preview renders the REAL CuratedSidebar in Expanded /
@@ -93,9 +93,10 @@ sealed class SidebarCustomizerPage : Component
     internal IOverlayService? OverlaySvc;
     internal LibraryStore? Store;
     internal Action<string, string?>? Go;
+    internal Action? Back;
 
-    /// <summary>The persisted VISIT LOG. Read only by <see cref="GoBack"/>: it is the closest thing to a back stack a page
-    /// can reach (see the note there).</summary>
+    /// <summary>The persisted visit log used only as a deterministic fallback when this page is mounted outside the shell
+    /// and therefore has no <see cref="HistoryStore.BackCtx"/> provider.</summary>
     internal HistoryStore? History;
 
     /// <summary>The live tier, published as a plain field for the sub-components that shape themselves by it (they render
@@ -121,6 +122,7 @@ sealed class SidebarCustomizerPage : Component
         Store = UseContext(LibraryStore.Slot);
         Registry = UseContext(WaveeExtensionRegistry.Slot) ?? Acts?.Extensions;
         Go = UseContext(HistoryStore.NavCtx);
+        Back = UseContext(HistoryStore.BackCtx);
         History = UseContext(HistoryStore.Slot);
 
         var widthSig = UseMeasuredWidth(4f);
@@ -319,12 +321,8 @@ sealed class SidebarCustomizerPage : Component
     /// <summary>Width the back affordance takes out of the command budget.</summary>
     const float BackReserve = 32f + Spacing.S;
 
-    /// <summary>The prototype's back arrow. <b>HONEST DEVIATION:</b> the shell's real back stack
-    /// (<c>WaveeShell.Back</c>) is a private instance method and is NOT provided through any context — the only nav seam a
-    /// page gets is the forward-only <c>HistoryStore.NavCtx</c> (see the HANDOFF). So this re-navigates to the most recent
-    /// visit that is not the customizer itself, read off the persisted <c>HistoryStore</c> visit log. That lands the user
-    /// where they came from, which is the intent; it costs one extra forward step in the shell's own back stack, which
-    /// wiring <c>Ctx.Provide(… Back …)</c> in <c>WaveeShell</c> would fix.</summary>
+    /// <summary>The customizer's back arrow invokes the shell's real browser-style Back callback. A standalone/headless
+    /// mount falls back to the newest non-customizer visit without changing production navigation history.</summary>
     /// <remarks>The extra wrapper box is LOAD-BEARING (round-3 defect 3): <c>ToolTip</c>'s own root declares
     /// <c>AlignSelf = FlexAlign.Start</c> (ToolTip.cs:352-354), which OPTS OUT of the header row's
     /// <c>AlignItems = Center</c> and pinned the arrow to the TOP of the 64-DIP header while the two-line title lane stayed
@@ -344,6 +342,11 @@ sealed class SidebarCustomizerPage : Component
     void GoBack()
     {
         Prefs?.Flush();
+        if (Back is { } back)
+        {
+            back();
+            return;
+        }
         if (History?.Entries is { Count: > 0 } log)
         {
             for (int i = log.Count - 1; i >= 0; i--)

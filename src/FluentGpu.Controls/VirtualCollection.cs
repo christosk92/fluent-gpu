@@ -51,6 +51,8 @@ public sealed class VirtualCollection<T>
     private bool[] _requested = Array.Empty<bool>(); // page p loaded OR in-flight ⇒ true (request dedup)
     private int _count = -1;                          // total; -1 until the first page lands
     private bool _provisional;                        // _count is a seeded estimate a real page may still correct (see Seed/Fill)
+    private ReadOnlyMemory<T> _snapshot;
+    private bool _snapshotMode;
 
     public VirtualCollection(Fetch fetch, int pageSize = 50, Action<Action>? post = null, CancellationToken ct = default)
     {
@@ -62,6 +64,30 @@ public sealed class VirtualCollection<T>
 
     public VirtualCollection(IPagedSource<T> source, int pageSize = 50, Action<Action>? post = null, CancellationToken ct = default)
         : this((source ?? throw new ArgumentNullException(nameof(source))).FetchPageAsync, pageSize, post, ct) { }
+
+    private VirtualCollection(ReadOnlyMemory<T> items)
+    {
+        _fetch = static (_, _, _) => new ValueTask<PageResult<T>>(new PageResult<T>(0, ReadOnlyMemory<T>.Empty));
+        _pageSize = 1;
+        _snapshot = items;
+        _snapshotMode = true;
+        _count = items.Length;
+    }
+
+    /// <summary>An already-resident collection. Every valid index is loaded, <see cref="EnsureRange"/> is a no-op, and
+    /// construction performs no signal write. Use this when virtualization is about mounted UI, not remote paging.</summary>
+    public static VirtualCollection<T> FromSnapshot(ReadOnlyMemory<T> items) => new(items);
+
+    /// <summary>Replace the resident snapshot in place so mounted consumers keep the same collection identity. An
+    /// identical memory slice is coalesced; a real replacement updates the count and bumps <see cref="Version"/> once.</summary>
+    public void ReplaceSnapshot(ReadOnlyMemory<T> items)
+    {
+        if (!_snapshotMode) throw new InvalidOperationException("Only a snapshot-backed collection can replace its snapshot.");
+        if (_snapshot.Equals(items)) return;
+        _snapshot = items;
+        _count = items.Length;
+        Bump();
+    }
 
     /// <summary>Total item count, or -1 until the first page lands.</summary>
     public int Count => _count;
@@ -78,6 +104,7 @@ public sealed class VirtualCollection<T>
         get
         {
             if ((uint)index >= (uint)_count) return default;
+            if (_snapshotMode) return _snapshot.Span[index];
             int p = index / _pageSize;
             var chunk = (uint)p < (uint)_chunks.Length ? _chunks[p] : null;
             return chunk is null ? default : chunk[index - p * _pageSize];
@@ -88,6 +115,7 @@ public sealed class VirtualCollection<T>
     public bool IsLoaded(int index)
     {
         if ((uint)index >= (uint)_count) return false;
+        if (_snapshotMode) return true;
         int p = index / _pageSize;
         return (uint)p < (uint)_chunks.Length && _chunks[p] is not null;
     }
@@ -100,6 +128,7 @@ public sealed class VirtualCollection<T>
     /// still unknown; a total already learned from a real page is never downgraded to provisional.</summary>
     public void Seed(int total, ReadOnlySpan<T> items, bool provisional = false)
     {
+        if (_snapshotMode) throw new InvalidOperationException("A snapshot-backed collection is replaced with ReplaceSnapshot.");
         if (_count < 0) { SetCount(total); _provisional = provisional; }
         for (int i = 0; i < items.Length && i < _count; i += _pageSize)
         {
@@ -117,6 +146,7 @@ public sealed class VirtualCollection<T>
     /// a no-op (alloc-free) once the window is present. The view calls it with its visible range whenever the window moves.</summary>
     public void EnsureRange(int first, int last)
     {
+        if (_snapshotMode) return;
         if (_count == 0) return;
         if (_count < 0) { RequestPage(0); return; }      // learn the total from page 0 first
         if (last < first) (first, last) = (last, first);

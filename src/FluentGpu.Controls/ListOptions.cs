@@ -1,5 +1,6 @@
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
@@ -82,6 +83,18 @@ public sealed record RemovalOptions
     public float StaggerMs { get; init; }
 }
 
+/// <summary>Reactive one-shot provider for an inserted contiguous range. The owner records its logical key on the user
+/// event; once its new plan exists, ItemsView consumes the exact range before the first expanded paint.</summary>
+public sealed record DisclosureOptions
+{
+    public IReadSignal<int>? Version { get; init; }
+    public Func<ItemDisclosureRange?>? PendingExpand { get; init; }
+    public Action<ItemDisclosureRange>? OnExpandStarted { get; init; }
+    public Action<ItemDisclosureRange>? OnExpandSettled { get; init; }
+    /// <summary>Optional cold-path lifecycle trace. Invoked from controller/layout/effect work, never paint or input.</summary>
+    public Action<ItemDisclosureDiagnostic>? Diagnostic { get; init; }
+}
+
 /// <summary>
 /// The consolidated options record for the <see cref="ItemsView"/> creation trio (<c>Create</c> / <c>CreateBound</c>).
 /// The ~20 named factory arguments collapse into this one record + the grouped sub-records
@@ -132,6 +145,8 @@ public record ListOptions
     public EntranceOptions? Entrance { get; init; }
     /// <summary>Removal choreography invoked through <see cref="ItemsViewController.BeginRemoval"/> (bound path).</summary>
     public RemovalOptions? Removal { get; init; }
+    /// <summary>Optional virtualized contiguous disclosure source.</summary>
+    public DisclosureOptions? Disclosure { get; init; }
 
     // ── research adjustment #16 — virtualization knobs (opt-in; unset ⇒ byte-identical to the pre-knob path) ──
     /// <summary>Recycle-pool discriminator: <c>index → contentType</c>. Heterogeneous rows only recycle/rebind within

@@ -21,11 +21,8 @@ sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
     readonly object _tintOwner = new();   // stable ownership across artist -> artist reuse and KeepAlive park/reactivate
-    // Two axes, never one value: CHROME chroma (what an accent-filled control paints) and WASH tint (what a translucent
-    // backdrop paints). _paletteAccent is the saturation-floored CHROME accent (WaveePalette.ChromeAccent) every filled
-    // control on this page reads — hero Play, the Verified pill, the Top-tracks masthead chip, the facet accent bars,
-    // the shy pill's Play. _washAccent is the plain brightness-LIFTED accent the light-theme blend backdrop paints, so a
-    // chroma change to the CTA can never be mistaken for a wash-alpha regression (and vice versa).
+    // Two axes, never one value: CHROME chroma for accent-filled controls and the quieter WASH tint used as one
+    // ingredient in the Editorial Split's semantic copy surface.
     ColorF? _paletteAccent;                // cover-extracted page CHROME accent; null keeps the semantic default live
     ColorF? _washAccent;                   // cover-extracted WASH accent (lifted only, NOT saturation-floored)
     ColorF _accent => _paletteAccent ?? Tok.AccentDefault;
@@ -106,18 +103,17 @@ sealed partial class ArtistPage : Component
         UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(routeKey, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled)));
         UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
 
-        var pinned = UseSignal(false);
+        var compactInteractive = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
         UseEffect(() =>
         {
-            pinned.Value = false;
+            compactInteractive.Value = false;
             pageScroll.Value = 0f;
         }, routeKey);
         // One tree: the boundary renders Body with the resource's pending value, derives its loading paint, then fills
         // the same Body with the loaded artist. The page does not author or pass a separate skeleton subtree.
         var scroll = ScrollView(Skel.Region(artist,
-            shimmerSource: ArtistShimmer,
-            content: a => Body(a, fansList, svc, go, bridge, pinned),
+            content: a => Body(a, fansList, svc, go, bridge, compactInteractive),
             onFailed: () => ErrorState.Build(artist.Error),
             group: routeKey)
             with
@@ -136,129 +132,9 @@ sealed partial class ArtistPage : Component
         // Provide the page scroll to the discography LazyGrids deeper in the body (the SwiftUI LazyVGrid-in-ScrollView wiring).
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, new BoxEl
         {
-            Key = "artist-page:" + routeKey, Grow = 1f, ZStack = true,
-            Children =
-            [
-                scroll,
-                new BoxEl   // shy pill overlay
-                {
-                    Grow = 1f, HitTestPassThrough = true, Direction = 1,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Start,
-                    // The named half of ArtistShyPill.Clearance: this margin + the pill's Height is what the sticky
-                    // facet headers pin BELOW (DiscographySection's stickyClearance) — keep them in lockstep.
-                    Padding = new Edges4(0f, ArtistShyPill.TopMargin, 0f, 0f),
-                    Children = [ ArtistShyPill.Create(uri, artist, svc, pinned) ],
-                },
-            ],
+            Key = "artist-page:" + routeKey, Grow = 1f, Direction = 1,
+            Children = [scroll],
         });
-    }
-
-    // Lightweight loading skeleton (finding #7): an explicit shimmer that MIRRORS the real ArtistPage layout — a
-    // full-bleed hero on the SAME ArtistHeroLayout.HeroHeightFor rule as Banner() (dim image placeholder with the
-    // headline block anchored bottom-left: verified pill → big name → meta → action buttons), then the two-column band
-    // (LEFT top-tracks list, RIGHT popular-releases column).
-    // Cover-like blocks are ImageEls (deriver → dim MediaColor) so they read distinctly under the brighter text bars; sized
-    // childless boxes → bars. This avoids building the full 14-section Body just to derive a skeleton; SmoothResize eases the
-    // swap to the real Body on load.
-    static Element ArtistShimmer()
-    {
-        static Element Bar(float w, float h, float r = 4f) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(r) };
-        static Element GrowBar(float h, float r = 4f) => new BoxEl { Height = h, Grow = 1f, Corners = CornerRadius4.All(r) };
-        static Element Cover(float size, float r) => new ImageEl { Width = size, Height = size, Corners = CornerRadius4.All(r) };
-
-        // Hero: a full-width dim image placeholder (ImageEl stretches in the ZStack) with the headline overlaid bottom-left.
-        // The hero HEIGHT is width-dependent (the wide banner grows past ~1312px), so the shimmer self-measures through
-        // Responsive rather than freezing a constant — a hardcoded 420 would step-jump on reveal in a wide window. The
-        // gutter matches the real hero copy (ArtistHeroLayout.PageGutter horizontally, Spacing.XL vertically).
-        Element hero = Responsive.Of(w =>
-        {
-            float heroH = ArtistHeroLayout.HeroHeightFor(w);
-            Element heroCopy = new BoxEl
-            {
-                Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S,
-                Padding = new Edges4(ArtistHeroLayout.PageGutter, Spacing.XL, ArtistHeroLayout.PageGutter, Spacing.XL),
-                Children =
-                [
-                    Bar(96f, 26f, 13f),                 // verified pill
-                    Bar(360f, 48f, 8f),                 // big artist name (HeroSize's widest step)
-                    Bar(480f, 22f),                     // monthly-listeners / followers meta line (18px counts)
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Padding = new Edges4(0f, Spacing.S, 0f, 0f),
-                        Children = [ Bar(120f, 48f, 24f), Bar(44f, 44f, 22f), Bar(120f, 44f, 22f), Bar(150f, 44f, 22f) ],   // Play / shuffle / Follow / radio
-                    },
-                ],
-            };
-            return new BoxEl { Height = heroH, ZStack = true, Children = [ new ImageEl { Height = heroH }, heroCopy ] };
-        }, fallback: ArtistHeroLayout.WideWidth);
-
-        // LEFT: Top tracks chart (rank · art · title · plays). RIGHT: Releases masthead + strip.
-        static Element ChartRow() => new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Height = 48f,
-            Children = [ Bar(14f, 10f), Cover(36f, 4f), GrowBar(12f), Bar(28f, 10f) ],
-        };
-        Element leftCol = new BoxEl
-        {
-            Direction = 0, Gap = Spacing.M, Grow = 2f, Basis = 0f,
-            Children =
-            [
-                new BoxEl { Direction = 1, Grow = 1f, Gap = 2f, Children = [ ChartRow(), ChartRow(), ChartRow(), ChartRow(), ChartRow() ] },
-                new BoxEl { Direction = 1, Grow = 1f, Gap = 2f, Children = [ ChartRow(), ChartRow(), ChartRow(), ChartRow(), ChartRow() ] },
-            ],
-        };
-        Element mast = new BoxEl
-        {
-            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Padding = Edges4.All(Spacing.M),
-            Children = [ Cover(112f, 8f), new BoxEl { Direction = 1, Grow = 1f, Gap = Spacing.S, Children = [ Bar(80f, 10f), Bar(140f, 14f), Bar(100f, 12f) ] } ],
-        };
-        // The Releases column's two shapes — the WIDE chip strip and the STACKED row list (ArtistPage.TopTracks.cs
-        // BuildReleaseStrip / BuildReleaseList). A skeleton that always drew chips step-jumped on reveal at narrow
-        // widths, because the live column is a row list there.
-        static Element Chip() => new BoxEl
-        {
-            Direction = 1, Grow = 1f, Gap = Spacing.S,
-            Children = [ Cover(72f, 8f), Bar(60f, 12f), Bar(40f, 10f) ],
-        };
-        static Element ListRow() => new BoxEl
-        {
-            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, Padding = new Edges4(10f, 6f, 10f, 6f),
-            Children =
-            [
-                Cover(52f, Radii.Control),
-                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f, Children = [ Bar(180f, 13f), Bar(90f, 11f) ] },
-            ],
-        };
-        // The band MIRRORS the real TopBand's stack rule (row above 760, one stacked column below) including the
-        // Releases variant swap, so the reveal is a cross-fade rather than a re-layout. Deliberately NO hysteresis: the
-        // latch exists to stop a slow window DRAG from flipping the live column, and a skeleton is on screen for one
-        // load — it is never dragged across the breakpoint, and a static builder has no page instance to latch on.
-        Element band = Responsive.Of(w =>
-        {
-            bool wide = w >= 760f;
-            Element left = new BoxEl
-            {
-                Direction = 1, Grow = wide ? 2f : 0f, Basis = wide ? 0f : float.NaN, MinWidth = 0f, Gap = Spacing.M,
-                Children = [ Bar(140f, 20f), leftCol ],
-            };
-            Element releases = wide
-                ? new BoxEl { Direction = 0, Gap = Spacing.S, Children = [ Chip(), Chip(), Chip() ] }
-                : new BoxEl { Direction = 1, Gap = 2f, Children = [ ListRow(), ListRow(), ListRow(), ListRow() ] };
-            Element right = new BoxEl
-            {
-                Direction = 1, Grow = wide ? 1f : 0f, Basis = wide ? 0f : float.NaN, MinWidth = 0f, Gap = Spacing.M,
-                Children = [ Bar(100f, 20f), mast, releases ],
-            };
-            return new BoxEl
-            {
-                Direction = (byte)(wide ? 0 : 1), Gap = Spacing.XL,
-                AlignItems = wide ? FlexAlign.Start : FlexAlign.Stretch,
-                Padding = new Edges4(ArtistHeroLayout.PageGutter, Spacing.XL, ArtistHeroLayout.PageGutter, Spacing.XL),
-                Children = [ left, right ],
-            };
-        }, fallback: 900f);
-
-        return new BoxEl { Direction = 1, Children = [ hero, band ] };
     }
 
     static Artist PendingArtist(string uri)
@@ -271,13 +147,11 @@ sealed partial class ArtistPage : Component
     }
 
     Element Body(Artist a, IReadOnlyList<Artist> fansAll, Services svc, Action<string, string?> go,
-                 PlaybackBridge? bridge, Signal<bool> pinned)
+                 PlaybackBridge? bridge, Signal<bool> compactInteractive)
     {
         string uri = a.Uri;
-        // Cover-extracted page accent in TWO treatments, mirroring DetailShell exactly: solid CHROME uses the provider's
-        // opposite-contrast branch (soft light treatment on dark heroes; stronger dark treatment on pale pages), then
-        // ChromeAccent's lift/saturation floor. The WASH uses the current page branch and stays lift-only, because wash
-        // strength is an alpha decision owned by the gradient stops below.
+        // Cover-extracted page accent in two treatments: solid chrome uses the provider's opposite-contrast branch;
+        // the editorial copy field uses the current page branch and stays lift-only.
         // Null palette ⇒ the neutral default. Both are set before the tree builds so every accent helper reads them.
         string? paletteUrl = PaletteImageUrl(a);
         var pagePal = Surfaces.SchemeFor(paletteUrl);
@@ -288,8 +162,9 @@ sealed partial class ArtistPage : Component
         var extras = a.Extras;
         var popular = a.TopTracks is { Count: > 0 } tt ? tt : FakeData.TopTracksOf(a);
         var albumsAll = a.TopAlbums ?? Array.Empty<Album>();
-        var albums = albumsAll.Where(al => al.Kind is AlbumKind.Album or AlbumKind.Compilation).ToArray();
+        var albums = albumsAll.Where(al => al.Kind == AlbumKind.Album).ToArray();
         var singles = albumsAll.Where(al => al.Kind is AlbumKind.Single or AlbumKind.EP).ToArray();
+        var compilations = albumsAll.Where(al => al.Kind == AlbumKind.Compilation).ToArray();
         var fans = fansAll.Where(f => f.Uri != uri).Take(12).ToArray();
 
         void Play() => _ = svc.Player.PlayAsync(uri, 0);
@@ -310,15 +185,25 @@ sealed partial class ArtistPage : Component
         // different data, and reusing one key would reuse the shelf subtree across the swap.
         var sections = new List<Element>(15);
         // NO pre-release band here. Four surfaces already carry the announcement, each in a place the visitor is
-        // already looking: the hero eyebrow pill (narrow windows), the hero pinned card's date line (wide), the shy
-        // pill once the hero scrolls away, and the Upcoming masthead at the head of the Releases column — where anyone
+        // already looking: the hero eyebrow pill (narrow windows), the hero pinned card's date line (wide), the compact
+        // bar once the hero scrolls away, and the Upcoming masthead at the head of the Releases column — where anyone
         // asking "what's new from this artist" looks first. A band of its own would be a FIFTH copy of one fact, and it
         // would push Top tracks, the thing most visitors came for, down by ~90px on every artist with something coming.
         if (popular.Count > 0)
-            sections.Add(TopBand(popular, uri, bridge, svc, a.LatestRelease, a.PopularReleases, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
-        // Discography facets: a capped grid + "See all N" that navigates to the dedicated facet page (breadcrumb + full grid).
-        if (albums.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent, ArtistShyPill.Clearance)) with { Key = "sec:albums" });
-        if (singles.Length > 0) sections.Add(Embed.Comp(() => new DiscographySection(uri, a.Name, DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent, ArtistShyPill.Clearance)) with { Key = "sec:singles" });
+            sections.Add(TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.Name, a.LatestRelease, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
+        // Owned discography stays inline as full virtualized facets; dedicated pages remain deep-link compatible only.
+        if (albums.Length > 0 || a.AlbumsTotal > 0) sections.Add(Embed.Comp(
+            new DiscographySection.Props(albums),
+            () => new DiscographySection(DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent))
+            with { Key = "sec:albums" });
+        if (singles.Length > 0 || a.SinglesTotal > 0) sections.Add(Embed.Comp(
+            new DiscographySection.Props(singles),
+            () => new DiscographySection(DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent))
+            with { Key = "sec:singles" });
+        if (compilations.Length > 0 || a.CompilationsTotal > 0) sections.Add(Embed.Comp(
+            new DiscographySection.Props(compilations),
+            () => new DiscographySection(DiscographyKind.Compilations, Loc.Get(Strings.Artist.Compilations), svc, go, PlayContext, accent))
+            with { Key = "sec:compilations" });
         if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext) with { Key = "sec:appears-on" });
         if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
             () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)) with { Key = "sec:tour" });
@@ -341,30 +226,21 @@ sealed partial class ArtistPage : Component
             // The gutter is ArtistHeroLayout.PageGutter — the SAME inset the hero copy uses, so the two line up.
             Grow = 1f, Shrink = 1f, MinWidth = 0f, Basis = 0f, MaxWidth = 1600f,
             // Top pad kept tight so Top tracks sits close under the hero Play/Follow row (was 40).
-            Padding = new Edges4(ArtistHeroLayout.PageGutter, Spacing.M, ArtistHeroLayout.PageGutter, PlayerDock.Reserve + 40f),
+            Padding = new Edges4(ArtistHeroLayout.PageGutterFor(_heroWidth.Value), Spacing.M, ArtistHeroLayout.PageGutterFor(_heroWidth.Value), PlayerDock.Reserve + 40f),
             Children = sections.ToArray(),
         };
-        // Arm the shy pill as the hero finishes collapsing (≈offset 380, near full collapse) so the compact bar takes over
-        // exactly as the hero's presented height reaches zero — no dead beat, no overlap.
-        var sentinel = new BoxEl { Height = 0f, ScrollBinds = [ new() { PinTop = 40f, OnFlag = v => pinned.Value = v } ] };
-        // The seam rule: every paint near the hero↔content boundary must terminate at ALPHA 0 over the shell's one
-        // continuous backdrop (Mica + the ShellTint this page publishes). The photo's bottom EdgeFade reaches exactly
-        // 0 (compositor feather), the copy scrim's last stop is 0, and this wash layer ramps its translucent tint down
-        // across the hero and reaches 0 just inside the first content band — so no pixel row exists where background
-        // responsibility changes hands. Never paint an OPAQUE approximation of the page surface here: the real
-        // background is a live Mica composite no constant colour can match, so any opaque bridge/flatten necessarily
-        // draws a line where it ends.
+        // One edge-only handoff: as the full hero reaches its 56-DIP floor, the compact presentation takes input.
+        // It stays inside the already-pinned hero; this sentinel paints nothing and never becomes a second chrome layer.
+        var sentinel = new BoxEl
+        {
+            Height = 0f, HitTestVisible = false,
+            ScrollBinds = [new() { PinTop = ArtistHeroLayout.CompactIdentityHeight,
+                OnFlag = v => compactInteractive.Value = v }],
+        };
         float heroWidth = _heroWidth.Value;
         bool lightWash = Tok.Theme == ThemeKind.Light;
-        // The light branch paints the NON-vivid wash accent (see the field docs): a translucent backdrop must not gain
-        // chroma just because the CTA did. Reuses the current-theme `pagePal` grading resolved above.
         ColorF wash = lightWash ? (_washAccent ?? Tok.AccentDefault)
                     : WaveePalette.BackgroundDark(pagePal ?? WaveePalette.Neutral);
-        // A RAMP, not a plateau: strongest behind the hero photo, already thin by the hero↔content boundary
-        // (BlendBoundaryFor, derived from the SHORT ContentBlendTail), gone by the end of the tail. The old flat-then-drop
-        // shape held its full tint for the hero's whole height and then dumped it across 320px of content — which is what
-        // read as a tinted plate over the first band. Light stays weaker than dark: the same alpha over a light surface
-        // is a visible cast, over a dark one it barely registers.
         bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
         Element washLayer = colorWashesDisabled
             ? new BoxEl()
@@ -387,7 +263,7 @@ sealed partial class ArtistPage : Component
                     Direction = 1,
                     Children =
                     [
-                        Banner(a, uri, Play, Shuffle, Radio, go),
+                        Banner(a, uri, Play, Shuffle, Radio, go, compactInteractive.Value),
                         sentinel,
                         new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },
                     ],

@@ -2487,11 +2487,17 @@ static class OverlaySuite
 
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(50f, 50f), 0, 0));
             host.RunFrame();
+            // Drain the hover-triggered component render and its passive effect before advancing the manual clock.
+            // Otherwise the 900ms jump can occur before ToolTipClock has seeded its countdown track.
+            for (int i = 0; i < 4; i++) host.RunFrame();
             clock.Advance(900f);
             for (int i = 0; i < 4; i++) host.RunFrame();
             bool opened = !FindTextNode(host.Scene, strings, host.Scene.Root, "tip-orphan").IsNull;
 
-            host.Scene.Flags(root.Target) |= NodeFlags.Parked;
+            // ToolTip registers its service wrapper as the overlay owner; root.Target is the wrapped content child.
+            // KeepAlive parks the whole subtree, so model that real edge on the actual registered owner.
+            var parkedOwner = host.Scene.Parent(root.Target);
+            host.Scene.Flags(parkedOwner) |= NodeFlags.Parked;
             host.RunFrame();
             bool closing = ((OverlayServiceImpl)root.Service!).Entries.Count == 1
                 && ((OverlayServiceImpl)root.Service!).Entries[0].Phase == OverlayPhase.Closing;

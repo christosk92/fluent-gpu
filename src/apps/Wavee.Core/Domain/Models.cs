@@ -246,7 +246,8 @@ public sealed record PinnedItem(
     string? ItemUri = null,               // itemV2.data.uri — what the pin points at
     string? ItemType = null,              // itemV2.data.type — "ALBUM" | "SINGLE" | "EP" | …
     string? ItemTypename = null,          // itemV2.data.__typename — "Album" | "PreRelease" | …
-    DateTimeOffset? ReleaseAt = null)     // itemV2.data.preReleaseEndDateTime
+    DateTimeOffset? ReleaseAt = null,     // itemV2.data.preReleaseEndDateTime
+    Image? BackgroundImage = null)        // profile.pinnedItem.backgroundImageV2.data.sources
 {
     /// <summary>Whether this pin is announcing something that has not dropped yet.
     ///

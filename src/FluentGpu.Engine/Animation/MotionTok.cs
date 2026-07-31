@@ -32,6 +32,7 @@ public enum MotionTokenId : ushort
     StandardSpring, ExpressiveSpring,
     // Feature motions
     ConnectedFly, ContentResize, ItemPlacement, ScrollFade,
+    DisclosureExpand, DisclosureCollapse, DisclosureChevron,
 }
 
 /// <summary>A resolved motion recipe: dynamics (eased OR spring) + the reduced-motion policy. 24B-ish POD.</summary>
@@ -116,6 +117,9 @@ public static class MotionTok
         MotionTokenId.ContentResize => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.90f)),
         MotionTokenId.ItemPlacement => MotionTokenDef.SpringOf(SpringParams.FromResponse(0.40f, 0.85f)),
         MotionTokenId.ScrollFade => MotionTokenDef.Eased(150f, Easing.Linear, ReducedMotionPolicy.KeepFade),
+        MotionTokenId.DisclosureExpand => MotionTokenDef.Eased(333f, Easing.FluentPopOpen),
+        MotionTokenId.DisclosureCollapse => MotionTokenDef.Eased(167f, Easing.FluentDisclosureCollapse),
+        MotionTokenId.DisclosureChevron => MotionTokenDef.Eased(167f, Easing.FluentDisclosureChevron),
         _ => MotionTokenDef.SpringOf(SpringParams.Default),
     };
 
@@ -132,4 +136,7 @@ public static class MotionTok
     public static MotionTokenDef ContentResize => Get(MotionTokenId.ContentResize);
     public static MotionTokenDef ItemPlacement => Get(MotionTokenId.ItemPlacement);
     public static MotionTokenDef ScrollFade => Get(MotionTokenId.ScrollFade);
+    public static MotionTokenDef DisclosureExpand => Get(MotionTokenId.DisclosureExpand);
+    public static MotionTokenDef DisclosureCollapse => Get(MotionTokenId.DisclosureCollapse);
+    public static MotionTokenDef DisclosureChevron => Get(MotionTokenId.DisclosureChevron);
 }

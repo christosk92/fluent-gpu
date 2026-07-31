@@ -93,4 +93,48 @@ static class SidebarRowGeometry
         if (fromIndex < 0 || toIndex < 0 || fromIndex == toIndex) return 0;
         return toIndex > fromIndex ? 1 : -1;
     }
+
+    /// <summary>Resolve the contiguous BODY owned by one planned section header. A different section at the same or a
+    /// shallower depth is a structural sibling and terminates the band even when that sibling is a divider or has no
+    /// header of its own. Deeper rows belong to a nested CustomGroup subtree and stay inside the parent disclosure.</summary>
+    public static bool TrySectionBodyRange(IReadOnlyList<SidebarRow> rows, string sectionId,
+                                           out int firstIndex, out int count)
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (string.IsNullOrEmpty(sectionId))
+        {
+            firstIndex = count = 0;
+            return false;
+        }
+
+        int header = -1;
+        byte depth = 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (row.Kind != SidebarRowKind.SectionHeader
+                || !string.Equals(row.SectionId, sectionId, StringComparison.Ordinal)) continue;
+            header = i;
+            depth = row.Depth;
+            break;
+        }
+
+        if (header < 0)
+        {
+            firstIndex = count = 0;
+            return false;
+        }
+
+        int end = header + 1;
+        while (end < rows.Count)
+        {
+            var row = rows[end];
+            if (row.Depth <= depth && !string.Equals(row.SectionId, sectionId, StringComparison.Ordinal)) break;
+            end++;
+        }
+
+        firstIndex = header + 1;
+        count = end - firstIndex;
+        return count > 0;
+    }
 }

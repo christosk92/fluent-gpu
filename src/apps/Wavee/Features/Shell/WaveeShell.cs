@@ -782,17 +782,19 @@ sealed class WaveeShell : Component
             // visited feed resolves (see SidebarProjectionBinder remarks). Nothing rebuilds the projection without it.
             _actions.Svc?.SidebarBinder.MountPoint() ?? new BoxEl { HitTestVisible = false, Shrink = 0f },
             Embed.Comp(() => new Wavee.Features.Video.InWindowVideoPip { Settings = _settings }),
-            Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings })) with { Grow = 1f };
+            Embed.Comp(() => new Wavee.Features.Video.VideoPlacementHost { Settings = _settings }),
+            DragPreviewLayer.Of(WaveeResourceDrag.Preview)) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
                Ctx.Provide(ShellTint.Slot, _shellTint,
+               Ctx.Provide(HistoryStore.BackCtx, (Action)Back,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
                Ctx.Provide(ActionServices.Slot, _actions,
                Ctx.Provide(WaveeExtensionRegistry.Slot, _actions.Extensions,
-               OverlayHost.Create(shellWithOverlays)))))))));
+               OverlayHost.Create(shellWithOverlays))))))))));
     }
 
     TabStrip BuildTabStrip() => new TabStrip

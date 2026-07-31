@@ -61,22 +61,42 @@ sealed class SidebarPane : Component
     readonly bool _inDrawer;
 
     /// <summary>Row-plan storage for the EXPANDED pane. A plan aliases its buffers, so the rail below must never share it.</summary>
-    readonly SidebarPlanBuffers _paneBuffers = new();
+    readonly SidebarPlanBuffers _paneBuffersA = new();
+    readonly SidebarPlanBuffers _paneBuffersB = new();
     /// <summary>Row-plan storage for the 56-DIP rail (§C5.2) — its own instance, for the same reason.</summary>
-    readonly SidebarPlanBuffers _railBuffers = new();
+    readonly SidebarPlanBuffers _railBuffersA = new();
+    readonly SidebarPlanBuffers _railBuffersB = new();
+    bool _presentedUsesA;
+    bool _planPublished;
+    int _nextPlanEpoch;
 
     /// <summary>The pane's OWN library-only search text (§C5.1's pinned head). SESSION-ONLY and PANE-OWNED: it is
     /// deliberately not <c>SidebarPreferences.V3Search</c>, which is Mode B's mode-global state — two panes must not filter
     /// each other. It reaches the planner as an override on the binder's input (<c>input with { Search = … }</c>), which is
     /// legal because the planner — not the projection — applies the search filter to EntityList/PlaylistTree.</summary>
     readonly Signal<string> _search = new("");
+    /// <summary>The normalized query from the exact input used to build <see cref="Plan"/>. Usually the pane-owned search;
+    /// in Library V3 it is the mode-global query supplied by <see cref="SidebarPaneConfig.Input"/>.</summary>
+    string _effectiveSearch = "";
 
     /// <summary>The reactive row count for the frozen-at-mount ItemsView. Written in a LAYOUT EFFECT, never in Render.</summary>
     readonly Signal<int> _rowCount = new(0);
+    readonly Signal<int> _planVersion = new(0);
 
     /// <summary>Bumped by any live reorder gesture AND by a collapse/expand choreography, so the ItemsView re-seeds its
     /// displacement / FLIP / fade tracks over the recycling window.</summary>
     readonly Signal<int> _dispVersion = new(0);
+    readonly Signal<int> _disclosureVersion = new(0);
+    static readonly bool DisclosureTraceEnabled =
+        string.Equals(Environment.GetEnvironmentVariable("WAVEE_SIDEBAR_DISCLOSURE_TRACE"), "1", StringComparison.Ordinal);
+    Action<ItemDisclosureDiagnostic>? _disclosureTrace;
+    string? _activeDisclosureKey;
+    string? _activeDisclosureId;
+    bool _activeDisclosureIsFolder;
+    bool _activeDisclosureOpen;
+    string? _pendingExpandSection;
+    string? _pendingExpandFolder;
+    Action? _queuedDisclosure;
 
     /// <summary>The virtualized list's public handle. Rootlist drop placement reads its viewport/offset, and selection
     /// motion uses the realized window to mirror WinUI's "both indicators exist" animation guard.</summary>
@@ -89,6 +109,11 @@ sealed class SidebarPane : Component
 
     /// <summary>The contiguous plan-row runs those sections own, rebuilt with every plan (see <see cref="SidebarPaneBand"/>).</summary>
     readonly List<SidebarPaneBand> _bands = new();
+    /// <summary>Pinned sections currently showing folder descendants. Their top-level pins are no longer contiguous in
+    /// plan space, so the flat reorder controller is disabled until the folder collapses rather than treating a child as
+    /// an independent pin or moving the wrong store slot.</summary>
+    readonly HashSet<string> _pinnedSubtrees = new(StringComparer.Ordinal);
+    readonly Dictionary<string, byte> _pinnedDepths = new(StringComparer.Ordinal);
 
     /// <summary>sectionId → spec, rebuilt with every plan so a row resolves its section in O(1) instead of re-walking the
     /// document per row.</summary>
@@ -97,28 +122,18 @@ sealed class SidebarPane : Component
     // ── R3.1.7b — collapse/expand choreography seeds (the DetailTracks dictionaries-on-the-page precedent) ────────────
     /// <summary>New plan index → the FLIP "first" (the row's OLD visual offset relative to its new slot), so a surviving
     /// row GLIDES from where it was instead of cutting to its new Y.</summary>
-    readonly Dictionary<int, (float dx, float dy)> _flip = new();
-    /// <summary>New plan index → (opacity from, stagger delay ms) for a row a freshly-expanded section just added.</summary>
-    readonly Dictionary<int, (float from, float delayMs)> _fade = new();
-    Func<int, (float dx, float dy)?>? _flipFrom;
-    Func<int, (float from, float delayMs)?>? _fadeFrom;
-    string? _toggledSection;
-    string? _toggledFolder;
-    bool _toggledExpand;
-    float _toggledExtent;
 
     /// <summary>Playlist-tree tiles the 56-DIP rail may draw before the rest of the document gets its turn.</summary>
     const int RailTreeTiles = 20;
 
     /// <summary>An expanded row eases in from a slight rise (the app's add vocabulary).</summary>
-    const float EnterRise = 6f;
-    const int StaggerCap = 8;
 
     // ── published to the bound row slots each render. PLAIN FIELDS by design: a bound slot is a frozen child, so it reads
     //    these at ITS render time; writing a signal here would be a render-time signal write (see the file header).
     // Seeded with a real EMPTY plan, never `default`: a default(SidebarRowPlan) carries null lists, and a bound slot that
     // renders one frame ahead of the first plan would NRE instead of drawing nothing.
     internal SidebarRowPlan Plan = new(Array.Empty<SidebarRow>(), Array.Empty<SidebarLibraryEntry>(), 0);
+    SidebarRowPlan _railPlan = new(Array.Empty<SidebarRow>(), Array.Empty<SidebarLibraryEntry>(), 0);
     internal SidebarCustomLayout Doc = SidebarCustomLayout.Empty;
     internal SidebarPreferences? Prefs;
     internal ActionServices? Acts;
@@ -134,16 +149,19 @@ sealed class SidebarPane : Component
     Func<int, (float dx, float dy)>? _displacement;
     bool _countSeeded;
 
+    sealed record PlanStage(SidebarCustomLayout Document, SidebarRowPlan Pane, SidebarRowPlan Rail,
+                            string EffectiveSearch, bool UsesA, int Epoch);
+
     // ── selection travel (R3.0.2 follow-up) ──────────────────────────────────────────────────────────────────────────
-    // Published to the row-owned indicators. The route epoch distinguishes a navigation from recycling; the geometry is
-    // captured once at that navigation edge so every involved row receives one identical WinUI flight.
+    // Centralized NavigationView transaction. Realized item-owned pills register their exact retained nodes here; the
+    // pane force-completes an interrupted pair before starting the next previous/current flight.
     string _selRoute = "";
     string _prevSelRoute = "";
     int _selEpoch;
-    int _selDir;
-    float _selTravel;
-    bool _selSameDepth;
-    bool _selCanAnimate;
+    NodeHandle _selectionFlightFrom;
+    NodeHandle _selectionFlightTo;
+    readonly Dictionary<string, SidebarPillRegistration> _selectionPills = new(StringComparer.Ordinal);
+    readonly Dictionary<int, string> _selectionRouteByNode = new();
 
     /// <summary>The variable-extent layout object. STATEFUL (a Fenwick estimate-then-correct table + scroll anchoring), so
     /// it is created ONCE per pane instance and never per render.</summary>
@@ -153,7 +171,6 @@ sealed class SidebarPane : Component
     /// A <c>Reorderable.Item</c>-wrapped row must not ALSO carry an authored offset hint (one position owner per node).</summary>
     static readonly LayoutTransition RowPlacement = new(
         TransitionChannels.Position, MotionTok.ItemPlacement.ToDynamics());
-    static readonly RemovalOptions RowRemoval = new() { StaggerMs = WaveeMotion.StaggerMs };
 
     public SidebarPane(SidebarPaneConfig config, Signal<Route> route, Action<string, string?> go, Signal<bool> compact,
                        Signal<float> expandedWidth, bool inDrawer = false)
@@ -177,22 +194,37 @@ sealed class SidebarPane : Component
 
         // The mode's live document. Invoked HERE so the signals it reads (the Curated LayoutVersion, Classic's three
         // section flags, V3's filter/sort state) subscribe this pane.
-        Doc = Config.Document();
+        var sourceDoc = Config.Document();
 
         bool compact = !_inDrawer && _compact.Value;    // the drawer always renders the EXPANDED pane (§C5.3)
         string search = _search.Value;                  // subscribe → the pinned head re-plans as you type
 
-        var plan = UseMemo(() => BuildPane(search), PlanDep(search));
-        Plan = plan;
+        var stage = UseMemo(() => BuildStage(sourceDoc, search), PlanDep(search));
+        if (!_planPublished) PublishStage(stage, notify: false);
+        _ = _planVersion.Value;
+        int disclosureUiVersion = _disclosureVersion.Value;
+        UseLayoutEffect(() => TryPublishStage(stage),
+            DepKey.From(HashCode.Combine(stage.Epoch, disclosureUiVersion)));
         // AFTER the plan is published: resolving the travel direction needs the plan the rows are about to render from.
         // This also SUBSCRIBES the pane to the route, so a navigation re-renders it (and therefore re-renders the row
         // indicators, which read these fields) without re-planning — PlanDep deliberately excludes the route.
         TrackSelection(_route.Value.Name);
-        var railPlan = UseMemo(() => BuildRailPlan(search), PlanDep(search));
-
-        // The ONE thing the frozen ItemsView cannot read from a field. A layout effect, so the write lands after render.
-        int rows = plan.Rows.Count;
-        UseLayoutEffect(() => { _rowCount.Value = rows; }, rows);
+        int selectionEpoch = _selEpoch;
+        UseLayoutEffect(RunSelectionTransaction, selectionEpoch);
+        int rows = Plan.Rows.Count;
+        UseLayoutEffect(() =>
+        {
+            if (_activeDisclosureKey is { } active && _activeDisclosureOpen
+                && (_pendingExpandSection is not null || _pendingExpandFolder is not null)
+                && PendingExpandRange() is null)
+            {
+                DisclosureSettled(active);
+                return;
+            }
+            if (_activeDisclosureKey is not null || _queuedDisclosure is not { } queued) return;
+            _queuedDisclosure = null;
+            queued();
+        }, DepKey.From(HashCode.Combine(disclosureUiVersion, rows)));
         ConfigureReorder();
 
         Element expanded = new BoxEl
@@ -213,7 +245,7 @@ sealed class SidebarPane : Component
                 Opacity = compact ? 1f : 0f, HitTestVisible = compact,
                 // As Classic always did: the rail's overlay scrollbar occupies the same gutter as the shell's resize seam
                 // and reads as a page-spanning border, so wheel/touch scrolling stays and the bar does not paint.
-                Children = [ScrollView(SidebarPaneRail.Build(this, railPlan)) with
+                Children = [ScrollView(SidebarPaneRail.Build(this, _railPlan)) with
                 {
                     Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
                 }],
@@ -311,16 +343,15 @@ sealed class SidebarPane : Component
             },
             // R3.1.7b — the collapse/expand choreography rides the SAME bump: freshly-expanded rows fade+rise in behind a
             // per-row stagger, and every row the change displaced GLIDES from its old position (FLIP) instead of cutting.
-            Entrance = new EntranceOptions
+            Disclosure = new DisclosureOptions
             {
-                ItemFlipFrom = _flipFrom ??= FlipFrom,
-                ItemFadeFrom = _fadeFrom ??= FadeFrom,
+                Version = _planVersion,
+                PendingExpand = PendingExpandRange,
+                OnExpandStarted = OnExpandStarted,
+                OnExpandSettled = OnExpandSettled,
+                Diagnostic = DisclosureTraceEnabled ? _disclosureTrace ??= TraceDisclosure : null,
             },
-            Removal = RowRemoval,
         }) with { Key = "plan" };
-
-    (float dx, float dy)? FlipFrom(int index) => _flip.TryGetValue(index, out var f) ? f : null;
-    (float from, float delayMs)? FadeFrom(int index) => _fade.TryGetValue(index, out var f) ? f : null;
 
     /// <summary>The authored-empty pane (§C4.7). Never a blank rectangle: it names the state and offers the one action
     /// that fixes it, and it keeps the layout menu reachable when there is no section header to host it. A LOCKED document
@@ -389,16 +420,48 @@ sealed class SidebarPane : Component
                               DepKey.Combine(DepKey.From(revision, mode), search));
     }
 
-    SidebarRowPlan BuildPane(string search)
+    PlanStage BuildStage(SidebarCustomLayout document, string search)
     {
-        var plan = SidebarRowPlanner.Build(Doc, Input(search), _paneBuffers);
-        RebuildIndex(plan);
-        Choreograph(plan);
-        return plan;
+        var input = Input(search);
+        bool useA = !_planPublished || !_presentedUsesA;
+        var paneBuffers = useA ? _paneBuffersA : _paneBuffersB;
+        var railBuffers = useA ? _railBuffersA : _railBuffersB;
+        var pane = SidebarRowPlanner.Build(document, input, paneBuffers);
+        var rail = SidebarRowPlanner.BuildRail(document, input, railBuffers);
+        return new PlanStage(document, pane, rail, SidebarSearch.Normalize(input.Search), useA, ++_nextPlanEpoch);
     }
 
-    SidebarRowPlan BuildRailPlan(string search)
-        => SidebarRowPlanner.BuildRail(Doc, Input(search), _railBuffers);
+    void TryPublishStage(PlanStage stage)
+    {
+        // A collapse keeps the expanded model presented until the close reaches zero. Expansion is the exception: its
+        // inserted generation must publish before ItemsView can resolve and arm the opening range.
+        bool preparedExpansion = _activeDisclosureOpen
+            && (_pendingExpandSection is not null || _pendingExpandFolder is not null);
+        if (_activeDisclosureKey is not null && !preparedExpansion) return;
+        if (_planPublished && stage.UsesA == _presentedUsesA && ReferenceEquals(stage.Pane.Rows, Plan.Rows)) return;
+        PublishStage(stage, notify: true);
+    }
+
+    void PublishStage(PlanStage stage, bool notify)
+    {
+        Doc = stage.Document;
+        Plan = stage.Pane;
+        _railPlan = stage.Rail;
+        _effectiveSearch = stage.EffectiveSearch;
+        _presentedUsesA = stage.UsesA;
+        _planPublished = true;
+        RebuildIndex(Plan);
+        ConfigureReorder();
+        if (!notify) return;
+
+        void PublishSignals()
+        {
+            _rowCount.Value = Plan.Rows.Count;
+            _planVersion.Value = _planVersion.Peek() + 1;
+        }
+        if (Context.Runtime is { } runtime) runtime.Batch(PublishSignals);
+        else PublishSignals();
+    }
 
     /// <summary>The planner input. Its lists ALIAS the binder's buffers, so the returned plan is valid exactly until the
     /// next rebuild — which is the UseMemo lifetime it is built for.</summary>
@@ -442,7 +505,22 @@ sealed class SidebarPane : Component
 
         MenuHostSectionId = null;
         _bands.Clear();
+        _pinnedSubtrees.Clear();
+        _pinnedDepths.Clear();
         var rows = plan.Rows;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            if (SectionOf(row.SectionId)?.Kind != SidebarSectionKind.Pinned) continue;
+            if (row.Kind == SidebarRowKind.SectionHeader)
+            {
+                _pinnedDepths[row.SectionId] = row.Depth;
+                continue;
+            }
+            if (row.EntryIndex >= 0 && _pinnedDepths.TryGetValue(row.SectionId, out byte sectionDepth)
+                && row.Depth > sectionDepth)
+                _pinnedSubtrees.Add(row.SectionId);
+        }
         string? bandId = null;
         int bandStart = 0;
         float bandExtent = SidebarRowMetrics.ClassicHeight;
@@ -464,7 +542,8 @@ sealed class SidebarPane : Component
             if (!item) continue;
 
             var section = SectionOf(row.SectionId);
-            if (section is null || !IsReorderableSection(section.Kind)) continue;
+            if (section is null || !IsReorderableSection(section.Kind)
+                || _pinnedSubtrees.Contains(row.SectionId)) continue;
             bandId = row.SectionId;
             bandStart = i;
             bandExtent = SidebarPaneMetrics.RowHeight(section);
@@ -506,112 +585,9 @@ sealed class SidebarPane : Component
     /// <para>Reduced motion is NOT branched on here: the seeds go through <c>AnimScheduler.SeedValue</c> under a named
     /// token, which reads the preference as a VALUE and snaps transforms itself. Branching on the mutable
     /// <c>Motion.ReducedMotion</c> global from authoring code is a hook-order hazard.</para></summary>
-    void Choreograph(SidebarRowPlan plan)
-    {
-        _flip.Clear();
-        _fade.Clear();
-        string? id = _toggledSection;
-        string? folder = _toggledFolder;
-        _toggledSection = null;
-        _toggledFolder = null;
-        if (folder is not null)
-        {
-            ChoreographFolder(plan, folder);
-            return;
-        }
-        if (id is null) return;
-
-        var rows = plan.Rows;
-        if (_toggledExpand)
-        {
-            // EXPANDED: the section's body rows are NEW in this plan — fade + rise them in behind a capped stagger, and
-            // glide everything below down from where it used to sit.
-            int first = -1, last = -1;
-            for (int i = 0; i < rows.Count; i++)
-            {
-                if (!string.Equals(rows[i].SectionId, id, StringComparison.Ordinal)) continue;
-                if (rows[i].Kind == SidebarRowKind.SectionHeader) continue;
-                if (first < 0) first = i;
-                last = i;
-            }
-            if (first < 0) return;
-
-            int ord = 0;
-            for (int i = first; i <= last; i++)
-            {
-                _flip[i] = (0f, -EnterRise);
-                _fade[i] = (0f, MathF.Min(ord, StaggerCap) * WaveeMotion.StaggerMs);
-                ord++;
-            }
-            var section = SectionOf(id);
-            float grown = (last - first + 1) * (section is null ? SidebarRowMetrics.ClassicHeight
-                                                               : SidebarPaneMetrics.RowHeight(section));
-            for (int i = last + 1; i < rows.Count; i++) _flip[i] = (0f, -grown);
-        }
-        else
-        {
-            // COLLAPSED: the body rows are gone. Everything after the retained header glides UP from its old, lower Y.
-            if (_toggledExtent <= 0f) return;
-            int after = -1;
-            for (int i = 0; i < rows.Count; i++)
-                if (rows[i].Kind == SidebarRowKind.SectionHeader
-                    && string.Equals(rows[i].SectionId, id, StringComparison.Ordinal)) { after = i + 1; break; }
-            if (after < 0) return;
-            for (int i = after; i < rows.Count; i++) _flip[i] = (0f, _toggledExtent);
-        }
-
-        // The ItemsView is a CHILD and renders after this, so it seeds in the SAME frame (the DetailTracks.Choreograph
-        // precedent). Nothing has read this signal earlier in the pass, so it is provably not a backwards write.
-        _dispVersion.Value = _dispVersion.Peek() + 1;
-    }
-
     /// <summary>Folder counterpart to section choreography. A playlist-tree folder owns one contiguous preorder band:
     /// descendants enter with the standard add rise/fade; on collapse the generic ItemsView removal seam keeps the
     /// departing realized rows alive while every survivor below FLIPs upward by their old extent.</summary>
-    void ChoreographFolder(SidebarRowPlan plan, string folderId)
-    {
-        int folderIndex = FolderIndexOf(plan, folderId);
-        if (folderIndex < 0) return;
-
-        if (_toggledExpand)
-        {
-            var rows = plan.Rows;
-            var entries = plan.Entries;
-            var folderRow = rows[folderIndex];
-            if ((uint)folderRow.EntryIndex >= (uint)entries.Count) return;
-            int rootDepth = entries[folderRow.EntryIndex].Depth;
-            int first = folderIndex + 1, last = folderIndex;
-            while (last + 1 < rows.Count)
-            {
-                var candidate = rows[last + 1];
-                if (!string.Equals(candidate.SectionId, folderRow.SectionId, StringComparison.Ordinal)
-                    || (uint)candidate.EntryIndex >= (uint)entries.Count
-                    || entries[candidate.EntryIndex].Depth <= rootDepth) break;
-                last++;
-            }
-            if (last < first) return;
-
-            int ord = 0;
-            for (int i = first; i <= last; i++)
-            {
-                _flip[i] = (0f, -EnterRise);
-                _fade[i] = (0f, MathF.Min(ord, StaggerCap) * WaveeMotion.StaggerMs);
-                ord++;
-            }
-            var section = SectionOf(folderRow.SectionId);
-            float grown = (last - first + 1) * (section is null ? SidebarRowMetrics.ClassicHeight
-                                                                : SidebarPaneMetrics.RowHeight(section));
-            for (int i = last + 1; i < rows.Count; i++) _flip[i] = (0f, -grown);
-        }
-        else
-        {
-            if (_toggledExtent <= 0f) return;
-            for (int i = folderIndex + 1; i < plan.Rows.Count; i++) _flip[i] = (0f, _toggledExtent);
-        }
-
-        _dispVersion.Value = _dispVersion.Peek() + 1;
-    }
-
     static int FolderIndexOf(SidebarRowPlan plan, string folderId)
     {
         var rows = plan.Rows;
@@ -625,16 +601,162 @@ sealed class SidebarPane : Component
         return -1;
     }
 
-    /// <summary>How much vertical space a section's BODY rows occupy in the CURRENT plan — measured before the collapse so
-    /// the glide-up distance is the real one.</summary>
-    float BodyExtentOf(string sectionId)
+    ItemDisclosureRange? PendingExpandRange()
+    {
+        if (_pendingExpandSection is { } section && TrySectionBodyRange(section, out var sectionRange))
+            return sectionRange;
+        if (_pendingExpandFolder is { } folder && TryFolderDescendantRange(folder, out var folderRange))
+            return folderRange;
+        return null;
+    }
+
+    void OnExpandStarted(ItemDisclosureRange range)
+    {
+        if (!string.Equals(_activeDisclosureKey, range.Key, StringComparison.Ordinal)) return;
+        _pendingExpandSection = null;
+        _pendingExpandFolder = null;
+    }
+
+    void OnExpandSettled(ItemDisclosureRange range) => DisclosureSettled(range.Key);
+
+    internal bool DisclosureOpen(string id, bool folder, bool fallback)
+        => _activeDisclosureKey is not null
+           && _activeDisclosureIsFolder == folder
+           && string.Equals(_activeDisclosureId, id, StringComparison.Ordinal)
+            ? _activeDisclosureOpen
+            : fallback;
+
+    bool TrySectionBodyRange(string sectionId, out ItemDisclosureRange range)
     {
         var rows = Plan.Rows;
-        float extent = 0f;
-        for (int i = 0; i < rows.Count; i++)
-            if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)
-                && rows[i].Kind != SidebarRowKind.SectionHeader) extent += RowExtentOf(i);
-        return extent;
+        if (!SidebarRowGeometry.TrySectionBodyRange(rows, sectionId, out int first, out int count))
+        {
+            range = default;
+            return false;
+        }
+        range = new ItemDisclosureRange("section:" + sectionId, first, count);
+        return true;
+    }
+
+    bool TryFolderDescendantRange(string folderId, out ItemDisclosureRange range)
+    {
+        int folderIndex = FolderIndexOf(Plan, folderId);
+        if (folderIndex < 0)
+        {
+            range = default;
+            return false;
+        }
+        var rows = Plan.Rows;
+        var entries = Plan.Entries;
+        var folder = rows[folderIndex];
+        if ((uint)folder.EntryIndex >= (uint)entries.Count)
+        {
+            range = default;
+            return false;
+        }
+        int depth = entries[folder.EntryIndex].Depth;
+        int end = folderIndex + 1;
+        while (end < rows.Count)
+        {
+            var row = rows[end];
+            if (!string.Equals(row.SectionId, folder.SectionId, StringComparison.Ordinal)
+                || (uint)row.EntryIndex >= (uint)entries.Count
+                || entries[row.EntryIndex].Depth <= depth) break;
+            end++;
+        }
+        int count = end - folderIndex - 1;
+        range = count > 0
+            ? new ItemDisclosureRange("folder:" + folderId, folderIndex + 1, count)
+            : default;
+        return count > 0;
+    }
+
+    void StartDisclosure(string key, string id, bool folder, bool open, Action commit)
+    {
+        if (_activeDisclosureKey is not null && !string.Equals(_activeDisclosureKey, key, StringComparison.Ordinal))
+        {
+            _queuedDisclosure = () => StartDisclosure(key, id, folder, open, commit);
+            if (_pendingExpandSection is not null || _pendingExpandFolder is not null)
+            {
+                string completed = _activeDisclosureKey;
+                _pendingExpandSection = null;
+                _pendingExpandFolder = null;
+                DisclosureSettled(completed);
+            }
+            else _listController.CompleteDisclosure();
+            return;
+        }
+        if (_activeDisclosureKey is not null && _activeDisclosureOpen == open) return;
+
+        _activeDisclosureKey = key;
+        _activeDisclosureId = id;
+        _activeDisclosureIsFolder = folder;
+        _activeDisclosureOpen = open;
+
+        ItemDisclosureRange range;
+        bool hasRange = folder
+            ? TryFolderDescendantRange(id, out range)
+            : TrySectionBodyRange(id, out range);
+        if (open && !hasRange)
+        {
+            if (folder) _pendingExpandFolder = id; else _pendingExpandSection = id;
+            commit();
+            _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
+            return;
+        }
+        if (!hasRange)
+        {
+            commit();
+            DisclosureSettled(key);
+            return;
+        }
+
+        _pendingExpandSection = null;
+        _pendingExpandFolder = null;
+        _listController.BeginDisclosure(range,
+            open ? ItemDisclosureDirection.Expand : ItemDisclosureDirection.Collapse,
+            collapseCommit: open ? null : commit,
+            settled: () => DisclosureSettled(key));
+        _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
+    }
+
+    void DisclosureSettled(string key)
+    {
+        if (!string.Equals(_activeDisclosureKey, key, StringComparison.Ordinal)) return;
+        _activeDisclosureKey = null;
+        _activeDisclosureId = null;
+        _pendingExpandSection = null;
+        _pendingExpandFolder = null;
+        _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
+    }
+
+    static void TraceDisclosure(ItemDisclosureDiagnostic d)
+    {
+        string eventId = d.Kind switch
+        {
+            ItemDisclosureDiagnosticKind.Queued => "sidebar.disclosure.queued",
+            ItemDisclosureDiagnosticKind.Starting => "sidebar.disclosure.starting",
+            ItemDisclosureDiagnosticKind.Armed => "sidebar.disclosure.armed",
+            ItemDisclosureDiagnosticKind.Progress => "sidebar.disclosure.progress",
+            ItemDisclosureDiagnosticKind.Committing => "sidebar.disclosure.committing",
+            ItemDisclosureDiagnosticKind.Settled => "sidebar.disclosure.settled",
+            ItemDisclosureDiagnosticKind.Cleared => "sidebar.disclosure.cleared",
+            ItemDisclosureDiagnosticKind.Recovered => "sidebar.disclosure.recovered",
+            _ => "sidebar.disclosure.failed_to_arm",
+        };
+        WaveeLog.Instance.Event(WaveeLogLevel.Info, "sidebar", eventId,
+            "Sidebar disclosure lifecycle edge.", operationId: "disclosure-" + d.OperationId,
+            fields:
+            [
+                WaveeLogField.Of("kind", d.Kind.ToString()),
+                WaveeLogField.Of("key", d.Range.Key),
+                WaveeLogField.Of("direction", d.Direction.ToString()),
+                WaveeLogField.Of("first", d.Range.FirstIndex),
+                WaveeLogField.Of("range_count", d.Range.Count),
+                WaveeLogField.Of("item_count", d.ItemCount),
+                WaveeLogField.Of("source_version", d.SourceVersion),
+                WaveeLogField.Of("progress", (double)d.Progress),
+            ]);
     }
 
     // ── reads the bound row slots make ───────────────────────────────────────────────────────────────────────────────
@@ -650,14 +772,8 @@ sealed class SidebarPane : Component
     {
         unchecked
         {
-            int h = StringComparer.Ordinal.GetHashCode(_search.Value);
-            h = h * 31 + (Config.ModeEpoch?.Invoke() ?? 0);
-            var prefs = Prefs;
-            if (prefs is null) return h;
-            h = h * 31 + prefs.LayoutVersion.Value;
-            h = h * 31 + prefs.Entries.Version.Value;
-            h = h * 31 + prefs.PinsVersion.Value;
-            h = h * 31 + prefs.FolderVersion.Value;
+            int h = _planVersion.Value;
+            h = h * 31 + _disclosureVersion.Value;
             return h;
         }
     }
@@ -667,78 +783,76 @@ sealed class SidebarPane : Component
 
     // ── selection travel ─────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Bumped once per real route change. A row-owned indicator compares this with the epoch it last handled,
-    /// which separates a navigation from a recycled slot being rebound to another item.</summary>
-    internal int SelEpoch => _selEpoch;
-
-    /// <summary>Direction through the plan (+1 down / -1 up / 0 unknown).</summary>
-    internal int SelDirection => _selDir;
-
-    /// <summary>Signed indicator-top displacement from the previous item to the next item.</summary>
-    internal float SelTravel => _selTravel;
-
-    /// <summary>WinUI animates a worm only when both indicators share a lane/depth.</summary>
-    internal bool SelSameDepth => _selSameDepth;
-
-    /// <summary>WinUI requires both item indicators to exist. An off-window/first-paint selection snaps.</summary>
-    internal bool SelCanAnimate => _selCanAnimate;
-
-    internal bool WasDeparting(string? route)
-        => route is { Length: > 0 } && string.Equals(route, _prevSelRoute, StringComparison.Ordinal);
-
-    /// <summary>Capture one NavigationView selection transaction. The item containers own the indicator nodes; the pane
-    /// owns only the pair geometry and the realized-window guard that WinUI gets from two non-null UIElements.</summary>
+    /// <summary>Capture one NavigationView selection edge. The layout effect starts the pair only after the route's row
+    /// skins have reconciled, matching NavigationView's previous/current/active transaction ordering.</summary>
     void TrackSelection(string route)
     {
         if (string.Equals(route, _selRoute, StringComparison.Ordinal)) return;
         _prevSelRoute = _selRoute;
         _selRoute = route;
         _selEpoch++;
-        int from = IndexOfRoute(_prevSelRoute);
-        int to = IndexOfRoute(route);
-        _selDir = SidebarRowGeometry.DirectionOf(from, to);
-        _selTravel = 0f;
-        _selSameDepth = false;
-        _selCanAnimate = false;
-        if (_selDir == 0 || !IsSelectionRowRealized(from) || !IsSelectionRowRealized(to)) return;
-        if (!TrySelectionGeometry(from, out float fromX, out float fromY)
-            || !TrySelectionGeometry(to, out float toX, out float toY)) return;
-
-        _selTravel = toY - fromY;
-        _selSameDepth = MathF.Abs(fromX - toX) < 0.5f;
-        _selCanAnimate = float.IsFinite(_selTravel) && MathF.Abs(_selTravel) > 0.5f;
     }
 
-    bool IsSelectionRowRealized(int index)
+    internal void RegisterSelectionPill(string route, NodeHandle node)
     {
-        if (index < 0) return false;
-        var viewport = _listController.Viewport;
         var scene = Context.Scene;
-        if (viewport.IsNull || !scene.IsLive(viewport)) return false;
-        if (!scene.TryGetScroll(viewport, out var scroll)) return true;
-        int prefix = Math.Clamp(scroll.PersistentPrefixCount, 0, scroll.ItemCount);
-        return index < prefix || (index >= scroll.FirstRealized && index < scroll.LastRealized);
+        if (route.Length == 0 || scene is null || node.IsNull || !scene.IsLive(node)) return;
+        int index = (int)node.Raw.Index;
+        if (_selectionRouteByNode.TryGetValue(index, out var previous)
+            && !string.Equals(previous, route, StringComparison.Ordinal))
+            _selectionPills.Remove(previous);
+        _selectionRouteByNode[index] = route;
+        _selectionPills[route] = new SidebarPillRegistration(node);
     }
 
-    bool TrySelectionGeometry(int index, out float x, out float y)
+    void RunSelectionTransaction()
     {
-        x = y = 0f;
-        var rows = Plan.Rows;
-        if ((uint)index >= (uint)rows.Count) return false;
-        var row = rows[index];
-        var section = SectionOf(row.SectionId);
-        if (section is null) return false;
+        var scene = Context.Scene;
+        var anim = Context.Anim;
+        if (scene is null || anim is null) return;
 
-        int depth = row.Depth;
-        if (row.EntryIndex >= 0 && row.EntryIndex < Plan.Entries.Count
-            && section.Kind == SidebarSectionKind.PlaylistTree)
-            depth = Math.Max(0, row.Depth - Plan.Entries[row.EntryIndex].Depth);
+        // NavigationView force-completes the old pair before a rapid retarget. This is the missing interruption rule that
+        // allowed several recycled pills to stay half-visible and flicker against section headers.
+        if (!_selectionFlightFrom.IsNull && scene.IsLive(_selectionFlightFrom))
+            NavigationSelectionMotion.SnapVertical(anim, _selectionFlightFrom, visible: false);
+        if (!_selectionFlightTo.IsNull && scene.IsLive(_selectionFlightTo))
+            NavigationSelectionMotion.SnapVertical(anim, _selectionFlightTo, visible: true);
+        _selectionFlightFrom = _selectionFlightTo = NodeHandle.Null;
 
-        float height = SidebarPaneMetrics.RowHeight(section);
-        y = SidebarRowGeometry.ContentYOf(index, rows.Count, RowExtentOf)
-            + MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f);
-        x = SidebarRowMetrics.IndentFor(depth);
-        return float.IsFinite(x) && float.IsFinite(y);
+        if (!TrySelectionPill(_selRoute, scene, out var incoming)) return;
+        if (!TrySelectionPill(_prevSelRoute, scene, out var outgoing))
+        {
+            NavigationSelectionMotion.SnapVertical(anim, incoming.Node, visible: true);
+            return;
+        }
+
+        var from = scene.AbsoluteRect(outgoing.Node);
+        var to = scene.AbsoluteRect(incoming.Node);
+        float travel = to.Y - from.Y;
+        if (!float.IsFinite(travel) || MathF.Abs(travel) <= 0.5f || outgoing.Node == incoming.Node)
+        {
+            NavigationSelectionMotion.SnapVertical(anim, outgoing.Node, visible: false);
+            NavigationSelectionMotion.SnapVertical(anim, incoming.Node, visible: true);
+            return;
+        }
+
+        // NavigationView compares the indicators' actual cross-axis positions. Section identity is irrelevant: two
+        // equally-indented rows in different groups still run the continuous worm, while a real depth change scales.
+        bool sameLane = MathF.Abs(to.X - from.X) < 0.5f;
+        NavigationSelectionMotion.StartVertical(anim, outgoing.Node, 0f, travel,
+            SidebarSelectionPill.PillH, outgoing: true, sameDepth: sameLane);
+        NavigationSelectionMotion.StartVertical(anim, incoming.Node, -travel, 0f,
+            SidebarSelectionPill.PillH, outgoing: false, sameDepth: sameLane);
+        _selectionFlightFrom = outgoing.Node;
+        _selectionFlightTo = incoming.Node;
+    }
+
+    bool TrySelectionPill(string route, SceneStore scene, out SidebarPillRegistration registration)
+    {
+        if (route.Length > 0 && _selectionPills.TryGetValue(route, out registration)
+            && !registration.Node.IsNull && scene.IsLive(registration.Node)) return true;
+        registration = default;
+        return false;
     }
 
     float RowExtentOf(int index)
@@ -750,34 +864,9 @@ sealed class SidebarPane : Component
         return float.IsFinite(extent) && extent > 0f ? extent : SidebarRowMetrics.ClassicHeight;
     }
 
-    /// <summary>The plan index of the row that navigates to <paramref name="route"/>, or -1. Mirrors the slot's own
-    /// resolution order (a projected entry's RouteKey first, then a hand-placed Route item's key) so the direction can
-    /// never disagree with which row actually draws as selected. O(rows), once per navigation, zero allocation.</summary>
-    int IndexOfRoute(string route)
-    {
-        if (route.Length == 0) return -1;
-        var rows = Plan.Rows;
-        var entries = Plan.Entries;
-        for (int i = 0; i < rows.Count; i++)
-        {
-            var row = rows[i];
-            if (row.Kind is not (SidebarRowKind.EntityRow or SidebarRowKind.IconRow)) continue;
-            if (row.EntryIndex >= 0 && row.EntryIndex < entries.Count)
-            {
-                if (string.Equals(entries[row.EntryIndex].RouteKey, route, StringComparison.Ordinal)) return i;
-                continue;
-            }
-            var section = SectionOf(row.SectionId);
-            if (section is null) continue;
-            if (SidebarPaneText.ItemOf(section, row.Key) is { Target: SidebarItemTarget.Route } item
-                && string.Equals(item.Key, route, StringComparison.Ordinal)) return i;
-        }
-        return -1;
-    }
-
-    /// <summary>The live search text, for the rows that must NAME it (an empty EntityList says which query matched
-    /// nothing). <c>Peek</c>: the subscription belongs to <see cref="SubscribeEpoch"/>, once per row, not once per read.</summary>
-    internal string SearchText => _search.Peek();
+    /// <summary>The normalized query from the input that built the published plan, for rows that must name it. This is the
+    /// pane-owned query in Classic/Custom and Library V3's mode-global query after its input transform.</summary>
+    internal string SearchText => _effectiveSearch;
 
     internal SidebarSectionSpec? SectionOf(string sectionId)
         => _sections.TryGetValue(sectionId, out var s) ? s : null;
@@ -981,6 +1070,7 @@ sealed class SidebarPane : Component
         return new DropTargetSpec([WaveeDragKinds.Resource], Hover, Hover, Leave, CommitDrop)
         {
             CanAccept = s => Compatible(s.Payload),
+            VisualPolicy = DropTargetVisualPolicy.Spotlight,
         };
     }
 
@@ -992,7 +1082,8 @@ sealed class SidebarPane : Component
         if (planIndex < 0) return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
         var viewport = _listController.Viewport;
         var scene = Context.Scene;
-        if (viewport.IsNull || !scene.IsLive(viewport)) return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
+        if (scene is null || viewport.IsNull || !scene.IsLive(viewport))
+            return folder ? RootlistDropPlacement.Inside : RootlistDropPlacement.Before;
         var rect = scene.AbsoluteRect(viewport);
         float contentY = pointer.Y - rect.Y + _listController.ScrollOffset;
         float top = SidebarRowGeometry.ContentYOf(planIndex, Plan.Rows.Count, RowExtentOf);
@@ -1021,15 +1112,8 @@ sealed class SidebarPane : Component
     internal void ToggleSection(string sectionId, bool collapsed)
     {
         if (Config.SetSectionCollapsed is not { } apply) return;
-        _toggledSection = sectionId;
-        _toggledFolder = null;
-        _toggledExpand = !collapsed;
-        _toggledExtent = collapsed ? BodyExtentOf(sectionId) : 0f;
-        if (!collapsed) { apply(sectionId, false); return; }
-
-        var removed = SectionBodyIndices(sectionId);
-        if (removed.Length == 0) apply(sectionId, true);
-        else _listController.BeginRemoval(removed, () => apply(sectionId, true));
+        StartDisclosure("section:" + sectionId, sectionId, folder: false, open: !collapsed,
+            () => apply(sectionId, collapsed));
     }
 
     /// <summary>Activate a folder through the mode seam while keeping inline disclosure structurally animated. Narrow
@@ -1045,67 +1129,8 @@ sealed class SidebarPane : Component
         if (!(Config.DisclosesFoldersInline?.Invoke() ?? true)) { commit(); return; }
 
         bool expanded = prefs.IsFolderExpanded(folderId);
-        _toggledSection = null;
-        _toggledFolder = folderId;
-        _toggledExpand = !expanded;
-        if (!expanded)
-        {
-            _toggledExtent = 0f;
-            commit();
-            return;
-        }
-
-        var removed = FolderDescendantIndices(planIndex);
-        _toggledExtent = ExtentOf(removed);
-        if (removed.Length == 0) commit();
-        else _listController.BeginRemoval(removed, commit);
-    }
-
-    int[] SectionBodyIndices(string sectionId)
-    {
-        var rows = Plan.Rows;
-        int count = 0;
-        for (int i = 0; i < rows.Count; i++)
-            if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)
-                && rows[i].Kind != SidebarRowKind.SectionHeader) count++;
-        if (count == 0) return [];
-        var result = new int[count];
-        int at = 0;
-        for (int i = 0; i < rows.Count; i++)
-            if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)
-                && rows[i].Kind != SidebarRowKind.SectionHeader) result[at++] = i;
-        return result;
-    }
-
-    int[] FolderDescendantIndices(int folderIndex)
-    {
-        var rows = Plan.Rows;
-        var entries = Plan.Entries;
-        if ((uint)folderIndex >= (uint)rows.Count) return [];
-        var folder = rows[folderIndex];
-        if (folder.Kind != SidebarRowKind.FolderHeader || (uint)folder.EntryIndex >= (uint)entries.Count) return [];
-        int depth = entries[folder.EntryIndex].Depth;
-        int end = folderIndex + 1;
-        while (end < rows.Count)
-        {
-            var row = rows[end];
-            if (!string.Equals(row.SectionId, folder.SectionId, StringComparison.Ordinal)
-                || (uint)row.EntryIndex >= (uint)entries.Count
-                || entries[row.EntryIndex].Depth <= depth) break;
-            end++;
-        }
-        int count = end - folderIndex - 1;
-        if (count <= 0) return [];
-        var result = new int[count];
-        for (int i = 0; i < count; i++) result[i] = folderIndex + 1 + i;
-        return result;
-    }
-
-    float ExtentOf(IReadOnlyList<int> indices)
-    {
-        float extent = 0f;
-        for (int i = 0; i < indices.Count; i++) extent += RowExtentOf(indices[i]);
-        return extent;
+        _ = planIndex;
+        StartDisclosure("folder:" + folderId, folderId, folder: true, open: !expanded, commit);
     }
 
     internal void Navigate(string routeKey, string? arg) => _go(routeKey, arg);

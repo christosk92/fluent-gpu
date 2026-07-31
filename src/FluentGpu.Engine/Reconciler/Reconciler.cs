@@ -514,6 +514,9 @@ public sealed class TreeReconciler
         ctx.ArmScroll = ArmScroll;
         ctx.PeekMainScrollBusy = PeekMainScrollBusy;
         ctx.BeginVirtualRemoval = BeginVirtualRemoval;
+        ctx.BeginVirtualDisclosure = BeginVirtualDisclosure;
+        ctx.CompleteVirtualDisclosure = CompleteVirtualDisclosure;
+        ctx.ClearVirtualDisclosure = ClearVirtualDisclosure;
         ctx.AnchorNode = anchor;
         ctx.ResolveContextSignal = ResolveContext;
         ctx.RegisterPendingEffectContext = RegisterPendingEffectContext;
@@ -3172,6 +3175,62 @@ public sealed class TreeReconciler
         }
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
         _realizeProgress = true;
+    }
+
+    /// <summary>Seed or retarget one contiguous disclosure range. The backing list stays in its EXPANDED shape while
+    /// progress moves; the composing control owns insert-before-expand and collapse-commit-after-settle ordering.</summary>
+    private bool BeginVirtualDisclosure(NodeHandle viewport, int first, int count, bool expanding)
+    {
+        if (viewport.IsNull || !_scene.IsLive(viewport) || Anim is null
+            || !_virtuals.TryGetValue(viewport, out var entry) || entry.El?.RowBind is null
+            || !_scene.TryGetScroll(viewport, out var snapshot) || snapshot.Orientation != 0
+            || snapshot.Layout is null || first < 0 || count <= 0 || first + count > snapshot.ItemCount)
+            return false;
+
+        float cross = MathF.Max(1f, _scene.Bounds(viewport).W);
+        RectF firstRect = snapshot.Layout.ItemRect(first, cross);
+        RectF lastRect = snapshot.Layout.ItemRect(first + count - 1, cross);
+        float top = firstRect.Y;
+        float extent = lastRect.Bottom - top;
+        if (!float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f) return false;
+
+        ref ScrollState sc = ref _scene.ScrollRef(viewport);
+        float from = float.IsFinite(sc.DisclosureT) ? Math.Clamp(sc.DisclosureT, 0f, 1f)
+                                                    : expanding ? 0f : 1f;
+        sc.DisclosureFirst = first;
+        sc.DisclosureCount = count;
+        sc.DisclosureTop = top;
+        sc.DisclosureExtent = extent;
+        sc.DisclosureT = from;
+        if (!sc.ContentNode.IsNull && _scene.IsLive(sc.ContentNode))
+            _scene.Mark(sc.ContentNode, NodeFlags.PaintDirty);
+        Anim.SeedValue(viewport, AnimChannel.DisclosureProgress, expanding ? 1f : 0f,
+            expanding ? MotionTokenId.DisclosureExpand : MotionTokenId.DisclosureCollapse, from: from);
+        return true;
+    }
+
+    /// <summary>Force the active disclosure to its requested endpoint. Used before a different logical band starts.</summary>
+    private void CompleteVirtualDisclosure(NodeHandle viewport, bool expanded)
+    {
+        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out var sc)
+            || !float.IsFinite(sc.DisclosureT)) return;
+        Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
+        _scene.SetVirtualDisclosureProgress(viewport, expanded ? 1f : 0f);
+    }
+
+    /// <summary>Release the presentation after the expanded model has reached the same resting geometry.</summary>
+    private void ClearVirtualDisclosure(NodeHandle viewport)
+    {
+        if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out _)) return;
+        Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
+        ref ScrollState sc = ref _scene.ScrollRef(viewport);
+        sc.DisclosureFirst = -1;
+        sc.DisclosureCount = 0;
+        sc.DisclosureTop = 0f;
+        sc.DisclosureExtent = 0f;
+        sc.DisclosureT = float.NaN;
+        if (!sc.ContentNode.IsNull && _scene.IsLive(sc.ContentNode))
+            _scene.Mark(sc.ContentNode, NodeFlags.PaintDirty);
     }
 
     private delegate void ActionRef<T>(in T value);

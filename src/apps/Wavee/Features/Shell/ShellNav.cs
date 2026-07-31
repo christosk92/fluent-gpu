@@ -23,7 +23,7 @@ static class ShellNav
         // rows, and the sidebar's pinned rows (whose pin id IS the route key). Icons.RadioTower is the podcasts glyph below.
         if (key.StartsWith("show:", StringComparison.Ordinal)) return (arg ?? Loc.Get(Strings.Nav.Show), Icons.RadioTower);
         if (key.StartsWith("browse:", StringComparison.Ordinal))
-            return (arg ?? Loc.Get(Strings.Browse.Title), Icons.ExploreContent);
+            return (arg ?? Loc.Get(Strings.Browse.Title), Icons.Globe);
         if (ConcertRoutes.TryParse(key, out var concertRoute))
             return concertRoute.Kind switch
             {

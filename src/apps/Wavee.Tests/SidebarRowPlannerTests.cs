@@ -29,7 +29,8 @@ public sealed class SidebarRowPlannerTests
             creator: "Artist", sortStamp: 200 + order, sourceOrder: order);
 
     static SidebarLibraryEntry Folder(string id, string name, int depth = 0, int order = 0)
-        => Entry("folder:" + id, SidebarEntryKind.Folder, "", name, sourceOrder: order, depth: depth);
+        => Entry("folder:" + id, SidebarEntryKind.Folder, "", name, sourceOrder: order, depth: depth)
+            with { FolderId = id, FolderName = name };
 
     static SidebarSectionSpec Sec(string id, SidebarSectionKind kind, SidebarDisplayOptions? display = null,
         IReadOnlyList<SidebarItemSpec>? items = null, SidebarEntityQuery? query = null,
@@ -199,6 +200,47 @@ public sealed class SidebarRowPlannerTests
         Assert.Equal(new[] {SidebarRowKind.HeaderLabel}, KindsOf(plan));
     }
 
+    [Fact]
+    public void SectionBodyRange_StopsAtDividerAndHeaderlessRootSibling()
+    {
+        var plan = SidebarRowPlanner.Build(Doc(
+            Sec("library", SidebarSectionKind.StaticLinks,
+                items: [Route("a", "liked"), Route("b", "albums")]),
+            Sec("rule", SidebarSectionKind.Divider, titleLocKey: null),
+            Sec("api", SidebarSectionKind.StaticLinks, items: [Route("console", "api")], titleLocKey: null)),
+            FullInput());
+
+        Assert.True(SidebarRowGeometry.TrySectionBodyRange(plan.Rows, "library", out int first, out int count));
+        Assert.Equal(1, first);
+        Assert.Equal(2, count);
+        Assert.Equal(SidebarRowKind.Divider, plan.Rows[first + count].Kind);
+        Assert.Equal("api", plan.Rows[first + count + 1].SectionId);
+    }
+
+    [Fact]
+    public void SectionBodyRange_KeepsNestedGroupRowsAndTheirDividerAtNestedDepth()
+    {
+        var group = Sec("group", SidebarSectionKind.CustomGroup,
+            items: [Route("own", "home")],
+            children:
+            [
+                Sec("child-a", SidebarSectionKind.Header),
+                Sec("child-rule", SidebarSectionKind.Divider, titleLocKey: null),
+                Sec("child-b", SidebarSectionKind.Header),
+            ]);
+        var plan = SidebarRowPlanner.Build(Doc(group,
+            Sec("api", SidebarSectionKind.StaticLinks, items: [Route("console", "api")], titleLocKey: null)),
+            FullInput());
+
+        Assert.True(SidebarRowGeometry.TrySectionBodyRange(plan.Rows, "group", out int first, out int count));
+        Assert.Equal(1, first);
+        Assert.Equal(4, count);
+        Assert.Equal((byte)1, plan.Rows[first + 2].Depth);
+        Assert.Equal(SidebarRowKind.Divider, plan.Rows[first + 2].Kind);
+        Assert.Equal("api", plan.Rows[first + count].SectionId);
+        Assert.Equal((byte)0, plan.Rows[first + count].Depth);
+    }
+
     // ── grids, truncation, degraded states ───────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -333,6 +375,40 @@ public sealed class SidebarRowPlannerTests
         Assert.Equal("album:spotify:album:9", plan.Entries[0].Id);
     }
 
+    [Fact]
+    public void ExpandedPinnedFolder_EmitsItsVisibleSubtreeAtRelativeDepth()
+    {
+        var root = Folder("f1", "Pinned folder", depth: 2, order: 0) with { IsPinned = true };
+        var nested = Folder("f2", "Collapsed child folder", depth: 3, order: 2);
+        var input = new SidebarProjectionInput
+        {
+            Pins = [root, Album("after", "Independent pin")],
+            PlaylistTree =
+            [
+                root with { IsPinned = false },
+                Playlist("a", "Direct child", order: 1, depth: 3),
+                nested,
+                Playlist("b", "Hidden grandchild", order: 3, depth: 4),
+                Playlist("outside", "Outside subtree", order: 4, depth: 2),
+            ],
+            ExpandedFolders = new HashSet<string>(StringComparer.Ordinal) { "f1" },
+        };
+
+        var plan = SidebarRowPlanner.Build(Doc(Sec("p", SidebarSectionKind.Pinned)), input);
+
+        Assert.Equal(new[]
+        {
+            SidebarRowKind.SectionHeader,
+            SidebarRowKind.FolderHeader,
+            SidebarRowKind.EntityRow,
+            SidebarRowKind.FolderHeader,
+            SidebarRowKind.EntityRow,
+        }, KindsOf(plan));
+        Assert.Equal(new[] { "Pinned folder", "Direct child", "Collapsed child folder", "Independent pin" },
+            NamesOf(plan));
+        Assert.Equal(new byte[] { 0, 0, 1, 1, 0 }, DepthsOf(plan));
+    }
+
     // ── the playlist tree ────────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -374,7 +450,7 @@ public sealed class SidebarRowPlannerTests
         var input = new SidebarProjectionInput
         {
             PlaylistTree = tree,
-            ExpandedFolders = new HashSet<string>(StringComparer.Ordinal) { "folder:f2" },
+            ExpandedFolders = new HashSet<string>(StringComparer.Ordinal) { "f2" },
         };
         var plan = SidebarRowPlanner.Build(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
 

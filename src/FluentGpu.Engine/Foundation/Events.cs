@@ -279,6 +279,21 @@ public sealed record DragSource(string Kind, Func<object?> PayloadFactory)
     public DragVisualStyle? Style { get; init; }
 }
 
+/// <summary>Optional app-wide treatment for compatible destinations during a typed drag. Spotlight targets remain at
+/// their authored opacity while ordinary content is deemphasized; discovery and hit testing are unchanged.</summary>
+public enum DropTargetVisualPolicy : byte
+{
+    None,
+    Spotlight,
+}
+
+/// <summary>Named drag presentation values. They live beside the drag contracts so recorder and controls share one
+/// vocabulary instead of hand-authoring unrelated opacity values.</summary>
+public static class DragVisualTok
+{
+    public const float SpotlightBackgroundOpacity = 0.28f;
+}
+
 /// <summary>
 /// E5-L2 drop TARGET spec (<c>BoxEl.DropTarget</c> — Flutter DragTarget / SwiftUI dropDestination): receives sessions
 /// whose Kind is in <see cref="AcceptKinds"/>. Discovery is hit-test-chain based — per pointer move the engine picks
@@ -302,6 +317,9 @@ public sealed record DropTargetSpec(
     /// into the glide-into-the-new-slot motion). False (default) = the drop suppresses the spring-back and the
     /// source visual snaps home: the "deposited" feel of a foreign-surface drop.</summary>
     public bool SettleOnDrop { get; init; }
+
+    /// <summary>Opt this destination into compatible-target spotlighting for the duration of a drag.</summary>
+    public DropTargetVisualPolicy VisualPolicy { get; init; }
 
     /// <summary>Ordinal accept test over <see cref="AcceptKinds"/> (cast-free, 0-alloc).</summary>
     public bool Accepts(string kind)

@@ -1099,7 +1099,12 @@ public static class SpotifyExportMapper
         var uri = Str(au, "uri") ?? ("spotify:artist:" + (Str(au, "id") ?? ""));
         var name = Str(au, "profile", "name") ?? "";
         var avatar = PickImage(Dig(au, "visuals", "avatarImage", "sources"));
-        var header = PickImage(Dig(au, "headerImage", "data", "sources"));
+        // Artist overviews ship the wide campaign banner in either of two shapes. Prefer the modern visuals branch;
+        // falling through to the lineup-style headerImage branch keeps older/captured payloads working. The NPV mapper
+        // already follows this order â€” keeping MapArtist aligned prevents the hero from silently falling back to the
+        // square avatar even though a real full-bleed header is present.
+        var header = PickImage(Dig(au, "visuals", "headerImage", "sources"))
+                  ?? PickImage(Dig(au, "headerImage", "data", "sources"));
         bool verified = BoolAt(au, false, "onPlatformReputationTrait", "verification", "isVerified")
                      || BoolAt(au, false, "onPlatformReputationTrait", "verification", "isRegistered");
         string? bio = HtmlText(Str(au, "profile", "biography", "text"));
@@ -1352,9 +1357,9 @@ public static class SpotifyExportMapper
     /// wrapper kind ("ALBUM"), not a label, and inventing one from it would read as a badge. The pre-release surface
     /// overrides the eyebrow at render time from the localized string table.
     ///
-    /// Null-tolerant end to end: <c>itemV2: null</c> (or any missing leaf) leaves all four of the new fields null, which
-    /// is byte-identical to what every pin mapped before they existed. The cover still prefers <c>thumbnailImage</c> and
-    /// falls back to the wrapped item's <c>coverArt</c>.</summary>
+    /// Null-tolerant end to end: <c>itemV2: null</c> leaves the optional item fields null, while a missing
+    /// <c>backgroundImageV2</c> selects the compact Artist Pick. Both remain compatible with older payloads. The cover
+    /// still prefers <c>thumbnailImage</c> and falls back to the wrapped item's <c>coverArt</c>.</summary>
     static PinnedItem? MapPinned(JsonElement p)
     {
         if (p.ValueKind != JsonValueKind.Object) return null;
@@ -1362,12 +1367,14 @@ public static class SpotifyExportMapper
         if (uri is null) return null;
         var item = Dig(p, "itemV2", "data");
         var cover = PickImage(Dig(p, "thumbnailImage", "data", "sources")) ?? CoverArt(item);
+        var background = PickImage(Dig(p, "backgroundImageV2", "data", "sources"));
         return new PinnedItem("Pinned", Str(p, "title") ?? "", Str(p, "subtitle") ?? "",
             Str(p, "comment") ?? "", cover, uri,
             ItemUri: Str(item, "uri"),
             ItemType: Str(item, "type"),
             ItemTypename: Str(item, "__typename"),
-            ReleaseAt: ParseIso(Str(item, "preReleaseEndDateTime")));
+            ReleaseAt: ParseIso(Str(item, "preReleaseEndDateTime")),
+            BackgroundImage: background);
     }
 
     static IReadOnlyList<Concert>? MapConcerts(JsonElement items)

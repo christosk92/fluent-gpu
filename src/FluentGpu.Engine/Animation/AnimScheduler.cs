@@ -250,7 +250,8 @@ public sealed partial class AnimEngine
     /// PASS1 writes them directly; PASS2 skips them so they never touch the transform/paint accumulator. The subsumption
     /// seam for the deleted AdvanceBrushAnims + InteractionAnimator tickers.</summary>
     private static bool IsSideTableChannel(AnimChannel ch)
-        => ch == AnimChannel.BrushFade || ch == AnimChannel.HoverFade || ch == AnimChannel.PressFade;
+        => ch == AnimChannel.BrushFade || ch == AnimChannel.HoverFade || ch == AnimChannel.PressFade
+           || ch == AnimChannel.DisclosureProgress;
 
     private void WriteSideTable(AnimChannel ch, NodeHandle node, float v)
     {
@@ -259,6 +260,7 @@ public sealed partial class AnimEngine
             case AnimChannel.BrushFade: _scene.SetBrushAnimT((int)node.Raw.Index, v); break;
             case AnimChannel.HoverFade: _scene.SetInteractT(node, press: false, v); break;
             case AnimChannel.PressFade: _scene.SetInteractT(node, press: true, v); break;
+            case AnimChannel.DisclosureProgress: _scene.SetVirtualDisclosureProgress(node, v); break;
         }
     }
 
@@ -342,6 +344,23 @@ public sealed partial class AnimEngine
         RefreshBlurAnimationActive(node);
     }
 
+    /// <summary>Write one already-cancelled animation channel to retained paint immediately. This is the composition
+    /// equivalent of WinUI's direct <c>Visual.Offset/Scale/Opacity</c> reset: unlike seeding a zero-distance timeline,
+    /// the new value is observable by geometry reads in the same layout-effect drain. The caller owns cancellation.</summary>
+    internal void ApplyImmediate(NodeHandle node, AnimChannel channel, float value)
+    {
+        if (!_scene.IsLive(node)) return;
+        if (IsSideTableChannel(channel))
+        {
+            WriteSideTable(channel, node, value);
+            return;
+        }
+
+        var acc = Accum.FromPaint(in _scene.Paint(node));
+        acc.Fold(channel, value, replace: true);
+        Compose(node, in acc);
+    }
+
     /// <summary>Derive the compositor's transient-blur hint from the slab rather than from sigma. A static authored
     /// blur and an animation paused by KeepAlive both remain stationary blurs; only a live, non-parked blur row opts
     /// into the retained/adaptive motion path. Called only on blur-row lifecycle edges, never per recorded node.</summary>
@@ -416,6 +435,7 @@ public sealed partial class AnimEngine
             AnimChannel.BlurSigma => p.BlurSigma,
             AnimChannel.StrokeTrimStart => !float.IsNaN(p.StrokeTrimStart) ? p.StrokeTrimStart : 0f,
             AnimChannel.StrokeTrimEnd => !float.IsNaN(p.StrokeTrimEnd) ? p.StrokeTrimEnd : 1f,
+            AnimChannel.DisclosureProgress => _scene.VirtualDisclosureProgress(node),
             _ => 0f,   // Rotation: not recoverable from a scaled matrix; springs from 0
         };
     }

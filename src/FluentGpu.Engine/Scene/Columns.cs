@@ -357,6 +357,13 @@ public struct ScrollState
     public int   PersistentPrefixCount;   // leading logical items retained before the recyclable [First,Last) window
     public float ItemClipTopInset;         // viewport-space top clip for recyclable items; NaN = disabled
     public float ItemClipTopFadeBand;      // top alpha feather for recyclable items; 0 = disabled
+    // One contiguous expand/collapse band over the flat virtual child ladder. Progress 0 = collapsed, 1 = expanded;
+    // NaN disables the presentation. The recorder and input dispatcher consume the same row-range geometry.
+    public int   DisclosureFirst;
+    public int   DisclosureCount;
+    public float DisclosureTop;
+    public float DisclosureExtent;
+    public float DisclosureT;
     public int   FirstRealized, LastRealized;
     public int   ExtentTableRef;          // -1 = uniform / non-virtual; else index into the ExtentTable slab
     public NodeHandle ContentNode;        // the single content child carrying the -ScrollOffset LocalTransform
@@ -397,7 +404,7 @@ public struct ScrollState
     /// offset + rubber-band exactly like the resampler path (scroll-feel-rework-v2 §4.1/§4.4).</summary>
     public const byte PhaseTouchPan = 16;
 
-    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, ItemClipTopInset = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
+    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, ItemClipTopInset = float.NaN, DisclosureFirst = -1, DisclosureT = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });

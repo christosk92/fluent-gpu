@@ -40,6 +40,7 @@ static class ControlsSuite
         NestedChecks(strings);
         ContextChecks(strings);
         HoverChecks(strings);
+        HoverBoundaryChecks(strings);
         MediaCardEngineChecks(strings);
         VideoHoleChecks(strings);
         MediaPlayerElementChecks(strings);
@@ -55,6 +56,8 @@ static class ControlsSuite
         InputVocabularyChecks(strings);
         WaveBInputChecks(strings);
         E5DragDropChecks(strings);
+        VirtualInsertionPreviewChecks();
+        VirtualDisclosureChecks(strings);
         FocusRingChecks(strings);
         Wave2ControlChecks(strings);
         RepeatButtonChecks(strings);
@@ -158,6 +161,42 @@ static class ControlsSuite
         bool unhov = (host.Scene.Flags(btn) & NodeFlags.Hovered) == 0;
 
         Check("26. hover/pressed states track the pointer", hov && prs && released && unhov, "enter→hover, down→pressed, up→release, leave→unhover");
+    }
+
+    static void HoverBoundaryChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+        {
+            Direction = 1, Width = 200f, Height = 100f, OnClick = static () => { },
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 200f, Height = 50f, OnClick = static () => { },
+                    Children = [new BoxEl { Width = 20f, Height = 20f, Opacity = 0f, HoverOpacity = 1f }],
+                },
+                new BoxEl
+                {
+                    Width = 200f, Height = 50f, OnClick = static () => { },
+                    Children = [new BoxEl { Width = 20f, Height = 20f, Opacity = 0f, HoverOpacity = 1f }],
+                },
+            ],
+        }, null);
+        new FlexLayout(scene, fonts).Run(scene.Root);
+        var firstRow = scene.FirstChild(scene.Root);
+        var secondRow = scene.NextSibling(firstRow);
+        var firstReveal = scene.FirstChild(firstRow);
+        var secondReveal = scene.FirstChild(secondRow);
+        var dispatcher = new InputDispatcher(scene);
+        var anim = new AnimEngine(scene);
+        dispatcher.OnHoverChanged = anim.SetHover;
+        dispatcher.Dispatch([new InputEvent(InputKind.PointerMove, new Point2(100f, 25f), 0, 0)]);
+        bool firstOn = scene.TryGetInteract(firstReveal, out var firstIa) && firstIa.HoverTarget > 0.99f;
+        bool secondOff = scene.TryGetInteract(secondReveal, out var secondIa) && secondIa.HoverTarget < 0.01f;
+        Check("26b. a list ancestor hover reveals only the hovered interactive row's descendant affordance",
+            firstOn && secondOff, $"first={firstIa.HoverTarget:0.00} second={secondIa.HoverTarget:0.00}");
     }
 
     static void ContextMenuChecks(StringTable strings)
@@ -2131,6 +2170,46 @@ static class ControlsSuite
                 passedThrough, $"began={began} outer={outerEnter} inner={innerEnter}");
         }
 
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Width = 200, Height = 100,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Width = 100, Height = 100,
+                        DropTarget = new DropTargetSpec(["resource"])
+                        {
+                            VisualPolicy = DropTargetVisualPolicy.Spotlight,
+                            CanAccept = static s => string.Equals(s.Payload as string, "ok", StringComparison.Ordinal),
+                        },
+                    },
+                    new BoxEl
+                    {
+                        Width = 100, Height = 100,
+                        DropTarget = new DropTargetSpec(["resource"])
+                        {
+                            VisualPolicy = DropTargetVisualPolicy.Spotlight,
+                            CanAccept = static _ => false,
+                        },
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var compatible = scene.FirstChild(scene.Root);
+            var incompatible = scene.NextSibling(compatible);
+            var disp = new InputDispatcher(scene);
+            bool began = disp.DragDrop.ExternalBegin("resource", "ok", new Point2(50, 50), KeyModifiers.None);
+            bool filtered = began && scene.DropSpotlightActive
+                && scene.IsDropSpotlightRoot(compatible) && !scene.IsDropSpotlightRoot(incompatible);
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.spotlight only capability-compatible opt-in targets escape the drag dim and cancel clears it",
+                filtered && !scene.DropSpotlightActive,
+                $"began={began} filtered={filtered} activeAfterCancel={scene.DropSpotlightActive}");
+        }
+
         // e5dragdrop.style — DragSource.Style overrides the lifted ghost's opacity (the default 0.80 → a custom value).
         // A drag promotes on a Draggable carrying Style{Opacity=0.5}; after promotion the node's painted opacity is 0.5.
         {
@@ -2556,6 +2635,163 @@ static class ControlsSuite
             Check("e5dragdrop.8b steady drag frame is 0-alloc on phases 6–13 (transform-only repaint of the lifted visual)",
                 zero && tracked, $"{dragFrame.HotPhaseAllocBytes} bytes dx={root.LastTotalDx:0.#} tdx={host.Scene.Paint(item).LocalTransform.Dx:0.#}");
         }
+    }
+
+    static void VirtualInsertionPreviewChecks()
+    {
+        var version = new Signal<int>(0);
+        var preview = new VirtualInsertionPreviewController(version);
+
+        bool opened = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f);
+        var prefix = preview.DisplacementFor(3);
+        var suffix = preview.DisplacementFor(4);
+        int afterOpen = version.Peek();
+        bool duplicate = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f);
+        bool retargeted = preview.Update(slot: 1, firstItemIndex: 2, extent: 48f);
+        var retargetPrefix = preview.DisplacementFor(2);
+        var retargetSuffix = preview.DisplacementFor(3);
+        bool cleared = preview.Clear();
+
+        Check("virtual-insertion.1 a prefixed ItemsView opens one stable suffix gap and ignores an identical retarget",
+            opened && prefix.dy == 0f && suffix.dy == 96f && afterOpen == 1 && !duplicate && version.Peek() == 3,
+            $"opened={opened} prefix={prefix.dy} suffix={suffix.dy} version={version.Peek()}");
+        Check("virtual-insertion.2 midpoint retarget publishes immediately and clear restores resting displacement",
+            retargeted && retargetPrefix.dy == 0f && retargetSuffix.dy == 48f && cleared
+            && preview.DisplacementFor(3).dy == 0f && !preview.Active,
+            $"retarget={retargeted} prefix={retargetPrefix.dy} suffix={retargetSuffix.dy} active={preview.Active}");
+    }
+
+    static void VirtualDisclosureChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("virtual-disclosure", new Size2(260, 220), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new VirtualDisclosureProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+
+        int collapseSettled = 0;
+        var range = new ItemDisclosureRange("band", 1, 2);
+        probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Collapse,
+            collapseCommit: probe.CommitCollapsed,
+            settled: () => collapseSettled++);
+        host.RunFrame();
+        bool collapseStarted = host.Scene.TryGetScroll(probe.Controller.Viewport, out var opening)
+            && float.IsFinite(opening.DisclosureT) && opening.DisclosureFirst == 1 && opening.DisclosureCount == 2;
+        for (int i = 0; i < 4; i++) host.RunFrame();
+        host.Scene.TryGetScroll(probe.Controller.Viewport, out var collapseMid);
+        bool collapseIntermediate = collapseMid.DisclosureT > 0f && collapseMid.DisclosureT < 1f
+            && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 1
+            && Occurrences(host.Scene.Root, "C") == 1 && Occurrences(host.Scene.Root, "D") == 1
+            && Occurrences(host.Scene.Root, "E") == 1;
+        for (int i = 0; i < 24; i++) host.RunFrame();
+        host.Scene.TryGetScroll(probe.Controller.Viewport, out var collapsed);
+        bool collapseFinished = collapseSettled == 1 && probe.Count.Peek() == 3
+            && !float.IsFinite(collapsed.DisclosureT)
+            && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 0
+            && Occurrences(host.Scene.Root, "C") == 0 && Occurrences(host.Scene.Root, "D") == 1
+            && Occurrences(host.Scene.Root, "E") == 1;
+
+        probe.RestoreExpanded();
+        host.RunFrame();
+        int expandSettled = 0;
+        probe.Controller.BeginDisclosure(range, ItemDisclosureDirection.Expand,
+            settled: () => expandSettled++);
+        host.RunFrame();
+        bool expandStarted = host.Scene.TryGetScroll(probe.Controller.Viewport, out var closing)
+            && float.IsFinite(closing.DisclosureT) && closing.DisclosureFirst == 1 && closing.DisclosureCount == 2;
+        for (int i = 0; i < 4; i++) host.RunFrame();
+        host.Scene.TryGetScroll(probe.Controller.Viewport, out var expandMid);
+        bool expandIntermediate = expandMid.DisclosureT > 0f && expandMid.DisclosureT < 1f
+            && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 1
+            && Occurrences(host.Scene.Root, "C") == 1 && Occurrences(host.Scene.Root, "D") == 1
+            && Occurrences(host.Scene.Root, "E") == 1;
+        for (int i = 0; i < 36; i++) host.RunFrame();
+        host.Scene.TryGetScroll(probe.Controller.Viewport, out var expanded);
+        bool expandFinished = expandSettled == 1 && probe.Count.Peek() == 5
+            && !float.IsFinite(expanded.DisclosureT);
+        bool lifecycle = probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Armed)
+            && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Progress)
+            && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Cleared)
+            && !probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.FailedToArm);
+
+        Check("virtual-disclosure.1 collapse retains the expanded model until settle, commits once, then clears presentation",
+            collapseStarted && collapseIntermediate && collapseFinished,
+            $"started={collapseStarted} mid={collapseMid.DisclosureT:0.###} identities={collapseIntermediate} settled={collapseSettled} count={probe.Count.Peek()} t={collapsed.DisclosureT}");
+        Check("virtual-disclosure.2 expansion starts from the inserted model and releases its clip after the named motion",
+            expandStarted && expandIntermediate && expandFinished,
+            $"started={expandStarted} mid={expandMid.DisclosureT:0.###} identities={expandIntermediate} settled={expandSettled} count={probe.Count.Peek()} t={expanded.DisclosureT}");
+        Check("virtual-disclosure.3 lifecycle arms before observation and clears without a failed-start recovery",
+            lifecycle, $"events={probe.Diagnostics.Count}");
+
+        int Occurrences(NodeHandle node, string text)
+        {
+            if (node.IsNull) return 0;
+            ref var paint = ref host.Scene.Paint(node);
+            int found = paint.VisualKind == VisualKind.Text && strings.Resolve(paint.Text) == text ? 1 : 0;
+            for (var child = host.Scene.FirstChild(node); !child.IsNull; child = host.Scene.NextSibling(child))
+                found += Occurrences(child, text);
+            return found;
+        }
+    }
+
+    sealed class VirtualDisclosureProbe : Component
+    {
+        public readonly Signal<int> Count = new(5);
+        public readonly Signal<int> SourceVersion = new(0);
+        public readonly ItemsViewController Controller = new();
+        public readonly List<ItemDisclosureDiagnostic> Diagnostics = [];
+        private string[] _labels = ["A", "B", "C", "D", "E"];
+        private float[] _heights = [28f, 36f, 44f, 32f, 40f];
+
+        public void CommitCollapsed() => Publish(["A", "D", "E"], [28f, 32f, 40f]);
+        public void RestoreExpanded() => Publish(["A", "B", "C", "D", "E"], [28f, 36f, 44f, 32f, 40f]);
+
+        private void Publish(string[] labels, float[] heights)
+        {
+            void Mutate()
+            {
+                _labels = labels;
+                _heights = heights;
+                Count.Value = labels.Length;
+                SourceVersion.Value = SourceVersion.Peek() + 1;
+            }
+            if (Context.Runtime is { } runtime) runtime.Batch(Mutate);
+            else Mutate();
+        }
+
+        public override Element Render() => Embed.Comp(() => new ItemsView
+        {
+            ItemCount = 8,
+            ItemCountSignal = Count,
+            BoundMode = true,
+            RowTemplate = scope => new BoxEl
+            {
+                Height = Prop.Of(() => { _ = SourceVersion.Value; return _heights[scope.Index.Value]; }),
+                Fill = Tok.FillSubtleSecondary,
+                Children =
+                [
+                    new TextEl("")
+                    {
+                        Text = Prop.Of(() => { _ = SourceVersion.Value; return _labels[scope.Index.Value]; }),
+                        Size = 12f,
+                    },
+                ],
+            },
+            Layout = RepeatLayout.VariableList(32f),
+            HasExplicitLayout = true,
+            SelectionMode = ItemsSelectionMode.None,
+            Selector = SelectorVisual.None,
+            Controller = Controller,
+            Disclosure = new DisclosureOptions
+            {
+                Version = SourceVersion,
+                Diagnostic = Diagnostics.Add,
+            },
+            Grow = 1f,
+        });
     }
 
     static void FocusRingChecks(StringTable strings)

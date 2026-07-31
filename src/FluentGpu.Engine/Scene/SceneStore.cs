@@ -154,6 +154,11 @@ public sealed class SceneStore : ISceneBackend
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
     private readonly Dictionary<int, DropTargetSpec> _dropTargets = new();
+    private readonly HashSet<int> _dropSpotlightRoots = new();
+    private readonly HashSet<int> _dropSpotlightExemptRoots = new();
+    private int _dropTargetsVersion;
+    private bool _dropSpotlightActive;
+    private NodeHandle _dropSpotlightOver;
 
     // UseGesture (input-a11y.md §13) declarations: sparse (only nodes that declared a gesture hook have an entry), the
     // _textEdits/_brushAnims side-table pattern — no per-node array, no resize cost. FluentGpu.Hooks WRITES the
@@ -364,7 +369,10 @@ public sealed class SceneStore : ISceneBackend
             _glyphWipes.Remove(idx);
         }
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
-        if (_dropTargets.Count != 0) _dropTargets.Remove(idx);
+        if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
+        if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
+        if (_dropSpotlightExemptRoots.Count != 0) _dropSpotlightExemptRoots.Remove(idx);
+        if (_dropSpotlightOver == node) _dropSpotlightOver = NodeHandle.Null;
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
@@ -1087,6 +1095,47 @@ public sealed class SceneStore : ISceneBackend
         return true;
     }
 
+    /// <summary>Resolve the active contiguous disclosure band owned by a vertical virtual viewport from its direct
+    /// content node. Geometry is in content-local DIP; <paramref name="progress"/> is clamped to 0..1.</summary>
+    public bool TryGetVirtualDisclosure(NodeHandle content, out int firstIndex, out int count,
+                                        out float top, out float extent, out float progress,
+                                        out int persistentPrefixCount, out int firstRealized)
+    {
+        firstIndex = -1;
+        count = 0;
+        top = extent = progress = 0f;
+        persistentPrefixCount = firstRealized = 0;
+        if (content.IsNull || !IsLive(content)) return false;
+        NodeHandle viewport = Parent(content);
+        if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var sc)
+            || sc.ContentNode != content || sc.Orientation != 0 || !float.IsFinite(sc.DisclosureT)
+            || sc.DisclosureFirst < 0 || sc.DisclosureCount <= 0 || sc.DisclosureExtent <= 0f)
+            return false;
+        firstIndex = sc.DisclosureFirst;
+        count = sc.DisclosureCount;
+        top = sc.DisclosureTop;
+        extent = sc.DisclosureExtent;
+        progress = Math.Clamp(sc.DisclosureT, 0f, 1f);
+        persistentPrefixCount = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+        firstRealized = Math.Max(persistentPrefixCount, sc.FirstRealized);
+        return true;
+    }
+
+    /// <summary>Animation-side write for a viewport disclosure progress channel.</summary>
+    public void SetVirtualDisclosureProgress(NodeHandle viewport, float progress)
+    {
+        if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out _)) return;
+        ref ScrollState sc = ref ScrollRef(viewport);
+        float next = Math.Clamp(progress, 0f, 1f);
+        if (sc.DisclosureT == next) return;
+        sc.DisclosureT = next;
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
+
+    /// <summary>Current disclosure progress for animation retargeting; zero when inactive.</summary>
+    public float VirtualDisclosureProgress(NodeHandle viewport)
+        => TryGetScroll(viewport, out var sc) && float.IsFinite(sc.DisclosureT) ? sc.DisclosureT : 0f;
+
     // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
     // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there
     // bypasses the scrim and reaches the content beneath (the MenuBar hover-switches titles with a menu open,
@@ -1340,8 +1389,15 @@ public sealed class SceneStore : ISceneBackend
     public void SetDropTarget(NodeHandle h, DropTargetSpec? t)
     {
         int idx = (int)h.Raw.Index;
-        if (t is null) _dropTargets.Remove(idx);
-        else _dropTargets[idx] = t;
+        if (t is null)
+        {
+            if (_dropTargets.Remove(idx)) _dropTargetsVersion++;
+            _dropSpotlightRoots.Remove(idx);
+            return;
+        }
+        if (_dropTargets.TryGetValue(idx, out var prior) && ReferenceEquals(prior, t)) return;
+        _dropTargets[idx] = t;
+        _dropTargetsVersion++;
     }
 
     public bool TryGetDropTarget(NodeHandle h, out DropTargetSpec? t)
@@ -1353,6 +1409,72 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Cheap per-move gate: any drop target in the scene at all (skips the chain walk for plain reorders).</summary>
     public bool HasDropTargets => _dropTargets.Count > 0;
+
+    /// <summary>Generation of the sparse target registry. Virtual realization changes it; a live drag refreshes
+    /// compatibility only on this edge, never during record.</summary>
+    public int DropTargetsVersion => _dropTargetsVersion;
+
+    public bool DropSpotlightActive => _dropSpotlightActive && _dropSpotlightRoots.Count != 0;
+
+    public bool IsDropSpotlightRoot(NodeHandle h)
+        => DropSpotlightActive && !h.IsNull && _dropSpotlightRoots.Contains((int)h.Raw.Index);
+
+    public bool IsUnderDropSpotlightRoot(NodeHandle h)
+    {
+        if (!DropSpotlightActive) return false;
+        for (var n = h; !n.IsNull; n = Parent(n))
+            if (_dropSpotlightRoots.Contains((int)n.Raw.Index)) return true;
+        return false;
+    }
+
+    /// <summary>Register a top-band presentation subtree (for example DragPreviewLayer) that must stay legible while
+    /// ordinary app content is dimmed. This is presentation-only and never participates in target discovery.</summary>
+    public void SetDropSpotlightExempt(NodeHandle h, bool exempt)
+    {
+        if (h.IsNull || !IsLive(h)) return;
+        int idx = (int)h.Raw.Index;
+        if (exempt) _dropSpotlightExemptRoots.Add(idx);
+        else _dropSpotlightExemptRoots.Remove(idx);
+    }
+
+    public bool IsUnderDropSpotlightExempt(NodeHandle h)
+    {
+        if (!DropSpotlightActive) return false;
+        for (var n = h; !n.IsNull; n = Parent(n))
+            if (_dropSpotlightExemptRoots.Contains((int)n.Raw.Index)) return true;
+        return false;
+    }
+
+    public NodeHandle DropSpotlightOver => _dropSpotlightActive ? _dropSpotlightOver : NodeHandle.Null;
+
+    /// <summary>Cold drag/reconcile edge: capability-test every opt-in target and publish only compatible live roots.</summary>
+    public void RefreshDropSpotlight(DragSession session)
+    {
+        _dropSpotlightRoots.Clear();
+        foreach (var pair in _dropTargets)
+        {
+            int idx = pair.Key;
+            var spec = pair.Value;
+            if (spec.VisualPolicy != DropTargetVisualPolicy.Spotlight || !spec.Accepts(session.Kind)) continue;
+            var node = new NodeHandle(new Handle((uint)idx, _gen[idx]));
+            if (!IsLive(node) || (_flags[idx] & NodeFlags.Disabled) != 0) continue;
+            if (spec.CanAccept is { } canAccept && !canAccept(session)) continue;
+            _dropSpotlightRoots.Add(idx);
+        }
+        _dropSpotlightActive = _dropSpotlightRoots.Count != 0;
+        if (!_dropSpotlightActive || !_dropSpotlightRoots.Contains((int)_dropSpotlightOver.Raw.Index))
+            _dropSpotlightOver = NodeHandle.Null;
+    }
+
+    public void SetDropSpotlightOver(NodeHandle node)
+        => _dropSpotlightOver = _dropSpotlightActive && IsDropSpotlightRoot(node) ? node : NodeHandle.Null;
+
+    public void ClearDropSpotlight()
+    {
+        _dropSpotlightRoots.Clear();
+        _dropSpotlightOver = NodeHandle.Null;
+        _dropSpotlightActive = false;
+    }
 
     // ── UseGesture subscriptions (input-a11y.md §13; the Hooks⇄Input seam) ──────────────────────────────────────
     /// <summary>Cheap census: any node in the scene declared a <c>UseGesture</c> hook (lets the dispatcher skip the

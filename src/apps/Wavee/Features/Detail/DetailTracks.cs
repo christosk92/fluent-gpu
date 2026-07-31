@@ -234,7 +234,7 @@ sealed class TrackList : Component
         _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeroImmersive = verticalHeroImmersive;
-        _playlistDrop = new PlaylistDropLane(_listCtl);
+        _playlistDrop = new PlaylistDropLane(_listCtl, _dispVer);
     }
 
     int TrackStart => _verticalHeader && !_cfg.HasTrailing ? VerticalTrackStart : 0;
@@ -603,6 +603,7 @@ sealed class TrackList : Component
             _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);
             _viewSavedSet = null;
         }
+        UseLayoutEffect(() => _playlistDrop.ObserveMembership(model.Tracks), DepKey.FromRef(model.Tracks));
 
         int tier = ClampTier(_tier.Value);       // subscribe → re-render (new header/chrome) on a breakpoint cross
         var shape = rowShape.Value;              // the SAME value the persistent rows read — header and rows stay aligned
@@ -751,7 +752,7 @@ sealed class TrackList : Component
                         Controller = _listCtl,
                         CountSignal = _listCount,
                         Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
-                        Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                        Reorder = new ReorderOptions { ItemDisplacement = _playlistDrop.Displacement, DisplacementVersion = _dispVer },
                         Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null, ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null },
                     });
             }
@@ -794,7 +795,7 @@ sealed class TrackList : Component
                         ScrollKey = _route.Value.Name + ":r" + _resetEpoch,
                         OnScrollGeometryChanged = SwipeCloseObserver(),
                     },
-                    Reorder = new ReorderOptions { ItemDisplacement = static _ => (0f, 0f), DisplacementVersion = _dispVer },
+                    Reorder = new ReorderOptions { ItemDisplacement = _playlistDrop.Displacement, DisplacementVersion = _dispVer },
                     Entrance = new EntranceOptions
                     {
                         // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
@@ -814,14 +815,16 @@ sealed class TrackList : Component
         // recycling untouched; newly realized overscan/scroll rows do not replay the navigation reveal.
         Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
         if (model.ContextUri is { Length: > 0 } dropUri && model.Capabilities.CanEditItems
-            && _acts is { } dropActs && _lib is not null)
+            && _acts is { } dropActs && _lib is not null && Context.Scene is { } scene)
         {
             float leading = _verticalHeader && !_cfg.HasTrailing
                 ? verticalHeroH + DetailVerticalLayout.ChromeExtent(verticalHasContentFilter ? ContentFilterChips.VerticalExtent : 0f)
                 : 0f;
-            _playlistDrop.Configure(Context.Scene, visible, rowH, leading,
-                (payload, displaySlot) => WaveeResourceDrop.DepositTracks(
-                    dropActs, dropUri, model.Title, payload, OriginalInsertionIndex(displaySlot)));
+            _playlistDrop.Configure(scene, visible, rowH, leading, TrackStart, dropUri,
+                allowSameListMove: sort.Column == SortColumn.Index && !sort.Descending,
+                commit: (payload, displaySlot) => WaveeResourceDrop.DepositTracksAsync(
+                    dropActs, dropUri, model.Title, payload, OriginalInsertionIndex(displaySlot)),
+                post: _post!);
             list = _playlistDrop.Wrap(list);
         }
 
@@ -1043,7 +1046,7 @@ sealed class TrackList : Component
                 },
                 Reorder = new ReorderOptions
                 {
-                    ItemDisplacement = static _ => (0f, 0f),
+                    ItemDisplacement = _playlistDrop.Displacement,
                     DisplacementVersion = _dispVer,
                 },
                 Entrance = new EntranceOptions

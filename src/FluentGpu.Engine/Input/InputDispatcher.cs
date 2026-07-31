@@ -4519,6 +4519,12 @@ public sealed class InputDispatcher
         ref NodePaint np = ref _scene.Paint(node);
         bool hasItemBand = _scene.TryGetVirtualItemBand(node, out int itemBandPrefix, out float itemBandTopInset);
         bool itemBandAllowsPoint = !hasItemBand || q.Y >= itemBandTopInset;
+        bool hasDisclosure = _scene.TryGetVirtualDisclosure(node, out int disclosureFirst, out int disclosureCount,
+            out float disclosureTop, out float disclosureExtent, out float disclosureT,
+            out int disclosurePrefix, out int disclosureFirstRealized);
+        int disclosureLast = disclosureFirst + disclosureCount;
+        float disclosureBottom = disclosureTop + disclosureExtent * disclosureT;
+        float disclosureShift = -disclosureExtent * (1f - disclosureT);
         var local = q;
         if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
@@ -4532,7 +4538,16 @@ public sealed class InputDispatcher
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), childOrdinal++)
         {
             if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
-            var r = HitAny(c, childLocal, netSx, netSy);
+            int logicalIndex = childOrdinal < disclosurePrefix
+                ? childOrdinal
+                : disclosureFirstRealized + (childOrdinal - disclosurePrefix);
+            bool disclosureBody = hasDisclosure && logicalIndex >= disclosureFirst && logicalIndex < disclosureLast;
+            bool disclosureSuffix = hasDisclosure && logicalIndex >= disclosureLast;
+            if (disclosureBody && (childLocal.Y < disclosureTop || childLocal.Y >= disclosureBottom)) continue;
+            Point2 presentedPoint = disclosureSuffix
+                ? new Point2(childLocal.X, childLocal.Y - disclosureShift)
+                : childLocal;
+            var r = HitAny(c, presentedPoint, netSx, netSy);
             if (!r.IsNull) result = r;
         }
         if (result.IsNull && inside && !YieldsToPassThrough(node))
@@ -4550,6 +4565,12 @@ public sealed class InputDispatcher
         ref NodePaint np = ref _scene.Paint(node);
         bool hasItemBand = _scene.TryGetVirtualItemBand(node, out int itemBandPrefix, out float itemBandTopInset);
         bool itemBandAllowsPoint = !hasItemBand || q.Y >= itemBandTopInset;
+        bool hasDisclosure = _scene.TryGetVirtualDisclosure(node, out int disclosureFirst, out int disclosureCount,
+            out float disclosureTop, out float disclosureExtent, out float disclosureT,
+            out int disclosurePrefix, out int disclosureFirstRealized);
+        int disclosureLast = disclosureFirst + disclosureCount;
+        float disclosureBottom = disclosureTop + disclosureExtent * disclosureT;
+        float disclosureShift = -disclosureExtent * (1f - disclosureT);
         var local = q;
         if (!StepIntoNode(node, ref local, ref netSx, ref netSy)) return NodeHandle.Null;
         float hitW = float.IsNaN(np.PresentedW) ? b.W : np.PresentedW;
@@ -4563,7 +4584,16 @@ public sealed class InputDispatcher
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c), childOrdinal++)
         {
             if (hasItemBand && childOrdinal >= itemBandPrefix && !itemBandAllowsPoint) continue;
-            var r = Hit(c, childLocal, netSx, netSy);
+            int logicalIndex = childOrdinal < disclosurePrefix
+                ? childOrdinal
+                : disclosureFirstRealized + (childOrdinal - disclosurePrefix);
+            bool disclosureBody = hasDisclosure && logicalIndex >= disclosureFirst && logicalIndex < disclosureLast;
+            bool disclosureSuffix = hasDisclosure && logicalIndex >= disclosureLast;
+            if (disclosureBody && (childLocal.Y < disclosureTop || childLocal.Y >= disclosureBottom)) continue;
+            Point2 presentedPoint = disclosureSuffix
+                ? new Point2(childLocal.X, childLocal.Y - disclosureShift)
+                : childLocal;
+            var r = Hit(c, presentedPoint, netSx, netSy);
             if (!r.IsNull) result = r;
         }
 

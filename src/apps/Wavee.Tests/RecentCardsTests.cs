@@ -120,6 +120,31 @@ public class RecentCardsTests
     }
 
     [Fact]
+    public void MapArtist_PrefersWideVisualsHeaderOverLegacyHeader()
+    {
+        var artist = SpotifyExportMapper.MapArtist(Root("""
+        {
+          "uri": "spotify:artist:x",
+          "profile": { "name": "X" },
+          "visuals": {
+            "avatarImage": { "sources": [
+              { "url": "https://i.scdn.co/avatar", "width": 640, "height": 640 }
+            ] },
+            "headerImage": { "sources": [
+              { "url": "https://i.scdn.co/real-wide-header", "width": 2660, "height": 1140 }
+            ] }
+          },
+          "headerImage": { "data": { "sources": [
+            { "url": "https://i.scdn.co/legacy-header", "maxWidth": 1280, "maxHeight": 720 }
+          ] } }
+        }
+        """));
+
+        Assert.Equal("https://i.scdn.co/real-wide-header", artist.HeaderImage?.Url);
+        Assert.Equal("https://i.scdn.co/avatar", artist.Image?.Url);
+    }
+
+    [Fact]
     public void RecentCards_MapsCoverFromRecentsShape()
     {
         // icedamericano.json recents entity: accent from visualIdentityTrait.squareCoverImage.extractedColorSet

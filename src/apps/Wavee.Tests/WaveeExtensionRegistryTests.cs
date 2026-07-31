@@ -30,8 +30,9 @@ public class WaveeExtensionRegistryTests
         SidebarActionTargetMode mode = SidebarActionTargetMode.FixedEntity, string? key = "spotify:album:a1")
         => new(provider, action, mode, key, null);
 
-    static WaveeActionHostState Host(string? track = null, string? context = null, string? route = null)
-        => new(track, context, route);
+    static WaveeActionHostState Host(string? track = null, string? context = null, string? route = null,
+        string? fixedName = null, string? trackName = null, string? routeName = null)
+        => new(track, context, route, fixedName, trackName, routeName);
 
     static WaveeActionTargetResolution Resolve(SidebarActionBinding b,
         WaveeActionTargetModes accepted = WaveeActionTargetModes.All, WaveeActionHostState host = default)
@@ -219,10 +220,12 @@ public class WaveeExtensionRegistryTests
     [Fact]
     public void FixedEntityResolvesAnEntityUriToItsUriAndRoute()
     {
-        var r = Resolve(Binding(mode: SidebarActionTargetMode.FixedEntity, key: "spotify:album:a1"));
+        var r = Resolve(Binding(mode: SidebarActionTargetMode.FixedEntity, key: "spotify:album:a1"),
+            host: Host(fixedName: "Album one"));
         Assert.True(r.Available);
         Assert.Equal("spotify:album:a1", r.Uri);
         Assert.Equal("album:spotify:album:a1", r.RouteKey);
+        Assert.Equal("Album one", r.Name);
     }
 
     [Fact]
@@ -268,22 +271,25 @@ public class WaveeExtensionRegistryTests
     [Fact]
     public void FixedTrackCarriesTheTrackUriAndNoRoute()
     {
-        var r = Resolve(Binding(mode: SidebarActionTargetMode.FixedTrack, key: "spotify:track:t1"));
+        var r = Resolve(Binding(mode: SidebarActionTargetMode.FixedTrack, key: "spotify:track:t1"),
+            host: Host(fixedName: "Track one"));
         Assert.True(r.Available);
         Assert.Equal("spotify:track:t1", r.Uri);
         Assert.Null(r.RouteKey);        // a track is never pinnable and has no detail route of its own
+        Assert.Equal("Track one", r.Name);
     }
 
     [Fact]
     public void NowPlayingResolvesTheLiveTrackAndItsContextRoute()
     {
         var r = Resolve(Binding(mode: SidebarActionTargetMode.NowPlaying, key: null),
-            host: Host(track: "spotify:track:t1", context: "spotify:playlist:p1"));
+            host: Host(track: "spotify:track:t1", context: "spotify:playlist:p1", trackName: "Track one"));
 
         Assert.True(r.Available);
         Assert.Equal("spotify:track:t1", r.Uri);
         Assert.Equal("spotify:playlist:p1", r.ContextUri);
         Assert.Equal("pl:spotify:playlist:p1", r.RouteKey);
+        Assert.Equal("Track one", r.Name);
     }
 
     [Fact]
@@ -299,11 +305,12 @@ public class WaveeExtensionRegistryTests
     public void ActiveRouteResolvesTheCurrentPageAndTheEntityBehindIt()
     {
         var r = Resolve(Binding(mode: SidebarActionTargetMode.ActiveRoute, key: null),
-            host: Host(route: "album:spotify:album:a1"));
+            host: Host(route: "album:spotify:album:a1", routeName: "Album one"));
 
         Assert.True(r.Available);
         Assert.Equal("album:spotify:album:a1", r.RouteKey);
         Assert.Equal("spotify:album:a1", r.Uri);
+        Assert.Equal("Album one", r.Name);
     }
 
     [Fact]

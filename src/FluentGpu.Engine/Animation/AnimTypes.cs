@@ -15,7 +15,7 @@ namespace FluentGpu.Animation;
 /// SizeW/SizeH → PaintDirty. LayoutW/LayoutH are the one deliberate exception to "animation never relays out": a
 /// SizeMode.Reflow track writes the interpolated size into LayoutInput each tick and the host re-solves the nearest
 /// layout boundary, so neighbours reflow smoothly.</summary>
-public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma, BrushFade, HoverFade, PressFade }
+public enum AnimChannel : byte { TranslateX, TranslateY, ScaleX, ScaleY, Rotation, Opacity, SizeW, SizeH, StrokeTrimStart, StrokeTrimEnd, ClipL, ClipT, ClipR, ClipB, LayoutW, LayoutH, BlurSigma, BrushFade, HoverFade, PressFade, DisclosureProgress }
 
 public enum IntegrationMode : byte { Eased, Spring }
 

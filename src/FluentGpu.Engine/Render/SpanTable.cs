@@ -17,6 +17,7 @@ public enum SpanReuseDisabledReason : uint
     Orphans = 1u << 8,
     Detached = 1u << 9,
     ImageContent = 1u << 10,
+    DragSpotlight = 1u << 11,
 }
 
 public readonly record struct DrawSpan(

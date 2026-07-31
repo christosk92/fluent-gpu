@@ -15,6 +15,7 @@ public class PreReleaseMapperTests
     const string PinUri = "spotify:album:4xT3ryrqfutVzV1cJN79Ww";
     const string Thumb = "https://image-cdn-fa.spotifycdn.com/image/ab67616d000075a0e26ed70ca976a8e72ac89dab";
     const string ItemCover = "https://i.scdn.co/image/ab67616d0000b273e26ed70ca976a8e72ac89dab";
+    const string Background = "https://image-cdn-fa.spotifycdn.com/image/ab67617000005910c660587dbf11c555dfd63443";
 
     // Field-for-field the maroon5 `profile.pinnedItem` node: a RELEASED pin (itemV2 present, preReleaseEndDateTime null).
     // `preReleaseEnd` is the one hole — "null" reproduces the shipped asset byte-for-byte.
@@ -113,11 +114,12 @@ public class PreReleaseMapperTests
         Assert.Equal(PinUri, pin.Uri);
         Assert.Equal(Thumb, pin.Cover?.Url);             // thumbnailImage is preferred over the item's coverArt
 
-        // …plus the four new ones, read out of itemV2.data.
+        // …plus the item identity and the artist-authored background used by the rich Artist Pick.
         Assert.Equal(PinUri, pin.ItemUri);
         Assert.Equal("SINGLE", pin.ItemType);
         Assert.Equal("Album", pin.ItemTypename);
         Assert.Null(pin.ReleaseAt);
+        Assert.Equal(Background, pin.BackgroundImage?.Url);
 
         Assert.False(pin.IsUpcoming);                    // no date ⇒ an ordinary promo (the pin's polarity)
         Assert.Equal(PinUri, pin.TargetUri);
@@ -162,7 +164,7 @@ public class PreReleaseMapperTests
     }
 
     [Fact]
-    public void ItemV2Null_LeavesTheFourNewFieldsNull_AndBehavesExactlyAsBefore()
+    public void ItemV2Null_LeavesTheOptionalFieldsNull_AndBehavesExactlyAsBefore()
     {
         var pin = Map(Overview(BarePin())).Pinned;
 
@@ -171,6 +173,7 @@ public class PreReleaseMapperTests
         Assert.Null(pin.ItemType);
         Assert.Null(pin.ItemTypename);
         Assert.Null(pin.ReleaseAt);
+        Assert.Null(pin.BackgroundImage);
         Assert.False(pin.IsUpcoming);
         Assert.Equal("spotify:album:pinOnly", pin.TargetUri);   // falls back to the pin's own uri
         Assert.Equal("https://i.scdn.co/image/thumb", pin.Cover?.Url);

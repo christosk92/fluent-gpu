@@ -21,6 +21,23 @@ public sealed class ItemsViewController
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
+    internal Action<bool>? CompleteDisclosureImpl;
+    internal readonly Signal<int> DisclosureVersion = new(0);
+    internal ItemDisclosureRequest? PendingDisclosure;
+    internal ItemDisclosureRequest? ActiveDisclosure;
+    internal ItemDisclosureRequest? CompletedDisclosure;
+    internal bool DisclosureStarted;
+    internal bool DisclosurePresentationArmed;
+    internal bool DisclosureTrackObserved;
+    internal bool DisclosureNeedsClear;
+    internal int DisclosureStartedItemCount;
+    internal int DisclosureStartedSourceVersion;
+    internal bool DisclosureTracksSourceVersion;
+    internal int DisclosureClearAtCount = int.MaxValue;
+    internal int DisclosureClearAtSourceVersion = int.MaxValue;
+    internal int DisclosureProgressBucket = -1;
+    internal Action<ItemDisclosureDiagnostic>? DisclosureDiagnostic;
+    private long _nextDisclosureOperationId;
 
     /// <summary>The REALIZED virtualized viewport node (<c>Null</c> before mount and for a non-virtual host). The seam a
     /// composing control needs to write per-viewport <c>ScrollState</c> knobs that a frozen-at-mount options record cannot
@@ -79,7 +96,167 @@ public sealed class ItemsViewController
         if (begin is null) commit();
         else begin(normalized, commit);
     }
+
+    /// <summary>Begin or retarget one contiguous disclosure band. Expand callers insert the range first; collapse callers
+    /// supply the mutation that removes it, which runs exactly once after the close reaches zero.</summary>
+    public void BeginDisclosure(ItemDisclosureRange range, ItemDisclosureDirection direction,
+                                Action? collapseCommit = null, Action? settled = null)
+    {
+        if (range.FirstIndex < 0) throw new ArgumentOutOfRangeException(nameof(range));
+        if (range.Count <= 0) throw new ArgumentOutOfRangeException(nameof(range));
+        if (string.IsNullOrEmpty(range.Key)) throw new ArgumentException("A stable logical key is required.", nameof(range));
+        if (direction == ItemDisclosureDirection.Collapse && collapseCommit is null)
+            throw new ArgumentNullException(nameof(collapseCommit));
+
+        var next = new ItemDisclosureRequest(++_nextDisclosureOperationId, range, direction, collapseCommit, settled);
+        var active = ActiveDisclosure;
+        if (active is not null && !string.Equals(active.Range.Key, range.Key, StringComparison.Ordinal))
+            CompleteDisclosure();
+        PendingDisclosure = next;
+        Trace(ItemDisclosureDiagnosticKind.Queued, next, -1, -1, -1f);
+        DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
+    }
+
+    /// <summary>Force the active transaction to its requested endpoint. A pending collapse still commits exactly once.</summary>
+    public void CompleteDisclosure()
+    {
+        var active = ActiveDisclosure;
+        if (active is null)
+        {
+            if (PendingDisclosure is { } pending)
+            {
+                PendingDisclosure = null;
+                if (pending.Direction == ItemDisclosureDirection.Collapse) pending.CollapseCommit?.Invoke();
+                pending.Settled?.Invoke();
+                DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
+            }
+            return;
+        }
+        CompleteDisclosureImpl?.Invoke(active.Direction == ItemDisclosureDirection.Expand);
+        FinishDisclosure(active);
+    }
+
+    internal void StartDisclosure(ItemDisclosureRequest request, int itemCount, int sourceVersion, bool tracksSourceVersion)
+    {
+        CompletedDisclosure = null;
+        ActiveDisclosure = request;
+        PendingDisclosure = null;
+        DisclosureStarted = true;
+        DisclosurePresentationArmed = false;
+        DisclosureTrackObserved = false;
+        DisclosureStartedItemCount = itemCount;
+        DisclosureStartedSourceVersion = sourceVersion;
+        DisclosureTracksSourceVersion = tracksSourceVersion;
+        DisclosureProgressBucket = -1;
+        Trace(ItemDisclosureDiagnosticKind.Starting, request, itemCount, sourceVersion, -1f);
+    }
+
+    internal void ArmDisclosure()
+    {
+        if (ActiveDisclosure is not { } request) return;
+        DisclosurePresentationArmed = true;
+        Trace(ItemDisclosureDiagnosticKind.Armed, request, DisclosureStartedItemCount,
+            DisclosureStartedSourceVersion, request.Direction == ItemDisclosureDirection.Expand ? 0f : 1f);
+    }
+
+    internal void ObserveDisclosure(float progress)
+    {
+        if (ActiveDisclosure is not { } request) return;
+        DisclosureTrackObserved = true;
+        int bucket = Math.Clamp((int)MathF.Floor(Math.Clamp(progress, 0f, 1f) * 4f), 0, 4);
+        if (bucket == DisclosureProgressBucket) return;
+        DisclosureProgressBucket = bucket;
+        Trace(ItemDisclosureDiagnosticKind.Progress, request, DisclosureStartedItemCount,
+            DisclosureStartedSourceVersion, progress);
+    }
+
+    internal void PrepareExpand(ItemDisclosureRange range, Action? settled)
+    {
+        if (ActiveDisclosure is { } active && string.Equals(active.Range.Key, range.Key, StringComparison.Ordinal)) return;
+        if (PendingDisclosure is { } pending && string.Equals(pending.Range.Key, range.Key, StringComparison.Ordinal)) return;
+        var request = new ItemDisclosureRequest(++_nextDisclosureOperationId, range,
+            ItemDisclosureDirection.Expand, null, settled, true);
+        PendingDisclosure = request;
+        Trace(ItemDisclosureDiagnosticKind.Queued, request, -1, -1, -1f);
+    }
+
+    internal void SettleDisclosure()
+    {
+        if (ActiveDisclosure is not { } active) return;
+        FinishDisclosure(active);
+    }
+
+    private void FinishDisclosure(ItemDisclosureRequest request)
+    {
+        CompletedDisclosure = request;
+        ActiveDisclosure = null;
+        PendingDisclosure = null;
+        DisclosureStarted = false;
+        DisclosurePresentationArmed = false;
+        DisclosureTrackObserved = false;
+        DisclosureNeedsClear = true;
+        DisclosureClearAtCount = request.Direction == ItemDisclosureDirection.Collapse
+            ? Math.Max(0, DisclosureStartedItemCount - request.Range.Count)
+            : int.MaxValue;
+        DisclosureClearAtSourceVersion = request.Direction == ItemDisclosureDirection.Collapse
+            ? DisclosureStartedSourceVersion + 1
+            : DisclosureStartedSourceVersion;
+        if (request.Direction == ItemDisclosureDirection.Collapse)
+        {
+            Trace(ItemDisclosureDiagnosticKind.Committing, request, DisclosureStartedItemCount,
+                DisclosureStartedSourceVersion, 0f);
+            request.CollapseCommit?.Invoke();
+        }
+        Trace(ItemDisclosureDiagnosticKind.Settled, request, DisclosureStartedItemCount,
+            DisclosureStartedSourceVersion, request.Direction == ItemDisclosureDirection.Expand ? 1f : 0f);
+        request.Settled?.Invoke();
+        DisclosureVersion.Value = DisclosureVersion.Peek() + 1;
+    }
+
+    internal void DisclosureCleared(bool recovery, int itemCount, int sourceVersion)
+    {
+        var request = CompletedDisclosure ?? ActiveDisclosure ?? PendingDisclosure;
+        DisclosureNeedsClear = false;
+        DisclosureClearAtCount = int.MaxValue;
+        DisclosureClearAtSourceVersion = int.MaxValue;
+        if (request is not null)
+            Trace(recovery ? ItemDisclosureDiagnosticKind.Recovered : ItemDisclosureDiagnosticKind.Cleared,
+                request, itemCount, sourceVersion, -1f);
+        else
+            DisclosureDiagnostic?.Invoke(new ItemDisclosureDiagnostic(
+                recovery ? ItemDisclosureDiagnosticKind.Recovered : ItemDisclosureDiagnosticKind.Cleared,
+                0, default, ItemDisclosureDirection.Expand, itemCount, sourceVersion, -1f));
+        CompletedDisclosure = null;
+    }
+
+    internal void TraceFailure()
+    {
+        if (ActiveDisclosure is { } request)
+            Trace(ItemDisclosureDiagnosticKind.FailedToArm, request, DisclosureStartedItemCount,
+                DisclosureStartedSourceVersion, -1f);
+    }
+
+    private void Trace(ItemDisclosureDiagnosticKind kind, ItemDisclosureRequest request,
+                       int itemCount, int sourceVersion, float progress)
+        => DisclosureDiagnostic?.Invoke(new ItemDisclosureDiagnostic(kind, request.OperationId, request.Range,
+            request.Direction, itemCount, sourceVersion, progress));
 }
+
+/// <summary>A stable contiguous logical range over an ItemsView's expanded item model.</summary>
+public readonly record struct ItemDisclosureRange(string Key, int FirstIndex, int Count);
+
+public enum ItemDisclosureDirection : byte { Expand, Collapse }
+
+public enum ItemDisclosureDiagnosticKind : byte
+{
+    Queued, Starting, Armed, Progress, Committing, Settled, Cleared, Recovered, FailedToArm,
+}
+
+public readonly record struct ItemDisclosureDiagnostic(ItemDisclosureDiagnosticKind Kind, long OperationId,
+    ItemDisclosureRange Range, ItemDisclosureDirection Direction, int ItemCount, int SourceVersion, float Progress);
+
+internal sealed record ItemDisclosureRequest(long OperationId, ItemDisclosureRange Range, ItemDisclosureDirection Direction,
+                                             Action? CollapseCommit, Action? Settled, bool PreparedExpansion = false);
 
 /// <summary>Per-item visual state handed to a custom <see cref="ItemContainerFactory"/> (the L4 skin seam).</summary>
 public readonly record struct ItemChromeState(
@@ -241,6 +418,7 @@ public sealed class ItemsView : Component
     public Func<int, (float from, float delayMs)?>? ItemFadeFrom;
     /// <summary>Optional bound-slot removal choreography, invoked through <see cref="ItemsViewController"/>.</summary>
     public RemovalOptions? Removal;
+    public DisclosureOptions? Disclosure;
 
     public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
@@ -345,6 +523,7 @@ public sealed class ItemsView : Component
             RepaintBoundary = o.RepaintBoundary,
             ItemCountSignal = o.CountSignal,
             Removal = o.Removal,
+            Disclosure = o.Disclosure,
         });
     }
 
@@ -393,6 +572,7 @@ public sealed class ItemsView : Component
             ItemFlipFrom = o.Entrance?.ItemFlipFrom,
             ItemFadeFrom = o.Entrance?.ItemFadeFrom,
             Removal = o.Removal,
+            Disclosure = o.Disclosure,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
@@ -453,6 +633,7 @@ public sealed class ItemsView : Component
             Reorder = o.Reorder,
             Entrance = o.Entrance,
             Removal = o.Removal,
+            Disclosure = o.Disclosure,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
@@ -560,6 +741,13 @@ public sealed class ItemsView : Component
         if (!BoundMode) _ = model.Version.Value;           // subscribe — a selection change re-skins just this window
         int cur = current.Value;                           // subscribe — current moves re-render (focus visuals)
         int dispVer = DisplacementVersion?.Value ?? 0;     // subscribe — reorder drag-delta/dwell re-seeds displacement
+        int disclosureVer = Controller?.DisclosureVersion.Value ?? 0;
+        int disclosureSourceVer = Disclosure?.Version?.Value ?? 0;
+        if (Controller is { } disclosureOwner && Disclosure?.PendingExpand?.Invoke() is { } preparedRange
+            && preparedRange.FirstIndex >= 0 && preparedRange.Count > 0
+            && preparedRange.FirstIndex + preparedRange.Count <= count)
+            disclosureOwner.PrepareExpand(preparedRange,
+                Disclosure.OnExpandSettled is { } onSettled ? () => onSettled(preparedRange) : null);
                                                            //   (crosses the frozen-ComponentEl boundary; the only re-render trigger here)
 
         if (!ReferenceEquals(subscribed.Value, model))     // forward the model's event once per model instance
@@ -993,7 +1181,50 @@ public sealed class ItemsView : Component
                 ? null
                 : (indices, commit) => beginRemoval(
                     viewportNode.Value, indices, removal.Exit, removal.Motion, removal.StaggerMs, commit);
+            ctl.CompleteDisclosureImpl = expanded
+                => Context.CompleteVirtualDisclosure?.Invoke(viewportNode.Value, expanded);
+            ctl.DisclosureDiagnostic = Disclosure?.Diagnostic;
         }
+
+        // Seed after the changed item model has reconciled and laid out, but before paint: an expanding range therefore
+        // starts clipped at zero instead of flashing once at full height.
+        UseLayoutEffect(() =>
+        {
+            if (Controller is not { } ctl) return;
+            var viewport = viewportNode.Value;
+            bool countReady = count <= ctl.DisclosureClearAtCount;
+            bool sourceReady = !ctl.DisclosureTracksSourceVersion
+                || disclosureSourceVer >= ctl.DisclosureClearAtSourceVersion;
+            if (ctl.DisclosureNeedsClear && countReady && sourceReady
+                && Context.ClearVirtualDisclosure is { } clear)
+            {
+                clear(viewport);
+                ctl.DisclosureCleared(recovery: false, count, disclosureSourceVer);
+            }
+            else if (!ctl.DisclosureNeedsClear && ctl.PendingDisclosure is null && ctl.ActiveDisclosure is null
+                     && Context.Scene is { } scene && scene.TryGetScroll(viewport, out var stale)
+                     && float.IsFinite(stale.DisclosureT) && Context.ClearVirtualDisclosure is { } recover)
+            {
+                // A remount/interrupted owner must never inherit a finite disclosure clip forever.
+                recover(viewport);
+                ctl.DisclosureCleared(recovery: true, count, disclosureSourceVer);
+            }
+            if (ctl.PendingDisclosure is not { } request) return;
+            ctl.StartDisclosure(request, count, disclosureSourceVer, Disclosure?.Version is not null);
+            bool started = Context.BeginVirtualDisclosure?.Invoke(
+                viewport, request.Range.FirstIndex, request.Range.Count,
+                request.Direction == ItemDisclosureDirection.Expand) == true;
+            if (started)
+            {
+                ctl.ArmDisclosure();
+                if (request.PreparedExpansion) Disclosure?.OnExpandStarted?.Invoke(request.Range);
+            }
+            else
+            {
+                ctl.TraceFailure();
+                ctl.SettleDisclosure();
+            }
+        }, DepKey.From(HashCode.Combine(disclosureVer, disclosureSourceVer, count)));
 
         // Post-layout: focus the (now realized) keyboard-current container so the engine ring lands on it.
         UseLayoutEffect(() =>
@@ -1265,6 +1496,13 @@ public sealed class ItemsView : Component
             : ((BoxEl)Repeater.ItemsRepeater(count, containerTemplate, in spec, keyOf: KeyOf, transition: Transition))
                 with { OnRealized = h => viewportNode.Value = h };
 
+        ItemsViewController? disclosureController = Controller;
+        bool watchesDisclosure = disclosureController is not null
+            && (disclosureController.PendingDisclosure is not null || disclosureController.ActiveDisclosure is not null);
+        Element[] rootChildren = watchesDisclosure
+            ? [itemsHost, Embed.Comp(() => new ItemsViewDisclosureWatcher(disclosureController!))]
+            : [itemsHost];
+
         return new BoxEl
         {
             // The root stacks along the LIST axis (D1 hygiene): a vertical view is a column so Grow distributes the
@@ -1273,7 +1511,7 @@ public sealed class ItemsView : Component
             Grow = Grow,
             OnKeyDown = OnRootKey,      // bubbles up from the focused ItemContainer (dispatcher key routing)
             OnCharInput = OnRootChar,   // typeahead
-            Children = [itemsHost],
+            Children = rootChildren,
         };
     }
 
@@ -1286,4 +1524,38 @@ public sealed class ItemsView : Component
             Justify = FlexJustify.Center,
             Children = [new TextEl(i < Items.Count ? Items[i] : string.Empty) { Size = 13f, Color = Tok.TextPrimary }],
         };
+}
+
+/// <summary>Frame-clock settle watcher mounted only while one disclosure track is active.</summary>
+internal sealed class ItemsViewDisclosureWatcher : Component
+{
+    private readonly ItemsViewController _controller;
+    public ItemsViewDisclosureWatcher(ItemsViewController controller) => _controller = controller;
+
+    public override Element Render()
+    {
+        long tick = UseContext(FrameClock.Tick);
+        UseEffect(() =>
+        {
+            if (!_controller.DisclosureStarted || _controller.ActiveDisclosure is null
+                || !_controller.DisclosurePresentationArmed) return;
+            var viewport = _controller.Viewport;
+            var anim = Context.Anim;
+            var scene = Context.Scene;
+            if (anim is null || scene is null || viewport.IsNull || !scene.IsLive(viewport))
+            {
+                _controller.TraceFailure();
+                _controller.SettleDisclosure();
+                return;
+            }
+
+            bool presented = scene.TryGetScroll(viewport, out var scroll) && float.IsFinite(scroll.DisclosureT);
+            bool tracked = anim.TryGetTrackValue(viewport, AnimChannel.DisclosureProgress, out float progress);
+            if (tracked) _controller.ObserveDisclosure(progress);
+            else if (presented) _controller.ObserveDisclosure(scroll.DisclosureT);
+            if (!tracked && (presented || _controller.DisclosureTrackObserved))
+                _controller.SettleDisclosure();
+        }, tick);
+        return new BoxEl { Height = 0f, Shrink = 0f, HitTestVisible = false };
+    }
 }

@@ -2031,6 +2031,29 @@ static class AnimSuite
                 $"count={vc.Count} fetches={fetches} hotAlloc={hot} seedFetches={seedFetches} sum={sum}");
         }
 
+        // An already-resident source still benefits from UI virtualization, but it must never enter the remote paging
+        // lifecycle. Replacing the snapshot preserves the mounted collection identity and emits one surgical version edge.
+        {
+            int[] first = [10, 20, 30, 40];
+            var resident = VirtualCollection<int>.FromSnapshot(first);
+            int v0 = resident.Version.Peek();
+            resident.EnsureRange(0, 1000);
+            bool initial = resident.Count == first.Length && resident.PageSize == 1
+                           && resident.IsLoaded(0) && resident.IsLoaded(3) && resident[2] == 30
+                           && !resident.IsLoaded(4) && resident.Version.Peek() == v0;
+
+            resident.ReplaceSnapshot(first);
+            bool coalesced = resident.Version.Peek() == v0;
+            int[] second = [7, 8, 9];
+            resident.ReplaceSnapshot(second);
+            bool replaced = resident.Count == second.Length && resident[0] == 7 && resident[2] == 9
+                            && resident.Version.Peek() == v0 + 1;
+
+            Check("virtual-collection.snapshot: resident data is fetch-free, fully loaded and replaceable in place",
+                initial && coalesced && replaced,
+                $"initial={initial} coalesced={coalesced} replaced={replaced} version={resident.Version.Peek()}");
+        }
+
         // lazy-grid paging runs passively: a cache-backed page can complete synchronously and bump Version. Dispatching
         // that request from Render would write the very signal the count delegate just read (a backwards-write loop).
         {
@@ -2107,9 +2130,48 @@ static class AnimSuite
             float tallTarget = LazyGridMath.ExpandedTarget(700f, 5380f, 1100f, 600f);   // same drawer-less extent
             bool bring = Near(shortTarget, 1072f, 0.5f) && Near(tallTarget, shortTarget, 0.01f);
 
+            var exactTop = LazyGridMath.VisibleRange(0f, vh, rowH, 20, 2, -1, 0f);
+            var exactMid = LazyGridMath.VisibleRange(1000f, vh, rowH, 20, 2, -1, 0f);
+            var exactDrawer = LazyGridMath.VisibleRange(650f, 300f, rowH, 20, 2, 2, 300f);
+            bool exact = exactTop == new LazyGridVisibleRange(0, 4, 2)
+                         && exactMid == new LazyGridVisibleRange(10, 14, 2)
+                         && exactDrawer == new LazyGridVisibleRange(4, 8, 2);
+            float insetTarget = LazyGridMath.ExpandedTarget(700f, 5000f, 1100f, 220f, 72f);
+            bool inset = Near(insetTarget, 1028f, 0.5f);
+
             Check("lazy-grid: window covers the viewport and spacers reserve the exact extent (incl. inline drawer in/above window)",
-                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring,
-                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring={shortTarget:0}/{tallTarget:0}");
+                atTop && mid && largerOverscan && drawerIn && drawerAbove && atEnd && bring && exact && inset,
+                $"top=({v0.FirstRow},{v0.LastRow},pad{v0.TopPad:0}) mid=({v1.FirstRow},{v1.LastRow}) ahead=({vAhead.FirstRow},{vAhead.LastRow}) drawerAboveTopPad={v3.TopPad:0} endLast={vEnd.LastRow} bring={shortTarget:0}/{tallTarget:0} exact={exactTop}/{exactMid}/{exactDrawer} inset={insetTarget:0}");
+        }
+
+        // A flat grid uses the same exact extent at every window boundary. This is the regression for stacked artist
+        // facets: moving realization from the first row to the last may replace cells, but never changes page geometry.
+        {
+            const float rowH = 100f, vh = 320f, drawerH = 260f;
+            const int totalRows = 73, expandedRow = 14;
+            float expected = totalRows * rowH + drawerH;
+            bool extent = true, monotone = true, covers = true;
+            int previousFirst = -1;
+            for (float y = -600f; y <= expected + 600f; y += 7f)
+            {
+                var view = LazyGridMath.Compute(y, vh, rowH, totalRows, 2, expandedRow, drawerH);
+                float block = (view.LastRow - view.FirstRow + 1) * rowH
+                              + (view.DrawerVisible ? drawerH : 0f);
+                extent &= Near(view.TopPad + block + view.BottomPad, expected, 0.01f);
+                monotone &= view.FirstRow >= previousFirst;
+                covers &= view.LastRow >= view.FirstRow;
+                previousFirst = view.FirstRow;
+            }
+
+            _ = LazyGridMath.Compute(500f, vh, rowH, totalRows, 2, expandedRow, drawerH);
+            long a0 = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 200; i++)
+                _ = LazyGridMath.Compute(i * 7f, vh, rowH, totalRows, 2, expandedRow, drawerH);
+            long alloc = GC.GetAllocatedBytesForCurrentThread() - a0;
+
+            Check("lazy-grid.flat-sweep: every realization window preserves one monotone exact extent",
+                extent && monotone && covers && alloc == 0,
+                $"extent={extent} monotone={monotone} covers={covers} alloc={alloc} first={previousFirst}");
         }
 
         // 23t — SizeMode.Relayout restores the DECLARED LayoutInput at settle (auto height stays auto).
@@ -2591,6 +2653,14 @@ static class AnimSuite
             from: 0f, to: delta, indicatorHeight: 16f, outgoing: true, sameDepth: true);
         NavigationSelectionMotion.StartVertical(engine, incoming,
             from: -delta, to: 0f, indicatorHeight: 16f, outgoing: false, sameDepth: true);
+        var immediateOut = scene.Paint(outgoing).LocalTransform;
+        var immediateIn = scene.Paint(incoming).LocalTransform;
+        bool seededImmediately = MathF.Abs(immediateOut.Dy) < 0.01f
+                                 && MathF.Abs(immediateOut.M22 - 1f) < 0.01f
+                                 && MathF.Abs(immediateIn.Dy + delta) < 0.01f
+                                 && MathF.Abs(immediateIn.M22 - 1f) < 0.01f
+                                 && scene.Paint(outgoing).Opacity > 0.99f
+                                 && scene.Paint(incoming).Opacity > 0.99f;
         engine.Tick(0f);
         engine.Tick(NavigationSelectionMotion.DurationMs * NavigationSelectionMotion.StretchPhase);
 
@@ -2611,9 +2681,19 @@ static class AnimSuite
                    && MathF.Abs(settledIn.M22 - 1f) < 0.01f
                    && scene.Paint(outgoing).Opacity < 0.01f
                    && scene.Paint(incoming).Opacity > 0.99f;
-        Check("gate.anim.navigationSelectionWorm", peak && end,
+        NavigationSelectionMotion.StartVertical(engine, outgoing,
+            from: 0f, to: delta, indicatorHeight: 16f, outgoing: true, sameDepth: true);
+        engine.Tick(0f);
+        engine.Tick(80f);
+        NavigationSelectionMotion.SnapVertical(engine, outgoing, visible: false);
+        var reset = scene.Paint(outgoing).LocalTransform;
+        bool resetImmediately = MathF.Abs(reset.Dy) < 0.01f
+                                && MathF.Abs(reset.M22 - 1f) < 0.01f
+                                && scene.Paint(outgoing).Opacity < 0.01f;
+        Check("gate.anim.navigationSelectionWorm", seededImmediately && peak && end && resetImmediately,
             $"peak=({stretchedOut.Dy:0.0},{stretchedIn.Dy:0.0},{stretchedOut.M22:0.00}) " +
-            $"end=({settledOut.Dy:0.0},{settledIn.Dy:0.0},{settledIn.M22:0.00})");
+            $"end=({settledOut.Dy:0.0},{settledIn.Dy:0.0},{settledIn.M22:0.00}) " +
+            $"seed=({immediateIn.Dy:0.0},{immediateIn.M22:0.00}) reset=({reset.Dy:0.0},{reset.M22:0.00})");
     }
 
     static void NestedHoverBoundaryChecks(StringTable strings)
@@ -2670,7 +2750,8 @@ static class AnimSuite
         var lazyScene = new SceneStore();
         var lazyAnim = new AnimEngine(lazyScene);
         var lazyRecon = new TreeReconciler(lazyScene, strings) { Anim = lazyAnim };
-        lazyRecon.ReconcileRoot(new BoxEl { OnClick = static () => { }, Children = [] }, null);
+        var lazyBefore = new BoxEl { OnClick = static () => { }, Children = [] };
+        lazyRecon.ReconcileRoot(lazyBefore, null);
         var lazyRoot = lazyScene.Root;
         lazyScene.Flags(lazyRoot) |= NodeFlags.HoverWithin;
         lazyAnim.SetHover(lazyRoot, true);
@@ -2678,7 +2759,7 @@ static class AnimSuite
         {
             OnClick = static () => { },
             Children = [new BoxEl { Key = "lazy-reveal", Opacity = 0f, HoverOpacity = 1f }],
-        }, null);
+        }, lazyBefore);
         var lazyReveal = lazyScene.FirstChild(lazyRoot);
         bool lazyMountedOn = lazyScene.TryGetInteract(lazyReveal, out var lazyAtMount)
             && lazyAtMount.HoverTarget > 0.99f;

@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Linq;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -15,566 +13,319 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The full-bleed artist hero: the photo (parallax + overscroll-stretch, behind a bottom edge-fade), the headline copy
-// (name / bio / meta / actions), the eyebrow pills, the action affordances, and the optional wide "pinned promo" card.
+// Full-bleed artist photography with a semantic copy veil. The image owns the entire hero; responsive pressure changes
+// the veil axis and copy placement, never the photograph's extent.
 sealed partial class ArtistPage : Component
 {
     readonly Signal<float> _heroWidth = new(ArtistHeroLayout.WideWidth);
 
-    // ── hero banner ──────────────────────────────────────────────────────────────────────────────────────
-    // Collapsing hero: pins at the viewport top and shrinks IN PLACE as you scroll (the WinUI/Spotify large-title
-    // collapse), its presented height riding down to zero while the bottom-anchored copy dissolves and the track list
-    // rises to meet the live edge — then hands off to the compact ArtistShyPill. The collapse is the generic scroll
-    // engine's trailing-anchored presented-height sink (BindSink.PresentedHTrailing): it clips the painted height AND
-    // shifts every child up by the same delta, so the copy + the media edge-fade stay attached to the shrinking edge
-    // with no relayout. See ArtistPage.cs (the pill arms via the sentinel) and the VerticalSlice 23u2 gate.
     Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
-        Action<string, string?> go)
+                   Action<string, string?> go, bool compactCanHit)
     {
-        float heroW = _heroWidth.Value;
-        float h = ArtistHeroLayout.HeroHeightFor(heroW);
-        int albumCount = a.TopAlbums?.Count(al => al.Kind is AlbumKind.Album or AlbumKind.Compilation) ?? 0;
-        int singleCount = a.TopAlbums?.Count(al => al.Kind is AlbumKind.Single or AlbumKind.EP) ?? 0;
-        var bg = a.HeaderImage ?? a.Image;
+        float width = MathF.Max(1f, _heroWidth.Value);
+        var tier = UseRef(ArtistHeroTier.Wide);
+        var metrics = ArtistHeroLayout.For(width, tier.Value);
+        tier.Value = metrics.Tier;
+        float height = metrics.MinHeight;
+        float collapseDistance = ArtistHeroLayout.CollapseDistance(height);
+        var background = a.HeaderImage ?? a.Image;
 
-        // The width-dependent hero body (photo + scrim + bottom-anchored copy). Built once the available width is known.
-        Element Inner(float w, float height)
+        Element Identity()
         {
-            bool wide = w >= 960f && a.Pinned is not null;
+            Element verified = a.Verified
+                ? new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+                    Children =
+                    [
+                        InfoBadge.Icon(Icons.Accept, color: _accent),
+                        Ui.Caption(Loc.Get(Strings.Artist.Verified)) with { Color = Tok.TextSecondary },
+                    ],
+                }
+                : new BoxEl();
 
-            // The artist's circular portrait, doubling as the watch-feed entry point. Sized to the title it sits
-            // beside (the size steps down below 960px so it never crowds the name — it is never dropped by width).
-            float portrait = w >= 960f ? 88f : 64f;
-            // STRICT gate (locked). The circle exists for ONE reason: to carry the artist's MOVING identity beside the
-            // name. The old predicate accepted a watch-feed still, an opaque video file id, OR just an avatar url —
-            // i.e. essentially every artist — so the hero showed a second, static portrait next to the full-bleed hero
-            // photo that already carries the identity, and it was never animated or clickable for most of them.
-            //
-            // The only shape that actually produces a clip is a resolved canvas URL: SpotifyExportMapper sets
-            // CanvasUrl solely for videoType == "URL", and ArtistWatchFeedPicture mounts WatchFeedClip only from
-            // CanvasUrl. VideoFileId stays an opaque id we never play. EntrypointUri is required too, because the clip
-            // layer only exists on the INTERACTIVE path (ArtistWatchFeedPicture returns the bare portrait
-            // otherwise) — a canvas with nowhere to navigate would be a static circle again. A usable still (watch-feed
-            // thumbnail, else the avatar) is required so the poster underneath the clip is a real image, which also
-            // makes PersonPicture's initials circle unreachable from this call site.
-            //
-            // Reduced motion keeps the circle and shows the STILL: ArtistWatchFeedPicture suppresses only the clip
-            // layer, never the portrait — the gate must not conflate "no motion" with "no identity".
             var wf = a.Extras?.WatchFeed;
-            bool hasFace = wf is { EntrypointUri.Length: > 0, CanvasUrl.Length: > 0 }
-                           && (wf.Thumbnail?.Url is { Length: > 0 } || a.Image?.Url is { Length: > 0 });
-            Element? face = hasFace
-                ? ArtistWatchFeedPicture.Create(wf, a.Image, a.Name, portrait,
-                    onOpen: () => go(wf!.EntrypointUri, a.Name))
-                : null;
+            bool hasWatchFeed = wf is { EntrypointUri.Length: > 0, CanvasUrl.Length: > 0 }
+                                && (wf.Thumbnail?.Url is { Length: > 0 } || a.Image?.Url is { Length: > 0 });
+            if (hasWatchFeed)
+            {
+                verified = new BoxEl
+                {
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+                    Children =
+                    [
+                        ArtistWatchFeedPicture.Create(wf, a.Image, a.Name, 36f,
+                            onOpen: () => go(wf!.EntrypointUri, a.Name)),
+                        verified,
+                    ],
+                };
+            }
 
-            // Name row: portrait BESIDE the title, centred on it, so the face and the name read as one identity block
-            // instead of a stack. With no portrait — the COMMON path now that the face gates on a resolved canvas
-            // clip — the row collapses to the title alone; the copy column's Gap/Justify already carry the rhythm,
-            // so no compensating spacing is needed here.
-            Element title = WaveeType.PageHero(a.Name) with
+            TextEl name = metrics.Tier switch
             {
-                Size = HeroSize(a.Name), Weight = 700, Color = WhiteText,
-                Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+                ArtistHeroTier.Wide => WaveeType.ArtistDisplay(a.Name),
+                ArtistHeroTier.Medium => WaveeType.ArtistTitle(a.Name),
+                _ => WaveeType.PageHero(a.Name),
             };
-            Element nameRow = face is null ? title : new BoxEl
+            name = name with
             {
-                Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
-                Children = [face, new BoxEl { Shrink = 1f, Children = [title] }],
-            };
-
-            // The copy column is CLAMPED: measure lines stop growing with the window, so on an ultra-wide hero the name
-            // and meta line stay one readable block on the left instead of a full-bleed ribbon. Shrink=1 so the clamp is
-            // a ceiling, never a floor — the column still yields to the wide pinned card beside it.
-            var copy = new BoxEl
-            {
-                Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S, Grow = 1f, Basis = 0f,
-                MaxWidth = 1120f, Shrink = 1f,
-                Children =
-                [
-                    // De-dup: when the WIDE pinned card is about to state the same countdown a few hundred pixels to the
-                    // right, the eyebrow pill would put one announcement twice in a single viewport-row. Narrow windows
-                    // keep the pill — the card does not render there, so the pill is the only copy.
-                    EyebrowPills(a, suppressPreRelease: wide && a.Pinned is { IsUpcoming: true }),
-                    nameRow,
-                    HeroBioLine(a.Bio, w),
-                    HeroMetaLine(a, albumCount, singleCount),
-                    new BoxEl
-                    {
-                        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
-                        Padding = new Edges4(0f, Spacing.S, 0f, 0f),
-                        Children =
-                        [
-                            PlayPill(play), Fab(Icons.Shuffle, shuffle),
-                            Embed.Comp(() => new FollowButton(uri, a.Name, WhiteText)) with { SkeletonProxy = FollowButton.SkeletonShape },
-                            ArtistRadioPill(radio)
-                        ],
-                    },
-                ],
+                Color = Tok.TextPrimary,
+                Wrap = TextWrap.Wrap,
+                MaxLines = metrics.Stacked ? 3 : 2,
+                MinWidth = 0f,
             };
 
-            // Dissolve the copy gradually from early in the collapse — an even, scroll-linked fade (Linear, so it mirrors
-            // the scroll instead of holding-then-snapping), finishing before the copy would clip under the top edge, so it
-            // reads as a true dissolve rather than a discrete hide. The Play/Follow affordances re-appear in the compact
-            // pill as the hero finishes collapsing, so they can leave with the rest of the copy here.
-            var overlay = new BoxEl
-            {
-                Width = w, Height = height, Direction = 0, AlignItems = FlexAlign.End, Gap = Spacing.XL,
-                // HORIZONTAL inset == ArtistHeroLayout.PageGutter, the same inset the content column below uses, so the
-                // hero name and the first section band start on ONE vertical. Vertical inset stays Spacing.XL.
-                Padding = new Edges4(ArtistHeroLayout.PageGutter, Spacing.XL, ArtistHeroLayout.PageGutter, Spacing.XL),
-                OpacityGroup = true,
-                ScrollBinds =
-                [
-                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(height * 0.16f, height * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
-                ],
-                Children = wide ? [copy, PinnedCard(a.Pinned!, go)] : [copy],
-            };
-
-            // The hero photo + its text scrim. The image fills the wide box COVER-fit, centred. A bottom EDGE FADE
-            // alpha-masks the photo to transparent over its last ArtistHeroLayout.PhotoFadeBandFor(height) so it
-            // composites into the page-over-Mica behind it (and, during the collapse, keeps the live shrinking edge soft
-            // rather than a hard cut).
-            //
-            // While the photo downloads the slot shows a DARK ACCENT WASH (the artist colour, dimmed) rather than a neutral
-            // grey, so the hero reads as the artist's own colour during the load — matching WaveeMusic's dark-base-with-accent
-            // hero. The lifted _accent guarantees a visible hue even when the cover's extracted dark tone is near-black. On
-            // decode the photo reveals via HeroArt's WaveeMusic-matched pop-in (320ms FluentDecelerate fade + 1.0→1.05 zoom).
-            // The media also dissolves on the same scroll interval as the copy; once the compact pill owns the header,
-            // the large photo must be visually gone, not merely behind the content.
-            ColorF HeroWash() => Tok.Theme == ThemeKind.Light
-                ? ColorF.Lerp(WaveeColors.FileArea, _accent, 0.12f)
-                : ColorF.Lerp(ColorF.FromRgba(0x14, 0x14, 0x16), _accent, 0.30f);
-            Element heroArt = bg?.Url is { Length: > 0 } hu
-                ? Embed.Comp(() => new HeroArt(hu, _heroWidth, bg.BlurHash, HeroWash)) with { Key = "heroart:" + hu }
-                : new BoxEl { Width = w, Height = height, Fill = HeroWash() };
-            var media = new BoxEl
-            {
-                Width = w, Height = height, ZStack = true, ClipToBounds = true,
-                ScrollBinds =
-                [
-                    new() { StretchFromTop = true }, // iOS/Spotify stretchy hero (generic scroll bind)
-                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(height * 0.16f, height * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
-                ],
-                TransformOriginX = 0.5f, TransformOriginY = 0f,
-                // HEIGHT-relative bottom fade (0.28·h, bounded): deep enough to still cover the collapse clip line once
-                // the parallax lag (+0.18·h below) has shifted the photo, without spending a fixed 260px of a short
-                // hero on feather. See ArtistHeroLayout.PhotoFadeBandFor.
-                EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, ArtistHeroLayout.PhotoFadeBandFor(height)),
-                Children = [heroArt],
-            };
-            // Parallax: the photo rises at ~65% of the collapse rate, so it lags behind the copy (which rides the live
-            // bottom edge at full rate). The differential between the two layers is the depth cue. Linear because it's
-            // scroll-DRIVEN (the photo's drift must mirror the scroll, not editorialize it). The collapse owner's
-            // ChildShiftY moves this layer up by `offset`; this +0.35·offset counter-translate is what makes it lag.
-            var heroParallax = new BoxEl
-            {
-                Width = w, Height = height, ZStack = true,
-                ScrollBinds =
-                [
-                    new() { From = ScrollChannel.Offset, To = BindSink.TransY, Range = ScrollRange.Px(0f, height), OutStart = 0f, OutEnd = height * 0.18f, Ease = Easing.Linear },
-                ],
-                Children = [media],
-            };
-
-            // Contrast belongs ABOVE the edge-faded media, not inside it. The old scrim was a child of `media`, so the
-            // same Bottom EdgeFade that dissolved the photo also erased its contrast exactly behind the bottom-anchored
-            // copy. A binary black/white palette choice cannot solve mixed collages; this localized veil guarantees the
-            // white hero type/buttons remain readable over both pale faces and dark hair, then fades before the page seam.
-            //
-            // AT MOST 4 STOPS: GradientSpec.MaxStops is 4 and the recorder silently DROPS extras — a 6-stop version of
-            // this veil lost its two release stops, so the last kept stop (peak alpha) held solid to the hero's bottom
-            // edge: a hard-cut dark plate instead of a fade. The shader clamps to the first stop's colour before its
-            // offset, so the transparent top zone needs no explicit 0-offset stop.
-            //
-            // GradientDown, NOT LinearGradient(180f): 180° is the HORIZONTAL axis (right→left) — authored that way
-            // this veil painted a sideways dark band down the hero's full height, which hard-clipped at the
-            // presented-height edge: THE seam line at the hero↔content boundary.
-            //
-            // The protection sits LOW, under the bottom-anchored copy: clear through the top 30% (the photo's face zone
-            // is left alone), ramping in across the middle and peaking at 85% where the name/meta/buttons actually are,
-            // then releasing to 0 at the edge. The last stop's alpha 0 is the seam contract (see ArtistPage.Body) — the
-            // veil must hand off to the shell backdrop, never terminate on a colour.
-            var copyContrast = new BoxEl
-            {
-                Width = w, Height = height, HitTestPassThrough = true,
-                Gradient = GradientDown(
-                    new GradientStop(0.30f, Scrim(0f)),
-                    new GradientStop(0.60f, Scrim(0.40f)),
-                    new GradientStop(0.85f, Scrim(0.55f)),
-                    new GradientStop(1f, Scrim(0f))),
-                ScrollBinds =
-                [
-                    new() { From = ScrollChannel.Offset, To = BindSink.Opacity, Range = ScrollRange.Px(height * 0.16f, height * 0.66f), OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
-                ],
-            };
+            string? sentence = FirstSentence(a.Bio);
+            Element bio = sentence is null
+                ? new BoxEl()
+                : Ui.Body(sentence) with
+                {
+                    Color = Tok.TextSecondary,
+                    Wrap = TextWrap.Wrap,
+                    MaxLines = 2,
+                    Trim = TextTrim.CharacterEllipsis,
+                    MinWidth = 0f,
+                };
 
             return new BoxEl
             {
-                Width = w, Height = height, ZStack = true, ClipToBounds = true,
-                Children = [heroParallax, copyContrast, overlay],
+                Direction = 1,
+                Width = MathF.Min(metrics.CopyMaxWidth, MathF.Max(1f, width - 2f * metrics.Gutter)),
+                MaxWidth = metrics.CopyMaxWidth,
+                MinWidth = 0f,
+                Gap = Spacing.M,
+                Enter = new EnterExit(Dy: Spacing.M, Opacity: 0f, Active: true),
+                Transition = MotionTok.EmphasizedEnter,
+                Children = [verified, name, bio, HeroMeta(a, metrics.Stacked),
+                            HeroActions(a, uri, play, shuffle, radio, metrics.Tier)],
             };
         }
 
-        void MeasureHero(RectF r)
+        ColorF Placeholder() => Surfaces.ArtworkPlaceholder;
+        Element art = background?.Url is { Length: > 0 } source
+            ? Embed.Comp(() => new HeroArt(source, _heroWidth, background.BlurHash, Placeholder))
+                with { Key = "heroart:" + source }
+            : new BoxEl { Width = width, Height = height, Fill = Placeholder() };
+        Element media = new BoxEl
         {
-            if (r.W <= 0f) return;
-            if (MathF.Abs(r.W - _heroWidth.Peek()) > 0.5f) _heroWidth.Value = r.W;
+            Width = width, Height = height, ZStack = true, ClipToBounds = true,
+            TransformOriginX = 0.5f, TransformOriginY = 0f,
+            EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, ArtistHeroLayout.PhotoFadeBandFor(height)),
+            ScrollBinds =
+            [
+                new() { StretchFromTop = true },
+                new()
+                {
+                    From = ScrollChannel.Offset, To = BindSink.TransY,
+                    Range = ScrollRange.Px(0f, height),
+                    OutStart = 0f, OutEnd = height * ArtistHeroLayout.PhotoParallaxFraction,
+                    Ease = Easing.Linear,
+                },
+            ],
+            Children = [art],
+        };
+
+        Element copy = new BoxEl
+        {
+            Width = width, Height = height,
+            Direction = 1,
+            Justify = metrics.Stacked ? FlexJustify.End : FlexJustify.Center,
+            AlignItems = FlexAlign.Start,
+            Padding = new Edges4(metrics.Gutter, Spacing.XXL, metrics.Gutter, Spacing.XXL),
+            Children = [Identity()],
+        };
+
+        void MeasureHero(RectF bounds)
+        {
+            if (bounds.W > 0f && MathF.Abs(bounds.W - _heroWidth.Peek()) > 0.5f)
+                _heroWidth.Value = bounds.W;
         }
 
-        // The pinned collapse owner MUST be a direct child of the tall scroll content: the sticky pin's containing-block
-        // clamp is the PARENT height, and a tight Responsive wrapper (== hero height) clamps the pin to 0 — the bug that
-        // left the empty band (the hero scrolled off while ChildShiftY double-counted). Owning the pin here and measuring
-        // this same node gives it a tall containing block so the pin holds the hero at the top while
-        // PresentedHTrailing rides its height to zero.
+        Element expandedPresentation = new BoxEl
+        {
+            Width = width, Height = height, ZStack = true,
+            HitTestVisible = !compactCanHit,
+            ScrollBinds =
+            [
+                new() { From = ScrollChannel.Offset, To = BindSink.TransY,
+                    Range = ScrollRange.Px(0f, collapseDistance),
+                    OutStart = 0f, OutEnd = -collapseDistance, Ease = Easing.Linear },
+                new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
+                    Range = ScrollRange.Px(ArtistHeroLayout.ExpandedFadeStart(collapseDistance), collapseDistance),
+                    OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+            ],
+            Children =
+            [
+                media,
+                new BoxEl
+                {
+                    Width = width, Height = height, HitTestVisible = false,
+                    Gradient = Surfaces.ArtistHeroVeil(_washAccent ?? _accent, metrics.VeilAxis),
+                },
+                copy,
+            ],
+        };
+        Element compactPresentation = ArtistCompactBar.Build(a, uri, width, metrics.Tier, collapseDistance,
+            _accent, play, compactCanHit);
+
         return new BoxEl
         {
-            Direction = 1, Height = h, ClipToBounds = true,
+            Direction = 1,
+            Height = height,
+            ClipToBounds = true,
+            ZStack = true,
             OnBoundsChanged = MeasureHero,
             ScrollBinds =
             [
                 new() { PinTop = 0f },
-                new() { From = ScrollChannel.Offset, To = BindSink.PresentedHTrailing, Range = ScrollRange.Px(0f, h), OutStart = h, OutEnd = 0f },
-            ],
-            Children = [ Inner(heroW, h) ],
-        };
-    }
-
-    // Display sizes on the stock-Fluent type ramp, not poster sizes: the widest step is 48 (one notch above
-    // Ui.Title's 28) and the ladder compresses to 32 for a long name, so the hero reads as a page title rather than
-    // as artwork typography.
-    static float HeroSize(string name) =>
-        name.Length <= 10 ? 48f : name.Length <= 18 ? 44f : name.Length <= 28 ? 38f : 32f;
-
-    static Element HeroBioLine(string? bio, float w)
-    {
-        string? line = FirstSentence(bio);
-        if (line is null) return new BoxEl();
-        return new TextEl(line)
-        {
-            // Cap 860 (the measure), floored by what the gutter actually leaves — the subtrahend must track
-            // ArtistHeroLayout.PageGutter or a fixed Width overflows the copy column on a narrow hero.
-            Size = 14f, Color = WhiteText with { A = 0.8f }, Wrap = TextWrap.Wrap,
-            Width = MathF.Min(w - 2f * ArtistHeroLayout.PageGutter, 860f),
-            MaxLines = 2, Trim = TextTrim.CharacterEllipsis
-        };
-    }
-
-    // The hero meta strip: "705,764 monthly listeners · 566,287 followers · 10 singles". The COUNTS carry the display
-    // step (18/600 full-strength white), the LABELS and the "·" separators stay at caption size (14, white@0.6) — the
-    // stock-Fluent "big number, small unit" stat pairing. A zero count drops its WHOLE segment — never "0 albums" — so a
-    // thin catalogue just shows fewer facts (and an artist with nothing to report renders nothing).
-    //
-    // A ROW of TextEls, not one SpanTextEl: a span run carries ONE Size for the whole flow (per-span size is
-    // unsupported), which is what forced the old single 14px line. The row reproduces the single-line contract: every
-    // run is NoWrap/MaxLines 1, the counts declare Shrink 0 so a number is never abbreviated, the labels shrink and
-    // ellipsize first, and the row itself clips so a long localized label can never inflate the copy column.
-    //
-    // Spacing is FLEX GAP, not padded strings: trailing/leading spaces are trimmed out of a run's measured width, so
-    // " · " between separate runs is not a reliable gap. Segment-internal gap (number↔label) stays tighter than the
-    // between-segment gap.
-    //
-    // FlexAlign has no Baseline, so End (bottom-align) is the closest approximation of a shared baseline across the
-    // 18px and 14px runs — Center would splay them by ~1.5px.
-    static Element HeroMetaLine(Artist a, int albums, int singles)
-    {
-        ColorF num = WhiteText;                       // primary foreground (the counts)
-        ColorF dim = WhiteText with { A = 0.6f };     // secondary foreground (labels + "·" separators)
-        var runs = new List<Element>(7);
-        void Seg(long value, string text, string label)
-        {
-            if (value <= 0) return;                   // drop a zero/absent segment entirely
-            if (runs.Count > 0)
-                runs.Add(new TextEl("·")
+                new()
                 {
-                    Size = 14f, Color = dim, Wrap = TextWrap.NoWrap, MaxLines = 1, Shrink = 0f,
-                });
-            runs.Add(new BoxEl
+                    From = ScrollChannel.Offset,
+                    To = BindSink.PresentedH,
+                    Range = ScrollRange.Px(0f, collapseDistance),
+                    OutStart = height,
+                    OutEnd = ArtistHeroLayout.CompactIdentityHeight,
+                },
+            ],
+            Children = [expandedPresentation, compactPresentation],
+        };
+    }
+
+    Element HeroActions(Artist a, string uri, Action play, Action shuffle, Action radio, ArtistHeroTier tier)
+    {
+        Element playButton = WaveeCta.Play(_accent, play, Loc.Get(Strings.Artist.Play));
+        Element follow = Embed.Comp(() => new FollowButton(uri, a.Name)) with
+        {
+            Key = "artist-follow:" + uri,
+            SkeletonProxy = FollowButton.SkeletonShape,
+        };
+
+        Element shuffleButton = tier is ArtistHeroTier.Wide or ArtistHeroTier.Medium
+            ? Button.Create(Loc.Get(Strings.Detail.Shuffle), shuffle, ButtonAppearance.Subtle, glyph: Icons.Shuffle)
+            : ToolTip.Wrap(IconButton.Create(Icons.Shuffle, shuffle), Loc.Get(Strings.Detail.Shuffle));
+        Element radioButton = tier is ArtistHeroTier.Wide or ArtistHeroTier.Medium
+            ? Button.Create(Loc.Get(Strings.Artist.ArtistRadio), radio, ButtonAppearance.Subtle, glyph: Icons.RadioTower)
+            : ToolTip.Wrap(IconButton.Create(Icons.RadioTower, radio), Loc.Get(Strings.Artist.ArtistRadio));
+
+        if (tier == ArtistHeroTier.Narrow)
+        {
+            return new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.End, Gap = 5f, MinWidth = 0f, Shrink = 1f,
+                Direction = 1, Gap = Spacing.S,
                 Children =
                 [
-                    new TextEl(text)
-                    {
-                        Size = 18f, Weight = 600, Color = num, Wrap = TextWrap.NoWrap, MaxLines = 1, Shrink = 0f,
-                    },
-                    new TextEl(label)
-                    {
-                        Size = 14f, Color = dim, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                        MinWidth = 0f, Shrink = 1f,   // the labels give first; the counts never do
-                    },
+                    new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = [playButton, follow] },
+                    new BoxEl { Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Children = [shuffleButton, radioButton] },
                 ],
-            });
+            }.Skeletonized(false);
         }
-        Seg(a.MonthlyListeners, Count(a.MonthlyListeners), Loc.Get(Strings.Artist.MetaMonthly));
-        Seg(a.Followers, Count(a.Followers), Loc.Get(Strings.Artist.MetaFollowers));
-        Seg(albums, albums.ToString(), Loc.Get(Strings.Artist.MetaAlbums));
-        Seg(singles, singles.ToString(), Loc.Get(Strings.Artist.MetaSingles));
-        if (runs.Count == 0) return new BoxEl();
+
         return new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.End, Gap = Spacing.S, MinWidth = 0f, Shrink = 1f, ClipToBounds = true,
-            Children = runs.ToArray(),
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+            Children = [playButton, shuffleButton, follow, radioButton],
+        }.Skeletonized(false);
+    }
+
+    static Element HeroMeta(Artist a, bool stacked)
+    {
+        Element rank = a.WorldRank > 0
+            ? Ui.BodyStrong(Strings.Artist.WorldRank(a.WorldRank.ToString())) with { Color = Tok.AccentTextPrimary }
+            : new BoxEl();
+        Element listeners = a.MonthlyListeners > 0
+            ? Ui.Body(Count(a.MonthlyListeners) + " " + Loc.Get(Strings.Artist.MetaMonthly)) with { Color = Tok.TextSecondary }
+            : new BoxEl();
+        Element followers = a.Followers > 0
+            ? Ui.Body(Count(a.Followers) + " " + Loc.Get(Strings.Artist.MetaFollowers)) with { Color = Tok.TextSecondary }
+            : new BoxEl();
+
+        return new BoxEl
+        {
+            Direction = (byte)(stacked ? 1 : 0),
+            AlignItems = stacked ? FlexAlign.Start : FlexAlign.Center,
+            Gap = stacked ? Spacing.XS : Spacing.L,
+            MinWidth = 0f,
+            Children = [rank, listeners, followers],
         };
     }
 
     static string? FirstSentence(string? bio)
     {
         if (string.IsNullOrWhiteSpace(bio)) return null;
-        string plain = StripHtml(bio!);
+        string plain = StripHtml(bio);
         if (plain.Length == 0) return null;
-        int dot = plain.IndexOf(". ", StringComparison.Ordinal);
-        string s = dot > 40 ? plain[..(dot + 1)] : plain;
-        return s.Length > 220 ? s[..220] + "…" : s;
+        int end = plain.IndexOf(". ", StringComparison.Ordinal);
+        return end > 20 ? plain[..(end + 1)] : plain;
     }
 
-    static string StripHtml(string s)
+    static string StripHtml(string value)
     {
-        var sb = new System.Text.StringBuilder(s.Length);
+        var result = new System.Text.StringBuilder(value.Length);
         bool tag = false;
-        foreach (char c in s)
+        foreach (char c in value)
         {
             if (c == '<') tag = true;
             else if (c == '>') tag = false;
-            else if (!tag && c is not ('\r' or '\n')) sb.Append(c);
+            else if (!tag && c is not ('\r' or '\n')) result.Append(c);
         }
-
-        return sb.ToString().Trim();
+        return result.ToString().Trim();
     }
-
-    // <paramref name="suppressPreRelease"/>: the wide hero's pinned card is carrying the same date, so the pill would be
-    // a second copy of one announcement in one viewport-row. Only the pre-release pill is affected; the identity pills
-    // are unconditional.
-    Element EyebrowPills(Artist a, bool suppressPreRelease = false)
-    {
-        var pills = new List<Element>(3);
-        if (a.Verified) pills.Add(VerifiedPill());
-        if (a.WorldRank > 0) pills.Add(GlassPill(Strings.Artist.WorldRank(a.WorldRank.ToString())));
-        // The upcoming release, stated where the identity pills already are. This is the first thing on the page and
-        // the one thing about the artist that expires, so it belongs beside "Verified" rather than in a band of its own
-        // further down — the page already announces the record twice below this point.
-        if (!suppressPreRelease && a.Extras?.PreRelease is { IsUpcoming: true, ReleaseAt: { } due })
-            pills.Add(GlassPill(Loc.Get(Strings.Detail.PreReleaseEyebrow) + " · " + PreReleaseCountdown.Remaining(due - DateTimeOffset.UtcNow)));
-        return pills.Count == 0
-            ? new BoxEl()
-            : new BoxEl
-            {
-                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Wrap = true, Children = pills.ToArray()
-            };
-    }
-
-    Element VerifiedPill() => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f,
-        Padding = new Edges4(8f, 4f, 12f, 4f), Corners = CornerRadius4.All(13f), Fill = _accent,
-        Children =
-        [
-            Icon(Icons.Check, 12f, ColorContrast.PickContrast(_accent)),
-            new TextEl(Loc.Get(Strings.Artist.Verified))
-                { Size = 11f, Weight = 700, Color = ColorContrast.PickContrast(_accent), CharSpacing = 20f }
-        ],
-    };
-
-    static Element GlassPill(string text) => new BoxEl
-    {
-        Padding = new Edges4(12f, 5f, 12f, 5f), Corners = CornerRadius4.All(13f), Fill = WhiteText with { A = 0.16f },
-        Children =
-        [
-            new TextEl(text) { Size = 11f, Weight = 700, Color = WhiteText with { A = 0.95f }, CharSpacing = 20f }
-        ],
-    };
-
-    // ── hero pinned promo card ───────────────────────────────────────────────────────────────────────────
-    // The artist's own pin. When what is pinned has not dropped yet the card re-dresses as the announcement — clock
-    // eyebrow, "Coming soon", and a date + countdown line where the artist's comment would be. The gate is
-    // PinnedItem.IsUpcoming, a WALL-CLOCK comparison (and deliberately false for a null date, unlike ArtistPreRelease),
-    // so an ordinary released pin renders byte-identically to before and a stale pin heals itself the moment the record
-    // lands, with no refetch. Still a static factory: no hooks, no ticking.
-    static Element PinnedCard(PinnedItem p, Action<string, string?> go)
-    {
-        bool upcoming = p.IsUpcoming;
-        ColorF eyebrowInk = WhiteText with { A = 0.7f };
-
-        // The third line. STATIC text on purpose: this card lives in the hero, which collapses to zero height on the
-        // first scroll, so a live ticker here would wake the app to re-render something nobody can see. The live clock
-        // is the Releases-column masthead; the hero pill and the shy pill are static for the same reason.
-        Element third = new BoxEl();
-        if (upcoming && p.ReleaseAt is { } due)
-            third = new TextEl(Strings.Detail.ReleasesOn(DetailFormat.ShortDate(due)) + " · " +
-                               PreReleaseCountdown.Remaining(due - DateTimeOffset.UtcNow))
-            {
-                Size = 12f, Weight = 600, Color = WhiteText, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
-            };
-        else if (p.Comment.Length > 0)
-            third = new TextEl(p.Comment)
-            {
-                Size = 12f, Color = WhiteText with { A = 0.75f }, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
-            };
-
-        return new BoxEl
-        {
-            Width = 320f, Shrink = 0f, Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M),
-            Corners = CornerRadius4.All(Radii.Card), Fill = Scrim(0.55f), ClipToBounds = true,
-            HoverFill = Scrim(0.65f),
-            // TargetUri is the pinned ITEM when the wire named one, else the pin's own uri (every pre-itemV2 payload).
-            // RouteForUri handles both schemes — it answers "album:"+uri for an album uri, so a released pin routes
-            // exactly as it did before, and it answers the prerelease route for a spotify:prerelease: pin. The literal
-            // fallback keeps a uri it cannot classify on the album route rather than on the generic stub.
-            OnClick = () => go(RichText.RouteForUri(p.TargetUri) ?? ("album:" + p.Uri), p.Title),
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = 64f, Height = 64f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control),
-                    ClipToBounds = true,
-                    Children =
-                    [
-                        Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 64f, 64f, Radii.Control,
-                            decodePx: 256)
-                    ]
-                },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
-                    Children =
-                    [
-                        new BoxEl
-                        {
-                            Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-                            Children =
-                            [
-                                Icon(upcoming ? Icons.Clock : Icons.Pin, 11f, eyebrowInk),
-                                // White-alpha ink in BOTH dresses. This card sits on the artist PHOTO behind a 0.55
-                                // scrim, and the page accent is extracted from that same artwork — accent-on-photo has
-                                // no guaranteed contrast, so it would be legible on one artist and invisible on the
-                                // next. The glyph swap plus the copy carry the state change; the ink does not.
-                                new TextEl(upcoming ? Loc.Get(Strings.Detail.PreReleaseEyebrow) : p.Eyebrow)
-                                    { Size = 10f, Weight = 700, Color = eyebrowInk, CharSpacing = 20f }
-                            ]
-                        },
-                        new TextEl(p.Title)
-                        {
-                            Size = 15f, Weight = 700, Color = WhiteText, MaxLines = 1, Trim = TextTrim.CharacterEllipsis
-                        },
-                        third,
-                    ]
-                },
-            ],
-        };
-    }
-
-    // ── action affordances ───────────────────────────────────────────────────────────────────────────────
-    Element PlayPill(Action onPlay)
-        => HeroCta.Pill(Icons.Play, Loc.Get(Strings.Artist.Play), _accent, ColorContrast.PickContrast(_accent), onPlay);
-
-    // Icon-only over the hero photo: stays a circle with its scale cue (unconverted by design).
-    static Element Fab(string glyph, Action onClick) => new BoxEl
-    {
-        Width = 44f, Height = 44f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(22f),
-        HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
-        Children = [Icon(glyph, 18f, WhiteText)],
-    }.Interactive(Interaction.Subtle);
-
-    // The media pill (WaveeCta: capsule / 36 / hand cursor / scale cue) on a PHOTO-LOCAL palette rather than
-    // ButtonAppearance.Outline: the stock neutral ramp is theme-keyed, so in Light it would drop a near-white plate with
-    // dark ink onto the hero photo, beside a white-ink Follow pill and a white-glyph Shuffle Fab. The white ramp already
-    // proven on this row (border white@0.35, hover white@0.12) is kept as the color axis only — Button still owns the
-    // timing, the focus ring and the automation role. 36 matches the Follow pill beside it, so the row is unchanged.
-    static Element ArtistRadioPill(Action onClick) => WaveeCta.Pill(
-        Loc.Get(Strings.Artist.ArtistRadio), onClick, ButtonAppearance.Standard,
-        palette: new Button.ButtonPalette(
-            Background: new StateBrush(ColorF.Transparent, WhiteText with { A = 0.12f },
-                                       WhiteText with { A = 0.08f }, ColorF.Transparent),
-            Foreground: new StateBrush(WhiteText, WhiteText, WhiteText with { A = 0.75f }, WhiteText with { A = 0.40f }),
-            Border: Button.BorderRamp.Flat(GradientSpec.Solid(WhiteText with { A = 0.35f })),
-            Sizing: BackgroundSizing.InnerBorderEdge),
-        glyph: Icons.RadioTower);
 }
 
-// The artist hero photo with a WaveeMusic-matched load-in. The engine's built-in image reveal is an opacity cross-fade —
-// here 320ms FluentDecelerate, which is the EXACT curve (cubic-bezier 0.1,0.9,0.2,1.0) and ~timing of WaveeMusic's
-// HeroHeader pop-in. This component adds the second half WaveeMusic does and a bare Ui.Image can't: a 1.0→1.05 scale-settle
-// that fires the instant the photo decodes. The photo rests at 1.05 (declared static, so any re-render after the one-shot
-// settles back onto it — a finite anim track frees on completion); the zoom keyframe seeds exactly ONCE on the
-// loading→ready edge (latched, so a re-render mid-flight can't restart it). Like CoverShimmer it reads the load-state from
-// the displayed image's EXACT decode handle (same src + (w,h) per ImageDecodeTarget), so it forks no second decode.
 sealed class HeroArt : Component
 {
-    const float RevealFadeMs = 320f;    // opacity 0→1 — matches WaveeMusic's keyframe reaching full at 0.4×800ms
-    const float RevealScaleMs = 800f;   // scale 1.0→1.05 over the full WaveeMusic pop-in duration
-    const float RestScale = 1.05f;      // WaveeMusic FinalScale — the photo settles (and rests) at a 5% crop-zoom
-    // Static overscan + lift, and they MOVE TOGETHER: the frame extends (FrameScale-1)/2 = 4% of h past each edge, and
-    // the lift spends exactly that 4% moving pixels up, so the frame's bottom edge lands at the slot's bottom edge. The
-    // host's RestScale (1.05, applied outside this frame) is what keeps real slack there — raise the lift without
-    // raising the scale and the frame edge walks into view.
-    const float FrameScale = 1.08f;     // makes portrait panning visible even when source/slot AR match
-    const float FrameLiftFrac = 0.04f;  // move decoded pixels up inside the clipped hero slot
+    const float RestScale = 1.05f;
+    const float FrameScale = 1.08f;
+    const float FrameLiftFraction = 0.04f;
     static readonly Keyframe[] ZoomIn = [new(0f, 1f), new(1f, RestScale, Easing.FluentDecelerate)];
     static readonly Keyframe[] Rest = [new(0f, RestScale), new(1f, RestScale)];
 
     readonly string _url;
     readonly IReadSignal<float> _width;
     readonly string? _blurHash;
-    readonly Func<ColorF> _wash;
-    public HeroArt(string url, IReadSignal<float> width, string? blurHash, Func<ColorF> wash)
-    { _url = url; _width = width; _blurHash = blurHash; _wash = wash; }
+    readonly Func<ColorF> _placeholder;
+
+    public HeroArt(string url, IReadSignal<float> width, string? blurHash, Func<ColorF> placeholder)
+    { _url = url; _width = width; _blurHash = blurHash; _placeholder = placeholder; }
 
     public override Element Render()
     {
-        float w = MathF.Max(1f, _width.Value);
-        float h = ArtistHeroLayout.HeroHeightFor(w);
+        float width = MathF.Max(1f, _width.Value);
+        var tier = UseRef(ArtistHeroTier.Wide);
+        var metrics = ArtistHeroLayout.For(width, tier.Value);
+        tier.Value = metrics.Tier;
+        float height = metrics.MinHeight;
 
-        // Latch the decode target on the first real measure. ImageCache keys (src, W, H) — rebinding decodePx to the
-        // live layout width on every bounds pass was blanking a warm hero (Pending + reveal fade) on resize / first
-        // measure correction. Layout stays fluid; only the decode hint is frozen (capped so ultra-wide windows don't
-        // request a giant texture).
         var decode = UseRef((0, 0));
-        if (decode.Value.Item1 <= 0 && w > 1f)
+        if (decode.Value.Item1 <= 0 && width > 1f)
         {
-            int dw = Math.Clamp((int)MathF.Round(w), 320, 1920);
-            int dh = Math.Max(1, (int)MathF.Round(dw * (h / w)));
-            decode.Value = (dw, dh);
+            int decodeW = Math.Clamp((int)MathF.Round(width), 320, 1920);
+            int decodeH = Math.Max(1, (int)MathF.Round(decodeW * (height / width)));
+            decode.Value = (decodeW, decodeH);
         }
-        int decodeW = decode.Value.Item1 > 0 ? decode.Value.Item1 : (int)w;
-        int decodeH = decode.Value.Item2 > 0 ? decode.Value.Item2 : Math.Max(1, (int)h);
-        float decodeAspect = (float)decodeW / decodeH;
+        int dw = decode.Value.Item1 > 0 ? decode.Value.Item1 : (int)width;
+        int dh = decode.Value.Item2 > 0 ? decode.Value.Item2 : Math.Max(1, (int)height);
+        float aspect = (float)dw / dh;
 
-        // Fire the zoom only once the photo is actually resident. Latch on the first Ready/Failed so the tile then stops
-        // calling UseImage (unsubscribes from the image epoch → no steady-state re-render) and a later re-render can't
-        // re-trigger the settle. UseImage consumes no hook cell, so the conditional call is safe (mirrors CoverShimmer).
         var settled = UseRef(false);
         var zoom = UseRef(false);
-        bool cacheWarm = false;
+        bool warm = false;
         if (!settled.Value)
         {
-            var state = UseImage(_url, decodeW, decodeH).State;   // SAME (src,w,h) as the displayed image → shared handle
-            cacheWarm = state == ImageState.Ready;
+            var state = UseImage(_url, dw, dh).State;
+            warm = state == ImageState.Ready;
             if (state == ImageState.Ready) { settled.Value = true; zoom.Value = true; }
-            else if (state == ImageState.Failed) settled.Value = true;   // no photo → no zoom, just stop probing
+            else if (state == ImageState.Failed) settled.Value = true;
         }
-        // One-shot 1.0→1.05 on the ready edge; otherwise hold the resting 1.05. Keyed by the latch so the layout-effect
-        // re-seeds exactly once (the finite track frees on completion and settles back onto the element's RestScale).
         Keyframe[] keys = zoom.Value ? ZoomIn : Rest;
-        float dur = zoom.Value ? RevealScaleMs : 1f;
-        UseKeyframes(AnimChannel.ScaleX, keys, dur, false, DepKey.From(zoom.Value));
-        UseKeyframes(AnimChannel.ScaleY, keys, dur, false, DepKey.From(zoom.Value));
-        // The reveal zoom rides this host. A nested static frame adds real overscan + lift; FocusY alone only changes
-        // visible pixels when Cover actually crops the decoded source, so same-ratio Spotify hero art needs this pan.
-        //
-        // Own the LIVE hero slot (Width/Height = current HeroHeightFor(w)). The ComponentEl anchor is column flex, not a
-        // ZStack — a NaN-sized root would measure to the Image's latched decodeAspect (wide/short) and leave a gap under
-        // the photo when the live hero is taller (narrow widths). Explicit size fills media so EdgeFade still has pixels
-        // to fade. Decode stays on the latched (decodeW, decodeAspect) so resize can't restart the reveal. Origin defaults
-        // to centre; the parent `media` box clips the 5% scale overscan, cover-fit crops.
-        // Skip the placeholder crossfade when the cache already has this decode — avoids a blank flash on warm nav.
-        var reveal = cacheWarm || settled.Value
-            ? ImageTransition.None
-            : ImageTransition.Fade(RevealFadeMs);
+        float duration = zoom.Value ? MotionTok.EmphasizedEnter.DurationMs : MotionTok.ControlFaster.DurationMs;
+        UseKeyframes(AnimChannel.ScaleX, keys, duration, false, DepKey.From(zoom.Value));
+        UseKeyframes(AnimChannel.ScaleY, keys, duration, false, DepKey.From(zoom.Value));
+        var reveal = warm || settled.Value ? ImageTransition.None : ImageTransition.Fade(MotionTok.StandardEnter.DurationMs);
+
         return new BoxEl
         {
-            Width = w, Height = h, ZStack = true, ScaleX = RestScale, ScaleY = RestScale,
+            Width = width, Height = height, ZStack = true, ScaleX = RestScale, ScaleY = RestScale,
             Children =
             [
                 new BoxEl
@@ -582,12 +333,12 @@ sealed class HeroArt : Component
                     ZStack = true,
                     ScaleX = FrameScale,
                     ScaleY = FrameScale,
-                    OffsetY = -h * FrameLiftFrac,
+                    OffsetY = -height * FrameLiftFraction,
                     Children =
                     [
-                        Ui.Image(_url, ImageFit.Cover, aspect: decodeAspect, decodePx: decodeW, corners: 0f,
-                                placeholder: _wash(), blurHash: _blurHash, transition: reveal)
-                            with { FocusY = 0.35f },
+                        Ui.Image(_url, ImageFit.Cover, aspect: aspect, decodePx: dw, corners: 0f,
+                                 placeholder: _placeholder(), blurHash: _blurHash, transition: reveal)
+                            with { FocusX = 0.62f, FocusY = 0.34f },
                     ],
                 },
             ],

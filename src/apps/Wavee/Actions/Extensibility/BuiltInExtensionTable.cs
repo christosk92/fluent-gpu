@@ -110,11 +110,12 @@ public static class BuiltInExtensionTable
         // playlist). They used to share `Strings.Menu.Save`, so every surface that lists the registry — the sidebar's
         // action picker most visibly — showed two consecutive rows both reading "Save" with the same heart, tellable apart
         // only by clicking one (round-2 defect 6b). NEITHER is dropped: removing either makes its target kind unbindable.
-        // `menu.saveToLiked` / `menu.saveToLibrary` were already in the catalog and previously unreferenced from C#.
+        // `menu.saveToLiked` / `menu.saveToLibrary` were already in the catalog and previously unreferenced from C#. The
+        // semantic Like/Save icon keys now keep the two rows visually distinct as well.
         r.RegisterAction(new WaveeActionDescriptor
         {
             Key = KeyToggleLike, LegacyId = ActionId.ToggleLike,
-            LabelLocKey = Strings.Menu.SaveToLiked, IconKey = ActionIcons.Heart,
+            LabelLocKey = Strings.Menu.SaveToLiked, IconKey = ActionIcons.Like,
             AcceptedTargets = WaveeActionTargetModes.FixedTrack | WaveeActionTargetModes.NowPlaying,
             RequiredPermissions = [WaveePermissions.LibraryWrite],
             IsEnabled = static (s, _) => s.Library is not null,
@@ -122,7 +123,7 @@ public static class BuiltInExtensionTable
             Run = static (s, _, t) =>
             {
                 if (s.Library is not { } lib || t.Uri.Length == 0) return;
-                lib.ToggleSaved(t.Uri);
+                lib.ToggleSaved(t.Uri, t.Name);
             },
         });
 
@@ -132,7 +133,7 @@ public static class BuiltInExtensionTable
         r.RegisterAction(new WaveeActionDescriptor
         {
             Key = KeySaveContext, LegacyId = ActionId.SaveContext,
-            LabelLocKey = Strings.Menu.SaveToLibrary, IconKey = ActionIcons.Heart,
+            LabelLocKey = Strings.Menu.SaveToLibrary, IconKey = ActionIcons.Save,
             AcceptedTargets = WaveeActionTargetModes.FixedEntity,
             RequiredPermissions = [WaveePermissions.LibraryWrite],
             IsEnabled = static (s, _) => s.Library is not null,
@@ -140,7 +141,7 @@ public static class BuiltInExtensionTable
             Run = static (s, _, t) =>
             {
                 if (s.Library is not { } lib || t.Uri.Length == 0) return;
-                lib.ToggleSaved(t.Uri);
+                lib.ToggleSaved(t.Uri, t.Name);
             },
         });
 

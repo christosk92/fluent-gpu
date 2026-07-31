@@ -107,6 +107,7 @@ float4 PSMain(VSOut i) : SV_Target
     col.rgb = lerp(pgray.xxx, col.rgb, i.maskParams.w);
     float2 s = sign(i.local);
     float r = (s.x < 0.0) ? (s.y < 0.0 ? i.radii.x : i.radii.w) : (s.y < 0.0 ? i.radii.y : i.radii.z);
+    r = min(r, min(i.halfSize.x, i.halfSize.y));
     float2 q = abs(i.local) - (i.halfSize - r);
     float d = min(max(q.x, q.y), 0.0) + length(max(q, 0.0)) - r;
     float fw = max(fwidth(d), 1e-4);

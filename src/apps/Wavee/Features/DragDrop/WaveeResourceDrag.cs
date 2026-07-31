@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
+using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using Wavee.Core;
 
 namespace Wavee;
@@ -112,6 +114,21 @@ static class WaveeResourceDrag
         ReorderPayload { Item: WaveeResourceDragPayload wrapped } => wrapped,
         _ => null,
     };
+
+    /// <summary>One root-mounted count badge for a multi-track drag. The engine still lifts the source row; this only
+    /// communicates the rest of the ordered selection without cloning a second track-list subtree under the pointer.</summary>
+    public static Element? Preview(DragState state)
+    {
+        if (!string.Equals(state.Kind, WaveeDragKinds.Resource, StringComparison.Ordinal)
+            || Unwrap(state.Payload)?.Tracks is not { Count: > 1 } tracks) return null;
+        return InfoBadge.Count(tracks.Count) with
+        {
+            OffsetX = Spacing.M,
+            OffsetY = -Spacing.L,
+            Shadow = Elevation.Flyout,
+            HitTestVisible = false,
+        };
+    }
 }
 
 static class WaveeResourceDrop
@@ -148,10 +165,18 @@ static class WaveeResourceDrop
     /// resolves to an ordered track snapshot and copies it. A null insertion index means append (sidebar target).</summary>
     public static void DepositTracks(ActionServices acts, string targetUri, string targetName,
                                      object? payload, int? insertionIndex)
+        => _ = DepositTracksAsync(acts, targetUri, targetName, payload, insertionIndex);
+
+    /// <summary>The awaitable deposit seam used by live insertion previews. The library mutation source publishes its
+    /// optimistic snapshot synchronously before the returned network task completes, so callers can hand visual ownership
+    /// to the real list immediately while still retaining an error-completion edge.</summary>
+    public static Task DepositTracksAsync(ActionServices acts, string targetUri, string targetName,
+                                          object? payload, int? insertionIndex)
     {
-        if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { } resource) return;
-        if (!resource.CanCopyTracks) return;
-        _ = Run();
+        if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { } resource)
+            return Task.CompletedTask;
+        if (!resource.CanCopyTracks) return Task.CompletedTask;
+        return Run();
 
         async Task Run()
         {

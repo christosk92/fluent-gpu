@@ -17,9 +17,9 @@ public static class NavigationSelectionMotion
     public static void SnapVertical(AnimEngine anim, NodeHandle indicator, bool visible)
     {
         anim.CancelAll(indicator);
-        Place(anim, indicator, AnimChannel.TranslateY, 0f);
-        Place(anim, indicator, AnimChannel.ScaleY, 1f);
-        Place(anim, indicator, AnimChannel.Opacity, visible ? 1f : 0f);
+        PlaceImmediate(anim, indicator, AnimChannel.TranslateY, 0f);
+        PlaceImmediate(anim, indicator, AnimChannel.ScaleY, 1f);
+        PlaceImmediate(anim, indicator, AnimChannel.Opacity, visible ? 1f : 0f);
     }
 
     /// <summary>
@@ -38,14 +38,31 @@ public static class NavigationSelectionMotion
             return;
         }
 
-        Place(anim, indicator, AnimChannel.Opacity, 1f);
+        PlaceImmediate(anim, indicator, AnimChannel.Opacity, 1f);
         if (!sameDepth)
         {
-            Place(anim, indicator, AnimChannel.TranslateY, 0f);
+            bool towardBelow = from < to;
+            // WinUI anchors a cross-depth indicator at the edge facing its peer. FluentGpu standardizes this primitive
+            // on a top-edge transform origin, so a bottom anchor is the equivalent translate H*(1-scale).
+            float translateFrom = outgoing
+                ? 0f
+                : towardBelow ? 0f : indicatorHeight;
+            float translateTo = outgoing
+                ? towardBelow ? indicatorHeight : 0f
+                : 0f;
+            float scaleFrom = outgoing ? 1f : 0f;
+            float scaleTo = outgoing ? 0f : 1f;
+            PlaceImmediate(anim, indicator, AnimChannel.TranslateY, translateFrom);
+            PlaceImmediate(anim, indicator, AnimChannel.ScaleY, scaleFrom);
+            anim.KeyframesMotion(indicator, AnimChannel.TranslateY,
+            [
+                new(0f, translateFrom),
+                new(1f, translateTo, Easing.Linear),
+            ], DurationMs, ReducedMotionPolicy.KeepFade);
             anim.KeyframesMotion(indicator, AnimChannel.ScaleY,
             [
-                new(0f, outgoing ? 1f : 0f),
-                new(1f, outgoing ? 0f : 1f, Easing.Linear),
+                new(0f, scaleFrom),
+                new(1f, scaleTo, Easing.Linear),
             ], DurationMs, ReducedMotionPolicy.KeepFade);
             return;
         }
@@ -68,6 +85,8 @@ public static class NavigationSelectionMotion
             new(1f, 1f, Easing.FluentDecelerate),
         ];
 
+        PlaceImmediate(anim, indicator, AnimChannel.TranslateY, top[0].Value);
+        PlaceImmediate(anim, indicator, AnimChannel.ScaleY, scale[0].Value);
         anim.KeyframesMotion(indicator, AnimChannel.TranslateY, top, DurationMs, ReducedMotionPolicy.KeepFade);
         anim.KeyframesMotion(indicator, AnimChannel.ScaleY, scale, DurationMs, ReducedMotionPolicy.KeepFade);
         if (outgoing)
@@ -79,6 +98,6 @@ public static class NavigationSelectionMotion
             ], DurationMs, ReducedMotionPolicy.KeepFade);
     }
 
-    static void Place(AnimEngine anim, NodeHandle node, AnimChannel channel, float value)
-        => anim.SeedEased(node, channel, value, value, 1f, Easing.Linear);
+    static void PlaceImmediate(AnimEngine anim, NodeHandle node, AnimChannel channel, float value)
+        => anim.ApplyImmediate(node, channel, value);
 }

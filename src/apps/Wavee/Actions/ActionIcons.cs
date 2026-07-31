@@ -13,6 +13,9 @@ public static class ActionIcons
     public const string Play = "play";
     public const string PlayNext = "play-next";
     public const string Queue = "queue";
+    public const string Like = "like";
+    public const string Save = "save";
+    /// <summary>Legacy semantic key retained for existing app actions; new descriptors choose Like or Save explicitly.</summary>
     public const string Heart = "heart";
     public const string Add = "add";
     public const string Album = "album";
@@ -51,7 +54,9 @@ public static class ActionIcons
         // Heart: the layered two-tone Like toggle — a neutral outline "Heart" when unliked, the accent-filled
         // "HeartFill" when liked (Segoe glyph fallbacks until the themed registry is warm). The strip renders the
         // accent from the icon's own Accent layer; the checked-strip fg tint covers the glyph-fallback case.
-        Heart => isChecked ? IconRef.Themed("HeartFill", Icons.HeartFill) : IconRef.Themed("Heart", Icons.Heart),
+        Like or Heart => isChecked ? IconRef.Themed("HeartFill", Icons.HeartFill) : IconRef.Themed("Heart", Icons.Heart),
+        // Saving a container is not liking a track. The add/check pair keeps both registry rows visually distinct.
+        Save => isChecked ? Icons.Check : IconRef.Themed("Add", Icons.Add),
         Add => IconRef.Themed("Add", Icons.Add),
         Album => Icons.Album,
         Artist => Icons.Contact,

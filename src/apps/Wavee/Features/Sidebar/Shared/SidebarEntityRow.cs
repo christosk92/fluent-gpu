@@ -5,6 +5,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 using Wavee.Core.Sidebar;
 using static FluentGpu.Dsl.Ui;
 

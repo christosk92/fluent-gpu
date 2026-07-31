@@ -2117,6 +2117,24 @@ sealed class ImageProbe : Component
     };
 }
 
+// Image commands normalize fully-rounded authoring radii against the final draw rect, including fluid/non-square boxes.
+sealed class ImageCornerClampProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Direction = 0, Gap = 8f,
+        Children =
+        [
+            Ui.Image("radius/square.jpg", 36f, 36f, Radii.Full),
+            new ImageEl
+            {
+                Source = "radius/non-square.jpg", Width = 40f, Height = 24f,
+                Corners = new CornerRadius4(Radii.Full, 6f, Radii.Full, 0f),
+            },
+        ],
+    };
+}
+
 sealed class BakedImageProbe : Component
 {
     public override Element Render() => new BoxEl

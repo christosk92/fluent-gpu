@@ -2,6 +2,7 @@ using System;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
 
@@ -18,6 +19,7 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed class DragPreviewLayer : Component
 {
+    NodeHandle _root;
     /// <summary>Map the live drag to a preview element (keyed by <c>state.Kind</c>/<c>state.Payload</c>), or null to
     /// show nothing for that drag. Set once at mount (a stable delegate); reactivity comes from the drag state.</summary>
     public Func<DragState, Element?>? Preview;
@@ -30,12 +32,14 @@ public sealed class DragPreviewLayer : Component
     {
         DragState state = UseDragState();
         Element? body = state.Active ? Preview?.Invoke(state) : null;
+        UseLayoutEffect(() => Context.Scene?.SetDropSpotlightExempt(_root, exempt: true), DepKey.Empty);
 
         // A non-clipping, input-transparent container that fills the root stack (so a child's composited OffsetX/Y is in
         // window-DIP space). The preview wrapper is offset to the cursor. When idle the container is empty (0 nodes).
         return new BoxEl
         {
             HitTestVisible = false,
+            OnRealized = h => _root = h,
             Children = body is null
                 ? []
                 : [new BoxEl { OffsetX = state.Position.X, OffsetY = state.Position.Y, HitTestVisible = false, Children = [body] }],

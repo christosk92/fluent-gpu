@@ -130,6 +130,9 @@ public sealed class HistoryStore
         new(null);
     public static readonly Context<Action<string, string?>> NavCtx =
         new((_, _) => { });
+    /// <summary>The shell's real browser-style Back operation. Null outside a shell mount, where pages may choose a
+    /// deterministic fallback without manufacturing a forward history entry.</summary>
+    public static readonly Context<Action?> BackCtx = new(null);
 }
 
 // ── History page ──────────────────────────────────────────────────────────────────────────────────────────────────────

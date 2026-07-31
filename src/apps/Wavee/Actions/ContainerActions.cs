@@ -30,7 +30,7 @@ public static class ContainerActions
     /// <summary>Save album · follow artist · save playlist — one toggle over the saved-set (LibraryBridge).</summary>
     public static readonly AppAction SaveContext = new()
     {
-        Id = ActionId.SaveContext, IconKey = ActionIcons.Heart,
+        Id = ActionId.SaveContext, IconKey = ActionIcons.Save,
         IsChecked = static c => c.S.Library?.IsSaved(c.Target.Uri) ?? false,
         // Short strip-friendly verbs (Explorer labeled-strip columns are one word — the equal-width columns ellipsize
         // "Save to Your Library"). Album/playlist: saved-state-aware Save/Saved (matches TrackActions.ToggleLike);

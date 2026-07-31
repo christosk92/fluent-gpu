@@ -440,6 +440,10 @@ public sealed partial class RenderContext
     /// <summary>Reconciler-injected bound-list removal seam: detach realized logical indices into the exit-orphan layer,
     /// commit the backing mutation, then remap surviving slot indices without remounting them.</summary>
     public Action<NodeHandle, IReadOnlyList<int>, EnterExit, MotionTokenId, float, Action>? BeginVirtualRemoval;
+    /// <summary>Reconciler-owned contiguous disclosure seam for a vertical bound virtual list.</summary>
+    public Func<NodeHandle, int, int, bool, bool>? BeginVirtualDisclosure;
+    public Action<NodeHandle, bool>? CompleteVirtualDisclosure;
+    public Action<NodeHandle>? ClearVirtualDisclosure;
     public NodeHandle HostNode;                 // this component's rendered child (animation hooks target it)
     public NodeHandle AnchorNode;               // this component's anchor in the scene (context resolution walks up from here)
     public Func<NodeHandle, object, Signal<object?>?>? ResolveContextSignal;   // (anchor, channel) → nearest provider signal

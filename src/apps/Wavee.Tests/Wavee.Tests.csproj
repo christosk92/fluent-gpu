@@ -190,6 +190,7 @@
     <Compile Include="..\Wavee\Features\Detail\DetailQueueActions.cs" />
     <!-- artist hero height response (Wavee.Core + BCL only) — ArtistHeroLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
+    <Compile Include="..\Wavee\Features\Detail\DiscographyEraBands.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
     <!-- the upcoming-release resolver (kind 138) + its seam/null/switchable trio — Backend + Wavee.Core deps only, so

@@ -5,6 +5,7 @@ using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -90,9 +91,28 @@ public static class Surfaces
             new GradientStop(1f, accent with { A = 0f }));
     }
 
-    /// <summary>Detail-Hero wash. Side-by-side keeps <see cref="HeroWash"/> restrained. Immersive needs an opaque
-    /// art-derived landing surface: EdgeFade dissolves the cover into this wash, and the same tone continues under the
-    /// track body (Apple Music album/playlist continuity — never a soft tint that clears into charcoal).</summary>
+    /// <summary>Semantic copy protection over full-bleed artist photography. Both axes use exactly four stops (the
+    /// recorder limit) and release to alpha zero at the hero seam.</summary>
+    public static GradientSpec ArtistHeroVeil(ColorF accent, ArtistHeroVeilAxis axis)
+    {
+        ColorF layer = Tok.FillLayerDefault;
+        float pull = Tok.Theme == ThemeKind.Light ? 0.16f : 0.24f;
+        ColorF veil = ColorF.Lerp(layer, accent, pull);
+        if (axis == ArtistHeroVeilAxis.Vertical)
+        {
+            return GradientDown(
+                new GradientStop(0f, veil with { A = 0f }),
+                new GradientStop(0.45f, veil with { A = 0.35f }),
+                new GradientStop(0.82f, veil with { A = 0.96f }),
+                new GradientStop(1f, veil with { A = 0f }));
+        }
+        return GradientRight(
+            new GradientStop(0f, veil with { A = 0.96f }),
+            new GradientStop(0.30f, veil with { A = 0.92f }),
+            new GradientStop(0.62f, veil with { A = 0.35f }),
+            new GradientStop(1f, veil with { A = 0f }));
+    }
+
     public static GradientSpec DetailHeroWash(ColorF accent, bool immersive)
     {
         if (!immersive) return HeroWash(accent);
@@ -175,7 +195,7 @@ public static class Surfaces
 
     /// <summary>A square cover that FILLS the width its layout hands it (CSS aspect-ratio 1) — for responsive grid cells
     /// whose exact width isn't known at template time (ItemsView grid tiles). Same Cover-fit + blurhash as
-    /// <see cref="Artwork"/>; pass a huge <paramref name="corners"/> (e.g. 9999) for a circular (artist) tile.</summary>
+    /// <see cref="Artwork"/>; pass <see cref="Radii.Full"/> for a layout-derived circular (artist) tile.</summary>
     public static Element ArtworkFill(Image? image, float corners, int decodePx = 256)
     {
         // A cover-less playlist in a fluid grid cell falls back to its first tile (the explicit-size Mosaic needs a known

@@ -64,22 +64,27 @@ public static class MediaCard
     // hovered so the lift halo isn't overpainted by a later card (the design's z-index:2); layout/hit-testing
     // unchanged. The returned box is the card ROOT — callers may still override Grow / Height / Border / Fill for
     // owner states (e.g. the discography drawer owner's accent border).
-    static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null) => new BoxEl
+    static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null, bool persistent = false) => new BoxEl
     {
         ZStack = true, Corners = CornerRadius4.All(Radii.Card),
-        OnClick = onClick, PressScale = 0.99f,
+        OnClick = onClick,
         HoverElevatePaint = true,
-        WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -4f },
-        WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
+        WhileHover = new MotionTarget { OffsetY = -4f },
+        WhilePressed = new MotionTarget { Scale = 0.99f, OffsetY = -1f },
         Transition = MotionTok.ControlNormal,
         Children =
         [
             new BoxEl
             {
                 Grow = 1f, Corners = CornerRadius4.All(Radii.Card),
-                Fill = plateFill ?? Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Shadow = Elevation.CardHover, Opacity = 0f, HoverOpacity = 1f,
-                HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
+                Fill = plateFill ?? Tok.FillCardDefault,
+                HoverFill = persistent ? Tok.FillCardSecondary : default,
+                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Shadow = persistent ? Elevation.Card : Elevation.CardHover,
+                Opacity = persistent ? 1f : 0f, HoverOpacity = 1f,
+                HoverDurationMs = MotionTok.ControlFaster.DurationMs,
+                HoverEasing = MotionTok.ControlFaster.Easing,
+                HitTestVisible = false,
             },
             content,
         ],
@@ -318,7 +323,7 @@ public static class MediaCard
                                    ColorF? accent = null, MenuAttach? menu = null)
     {
         var hovered = new Signal<bool>(false);
-        float r = circular ? 9999f : Radii.Card;
+        float r = circular ? Radii.Full : Radii.Card;
         var coverStack = new BoxEl
         {
             // Surfaces.ArtworkFill owns the circular image crop. Keep the overlay layer rectangular so artist FABs and
@@ -353,13 +358,108 @@ public static class MediaCard
                 },
             ],
         };
-        // Same shell as Shelf; the album-palette accent tints the HOVER plate only (accent = small emphasis) — the
-        // expanded-drawer owner still gets its resting accent border/fill via the caller's root override.
-        return (CardShell(content, onClick, AccentCardHoverFill(accent)) with
+        // Keep the hover surface neutral. The cover already carries the release palette; tinting the whole plate muddies
+        // saturated artwork colours. The expanded drawer owner still gets its explicit accent border from the caller.
+        return (CardShell(content, onClick) with
         {
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
         }).WithMenu(menu);
+    }
+
+    /// <summary>The artist-authored pinned item. A supplied background image selects the rich editorial shape; older
+    /// payloads fall back to the compact object card. Both shapes use the shared media-card interaction shell.</summary>
+    public static Element ArtistPick(PinnedItem pinned, string artistName, Image? artistImage,
+                                     Action onClick, Action onPlay)
+    {
+        bool rich = pinned.BackgroundImage?.Url is { Length: > 0 };
+        Element comment = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            Padding = Edges4.All(Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card),
+            Fill = rich ? Tok.FillSolidBase : ColorF.Transparent,
+            BorderWidth = rich ? 1f : 0f,
+            BorderColor = rich ? Tok.StrokeCardDefault : ColorF.Transparent,
+            Shadow = rich ? Elevation.Card : default,
+            Children =
+            [
+                PersonPicture.Create("", 28f, displayName: artistName, imageSourcePath: artistImage?.Url),
+                Ui.Body(pinned.Comment.Length > 0 ? pinned.Comment : pinned.Eyebrow) with
+                {
+                    Grow = 1f, Basis = 0f, MinWidth = 0f,
+                    Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 3,
+                    Trim = TextTrim.CharacterEllipsis,
+                },
+            ],
+        };
+
+        Element item = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = Edges4.All(Spacing.S),
+            Corners = CornerRadius4.All(Radii.Card),
+            Fill = rich ? Tok.FillSolidBase : ColorF.Transparent,
+            BorderWidth = rich ? 1f : 0f,
+            BorderColor = rich ? Tok.StrokeCardDefault : ColorF.Transparent,
+            Children =
+            [
+                Surfaces.Artwork(pinned.Cover, Seed(pinned.Uri), 56f, 56f, Radii.Control, decodePx: 128),
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XS,
+                    Children =
+                    [
+                        WaveeType.TrackTitle(pinned.Title) with
+                        {
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                        },
+                        WaveeType.TrackMeta(pinned.Subtitle) with
+                        {
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                        },
+                    ],
+                },
+                Button.Create(Loc.Get(Strings.Detail.Play), onPlay, ButtonAppearance.Subtle,
+                    ControlSize.Small, glyph: Icons.Play),
+            ],
+        };
+
+        Element content;
+        if (pinned.BackgroundImage?.Url is { Length: > 0 } background)
+        {
+            content = new BoxEl
+            {
+                Height = 260f, ZStack = true, ClipToBounds = true,
+                Corners = CornerRadius4.All(Radii.Card),
+                Children =
+                [
+                    Ui.Image(background, ImageFit.Cover, aspect: 1.6f, decodePx: 640,
+                        corners: Radii.Card, placeholder: Surfaces.ArtworkPlaceholder,
+                        blurHash: pinned.BackgroundImage.BlurHash) with
+                        {
+                            AlignSelf = FlexAlign.Stretch,
+                            JustifySelf = FlexAlign.Stretch,
+                        },
+                    new BoxEl
+                    {
+                        Grow = 1f, Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S,
+                        Padding = Edges4.All(Spacing.M),
+                        Children = [comment, item],
+                    },
+                ],
+            };
+        }
+        else
+        {
+            content = new BoxEl
+            {
+                Direction = 1, Gap = Spacing.S, Padding = Edges4.All(Spacing.M),
+                Children = [comment, item],
+            };
+        }
+
+        return CardShell(content, onClick, persistent: true);
     }
 
     // Editorial home card: intentionally reserved for HomeFeedBaselineSectionData. Normal home sections keep the regular

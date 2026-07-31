@@ -224,6 +224,7 @@ public static class SidebarRowPlanner
             {
                 st.DividerPending = true;
                 st.DividerSectionId = s.Id;
+                st.DividerDepth = 0;
                 continue;
             }
             RailSection(s, in input, ref st, ref tiles);
@@ -244,6 +245,7 @@ public static class SidebarRowPlanner
         {
             st.DividerPending = true;      // flushed by the next row: leading/trailing drop, consecutive collapse
             st.DividerSectionId = s.Id;
+            st.DividerDepth = depth;
             return;
         }
 
@@ -321,17 +323,75 @@ public static class SidebarRowPlanner
         var pins = input.Pins;
         int start = st.Entries.Count;
         int cap = Cap(s, DynamicSectionRowCap);
+        bool grid = s.Opts.Presentation == SidebarPresentation.Grid;
         if (pins is not null)
             for (int i = 0; i < pins.Count && st.Entries.Count - start < cap; i++)
             {
-                if (IsHiddenOverride(s, pins[i])) continue;
-                st.Entries.Add(pins[i]);
+                var pin = pins[i];
+                if (IsHiddenOverride(s, pin)) continue;
+
+                int at = st.Entries.Count;
+                st.Entries.Add(pin);
+                if (!grid)
+                    Add(ref st, new SidebarRow(pin.IsFolder ? SidebarRowKind.FolderHeader : SidebarRowKind.EntityRow,
+                        s.Id, depth, at, 0, pin.Id));
+
+                if (pin.IsFolder && IsExpanded(input, FolderId(in pin)))
+                    AppendPinnedFolderChildren(s, depth, in pin, start, cap, grid, in input, ref st);
             }
 
         int count = st.Entries.Count - start;
         // Empty Pinned is the real DropZone row ("Drop items here to pin"), not a caption.
         if (count == 0) { Add(ref st, Chrome(SidebarRowKind.Empty, s, depth)); return; }
-        EmitProjected(s, depth, start, count, ref st);
+        if (grid) EmitProjected(s, depth, start, count, ref st);
+    }
+
+    /// <summary>Expand one pinned folder against the canonical flattened rootlist. The pinned folder itself is a root row
+    /// in this section; descendants keep only their depth RELATIVE to that root. Nested disclosures obey the same shared
+    /// expansion set as PlaylistTree, and the section's item cap bounds roots plus descendants together.</summary>
+    static void AppendPinnedFolderChildren(SidebarSectionSpec s, byte depth, in SidebarLibraryEntry pin,
+        int sectionStart, int cap, bool grid, in SidebarProjectionInput input, ref PlanState st)
+    {
+        var tree = input.PlaylistTree;
+        if (tree is null || tree.Count == 0) return;
+
+        string folderId = FolderId(in pin);
+        int root = -1;
+        for (int i = 0; i < tree.Count; i++)
+        {
+            var candidate = tree[i];
+            if (!candidate.IsFolder) continue;
+            if (string.Equals(candidate.Id, pin.Id, StringComparison.Ordinal)
+                || string.Equals(FolderId(in candidate), folderId, StringComparison.Ordinal))
+            {
+                root = i;
+                break;
+            }
+        }
+        if (root < 0) return;
+
+        int rootDepth = tree[root].Depth;
+        for (int i = root + 1; i < tree.Count && st.Entries.Count - sectionStart < cap; i++)
+        {
+            var child = tree[i];
+            if (child.Depth <= rootDepth) break;
+
+            int at = st.Entries.Count;
+            st.Entries.Add(child);
+            if (!grid)
+            {
+                int relativeDepth = Math.Max(1, child.Depth - rootDepth);
+                byte rowDepth = (byte)Math.Min(depth + relativeDepth, byte.MaxValue);
+                Add(ref st, new SidebarRow(child.IsFolder ? SidebarRowKind.FolderHeader : SidebarRowKind.EntityRow,
+                    s.Id, rowDepth, at, 0, child.Id));
+            }
+
+            if (child.IsFolder && !IsExpanded(input, FolderId(in child)))
+            {
+                int collapsedDepth = child.Depth;
+                while (i + 1 < tree.Count && tree[i + 1].Depth > collapsedDepth) i++;
+            }
+        }
     }
 
     static void PlanJumpBackIn(SidebarSectionSpec s, byte depth, in SidebarProjectionInput input, ref PlanState st)
@@ -889,6 +949,7 @@ public static class SidebarRowPlanner
         public List<int> TreeAncestors;
         public bool DividerPending;
         public string? DividerSectionId;
+        public byte DividerDepth;
     }
 
     static PlanState Begin(SidebarPlanBuffers? buffers)
@@ -931,8 +992,10 @@ public static class SidebarRowPlanner
         {
             st.DividerPending = false;
             var id = st.DividerSectionId!;
+            byte depth = st.DividerDepth;
             st.DividerSectionId = null;
-            if (st.Rows.Count > 0) st.Rows.Add(new SidebarRow(SidebarRowKind.Divider, id, 0, -1, 0, id));
+            st.DividerDepth = 0;
+            if (st.Rows.Count > 0) st.Rows.Add(new SidebarRow(SidebarRowKind.Divider, id, depth, -1, 0, id));
         }
         st.Rows.Add(row);
     }
@@ -1004,6 +1067,9 @@ public static class SidebarRowPlanner
 
     static bool IsExpanded(in SidebarProjectionInput input, string folderId)
         => input.ExpandedFolders is null || input.ExpandedFolders.Contains(folderId);
+
+    static string FolderId(in SidebarLibraryEntry entry)
+        => entry.FolderId.Length > 0 ? entry.FolderId : SidebarPinId.FolderIdOf(entry.Id);
 
     /// <summary>The trimmed library-only query, or null when the pane is not searching.</summary>
     static string? Search(in SidebarProjectionInput input)

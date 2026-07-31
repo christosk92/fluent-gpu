@@ -55,7 +55,7 @@ public static class TrackActions
 
     public static readonly AppAction ToggleLike = new()
     {
-        Id = ActionId.ToggleLike, IconKey = ActionIcons.Heart,
+        Id = ActionId.ToggleLike, IconKey = ActionIcons.Like,
         // Checked visual in the labeled context-menu strip: the two-tone accent-filled heart (no pill) — the player-bar
         // Like convention (PlayerBar.cs: liked ? Icons.HeartFill : Icons.Heart + accent color). Glyph fallback pre-registry.
         CheckedIcon = IconRef.Themed("HeartFill", Icons.HeartFill),

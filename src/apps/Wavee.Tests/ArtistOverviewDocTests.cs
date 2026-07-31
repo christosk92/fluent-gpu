@@ -34,7 +34,7 @@ public class ArtistOverviewDocTests
     """;
 
     [Fact]
-    public void ALegacyDocument_StillBinds_WithTheFourNewFieldsNull()
+    public void ALegacyDocument_StillBinds_WithTheOptionalFieldsNull()
     {
         var doc = JsonSerializer.Deserialize<ArtistOverviewDoc>(LegacyDoc, EntityJson.Default.Options);
 
@@ -50,11 +50,12 @@ public class ArtistOverviewDocTests
         Assert.Equal("https://i.scdn.co/image/legacy", pin.Cover?.Url);
         Assert.Equal(PinUri, pin.Uri);
 
-        // The four that were not — bound to their defaults, not a bind failure.
+        // The optional fields that were not — bound to their defaults, not a bind failure.
         Assert.Null(pin.ItemUri);
         Assert.Null(pin.ItemType);
         Assert.Null(pin.ItemTypename);
         Assert.Null(pin.ReleaseAt);
+        Assert.Null(pin.BackgroundImage);
 
         // …and the derived reads degrade to exactly today's behaviour.
         Assert.False(pin.IsUpcoming);
@@ -76,7 +77,8 @@ public class ArtistOverviewDocTests
             ItemUri: "spotify:album:0qi1ztU4S08zA1FsP1DUaY",
             ItemType: "ALBUM",
             ItemTypename: "Album",
-            ReleaseAt: due));
+            ReleaseAt: due,
+            BackgroundImage: new Image("https://i.scdn.co/image/pick-background", 1200, 600)));
 
         var json = JsonSerializer.Serialize(doc, EntityJson.Default.ArtistOverviewDoc);
         var back = JsonSerializer.Deserialize<ArtistOverviewDoc>(json, EntityJson.Default.Options);
@@ -89,6 +91,8 @@ public class ArtistOverviewDocTests
         Assert.Equal(due, pin.ReleaseAt);
         Assert.Equal("https://i.scdn.co/image/pre", pin.Cover?.Url);
         Assert.Equal(640, pin.Cover!.Width!.Value);
+        Assert.Equal("https://i.scdn.co/image/pick-background", pin.BackgroundImage?.Url);
+        Assert.Equal(1200, pin.BackgroundImage!.Width!.Value);
         Assert.Equal("spotify:album:0qi1ztU4S08zA1FsP1DUaY", pin.TargetUri);
     }
 
@@ -104,6 +108,7 @@ public class ArtistOverviewDocTests
         Assert.DoesNotContain("ItemUri", json, StringComparison.Ordinal);
         Assert.DoesNotContain("ItemType", json, StringComparison.Ordinal);
         Assert.DoesNotContain("ReleaseAt", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("BackgroundImage", json, StringComparison.Ordinal);
         Assert.Contains("\"Uri\"", json, StringComparison.Ordinal);
 
         // …and it reads back identical.

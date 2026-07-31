@@ -303,6 +303,7 @@ public static class SceneRecorder
         bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
         int overlayCount = scene.OverlayCount;
         if (hasGhost) disabledReasons |= SpanReuseDisabledReason.DragGhost;   // DragGhost stays GLOBAL this wave (drags are rare; scope later)
+        if (scene.DropSpotlightActive) disabledReasons |= SpanReuseDisabledReason.DragSpotlight;
         if (overlayCount != 0) disabledReasons |= SpanReuseDisabledReason.Overlays;
         if (scene.OrphanCount != 0) disabledReasons |= SpanReuseDisabledReason.Orphans;
         if (!reuseBlockRoots.IsEmpty) disabledReasons |= SpanReuseDisabledReason.Detached;
@@ -310,11 +311,12 @@ public static class SceneRecorder
         const SpanReuseDisabledReason GlobalReuseKill =
             SpanReuseDisabledReason.FirstRecord | SpanReuseDisabledReason.SceneChanged | SpanReuseDisabledReason.Layout |
             SpanReuseDisabledReason.Resize | SpanReuseDisabledReason.ModalPaint | SpanReuseDisabledReason.DragGhost |
-            SpanReuseDisabledReason.ImageContent;
+            SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight;
         bool spanReuseOff = spans is null || (disabledReasons & GlobalReuseKill) != 0;
         // The span STORE stays alive under every scoped reason (blocked nodes self-gate via IsBlocked, so the off-screen
         // cull survives for the unblocked rest of the tree); only DragGhost (still global) suppresses the store wholesale.
-        bool spanStoreOn = spans is not null && (disabledReasons & SpanReuseDisabledReason.DragGhost) == 0;
+        bool spanStoreOn = spans is not null
+            && (disabledReasons & (SpanReuseDisabledReason.DragGhost | SpanReuseDisabledReason.DragSpotlight)) == 0;
         stats.SpanReuseDisabledReasons = disabledReasons;
         Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1 + overlayCount];
         skipRoots.CopyTo(skips);
@@ -673,6 +675,21 @@ public static class SceneRecorder
         float childScaleY = netScaleY * p.LocalTransform.M22;
 
         float opacity = parentOpacity * ResolveOpacity(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
+        if (scene.DropSpotlightActive)
+        {
+            bool insideTarget = scene.IsUnderDropSpotlightRoot(node) || scene.IsUnderDropSpotlightExempt(node);
+            if (node == scene.Root)
+            {
+                if (!insideTarget) opacity *= DragVisualTok.SpotlightBackgroundOpacity;
+            }
+            else if (insideTarget)
+            {
+                var parent = scene.Parent(node);
+                if (parent.IsNull || (!scene.IsUnderDropSpotlightRoot(parent)
+                    && !scene.IsUnderDropSpotlightExempt(parent)))
+                    opacity /= DragVisualTok.SpotlightBackgroundOpacity;
+            }
+        }
 
         // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
         // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.
@@ -1329,6 +1346,18 @@ public static class SceneRecorder
             childState = childState.WithUnderElevateRoot();
         bool hasItemBand = scene.TryGetVirtualItemBand(
             node, out int itemBandPrefix, out float itemBandTopInset, out float itemBandTopFade);
+        bool hasDisclosure = scene.TryGetVirtualDisclosure(node, out int disclosureFirst, out int disclosureCount,
+            out float disclosureTop, out float disclosureExtent, out float disclosureT,
+            out int disclosurePrefix, out int disclosureFirstRealized);
+        int disclosureLast = disclosureFirst + disclosureCount;
+        float disclosureShift = hasDisclosure ? -disclosureExtent * (1f - disclosureT) : 0f;
+        RectF disclosureClip = childClip;
+        if (hasDisclosure)
+        {
+            float contentW = MathF.Max(1f, scene.Bounds(node).W);
+            disclosureClip = childClip.Intersect(childWorld.TransformBounds(
+                new RectF(0f, disclosureTop, contentW, disclosureExtent * disclosureT)));
+        }
         RectF itemBandClip = childClip;
         bool itemBandClipChanged = false;
         if (hasItemBand)
@@ -1370,6 +1399,8 @@ public static class SceneRecorder
             // card deferred (the lower one records in place) — O(1) space, no sort, no allocation.
             NodeHandle deferElevate = NodeHandle.Null;
             float deferElevateT = 0f;
+            Affine2D deferElevateWorld = childWorld;
+            RectF deferElevateClip = childClip;
             int childOrdinal = 0;
             bool itemBandPushed = false;
             bool itemBandFadePushed = false;
@@ -1381,8 +1412,8 @@ public static class SceneRecorder
                     // the prefix is deliberately exempt from the sticky item clip.
                     if (!deferElevate.IsNull)
                     {
-                        var prefixElevated = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1,
-                            childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                        var prefixElevated = Walk(scene, dl, images, deferElevate, deferElevateWorld, opacity, depth + 1,
+                            deferElevateClip, in focus, in textEdit, scrollThumb, scrollTrack,
                             childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots,
                             spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                         result.Include(prefixElevated);
@@ -1406,7 +1437,15 @@ public static class SceneRecorder
                         itemBandFadePushed = true;
                     }
                 }
-                RectF activeChildClip = hasItemBand && childOrdinal >= itemBandPrefix ? itemBandClip : childClip;
+                int ordinal = childOrdinal;
+                int logicalIndex = ordinal < disclosurePrefix
+                    ? ordinal
+                    : disclosureFirstRealized + (ordinal - disclosurePrefix);
+                bool disclosureBody = hasDisclosure && logicalIndex >= disclosureFirst && logicalIndex < disclosureLast;
+                bool disclosureSuffix = hasDisclosure && logicalIndex >= disclosureLast;
+                RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix ? itemBandClip : childClip;
+                if (disclosureBody) activeChildClip = activeChildClip.Intersect(disclosureClip);
+                Affine2D activeChildWorld = disclosureSuffix ? childWorld.Translate(0f, disclosureShift) : childWorld;
                 NodeFlags cf = scene.Flags(c);
                 childOrdinal++;
                 if ((cf & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
@@ -1419,22 +1458,28 @@ public static class SceneRecorder
                              : (scene.TryGetInteract(c, out var cia) ? cia.HoverT : 0f);
                     if (ht > 0.01f)
                     {
-                        if (deferElevate.IsNull) { deferElevate = c; deferElevateT = ht; continue; }
+                        if (deferElevate.IsNull)
+                        {
+                            deferElevate = c; deferElevateT = ht;
+                            deferElevateWorld = activeChildWorld; deferElevateClip = activeChildClip;
+                            continue;
+                        }
                         if (ht > deferElevateT)
                         {
                             // A higher-progress card appeared — flush the previously-deferred (lower) one in place now,
                             // then defer this one so the most-hovered card ends up on top.
-                            var flushed = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1,
-                                activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                            var flushed = Walk(scene, dl, images, deferElevate, deferElevateWorld, opacity, depth + 1,
+                                deferElevateClip, in focus, in textEdit, scrollThumb, scrollTrack,
                                 childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                             result.Include(flushed);
                             deferElevate = c; deferElevateT = ht;
+                            deferElevateWorld = activeChildWorld; deferElevateClip = activeChildClip;
                             continue;
                         }
                         // Lower progress than the deferred card → record it now in normal order (falls through).
                     }
                 }
-                var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1,
+                var childResult = Walk(scene, dl, images, c, activeChildWorld, opacity, depth + 1,
                     activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(childResult);
@@ -1449,7 +1494,7 @@ public static class SceneRecorder
                 if (childState.UnderElevateRoot != 0 && stats.PendingElevate.IsNull)
                 {
                     stats.PendingElevate = deferElevate;
-                    stats.PendingElevateWorld = childWorld;
+                    stats.PendingElevateWorld = deferElevateWorld;
                     stats.PendingElevateOpacity = opacity;
                     stats.PendingElevateDepth = depth + 1;
                     stats.PendingElevateScaleX = childScaleX;
@@ -1462,8 +1507,8 @@ public static class SceneRecorder
                 }
                 else
                 {
-                    var elevResult = Walk(scene, dl, images, deferElevate, childWorld, opacity, depth + 1,
-                        hasItemBand ? itemBandClip : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
+                    var elevResult = Walk(scene, dl, images, deferElevate, deferElevateWorld, opacity, depth + 1,
+                        deferElevateClip, in focus, in textEdit, scrollThumb, scrollTrack,
                         childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                     result.Include(elevResult);
                 }
@@ -1478,6 +1523,13 @@ public static class SceneRecorder
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
                     {
                         RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
+                        int logicalIndex = pinnedOrdinal < disclosurePrefix
+                            ? pinnedOrdinal
+                            : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
+                        bool disclosureBody = hasDisclosure && logicalIndex >= disclosureFirst && logicalIndex < disclosureLast;
+                        bool disclosureSuffix = hasDisclosure && logicalIndex >= disclosureLast;
+                        if (disclosureBody) pinnedClip = pinnedClip.Intersect(disclosureClip);
+                        Affine2D pinnedWorld = disclosureSuffix ? childWorld.Translate(0f, disclosureShift) : childWorld;
                         if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed
                             && itemBandClipChanged && !itemBandClip.IsEmpty)
                         {
@@ -1485,7 +1537,7 @@ public static class SceneRecorder
                             pinnedBandPushed = true;
                         }
                         if (pinnedClip.IsEmpty) continue;
-                        var childResult = Walk(scene, dl, images, c, childWorld, opacity, depth + 1,
+                        var childResult = Walk(scene, dl, images, c, pinnedWorld, opacity, depth + 1,
                             pinnedClip, in focus, in textEdit, scrollThumb, scrollTrack,
                             childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                         result.Include(childResult);

@@ -27,6 +27,7 @@ namespace FluentGpu.Controls
         /// <summary>Added with the "sidebar-customize" arm (Wave 4a): the customizer's destination glyph.</summary>
         public const string Edit = "glyph:Edit";
         public const string ExploreContent = "glyph:ExploreContent";
+        public const string Globe = "glyph:Globe";
     }
 
     /// <summary>Mirror of <c>FluentGpu.Controls.Navigation.Route</c> (name + optional display arg).</summary>
@@ -94,7 +95,7 @@ namespace Wavee.Tests
         [Fact]
         public void BrowseCategory_UsesItsPageTitleAndExploreGlyph()
         {
-            Assert.Equal(("Music", Icons.ExploreContent), Dest("browse:spotify:page:music", "Music"));
+            Assert.Equal(("Music", Icons.Globe), Dest("browse:spotify:page:music", "Music"));
             Assert.Equal(Loc.Get(Strings.Browse.Title), Dest("browse:spotify:page:music").Title);
         }
 

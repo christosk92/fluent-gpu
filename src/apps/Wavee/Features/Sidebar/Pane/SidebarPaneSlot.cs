@@ -185,7 +185,7 @@ sealed class SidebarPaneSlot : Component
         var rows = _o.Plan.Rows;
         if ((uint)index >= (uint)rows.Count) return true;
         var section = _o.SectionOf(rows[index].SectionId);
-        return section is null || !section.Collapsed;
+        return section is null || _o.DisclosureOpen(section.Id, folder: false, fallback: !section.Collapsed);
     }
 
     /// <summary>The folder chevron's live expansion state — same recycle-safe shape as <see cref="HeaderOpenLive"/>.</summary>
@@ -198,7 +198,9 @@ sealed class SidebarPaneSlot : Component
         var row = rows[index];
         var entries = _o.Plan.Entries;
         if (row.EntryIndex < 0 || row.EntryIndex >= entries.Count) return true;
-        return _o.Prefs?.IsFolderExpanded(entries[row.EntryIndex].FolderId) ?? true;
+        string folderId = entries[row.EntryIndex].FolderId;
+        bool open = _o.Prefs?.IsFolderExpanded(folderId) ?? true;
+        return _o.DisclosureOpen(folderId, folder: true, fallback: open);
     }
 
     // ── item / entity rows ───────────────────────────────────────────────────────────────────────────────────────────
@@ -310,7 +312,7 @@ sealed class SidebarPaneSlot : Component
         Element built = SidebarEntityRow.Create(spec);
         if (track) built = SidebarEntityRow.WithPlayTrackHint(built);
         // Tree connectors own their depth lanes; the selection indicator stays in the row's base gutter.
-        return Indicator(built, selected, baseDepth, height, route);
+        return Indicator(built, selected, baseDepth, height, route, row.SectionId);
     }
 
     /// <summary>A rootlist FOLDER: the entity-row geometry with a disclosure chevron and the folder mark. A folder never
@@ -374,7 +376,7 @@ sealed class SidebarPaneSlot : Component
             DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
             DropTarget = drop,
         };
-        return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key);
+        return SidebarEntityRow.Create(spec);
     }
 
     /// <summary>Which connector columns continue below a realized tree row. The plan is preorder, so the first later
@@ -446,7 +448,7 @@ sealed class SidebarPaneSlot : Component
             DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
             DropTarget = drop,
         };
-        return SidebarEntityRow.Create(spec);
+        return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key, section.Id);
     }
 
     Func<ContextMenuModel?>? RouteMenu(SidebarItemSpec item)
@@ -993,21 +995,15 @@ sealed class SidebarPaneSlot : Component
 
     /// <summary>Attach the item-owned SelectionIndicator. Keeping it shape-stable is load-bearing for recycling: a slot
     /// never inherits an animated transform from the route it represented one window earlier.</summary>
-    Element Indicator(Element row, bool selected, int depth, float height, string? route)
+    Element Indicator(Element row, bool selected, int depth, float height, string? route, string sectionId)
     {
         if (!float.IsFinite(height) || height <= 0f) height = SidebarRowMetrics.ClassicHeight;
         _pillState = new SidebarPillState(
             Route: route,
             Selected: selected,
-            Departing: !selected && _o.WasDeparting(route),
-            Direction: _o.SelDirection,
-            Epoch: _o.SelEpoch,
             Indent: SidebarRowMetrics.IndentFor(depth),
-            Top: MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f),
-            Travel: _o.SelTravel,
-            SameDepth: _o.SelSameDepth,
-            CanAnimate: _o.SelCanAnimate);
-        return ZStack(row, Embed.Comp(() => new SidebarSelectionPill(_pillProbe ??= PillState)));
+            Top: MathF.Max(0f, (height - SidebarSelectionPill.PillH) * 0.5f));
+        return ZStack(row, Embed.Comp(() => new SidebarSelectionPill(_o, _pillProbe ??= PillState)));
     }
 
     SidebarPillState PillState()
@@ -1021,12 +1017,6 @@ sealed class SidebarPaneSlot : Component
         return state with
         {
             Selected = selected,
-            Departing = !selected && _o.WasDeparting(state.Route),
-            Direction = _o.SelDirection,
-            Epoch = _o.SelEpoch,
-            Travel = _o.SelTravel,
-            SameDepth = _o.SelSameDepth,
-            CanAnimate = _o.SelCanAnimate,
         };
     }
 

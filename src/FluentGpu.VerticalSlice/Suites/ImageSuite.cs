@@ -246,6 +246,7 @@ static class ImageSuite
         IconChecks(strings);
         ImageCacheChecks();
         ImageElChecks(strings);
+        ImageCornerClampChecks(strings);
         ImageFitChecks(strings);
         DecodeSchedulerChecks();
         PixelBufferPoolChecks();
@@ -544,6 +545,28 @@ static class ImageSuite
         Check("46c. Baked ImageEl: source fallback then persistent derived handle; overlay+mask stay in one DrawImage with zero layers",
             deferredUntilSettled && oneQuad && selectedDerived && styling,
             $"deferred={deferredUntilSettled} settleFrames={bakeSettleFrames} fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
+    }
+
+    static void ImageCornerClampChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("image-radius", new Size2(320, 160), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        using var host = new AppHost(app, window, device, fonts, strings, new ImageCornerClampProbe());
+        host.RunFrame();
+
+        bool count = device.LastImages.Count == 2;
+        var square = count ? device.LastImages[0].Radii : default;
+        var nonSquare = count ? device.LastImages[1].Radii : default;
+        bool clamped = Near(square.TopLeft, 18f) && Near(square.TopRight, 18f)
+            && Near(square.BottomRight, 18f) && Near(square.BottomLeft, 18f)
+            && Near(nonSquare.TopLeft, 12f) && Near(nonSquare.TopRight, 6f)
+            && Near(nonSquare.BottomRight, 12f) && Near(nonSquare.BottomLeft, 0f);
+        Check("46d. ImageEl: record-time radii clamp honors square/non-square boxes and preserves smaller corners",
+            count && clamped,
+            $"draws={device.LastImages.Count} square={square} nonSquare={nonSquare}");
     }
 
     static (RectF art, float innerW) RenderAspectTile(StringTable strings)

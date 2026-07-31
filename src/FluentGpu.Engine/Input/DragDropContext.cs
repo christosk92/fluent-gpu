@@ -54,6 +54,7 @@ public sealed class DragDropContext
     private bool _active;
     private NodeHandle _over;            // current accepting target (Null = over nothing that accepts)
     private DropTargetSpec? _overSpec;   // its spec (cached so Leave/Over/Drop never re-query a dead column)
+    private int _spotlightTargetVersion = -1;
     private DropEffect _defaultEffect = DropEffect.Move;   // the engine's advisory effect over an accepting target;
                                                            // Move for in-app drags, Copy for an OS file drop (Explorer convention)
 
@@ -112,6 +113,7 @@ public sealed class DragDropContext
             _active = true;
             _over = NodeHandle.Null;
             _overSpec = null;
+            RefreshSpotlight(force: true);
             return true;
         }
         return false;
@@ -145,6 +147,7 @@ public sealed class DragDropContext
         _active = true;
         _over = NodeHandle.Null;
         _overSpec = null;
+        RefreshSpotlight(force: true);
         return true;
     }
 
@@ -158,6 +161,7 @@ public sealed class DragDropContext
         _session.VelocityX = velocityX;
         _session.VelocityY = velocityY;
         _session.Mods = mods;
+        RefreshSpotlight(force: false);
 
         var next = FindTarget(hit);
         if (next != _over)
@@ -169,6 +173,7 @@ public sealed class DragDropContext
             }
             _over = next;
             _overSpec = !next.IsNull && _scene.TryGetDropTarget(next, out var spec) ? spec : null;
+            _scene.SetDropSpotlightOver(next);
             _session.OverTarget = next;
             _session.Effect = next.IsNull ? DropEffect.None : _defaultEffect;   // targets may refine in OnEnter/OnOver
             if (!next.IsNull) _overSpec?.OnEnter?.Invoke(_session);
@@ -228,12 +233,14 @@ public sealed class DragDropContext
     public void PruneDead()
     {
         if (!_active) return;
+        RefreshSpotlight(force: false);
         if (!_scene.IsLive(_session.Source)) { Cancel(); return; }
         if (!_over.IsNull && !_scene.IsLive(_over))
         {
             _over = NodeHandle.Null;
             _overSpec = null;
             _session.OverTarget = NodeHandle.Null;
+            _scene.SetDropSpotlightOver(NodeHandle.Null);
         }
         if (!_scrollViewport.IsNull && !_scene.IsLive(_scrollViewport))
         {
@@ -268,6 +275,9 @@ public sealed class DragDropContext
             _edgeScrolling = false;
             return false;
         }
+        // The pointer did not move, but the target's content geometry did. Re-run the current destination's projection
+        // so insertion slots/previews track edge autoscroll continuously instead of lagging until the next mouse event.
+        if (!_over.IsNull && _scene.IsLive(_over)) _overSpec?.OnOver?.Invoke(_session);
         _requestRerender();
         return true;
     }
@@ -346,8 +356,23 @@ public sealed class DragDropContext
         return EdgeScrollMaxSpeed - (distanceFromEdge / EdgeScrollZonePx) * (EdgeScrollMaxSpeed - EdgeScrollMinSpeed);
     }
 
+    private void RefreshSpotlight(bool force)
+    {
+        int version = _scene.DropTargetsVersion;
+        if (!force && version == _spotlightTargetVersion) return;
+        _spotlightTargetVersion = version;
+        _scene.RefreshDropSpotlight(_session);
+        if (!_over.IsNull && _scene.IsLive(_over))
+            _overSpec = _scene.TryGetDropTarget(_over, out var current) ? current : null;
+        _scene.SetDropSpotlightOver(_over);
+        _requestRerender();
+    }
+
     private void End()
     {
+        _scene.ClearDropSpotlight();
+        _requestRerender();
+        _spotlightTargetVersion = -1;
         _active = false;
         _over = NodeHandle.Null;
         _overSpec = null;

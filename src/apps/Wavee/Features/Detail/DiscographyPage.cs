@@ -17,8 +17,6 @@ namespace Wavee;
 // (spotify uris), but the kind is a single leading digit, so parsing is unambiguous (kind at [6], uri from [8]).
 static class DiscographyRoute
 {
-    public const int PreviewCap = 50;   // items shown on the artist page before "See all"; the facet page skips past these
-
     public static string Make(DiscographyKind kind, string artistUri) => $"disco:{(int)kind}:{artistUri}";
     public static bool Is(string name) => name.StartsWith("disco:", StringComparison.Ordinal);
 
@@ -152,8 +150,8 @@ sealed class DiscographyPage : Component
             Children =
             [
                 breadcrumb,
-                // cap 0 = the whole facet; initialIndex skips past the items already previewed on the artist page.
-                Embed.Comp(() => new DiscoGrid(_vc!, svc, go, Play, cap: 0, initialIndex: DiscographyRoute.PreviewCap)) with { Key = "disco-grid:" + route.Name },
+                // Deep-link compatibility uses the same complete, virtualized grid as the inline artist section.
+                Embed.Comp(() => new DiscoGrid(_vc!, svc, go, Play)) with { Key = "disco-grid:" + route.Name },
             ],
         };
 

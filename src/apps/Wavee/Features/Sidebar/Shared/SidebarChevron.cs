@@ -65,11 +65,11 @@ sealed class SidebarChevron : Component
                 // First mount (and every RECYCLE into a different section's state): place the resting angle with no
                 // visible motion — a realize must not animate a chevron that was never toggled.
                 seeded.Value = true;
-                anim.SeedValue(node.Value, AnimChannel.Rotation, target, MotionTokenId.ControlFaster, from: target);
+                anim.SeedValue(node.Value, AnimChannel.Rotation, target, MotionTokenId.DisclosureChevron, from: target);
                 return;
             }
             // A mid-flight toggle retargets from the LIVE angle (from: null) instead of restarting.
-            anim.SeedValue(node.Value, AnimChannel.Rotation, target, MotionTokenId.ControlFast);
+            anim.SeedValue(node.Value, AnimChannel.Rotation, target, MotionTokenId.DisclosureChevron);
         }, target);
 
         return new BoxEl

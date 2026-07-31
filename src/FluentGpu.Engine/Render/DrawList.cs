@@ -465,8 +465,14 @@ public sealed class DrawList
                           float maskRight = 0f, float maskBottom = 0f, int maskFalloff = 0, float maskIntensity = 0f,
                           float saturation = 1f)
     {
+        // Radii.Full is an authoring sentinel for layout-derived circles/capsules. Normalize it at the portable command
+        // boundary so every backend sees valid rounded-box geometry (and cached/replayed image paths cannot bypass it).
+        float maxRadius = MathF.Min(rect.W, rect.H) * 0.5f;
+        var clampedRadii = new CornerRadius4(
+            MathF.Min(radii.TopLeft, maxRadius), MathF.Min(radii.TopRight, maxRadius),
+            MathF.Min(radii.BottomRight, maxRadius), MathF.Min(radii.BottomLeft, maxRadius));
         WriteOp(DrawOp.DrawImage);
-        WritePayload(new DrawImageCmd(rect, radii, imageId, ready ? 1 : 0, placeholder, transform, opacity, uvRect,
+        WritePayload(new DrawImageCmd(rect, clampedRadii, imageId, ready ? 1 : 0, placeholder, transform, opacity, uvRect,
             fadeStartMs, fadeDurationMs, fadeEasing, overlay, maskEdges, maskLeft, maskTop, maskRight, maskBottom,
             maskFalloff, maskIntensity, saturation));
         PushSort(sortKey);

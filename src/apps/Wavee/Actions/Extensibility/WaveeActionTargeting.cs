@@ -61,19 +61,29 @@ public enum WaveeActionUnavailable : byte
 /// never touches a signal, a bridge or a service: the caller (<see cref="WaveeActionDescriptor"/>) snapshots it.</summary>
 public readonly struct WaveeActionHostState
 {
-    public WaveeActionHostState(string? nowPlayingTrackUri, string? nowPlayingContextUri, string? activeRouteKey)
+    public WaveeActionHostState(string? nowPlayingTrackUri, string? nowPlayingContextUri, string? activeRouteKey,
+        string? fixedTargetName = null, string? nowPlayingTrackName = null, string? activeRouteName = null)
     {
         NowPlayingTrackUri = nowPlayingTrackUri;
         NowPlayingContextUri = nowPlayingContextUri;
         ActiveRouteKey = activeRouteKey;
+        FixedTargetName = fixedTargetName;
+        NowPlayingTrackName = nowPlayingTrackName;
+        ActiveRouteName = activeRouteName;
     }
 
     public string? NowPlayingTrackUri { get; }
     public string? NowPlayingContextUri { get; }
+    /// <summary>The best-known display title for a persisted FixedEntity/FixedTrack target.</summary>
+    public string? FixedTargetName { get; }
+    /// <summary>The current track title captured beside <see cref="NowPlayingTrackUri"/>.</summary>
+    public string? NowPlayingTrackName { get; }
     /// <summary>The current page's nav route key (<c>home</c>, <c>pl:spotify:playlist:…</c>). Null when the host has not
     /// supplied a route provider — an <see cref="SidebarActionTargetMode.ActiveRoute"/> binding then resolves
     /// <see cref="WaveeActionUnavailable.NoActiveRoute"/> rather than guessing.</summary>
     public string? ActiveRouteKey { get; }
+    /// <summary>The active destination's display title captured beside <see cref="ActiveRouteKey"/>.</summary>
+    public string? ActiveRouteName { get; }
 
     public static WaveeActionHostState Empty => default;
 }
@@ -84,22 +94,27 @@ public readonly struct WaveeActionHostState
 public readonly struct WaveeActionTargetResolution
 {
     internal WaveeActionTargetResolution(SidebarActionTargetMode mode, string uri, string? routeKey, string? contextUri,
-                                         WaveeActionUnavailable reason)
+                                         WaveeActionUnavailable reason, string? name = null)
     {
         Mode = mode;
         _uri = uri;
+        _name = name;
         RouteKey = routeKey;
         ContextUri = contextUri;
         Reason = reason;
     }
 
     readonly string? _uri;
+    readonly string? _name;
 
     public SidebarActionTargetMode Mode { get; }
 
     /// <summary>The entity/track uri this invocation acts on; "" when the mode carries none (None / a route with no
     /// entity behind it).</summary>
     public string Uri => _uri ?? "";
+
+    /// <summary>The best-known target title for user-facing activity/history. Empty when the host cannot resolve one.</summary>
+    public string Name => _name ?? "";
 
     /// <summary>The nav route key <c>Go(key, name)</c> takes, or null when there is none (a track, a folder).</summary>
     public string? RouteKey { get; }
@@ -183,27 +198,29 @@ public static class WaveeActionTargets
                 // sidebar row resolve to the same target (the SidebarPinId.FromUri/FromRoute pair is the one authority).
                 if (SidebarPinId.FromUri(targetKey) is { } routeFromUri)
                     return new WaveeActionTargetResolution(mode, targetKey!, routeFromUri, null,
-                        WaveeActionUnavailable.None);
+                        WaveeActionUnavailable.None, host.FixedTargetName);
                 if (SidebarPinId.FromRoute(targetKey) is { } routeKey)
                     return new WaveeActionTargetResolution(mode, SidebarPinId.UriOf(routeKey), routeKey, null,
-                        WaveeActionUnavailable.None);
+                        WaveeActionUnavailable.None, host.FixedTargetName);
                 // An unrecognized key is still handed through as a bare uri: a future/third-party entity scheme must
                 // not be silently unbindable just because the pin-id scheme does not know it.
-                return new WaveeActionTargetResolution(mode, targetKey!, null, null, WaveeActionUnavailable.None);
+                return new WaveeActionTargetResolution(mode, targetKey!, null, null,
+                    WaveeActionUnavailable.None, host.FixedTargetName);
             }
 
             case SidebarActionTargetMode.FixedTrack:
                 // Tracks have no route and are never pinnable (locked decision 4) — the uri IS the whole target.
                 return string.IsNullOrEmpty(targetKey)
                     ? Fail(mode, WaveeActionUnavailable.MissingTargetKey)
-                    : new WaveeActionTargetResolution(mode, targetKey!, null, null, WaveeActionUnavailable.None);
+                    : new WaveeActionTargetResolution(mode, targetKey!, null, null,
+                        WaveeActionUnavailable.None, host.FixedTargetName);
 
             case SidebarActionTargetMode.NowPlaying:
                 if (string.IsNullOrEmpty(host.NowPlayingTrackUri))
                     return Fail(mode, WaveeActionUnavailable.NoNowPlaying);
                 return new WaveeActionTargetResolution(mode, host.NowPlayingTrackUri!,
                     SidebarPinId.FromUri(host.NowPlayingContextUri), host.NowPlayingContextUri,
-                    WaveeActionUnavailable.None);
+                    WaveeActionUnavailable.None, host.NowPlayingTrackName);
 
             case SidebarActionTargetMode.ActiveRoute:
                 if (string.IsNullOrEmpty(host.ActiveRouteKey))
@@ -211,7 +228,7 @@ public static class WaveeActionTargets
                 // The route key IS the pin id for every navigable kind (F.5.4), so the entity behind it (when there is
                 // one) comes straight back out of the scheme.
                 return new WaveeActionTargetResolution(mode, SidebarPinId.UriOf(host.ActiveRouteKey!),
-                    host.ActiveRouteKey, null, WaveeActionUnavailable.None);
+                    host.ActiveRouteKey, null, WaveeActionUnavailable.None, host.ActiveRouteName);
 
             default:
                 return Fail(mode, WaveeActionUnavailable.ModeNotSupported);

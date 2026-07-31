@@ -102,7 +102,7 @@ public sealed class WaveeActionDescriptor
     /// wants; true snapshots them without subscribing, which is what an invoke does.</summary>
     public WaveeActionTargetResolution Resolve(ActionServices services, SidebarActionBinding binding, bool peek = false)
     {
-        var host = HostStateOf(services, peek);
+        var host = HostStateOf(services, binding, peek);
         var target = WaveeActionTargets.Resolve(binding, AcceptedTargets, in host);
         if (!target.Available) return target;
 
@@ -170,13 +170,38 @@ public sealed class WaveeActionDescriptor
     /// <summary>Snapshot the live app facts the dynamic target modes resolve against. The route provider is the host's
     /// (<c>ActionServices.CurrentRoute</c>); when the host supplied none, an <c>ActiveRoute</c> binding resolves
     /// unavailable rather than guessing.</summary>
-    static WaveeActionHostState HostStateOf(ActionServices services, bool peek)
+    static WaveeActionHostState HostStateOf(ActionServices services, SidebarActionBinding binding, bool peek)
     {
-        if (services.Playback is not { } pb)
-            return new WaveeActionHostState(null, null, services.CurrentRoute?.Invoke());
-        string? track = (peek ? pb.CurrentTrack.Peek() : pb.CurrentTrack.Value)?.Uri;
-        string? context = peek ? pb.CurrentContext.Peek() : pb.CurrentContext.Value;
-        return new WaveeActionHostState(track, context, services.CurrentRoute?.Invoke());
+        var playing = services.Playback is { } pb
+            ? (peek ? pb.CurrentTrack.Peek() : pb.CurrentTrack.Value)
+            : null;
+        string? context = services.Playback is { } playback
+            ? (peek ? playback.CurrentContext.Peek() : playback.CurrentContext.Value)
+            : null;
+        var destination = services.CurrentDestination?.Invoke();
+        string? fixedName = FixedTargetNameOf(services, binding);
+        if (fixedName is null && binding.TargetMode == SidebarActionTargetMode.FixedTrack
+            && playing is { } track && string.Equals(track.Uri, binding.TargetKey, StringComparison.Ordinal))
+            fixedName = track.Title;
+
+        return new WaveeActionHostState(
+            playing?.Uri,
+            context,
+            services.CurrentRoute?.Invoke(),
+            fixedTargetName: fixedName,
+            nowPlayingTrackName: playing?.Title,
+            activeRouteName: destination?.Name);
+    }
+
+    static string? FixedTargetNameOf(ActionServices services, SidebarActionBinding binding)
+    {
+        if (binding.TargetMode is not (SidebarActionTargetMode.FixedEntity or SidebarActionTargetMode.FixedTrack)
+            || binding.TargetKey is not { Length: > 0 } key)
+            return null;
+        var byKey = services.Sidebar?.Binder?.CurrentInput.ByUri;
+        return byKey is not null && byKey.TryGetValue(key, out var entry) && entry.Name.Length > 0
+            ? entry.Name
+            : null;
     }
 }
 

@@ -56,6 +56,7 @@ sealed class SidebarPinDropZone : Component
             OnDrop: s => { over.Value = false; _accept(s.Payload, 0); })
         {
             CanAccept = static s => WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
+            VisualPolicy = DropTargetVisualPolicy.Spotlight,
         }, DepKey.Empty);
 
         bool compatible = drag.Active

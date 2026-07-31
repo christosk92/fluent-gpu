@@ -253,6 +253,10 @@ public enum Easing : byte
     /// └────────────────────────────
     /// </code></summary>
     FluentPopOpen,
+    /// <summary>WinUI Expander CollapseUp: cubic-bezier(1,1,0,1).</summary>
+    FluentDisclosureCollapse,
+    /// <summary>WinUI AnimatedChevronUpDownSmall: cubic-bezier(.167,.167,0,1).</summary>
+    FluentDisclosureChevron,
 
     // ── transitions.dev "expressive" palette (opt-in app-author curves; the overshoot ones exceed 1.0 by design)
     /// <summary><b>SmoothOut</b> — expressive signature ease-out — quick then long glide.
@@ -383,6 +387,8 @@ public static class Easings
         Easing.FluentDecelerate => CubicBezier(t, 0.1f, 0.9f, 0.2f, 1.0f),
         Easing.FluentAccelerate => CubicBezier(t, 0.9f, 0.1f, 1.0f, 0.2f),
         Easing.FluentPopOpen => CubicBezier(t, 0.0f, 0.0f, 0.0f, 1.0f),
+        Easing.FluentDisclosureCollapse => CubicBezier(t, 1.0f, 1.0f, 0.0f, 1.0f),
+        Easing.FluentDisclosureChevron => CubicBezier(t, 0.167f, 0.167f, 0.0f, 1.0f),
         Easing.SmoothOut => CubicBezier(t, 0.22f, 1.0f, 0.36f, 1.0f),
         Easing.Overshoot => CubicBezier(t, 0.34f, 1.36f, 0.64f, 1.0f),
         Easing.OvershootStrong => CubicBezier(t, 0.34f, 3.85f, 0.64f, 1.0f),

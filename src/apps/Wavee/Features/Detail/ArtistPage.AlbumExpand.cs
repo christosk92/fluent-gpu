@@ -10,6 +10,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -30,9 +31,9 @@ static class AlbumLoader
 }
 
 // ── Discography facets (Albums / Singles / Compilations) ───────────────────────────────────────────────
-// The artist page shows a collapsible header + the first Cap items (DiscographySection → DiscoGrid), then a "See all N"
-// link that NAVIGATES to the full facet page (DiscographyPage). The grid is virtualized over a VirtualCollection<Album>
-// that pages in on scroll, with iTunes-style inline track drawers — shared by the section (capped) and the full page.
+// The artist page keeps each complete facet inline, virtualized over a VirtualCollection<Album> that pages as the outer
+// page scrolls. The legacy facet route remains deep-link compatible, but ordinary catalogue browsing never leaves the
+// artist page. Both surfaces share the same iTunes-style inline track drawer.
 
 static class AlbumNavAction
 {
@@ -261,8 +262,9 @@ sealed class DiscoGrid : Component
     readonly Services _svc;
     readonly Action<string, string?> _go;
     readonly Action<string> _play;
-    readonly int _cap;
     readonly int _initialIndex;
+    readonly Action<LazyGridVisibleRange>? _visibleRangeChanged;
+    readonly float _expandedTopInset;
     static readonly Func<ColorF> ThemeAccent = static () => Tok.AccentDefault;
     readonly Func<ColorF> _accent;
     readonly Signal<int> _expanded = new(-1);
@@ -300,16 +302,26 @@ sealed class DiscoGrid : Component
 
     // The inline drawer's open/close + switch motion. Opacity+Position animate the enter (drop-in) / exit (lift-out);
     // Size=Reflow eases the height when switching to an album with a different track count (the rows below reflow).
-    static readonly LayoutTransition DrawerReveal = new(
-        TransitionChannels.Opacity | TransitionChannels.Position | TransitionChannels.Size,
-        TransitionDynamics.Tween(280f, Easing.SmoothOut),
-        Size: SizeMode.Reflow,
+    static readonly LayoutTransition DrawerResize = new(
+        TransitionChannels.Size,
+        MotionTok.ContentResize.ToDynamics(),
+        Size: SizeMode.Reflow);
+    static readonly LayoutTransition DrawerPresence = new(
+        TransitionChannels.Opacity | TransitionChannels.Position,
+        MotionTok.StandardEnter.ToDynamics(),
         Enter: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
         Exit: new EnterExit(Dy: -8f, Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Spring(0.24f, 1f));
+        ExitDynamics: MotionTok.StandardExit.ToDynamics());
 
-    public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play, int cap, int initialIndex = 0, Func<ColorF>? accent = null)
-    { _vc = vc; _svc = svc; _go = go; _play = play; _cap = cap; _initialIndex = initialIndex; _accent = accent ?? ThemeAccent; }
+    public DiscoGrid(VirtualCollection<Album> vc, Services svc, Action<string, string?> go, Action<string> play,
+                     int initialIndex = 0, Func<ColorF>? accent = null,
+                     Action<LazyGridVisibleRange>? onVisibleRangeChanged = null, float expandedTopInset = 28f)
+    {
+        _vc = vc; _svc = svc; _go = go; _play = play; _initialIndex = initialIndex;
+        _accent = accent ?? ThemeAccent;
+        _visibleRangeChanged = onVisibleRangeChanged;
+        _expandedTopInset = expandedTopInset;
+    }
 
     public override Element Render()
     {
@@ -354,15 +366,23 @@ sealed class DiscoGrid : Component
         });
 
         return Embed.Comp(() => new LazyGrid(
-        // Capped to _cap when >0 (the artist page); cap 0 → the full facet. The count delegate reads the live total.
-        count: () => { _ = _vc.Version.Value; int t = _vc.CountOr0; return _cap > 0 ? Math.Min(_cap, t) : t; },
+        // The count is the whole facet. LazyGrid realizes only the viewport window plus overscan.
+        count: Count,
         cell: Cell,
         ensureRange: (f, l) => _vc.EnsureRange(f, l - 1),
         minColWidth: MinCol, gap: Gap, rowExtra: CardChrome + RowGap, overscanRows: 4,
         expanded: _expanded,
         drawer: DrawerFor,
         drawerHeight: DrawerHeight,
-        initialIndex: _initialIndex));
+        initialIndex: _initialIndex,
+        onVisibleRangeChanged: _visibleRangeChanged,
+        expandedTopInset: _expandedTopInset));
+    }
+
+    int Count()
+    {
+        _ = _vc.Version.Value;
+        return _vc.CountOr0;
     }
 
     Element Cell(int idx, float cardW)
@@ -408,6 +428,12 @@ sealed class DiscoGrid : Component
             "MONTH" => date.ToString("MMM yyyy", culture),
             _ => date.ToString("MMM d, yyyy", culture),
         };
+    }
+
+    internal static string ReleaseYearLabel(Album album)
+    {
+        if (album.Year > 0) return album.Year.ToString(CultureInfo.InvariantCulture);
+        return album.ReleaseDate is { Length: >= 4 } date ? date[..4] : "";
     }
 
     // A self-sizing shimmer cell, SAME height as a real card: the cover fills the (engine-laid-out) cell width and squares
@@ -474,212 +500,210 @@ sealed class DiscoGrid : Component
 
         // The OUTER slot owns the transition because its height participates in parent layout. The stable key keeps ONE
         // node across A→B switches (Position/Size-reflow); a true open/close runs the enter/exit channels.
-        var inner = new BoxEl { ZStack = true, Children = [ panel, connector ] };
+        var inner = new BoxEl
+        {
+            ZStack = true, Animate = DrawerPresence,
+            Children = [ panel, connector ],
+        };
         return new BoxEl
         {
             Key = "disco-drawer", Direction = 1,
             Height = DrawerHeight(idx),
-            ClipToBounds = true, Animate = DrawerReveal,
+            ClipToBounds = true, Animate = DrawerResize,
             Children = [ inner ],
         };
     }
 }
 
-// One artist-page discography facet: a collapsible header + the first Cap items (DiscoGrid), and a "See all N {facet}" link
-// that NAVIGATES to the full facet page — never an in-place reveal (DiscographyRoute → DiscographyPage).
+// One artist-page discography facet. The complete resident collection stays inline and UI-virtualized; the stock Expander
+// owns disclosure semantics and motion. Era ranges are display-only metadata on the one sticky heading: grid rows never
+// restart and no late-arriving structure can change the section's measured extent while the user is scrolling.
 sealed class DiscographySection : Component
 {
-    readonly string _artistUri, _artistName, _title;
+    internal sealed record Props(Album[] Items);
+
+    readonly string _title;
     readonly DiscographyKind _kind;
     readonly Services _svc;
     readonly Action<string, string?> _go;
     readonly Action<string> _play;
     readonly Func<ColorF> _accent;
-    readonly Signal<bool> _collapsed = new(false);
-    // :stuck — true only while the body's sticky clip is actually cutting (ScrollBindDsl.OnFlag edge, never per-frame).
-    readonly Signal<bool> _stickyClipped = new(false);
+    readonly Signal<LazyGridVisibleRange> _visible = new(default);
+    readonly Signal<bool> _gridClipped = new(false);
     VirtualCollection<Album>? _vc;
-    System.Threading.CancellationTokenSource? _cts;   // per-instance; cancelled on unmount (feeds the VC + the seed probe)
-    bool _seeded;                                      // one-shot latch: guards the provisional Seed (Seed bumps Version)
+    int _snapshotKey, _snapshotCount = -1;
+    TemplateParts? _parts;
 
-    const int Cap = DiscographyRoute.PreviewCap;
+    const float HeaderRowH = 40f;
+    const float StickyInset = ArtistHeroLayout.CompactIdentityHeight + HeaderRowH;
 
-    /// <param name="stickyClearance">Viewport-top offset the sticky header pins BELOW — the artist page passes
-    /// <see cref="ArtistShyPill.Clearance"/> so the pinned header never slides under the floating shy pill; the default
-    /// 0 is for hosts with no top overlay (DiscographyPage). STATIC on purpose (a ctor float, never a reactive
-    /// `pinned.Value` read): every facet sits ≥1000px below the sentinel flip, so a reactive read would evaluate to
-    /// the clearance in every reachable state while costing a two-section re-render + ScrollBinds re-bake per flip;
-    /// the one wrong state (header pinned, pill hidden) only exists while Artist != Ready, where the page shows
-    /// skeleton/error, not a scrollable grid.</param>
-    public DiscographySection(string artistUri, string artistName, DiscographyKind kind, string title, Services svc, Action<string, string?> go, Action<string> play, Func<ColorF> accent, float stickyClearance = 0f)
-    { _artistUri = artistUri; _artistName = artistName; _kind = kind; _title = title; _svc = svc; _go = go; _play = play; _accent = accent; _pinTop = stickyClearance; }
-
-    readonly float _pinTop;   // see the ctor doc: the sticky header's viewport-top offset (ArtistShyPill.Clearance / 0)
+    public DiscographySection(DiscographyKind kind, string title, Services svc,
+                              Action<string, string?> go, Action<string> play, Func<ColorF> accent)
+    {
+        _kind = kind; _title = title; _svc = svc;
+        _go = go; _play = play; _accent = accent;
+    }
 
     public override Element Render()
     {
-        var post = UsePost();
-        _cts ??= new System.Threading.CancellationTokenSource();
-        _vc ??= DiscoVc.Make(_svc, _artistUri, _kind, post, _cts.Token);
-        // Once per mount (a signal-free effect runs exactly once): cancel the CTS on unmount — cancelling the VC's paged
-        // fetches AND the seed probe — and fire the total-only probe so shimmer-up-to-N renders before page 0 lands.
-        // Mirrors the HomePage / LyricsTicker UseSignalEffect + Reactive.OnCleanup lifecycle pattern.
-        UseSignalEffect(() =>
+        var props = UsePropsOrDefault<Props>();
+        Album[] items = props?.Items ?? Array.Empty<Album>();
+        int snapshotKey = SnapshotKey(items);
+        _vc ??= VirtualCollection<Album>.FromSnapshot(items);
+        if (_snapshotCount < 0) { _snapshotKey = snapshotKey; _snapshotCount = items.Length; }
+        UseEffect(() =>
         {
-            Reactive.OnCleanup(() => { _cts?.Cancel(); _cts?.Dispose(); });
-            SeedProbe(post);
-        });
-        _ = _vc.Version.Value;                       // subscribe → header count + "See all N" update as the facet loads
-        int total = _vc.CountOr0;
-        bool collapsed = _collapsed.Value;
+            if (_snapshotKey == snapshotKey && _snapshotCount == items.Length) return;
+            _snapshotKey = snapshotKey;
+            _snapshotCount = items.Length;
+            _vc!.ReplaceSnapshot(items);
+            if (_visible.Peek() != default) _visible.Value = default;
+        }, DepKey.From(snapshotKey, items.Length));
+        var eras = DiscographyEraBands.PlanAlbums(items);
 
-        // Body stays mounted so collapse can animate (Reflow height) and collapsed mode can peek the first album
-        // tops through a clipped, bottom-faded, softly blurred window. Leading anchor keeps content top-pinned.
+        // The real section heading pins directly below the compact artist bar. The grid owns one subtree clip at the
+        // combined inset, so cards pass behind neither painted row and no signal-driven surrogate header is needed.
+        Element header = Header(items.Length, eras);
         Element grid = new BoxEl
         {
             Direction = 1,
-            // Collapsed peek is decorative — taps expand via the clip wrapper; cards must not open drawers.
-            HitTestVisible = !collapsed,
-            Children = [Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play, cap: Cap, accent: _accent))],
-        };
-        var bodyKids = new List<Element>(2) { grid };
-        if (!collapsed && total > Cap) bodyKids.Add(SeeAllButton(total));
-
-        Element body = new BoxEl
-        {
-            Direction = 1, Gap = Spacing.M,
-            ClipToBounds = true,
-            // Collapsed → short peek of the first cards; expanded → natural height. SizeMode.Reflow eases the layout
-            // height so sections below slide smoothly (WinUI Expander timings).
-            Height = collapsed ? CollapsedPeekH : float.NaN,
-            Animate = BodyMotion,
-            EdgeFade = collapsed ? new EdgeFadeSpec(EdgeMask.Bottom, CollapsedFadeBand) : null,
-            Blur = collapsed ? CollapsedPeekBlur : 0f,
-            Opacity = collapsed ? 0.92f : 1f,
-            // Peek is tappable to expand; expanded body keeps sticky-clip under the pinned header.
-            HitTestVisible = true,
-            OnClick = collapsed ? () => _collapsed.Value = false : null,
-            Children = bodyKids.ToArray(),
-        };
-        if (!collapsed)
-            body = ((BoxEl)body) with
+            EdgeFade = _gridClipped.Value
+                ? new EdgeFadeSpec(EdgeMask.Top, DetailVerticalLayout.StickyFadeBand)
+                : null,
+            ScrollBinds = [new()
             {
-                ScrollBinds = [new() { ClipTopAtViewport = HeaderClipInset, OnFlag = on => _stickyClipped.Value = on }],
-                // The sticky clip is a hard cut: cards vanish on an exact pixel line under the pinned header, which
-                // reads as content being sliced rather than passing behind it. A short top band softens that line into
-                // a dissolve, the same cue the shelves already use at their scroll edges. ONLY while the clip is cutting
-                // (the OnFlag :stuck edge): at rest there is no cut to soften, so the band instead feathered the FIRST
-                // card row's own tops (the "black card tops" defect) and forced the whole facet body through an
-                // offscreen RT for a fade that had nothing to fade.
-                EdgeFade = _stickyClipped.Value ? new EdgeFadeSpec(EdgeMask.Top, 0f, StickyFadeBand, 0f, 0f) : null,
-            };
+                ClipTopAtViewport = StickyInset,
+                OnFlag = clipped => { if (_gridClipped.Peek() != clipped) _gridClipped.Value = clipped; },
+            }],
+            Children =
+            [
+                Embed.Comp(() => new DiscoGrid(_vc!, _svc, _go, _play,
+                    accent: _accent,
+                    onVisibleRangeChanged: OnVisibleRangeChanged,
+                    expandedTopInset: StickyInset)),
+            ],
+        };
+
+        var parts = Parts();
 
         return new BoxEl
         {
-            Direction = 1, Gap = Spacing.M, Padding = new Edges4(0f, 0f, 0f, Spacing.XXL),
-            Children = [Header(total, collapsed), body],
+            Direction = 1,
+            Children =
+            [
+                Embed.Comp(new Expander.ExpanderSlots(header, grid, parts),
+                    () => new Expander { InitiallyExpanded = true }),
+                new BoxEl { Height = Spacing.XXL, HitTestVisible = false },
+            ],
         };
     }
 
-    // Peek of the first album-card tops when the facet is collapsed (~one card row tip).
-    const float CollapsedPeekH = 96f;
-    const float CollapsedFadeBand = 64f;
-    const float CollapsedPeekBlur = 8f;
-
-    // Expand 333ms / collapse ~220ms — Expander timings, height-only. Leading keeps album tops in the peek.
-    static readonly LayoutTransition BodyMotion = new(
-        TransitionChannels.Size,
-        TransitionDynamics.Tween(333f, Easing.FluentPopOpen),
-        Size: SizeMode.Reflow,
-        ExitDynamics: TransitionDynamics.Tween(220f, EasingSpec.CubicBezier(1f, 1f, 0f, 1f)),
-        Anchor: SizeAnchor.Leading,
-        Axes: SizeAxes.Height);
-
-    // Total-only probe (limit 0 → NO network; resolves same-tick from the cached artist the page header already fetched).
-    // Seeds the VC COUNT ONLY (items = default) as PROVISIONAL so shimmers render instantly; the first real page reconciles
-    // the count. Behind a one-shot latch because Seed bumps Version → an unlatched seed would re-render-loop. A cancelled or
-    // failed probe, or a non-positive total, leaves _seeded clear so a remount retries (existing total>0 gate still governs).
-    async void SeedProbe(Action<Action> post)
+    TemplateParts Parts()
     {
-        var cts = _cts;
-        if (_seeded || cts is null) return;
-        var ct = cts.Token;
-        var vc = _vc;
-        try
+        if (_parts is not null) return _parts;
+        return _parts = new TemplateParts
         {
-            var p = await _svc.Library.GetDiscographyAsync(_artistUri, _kind, 0, 0, ct).ConfigureAwait(false);
-            int total = p.Total;
-            post(() =>
+            [Expander.PartHeader] = element => element with
             {
-                if (_seeded || ct.IsCancellationRequested || total <= 0 || vc is null) return;
-                _seeded = true;
-                vc.Seed(total, default, provisional: true);
-            });
-        }
-        catch { /* OCE (nav away) or a failed probe → _seeded stays clear so a remount retries */ }
+                MinHeight = HeaderRowH,
+                Padding = new Edges4(0f, Spacing.XS, Spacing.S, Spacing.XS),
+                Fill = ColorF.Transparent,
+                HoverFill = ColorF.Transparent,
+                PressedFill = ColorF.Transparent,
+                BorderWidth = 0f,
+                Corners = CornerRadius4.All(0f),
+                BrushTransitionMs = 0f,
+                ScrollBinds = [new() { PinTop = ArtistHeroLayout.CompactIdentityHeight }],
+            },
+            [Expander.PartChevron] = element => element with
+            {
+                Width = 28f, Height = 28f,
+                Margin = new Edges4(Spacing.S, 0f, 0f, 0f),
+            },
+            [Expander.PartContent] = element => element with
+            {
+                Padding = Edges4.All(0f), MinHeight = 0f, Margin = Edges4.All(0f),
+                Fill = ColorF.Transparent, BorderWidth = 0f,
+                Corners = CornerRadius4.All(0f),
+            },
+        };
     }
 
-    /// <summary>The header's text row. RailHeader's 20px type measures ~28 DIP with its line box; the accent bar's
-    /// MinHeight 22 is shorter, so the text sets the row height.</summary>
-    const float HeaderRowH = 28f;
-    /// <summary>Header padding ABOVE the text row. Deliberately tighter than the pad below (and than the symmetric
-    /// Spacing.M it replaced): a symmetric 12/12 made the pinned band 52px tall, which — stacked under the shy pill's
-    /// own 56px — ate ~120px of viewport before the first card. The heading only needs to clear the pill, not float in
-    /// the middle of its own strip. Keep in lockstep with Header()'s Padding — PinnedHeaderH derives from it.</summary>
-    const float HeaderPadTop = Spacing.XS;
-    /// <summary>Header padding BELOW the text row — larger than <see cref="HeaderPadTop"/> so the heading sits ON its
-    /// content (the optical grouping every heading wants) rather than centred in a band.</summary>
-    const float HeaderPadBottom = Spacing.XS;
-    /// <summary>The header's real pinned height. This used to be a hand-written 38 against an actual 44, so ~6px of
-    /// card leaked above the clip line on every scroll. Derived now, so a padding or type change cannot desync it.</summary>
-    const float PinnedHeaderH = HeaderRowH + HeaderPadTop + HeaderPadBottom;   // 36
-    /// <summary>Where the section body's sticky clip cuts: everything above (the overlay clearance the pill owns, plus
-    /// the pinned header itself) must be free of card pixels. 44 + 36 = 80 on the artist page; 36 with no clearance.</summary>
-    float HeaderClipInset => _pinTop + PinnedHeaderH;
-
-    /// <summary>Depth of the dissolve at the sticky-clip line. Widened from 14: the clip line sits ~80px down the
-    /// viewport with a translucent acrylic pill immediately above it, where a 14px feather still read as a cut.</summary>
-    const float StickyFadeBand = 22f;
-
-    Element Header(int total, bool collapsed) => new BoxEl
+    Element Header(int total, DiscographyEraBand[]? eras)
     {
-        // Left padding 0 so the accent bar aligns with the non-collapsible AccentHeader sections (Top tracks / Appears on).
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
-        Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-        // Breathing room while PINNED, ASYMMETRIC: the named HeaderPadTop/HeaderPadBottom (PinnedHeaderH derives from
-        // them — keep them in lockstep). Less above than below, so the heading reads as attached to its own grid rather
-        // than centred in a fat strip, and the pinned band stays slim enough to leave the cards the viewport. The right
-        // pad keeps it clear of the edge.
-        Padding = new Edges4(0f, HeaderPadTop, Spacing.L, HeaderPadBottom),
-        // CSS-sticky wayfinding: the header pins BELOW the floating shy pill (_pinTop = ArtistShyPill.Clearance on the
-        // artist page; 0 on hosts with no overlay) while ITS section (the parent column = the containing block) is in
-        // view, clamps at the section's end, and releases on scroll-back — so mid-grid the user always sees which facet
-        // (Albums / Singles & EPs) they're in. STATIC by design — see the ctor's stickyClearance doc. The header itself
-        // never changes looks; the section BODY's sticky-clip (below) keeps the page backdrop behind it.
-        ScrollBinds = [ new() { PinTop = _pinTop } ],
-        OnClick = () => _collapsed.Value = !_collapsed.Peek(),
-        Children =
-        [
-            new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = _accent() },
-            WaveeType.RailHeader(_title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            total > 0 ? new TextEl(total.ToString()) { Size = 15f, Weight = 600, Color = Tok.TextTertiary } : new BoxEl(),
-            new BoxEl { Grow = 1f },
-            Icon(collapsed ? Icons.ChevronDown : Icons.ChevronUp, 14f, Tok.TextSecondary),
-        ],
-    };
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch,
+                    Corners = CornerRadius4.All(Radii.Pill), Fill = _accent(), HitTestVisible = false,
+                },
+                Embed.Comp(new DiscographyFacetHeaderLabel.Props(_title, total, eras),
+                    () => new DiscographyFacetHeaderLabel(_visible)) with
+                {
+                    Key = "facet-label:" + (int)_kind,
+                },
+                new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f },
+            ],
+        };
+    }
 
-    // Full-width "See all N {facet}" link → navigates to the dedicated facet page (breadcrumb + the whole grid).
-    Element SeeAllButton(int total) => new BoxEl
+    void OnVisibleRangeChanged(LazyGridVisibleRange range)
     {
-        Direction = 0, AlignItems = FlexAlign.Center, Height = 56f,
-        Padding = new Edges4(Spacing.L, 0f, Spacing.M, 0f), Corners = CornerRadius4.All(Radii.Card),
-        Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault,
-        BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        OnClick = () => _go(DiscographyRoute.Make(_kind, _artistUri), _artistName),
-        Children =
-        [
-            new TextEl($"See all {total} {DiscographyRoute.FacetWord(_kind, total)}") { Grow = 1f, Basis = 0f, Size = 14f, Weight = 700, Color = Tok.TextPrimary },
-            Icon(Icons.ChevronRight, 16f, Tok.TextSecondary),
-        ],
-    };
+        if (_visible.Peek() != range) _visible.Value = range;
+    }
+
+    static int SnapshotKey(Album[] items)
+    {
+        var hash = new HashCode();
+        hash.Add(items.Length);
+        for (int i = 0; i < items.Length; i++)
+        {
+            var item = items[i];
+            hash.Add(item.Uri, StringComparer.Ordinal);
+            hash.Add(item.Name, StringComparer.Ordinal);
+            hash.Add(item.Year);
+            hash.Add(item.ReleaseDate, StringComparer.Ordinal);
+            hash.Add(item.TrackCount);
+            hash.Add(item.Cover?.Url, StringComparer.Ordinal);
+        }
+        return hash.ToHashCode();
+    }
+}
+
+/// <summary>The only reactive leaf in the pinned facet heading. Visible-window changes replace one fixed-line text run;
+/// they never rerender the Expander, reflow the grid, or write the page scroll offset.</summary>
+sealed class DiscographyFacetHeaderLabel : Component
+{
+    internal sealed record Props(string Title, int Total, DiscographyEraBand[]? Eras);
+
+    readonly IReadSignal<LazyGridVisibleRange> _visible;
+
+    public DiscographyFacetHeaderLabel(IReadSignal<LazyGridVisibleRange> visible) => _visible = visible;
+
+    public override Element Render()
+    {
+        var props = UsePropsOrDefault<Props>() ?? new Props("", 0, null);
+        var visible = _visible.Value;
+        string meta = props.Total > 0 ? Strings.Artist.ReleaseCount(props.Total) : "";
+        var eras = props.Eras;
+        if (eras is not null && eras.Length > 0)
+        {
+            int index = visible.LastIndexExclusive > visible.FirstIndex ? visible.FirstIndex : 0;
+            if (DiscographyEraBands.AtIndex(eras, index) is { } era && era.Label.Length > 0)
+            {
+                meta = era.Label + " · " + Strings.Artist.ReleaseCount(era.Count);
+            }
+        }
+
+        return meta.Length > 0
+            ? WaveeType.RailHeader(props.Title, meta)
+            : WaveeType.RailHeader(props.Title) with
+            {
+                MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            };
+    }
 }
