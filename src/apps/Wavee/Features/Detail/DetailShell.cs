@@ -461,9 +461,9 @@ sealed class DetailShell : Component
                         Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":"
                             + colorWashesDisabled + ":" + immersiveHero,
                         ZStack = true, Grow = 1f, HitTestVisible = false,
-                        // Confine the wash to the content card's shape: round the top corners (Radii.Card) + clip, so the
-                        // tint never square-fills the card's cut-away top-left corner over the sidebar seam / material.
-                        ClipToBounds = true, Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
+                        // Confine the wash to the shell-owned content-pane shape. A route must not round the trailing
+                        // corner independently and make the page silhouette change during navigation.
+                        ClipToBounds = true, Corners = WaveeShell.ContentPaneCorners,
                         Gradient = colorWashesDisabled ? null : Surfaces.DetailHeroWash(washColor, immersiveHero),
                         Animate = PaletteWashTransition,
                     },
@@ -520,9 +520,9 @@ sealed class DetailShell : Component
                 {
                     Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":" + colorWashesDisabled,
                     ZStack = true, Grow = 1f, HitTestVisible = false,
-                    // Confine the wash to the content card's shape: round the top corners (Radii.Card) + clip, so the
-                    // tint never square-fills the card's cut-away top-left corner over the sidebar seam / material.
-                    ClipToBounds = true, Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
+                    // Confine the wash to the shell-owned content-pane shape. A route must not round the trailing
+                    // corner independently and make the page silhouette change during navigation.
+                    ClipToBounds = true, Corners = WaveeShell.ContentPaneCorners,
                     Gradient = colorWashesDisabled ? null : Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
                 },
                 twoColumnPage,

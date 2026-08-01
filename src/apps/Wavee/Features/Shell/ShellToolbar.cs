@@ -41,6 +41,8 @@ sealed class ShellToolbar : Component
     readonly Action _toggleTheme;
     readonly List<Route> _backHistory;
     readonly List<Route> _forwardHistory;
+    readonly FloatSignal _leftChromeWidth = new();
+    readonly FloatSignal _rightChromeWidth = new();
 
     // The shortcut band's services. PLAIN FIELDS refreshed on every Render (the mode-component pattern): these are
     // reference-stable singletons, and Bar()/OverflowItems() run inside the CHILD's render — a ctor arg would freeze at
@@ -90,7 +92,7 @@ sealed class ShellToolbar : Component
         string sel = _route.Value.Name;                  // subscribe (the selection mark under the active shortcut)
         var nav = NavStyle;
 
-        var kids = new List<Element>
+        var leftKids = new List<Element>
         {
             // ── left: sidebar toggle · back · forward · the customizable shortcut band ──────────
             // Back/forward use NavHistoryButton so they also support right-click/hold history flyouts.
@@ -105,34 +107,18 @@ sealed class ShellToolbar : Component
         };
         if (L.ShowPrimaryNav)
         {
-            kids.Add(Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go)));
-            AddShortcutBand(kids, nav, sel);
+            leftKids.Add(Embed.Comp(() => new NavHistoryButton(Icons.Forward, _forward, _canForward, _forwardHistory, _go)));
+            AddShortcutBand(leftKids, nav, sel);
         }
 
-            // ── centre: omnibar, CENTRED in the free space (the stock NavigationView search placement) ──
-        kids.Add(new BoxEl
-            {
-                // Right margin keeps a clear gap between the omnibar and the account cluster — without it the search box's
-                // trailing icon butts right up against the profile avatar at narrower widths (reads as overlap).
-                Grow = 1f, Basis = 0f, Shrink = 1f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                ClipToBounds = true,
-                Padding = new Edges4(8f, 0f, 8f, 0f), Margin = new Edges4(0f, 0f, Spacing.L, 0f),
-                Children =
-                [
-                    // Fills the omnibar slot, capped at 480 (shrinks below that on a narrow window). Live as-you-type
-                    // suggestions come from the Omnibar component (online searchSuggestions).
-                    Embed.Comp(() => new FluentRichOmnibar(_searchText, _go)),
-                ],
-            });
-
-            // ── right: account · friends · bell · theme (collapses by threshold) ──
-        kids.Add(ProfileChip(b, L.ShowProfileName));
-        if (L.ShowFriends) kids.Add(IconButton.Create(Icons.Friends, () => ui?.Toggle(RailMode.Friends), nav));
-        if (L.ShowBell) kids.Add(Embed.Comp(() => new NotificationBell()));
+        // ── right: account · friends · bell · theme (collapses by threshold) ──
+        var rightKids = new List<Element> { ProfileChip(b, L.ShowProfileName) };
+        if (L.ShowFriends) rightKids.Add(IconButton.Create(Icons.Friends, () => ui?.Toggle(RailMode.Friends), nav));
+        if (L.ShowBell) rightKids.Add(Embed.Comp(() => new NotificationBell()));
         if (L.ShowThemeToggle)
         {
-            kids.Add(new BoxEl { Width = 1f, Height = 20f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 0f, 4f, 0f) });
-            kids.Add(IconButton.Create(Theme.Dark ? Icons.Moon : Icons.Sun, _toggleTheme, nav));
+            rightKids.Add(new BoxEl { Width = 1f, Height = 20f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 0f, 4f, 0f) });
+            rightKids.Add(IconButton.Create(Theme.Dark ? Icons.Moon : Icons.Sun, _toggleTheme, nav));
         }
         // Overflow: whatever dropped off the bar folds into a "⋯" MenuFlyout so it stays reachable. A plain MenuFlyout
         // (not CommandBarFlyout) gets the clean OverlayHost clip-reveal open — CommandBarFlyout layers its own
@@ -140,17 +126,34 @@ sealed class ShellToolbar : Component
         var overflow = OverflowItems(L, ui);
         bool overflowBell = !L.ShowBell;   // when the bell collapses, the notification center folds into the ⋯ menu
         if (overflow.Count > 0 || overflowBell)
-            kids.Add(Embed.Comp(() => new OverflowMenu(this, layout, ui)));
+            rightKids.Add(Embed.Comp(() => new OverflowMenu(this, layout, ui)));
 
-        var row = new BoxEl
+        void MeasureCluster(FloatSignal target, RectF r)
+        {
+            if (r.W > 0f && MathF.Abs(r.W - target.Peek()) > 0.5f) target.Value = r.W;
+        }
+
+        var leftCluster = new BoxEl
+        {
+            Direction = 0, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+            OnBoundsChanged = r => MeasureCluster(_leftChromeWidth, r),
+            Children = leftKids.ToArray(),
+        };
+        var rightCluster = new BoxEl
+        {
+            Direction = 0, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+            OnBoundsChanged = r => MeasureCluster(_rightChromeWidth, r),
+            Children = rightKids.ToArray(),
+        };
+        var guardWidth = Prop.Of(() => MathF.Max(_leftChromeWidth.Value, _rightChromeWidth.Value) + Spacing.S);
+
+        var plate = new BoxEl
         {
             // MUX tabbed-window chrome: this row IS the app-body PLATE (LayerOnMicaBaseAlt) — the same material as the
             // nav pane, the player dock and the content-pane backing, so the whole body reads as one continuous plate.
             // The UNPAINTED row is the one ABOVE this: the TAB RAIL in the title bar, where bare Mica Alt shows.
             // BOUND so the host's live re-theme (RethemeAll) re-fires it and follows a palette swap.
-            Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(6f, 0f, 6f, 0f), Fill = Prop.Of(() => WaveeColors.Toolbar),
-            Children = kids.ToArray(),
+            Grow = 1f, Fill = Prop.Of(() => WaveeColors.Toolbar), HitTestVisible = false,
         };
         return new BoxEl
         {
@@ -158,7 +161,38 @@ sealed class ShellToolbar : Component
             Height = 48f,
             Children =
             [
-                row,
+                plate,
+                // Edge commands and the omnibar are independent overlay lanes. The middle lane reserves the larger
+                // measured edge width on BOTH sides, so adding a route-only command (notably Pin/Unpin in the overflow)
+                // can shrink the field on a tight window but can never move its window-centred axis.
+                new BoxEl
+                {
+                    Direction = 0, Height = 48f, AlignItems = FlexAlign.Center,
+                    Padding = new Edges4(6f, 0f, 6f, 0f), HitTestPassThrough = true,
+                    Children = [leftCluster],
+                },
+                new BoxEl
+                {
+                    Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, HitTestPassThrough = true,
+                    Children =
+                    [
+                        new BoxEl { Width = guardWidth, Shrink = 0f, HitTestVisible = false },
+                        new BoxEl
+                        {
+                            Grow = 1f, Basis = 0f, Shrink = 1f, MinWidth = 0f,
+                            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                            ClipToBounds = true, HitTestPassThrough = true,
+                            Children = [Embed.Comp(() => new FluentRichOmnibar(_searchText, _go))],
+                        },
+                        new BoxEl { Width = guardWidth, Shrink = 0f, HitTestVisible = false },
+                    ],
+                },
+                new BoxEl
+                {
+                    Direction = 0, Height = 48f, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+                    Padding = new Edges4(6f, 0f, 6f, 0f), HitTestPassThrough = true,
+                    Children = [rightCluster],
+                },
                 // The commanding plate/content handoff needs the same quiet alpha seam as the player dock and tab rail.
                 // Keeping it as an overlay preserves the toolbar's full 48-DIP content lane.
                 new BoxEl

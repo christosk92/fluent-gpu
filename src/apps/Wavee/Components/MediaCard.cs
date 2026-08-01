@@ -367,12 +367,16 @@ public static class MediaCard
         }).WithMenu(menu);
     }
 
-    /// <summary>The artist-authored pinned item. A supplied background image selects the rich editorial shape; older
-    /// payloads fall back to the compact object card. Both shapes use the shared media-card interaction shell.</summary>
-    public static Element ArtistPick(PinnedItem pinned, string artistName, Image? artistImage,
+    /// <summary>The artist-authored pinned item. The pin's supplied background selects the rich editorial shape; when
+    /// Spotify omits it, the artist hero image preserves that same two-surface composition. Only artists without either
+    /// image fall back to the compact object card. Both shapes use the shared media-card interaction shell.</summary>
+    public static Element ArtistPick(PinnedItem pinned, string artistName, Image? artistImage, Image? artistBackground,
                                      Action onClick, Action onPlay)
     {
-        bool rich = pinned.BackgroundImage?.Url is { Length: > 0 };
+        Image? background = pinned.BackgroundImage?.Url is { Length: > 0 }
+            ? pinned.BackgroundImage
+            : artistBackground?.Url is { Length: > 0 } ? artistBackground : null;
+        bool rich = background is not null;
         Element comment = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
@@ -426,7 +430,7 @@ public static class MediaCard
         };
 
         Element content;
-        if (pinned.BackgroundImage?.Url is { Length: > 0 } background)
+        if (background?.Url is { Length: > 0 } backgroundUrl)
         {
             content = new BoxEl
             {
@@ -434,9 +438,9 @@ public static class MediaCard
                 Corners = CornerRadius4.All(Radii.Card),
                 Children =
                 [
-                    Ui.Image(background, ImageFit.Cover, aspect: 1.6f, decodePx: 640,
+                    Ui.Image(backgroundUrl, ImageFit.Cover, aspect: 1.6f, decodePx: 640,
                         corners: Radii.Card, placeholder: Surfaces.ArtworkPlaceholder,
-                        blurHash: pinned.BackgroundImage.BlurHash) with
+                        blurHash: background.BlurHash) with
                         {
                             AlignSelf = FlexAlign.Stretch,
                             JustifySelf = FlexAlign.Stretch,

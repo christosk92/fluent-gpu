@@ -37,6 +37,7 @@ internal sealed class DisplayPhaseGate
     private bool _inStretch;       // a gated stretch is open; separate from _sinceTicks because 0 is a LEGAL stamp
     private long _sinceTicks;      // start of the current gated stretch, for the stall ceiling
     private long _gatedFrames;
+    private long _ceilingEscapes;  // times the two-refresh liveness ceiling opened the gate (must be reported, never silent)
 
     /// <param name="readAck">Reads the render thread's present-ack (the publish seq it last presented). Invoked twice
     /// per gated decision — the second read is the recheck — so it must be cheap and side-effect free.</param>
@@ -50,6 +51,10 @@ internal sealed class DisplayPhaseGate
     /// <summary>Frames declined so far (diagnostic). Each is a frame DropOldest was about to discard.</summary>
     public long GatedFrames => Volatile.Read(ref _gatedFrames);
 
+    /// <summary>Times the stall ceiling opened the gate because present-ack never arrived in time. The two-refresh
+    /// escape stays for liveness, but every escape is an explicit signal — never a silent smoothness win.</summary>
+    public long CeilingEscapes => Volatile.Read(ref _ceilingEscapes);
+
     /// <summary>UI thread. True ⇒ decline to produce this frame.</summary>
     /// <param name="publishSeq">Frames handed to the seam so far.</param>
     /// <param name="nowTicks">Caller's monotonic stamp (same domain as <paramref name="ceilingTicks"/>).</param>
@@ -58,7 +63,7 @@ internal sealed class DisplayPhaseGate
     /// run input, timers and recovery.</param>
     public bool Blocks(ulong publishSeq, long nowTicks, long ceilingTicks)
     {
-        if (publishSeq <= _readAck()) return Open();
+        if (publishSeq <= _readAck()) return Open(ceilingEscape: false);
 
         if (!_inStretch)
         {
@@ -69,26 +74,29 @@ internal sealed class DisplayPhaseGate
             Interlocked.Exchange(ref _armed, 1);
             // Recheck: if the ack moved while we were arming, WE own the slot and no wake is coming (the callback may
             // already have run and seen us unarmed). Open immediately rather than sleeping to the ceiling.
-            if (publishSeq <= _readAck()) return Open();
+            if (publishSeq <= _readAck()) return Open(ceilingEscape: false);
             _gatedFrames++;
             return true;
         }
 
         // Already armed from an earlier call in this stretch; the ack was re-read at the top, so only the ceiling is
         // left to check.
-        if (nowTicks - _sinceTicks >= ceilingTicks) return Open();
+        if (nowTicks - _sinceTicks >= ceilingTicks) return Open(ceilingEscape: true);
         _gatedFrames++;
         return true;
     }
 
     /// <summary>Open the gate and disarm. Idempotent; safe to call when already open.</summary>
-    public bool Open()
+    public bool Open() => Open(ceilingEscape: false);
+
+    private bool Open(bool ceilingEscape)
     {
         if (_inStretch)
         {
             _inStretch = false;
             _sinceTicks = 0;
             Interlocked.Exchange(ref _armed, 0);
+            if (ceilingEscape) _ceilingEscapes++;
         }
         else if (Volatile.Read(ref _armed) != 0)
         {

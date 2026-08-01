@@ -190,7 +190,7 @@ sealed partial class ArtistPage : Component
         // asking "what's new from this artist" looks first. A band of its own would be a FIFTH copy of one fact, and it
         // would push Top tracks, the thing most visitors came for, down by ~90px on every artist with something coming.
         if (popular.Count > 0)
-            sections.Add(TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.Name, a.LatestRelease, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
+            sections.Add(TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.HeaderImage, a.Name, a.LatestRelease, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
         // Owned discography stays inline as full virtualized facets; dedicated pages remain deep-link compatible only.
         if (albums.Length > 0 || a.AlbumsTotal > 0) sections.Add(Embed.Comp(
             new DiscographySection.Props(albums),
@@ -265,6 +265,7 @@ sealed partial class ArtistPage : Component
                     [
                         Banner(a, uri, Play, Shuffle, Radio, go, compactInteractive.Value),
                         sentinel,
+                        new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false },
                         new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },
                     ],
                 },

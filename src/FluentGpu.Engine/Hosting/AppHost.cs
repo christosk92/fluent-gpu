@@ -1213,6 +1213,10 @@ public sealed class AppHost : IDisposable
     /// been discarded by DropOldest before reaching the screen.</summary>
     public long PhaseGatedFrames => _phaseGate?.GatedFrames ?? 0;
 
+    /// <summary>Times the display-phase gate's two-refresh liveness ceiling fired. Retained for liveness; every escape
+    /// must be reported in pacing traces rather than treated as a smoothness win.</summary>
+    public long PhaseGateCeilingEscapes => _phaseGate?.CeilingEscapes ?? 0;
+
     /// <summary>Stall ceiling for the gate, in ms: never wait more than two refresh periods for a present-ack. The gate
     /// must be an optimization, never a liveness dependency — an occluded, stalled, or device-lost render thread stops
     /// acking, and the loop has to keep running (input, timers, recovery) regardless. Clamped so a bogus or missing
@@ -1237,13 +1241,15 @@ public sealed class AppHost : IDisposable
     }
 
     /// <summary>Render thread: nudge the UI out of its wait after a present, but only while it is actually parked on the
-    /// gate. Elided otherwise so a 120 Hz present cadence does not post 120 messages/s at a loop that is idle or already
+    /// gate. Elided otherwise so a 120 Hz present cadence does not post 120 wakes/s at a loop that is idle or already
     /// running (video playback presents continuously with nothing waiting on it).
     ///
     /// The barrier is required, not defensive: RenderThread publishes the ack with a release write, then this reads the
     /// armed flag — a StoreLoad pair that neither x86 nor ARM orders for free. Without it this can observe a stale
     /// "not armed" for a UI thread that has already armed and gone to sleep, which is precisely the lost wake the
-    /// handshake exists to close.</summary>
+    /// handshake exists to close. <see cref="IPlatformWindow.Wake"/> signals a waitable the UI
+    /// <see cref="IPlatformWindow.WaitForWork"/> waits on atomically with input (and the HR timer), not message-only.
+    /// </summary>
     private void OnRenderPresentAck()
     {
         Thread.MemoryBarrier();
@@ -1906,6 +1912,7 @@ public sealed class AppHost : IDisposable
         _reconciler.Anim = _anim;
         _reconciler.Connected = _connected;   // shared-element (connected-animation) participant registry, fed by Element.MorphId
         _reconciler.ArmScroll = _scrollAnim.Arm;   // controls can request a smooth programmatic scroll (set Target + arm → phase 7 eases)
+        _reconciler.RequestFrame = WakeFrame;      // wake-only seam: mutate retained scene state, wake, DON'T re-render
         _reconciler.PeekMainScrollBusy = () => Stopwatch.GetTimestamp() < _mainScrollHoldUntil;
         // KeepAlive park/un-park → quiesce/resume the parked subtree's animation + scroll tickers so a backgrounded tab's
         // looping animation or mid-fling scroll can't keep the frame loop awake (defeating the idle wake-stop). A parked

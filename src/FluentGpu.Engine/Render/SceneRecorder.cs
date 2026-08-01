@@ -137,6 +137,7 @@ public static class SceneRecorder
         public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
+        public bool HasActiveVirtualDisclosures;
 
         // Hover-elevate clip-ESCAPE (HoverElevateClipRootBit): under a flagged clip root, the sibling deferral PARKS
         // the elevated child here (with everything its re-walk needs) instead of emitting; the flagged ancestor hoists
@@ -276,7 +277,7 @@ public static class SceneRecorder
 
         _scrollLogFrame++;
         ResetDamageEntries();
-        var stats = new RecordAccumulator();
+        var stats = new RecordAccumulator { HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
         // Seed the frame damage with any band a structural-track CANCEL vacated this frame (AnimEngine.PendingStructuralDamage):
         // when a suppressed/resized FLIP or Reveal is snapped to its final bounds, the node stops covering the extent it drew
         // at last frame, but no node re-touches that band — so the region-aware acrylic/backdrop cache would freeze last
@@ -452,7 +453,7 @@ public static class SceneRecorder
             pax = pr.X;
             pay = pr.Y;
         }
-        var stats = new RecordAccumulator();
+        var stats = new RecordAccumulator { HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
              in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, false, default, default, null, 0, true, false, ref stats);
         return stats.ToStats();
@@ -1346,14 +1347,19 @@ public static class SceneRecorder
             childState = childState.WithUnderElevateRoot();
         bool hasItemBand = scene.TryGetVirtualItemBand(
             node, out int itemBandPrefix, out float itemBandTopInset, out float itemBandTopFade);
-        bool hasDisclosure = scene.TryGetVirtualDisclosure(node, out int disclosureFirst, out int disclosureCount,
-            out float disclosureTop, out float disclosureExtent, out float disclosureT,
-            out int disclosurePrefix, out int disclosureFirstRealized);
-        int disclosureLast = disclosureFirst + disclosureCount;
-        float disclosureShift = hasDisclosure ? -disclosureExtent * (1f - disclosureT) : 0f;
+        int disclosureFirst = 0, disclosureCount = 0, disclosurePrefix = 0, disclosureFirstRealized = 0;
+        float disclosureTop = 0f, disclosureExtent = 0f, disclosureT = 0f;
+        bool hasDisclosure = stats.HasActiveVirtualDisclosures
+            && scene.TryGetVirtualDisclosure(node, out disclosureFirst, out disclosureCount,
+                out disclosureTop, out disclosureExtent, out disclosureT,
+                out disclosurePrefix, out disclosureFirstRealized);
+        int disclosureLast = 0;
+        float disclosureShift = 0f;
         RectF disclosureClip = childClip;
         if (hasDisclosure)
         {
+            disclosureLast = disclosureFirst + disclosureCount;
+            disclosureShift = -disclosureExtent * (1f - disclosureT);
             float contentW = MathF.Max(1f, scene.Bounds(node).W);
             disclosureClip = childClip.Intersect(childWorld.TransformBounds(
                 new RectF(0f, disclosureTop, contentW, disclosureExtent * disclosureT)));
@@ -1438,14 +1444,18 @@ public static class SceneRecorder
                     }
                 }
                 int ordinal = childOrdinal;
-                int logicalIndex = ordinal < disclosurePrefix
-                    ? ordinal
-                    : disclosureFirstRealized + (ordinal - disclosurePrefix);
-                bool disclosureBody = hasDisclosure && logicalIndex >= disclosureFirst && logicalIndex < disclosureLast;
-                bool disclosureSuffix = hasDisclosure && logicalIndex >= disclosureLast;
                 RectF activeChildClip = hasItemBand && ordinal >= itemBandPrefix ? itemBandClip : childClip;
-                if (disclosureBody) activeChildClip = activeChildClip.Intersect(disclosureClip);
-                Affine2D activeChildWorld = disclosureSuffix ? childWorld.Translate(0f, disclosureShift) : childWorld;
+                Affine2D activeChildWorld = childWorld;
+                if (hasDisclosure)
+                {
+                    int logicalIndex = ordinal < disclosurePrefix
+                        ? ordinal
+                        : disclosureFirstRealized + (ordinal - disclosurePrefix);
+                    if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
+                        activeChildClip = activeChildClip.Intersect(disclosureClip);
+                    else if (logicalIndex >= disclosureLast)
+                        activeChildWorld = childWorld.Translate(0f, disclosureShift);
+                }
                 NodeFlags cf = scene.Flags(c);
                 childOrdinal++;
                 if ((cf & NodeFlags.StickyPinned) != 0) { anyPinned = true; continue; }
@@ -1523,13 +1533,17 @@ public static class SceneRecorder
                     if ((scene.Flags(c) & NodeFlags.StickyPinned) != 0)
                     {
                         RectF pinnedClip = hasItemBand && pinnedOrdinal >= itemBandPrefix ? itemBandClip : childClip;
-                        int logicalIndex = pinnedOrdinal < disclosurePrefix
-                            ? pinnedOrdinal
-                            : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
-                        bool disclosureBody = hasDisclosure && logicalIndex >= disclosureFirst && logicalIndex < disclosureLast;
-                        bool disclosureSuffix = hasDisclosure && logicalIndex >= disclosureLast;
-                        if (disclosureBody) pinnedClip = pinnedClip.Intersect(disclosureClip);
-                        Affine2D pinnedWorld = disclosureSuffix ? childWorld.Translate(0f, disclosureShift) : childWorld;
+                        Affine2D pinnedWorld = childWorld;
+                        if (hasDisclosure)
+                        {
+                            int logicalIndex = pinnedOrdinal < disclosurePrefix
+                                ? pinnedOrdinal
+                                : disclosureFirstRealized + (pinnedOrdinal - disclosurePrefix);
+                            if (logicalIndex >= disclosureFirst && logicalIndex < disclosureLast)
+                                pinnedClip = pinnedClip.Intersect(disclosureClip);
+                            else if (logicalIndex >= disclosureLast)
+                                pinnedWorld = childWorld.Translate(0f, disclosureShift);
+                        }
                         if (hasItemBand && pinnedOrdinal >= itemBandPrefix && !pinnedBandPushed
                             && itemBandClipChanged && !itemBandClip.IsEmpty)
                         {

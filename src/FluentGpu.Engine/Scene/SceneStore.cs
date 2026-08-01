@@ -110,6 +110,8 @@ public sealed class SceneStore : ISceneBackend
 
     // Sparse side-table for scroll/virtual viewports (O(viewports), not one-per-node). Keyed by node index.
     private readonly ColdSlab<ScrollState> _scroll = new();   // GEN-17 (wired)
+    // Scene-wide census for the recorder/input inactive fast path. Usually zero; supports concurrent ItemsViews.
+    private int _activeVirtualDisclosureCount;
     // Per-variable-list extent tables (Fenwick); persist across frames. Keyed by viewport node index.
     private readonly Dictionary<int, ExtentTable> _extents = new();
     // Grid specs for grid-container nodes (O(grids)). Keyed by node index.
@@ -333,6 +335,11 @@ public sealed class SceneStore : ISceneBackend
         NodeFlags flags = _flags[idx];
         if ((flags & NodeFlags.Scrollable) != 0)
         {
+            if (_scroll.TryGet(idx, out var scroll) && float.IsFinite(scroll.DisclosureT))
+            {
+                Debug.Assert(_activeVirtualDisclosureCount > 0);
+                if (_activeVirtualDisclosureCount > 0) _activeVirtualDisclosureCount--;
+            }
             _scroll.Remove(idx);
             _extents.Remove(idx);
             _scrollObs.Remove(idx);
@@ -1073,6 +1080,8 @@ public sealed class SceneStore : ISceneBackend
     public bool HasScroll(NodeHandle h) => _scroll.Contains((int)h.Raw.Index);
     /// <summary>Read the scroll row by value (default if the node is not a viewport).</summary>
     public bool TryGetScroll(NodeHandle h, out ScrollState s) => _scroll.TryGet((int)h.Raw.Index, out s);
+    /// <summary>True while any viewport owns an active expand/collapse presentation.</summary>
+    public bool HasActiveVirtualDisclosures => _activeVirtualDisclosureCount != 0;
     /// <summary>Resolve the shared recyclable-item clip owned by a virtual viewport from its direct content node.
     /// The returned prefix count maps directly to the content node's leading child ordinals.</summary>
     public bool TryGetVirtualItemBand(NodeHandle content, out int persistentPrefixCount, out float topInset)
@@ -1105,6 +1114,7 @@ public sealed class SceneStore : ISceneBackend
         count = 0;
         top = extent = progress = 0f;
         persistentPrefixCount = firstRealized = 0;
+        if (_activeVirtualDisclosureCount == 0) return false;
         if (content.IsNull || !IsLive(content)) return false;
         NodeHandle viewport = Parent(content);
         if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var sc)
@@ -1121,10 +1131,34 @@ public sealed class SceneStore : ISceneBackend
         return true;
     }
 
+    /// <summary>Arm or retarget one viewport disclosure and maintain the scene-wide active census.</summary>
+    public bool BeginVirtualDisclosure(NodeHandle viewport, int firstIndex, int count,
+                                       float top, float extent, float progress)
+    {
+        if (viewport.IsNull || !IsLive(viewport) || firstIndex < 0 || count <= 0
+            || !float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f
+            || !float.IsFinite(progress) || !_scroll.TryGet((int)viewport.Raw.Index, out var snapshot)
+            || snapshot.Orientation != 0 || snapshot.ContentNode.IsNull || !IsLive(snapshot.ContentNode))
+            return false;
+
+        ref ScrollState sc = ref ScrollRef(viewport);
+        bool wasActive = float.IsFinite(sc.DisclosureT);
+        sc.DisclosureFirst = firstIndex;
+        sc.DisclosureCount = count;
+        sc.DisclosureTop = top;
+        sc.DisclosureExtent = extent;
+        sc.DisclosureT = Math.Clamp(progress, 0f, 1f);
+        if (!wasActive) _activeVirtualDisclosureCount++;
+        Mark(sc.ContentNode, NodeFlags.PaintDirty);
+        return true;
+    }
+
     /// <summary>Animation-side write for a viewport disclosure progress channel.</summary>
     public void SetVirtualDisclosureProgress(NodeHandle viewport, float progress)
     {
-        if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out _)) return;
+        if (viewport.IsNull || !IsLive(viewport) || !float.IsFinite(progress)
+            || !_scroll.TryGet((int)viewport.Raw.Index, out var snapshot) || !float.IsFinite(snapshot.DisclosureT))
+            return;
         ref ScrollState sc = ref ScrollRef(viewport);
         float next = Math.Clamp(progress, 0f, 1f);
         if (sc.DisclosureT == next) return;
@@ -1135,6 +1169,29 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Current disclosure progress for animation retargeting; zero when inactive.</summary>
     public float VirtualDisclosureProgress(NodeHandle viewport)
         => TryGetScroll(viewport, out var sc) && float.IsFinite(sc.DisclosureT) ? sc.DisclosureT : 0f;
+
+    /// <summary>Release one viewport disclosure. Repeated clears are harmless and never underflow the census.</summary>
+    public void ClearVirtualDisclosure(NodeHandle viewport)
+    {
+        if (viewport.IsNull || !IsLive(viewport) || !_scroll.TryGet((int)viewport.Raw.Index, out var snapshot)) return;
+        bool wasActive = float.IsFinite(snapshot.DisclosureT);
+        bool hadState = wasActive || snapshot.DisclosureFirst >= 0 || snapshot.DisclosureCount != 0
+            || snapshot.DisclosureTop != 0f || snapshot.DisclosureExtent != 0f;
+        if (!hadState) return;
+
+        ref ScrollState sc = ref ScrollRef(viewport);
+        sc.DisclosureFirst = -1;
+        sc.DisclosureCount = 0;
+        sc.DisclosureTop = 0f;
+        sc.DisclosureExtent = 0f;
+        sc.DisclosureT = float.NaN;
+        if (wasActive)
+        {
+            Debug.Assert(_activeVirtualDisclosureCount > 0);
+            if (_activeVirtualDisclosureCount > 0) _activeVirtualDisclosureCount--;
+        }
+        if (!sc.ContentNode.IsNull && IsLive(sc.ContentNode)) Mark(sc.ContentNode, NodeFlags.PaintDirty);
+    }
 
     // ── hit-test pass-through (WinUI FlyoutBase.OverlayInputPassThroughElement) ──────────────────
     // A light-dismiss scrim registers ONE target subtree whose rendered bounds it yields to: pointer input there

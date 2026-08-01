@@ -451,9 +451,11 @@ public interface IPlatformWindow : IDisposable
     /// Break an in-progress <see cref="WaitForWork"/> from ANY thread so the loop runs another frame promptly — the
     /// thread-safe wake the engine's cross-thread UI dispatch (<c>AppHost.Post</c>) needs. Unlike the host's internal
     /// <c>WakeFrame</c> (UI-thread-only), this is callable from a worker/COM thread: a background producer enqueues a
-    /// UI-thread action and calls <see cref="Wake"/> so an idle, fully-blocked loop wakes to drain it. Win32 posts a
-    /// benign <c>WM_NULL</c> (PostMessage is thread-safe); headless and other non-blocking backends no-op (their
-    /// <see cref="WaitForWork"/> already returns immediately, so the next loop iteration drains the post anyway).
+    /// UI-thread action and calls <see cref="Wake"/> so an idle, fully-blocked loop wakes to drain it. Win32 signals a
+    /// present-ack waitable that <see cref="WaitForWork"/> waits on atomically with input messages (and the
+    /// high-resolution timer when armed) AND posts a benign <c>WM_NULL</c>; headless and other non-blocking backends
+    /// no-op (their <see cref="WaitForWork"/> already returns immediately, so the next loop iteration drains the post
+    /// anyway).
     /// </summary>
     void Wake() { }
 

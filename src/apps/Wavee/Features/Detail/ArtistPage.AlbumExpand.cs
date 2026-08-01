@@ -284,10 +284,7 @@ sealed class DiscoGrid : Component
 
     /// <summary>Max rows the inline drawer shows. THE single definition — it used to be a literal 10 repeated in
     /// PanelHeight, the panel's shimmer clamp and row clamp, and the selection-bar index guard, all free to drift.</summary>
-    internal const int RowCap = 10;
-    /// <summary>Rows reserved while loading when the card carries no usable count (a cold-restored stub): enough to
-    /// read as "something is coming" without reserving a screenful for what may be a 2-track single.</summary>
-    const int MinShimmerRows = 3;
+    internal const int RowCap = AlbumDrawerRows.RowCap;
     /// <summary>Rows' worth of height the Ready-but-empty note + retry occupies.</summary>
     const int NoteRows = 2;
 
@@ -361,7 +358,7 @@ sealed class DiscoGrid : Component
             // small the hint is. `tracks.Count == 0 && pending` is exactly that rule.
             bool loading = tracks.Count == 0 && pending;
             bool readyEmpty = !pending && tracks.Count == 0;   // Ready OR Failed with nothing to show → note + retry
-            int rows = loading ? Math.Clamp(al.TrackCount, MinShimmerRows, RowCap) : Math.Min(tracks.Count, RowCap);
+            int rows = loading ? AlbumDrawerRows.PendingCount(al.TrackCount) : Math.Min(tracks.Count, RowCap);
             return new DrawerState(al.Uri, rows, loading, readyEmpty);
         });
 

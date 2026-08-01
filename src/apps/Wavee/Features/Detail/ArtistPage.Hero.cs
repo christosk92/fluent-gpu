@@ -65,7 +65,7 @@ sealed partial class ArtistPage : Component
             {
                 ArtistHeroTier.Wide => WaveeType.ArtistDisplay(a.Name),
                 ArtistHeroTier.Medium => WaveeType.ArtistTitle(a.Name),
-                _ => WaveeType.PageHero(a.Name),
+                _ => WaveeType.ArtistCompactTitle(a.Name),
             };
             name = name with
             {

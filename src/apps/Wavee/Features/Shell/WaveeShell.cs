@@ -105,6 +105,8 @@ sealed class WaveeShell : Component
     // Stable-frame anchor key for the content card's FLIP (see the row's MorphId + the card's RelativeTo). Not a Hero
     // participant key — the row never unmounts, so it never matches a mounting node and never triggers a connected fly.
     const string ContentRowMorphId = "shell.content-row";
+    /// <summary>The one main-page silhouette. Route content may paint through it, but may not author another shape.</summary>
+    internal static readonly CornerRadius4 ContentPaneCorners = new(Radii.Card, 0f, 0f, 0f);
 
     // The sidebar collapse (56↔expanded) AND the content card's FLIP share ONE transition, so the pane's animating edge
     // and the card's left edge ease on identical dynamics (edge coherence). Reveal lays the subtree out at its FINAL size
@@ -532,7 +534,7 @@ sealed class WaveeShell : Component
                                     {
                                         Grow = 1f, Margin = new Edges4(0f, 0f, Spacing.S, 0f),
                                         Fill = Prop.Of(() => WaveeColors.FileArea),
-                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                        Corners = ContentPaneCorners,
                                         // Wino/WinUI content zones sit one elevation step above commanding chrome.
                                         // Keep the shadow on this STATIC final-geometry pane: putting it on the animated
                                         // transparent card would make the elevation itself slide during sidebar FLIP.
@@ -562,7 +564,7 @@ sealed class WaveeShell : Component
                                         // Stock NavigationViewContentGridCornerRadius = 8,0,0,0: only the corner facing
                                         // the nav pane rounds. (The seam stroke is uniform 1px — per-side borders are
                                         // unsupported, so the ring is an accepted deviation from the top+left-only rule.)
-                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                        Corners = ContentPaneCorners,
                                         ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
                                         // parent-determined) and clips — so a re-render deep inside a page re-solves only this

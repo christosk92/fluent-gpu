@@ -85,7 +85,7 @@ public sealed class DisplayPhaseGateTests
 
     /// <summary>The stall ceiling opens the gate and disarms it. The gate must be an optimization, never a liveness
     /// dependency: an occluded, stalled or device-lost render thread stops acking entirely, and the loop still has to
-    /// run input, timers and recovery.</summary>
+    /// run input, timers and recovery. Every escape is counted explicitly — never a silent smoothness win.</summary>
     [Fact]
     public void StallCeiling_OpensAndDisarms_WhenAckNeverArrives()
     {
@@ -97,10 +97,24 @@ public sealed class DisplayPhaseGateTests
         // Still inside the ceiling.
         Assert.True(gate.Blocks(publishSeq: 5, nowTicks: 1000 + Ceiling - 1, ceilingTicks: Ceiling));
         Assert.True(gate.IsArmed);
+        Assert.Equal(0, gate.CeilingEscapes);
         // Ceiling reached ⇒ produce anyway.
         Assert.False(gate.Blocks(publishSeq: 5, nowTicks: 1000 + Ceiling, ceilingTicks: Ceiling));
         Assert.False(gate.IsArmed);
         Assert.Equal(0, gate.SinceTicksForTest);
+        Assert.Equal(1, gate.CeilingEscapes);
+    }
+
+    /// <summary>A normal present-ack open must not inflate the ceiling-escape counter.</summary>
+    [Fact]
+    public void PresentAckOpen_DoesNotCountAsCeilingEscape()
+    {
+        ulong ack = 4;
+        var gate = new DisplayPhaseGate(() => ack);
+        Assert.True(gate.Blocks(5, 0, Ceiling));
+        ack = 5;
+        Assert.False(gate.Blocks(5, 1, Ceiling));
+        Assert.Equal(0, gate.CeilingEscapes);
     }
 
     /// <summary>After the ceiling fires, a still-stale ack re-arms a FRESH stretch rather than opening forever — the

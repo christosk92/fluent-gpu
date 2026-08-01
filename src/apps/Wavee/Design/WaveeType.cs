@@ -45,11 +45,38 @@ public static class WaveeType
     /// <summary>Page hero (playlist / album name). → Ui.Title (28/36 Semibold).</summary>
     public static TextEl PageHero(string s) => Ui.Title(s);
 
-    /// <summary>Wide artist identity display on the Fluent type ramp.</summary>
-    public static TextEl ArtistDisplay(string s) => Ui.Display(s);
+    /// <summary>Wide artist identity display: a larger, tightly tracked Display face for editorial heroes.</summary>
+    public static TextEl ArtistDisplay(string s) => Ui.Display(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        Size = 84f,
+        LineHeight = 96f,
+        Weight = 700,
+        CharSpacing = -28f,
+        MinSize = 68f,
+    };
 
-    /// <summary>Medium artist identity title on the Fluent type ramp.</summary>
-    public static TextEl ArtistTitle(string s) => Ui.TitleLarge(s);
+    /// <summary>Medium artist identity title retaining the display face and weight under pressure.</summary>
+    public static TextEl ArtistTitle(string s) => Ui.TitleLarge(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        Size = 48f,
+        LineHeight = 60f,
+        Weight = 700,
+        CharSpacing = -20f,
+        MinSize = 40f,
+    };
+
+    /// <summary>Compact artist identity title with the same bold, tightly tracked voice.</summary>
+    public static TextEl ArtistCompactTitle(string s) => Ui.Title(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        Size = 32f,
+        LineHeight = 40f,
+        Weight = 700,
+        CharSpacing = -12f,
+        MinSize = 28f,
+    };
 
     /// <summary>Now-playing track title. → Ui.Subtitle.</summary>
     public static TextEl NowPlayingTitle(string s) => Ui.Subtitle(s);

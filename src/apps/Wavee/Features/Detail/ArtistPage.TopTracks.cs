@@ -29,7 +29,8 @@ sealed partial class ArtistPage : Component
     // Top tracks retain the native two-column PagedShelf. The supporting rail now carries artist-authored and
     // time-sensitive objects only: Artist Pick, upcoming, and latest release.
     Element TopBand(IReadOnlyList<Track> popular, string uri, PlaybackBridge? bridge, Services svc,
-                    PinnedItem? pinned, Image? artistImage, string artistName, Album? latest, ArtistPreRelease? upcoming,
+                    PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName,
+                    Album? latest, ArtistPreRelease? upcoming,
                     Action<string, string?> go, Action<string> play, Func<ColorF> accent) =>
         Responsive.Of(w =>
         {
@@ -37,7 +38,7 @@ sealed partial class ArtistPage : Component
             string popTitle = Loc.Get(Strings.Artist.TopTracks);
             Element tracks = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
-            Element featured = FeaturedColumn(pinned, artistImage, artistName, latest, upcoming, go, play, accent);
+            Element featured = FeaturedColumn(pinned, artistImage, artistBackground, artistName, latest, upcoming, go, play, accent);
             bool hasFeatured = pinned is not null || latest is { Name.Length: > 0, Uri.Length: > 0 }
                                || upcoming is { IsUpcoming: true };
 
@@ -64,7 +65,7 @@ sealed partial class ArtistPage : Component
             };
         }, fallback: 900f);
 
-    Element FeaturedColumn(PinnedItem? pinned, Image? artistImage, string artistName, Album? latest,
+    Element FeaturedColumn(PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName, Album? latest,
                            ArtistPreRelease? upcoming, Action<string, string?> go,
                            Action<string> play, Func<ColorF> accent)
     {
@@ -73,7 +74,7 @@ sealed partial class ArtistPage : Component
         {
             string target = RichText.RouteForUri(pick.TargetUri) ?? ("album:" + pick.TargetUri);
             groups.Add(Section(Loc.Get(Strings.Artist.ArtistPick),
-                MediaCard.ArtistPick(pick, artistName, artistImage,
+                MediaCard.ArtistPick(pick, artistName, artistImage, artistBackground,
                     onClick: () => go(target, pick.Title),
                     onPlay: () => play(pick.TargetUri))) with { Key = "featured:pick" });
         }

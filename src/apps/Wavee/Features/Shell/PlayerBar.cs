@@ -105,7 +105,7 @@ sealed class PlayerBarContent : Component
         // Hooks FIRST (stable call order — rule #7), before any early return.
         var b = UseContext(PlaybackBridge.Slot);
         var lib = UseContext(LibraryBridge.Slot);    // Mutations: the now-playing like reflects + toggles the saved-set
-        var go = UseContext(HistoryStore.NavCtx);    // navigate to the now-playing album / artist on click
+        var go = UseContext(HistoryStore.NavCtx);    // navigate to the playback context / album / artist on click
         var ui = UseContext(ShellUi.Slot);           // right-rail (lyrics) toggle state
         var svc = UseContext(Services.Slot);
         var acts = UseContext(ActionServices.Slot);  // now-playing cluster context menu (Menus.NowPlaying)
@@ -204,7 +204,17 @@ sealed class PlayerBarContent : Component
         // Both lines auto-scroll when the title overflows (PauseOnHover) and share ONE hover gate (titleHover) on the
         // meta column — hovering pauses so the user can read / click; CycleMs keeps any sibling lines phase-locked.
         // The edge fade is unaffected: a right-edge "there's more" cue at rest, both edges while scrolling.
-        // Now-playing is clickable: art + title → the album; artists are per-name links inside a scrolling row.
+        // Now-playing is clickable: art → the playback context; title → the album; artists are per-name links inside a
+        // scrolling row. The context route matches QueuePanel's "Playing from" breadcrumb instead of assuming that the
+        // track's album is also its playback source (it may be a playlist or Liked Songs).
+        bool contextNav = RichText.RouteForUri(b.CurrentContext.Value) is { Length: > 0 };
+        void NavContext()
+        {
+            // Resolve at invoke time: the mounted click target survives context changes.
+            if (RichText.RouteForUri(b.CurrentContext.Peek()) is { } route)
+                go?.Invoke(route, null);
+        }
+
         var npAlbum = track?.Album;
         bool albumNav = npAlbum is { Uri.Length: > 0 };
         void NavAlbum()
@@ -288,8 +298,10 @@ sealed class PlayerBarContent : Component
             leftKids.Add(new BoxEl
             {
                 Key = "art", Width = artSize, Height = artSize, Shrink = 0f, Animate = ItemMotion,
-                Cursor = albumNav ? CursorId.Hand : (CursorId?)null,
-                OnClick = albumNav ? NavAlbum : null,   // album art → the album
+                Cursor = contextNav ? CursorId.Hand : (CursorId?)null,
+                OnClick = contextNav ? NavContext : null,   // album art → the playback context
+                Role = contextNav ? AutomationRole.Hyperlink : AutomationRole.None,
+                Focusable = contextNav,
                 Children = [Surfaces.Artwork(track?.Image, SeedOf(track), artSize, artSize, 6f)]
             });
         leftKids.Add(metaCol);

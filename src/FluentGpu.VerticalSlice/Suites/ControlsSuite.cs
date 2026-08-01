@@ -58,6 +58,7 @@ static class ControlsSuite
         E5DragDropChecks(strings);
         VirtualInsertionPreviewChecks();
         VirtualDisclosureChecks(strings);
+        VirtualDisclosureFastPathChecks(strings);
         FocusRingChecks(strings);
         Wave2ControlChecks(strings);
         RepeatButtonChecks(strings);
@@ -2671,6 +2672,7 @@ static class ControlsSuite
         var probe = new VirtualDisclosureProbe();
         using var host = new AppHost(app, window, device, fonts, strings, probe);
         host.RunFrame();
+        bool censusInitiallyIdle = !host.Scene.HasActiveVirtualDisclosures;
 
         int collapseSettled = 0;
         var range = new ItemDisclosureRange("band", 1, 2);
@@ -2680,6 +2682,7 @@ static class ControlsSuite
         host.RunFrame();
         bool collapseStarted = host.Scene.TryGetScroll(probe.Controller.Viewport, out var opening)
             && float.IsFinite(opening.DisclosureT) && opening.DisclosureFirst == 1 && opening.DisclosureCount == 2;
+        bool collapseCensusActive = host.Scene.HasActiveVirtualDisclosures;
         for (int i = 0; i < 4; i++) host.RunFrame();
         host.Scene.TryGetScroll(probe.Controller.Viewport, out var collapseMid);
         bool collapseIntermediate = collapseMid.DisclosureT > 0f && collapseMid.DisclosureT < 1f
@@ -2693,6 +2696,7 @@ static class ControlsSuite
             && Occurrences(host.Scene.Root, "A") == 1 && Occurrences(host.Scene.Root, "B") == 0
             && Occurrences(host.Scene.Root, "C") == 0 && Occurrences(host.Scene.Root, "D") == 1
             && Occurrences(host.Scene.Root, "E") == 1;
+        bool collapseCensusIdle = !host.Scene.HasActiveVirtualDisclosures;
 
         probe.RestoreExpanded();
         host.RunFrame();
@@ -2702,6 +2706,7 @@ static class ControlsSuite
         host.RunFrame();
         bool expandStarted = host.Scene.TryGetScroll(probe.Controller.Viewport, out var closing)
             && float.IsFinite(closing.DisclosureT) && closing.DisclosureFirst == 1 && closing.DisclosureCount == 2;
+        bool expandCensusActive = host.Scene.HasActiveVirtualDisclosures;
         for (int i = 0; i < 4; i++) host.RunFrame();
         host.Scene.TryGetScroll(probe.Controller.Viewport, out var expandMid);
         bool expandIntermediate = expandMid.DisclosureT > 0f && expandMid.DisclosureT < 1f
@@ -2712,6 +2717,7 @@ static class ControlsSuite
         host.Scene.TryGetScroll(probe.Controller.Viewport, out var expanded);
         bool expandFinished = expandSettled == 1 && probe.Count.Peek() == 5
             && !float.IsFinite(expanded.DisclosureT);
+        bool expandCensusIdle = !host.Scene.HasActiveVirtualDisclosures;
         bool lifecycle = probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Armed)
             && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Progress)
             && probe.Diagnostics.Exists(static d => d.Kind == ItemDisclosureDiagnosticKind.Cleared)
@@ -2725,6 +2731,9 @@ static class ControlsSuite
             $"started={expandStarted} mid={expandMid.DisclosureT:0.###} identities={expandIntermediate} settled={expandSettled} count={probe.Count.Peek()} t={expanded.DisclosureT}");
         Check("virtual-disclosure.3 lifecycle arms before observation and clears without a failed-start recovery",
             lifecycle, $"events={probe.Diagnostics.Count}");
+        Check("virtual-disclosure.4 scene census is active only while presentation is armed",
+            censusInitiallyIdle && collapseCensusActive && collapseCensusIdle && expandCensusActive && expandCensusIdle,
+            $"initial={censusInitiallyIdle} collapse={collapseCensusActive}->{collapseCensusIdle} expand={expandCensusActive}->{expandCensusIdle}");
 
         int Occurrences(NodeHandle node, string text)
         {
@@ -2735,6 +2744,97 @@ static class ControlsSuite
                 found += Occurrences(child, text);
             return found;
         }
+    }
+
+    static void VirtualDisclosureFastPathChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        var scene = new SceneStore();
+        new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+        {
+            Direction = 1,
+            Width = 100f,
+            Height = 200f,
+            ClipToBounds = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 1,
+                    Width = 100f,
+                    Children =
+                    [
+                        new BoxEl { Key = "A", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "B", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "C", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "D", Width = 100f, Height = 40f, OnClick = static () => { } },
+                        new BoxEl { Key = "E", Width = 100f, Height = 40f, OnClick = static () => { } },
+                    ],
+                },
+            ],
+        }, null);
+        new FlexLayout(scene, fonts).Run(scene.Root);
+
+        var viewport = scene.Root;
+        var content = Child(scene, viewport, 0);
+        var b = Child(scene, content, 1);
+        var c = Child(scene, content, 2);
+        var d = Child(scene, content, 3);
+        ref ScrollState scroll = ref scene.ScrollRef(viewport);
+        scroll.Orientation = 0;
+        scroll.ContentNode = content;
+        scroll.ItemCount = 5;
+        scroll.FirstRealized = 0;
+
+        bool idle = !scene.HasActiveVirtualDisclosures;
+        bool armed = scene.BeginVirtualDisclosure(viewport, 1, 2, 40f, 80f, 0.5f)
+            && scene.HasActiveVirtualDisclosures;
+        bool retargeted = scene.BeginVirtualDisclosure(viewport, 1, 2, 40f, 80f, 0.5f)
+            && scene.HasActiveVirtualDisclosures;
+        var dispatcher = new InputDispatcher(scene);
+        var bodyHit = dispatcher.HitTest(new Point2(10f, 50f));
+        var suffixHit = dispatcher.HitTest(new Point2(10f, 90f));
+        scene.ClearVirtualDisclosure(viewport);
+        var restingHit = dispatcher.HitTest(new Point2(10f, 90f));
+        scene.SetVirtualDisclosureProgress(viewport, 0.75f);   // a late animation write after clear must be ignored
+        bool cleared = !scene.HasActiveVirtualDisclosures
+            && scene.TryGetScroll(viewport, out var clearedState) && !float.IsFinite(clearedState.DisclosureT);
+
+        Check("virtual-disclosure.5 midpoint hit testing clips the body and maps the translated suffix",
+            idle && armed && retargeted && bodyHit == b && suffixHit == d && restingHit == c && cleared,
+            $"idle={idle} armed={armed} retarget={retargeted} body={bodyHit == b} suffix={suffixHit == d} resting={restingHit == c} cleared={cleared}");
+
+        var census = new SceneStore();
+        var root = census.CreateNode(1);
+        census.Root = root;
+        var viewportA = census.CreateNode(1);
+        var contentA = census.CreateNode(1);
+        var viewportB = census.CreateNode(1);
+        var contentB = census.CreateNode(1);
+        census.AppendChild(root, viewportA);
+        census.AppendChild(viewportA, contentA);
+        census.AppendChild(root, viewportB);
+        census.AppendChild(viewportB, contentB);
+        ref ScrollState scrollA = ref census.ScrollRef(viewportA);
+        scrollA.ContentNode = contentA;
+        scrollA.ItemCount = 1;
+        ref ScrollState scrollB = ref census.ScrollRef(viewportB);
+        scrollB.ContentNode = contentB;
+        scrollB.ItemCount = 1;
+
+        bool both = census.BeginVirtualDisclosure(viewportA, 0, 1, 0f, 10f, 0f)
+            && census.BeginVirtualDisclosure(viewportB, 0, 1, 0f, 10f, 1f)
+            && census.HasActiveVirtualDisclosures;
+        census.ClearVirtualDisclosure(viewportA);
+        bool oneRemains = census.HasActiveVirtualDisclosures;
+        census.ClearVirtualDisclosure(viewportA);
+        bool repeatClearSafe = census.HasActiveVirtualDisclosures;
+        census.FreeSubtree(viewportB);
+        bool freeClearsLast = !census.HasActiveVirtualDisclosures;
+
+        Check("virtual-disclosure.6 concurrent, repeated-clear, and viewport-free census edges stay balanced",
+            both && oneRemains && repeatClearSafe && freeClearsLast,
+            $"both={both} one={oneRemains} repeat={repeatClearSafe} free={freeClearsLast}");
     }
 
     sealed class VirtualDisclosureProbe : Component

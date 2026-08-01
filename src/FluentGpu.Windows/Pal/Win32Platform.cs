@@ -550,6 +550,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private RECT _windowedRect;
     private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
     private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
+    private HANDLE _presentAckEvent;        // auto-reset: present-ack / Wake signal waited with messages (not message-only)
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -618,6 +619,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
         s_constructing = null;
         _textInput = new Win32TextInput(_hwnd);
+        // Create this before the window is handed to AppHost: Wake may be called from the render thread, so lazy
+        // creation in Wake/WaitForWork would race and could leave the waiter observing a different handle.
+        _presentAckEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
 
         // Re-run WM_NCCALCSIZE under the custom-frame policy (it already ran during creation with _customFrame set,
         // but a frame-changed pass is the documented way to make the new client geometry stick).
@@ -1150,6 +1154,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             int dmWaitMs = dm.DelayUntilNextUpdateMs(System.Diagnostics.Stopwatch.GetTimestamp());
             if (dmWaitMs >= 0 && (timeoutMs < 0 || dmWaitMs < timeoutMs)) timeoutMs = dmWaitMs;
         }
+
+        // Present-ack / cross-thread Wake signal: waited atomically with input (and the HR timer when armed). A
+        // message-only wake lost presents under queue pressure; SetEvent is observed by MsgWait without depending on
+        // the message queue draining WM_NULL first. Retained vsync + one-frame latency are unchanged — this only makes
+        // the phase-gate's ack wake reliable.
+        HANDLE ack = _presentAckEvent;
+
         // MsgWaitForMultipleObjectsEx's millisecond timeout is quantized by the system timer. On this 120-Hz device a
         // requested 7 ms display-rate wait repeatedly took ~12-13 ms, limiting an otherwise 0.3 ms scroll frame to
         // ~80 fps. A high-resolution waitable timer preserves the same "message OR deadline" contract without
@@ -1162,9 +1173,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             HANDLE timer = _preciseWaitTimer;
             if (SetWaitableTimer(timer, &due, 0, null, null, false))
             {
-                // One handle: 0 = timer, 1 = queued message. The coarse timeout is only a fault backstop.
+                // handles[0]=present-ack, handles[1]=timer; +1 = queued message. Coarse timeout is a fault backstop.
+                HANDLE* handles = stackalloc HANDLE[2];
+                handles[0] = ack;
+                handles[1] = timer;
+                uint n = ack != HANDLE.NULL ? 2u : 1u;
+                HANDLE* waitBase = ack != HANDLE.NULL ? handles : &timer;
                 if (MsgWaitForMultipleObjectsEx(
-                        1, &timer, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
+                        n, waitBase, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
                     return;
             }
             // A wait/set failure is not recoverable by retrying the same handle every animation frame. Retire it once,
@@ -1173,6 +1189,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
 
         uint timeout = timeoutMs < 0 ? 0xFFFFFFFF : (uint)timeoutMs;
+        if (timeoutMs != 0 && ack != HANDLE.NULL)
+        {
+            MsgWaitForMultipleObjectsEx(1, &ack, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            return;
+        }
         MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
     }
 
@@ -1201,10 +1222,14 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _preciseWaitUnavailable = true;
     }
 
-    /// <summary>Thread-safe wake (IPlatformWindow.Wake): post a benign WM_NULL so a blocked <see cref="WaitForWork"/>
-    /// returns and the loop drains a cross-thread UI post. PostMessageW is documented thread-safe, so a worker/COM thread
-    /// may call this directly; WM_NULL (0) is discarded by the pump after waking.</summary>
-    public void Wake() => PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
+    /// <summary>Thread-safe wake (IPlatformWindow.Wake): signal the present-ack waitable AND post a benign WM_NULL so a
+    /// blocked <see cref="WaitForWork"/> returns. The event is what the phase-gate ack depends on; WM_NULL remains for
+    /// pumps that only peek messages. PostMessageW / SetEvent are both thread-safe.</summary>
+    public void Wake()
+    {
+        if (_presentAckEvent != HANDLE.NULL) SetEvent(_presentAckEvent);
+        PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
+    }
 
     /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
     /// <see cref="FluentGpu.Hooks.InputHooks"/>.Announce. Best-effort; a no-op when no assistive tech is listening.</summary>
@@ -1219,6 +1244,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); DestroyWindow(_hwnd); }
         if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
+        if (_presentAckEvent != HANDLE.NULL) { CloseHandle(_presentAckEvent); _presentAckEvent = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }
