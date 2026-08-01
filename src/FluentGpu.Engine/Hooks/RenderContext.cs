@@ -430,6 +430,10 @@ public sealed partial class RenderContext
     /// <summary>Imperatively re-render THIS component (granular — schedules only this component's render-effect). Wired
     /// by the reconciler at mount. For escape-hatch callers (e.g. a Navigator's OnChange); state/context use signals.</summary>
     public Action RequestRerender = static () => { };
+    /// <summary>Host-injected: wake the frame loop WITHOUT re-rendering this component. The wake is the only thing an
+    /// escape hatch needs when it has already mutated retained scene state directly (offsets, transforms, dirty flags)
+    /// and the tree it would re-render is byte-identical. Falls back to <see cref="RequestRerender"/> when unwired.</summary>
+    public Action? RequestFrame;
     public AnimEngine? Anim;
     public ImageCache? Images;                  // host-injected; backs UseImage / PrefetchImage
     public SceneStore? Scene;                   // reconciler-injected; for measuring nodes (AbsoluteRect) + overlay positioning

@@ -862,6 +862,23 @@ static class ScrollSuite
         Check("IV-bound 4. exactly one realized slot holds the roving tab stop (no-current fallback = slot 0)",
             focusable == 1 && theStop == slot0, $"focusable={focusable} isSlot0={theStop == slot0}");
 
+        // 5. A PROGRAMMATIC scroll (ItemsViewController.ScrollBy) moves the viewport WITHOUT re-rendering the ItemsView
+        //    component. ScrollByDelta writes the offset + content transform + VirtualRangeDirty straight onto the
+        //    retained scene and only needs a frame WAKE; re-rendering rebuilt a byte-identical element tree (the list
+        //    element, every template/rowBind closure, and the keyed diff of the result) on every single scroll step and
+        //    was the entire UI-thread allocation of a controller-driven scroll. The engine's own wheel/fling path never
+        //    re-rendered here, so this is also what makes the two scroll paths behave alike.
+        host.RunFrame();                                   // quiesce, so the baseline is a settled frame
+        scene.TryGetScroll(vp, out var scBefore);
+        float offBefore = scBefore.OffsetY;
+        int callsScrollBase = probe.TemplateCalls;
+        probe.Controller.ScrollBy(BoundItemsViewProbe.RowH * 5f);
+        var fScroll = host.RunFrame();
+        scene.TryGetScroll(vp, out var scAfter);
+        Check("IV-bound 4b. programmatic ScrollBy moves the viewport with ZERO component re-renders (wake, don't re-render)",
+            scAfter.OffsetY > offBefore + 1f && fScroll.ComponentsRendered == 0 && probe.TemplateCalls == callsScrollBase,
+            $"offset {offBefore:0.0}→{scAfter.OffsetY:0.0} comps={fScroll.ComponentsRendered} templateCalls {callsScrollBase}→{probe.TemplateCalls}");
+
         // Same-count replacement: title is not special. Title, artist, album and duration are four separate mounted
         // binds, and all four must update on the same persistent row without re-running the template or replacing nodes.
         using var atomicApp = new HeadlessPlatformApp();

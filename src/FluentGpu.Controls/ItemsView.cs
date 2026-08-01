@@ -926,7 +926,16 @@ public sealed class ItemsView : Component
                 sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             }
             sceneRef.Mark(vp, NodeFlags.VirtualRangeDirty);
-            Context.RequestRerender();
+            // WAKE, don't re-render. Everything this scroll needs is already written above: the offset + target on the
+            // ScrollState POD, the content transform, and VirtualRangeDirty on the viewport — which the reconciler's
+            // ReRealizeVirtuals drains granularly each frame ("no component re-render", Reconciler.ReRealizeVirtuals).
+            // Re-rendering the whole ItemsView produced a byte-identical element tree (same count, memoized layout,
+            // same VirtualListEl props) and was the entire measured UI-thread allocation of a programmatic scroll —
+            // the list element, every template/rowBind closure and the keyed diff of the result, rebuilt per ScrollBy.
+            // The frame WAKE is the only load-bearing part, so take that alone. (The engine's own wheel/fling path
+            // never re-rendered here — its RequestRerender is already wired to WakeFrame — so this makes the
+            // controller-driven scroll behave like the input-driven one.)
+            (Context.RequestFrame ?? Context.RequestRerender)();
         }
 
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)

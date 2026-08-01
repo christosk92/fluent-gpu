@@ -337,6 +337,9 @@ public sealed class TreeReconciler
     /// <summary>Set by the host (→ ScrollIntegrator.Arm); injected into each component so a control can arm a viewport for a
     /// smooth programmatic scroll (set Target, then phase 7 eases the offset toward it).</summary>
     public Action<FluentGpu.Foundation.NodeHandle>? ArmScroll { get; set; }
+    /// <summary>Set by the host (→ AppHost.WakeFrame); injected into each component so an escape hatch that has already
+    /// mutated retained scene state can wake the frame loop WITHOUT scheduling its own render-effect.</summary>
+    public Action? RequestFrame { get; set; }
     /// <summary>Peek: any user scroll active or inside the host's post-scroll hold (see AppHost).</summary>
     public Func<bool>? PeekMainScrollBusy { get; set; }
     /// <summary>Set by the host; image nodes request decodes through it and pin/unpin for residency (liveness).</summary>
@@ -512,6 +515,7 @@ public sealed class TreeReconciler
         ctx.Images = Images;
         ctx.Scene = _scene;
         ctx.ArmScroll = ArmScroll;
+        ctx.RequestFrame = RequestFrame;
         ctx.PeekMainScrollBusy = PeekMainScrollBusy;
         ctx.BeginVirtualRemoval = BeginVirtualRemoval;
         ctx.BeginVirtualDisclosure = BeginVirtualDisclosure;
@@ -2560,14 +2564,26 @@ public sealed class TreeReconciler
         int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
-        Span<NodeHandle> oldNodes = oldN <= 128 ? stackalloc NodeHandle[oldN] : new NodeHandle[oldN];
+        if (oldN <= StackScratchMax && newN <= StackScratchMax)
+        {
+            ReconcileWindowCore(node, newKids, oldKids, shift,
+                stackalloc NodeHandle[oldN], stackalloc bool[oldN], stackalloc NodeHandle[newN]);
+            return;
+        }
+
+        var scratch = ChildScratch.Rent(oldN, newN);
+        try { ReconcileWindowCore(node, newKids, oldKids, shift, scratch.Old, scratch.Used, scratch.New); }
+        finally { scratch.Return(); }
+    }
+
+    private void ReconcileWindowCore(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids,
+                                     int shift, Span<NodeHandle> oldNodes, Span<bool> used, Span<NodeHandle> newNodes)
+    {
+        int oldN = oldKids.Length, newN = newKids.Length;
         {
             int i = 0;
             for (var c = _scene.FirstChild(node); !c.IsNull && i < oldN; c = _scene.NextSibling(c)) oldNodes[i++] = c;
         }
-
-        Span<bool> used = oldN <= 128 ? stackalloc bool[oldN] : new bool[oldN];
-        Span<NodeHandle> newNodes = newN <= 128 ? stackalloc NodeHandle[newN] : new NodeHandle[newN];
 
         // Pass 1: overlap — a reused element object keeps its node untouched. A REBUILT element at the SAME slot
         // (a parent re-render re-ran RenderItem over an unchanged window — the reuseOverlap:false realize) with the
@@ -2749,12 +2765,74 @@ public sealed class TreeReconciler
 
     // ── Keyed child reconcile (the structural engine, retained) ──────────────────────────────────
 
+    /// <summary>Largest child count whose keyed-diff scratch still fits on the stack. Above it the three scratch
+    /// buffers come from <see cref="ArrayPool{T}"/> instead of the managed heap — a 500-child container used to
+    /// allocate two <c>NodeHandle[]</c> + one <c>bool[]</c> (~8.5KB) on EVERY reconcile of that container, which was
+    /// the entire measured cost of a large-subtree swap. The threshold stays where it was so small containers (the
+    /// overwhelming majority, and every nesting level of a deep tree) keep the zero-ceremony stack path.</summary>
+    private const int StackScratchMax = 128;
+
+    /// <summary>
+    /// The three keyed-diff scratch buffers for a container too large to stackalloc, rented from the shared pool.
+    /// Pool arrays are NOT zeroed and all three slices are read at indices the diff does not necessarily write
+    /// (<see cref="Old"/> when the scene holds fewer children than <c>oldKids</c>; <see cref="Used"/> and
+    /// <see cref="New"/> by definition), so every slice is cleared on rent — matching the stackalloc semantics the
+    /// diff was written against exactly. Rent/Return is per invocation, so it survives the re-entrant
+    /// <c>Update → ReconcileChildren</c> recursion: each nested frame owns its own arrays.
+    /// </summary>
+    private ref struct ChildScratch
+    {
+        public Span<NodeHandle> Old, New;
+        public Span<bool> Used;
+        private NodeHandle[] _oldRent, _newRent;
+        private bool[] _usedRent;
+
+        public static ChildScratch Rent(int oldN, int newN)
+        {
+            ChildScratch s = default;
+            s._oldRent = ArrayPool<NodeHandle>.Shared.Rent(Math.Max(1, oldN));
+            s._usedRent = ArrayPool<bool>.Shared.Rent(Math.Max(1, oldN));
+            s._newRent = ArrayPool<NodeHandle>.Shared.Rent(Math.Max(1, newN));
+            s.Old = s._oldRent.AsSpan(0, oldN);
+            s.Used = s._usedRent.AsSpan(0, oldN);
+            s.New = s._newRent.AsSpan(0, newN);
+            s.Old.Clear();
+            s.Used.Clear();
+            s.New.Clear();
+            return s;
+        }
+
+        // NodeHandle is a POD struct and bool a primitive, so the pool holds no references alive — returning without
+        // clearing is safe (and the next Rent clears anyway).
+        public void Return()
+        {
+            ArrayPool<NodeHandle>.Shared.Return(_oldRent);
+            ArrayPool<bool>.Shared.Return(_usedRent);
+            ArrayPool<NodeHandle>.Shared.Return(_newRent);
+        }
+    }
+
     internal void ReconcileChildren(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids)
     {
         int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN == 0 && newN == 0) return;
 
-        Span<NodeHandle> oldNodes = oldN <= 128 ? stackalloc NodeHandle[oldN] : new NodeHandle[oldN];
+        if (oldN <= StackScratchMax && newN <= StackScratchMax)
+        {
+            ReconcileChildrenCore(node, newKids, oldKids,
+                stackalloc NodeHandle[oldN], stackalloc bool[oldN], stackalloc NodeHandle[newN]);
+            return;
+        }
+
+        var scratch = ChildScratch.Rent(oldN, newN);
+        try { ReconcileChildrenCore(node, newKids, oldKids, scratch.Old, scratch.Used, scratch.New); }
+        finally { scratch.Return(); }
+    }
+
+    private void ReconcileChildrenCore(NodeHandle node, ReadOnlySpan<Element> newKids, ReadOnlySpan<Element> oldKids,
+                                       Span<NodeHandle> oldNodes, Span<bool> used, Span<NodeHandle> newNodes)
+    {
+        int oldN = oldKids.Length, newN = newKids.Length;
         if (oldN > 0)
         {
             int i = 0;
@@ -2766,8 +2844,6 @@ public sealed class TreeReconciler
             for (int j = 0; j < oldN; j++)
                 if (oldKids[j].Key is string k) (keyMap ??= new()).TryAdd(k, j);
 
-        Span<bool> used = oldN <= 128 ? stackalloc bool[oldN] : new bool[oldN];
-        Span<NodeHandle> newNodes = newN <= 128 ? stackalloc NodeHandle[newN] : new NodeHandle[newN];
         bool structural = false;
         // A PURE reorder (same key set, different order — e.g. a list reverse) creates/removes nothing, but the
         // re-appended child order still needs a relayout to move the rows. Non-monotonic match order detects it.
@@ -3194,16 +3270,9 @@ public sealed class TreeReconciler
         float extent = lastRect.Bottom - top;
         if (!float.IsFinite(top) || !float.IsFinite(extent) || extent <= 0f) return false;
 
-        ref ScrollState sc = ref _scene.ScrollRef(viewport);
-        float from = float.IsFinite(sc.DisclosureT) ? Math.Clamp(sc.DisclosureT, 0f, 1f)
-                                                    : expanding ? 0f : 1f;
-        sc.DisclosureFirst = first;
-        sc.DisclosureCount = count;
-        sc.DisclosureTop = top;
-        sc.DisclosureExtent = extent;
-        sc.DisclosureT = from;
-        if (!sc.ContentNode.IsNull && _scene.IsLive(sc.ContentNode))
-            _scene.Mark(sc.ContentNode, NodeFlags.PaintDirty);
+        float from = float.IsFinite(snapshot.DisclosureT) ? Math.Clamp(snapshot.DisclosureT, 0f, 1f)
+                                                          : expanding ? 0f : 1f;
+        if (!_scene.BeginVirtualDisclosure(viewport, first, count, top, extent, from)) return false;
         Anim.SeedValue(viewport, AnimChannel.DisclosureProgress, expanding ? 1f : 0f,
             expanding ? MotionTokenId.DisclosureExpand : MotionTokenId.DisclosureCollapse, from: from);
         return true;
@@ -3223,14 +3292,7 @@ public sealed class TreeReconciler
     {
         if (viewport.IsNull || !_scene.IsLive(viewport) || !_scene.TryGetScroll(viewport, out _)) return;
         Anim?.Cancel(viewport, AnimChannel.DisclosureProgress);
-        ref ScrollState sc = ref _scene.ScrollRef(viewport);
-        sc.DisclosureFirst = -1;
-        sc.DisclosureCount = 0;
-        sc.DisclosureTop = 0f;
-        sc.DisclosureExtent = 0f;
-        sc.DisclosureT = float.NaN;
-        if (!sc.ContentNode.IsNull && _scene.IsLive(sc.ContentNode))
-            _scene.Mark(sc.ContentNode, NodeFlags.PaintDirty);
+        _scene.ClearVirtualDisclosure(viewport);
     }
 
     private delegate void ActionRef<T>(in T value);

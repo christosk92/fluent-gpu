@@ -1194,6 +1194,7 @@ sealed class BoundItemsViewProbe : Component
     public const float RowH = 40f;
     public readonly SelectionModel Selection = new();
     public readonly Signal<int> NowPlaying = new(-1);   // the "current track" index the title-colour bind compares against
+    public readonly ItemsViewController Controller = new();   // programmatic scroll seam (ScrollBy must NOT re-render this component)
     public int TemplateCalls;                            // bound rowTemplate invocations (slot mounts) — must stay flat on a re-skin
     public override Element Render()
         => new BoxEl
@@ -1213,7 +1214,10 @@ sealed class BoundItemsViewProbe : Component
                             ? ColorF.FromRgba(0x4C, 0xC2, 0xFF) : ColorF.FromRgba(0xE0, 0xE0, 0xE0)),
                     };
                     return SelectorVisualsBound.AccentPill(scope, content);
-                }, RepeatLayout.Stack(RowH), new ListOptions { SelectionMode = ItemsSelectionMode.Multiple, Selection = Selection }),
+                }, RepeatLayout.Stack(RowH), new ListOptions
+                {
+                    SelectionMode = ItemsSelectionMode.Multiple, Selection = Selection, Controller = Controller,
+                }),
             ],
         };
 }
