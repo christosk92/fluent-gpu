@@ -380,88 +380,145 @@ public static class MediaCard
         }).WithMenu(menu);
     }
 
-    /// <summary>The artist-authored pinned item. The pin's supplied background selects the rich editorial shape; when
-    /// Spotify omits it, the artist hero image preserves that same two-surface composition. Only artists without either
-    /// image fall back to the compact object card. Both shapes use the shared media-card interaction shell.</summary>
+    // ── Artist Pick on-media chrome. The pick floats two SMALL surfaces over a full-bleed hero, so both plates use the
+    // canonical over-media idiom (Tok.MediaScrim + a white hairline + Tok.OnMedia* ink) rather than theme card brushes:
+    // ink over artwork is theme-INVARIANT (theming.md's leaf-value rule — Tokens.cs "On-media ink + scrim"), which is
+    // why the plates stay dark in light mode too. The hairline alpha matches CardLibraryAction's on-dark ring (58).
+    static readonly ColorF PickOnMediaHairline = ColorF.FromRgba(255, 255, 255, 58);
+    const float PickHeight = 260f;         // the hero's fixed extent; the rail column supplies the width
+    const float PickCommentMaxW = 300f;    // the comment pill's text budget — the pill hugs below it
+    const float PickItemMaxW = 400f;       // the entity card's cap on a wide rail (prototype ≈ 380–420)
+    const float PickItemTextMaxW = 240f;   // and its title/subtitle budget inside that cap
+    const float PickFab = 32f;             // compact play affordance (the 44px shelf FAB is too heavy here)
+
+    /// <summary>The artist-authored pinned item: a full-bleed hero with a COMPACT comment pill pinned top-left and a
+    /// COMPACT entity card pinned bottom-left (space-between), both content-hugging — never full-width slabs.
+    ///
+    /// Backdrop precedence: the pin's own authored campaign art (<c>profile.pinnedItem.backgroundImageV2</c>) → the
+    /// artist's wide header banner (<c>visuals.headerImage</c>) → the pin's own COVER, blurred and dimmed, → the artist
+    /// avatar, likewise. The wire omits the first two for plenty of artists (that is what produced the flat card), and a
+    /// blurred square standing in for a missing banner is the same idiom the editorial card's frosted band uses
+    /// (BakedBlur + ColorOverlay — a bake-once derivative, not a per-frame layer). Only an artist with NO art at all
+    /// falls back to a flat, height-hugging plate, and even then it keeps the identical pill + entity composition.</summary>
     public static Element ArtistPick(PinnedItem pinned, string artistName, Image? artistImage, Image? artistBackground,
                                      Action onClick, Action onPlay, DragSource? drag = null)
     {
         Image? background = pinned.BackgroundImage?.Url is { Length: > 0 }
             ? pinned.BackgroundImage
             : artistBackground?.Url is { Length: > 0 } ? artistBackground : null;
-        bool rich = background is not null;
+        // The stand-in when neither wide image exists: the pinned entity's own cover, else the artist's avatar.
+        Image? backdrop = background
+            ?? (pinned.Cover?.Url is { Length: > 0 } ? pinned.Cover
+                : artistImage?.Url is { Length: > 0 } ? artistImage : null);
+        bool blurred = background is null && backdrop is not null;   // a square cover doing a wide banner's job
+        bool onMedia = backdrop is not null;
+
+        ColorF plate = onMedia ? Tok.MediaScrim : Tok.FillSubtleSecondary;
+        ColorF hairline = onMedia ? PickOnMediaHairline : ColorF.Transparent;
+        ColorF ink = onMedia ? Tok.OnMediaPrimary : Tok.TextPrimary;
+        ColorF inkDim = onMedia ? Tok.OnMediaTertiary : Tok.TextSecondary;
+
+        // ── The comment pill (top-left): avatar + the artist's note, capsule corners, hugging its content. The text is
+        // Grow (no Basis) so the pill MEASURES to the copy but can never out-measure the rail: FlexLayout hands a grow
+        // child only the width left after the fixed siblings, so the pill's natural width is bounded by its own MaxWidth
+        // AND by the column that arranges it. Basis=0 would have collapsed the hug to just the avatar.
         Element comment = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
-            Padding = Edges4.All(Spacing.S),
-            Corners = CornerRadius4.All(Radii.Card),
-            Fill = rich ? Tok.FillSolidBase : ColorF.Transparent,
-            BorderWidth = rich ? 1f : 0f,
-            BorderColor = rich ? Tok.StrokeCardDefault : ColorF.Transparent,
-            Shadow = rich ? Elevation.Card : default,
+            AlignSelf = FlexAlign.Start, MaxWidth = PickCommentMaxW + 60f,
+            Padding = new Edges4(Spacing.XS, Spacing.XS, 14f, Spacing.XS),
+            Corners = Radii.FullAll,
+            Fill = plate,
+            BorderWidth = onMedia ? 1f : 0f, BorderColor = hairline,
+            Shadow = onMedia ? Elevation.Card : default,
             Children =
             [
-                PersonPicture.Create("", 28f, displayName: artistName, imageSourcePath: artistImage?.Url),
+                PersonPicture.Create("", 28f, displayName: artistName, imageSourcePath: artistImage?.Url,
+                                     fill: onMedia ? plate : null) with
+                {
+                    BorderColor = onMedia ? hairline : Tok.StrokeCardDefault,
+                },
                 Ui.Body(pinned.Comment.Length > 0 ? pinned.Comment : pinned.Eyebrow) with
                 {
-                    Grow = 1f, Basis = 0f, MinWidth = 0f,
-                    Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 3,
+                    Grow = 1f, Shrink = 1f, MinWidth = 0f, MaxWidth = PickCommentMaxW,
+                    Color = ink, Wrap = TextWrap.Wrap, MaxLines = 2,
                     Trim = TextTrim.CharacterEllipsis,
                 },
             ],
         };
 
+        // ── The entity card (bottom-left): cover + title + kind, hugging, capped, card corners — the prototype's dark
+        // smoke card, not a white slab. Play stays on the card, restyled to the compact over-media FAB.
         Element item = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            AlignSelf = FlexAlign.Start, MaxWidth = PickItemMaxW,
             Padding = Edges4.All(Spacing.S),
-            Corners = CornerRadius4.All(Radii.Card),
-            Fill = rich ? Tok.FillSolidBase : ColorF.Transparent,
-            BorderWidth = rich ? 1f : 0f,
-            BorderColor = rich ? Tok.StrokeCardDefault : ColorF.Transparent,
+            Corners = Radii.CardAll,
+            Fill = plate,
+            BorderWidth = onMedia ? 1f : 0f, BorderColor = hairline,
+            Shadow = onMedia ? Elevation.Card : default,
             Children =
             [
                 Surfaces.Artwork(pinned.Cover, Seed(pinned.Uri), 56f, 56f, Radii.Control, decodePx: 128),
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XS,
+                    Direction = 1, Gap = Spacing.XS,
+                    Grow = 1f, Shrink = 1f, MinWidth = 0f, MaxWidth = PickItemTextMaxW,
                     Children =
                     [
                         WaveeType.TrackTitle(pinned.Title) with
                         {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Color = ink,
                         },
                         WaveeType.TrackMeta(pinned.Subtitle) with
                         {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Color = inkDim,
                         },
                     ],
                 },
-                Button.Create(Loc.Get(Strings.Detail.Play), onPlay, ButtonAppearance.Subtle,
-                    ControlSize.Small, glyph: Icons.Play),
+                onMedia
+                    ? CoverActionFab(onPlay, Icons.Play, Loc.Get(Strings.Detail.Play), PickFab)
+                    : PlayFab(onPlay, Icons.Play, PickFab),
             ],
         };
 
         Element content;
-        if (background?.Url is { Length: > 0 } backgroundUrl)
+        if (backdrop?.Url is { Length: > 0 } backdropUrl)
         {
             content = new BoxEl
             {
-                Height = 260f, ZStack = true, ClipToBounds = true,
+                Height = PickHeight, ZStack = true, ClipToBounds = true,
                 Corners = CornerRadius4.All(Radii.Card),
                 Children =
                 [
-                    Ui.Image(backgroundUrl, ImageFit.Cover, aspect: 1.6f, decodePx: 640,
+                    Ui.Image(backdropUrl, ImageFit.Cover, aspect: 1.6f, decodePx: blurred ? 256 : 640,
                         corners: Radii.Card, placeholder: Surfaces.ArtworkPlaceholder,
-                        blurHash: background.BlurHash) with
+                        blurHash: backdrop.BlurHash) with
                         {
                             AlignSelf = FlexAlign.Stretch,
                             JustifySelf = FlexAlign.Stretch,
+                            // A stand-in cover is BAKED-blurred once into a derived image (shader channels, no scene
+                            // layer, no per-frame blur) and dimmed so it reads as a backdrop rather than a stretched
+                            // square. The authored/header banner is shown crisp.
+                            BakedBlur = blurred ? new BakedBlurSpec(30f, 0.5f) : (BakedBlurSpec?)null,
+                            ColorOverlay = blurred ? ColorF.FromRgba(8, 8, 10) with { A = 0.45f } : ColorF.Transparent,
                         },
+                    // The canonical media scrims (Tokens.cs) — top for the pill, bottom for the entity card — so the
+                    // white ink holds over a bright hero without dimming the middle of the image.
                     new BoxEl
                     {
-                        Grow = 1f, Direction = 1, Justify = FlexJustify.End, Gap = Spacing.S,
-                        Padding = Edges4.All(Spacing.M),
+                        HitTestVisible = false, Corners = CornerRadius4.All(Radii.Card), Gradient = Tok.ScrimTop,
+                    },
+                    new BoxEl
+                    {
+                        HitTestVisible = false, Corners = CornerRadius4.All(Radii.Card), Gradient = Tok.ScrimBottom,
+                    },
+                    new BoxEl
+                    {
+                        Grow = 1f, Direction = 1, Justify = FlexJustify.SpaceBetween, AlignItems = FlexAlign.Start,
+                        Gap = Spacing.M, Padding = Edges4.All(Spacing.M),
+                        HitTestPassThrough = true,   // the card body stays clickable between the two plates
                         Children = [comment, item],
                     },
                 ],
@@ -469,9 +526,11 @@ public static class MediaCard
         }
         else
         {
+            // No art at all: the SAME two compact plates, just on the card's own surface and hugging its height.
             content = new BoxEl
             {
-                Direction = 1, Gap = Spacing.S, Padding = Edges4.All(Spacing.M),
+                Direction = 1, Gap = Spacing.M, AlignItems = FlexAlign.Start,
+                Padding = Edges4.All(Spacing.M),
                 Children = [comment, item],
             };
         }
