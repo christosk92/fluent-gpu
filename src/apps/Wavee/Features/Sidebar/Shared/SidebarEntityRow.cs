@@ -317,8 +317,11 @@ static class SidebarEntityRow
             IsEnabled = enabled,
             OnClick = enabled ? spec.OnClick : null,
             Focusable = spec.Focusable,
+            // Stationary lift at the standard 0.4 source dim. This is the RESOURCE drag only: a row inside a
+            // reorderable band carries no Drag payload at all (Reorderable.Item installs its own source and position
+            // track — a second one is a documented stomp), so the vacated-slot case never reaches this line.
             Draggable = enabled && spec.Drag is { } payload
-                ? new DragSource(WaveeDragKinds.Resource, () => payload)
+                ? Drag.Source(WaveeDragKinds.Resource, () => payload)
                 : null,
             DropTarget = spec.DropTarget,
             Children = kids,

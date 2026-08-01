@@ -48,16 +48,16 @@ sealed class SidebarPinDropZone : Component
     {
         var drag = UseDragState();
         var over = UseSignal(false);
-        var spec = UseMemo(() => new DropTargetSpec(
-            [WaveeDragKinds.Resource],
-            OnEnter: s => over.Value = WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
-            OnOver: s => over.Value = WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
-            OnLeave: _ => over.Value = false,
-            OnDrop: s => { over.Value = false; _accept(s.Payload, 0); })
-        {
-            CanAccept = static s => WaveeResourceDrag.Unwrap(s.Payload) is { CanPin: true },
-            VisualPolicy = DropTargetVisualPolicy.Spotlight,
-        }, DepKey.Empty);
+        // Typed target: the accept test IS the pin-eligibility test, so a payload that reaches a handler is pinnable by
+        // construction (the engine only enters a target whose CanAccept passed).
+        var spec = UseMemo(() => Drop.Target<WaveeResourceDragPayload>(
+            WaveeDragKinds.Resource,
+            accepts: static p => p.CanPin,
+            onEnter: (_, _) => over.Value = true,
+            onOver: (_, _) => over.Value = true,
+            onLeave: _ => over.Value = false,
+            onDrop: (p, _) => { over.Value = false; _accept(p, 0); },
+            visualPolicy: DropTargetVisualPolicy.Spotlight), DepKey.Empty);
 
         bool compatible = drag.Active
             && string.Equals(drag.Kind, WaveeDragKinds.Resource, StringComparison.Ordinal)

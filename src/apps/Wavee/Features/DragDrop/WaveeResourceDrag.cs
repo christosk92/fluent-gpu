@@ -16,14 +16,12 @@ static class WaveeDragKinds
     public const string Resource = "wavee.resource";
 }
 
-enum WaveeResourceKind : byte
-{
-    Route, Playlist, Album, Artist, Show, Folder, Track, Episode,
-}
-
 /// <summary>A transport envelope shared by tabs, sidebar rows and track lists. Display/navigation identity is retained
 /// separately from an optional ordered track snapshot; source playlist row refs make a same-playlist drop a move while
-/// every other playlist target is a copy. The resolver is cold and runs only after a compatible drop.</summary>
+/// every other playlist target is a copy. The resolver is cold and runs only after a compatible drop.
+/// <para><see cref="ArtUrl"/> is the drag CHIP's artwork and nothing else — a source fills it only where the cover is
+/// already in hand (a sidebar row's entry). A track snapshot needs no help: the chip reads the first track's own image.
+/// </para></summary>
 sealed record WaveeResourceDragPayload(
     WaveeResourceKind Kind,
     string Id,
@@ -33,8 +31,12 @@ sealed record WaveeResourceDragPayload(
     string? SourcePlaylistUri = null,
     IReadOnlyList<PlaylistRowRef>? SourceRows = null,
     Func<CancellationToken, Task<IReadOnlyList<Track>>>? TrackResolver = null,
-    bool RootlistItem = false)
+    bool RootlistItem = false,
+    string? ArtUrl = null)
 {
+    /// <summary>This payload's chip data (the engine-free resolution rules).</summary>
+    public WaveeDragChipModel ChipModel() => WaveeDragChipModel.For(Name, ArtUrl, Tracks);
+
     public bool CanPin => Kind is WaveeResourceKind.Route or WaveeResourceKind.Playlist or WaveeResourceKind.Album
         or WaveeResourceKind.Artist or WaveeResourceKind.Show or WaveeResourceKind.Folder;
 
@@ -73,7 +75,8 @@ sealed record WaveeResourceDragPayload(
             _ => WaveeResourceKind.Route,
         };
         return new(kind, entry.Id, entry.Uri, entry.Name,
-            TrackResolver: ResolverFor(kind, entry.Uri, svc), RootlistItem: rootlistItem);
+            TrackResolver: ResolverFor(kind, entry.Uri, svc), RootlistItem: rootlistItem,
+            ArtUrl: WaveeDragChipModel.ArtOf(entry.Cover));
     }
 
     public static WaveeResourceDragPayload FromDestination(SidebarDestination destination, Services? svc)
@@ -87,6 +90,8 @@ sealed record WaveeResourceDragPayload(
             SidebarPinKind.Folder => WaveeResourceKind.Folder,
             _ => WaveeResourceKind.Route,
         };
+        // A destination is a ROUTE record — it carries no cover (the tab strip never had one to show), so a tab drag's
+        // chip falls back to the kind glyph tile.
         return new(kind, destination.PinId, destination.Uri, destination.Name,
             TrackResolver: ResolverFor(kind, destination.Uri, svc));
     }
@@ -115,20 +120,35 @@ static class WaveeResourceDrag
         _ => null,
     };
 
-    /// <summary>One root-mounted count badge for a multi-track drag. The engine still lifts the source row; this only
-    /// communicates the rest of the ordered selection without cloning a second track-list subtree under the pointer.</summary>
-    public static Element? Preview(DragState state)
+    /// <summary>The app's chip DATA for a live drag — Wavee's whole contribution to the drag visual. The framework
+    /// renders it (opaque compact card, art + title + subtitle, corner count badge and stacked backdrop for a
+    /// multi-select, tilt, caption, not-allowed cue, cursor offset, window clamp); this decides only what it says.
+    /// The resolution rules themselves live in the engine-free <see cref="WaveeDragChipModel"/>.</summary>
+    public static DragChipSpec? Chip(DragState state)
     {
         if (!string.Equals(state.Kind, WaveeDragKinds.Resource, StringComparison.Ordinal)
-            || Unwrap(state.Payload)?.Tracks is not { Count: > 1 } tracks) return null;
-        return InfoBadge.Count(tracks.Count) with
-        {
-            OffsetX = Spacing.M,
-            OffsetY = -Spacing.L,
-            Shadow = Elevation.Flyout,
-            HitTestVisible = false,
-        };
+            || Unwrap(state.Payload) is not { } payload) return null;
+        var model = payload.ChipModel();
+        return new DragChipSpec(
+            ArtSource: model.ArtUrl, Title: model.Title, Subtitle: model.Subtitle,
+            Count: model.Count, Glyph: GlyphFor(payload.Kind));
     }
+
+    /// <summary>The one preview mounted at the shell root (<c>DragPreviewLayer.Of</c>).</summary>
+    public static readonly Func<DragState, Element?> Preview = DragChip.Resolve(Chip);
+
+    /// <summary>The art-less fallback tile: the same kind glyphs the sidebar uses, so a cover-less drag still reads as
+    /// "a playlist" / "an album" rather than as a generic note.</summary>
+    static string GlyphFor(WaveeResourceKind kind) => kind switch
+    {
+        WaveeResourceKind.Playlist => Icons.MusicNote,
+        WaveeResourceKind.Album => Icons.Album,
+        WaveeResourceKind.Artist => Icons.Contact,
+        WaveeResourceKind.Show or WaveeResourceKind.Episode => Icons.RadioTower,
+        WaveeResourceKind.Folder => Icons.Folder,
+        WaveeResourceKind.Route => Icons.Home,
+        _ => Icons.MusicNote,
+    };
 }
 
 static class WaveeResourceDrop

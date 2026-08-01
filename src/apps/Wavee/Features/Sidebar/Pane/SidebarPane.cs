@@ -1021,10 +1021,8 @@ sealed class SidebarPane : Component
                                              WaveeResourceDragPayload? rootTarget = null,
                                              int rootPlanIndex = -1)
     {
-        bool Compatible(object? payload)
+        bool Compatible(WaveeResourceDragPayload source)
         {
-            var source = WaveeResourceDrag.Unwrap(payload);
-            if (source is null) return false;
             if (rootTarget is not null && source.RootlistItem
                 && source.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder)
                 return !string.Equals(source.Id, rootTarget.Id, StringComparison.Ordinal);
@@ -1032,13 +1030,13 @@ sealed class SidebarPane : Component
             return slot >= 0 && source.CanPin;
         }
 
-        void Hover(DragSession s) => _resourceDropRow.Value = Compatible(s.Payload) ? rootPlanIndex : -1;
+        void Hover(WaveeResourceDragPayload p, DragSession _)
+            => _resourceDropRow.Value = Compatible(p) ? rootPlanIndex : -1;
         void Leave(DragSession _) { if (_resourceDropRow.Peek() == rootPlanIndex) _resourceDropRow.Value = -1; }
 
-        void CommitDrop(DragSession s)
+        void CommitDrop(WaveeResourceDragPayload source, DragSession s)
         {
             Leave(s);
-            var source = WaveeResourceDrag.Unwrap(s.Payload);
             if (rootTarget is { } root && Acts is { } rootActs
                 && source is { RootlistItem: true,
                     Kind: WaveeResourceKind.Playlist or WaveeResourceKind.Folder })
@@ -1067,11 +1065,9 @@ sealed class SidebarPane : Component
             if (slot >= 0) AcceptForeign(sectionId, s.Payload, slot);
         }
 
-        return new DropTargetSpec([WaveeDragKinds.Resource], Hover, Hover, Leave, CommitDrop)
-        {
-            CanAccept = s => Compatible(s.Payload),
-            VisualPolicy = DropTargetVisualPolicy.Spotlight,
-        };
+        return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+            accepts: Compatible, onDrop: CommitDrop, onEnter: Hover, onOver: Hover, onLeave: Leave,
+            visualPolicy: DropTargetVisualPolicy.Spotlight);
     }
 
     internal bool IsResourceDropActive(int planIndex)

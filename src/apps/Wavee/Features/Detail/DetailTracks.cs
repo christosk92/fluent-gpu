@@ -2744,7 +2744,9 @@ sealed class TrackList : Component
             PressedFill = plainRows ? WaveeColors.RowPressed
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed),
             PressScale = 0.985f,   // subtle push-down on press (a depth cue so the row isn't flat)
-            Draggable = new DragSource(WaveeDragKinds.Resource, () => TrackDragPayload(index.Peek(), trackStart)),
+            // Stationary lift: the row stays in its slot at 0.4 (Atlassian's "it's in the chip" dim) while the chip
+            // follows the pointer — the full-width lifted row snapshot was the S1 ghost failure.
+            Draggable = Drag.Source(WaveeDragKinds.Resource, () => TrackDragPayload(index.Peek(), trackStart)),
 
             BorderWidth = plainRows ? 0f : 1f,
             // WinUI even rows: CardStroke at rest. BorderColor is Prop<ColorF> — bind to the zebra index.

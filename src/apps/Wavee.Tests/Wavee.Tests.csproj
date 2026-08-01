@@ -194,6 +194,9 @@
     <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
     <Compile Include="..\Wavee\Features\Detail\AlbumDrawerRows.cs" />
     <Compile Include="..\Wavee\Features\Detail\DiscographyEraBands.cs" />
+    <!-- the drag-chip resolution rules (Wavee.Core + BCL only; the chip SPEC type is a Controls type, which is exactly
+         why the decisions live in this engine-free model) — WaveeDragChipModelTests -->
+    <Compile Include="..\Wavee\Features\DragDrop\WaveeDragChipModel.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
     <!-- the upcoming-release resolver (kind 138) + its seam/null/switchable trio — Backend + Wavee.Core deps only, so

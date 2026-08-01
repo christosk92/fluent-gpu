@@ -834,7 +834,7 @@ sealed class WaveeShell : Component
                 IsClosable = _open.Count > 1,
                 ContextMenu = destination is null ? null : () => TabMenu(tab),
                 Drag = destination is { } d
-                    ? new DragSource(WaveeDragKinds.Resource,
+                    ? Drag.Source(WaveeDragKinds.Resource,
                         () => WaveeResourceDragPayload.FromDestination(d, _actions.Svc))
                     : null,
             };
