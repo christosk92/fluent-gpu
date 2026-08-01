@@ -55,6 +55,9 @@ public sealed class DragPreviewLayer : Component
         FloatSignal chipH = UseFloatSignal(0f);
         SceneStore? scene = Context.Scene;   // captured at render: the bind thunk runs outside any render context
         Element? body = state.Active ? Preview?.Invoke(state) : null;
+        // No chip this frame ⇒ the node the seeds target is gone. Drop the handle rather than seeding a dead one: the
+        // slab is generation-checked so it would be harmless, but it costs a wasted row per such gesture.
+        if (body is null) _settleNode = NodeHandle.Null;
 
         // Register as the engine's drag-overlay band. That registration is the WHOLE story now: the band is emitted
         // above the drop-spotlight scrim, so the chip is lit by construction and needs no exemption from anything (the

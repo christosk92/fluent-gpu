@@ -1707,7 +1707,7 @@ internal sealed class ItemsViewInsertion
         _membershipToken = token;
         if (!_awaiting || ReferenceEquals(_commitBaseline, token)) return;
         _awaiting = false;
-        Clear();
+        Clear(releaseOverride: false);   // deferred: the gesture already ended, and with it the controller's release
         FireLanded();
     }
 
@@ -1819,7 +1819,7 @@ internal sealed class ItemsViewInsertion
             {
                 if (epoch != _commitEpoch) return;
                 if (!ok) _landedPending = false;
-                if (_awaiting) { _awaiting = false; Clear(); }
+                if (_awaiting) { _awaiting = false; Clear(releaseOverride: false); }   // deferred — see ObserveMembership
                 FireLanded();
             }
             var post = Post;
@@ -1834,10 +1834,14 @@ internal sealed class ItemsViewInsertion
         Options.OnLanded?.Invoke(_landedSlot, _landedCount);
     }
 
-    private void Clear()
+    /// <param name="releaseOverride">Also release <c>SceneStore.DragSourceOpacityOverride</c>. False on the DEFERRED
+    /// teardowns (a membership hand-off / a commit that completes after the gesture): by then the drag is over and the
+    /// controller has already released the override, so a late write would clear the dim a NEWER drag is holding —
+    /// strobing that gesture's press-source row back to 0.4 while its siblings stay hidden.</param>
+    private void Clear(bool releaseOverride = true)
     {
         bool changed = _plan.IsActive || _payload is not null || _sourceCount != 0;
-        if (HidesSources && Scene is { } scene) HideDragSource(scene, false);
+        if (HidesSources && Scene is { } scene) HideDragSource(scene, false, releaseOverride);
         _plan = default;
         _payload = null;
         _sourceCount = 0;
@@ -1945,14 +1949,14 @@ internal sealed class ItemsViewInsertion
         return false;
     }
 
-    private void HideDragSource(SceneStore scene, bool hide)
+    private void HideDragSource(SceneStore scene, bool hide, bool releaseOverride = true)
     {
         // The press-source row has TWO owners while a same-list insertion is open: this virtual removal (0 — the row is
         // "in the chip") and DragController's Stationary re-assert, which re-writes the source's authored dim on every
         // mid-drag reconcile, AFTER the frame's animation compose. Publish the hidden value as the drag's source-opacity
         // override so the re-assert agrees instead of strobing this one row back to 0.4 while its siblings stay hidden.
         // Written before the node guard: the teardown must release the override even when the row itself is gone.
-        scene.DragSourceOpacityOverride = hide ? 0f : null;
+        if (hide || releaseOverride) scene.DragSourceOpacityOverride = hide ? 0f : null;
         var node = _dragSource;
         if (node.IsNull || !scene.IsLive(node)) return;
         ref NodePaint p = ref scene.Paint(node);

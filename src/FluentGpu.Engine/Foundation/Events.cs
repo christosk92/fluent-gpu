@@ -341,6 +341,10 @@ public static class DragVisualTok
 /// ancestor). OnEnter/OnLeave fire on hover transitions, OnOver every move while inside, OnDrop on release over it
 /// (BEFORE the L1 completion). The <see cref="DragSession"/> argument is THE one live reused instance — copy what
 /// you keep.
+/// <para><b>OnOver is not only a pointer-move callback.</b> While an edge auto-scroll is running the geometry moves
+/// under a STILL pointer, so the host re-projects the current destination once per frame (phase 7.6) — inside the
+/// 0-alloc frame region. Keep <c>OnOver</c> (and anything it invokes, such as a caption builder) cheap and
+/// allocation-free: cache or precompute strings rather than interpolating one per call.</para>
 /// </summary>
 public sealed record DropTargetSpec(
     string[] AcceptKinds,
@@ -364,7 +368,8 @@ public sealed record DropTargetSpec(
     /// <summary>Per-SESSION spotlight policy: when set and it returns false for the live session, this target does not
     /// participate in the drag scrim even though its <see cref="VisualPolicy"/> opts in — so a same-list reorder never
     /// dims the app it is reordering inside. Null (default) = the <see cref="VisualPolicy"/> decides alone. Evaluated
-    /// on the cold refresh edge (<c>SceneStore.RefreshDropSpotlight</c>), never during record; a session with no
+    /// off the record path (<c>SceneStore.RefreshDropSpotlight</c>) — at drag begin, on a target-registry version change,
+    /// and once per frame at phase 7.8 — so keep it cheap and allocation-free; never during record. A session with no
     /// surviving spotlight destination emits no scrim band at all.</summary>
     public Func<DragSession, bool>? SpotlightWhen { get; init; }
 

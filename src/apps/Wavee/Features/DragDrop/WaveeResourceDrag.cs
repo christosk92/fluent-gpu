@@ -229,10 +229,6 @@ static class WaveeResourceDrop
     public static bool CanDepositTracks(object? payload)
         => WaveeResourceDrag.Unwrap(payload) is { CanCopyTracks: true };
 
-    public static bool CanMoveRootlist(object? payload)
-        => WaveeResourceDrag.Unwrap(payload) is { RootlistItem: true,
-            Kind: WaveeResourceKind.Playlist or WaveeResourceKind.Folder };
-
     public static void MoveRootlist(ActionServices acts, object? payload,
                                     WaveeResourceDragPayload target, RootlistDropPlacement placement)
     {

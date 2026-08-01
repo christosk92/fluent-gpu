@@ -439,9 +439,26 @@ would otherwise cause, **subordinate to one hard safety invariant**:
   `FrameEpoch` tick. The mandatory band is realized unconditionally (budget-exempt); the budget clips only the
   overscan refill, extending toward the desired window on the velocity side first. On a deficit the viewport stays
   `VirtualRangeDirty` (the remainder trickles in over subsequent frames) and an O(1) census
-  (`HasBudgetDeferredVirtuals`) keeps the host awake until it catches up. Because the fixed-sum window width is
-  constant under steady scroll, a single list at the default budget never deficits (it realizes its whole window
-  each cross); the budget bites when many viewports compete or a large window must be (re)built.
+  (`HasBudgetDeferredVirtuals`) keeps the host awake until it catches up. The floor is a REFILL RATE, and a flat rate
+  is the failure mode: the mandatory band grows by however many rows the visible edge crossed this frame, which scales
+  with fling velocity and is uncapped (that is the anti-flicker invariant, not a bug), while a flat 12 rows/frame
+  refills the surrounding halo at a velocity-independent rate. Under a sustained fast fling consumption therefore
+  outruns refill, the halo drains frame over frame, and once it is empty every row entering the mandatory band is a
+  COLD realize instead of a warm recycler hit — `comps` and realize-ms climb in lockstep until deceleration lets it
+  drain back. This is the common case for a single fast-scrolling list, not an edge case reserved for many competing
+  viewports; the fix is E4b below (a rate fix, not a window-size fix).
+- **E4b — velocity-scaled realize-budget ceiling.** The per-frame pool is a floor lifted toward a ceiling by the
+  rate the visible edge is consuming rows: `budget = SteadyRealizeRowsPerFrame + clamp(⌈|FlingVelocity| ·
+  SteadyRealizeVelocityFactor / avgExtent⌉, 0, SteadyRealizeRowsCeiling − SteadyRealizeRowsPerFrame)`, with
+  `SteadyRealizeRowsCeiling = 36`, `SteadyRealizeVelocityFactor = 0.20`, and `avgExtent = ContentExtent / ItemCount`
+  (the O(1) value E5 already computes at the same call site — nothing new is measured). `|FlingVelocity| / avgExtent`
+  is rows/second, so the extra term is "roughly the rows the edge will consume in the next 0.20 s", capped at 3× the
+  floor. At rest and at slow scroll the extra term is 0 and behavior is byte-identical to the flat floor. All added
+  arithmetic is scalar `int`/`float` — the pool computation adds no managed allocation to frame phases 6–13.
+  **Safety argument:** this changes only how many rows may be realized PER FRAME. The desired window handed to the
+  clip is still E5's fixed-sum `2·Overscan` window, and the clip never widens it — so the realized WINDOW WIDTH stays
+  velocity-independent and the persistent-slot bound path (§5) keeps its zero-alloc guarantee unchanged (see E5 above
+  for why that fixed sum is load-bearing). E4b makes the halo reach that same ceiling sooner; it never raises it.
 - **E6 — scene-owned virtual-dirty queue.** `SceneStore` appends a viewport to a pre-sized `_virtualRangeDirty` list
   on the `VirtualRangeDirty` 0→1 edge (mirrors the `_layoutDirty` idiom). `ReRealizeVirtuals` iterates THAT queue —
   never a full scan of the `_virtuals` dictionary — swap-removing an entry once its window fully realizes; a

@@ -137,14 +137,60 @@ AOT-clean Win32/WinRT interop behind a small managed surface — **no** WindowsA
 - Others: **Credentials** (locker), **Packaging** (identity), **Activation** (protocol/redirect), **Dialogs** (file pickers, owner HWND), **Shell** (taskbar progress/jump list), **Network** (NLM connectivity + change events).
 - **OS file/folder drop is engine-level, not a pillar:** a `BoxEl.DropTarget = new DropTargetSpec(new[]{ DropKinds.Files }, OnEnter, OnLeave, OnDrop: s => { var d = (FileDropData)s.Payload!; … })` receives an Explorer drag. The Windows backend auto-registers the top-level window with a hand-vtable OLE `IDropTarget` (`Win32DropTarget` → `InputHooks.ExternalDrag*` → `InputDispatcher` → `DragDropContext`), so the zone gets **live hover** (DragEnter/Over/Leave) + the OS "+Copy" cursor; the file list is read once, at drop. Handlers fire on the UI thread. Gates: `e5dragdrop.ext` + smoke `6c.1`.
 
-## Drag & drop styling (`FluentGpu.Controls.DropZone` / `DragPreviewLayer`)
+## Drag & drop (`FluentGpu.Controls` — declare intent, never coordinates)
 
-Style drag/drop without touching the engine internals:
-- **Drop zone (Vercel "Drop to Deploy" feel):** `DropZone.Create(accept: new[]{ DropKinds.Files }, onDrop: s => …, content: body)` (or `DropZone.Window(…)` for whole-window). It restyles ITSELF — a cross-faded dashed accent ring + accent glow that fades in while a COMPATIBLE drag is live ("you can drop here") and brightens on hover — with **no second labelled panel** (so the content's own text never doubles). Works for in-app AND OS file drags.
-- **Lifted-ghost knobs:** set `DragSource.Style = new DragVisualStyle { Opacity = …, Shadow = …, Scale = … }` on a `BoxEl.Draggable` (default = WinUI 0.80 + flyout shadow). Honored in `DragController`.
-- **Custom floating preview (the "cursor tip"):** mount one `DragPreviewLayer.Of(state => state.Kind == "track" ? new Chip(...) : null)` at the app ROOT (top of a root ZStack); it follows the cursor using `UseDragState()`. Set the source's `DragVisualStyle.Opacity = 0` to hide the lifted node and show only the custom preview.
+**Four one-liners cover the whole system.** App code says *what* is draggable, *what* a surface takes, *what* the chip
+shows, and *what* a list does on deposit — the framework owns every coordinate. Canon: `docs/design/subsystems/input-a11y.md` §12
+(contract) + `controls.md` §7.4 (this surface).
+
+```csharp
+// 1. Make anything draggable. Defaults: DragLift.Stationary (the row STAYS in its slot, dimmed to 0.4) + the chip.
+row with { Draggable = Drag.Source(MyKinds.Resource, () => payload) }
+//    Drag.SourceHidden(...) → opacity 0 (a reorder list whose vacated slot IS the gap)
+//    Drag.Source(..., lift: DragLift.Ghost, backplate: …, shadow: …) → the legacy lifted-row ghost
+
+// 2. Declare the chip ONCE per app as DATA. The framework renders the card (opaque ≤280px, art + title + subtitle,
+//    corner count badge + stacked backdrop for N≥2, pickup tilt flash, caption row, not-allowed glyph, cursor
+//    offset, window clamp). Mount the layer at the app ROOT (top of the root ZStack).
+DragPreviewLayer.Of(DragChip.Resolve(state => state.Payload switch {
+    TrackPayload p => new DragChipSpec(ArtSource: p.Art, Title: p.Name, Subtitle: p.Artist, Count: p.Tracks.Count),
+    _              => DragChipSpec.None,
+}))
+
+// 3. Typed drop targets — payload unwrap, caption, spotlight policy, spring-load are PARAMETERS.
+DropTarget = Drop.Target<TrackPayload>(MyKinds.Resource,
+    accepts: p => p.CanCopy,
+    onDrop:  (p, s) => Deposit(p),
+    caption: p => $"Add {p.Count} tracks to {name}",       // the WinUI DragUIOverride caption
+    refusalCaption: p => "Clear sorting to reorder",        // WHY a refusal — else it reads as "DnD is broken"
+    springLoadMs: 500, onSpringLoad: (p, s) => Expand())    // Finder dwell-to-open; springLoadOnly: true = waypoint
+
+// 4. Sortable / insertable lists — ItemsView owns slot, gap, line, preview, source-hide, membership handoff.
+Insertion = new InsertionOptions {
+    AcceptKinds = [MyKinds.Resource],
+    IsSameList  = p => …,                 // move vs copy semantics
+    SourceIndices = p => …,               // dragged DISPLAY rows → virtual removal + hide (may be non-contiguous)
+    OnDeposit   = (p, slot) => CommitAsync(p, slot),   // Task<bool> = "a mutation was issued"
+    GapPreview  = (p, slot) => PreviewCards(p),
+}
+```
+
+Rules and gotchas:
+- **Never position a preview yourself.** The chip follows the pointer through a BOUND transform over the engine's
+  `UseDragPosition()` signals — a move costs one composited write, no render/reconcile/layout/alloc. `UseDragState()`'s
+  epoch is EDGE-triggered (begin/end, target, effect, refusal, caption, settle), so `Preview` runs only when the chip's
+  *content* could differ. Don't re-render on move; don't reach for `state.Position` to place things.
+- **A refusing target is transparent** (discovery continues to an accepting ancestor) — so any `accepts` gate that can
+  turn away a payload the surface *looks* like it should take must pass `refusalCaption`, or the user gets nothing.
+- **Refusal vs empty space:** `DragState.Effect == None` covers both; only `DragState.Refused` means "a compatible
+  surface said no". That is what the not-allowed glyph reads.
+- **`BoxEl.BlocksDragArm`** on a child (a card's play FAB, its "…" corner) stops the drag-arm walk so pressing it isn't
+  a handle for dragging the card.
+- **`SpotlightWhen = s => !IsSameList(s.Payload)`** on a list target — never dim the app the user is reordering inside.
+- **Drop zone (Vercel "Drop to Deploy" feel):** `DropZone.Create(accept: new[]{ DropKinds.Files }, onDrop: s => …, content: body)` (or `DropZone.Window(…)` for whole-window). It restyles ITSELF — a cross-faded dashed accent ring + accent glow that fades in while a COMPATIBLE drag is live ("you can drop here") and brightens on hover. Works for in-app AND OS file drags; for an OS file drag the OS owns the drag image, so prefer this over a chip.
 - **Dashed borders anywhere:** `BoxEl.BorderDashOn`/`BorderDashOff` (0 = solid) → `SceneRecorder.StrokeRoundRectDashed`.
-- Reactive drag state: `UseDragState()` → `DragState{ Active, Kind, Position, Payload }`, re-renders on drag begin/move/end.
+- **Accessibility is outcome-equivalent, not a simulated drag:** ship a menu command / Alt+Arrow that reaches the same
+  mutation seam (`ReorderList.BlockLength` moves a multi-selection as one unit).
 
 Interop posture is binding (the three allowed modes + the strict NOs): see `docs/plans/wasdk-migration-survey.md`. The live demo of every pillar is `src/FluentGpu.WindowsApp/WindowsApiPage.cs` (one card each).
 

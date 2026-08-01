@@ -756,6 +756,115 @@ recommended surface.
 - **Motion/cursor/RTL:** the selection indicator slides between headers via a phase-7 spring (`AnimTrack` spring mode,
   velocity hand-off on rapid switching, backdrop §5.7); content swap uses the Suspense keep-stale + cross-fade; strip
   mirrors RTL; cursor `Arrow` (or `Hand` on headers).
+- **Drop target (as built, 2026-08):** `TabViewItem.DropTarget` mounts a spec on the whole tab HEADER (not the inner
+  body, whose padding gaps would drop the dwell as the pointer wandered). Its intended use is spring-loading —
+  `Drop.Target<T>(…, springLoadMs: 500, onSpringLoad: …, springLoadOnly: true)` — so holding a drag over a tab
+  *navigates* to it mid-gesture without depositing anything (§7.4; contract in `input-a11y.md` §12).
+
+### 7.4 As built (2026-08) — the drag & drop control surface (facade, chip, sortable core)
+
+> **Ownership.** The drag/drop CONTRACT — `DragLift`, `DragVisualStyle`, `DragSession`/`DragState`, `DropTargetSpec`
+> (incl. `SpotlightWhen`/`RefusalCaption`/spring-load), the spotlight policy and the settle window — is owned by
+> `input-a11y.md` §12; the scrim/band pixels by `gpu-renderer.md` §7.4. This section owns only what
+> `FluentGpu.Controls` adds *on top*: the declarative facade, the standard chip, and the sortable/insertable list.
+> Nothing here restates an engine struct.
+
+**The debt this closes.** Every DnD consumer used to hand-wire geometry — `Configure(scene, itemCount, rowH, leading,
+firstItemIndex…)`, manual slot math, manual displacement plumbing, hand-built preview elements positioned at raw cursor
+coordinates. The facade is modelled on SwiftUI `draggable`/`dropDestination`, dnd-kit `useSortable` and Framer
+`Reorder`: **app code declares intent; the framework owns every coordinate.**
+
+- **`Drag.Source(kind, payload, …)`** (`DragDropFacade.cs`) — one line makes anything draggable, with the researched
+  defaults rather than the legacy ghost: `DragLift.Stationary` lift at `Drag.SourceDimOpacity = 0.4f` (Atlassian's
+  "it's in the chip" dim — sources stay VISIBLE so the user keeps their place). `lift: DragLift.Ghost` or an explicit
+  `DragVisualStyle` overload opts back into the lifted ghost; `Drag.SourceHidden` is the opacity-0 variant for a
+  reorder list whose vacated slot IS the gap (a dimmed ghost row there would read as a duplicate).
+- **`Drop.Target<T>(kind|kinds, accepts, onDrop, caption, onEnter/onOver/onLeave, settleOnDrop, visualPolicy,
+  spotlightWhen, refusalCaption, springLoadMs, onSpringLoad, springLoadOnly)`** — a typed wrapper over
+  `DropTargetSpec` whose handlers take the app's own type instead of `object?` casts. **The unwrap rule
+  (`Drop.TryUnwrap<T>`, public so hand-written targets share it):** the payload is `T` itself **or** the
+  `ReorderPayload.Item` of a sortable list's own gesture — so one target serves both a foreign drop and a same-list
+  reorder. A payload that does not unwrap makes the target *transparent* (discovery continues to a compatible
+  ancestor) rather than accepting and silently no-op'ing the drop. Because a transparent target is invisible to the
+  user, any `accepts` test that can turn away a payload the surface LOOKS like it should take should pass
+  `refusalCaption` too. `caption` is applied on BOTH `OnEnter` and `OnOver` (the engine clears `session.Caption` on
+  every target change, so an Enter-only caption vanishes when the pointer re-enters from a sibling).
+- **The standard chip — `DragChipSpec` + `DragChip.Resolve` (`DragChip.cs`).** Apps supply chip **data**, never
+  elements and never positions: `DragChipSpec(Art | ArtSource, Title, Subtitle, Count, Glyph)`, wrapped by
+  `DragChip.Resolve(state => spec)` into the `Func<DragState, Element?>` a `DragPreviewLayer` consumes
+  (`DragChipSpec.None` ⇒ nothing rendered for that drag). The framework renders the researched premiere card: opaque,
+  capped at `MaxWidth = 280` with a flyout-class shadow, at most three info pieces all ellipsized, a top-trailing
+  `InfoBadge` count over a two-card stacked backdrop for `Count ≥ 2` (Apple's "flocking"), the target's
+  `DragState.Caption` as a trailing row, and an explicit `NotAllowedGlyph` whenever `DragState.Refused`.
+  **The tilt is a FLASH, not a pose:** the chip springs in at `TiltDeg = 4°` + `PickupScale = 1.02` (Trello) and eases
+  to flat within `PickupFlashMs` (seeded as `MotionTokenId.ControlFast`) — held for the whole drag, a static rotation
+  stops reading as "lifted" and starts reading as a misrendered card. The flash is keyed on the session's Active edge
+  and seeded on a node carrying the stable `DragChip.ChipRootKey`, so the caption/target/effect re-renders cannot
+  remount the subtree and replay it.
+- **`DragPreviewLayer`** — mount ONCE at the top of the app's root stack. It registers its container as
+  `SceneStore.DragOverlay`, which is the whole story: the recorder draws that band above the main pass, above the drag
+  ghost and above connected-animation overlays, so the chip can never be clipped by an ancestor scissor nor overdrawn
+  — and it is lit by construction, needing no exemption from the drop-spotlight scrim (the presentation-only exemption
+  registry the old per-node dim required is deleted). It follows the pointer through a BOUND transform over
+  `UseDragPosition()` + `CursorOffsetX/Y = 16/8` with a window clamp, so a move is compositor-only. Pair it with
+  `Stationary` sources; for OS file drags the OS owns the drag image, so prefer a `DropZone` hover overlay there.
+
+**`InsertionOptions` — the declarative sortable/insertable list (`ListOptions.Insertion`).** The view already knows its
+viewport rect, its live scroll offset, its virtual layout's MEASURED item bands, its persistent prefix and its item
+count — the exact values apps used to shovel in by hand (a hard-coded leading estimate against a `RepeatLayout.Measured`
+list was a documented cause of silent "cannot drop in this mode" failures). Setting the option makes `ItemsView` mount
+its own `DropTargetSpec` and own the whole gesture: slot resolution, the live gap, the 2px accent line + 8px terminal
+dot, the in-gap preview lifecycle, the source-row hide and the optimistic-membership handoff.
+
+| Member | Declares |
+|---|---|
+| `AcceptKinds` / `CanAccept` | the cheap ordinal kind gate, then the capability gate (false ⇒ **transparent**, never a silent no-op drop) |
+| `IsSameList` | move vs copy semantics |
+| `SourceIndices` | the dragged rows as DISPLAY indices relative to the insertable range — virtual removal + hide; may be non-contiguous |
+| `DraggedCount` | payload size for a cross-list copy (a same-list move counts `SourceIndices`) |
+| `OnDeposit(payload, slot) → Task<bool>` | the commit. `slot` is the RAW display slot, deliberately **not** pre-corrected for removed rows — a backend "insert before the row currently at this index" convention already discounts them, and correcting twice moves the block twice. `true` = "a mutation was issued", the only value that promises the membership snapshot the gap is handed to |
+| `GapPreview` / `PreviewCap` | the app owns the CARDS; the view owns their position and the gap size (`DefaultPreviewCap = 3`) |
+| `Caption` / `RefusalCaption` | per-move drop caption; the reason a kind-matched payload was turned away |
+| `OnLanded(slot, count)` | the post-drop edge an app renders its own flash from (the framework ships no app visual beyond line + gap) |
+| `Range` | the INSERTABLE sub-range; default `(PersistentPrefixCount, count − prefix)`. A list that appends rows the insertion does not address (a "Recommended" header + rows) must bound it or they ride the gap down |
+| `VisualPolicy` / `SpotlightWhen` | drag-dim participation; return false for a same-list reorder so the app never dims for it |
+
+Like every other option record it is unpacked and **frozen at mount** (the component-props contract), so its delegates
+must read live app state rather than close over a snapshot.
+
+**`SortableMath` — the pure, unit-tested geometry.** All of the above math lives in one static class with no scene
+dependency: `SlotFromPointer`/`SlotFromOffset`/`SlotFromBand` (the NN/g **centre-crosses-edge** trigger, uniform and
+variable-extent forms), `Plan(...) → InsertionPlan`, and the `RemovedBefore`/`IsSource`/`Normalize` helpers over a
+sorted source span. The `InsertionPlan` record is the single answer the view and the preview both read:
+`GapRows` = exactly `N` for a same-list move (virtual removal balances it) but `min(N, PreviewCap)` for a copy — an
+exact-N gap for a 500-track copy would blow the viewport; `DisplacementFor(item)` = `extent · (N·[item ≥ slot] −
+removedBefore(item))`, whose Σ over the list is zero, so content height never changes and the gap is exact rather than
+one row too big; `PreviewOffset`/`PreviewY` give the line and the preview ONE position derived from the same extent
+(the preview must read `GapExtent`, never recompute one). Gate: `SortableMathTests` + `e11virt.insertion`.
+
+**Prefix-corrected displacement (C1).** The `ItemsView` displacement seed maps a realized ORDINAL to an item index with
+the canonical `FlexLayout.VirtualIndex` rule — `item = ord < prefix ? ord : firstRealized + ord − prefix` — instead of
+`firstRealized + ord`. With a persistent prefix (a sticky hero, chrome rows) the naive form displaces the wrong rows
+entirely and drags the sticky hero with them.
+
+**`ReorderList.BlockLength` (additive, ruling e).** `Begin(draggedIndex, blockLength, extents…)` /
+`BeginBlock(draggedIndex, blockLength, count, itemExtent…)` drag `blockLength` CONTIGUOUS items as one unit;
+`OffsetFor`/`ProjectOrder`/`Move` are block-aware, slots are the block's landing START (valid range
+`0..Count − BlockLength`), and length 1 — what every non-block `Begin` sets — reduces to the old expressions term for
+term (the single-item path deliberately keeps the *exact* old float expression, since the general form is
+algebraically but not bit-for-bit identical). Existing single-item surfaces compile unchanged, pinned by
+`e5dragdrop.6/.7/.7b`. Non-contiguous multi-selection is deliberately NOT this API's job — it rides the insertion
+view's virtual-removal math above, which needs no notion of a single moving run. `Sample(...)`, `SlotAtOffset` and
+`BoundaryOffset` expose the resting prefix sums so a cross-list hover can resolve a slot before any local lift exists.
+
+**`Reorderable` policy seams (all optional; unset ⇒ byte-identical to the pre-policy list).** `DragStyle` (set
+`Stationary` + `Drag.SourceDimOpacity` on a list whose app mounts a `DragPreviewLayer`, or the row is lifted AND the
+chip is drawn — two visuals for one gesture); `CanAcceptForeign` + `ForeignRefusalCaption` (the list's own
+`ReorderPayload` is ALWAYS accepted — a refused own-list target would strand the drag under a not-allowed cue over its
+own list); `ForeignCaption` (per move, at the live slot); `RequireDropOnList` (commit a pointer reorder only when the
+gesture was released over THIS list — without it, dragging a row away to a foreign target still commits the local move
+the downward travel happened to project; keyboard lift/drop is unaffected). C3 is closed too: the insertion line and
+the slot math read the SAMPLED prefix sums when `ExtentOf` is set, instead of assuming a uniform pitch.
 
 ---
 
@@ -951,7 +1060,25 @@ here. `VirtualListEl` stays in `Reconciler`.
   (`Localization`/`Loc`/`UseLocale`) + the `LocalizationKeysGenerator` are owned by the engine + dsl-aot.md; the
   *kit's key set + activation* are owned here.
 
-**Explicitly NOT owned here (referenced):** SceneStore columns + opcode registration incl. `DrawGradientStroke` +
+**As built (2026-08) — the drag & drop control surface (§7.4; this assembly OWNS these):**
+- **The facade** — `Drag.Source`/`Drag.SourceHidden`/`Drag.SourceDimOpacity` + `Drop.Target<T>`/`Drop.TryUnwrap<T>`
+  (`Controls/DragDropFacade.cs`). Pure composition over `DragSource`/`DragVisualStyle`/`DropTargetSpec`, all of which
+  are owned by input-a11y.md §12 — the facade mints no engine type, it only picks the researched defaults and adds the
+  typed payload unwrap.
+- **The standard chip** — `DragChipSpec` + `DragChip.Resolve` + the chip constants (`MaxWidth`, `ArtSize`, `TiltDeg`,
+  `PickupScale`, `PickupFlashMs`, `ChipRootKey`, `StackOffset`, `NotAllowedGlyph`) and the `DragPreviewLayer`
+  component + its `CursorOffsetX/Y` (`Controls/{DragChip,DragPreviewLayer}.cs`). The `SceneStore.DragOverlay` band it
+  registers into is owned by scene-memory.md / gpu-renderer.md §7.4; the layer is the only consumer.
+- **The sortable core** — `InsertionOptions` (on `ListOptions.Insertion`), `SortableMath` + `InsertionPlan`, the
+  `ItemsView` insertion implementation (slot/gap/line/preview/source-hide/membership handoff) and
+  `ItemsViewController.ObserveInsertionMembership` (`Controls/{ListOptions,SortableMath,ItemsView}.cs`).
+- **The reorder policy seams** — `ReorderList.BlockLength`/`BeginBlock`/`Sample`/`SlotAtOffset`/`BoundaryOffset` and
+  `Reorderable.{DragStyle,CanAcceptForeign,ForeignRefusalCaption,ForeignCaption,RequireDropOnList}`, plus
+  `TabViewItem.DropTarget`.
+
+**Explicitly NOT owned here (referenced):** `DragLift`/`DragVisualStyle`/`DragSession`/`DragState`/`DropTargetSpec`
+(incl. `SpotlightWhen`/`RefusalCaption`/spring-load), `DragSourceOpacityOverride`, the settle window and the
+drop-spotlight policy (input-a11y.md §12); the scrim band + band order + `EraseRoundRectCmd` (gpu-renderer.md §7.4); SceneStore columns + opcode registration incl. `DrawGradientStroke` +
 `_borderBrushes` + `InteractionInfo.Role` (scene-memory.md / input-a11y.md); DrawList
 opcode shapes `DrawGradientStrokeCmd`/`DrawFocusRingCmd`/`DrawSelectionRectCmd`/`DrawScrimCmd`/`FillRoundRectCmd` (gpu-renderer.md §3.1/§3.1a/§3.6);
 gesture arena / overlay manager / cursor resolver / edge-autoscroll / UIA providers / `ITextRangeProvider` CCW

@@ -2522,7 +2522,12 @@ public sealed class AppHost : IDisposable
                 _dragLastPayload = ds.Payload;
                 _dragLastPos = ds.Position;
                 _dragLastEffect = ds.Effect;
-                if (_dragSettlePhase != DragSettlePhase.None) _dragSettlePhase = DragSettlePhase.None;   // a new gesture cancels a stale settle
+                // A new gesture cancels a stale settle — INCLUDING an undrained latch. One coalesced dispatch batch can
+                // carry the release of a Stationary drag and the promotion of the next one, so the publication frame
+                // below never runs; leaving the latch armed would fire a phantom settle (with a stale rect) at the end
+                // of THIS gesture, even a Ghost one that must never settle.
+                if (_dragSettlePhase != DragSettlePhase.None) _dragSettlePhase = DragSettlePhase.None;
+                if (_dragSettleRequested) { _dragSettleRequested = false; _dragSettlePending = DragSettlePhase.None; }
             }
             else if (_dragWasActive)
             {
@@ -3931,7 +3936,14 @@ public sealed class AppHost : IDisposable
         {
             def.GetDragState = null;
             def.DragEpoch = null;
+            // The position signals are OURS too (the same seam, installed in the same place): leaving them installed
+            // points every later reader at a disposed host's signals.
+            if (ReferenceEquals(def.DragPosX, _dragPosX)) def.DragPosX = null;
+            if (ReferenceEquals(def.DragPosY, _dragPosY)) def.DragPosY = null;
         }
+        // A host disposed mid-settle would otherwise pin the last drag's payload for its own lifetime.
+        _dragLastPayload = null;
+        _dragLastKind = "";
 
         // Symmetry for the intern-on-change HUD cache: each cached id holds one host AddRef (RefreshDynText), so a
         // disposed HUD-bearing host must drop them or it pins ≤5 ids on the shared interner per disposed host.

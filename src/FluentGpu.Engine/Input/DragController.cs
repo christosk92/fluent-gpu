@@ -6,10 +6,20 @@ namespace FluentGpu.Input;
 /// <summary>
 /// The drag-reorder gesture engine (E5). A left press on (or inside) a <c>CanDrag</c> node ARMS a candidate; pointer
 /// travel outside the drag box PROMOTES it from a click to a drag (the dispatcher then suppresses the click and routes
-/// every move here — capture semantics). The promoted drag draws its visual on the dragged node itself: a parent-space
-/// <c>LocalTransform</c> translate + 0.8 opacity + a flyout-class shadow
-/// (WinUI <c>ListViewItemDragThemeOpacity</c> = 0.80 — microsoft-ui-xaml controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7),
-/// and the node stops hit-testing so drop-target queries see THROUGH the moving visual.
+/// every move here — capture semantics).
+///
+/// TWO LIFT MODES (<see cref="DragLift"/>, selected per source by <c>DragSource.Style.Lift</c>) — exactly one of them
+/// owns the source node's presented channels for the gesture:
+/// <list type="bullet">
+/// <item><b>Ghost</b> (the historical behaviour, and what an unstyled source still gets) draws the visual on the dragged
+/// node ITSELF: a parent-space <c>LocalTransform</c> translate + 0.8 opacity + a flyout-class shadow
+/// (WinUI <c>ListViewItemDragThemeOpacity</c> = 0.80 — microsoft-ui-xaml controls\dev\CommonStyles\ListViewItem_themeresources.xaml:7)
+/// + one opacity group + the optional backplate, hoisted into the recorder's unclipped ghost band.</item>
+/// <item><b>Stationary</b> (what <c>Controls.Drag.Source</c> defaults to) leaves the row in its slot and writes ONLY the
+/// dim; the moving visual is an independent chip a <c>DragPreviewLayer</c> draws in the drag-overlay band. No translate,
+/// no spring, no shadow, no ghost flag — and the gesture survives the source row being virtualized away.</item>
+/// </list>
+/// Both modes stop the source hit-testing, so drop-target queries see THROUGH it.
 ///
 /// Threshold: the Windows drag box is <c>SM_CXDRAG</c>/<c>SM_CYDRAG</c> (4px default), tested per-axis
 /// (<c>dx &gt; maxDx || dy &gt; maxDy</c> — microsoft-ui-xaml dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:1864-1878).
@@ -36,7 +46,7 @@ namespace FluentGpu.Input;
 /// re-asserted on every move because a mid-drag commit's patch restores the authored opacity/shadow/hit-test
 /// (Reconciler ApplyBox writes them unconditionally).
 ///
-/// GHOST (E5-L2): while a drag is active the lifted node carries <see cref="NodeFlags.DragGhost"/> and is published as
+/// GHOST BAND (E5-L2; Ghost lift only): while such a drag is active the lifted node carries <see cref="NodeFlags.DragGhost"/> and is published as
 /// <see cref="SceneStore.DragGhost"/> — the recorder excludes it from the clipped main pass and re-walks its subtree
 /// in an UNCLIPPED top band emitted last (mirroring the orphan pass), so the visual escapes every ancestor scissor (a
 /// row dragged out of a clipped list keeps drawing) and paints above overlays — the Flutter/rbd ghost layer.
@@ -537,9 +547,6 @@ public sealed class DragController
         ref NodePaint p = ref _scene.Paint(node);
         p.Opacity = _restingOpacity;
         if (_wasHitTestVisible) _scene.Flags(node) |= NodeFlags.HitTestVisible;
-        // The gesture is over, so no destination owns this node's dim any more (the safety net for a destination whose
-        // own teardown never ran — a virtualized-away insertion, a torn-down page).
-        _scene.DragSourceOpacityOverride = null;
         if (_dragStyle.Lift == DragLift.Stationary)
         {
             // Stationary touched nothing but opacity + hit-test — restoring more (transform/shadow/ghost flag) would
@@ -616,6 +623,12 @@ public sealed class DragController
     private void Reset()
     {
         if (!_node.IsNull && _scene.DragGhost == _node) { _scene.DragGhost = NodeHandle.Null; _scene.DragGhostBackplate = null; }   // PruneDead path safety
+        // The gesture is over, so no destination owns a source dim any more — the safety net for a destination whose own
+        // teardown never ran (a virtualized-away insertion, a torn-down page). It lives HERE, not in RestoreVisuals,
+        // because RestoreVisuals is skipped whenever the source node is already dead (Complete/Cancel/PruneDead all
+        // guard on IsLive) — exactly the Stationary source-recycled case that can strand the override, which would then
+        // hide the NEXT drag's source row entirely. Reset is the one chokepoint every exit path funnels through.
+        _scene.DragSourceOpacityOverride = null;
         _node = NodeHandle.Null;
         _active = false;
         _sprung = false;

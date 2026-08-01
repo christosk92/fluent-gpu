@@ -134,7 +134,6 @@ sealed class TrackList : Component
     const int ReDealRows = 24;                                 // seed a viewport's worth; ItemFadeFrom is queried per REALIZED row anyway
     readonly Dictionary<int, (float dx, float dy)> _flip = new();        // new display index → FLIP start residual (dy DIP)
     readonly Dictionary<int, (float from, float delayMs)> _fade = new(); // added display index → opacity ease-in + stagger
-    int _flipEpoch = -1;                                       // the _dispVer value the seeds above were written for
     Track[]? _lastDisplayed;                                   // displayed (view-ordered) snapshot — the keyed-diff baseline
     LibraryBridge? _lib;                                       // Mutations bridge → per-row heart saved-state + toggle (null when no Mutations source)
     ActionServices? _acts;                                     // the signals-first action system (row context menus + batch bar) — cached in Render like _lib
@@ -909,15 +908,16 @@ sealed class TrackList : Component
         return _rowItems is { } items && items.TryPeek(itemIndex, out var track, trackStart) ? track : null;
     }
 
-    // The FLIP/fade seeds belong to exactly ONE _dispVer bump — the Choreograph / ReDeal write that filled them. That
-    // same version signal doubles as the drop lane's displacement bus, so every gap open/retarget/clear re-runs the
-    // ItemsView seed effect; without this epoch check the re-run replays a spent choreography as a phantom
-    // half-fade on rows that never moved (the visible symptom: rows fading mid-drag).
+    // The FLIP/fade seeds belong to exactly ONE _dispVer bump — the Choreograph / ReDeal write that filled them, which
+    // are now this signal's ONLY writers (the drop lane that used to share the bus is gone; the framework-owned
+    // insertion runs on its own version signal). The app-side epoch guard that de-duplicated the shared bus is deleted
+    // with it: ItemsView edge-gates the seeds itself now (see its lastEntranceVer check), so a re-run of the seed
+    // effect can no longer replay a spent choreography as a phantom half-fade on rows that never moved.
     (float dx, float dy)? SeedFlip(int display)
-        => _dispVer.Peek() == _flipEpoch && _flip.TryGetValue(display, out var f) ? f : null;
+        => _flip.TryGetValue(display, out var f) ? f : null;
 
     (float from, float delayMs)? SeedFade(int display)
-        => _dispVer.Peek() == _flipEpoch && _fade.TryGetValue(display, out var f) ? f : null;
+        => _fade.TryGetValue(display, out var f) ? f : null;
 
     int OriginalInsertionIndex(int displaySlot)
     {
@@ -1262,9 +1262,7 @@ sealed class TrackList : Component
             _fade[n] = (0f, Math.Min(addOrd++, 8) * 20f);              // …with a 20ms/row stagger, capped (no cascades)
         }
 
-        // Claim the bump: only THIS version replays these seeds (the drop lane shares the bus — see SeedFlip).
-        _flipEpoch = _dispVer.Peek() + 1;
-        _dispVer.Value = _flipEpoch;            // the ItemsView (a child, renders after this) seeds in the SAME frame
+        _dispVer.Value = _dispVer.Peek() + 1;   // the ItemsView (a child, renders after this) seeds in the SAME frame
     }
 
     // ── Breakpoint re-deal ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1307,8 +1305,7 @@ sealed class TrackList : Component
             _flip[i] = (0f, 6f);                                  // rise into place…
             _fade[i] = (0f, Math.Min(ord, cap) * step);           // …behind a capped top-down stagger
         }
-        _flipEpoch = _dispVer.Peek() + 1;       // claim the bump (see SeedFlip)
-        _dispVer.Value = _flipEpoch;            // the ItemsView (a child, renders after this) seeds in the SAME frame
+        _dispVer.Value = _dispVer.Peek() + 1;   // the ItemsView (a child, renders after this) seeds in the SAME frame
     }
 
     float VerticalHeaderHeight(bool subscribe = false)

@@ -53,9 +53,10 @@ public sealed class DropZone : Component
     public override Element Render()
     {
         var over = UseSignal(InitiallyOver);
-        var state = UseDragState();   // re-renders this zone while a drag is live (begin/move/end)
+        var state = UseDragState();   // re-renders on the drag's CONTENT edges (begin/end, target, effect, caption)
 
-        // Build the drop-target spec once (stable closures) — avoids per-frame alloc as UseDragState re-renders.
+        // Build the drop-target spec once (stable closures) — the epoch is edge-triggered, not per-frame, but a target
+        // change still re-renders every mounted zone, so a fresh spec per render would churn for no reason.
         var specRef = UseRef<DropTargetSpec?>(null);
         specRef.Value ??= new DropTargetSpec(
             Accept,

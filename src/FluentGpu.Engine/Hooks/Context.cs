@@ -268,10 +268,13 @@ public sealed class InputHooks
     public Func<Point2, string[], KeyModifiers, bool>? ExternalDropFiles;
 
     // ── Live drag state (host-wired; consumed by UseDragState / a DragPreviewLayer to render a cursor-following custom
-    //    preview). DragEpoch bumps each frame while a typed drag (in-app DragSource OR an OS file drag) is live, plus once
-    //    when it ends; GetDragState reads the live session as a copied snapshot. Mirrors WindowChromeEpoch's pattern. ──
-    /// <summary>Bumped by the host while a drag is live (and once on end): a component reads it to subscribe, then pulls
-    /// <see cref="GetDragState"/> for the current snapshot on re-render.</summary>
+    //    preview). DragEpoch is EDGE-triggered — see below; the pointer POSITION rides DragPosX/Y instead, so the epoch
+    //    never bumps merely because the pointer moved. GetDragState reads the live session as a copied snapshot.
+    //    Mirrors WindowChromeEpoch's pattern. ──
+    /// <summary>Bumped by the host on the edges a preview's CONTENT depends on — session begin/end, the target under the
+    /// pointer, the advisory effect, a refusal, the caption, and the settle window's start/expiry — NOT per frame (the
+    /// chip follows through <see cref="DragPosX"/>/<see cref="DragPosY"/>). A component reads it to subscribe, then
+    /// pulls <see cref="GetDragState"/> for the current snapshot on re-render.</summary>
     public Signal<int>? DragEpoch;
     /// <summary>Snapshot the live drag (active/kind/position/payload) — <see cref="DragState.Active"/> false when idle.</summary>
     public Func<DragState>? GetDragState;

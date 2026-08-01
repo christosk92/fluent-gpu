@@ -393,7 +393,10 @@ public sealed class DragDropContext
             _refused = node;
             _refusedSpec = spec;
             _session.RefusedTarget = node;
-            if (node.IsNull) _session.Caption = null;   // left the refuser: its reason leaves with it
+            // Left the refuser: its reason leaves with it — but ONLY when nothing accepted. On the refuser→acceptor
+            // transition the acceptor's OnEnter/OnOver has already published its own caption a few lines above (Move
+            // resolves acceptance first), and clearing here would blank it for one frame before the next move re-set it.
+            if (node.IsNull && _over.IsNull) _session.Caption = null;
             _requestRerender();
         }
         if (_refused.IsNull) return;

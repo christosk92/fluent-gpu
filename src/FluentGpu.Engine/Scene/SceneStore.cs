@@ -1510,6 +1510,10 @@ public sealed class SceneStore : ISceneBackend
     public bool IsDropSpotlightRoot(NodeHandle h)
         => DropSpotlightActive && !h.IsNull && _dropSpotlightRoots.Contains((int)h.Raw.Index);
 
+    /// <summary>Is <paramref name="h"/> inside a compatible spotlight destination? A HOST-facing query with no in-tree
+    /// consumer: the scrim needs only the root set itself (<see cref="DropSpotlightRootAt"/>), and the presentation-only
+    /// exemption walk that used to call this is deleted along with the per-node dim. Kept because an app that wants to
+    /// restyle its own content by spotlight membership has no other way to ask, and it is O(depth) with no state.</summary>
     public bool IsUnderDropSpotlightRoot(NodeHandle h)
     {
         if (!DropSpotlightActive) return false;
@@ -1522,8 +1526,11 @@ public sealed class SceneStore : ISceneBackend
     public int DropSpotlightRootCount => DropSpotlightActive ? _dropSpotlightRoots.Count : 0;
 
     /// <summary>The i-th compatible spotlight destination (0 &lt;= i &lt; <see cref="DropSpotlightRootCount"/>). The
-    /// recorder cuts one rounded window per root out of the scrim band; a root freed since the last refresh comes back
-    /// dead (<c>IsLive</c> false) and is skipped there rather than being pruned mid-record.</summary>
+    /// recorder cuts one rounded window per root out of the scrim band.
+    /// <para>The set stores raw INDICES and rebuilds the handle from the current generation, so this can never hand back
+    /// a stale handle — which is exactly why <c>FreeSubtree</c> must keep pruning the set as nodes die. Do not "simplify"
+    /// that prune away on the theory that the recorder's <c>IsLive</c> check will catch a freed root: it cannot, and the
+    /// cutout would then follow whichever unrelated node recycled the index.</para></summary>
     public NodeHandle DropSpotlightRootAt(int i)
     {
         int idx = _dropSpotlightRoots[i];
@@ -1532,7 +1539,11 @@ public sealed class SceneStore : ISceneBackend
 
     public NodeHandle DropSpotlightOver => _dropSpotlightActive ? _dropSpotlightOver : NodeHandle.Null;
 
-    /// <summary>Cold drag/reconcile edge: capability-test every opt-in target and publish only compatible live roots.</summary>
+    /// <summary>Capability-test every opt-in target and publish only compatible live roots. Called off the record path —
+    /// at drag begin, on a <see cref="DropTargetsVersion"/> change, and once per frame at phase 7.8
+    /// (<c>DragDropContext.SyncSpotlightBeforeRecord</c>) — so the <c>CanAccept</c>/<c>SpotlightWhen</c> delegates it
+    /// invokes run PER FRAME for the life of a drag, not on a cold edge. They must therefore be cheap and
+    /// allocation-free (frame phases 6-13 are the 0-alloc region).</summary>
     public void RefreshDropSpotlight(DragSession session)
     {
         _dropSpotlightRoots.Clear();

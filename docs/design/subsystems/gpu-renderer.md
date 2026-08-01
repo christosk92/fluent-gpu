@@ -787,6 +787,14 @@ PushLayer(kind = Opacity, GroupAlpha = DragVisualTok.ScrimOpacity, deviceRect = 
 PopLayer(scrim)
 ```
 
+**The root set is collected before record, once per frame.** The recorder only *iterates*
+`DropSpotlightRootCount`/`DropSpotlightRootAt` — it evaluates no policy and prunes nothing (a root freed since the
+last collection comes back `!IsLive` and is simply skipped). The set is (re)collected by the input side at **phase
+7.8**, after reconcile/layout/realize and the scroll writes and before record, so the cutouts describe the bindings
+and the geometry *this* frame paints; a recycling virtual list rebinds a realized row without ever rewriting its
+drop-target spec, so a version-gated refresh alone left cutouts sitting on the slots that *used* to be compatible.
+The collection edge, and why the version is only a hint, are `input-a11y.md` §12's.
+
 `scrim` = `SceneStore.SpotlightScrimClip` when set (an app scopes the veil to its content region so window
 chrome stays lit), else the scene root's rect. `hole_i` = destination `i`'s absolute rect ∩ every
 `ClipsToBounds` ancestor's rect ∩ `scrim`, with the destination's **own** `CornerRadius4`, so a half-scrolled

@@ -24,8 +24,8 @@ namespace Wavee;
 /// <para>A TRACK drag shares the generic resource discriminator but fails the payload capability test, so no pin
 /// affordance appears. Pin eligibility remains centralized in <c>WaveeResourceDragPayload.CanPin</c>.</para>
 ///
-/// <para>Its own Component so <c>UseDragState</c> — which re-renders its consumer every frame while any typed drag is
-/// live — is scoped to this card instead of the whole sidebar.</para>
+/// <para>Its own Component so <c>UseDragState</c> — which re-renders its consumer on every drag CONTENT edge (begin/end,
+/// the target under the pointer, effect, caption) — is scoped to this card instead of the whole sidebar.</para>
 /// </summary>
 sealed class SidebarPinDropZone : Component
 {

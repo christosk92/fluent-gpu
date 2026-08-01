@@ -398,6 +398,7 @@ new ListOptions {
   Transition = ItemCollectionTransition.Default,
   Scroll   = new ScrollOptions   { ScrollKey = …, SuppressScrollBar = …, AutoEdgeFade = …, OnScrollGeometryChanged = … },
   Reorder  = new ReorderOptions  { ItemDisplacement = …, DisplacementVersion = …, DraggedSlot = … },
+  Insertion= new InsertionOptions{ AcceptKinds = […], IsSameList = …, SourceIndices = …, OnDeposit = … },  // drop/sort: the VIEW owns the geometry
   Entrance = new EntranceOptions { StaggerColdRealize = …, ItemFlipFrom = …, ItemFadeFrom = … },   // bound path
   // ── virtualization knobs ──
   ContentType   = i => rowKind(i),   // recycle-pool discriminator: heterogeneous rows only rebind within their type pool
@@ -427,6 +428,50 @@ new ListOptions {
 - **`RepaintBoundary` (#16)** — wraps each realized item container as a layout/paint boundary.
 - Reorder rides the displacement channel (`ReorderOptions`); displaced siblings glide aside via an animated translate
   — a capability WinUI's own ItemsView lacks.
+- **`Insertion` (`InsertionOptions`)** is the declarative drop/sort destination: the view already knows its viewport,
+  scroll offset, measured item bands, persistent prefix and item count, so it owns slot resolution, the live gap
+  (exactly `N × extent` for a same-list move, capped for a cross-list copy), the 2px accent line + terminal dot, the
+  in-gap preview lifecycle, the source-row hide and the optimistic-membership handoff. You declare which payloads it
+  takes, which rows they came from, and what to do on deposit — never a coordinate. See the drag & drop section below.
+
+## Drag & drop (declare intent, never coordinates)
+
+Four one-liners cover the whole system (`src/FluentGpu.Controls/{DragDropFacade,DragChip,DragPreviewLayer,SortableMath}.cs`;
+design canon: `docs/design/subsystems/input-a11y.md` §12 + `controls.md` §7.4):
+
+```csharp
+// 1. Draggable — defaults to DragLift.Stationary: the row STAYS in its slot dimmed to 0.4, and a chip is the visual.
+row with { Draggable = Drag.Source(MyKinds.Resource, () => payload) }
+
+// 2. The chip, declared ONCE per app as DATA — mount the layer at the app root (top of the root ZStack).
+DragPreviewLayer.Of(DragChip.Resolve(state => state.Payload switch {
+    TrackPayload p => new DragChipSpec(ArtSource: p.Art, Title: p.Name, Subtitle: p.Artist, Count: p.Tracks.Count),
+    _              => DragChipSpec.None,
+}))
+
+// 3. A typed drop target — unwrap, caption, refusal, spotlight policy and spring-load are parameters.
+DropTarget = Drop.Target<TrackPayload>(MyKinds.Resource,
+    accepts: p => p.CanCopy, onDrop: (p, s) => Deposit(p),
+    caption: p => $"Add {p.Count} tracks to {name}",
+    refusalCaption: p => "Clear sorting to reorder",
+    springLoadMs: 500, onSpringLoad: (p, s) => Expand())
+
+// 4. A sortable list — see ListOptions.Insertion above.
+```
+
+- The framework renders the chip: opaque ≤280px card, art + title + subtitle, corner count badge + stacked backdrop
+  for N≥2, a ~4° pickup tilt that FLASHES and eases flat, the caption row, a not-allowed glyph on refusal, the
+  +16/+8 cursor offset and a window clamp. Apps supply data — never elements, never positions.
+- **The chip follows on the compositor.** Its transform is BOUND to the engine's drag-position signals, so a pointer
+  move re-renders nothing and allocates nothing; `UseDragState()`'s epoch is edge-triggered (begin/end, target,
+  effect, refusal, caption, settle). Never place a preview from `state.Position` yourself.
+- **A refusing target is transparent** — discovery continues to an accepting ancestor — so it is invisible unless you
+  give it a `refusalCaption`. `DragState.Refused` (not `Effect == None`, which also means "over nothing") is what the
+  not-allowed cue reads.
+- `BoxEl.BlocksDragArm` on a child (a card's play FAB, its "…" corner) stops the drag-arm walk, so pressing it is not
+  a handle for dragging the card.
+- Accessibility is outcome-equivalent, not a simulated keyboard drag: ship a menu command / Alt+Arrow that reaches the
+  same mutation seam (`ReorderList.BlockLength` moves a multi-selection as one unit).
 
 ## Theming (`Tok` / `Theme`, `src/FluentGpu.Engine/Dsl/Tokens.cs`)
 

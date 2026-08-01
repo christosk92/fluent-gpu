@@ -139,9 +139,13 @@ The per-glyph color field of GlyphInstance: **text.md**.)
 | IVirtualLayout / IMeasuredVirtualLayout / IViewportVirtualLayout (E11-L0 seam) + built-in layouts (Stack/Grid/HorizontalGrid/FillRow/LinedFlow/SpanningGrid/MeasuredStack/GroupedList) | virtualization.md (as-built: src\FluentGpu.Engine\Scene\VirtualLayout.cs) |
 | VirtualListEl realize lifecycle (OnItemPrepared/Clearing/IndexChanged/OnVisibleRange/OnRealized) | virtualization.md (as-built: src\FluentGpu.Engine\Reconciler\VirtualListEl.cs + Reconciler RealizeWindow) |
 | SelectionModel / ItemContainer / ItemsView (E11-L3) | controls.md (selection semantics cite WinUI controls\dev\ItemsView selectors; as-built: src\FluentGpu.Controls) |
+| **Drag/drop contract** — `DragLift`, `DragVisualStyle`, `DragSource`, `DragSession`/`DragState`, `DropTargetSpec` (incl. `SpotlightWhen`/`RefusalCaption`/`SpringLoad*`), `DragSettlePhase`, `DragVisualTok`, `InteractionInfo.BlocksDragArmBit` | input-a11y.md §12 |
+| **Drag scene scalars** — `SceneStore.{DragGhost, DragGhostBackplate, DragOverlay, DragSourceOpacityOverride, SpotlightScrimClip}` + the spotlight root set | input-a11y.md §12 (who writes them, and when) / gpu-renderer.md §7.4 (how the recorder reads them into bands) |
+| **Drag/drop CONTROL surface** — `Drag.Source`/`Drop.Target<T>`, `DragChipSpec`/`DragChip`, `DragPreviewLayer`, `DropZone`, `InsertionOptions`/`SortableMath`, `ReorderList.BlockLength`, `Reorderable` policy seams | controls.md §7.4 |
 | UseImage / UseMosaic / UseVideoSurface / UseSyncedLyrics | media-pipeline.md (UseSyncedLyrics timing: backdrop-effects-animation.md) |
 | UseTheme / UseSystemColors / UseHighContrast / UseDerivedBrush / UseDynamicColor | theming.md (UseDynamicColor's wantPalette trigger half: media-pipeline.md) |
 | UseFocus / UseElementRef / UseCommand / UseAccelerator / UseGesture / UseAnnounce | input-a11y.md |
+| **UseDragState / UseDragPosition** (live drag snapshot + the two bound drag-position signals) | input-a11y.md §12 (contract) / controls.md §7.4 (`DragPreviewLayer`, the only consumer) |
 | **UseTransition / UseDeferredValue / StartTransition** (lanes P1) | reconciler-hooks.md (lowering: dsl-aot.md `LaneCaptureGenerator`) |
 | **UseDerived / UseContextSelector** (P6 derived-state node) | reconciler-hooks.md (lowering: dsl-aot.md `DerivedCaptureGenerator`) |
 | **UseOptimistic / UseActionState** (P7 optimistic UX over transition lanes) | reconciler-hooks.md (lowering: dsl-aot.md `DerivedCaptureGenerator`) |

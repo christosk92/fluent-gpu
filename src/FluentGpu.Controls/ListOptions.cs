@@ -108,7 +108,9 @@ public sealed record InsertionOptions
     /// <summary>Optional in-gap preview content (the app owns the CARDS; the view owns their position and the gap).
     /// Null ⇒ the line alone marks the insertion point.</summary>
     public Func<object?, int, Element>? GapPreview { get; init; }
-    /// <summary>Optional drop caption (<see cref="DragSession.Caption"/>) refreshed per move — "Move 3 tracks".</summary>
+    /// <summary>Optional drop caption (<see cref="DragSession.Caption"/>) — "Move 3 tracks". Refreshed per move, and
+    /// also once per frame while an edge auto-scroll is running (the destination re-projects under a still pointer,
+    /// inside the 0-alloc frame region), so prefer a cached/precomputed string over interpolating one per call.</summary>
     public Func<object?, int, string?>? Caption { get; init; }
     /// <summary>Why a payload this list COULD have taken (its kind matched) was turned away by <see cref="CanAccept"/> —
     /// "Clear sorting to reorder", "Can't edit this playlist". A refusing target is transparent by design, so without

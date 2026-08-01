@@ -13,8 +13,9 @@ namespace Wavee;
 static class PlaylistInsertionPreview
 {
     /// <summary>Preview cards drawn in the gap (and, for a cross-list copy, the gap's row cap — an exact-N gap for a
-    /// 500-track copy would blow the viewport).</summary>
-    internal const int Cap = 3;
+    /// 500-track copy would blow the viewport). Deliberately the FRAMEWORK's cap, not a second 3: the view sizes the
+    /// gap from <see cref="SortableMath.DefaultPreviewCap"/>, so a local literal would drift the cards off the gap.</summary>
+    internal const int Cap = SortableMath.DefaultPreviewCap;
 
     internal static Element Cards(WaveeResourceDragPayload payload, float rowH)
     {

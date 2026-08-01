@@ -121,11 +121,8 @@ public static class SortableMath
     public static float PreviewOffset(int slot, float leadingExtent, float itemExtent, int removedAboveSlot)
         => leadingExtent + (slot - removedAboveSlot) * itemExtent;
 
-    /// <summary>VIEWPORT-space main-axis position of the gap's leading edge (see <see cref="PreviewOffset"/>) — the
-    /// value a transform on a viewport-anchored overlay consumes directly.</summary>
-    public static float PreviewY(int slot, float leadingExtent, float itemExtent, float scrollOffset,
-                                 int removedAboveSlot)
-        => PreviewOffset(slot, leadingExtent, itemExtent, removedAboveSlot) - scrollOffset;
+    // (The viewport-space form is <see cref="InsertionPlan.PreviewY"/> — it is only ever wanted with a plan in hand,
+    //  so there is deliberately no free-function twin here to drift from it.)
 
     // ── shared helpers over a SORTED, de-duplicated source-index set ─────────────────────────────────
 
