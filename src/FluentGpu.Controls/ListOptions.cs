@@ -57,6 +57,77 @@ public sealed record ReorderOptions
 }
 
 /// <summary>
+/// THE declarative sortable/insertable-list surface (design ruling (f), level 4 — SwiftUI <c>dropDestination</c> /
+/// dnd-kit <c>useSortable</c> / Framer <c>Reorder</c>): an app declares INTENT — which payloads this list takes, which
+/// of its rows the payload came from, what to do on deposit — and <see cref="ItemsView"/> owns every coordinate.
+///
+/// <para>The view already knows its viewport rect, its live scroll offset, its virtual layout's MEASURED item bands,
+/// its persistent prefix and its item count: the exact values apps used to shovel in by hand (a hard-coded leading
+/// estimate against a measured list was one of the four documented "cannot drop in this mode" causes). Setting this
+/// option makes the view mount its own <see cref="DropTargetSpec"/>, resolve the insertion slot (<see cref="SortableMath"/>,
+/// centre-crossing trigger), open an exact live gap with virtual-removal accounting, draw the 2px accent line + terminal
+/// dot, host the in-gap preview, hide same-list source rows and run the whole teardown/optimistic-handoff lifecycle.</para>
+///
+/// <code>
+/// Insertion = new InsertionOptions {
+///     AcceptKinds   = [MyKinds.Resource],
+///     CanAccept     = p =&gt; …,                       // capability gate (kind is matched first, for free)
+///     IsSameList    = p =&gt; …,                       // move vs copy semantics
+///     SourceIndices = p =&gt; …,                       // dragged DISPLAY rows → virtual removal + hide
+///     OnDeposit     = (p, slot) =&gt; CommitAsync(p, slot),
+///     GapPreview    = (p, slot) =&gt; PreviewCards(p),
+/// }
+/// </code>
+///
+/// <para>Like every other option this record is UNPACKED and FROZEN at mount (the component-props contract), so its
+/// delegates must read LIVE app state (a signal, a field on the owning component) rather than close over a snapshot.</para>
+/// </summary>
+public sealed record InsertionOptions
+{
+    /// <summary>Drag kinds this list accepts (the cheap ordinal first gate — see <see cref="DropTargetSpec"/>).</summary>
+    public string[] AcceptKinds { get; init; } = [];
+    /// <summary>Capability gate over the payload. False ⇒ the target is TRANSPARENT (discovery continues to a
+    /// compatible ancestor) rather than accepting and silently no-op'ing the drop.</summary>
+    public Func<object?, bool>? CanAccept { get; init; }
+    /// <summary>True ⇒ the payload's rows came from THIS list: move semantics (sources hide, the gap is exactly
+    /// N·extent, the effect is <see cref="DropEffect.Move"/>). False ⇒ a copy with a capped gap.</summary>
+    public Func<object?, bool>? IsSameList { get; init; }
+    /// <summary>The dragged rows as DISPLAY indices relative to the insertable range (0 = the first insertable item,
+    /// NOT the first item). Drives virtual removal + the source-row hide; may be non-contiguous. Only consulted when
+    /// <see cref="IsSameList"/> holds.</summary>
+    public Func<object?, IReadOnlyList<int>?>? SourceIndices { get; init; }
+    /// <summary>How many rows the payload carries (the gap/preview size for a CROSS-list copy; a same-list move counts
+    /// <see cref="SourceIndices"/> instead). Null ⇒ 1.</summary>
+    public Func<object?, int>? DraggedCount { get; init; }
+    /// <summary>Commit the drop at <c>slot</c> — the RAW insertion slot in display space (0..count) the user aimed at.
+    /// It is deliberately NOT pre-corrected for rows removed above it: a backend move convention that inserts "before
+    /// the row currently at this index" already discounts them, and correcting twice moves the block twice.
+    /// The result is "a mutation was issued": only <c>true</c> promises the membership snapshot that
+    /// <see cref="ItemsViewController.ObserveInsertionMembership"/> hands the gap over to.</summary>
+    public Func<object?, int, Task<bool>>? OnDeposit { get; init; }
+    /// <summary>Optional in-gap preview content (the app owns the CARDS; the view owns their position and the gap).
+    /// Null ⇒ the line alone marks the insertion point.</summary>
+    public Func<object?, int, Element>? GapPreview { get; init; }
+    /// <summary>Optional drop caption (<see cref="DragSession.Caption"/>) refreshed per move — "Move 3 tracks".</summary>
+    public Func<object?, int, string?>? Caption { get; init; }
+    /// <summary>Fired once after a deposit LANDS (the membership handoff, else the commit's success edge) with the
+    /// landed <c>(slot, count)</c> — the seam an app renders its own post-drop flash from. The framework deliberately
+    /// ships no app visual here beyond the line and the gap.</summary>
+    public Action<int, int>? OnLanded { get; init; }
+    /// <summary>The INSERTABLE sub-range of the item model, <c>(firstItem, count)</c>. Null ⇒
+    /// <c>(PersistentPrefixCount, itemCount − PersistentPrefixCount)</c>. Lists that append rows the insertion does not
+    /// address (a "Recommended" header + its rows) must bound it, or those rows ride the gap down.</summary>
+    public Func<(int First, int Count)>? Range { get; init; }
+    /// <summary>Preview cards, and the cross-list gap cap (default 3 — an exact-N gap for a 500-track copy would blow
+    /// the viewport).</summary>
+    public int PreviewCap { get; init; } = SortableMath.DefaultPreviewCap;
+    /// <summary>Drag-dim participation (default <see cref="DropTargetVisualPolicy.Spotlight"/>).</summary>
+    public DropTargetVisualPolicy VisualPolicy { get; init; } = DropTargetVisualPolicy.Spotlight;
+    /// <summary>Per-session spotlight policy — return false for a same-list reorder so the app never dims for it.</summary>
+    public Func<DragSession, bool>? SpotlightWhen { get; init; }
+}
+
+/// <summary>
 /// Entrance / cold-realize choreography for a BOUND <see cref="ItemsView"/> (<c>CreateBound</c>). Bound rows recycle
 /// (mount-keyed Enter can't express a per-row add/glide), so these ride the same displacement bump that lands the order.
 /// </summary>
@@ -141,6 +212,10 @@ public record ListOptions
     public ScrollOptions? Scroll { get; init; }
     /// <summary>Drag-reorder displacement channel.</summary>
     public ReorderOptions? Reorder { get; init; }
+    /// <summary>Declarative insertion/sortable destination — the view owns ALL the geometry (see
+    /// <see cref="InsertionOptions"/>). Supersedes hand-wired drop lanes; coexists with <see cref="Reorder"/> (an
+    /// external displacement provider still applies when no insertion gap is open).</summary>
+    public InsertionOptions? Insertion { get; init; }
     /// <summary>Entrance / cold-realize choreography (bound path).</summary>
     public EntranceOptions? Entrance { get; init; }
     /// <summary>Removal choreography invoked through <see cref="ItemsViewController.BeginRemoval"/> (bound path).</summary>

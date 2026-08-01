@@ -3346,6 +3346,118 @@ static class ScrollSuite
                 $"first={first} realizedOrds={ord} dy=[{dy[0]:0.#},{dy[1]:0.#},{dy[2]:0.#},{dy[3]:0.#},{dy[4]:0.#},{dy[5]:0.#}]");
         }
 
+        // e11virt.insertion — the WHOLE declarative sortable core end to end (design ruling (f) level 4). The probe
+        // declares intent only: accept kinds, same-list, the dragged display rows, the insertable range and a deposit.
+        // Every coordinate — viewport rect, live scroll offset, the MEASURED leading extent of the two prefix items,
+        // the slot, the exact gap, the line and the preview position — is the view's own. Hover opens the gap, the
+        // sources HIDE (virtual removal), the trailing rows never move, drop reports the raw slot, the optimistic
+        // membership handoff closes the gap and reports the landing, and everything restores.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("insertion", new Size2(320, 400), 1f));
+            window.Show();
+            var probe = new InsertionProbe
+            {
+                SameList = true, Sources = [0, 2], DraggedCount = 2,
+                // Keep the commit IN FLIGHT: only a mutation that can still publish a membership snapshot owns the
+                // handoff the gap waits for (a commit that resolves without issuing one must tear down at once).
+                Pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            var scene = host.Scene;
+            var vp = FindScrollable(scene, scene.Root);
+            scene.TryGetScroll(vp, out var sc0);
+            var rect = scene.AbsoluteRect(vp);
+            // Item 2 starts one measured prefix (2 x 40) into the content; the pointer sits 20 DIP past its centre,
+            // so the NN/g rule claims slot 1 — i.e. insert before item 3.
+            var p = new Point2(rect.X + 100f, rect.Y + 100f);
+
+            bool began = host.Input.DragDrop.ExternalBegin("res", "payload", p, KeyModifiers.None);
+            host.Input.DragDrop.Move(host.Input.DiagHitTest(p), p, 0f, 0f, KeyModifiers.None);
+            for (int i = 0; i < 60; i++) host.RunFrame();
+
+            Span<float> dy = stackalloc float[8];
+            Span<float> op = stackalloc float[8];
+            int ord = 0;
+            for (var n = scene.FirstChild(sc0.ContentNode); !n.IsNull && ord < dy.Length; n = scene.NextSibling(n), ord++)
+            {
+                dy[ord] = scene.Paint(n).LocalTransform.Dy;
+                op[ord] = scene.Paint(n).Opacity;
+            }
+            // Gap = EXACTLY 2 x 40; item 2 is a source ABOVE the slot (it vacates in place), item 3 takes the gap
+            // minus that one removal, item 4 is the second source, and by item 5 both removals cancel the gap — the
+            // content height never changed (the A4 "one row too big" gap is arithmetically impossible now).
+            bool leadUntouched = Near(dy[0], 0f, 0.5f) && Near(dy[1], 0f, 0.5f);
+            bool reflow = Near(dy[2], 0f, 0.5f) && Near(dy[3], 40f, 0.5f)
+                && Near(dy[4], 40f, 0.5f) && Near(dy[5], 0f, 0.5f);
+            bool hidden = op[2] < 0.05f && op[4] < 0.05f && op[3] > 0.95f && op[5] > 0.95f;
+            bool previewMounted = !FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill).IsNull;
+            bool effect = host.Input.DragDrop.Session.Effect == DropEffect.Move;
+
+            // Steady-state Over: a pointer move INSIDE the current slot re-runs the whole geometry (viewport rect,
+            // measured band lookup, plan, the bound line/preview offset) and must allocate nothing — the gap projection
+            // may not perturb the cadence of the gesture it is drawing.
+            var hit = host.Input.DiagHitTest(p);
+            for (int k = 0; k < 4; k++) host.Input.DragDrop.Move(hit, p, 0f, 0f, KeyModifiers.None);   // warm
+            long allocBefore = GC.GetAllocatedBytesForCurrentThread();
+            for (int k = 0; k < 16; k++)
+                host.Input.DragDrop.Move(hit, new Point2(p.X, p.Y + (k % 5) * 0.5f), 0f, 0f, KeyModifiers.None);
+            long overAlloc = GC.GetAllocatedBytesForCurrentThread() - allocBefore;
+
+            bool dropped = host.Input.DragDrop.TryDrop(p, KeyModifiers.None, out _);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            // The deposit reports the RAW slot the user aimed at (the backend move convention discounts the rows
+            // removed above it — correcting here would move the block twice), and the gap is HELD until the
+            // optimistic membership snapshot lands.
+            bool deposit = probe.Deposits == 1 && probe.DepositSlot == 1;
+            bool held = !FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill).IsNull;
+
+            probe.Ctl.ObserveInsertionMembership(new object());
+            probe.Pending!.TrySetResult(true);
+            for (int i = 0; i < 60; i++) host.RunFrame();
+            ord = 0;
+            for (var n = scene.FirstChild(sc0.ContentNode); !n.IsNull && ord < dy.Length; n = scene.NextSibling(n), ord++)
+            {
+                dy[ord] = scene.Paint(n).LocalTransform.Dy;
+                op[ord] = scene.Paint(n).Opacity;
+            }
+            bool tornDown = FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill).IsNull
+                && Near(dy[3], 0f, 0.5f) && Near(dy[4], 0f, 0.5f)
+                && op[2] > 0.95f && op[4] > 0.95f;
+            bool landed = probe.LandedSlot == 1 && probe.LandedCount == 2;
+
+            Check("e11virt.insertion a list that declares only InsertionOptions gets the whole premiere destination from its OWN geometry: the slot resolves against the MEASURED prefix leading extent, virtual removal opens an exact N-extent gap with the source rows hidden, rows outside the insertable range never move, the preview mounts in the gap, the drop reports the raw slot and holds the gap until the membership handoff, which closes it and reports the landing",
+                began && dropped && leadUntouched && reflow && hidden && previewMounted && effect
+                && deposit && held && tornDown && landed && overAlloc == 0,
+                $"began={began} lead={leadUntouched} reflow={reflow} hidden={hidden} preview={previewMounted} effect={effect} deposit=({probe.Deposits},{probe.DepositSlot}) held={held} down={tornDown} landed=({probe.LandedSlot},{probe.LandedCount}) overAlloc={overAlloc}B");
+        }
+
+        // e11virt.insertion.empty — S5 cause 2. An EMPTY / still-loading destination used to swallow the drop: the
+        // lane bailed on a zero-extent viewport and never cleared, so the gesture ended in silence. The framework
+        // resolves slot 0 against the leading edge and the deposit APPENDS.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("insertion-empty", new Size2(320, 260), 1f));
+            window.Show();
+            var probe = new EmptyInsertionProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            var scene = host.Scene;
+            var vp = FindScrollable(scene, scene.Root);
+            var rect = scene.AbsoluteRect(vp);
+            var p = new Point2(rect.X + 40f, rect.Y + 120f);
+            bool began = host.Input.DragDrop.ExternalBegin("res", "payload", p, KeyModifiers.None);
+            host.Input.DragDrop.Move(host.Input.DiagHitTest(p), p, 0f, 0f, KeyModifiers.None);
+            for (int i = 0; i < 3; i++) host.RunFrame();
+            bool over = host.Input.DragDrop.OverTarget.IsNull == false;
+            bool dropped = host.Input.DragDrop.TryDrop(p, KeyModifiers.None, out _);
+            for (int i = 0; i < 3; i++) host.RunFrame();
+            Check("e11virt.insertion.empty an EMPTY destination still accepts the drop at slot 0 (append) instead of silently discarding it — the S5 'cannot drop in this mode' cause that had no cue at all",
+                began && over && dropped && probe.Deposits == 1 && probe.DepositSlot == 0,
+                $"began={began} over={over} dropped={dropped} deposits={probe.Deposits} slot={probe.DepositSlot}");
+        }
+
         // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an
         // ItemCollectionTransition stamps the engine FLIP/fade spec on each item root — Moves = Position FLIP,
         // Adds/Removes = opacity 0↔1, over ControlFastAnimationDuration 167ms decelerate (the ItemContainer.xaml:54-56

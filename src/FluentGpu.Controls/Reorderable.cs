@@ -164,23 +164,30 @@ public sealed class Reorderable
     {
         get
         {
-            float pitch = ItemExtent + Spacing;
             float pos;
             if (_crossOver && _crossInsert >= 0)
             {
-                pos = _crossInsert * pitch - Spacing * 0.5f;
+                pos = BoundaryOf(_crossInsert);
             }
             else
             {
                 // Same-list pending slot p: the line sits at the boundary the item will insert at — above item p
                 // when moving up, below item p when moving down (the midpoint-rule claim direction).
                 int p = Core.PendingIndex;
-                pos = p > Core.DraggedIndex ? (p + 1) * pitch - Spacing * 0.5f : p * pitch - Spacing * 0.5f;
+                pos = BoundaryOf(p > Core.DraggedIndex ? p + 1 : p);
             }
             if (pos < 0f) pos = 0f;
             return pos - ViewportScrollOffset();
         }
     }
+
+    /// <summary>Boundary offset of a slot: the SAMPLED prefix sums when they describe the current list (the
+    /// <see cref="ExtentOf"/> variable-extent path, C3), else the uniform pitch.</summary>
+    private float BoundaryOf(int slot)
+        => Sampled ? Core.BoundaryOffset(slot) : slot * (ItemExtent + Spacing) - Spacing * 0.5f;
+
+    /// <summary>The resting geometry table currently describes THIS list (same item count).</summary>
+    private bool Sampled => Core.Count > 0 && Core.Count == Math.Max(0, ItemCount);
 
     /// <summary>The ORIGINAL item index shown at <paramref name="slot"/> under the current projection (identity when
     /// idle): render slot s with the item at <c>ItemAt(s)</c> and the item's STABLE key — mid-drag the dragged item
@@ -389,7 +396,31 @@ public sealed class Reorderable
 
     // ── drop-target handlers (the list body's DropTargetSpec) ─────────────────────────────────────
 
-    private void OnTargetEnter(DragSession s) => OnTargetOver(s);
+    private void OnTargetEnter(DragSession s)
+    {
+        // A foreign session needs a slot before any LOCAL lift exists, so the resting geometry has never been sampled.
+        // Refresh it once per hover entry (cold) — that is what makes the cross-list slot math variable-extent aware.
+        if (!Core.IsActive) SampleRest();
+        OnTargetOver(s);
+    }
+
+    private void SampleRest()
+    {
+        int count = Math.Max(0, ItemCount);
+        if (count == 0) return;
+        if (ExtentOf is { } extentOf)
+        {
+            if (_extents.Length < count)
+            {
+                int cap = _extents.Length > 0 ? _extents.Length : 8;
+                while (cap < count) cap *= 2;
+                _extents = new float[cap];
+            }
+            for (int i = 0; i < count; i++) _extents[i] = extentOf(i);
+            Core.Sample(_extents.AsSpan(0, count), Spacing);
+        }
+        else Core.Sample(count, ItemExtent, Spacing);
+    }
 
     private void OnTargetOver(DragSession s)
     {
@@ -435,9 +466,10 @@ public sealed class Reorderable
 
     // ── geometry (cross-list pointer → slot; cold per-move path) ─────────────────────────────────
 
-    /// <summary>Insertion slot (0..<see cref="ItemCount"/>) for a window-space position: midpoint rule over the
-    /// uniform pitch in CONTENT space (wrapper origin + inner scroll offset). Without <see cref="Scene"/> the wrapper
-    /// origin/scroll are unknown and 0 is assumed (lists at the window origin only) — wire Scene for cross-list.</summary>
+    /// <summary>Insertion slot (0..<see cref="ItemCount"/>) for a window-space position: the midpoint rule in CONTENT
+    /// space (wrapper origin + inner scroll offset), over the SAMPLED prefix sums when they describe this list — so an
+    /// <see cref="ExtentOf"/> list resolves the slot exactly instead of assuming a uniform pitch (C3). Without
+    /// <see cref="Scene"/> the wrapper origin/scroll are unknown and 0 is assumed (lists at the window origin only).</summary>
     private int SlotFromPosition(Point2 abs)
     {
         int count = Math.Max(0, ItemCount);
@@ -449,6 +481,7 @@ public sealed class Reorderable
             main -= Horizontal ? r.X : r.Y;
             main += ViewportScrollOffset();
         }
+        if (Sampled) return Core.SlotAtOffset(main);
         float pitch = ItemExtent + Spacing;
         if (pitch <= 0f) return 0;
         int item = (int)MathF.Floor(main / pitch);

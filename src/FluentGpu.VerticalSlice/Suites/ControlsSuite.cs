@@ -56,7 +56,8 @@ static class ControlsSuite
         InputVocabularyChecks(strings);
         WaveBInputChecks(strings);
         E5DragDropChecks(strings);
-        VirtualInsertionPreviewChecks();
+        SortableMathChecks();
+        SortableSurfaceChecks(strings);
         VirtualDisclosureChecks(strings);
         VirtualDisclosureFastPathChecks(strings);
         FocusRingChecks(strings);
@@ -3165,29 +3166,226 @@ static class ControlsSuite
         }
     }
 
-    static void VirtualInsertionPreviewChecks()
+    // -- the framework-owned sortable core (pure geometry - no scene, no host) ---------------------------
+    // These replace the former VirtualInsertionPreviewController checks: that class computed a single capped suffix
+    // gap with NO removal accounting, which is exactly the A4/A5 bug pair (a gap one block too big, a preview placed
+    // in the wrong space). SortableMath now owns the whole family and the invariants are asserted directly.
+    static void SortableSurfaceChecks(StringTable strings)
     {
-        var version = new Signal<int>(0);
-        var preview = new VirtualInsertionPreviewController(version);
+        var fonts = new HeadlessFontSystem(strings);
 
-        bool opened = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f, itemCount: 8);
-        var prefix = preview.DisplacementFor(3);
-        var suffix = preview.DisplacementFor(4);
-        var appended = preview.DisplacementFor(10);   // firstItemIndex + itemCount → a trailing non-item row
-        int afterOpen = version.Peek();
-        bool duplicate = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f, itemCount: 8);
-        bool retargeted = preview.Update(slot: 1, firstItemIndex: 2, extent: 48f, itemCount: 8);
-        var retargetPrefix = preview.DisplacementFor(2);
-        var retargetSuffix = preview.DisplacementFor(3);
-        bool cleared = preview.Clear();
+        // e5dragdrop.reorder.varextent — C3. Reorderable/ReorderList assumed a UNIFORM pitch for the cross-list slot
+        // and the insertion line even when the consumer supplied ExtentOf, so a list with one tall row aimed at the
+        // wrong boundary. The resting table is now sampled (a foreign hover has no local lift to Begin) and both
+        // queries read its prefix sums.
+        {
+            var rl = new ReorderList();
+            Span<float> ext = stackalloc float[] { 40f, 100f, 40f, 40f };   // item 1 is a TALL row
+            rl.Sample(ext, spacing: 0f);                                    // starts 0,40,140,180; content end 220
+            bool slots = rl.SlotAtOffset(0f) == 0 && rl.SlotAtOffset(19f) == 0 && rl.SlotAtOffset(21f) == 1
+                && rl.SlotAtOffset(89f) == 1 && rl.SlotAtOffset(91f) == 2 && rl.SlotAtOffset(1000f) == 4;
+            bool boundaries = Near(rl.BoundaryOffset(0), 0f) && Near(rl.BoundaryOffset(1), 40f)
+                && Near(rl.BoundaryOffset(2), 140f) && Near(rl.BoundaryOffset(4), 220f);
+            // Uniform extents must reduce to the historical formula everywhere (the sidebar/tab-strip surfaces).
+            var uni = new ReorderList();
+            uni.Sample(5, 40f, spacing: 8f);
+            bool reduces = true;
+            for (float y = -20f; y < 300f; y += 2.3f)
+            {
+                int item = (int)MathF.Floor(y / 48f);
+                float within = y - item * 48f;
+                int expect = Math.Clamp(within > 20f ? item + 1 : item, 0, 5);
+                reduces &= uni.SlotAtOffset(y) == expect;
+            }
+            bool uniformBoundary = Near(uni.BoundaryOffset(2), 2 * 48f - 4f) && Near(uni.BoundaryOffset(5), 5 * 48f - 4f);
 
-        Check("virtual-insertion.1 a prefixed ItemsView opens one stable suffix gap bounded by the item count (appended trailing rows never displace) and ignores an identical retarget",
-            opened && prefix.dy == 0f && suffix.dy == 96f && appended.dy == 0f && afterOpen == 1 && !duplicate && version.Peek() == 3,
-            $"opened={opened} prefix={prefix.dy} suffix={suffix.dy} appended={appended.dy} version={version.Peek()}");
-        Check("virtual-insertion.2 midpoint retarget publishes immediately and clear restores resting displacement",
-            retargeted && retargetPrefix.dy == 0f && retargetSuffix.dy == 48f && cleared
-            && preview.DisplacementFor(3).dy == 0f && !preview.Active,
-            $"retarget={retargeted} prefix={retargetPrefix.dy} suffix={retargetSuffix.dy} active={preview.Active}");
+            // …and through Reorderable's live cross-list hover path (a foreign session over the list body).
+            var scene = new SceneStore();
+            var ro = new Reorderable("res")
+            {
+                ItemCount = 4, ItemExtent = 40f, ExtentOf = i => i == 1 ? 100f : 40f, Spacing = 0f,
+                Scene = scene, RequestRender = static () => { },
+            };
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                ro.List(new BoxEl { Width = 200, Height = 220 }), null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var at = new Point2(50f, 91f);        // just past the TALL row's centre (90) — a uniform 40 pitch says 2 @ 80
+            bool began = disp.DragDrop.ExternalBegin("res", "p", at, KeyModifiers.None);
+            disp.DragDrop.Move(disp.DiagHitTest(at), at, 0f, 0f, KeyModifiers.None);
+            int liveSlot = ro.InsertionIndex;
+            float liveLine = ro.InsertionLineOffset;
+            bool live = ro.InsertionVisible && liveSlot == 2 && Near(liveLine, 140f);
+            disp.DragDrop.Cancel();
+
+            Check("e5dragdrop.reorder.varextent Reorderable/ReorderList resolve the cross-list slot AND the insertion-line boundary from the sampled resting extents (a list with one tall row), reducing byte-for-byte to the uniform midpoint formula when the extents are equal",
+                slots && boundaries && reduces && uniformBoundary && began && live,
+                $"slots={slots} boundaries={boundaries} reduces={reduces} uniformBoundary={uniformBoundary} live=({liveSlot},{liveLine:0.#})");
+        }
+
+        // e5dragdrop.settle.cancel — Escape mid-insertion. The most-modal gesture: the L2 session closes with OnLeave
+        // on the live target, so the gap, the preview, the hidden source rows and the drop spotlight all tear down —
+        // and NO deposit runs. A cancel that left the projection open was the "stale cards stuck at the top" failure.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("insertion-cancel", new Size2(320, 400), 1f));
+            window.Show();
+            var probe = new InsertionProbe { SameList = true, Sources = [0, 2], DraggedCount = 2 };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            var scene = host.Scene;
+            var vp = FindScrollable(scene, scene.Root);
+            scene.TryGetScroll(vp, out var sc);
+            var rect = scene.AbsoluteRect(vp);
+            var down = new Point2(rect.X + 100f, rect.Y + 100f);
+
+            // A REAL L1 lift (Escape only cancels a live item drag), which opens the L2 session on promotion.
+            window.QueueInput(new InputEvent(InputKind.PointerDown, down, 0, 0));
+            host.RunFrame();
+            var moved = new Point2(down.X, down.Y + 30f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, moved, 0, 0));
+            for (int i = 0; i < 30; i++) host.RunFrame();
+            bool lifted = host.Input.Drag.IsActive && host.Input.DragDrop.IsActive
+                && !FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill).IsNull;
+
+            window.QueueInput(new InputEvent(InputKind.Key, moved, 0, Keys.Escape));
+            for (int i = 0; i < 60; i++) host.RunFrame();
+            Span<float> dy = stackalloc float[8];
+            Span<float> op = stackalloc float[8];
+            int ord = 0;
+            for (var n = scene.FirstChild(sc.ContentNode); !n.IsNull && ord < dy.Length; n = scene.NextSibling(n), ord++)
+            {
+                dy[ord] = scene.Paint(n).LocalTransform.Dy;
+                op[ord] = scene.Paint(n).Opacity;
+            }
+            bool cleared = FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill).IsNull
+                && Near(dy[3], 0f, 0.5f) && Near(dy[4], 0f, 0.5f)
+                && op[2] > 0.95f && op[3] > 0.95f && op[4] > 0.95f;
+            bool closed = !host.Input.DragDrop.IsActive && !host.Input.Drag.IsActive
+                && host.Input.DragDrop.OverTarget.IsNull && !scene.DropSpotlightActive;
+            bool noCommit = probe.Deposits == 0 && probe.LandedSlot == -1;
+
+            Check("e5dragdrop.settle.cancel Escape mid-insertion tears the whole projection down — gap, in-gap preview, hidden source rows and drop spotlight all restore, the L1+L2 session closes, and no deposit runs",
+                lifted && cleared && closed && noCommit,
+                $"lifted={lifted} cleared={cleared} closed={closed} deposits={probe.Deposits} dy=[{dy[2]:0.#},{dy[3]:0.#},{dy[4]:0.#}] op=[{op[2]:0.##},{op[3]:0.##},{op[4]:0.##}]");
+        }
+    }
+
+    static void SortableMathChecks()
+    {
+        // sortable.slot - the NN/g centre-crossing trigger, uniform AND variable extents, in CONTENT space with a
+        // MEASURED leading extent (the persistent prefix's real height, never an app estimate).
+        {
+            const float lead = 80f, e = 40f;
+            const int n = 6;
+            bool atTop = SortableMath.SlotFromOffset(0f, lead, e, n) == 0
+                && SortableMath.SlotFromOffset(lead, lead, e, n) == 0
+                && SortableMath.SlotFromOffset(lead + e * 0.5f - 0.01f, lead, e, n) == 0;
+            bool crossesCentre = SortableMath.SlotFromOffset(lead + e * 0.5f, lead, e, n) == 1
+                && SortableMath.SlotFromOffset(lead + e * 1.5f, lead, e, n) == 2;
+            bool clampsEnd = SortableMath.SlotFromOffset(lead + e * 99f, lead, e, n) == n
+                && SortableMath.SlotFromOffset(-500f, lead, e, n) == 0;
+            // The same offset through the pointer form (viewport-space pointer + live scroll offset).
+            bool viaPointer = SortableMath.SlotFromPointer(lead + e * 1.5f - 200f, 200f, lead, e, n) == 2;
+
+            // Variable extents: item 1 is a TALL row (an expanded drawer). starts = 80,120,220,260,300,340,380.
+            Span<float> starts = stackalloc float[] { 80f, 120f, 220f, 260f, 300f, 340f, 380f };
+            bool varSlot = SortableMath.SlotFromOffset(150f, starts, n) == 1        // 150 < centre 170 => before item 1
+                && SortableMath.SlotFromOffset(171f, starts, n) == 2                // past the TALL row's centre
+                && SortableMath.SlotFromOffset(79f, starts, n) == 0
+                && SortableMath.SlotFromOffset(1000f, starts, n) == n;
+            // A uniform starts table must agree with the uniform overload exactly.
+            Span<float> uniform = stackalloc float[n + 1];
+            for (int i = 0; i <= n; i++) uniform[i] = lead + i * e;
+            bool agrees = true;
+            for (float y = 60f; y < lead + e * (n + 1); y += 3.7f)
+                agrees &= SortableMath.SlotFromOffset(y, uniform, n) == SortableMath.SlotFromOffset(y, lead, e, n);
+            // The single-band form (what a measured virtualized list can afford per move) agrees too.
+            bool band = SortableMath.SlotFromBand(150f, 1, 120f, 100f, n) == 1
+                && SortableMath.SlotFromBand(171f, 1, 120f, 100f, n) == 2;
+
+            Check("sortable.slot SortableMath resolves the insertion slot by the NN/g centre-crossing rule against a MEASURED leading extent, clamps to [0,count] at both ends, and the variable-extent (prefix-sum + single-band) overloads agree with the uniform one everywhere the extents are equal",
+                atTop && crossesCentre && clampsEnd && viaPointer && varSlot && agrees && band,
+                $"top={atTop} centre={crossesCentre} clamp={clampsEnd} pointer={viaPointer} varied={varSlot} agrees={agrees} band={band}");
+        }
+
+        // sortable.gap - design ruling (a). Same-list virtual removal: the gap is EXACTLY N*extent, every row below a
+        // hidden source shifts UP one extent, and the content height is invariant (the tail row's dy is 0). The
+        // dragged set may be NON-CONTIGUOUS. Rows outside the insertable range never move (C1 prefix + A12 trailing).
+        {
+            const float e = 40f;
+            // Items 2..37 insertable (0,1 lead; 38,39 trail). Sources = display 0 and 2 => items 2 and 4.
+            var plan = SortableMath.Plan(firstItem: 2, count: 36, slot: 1, draggedCount: 2, itemExtent: e,
+                sameList: true, previewCap: 3);
+            Span<int> sources = stackalloc int[] { 2, 4 };
+            bool exactGap = plan.GapRows == 2 && Near(plan.GapExtent, 80f) && plan.PreviewRows == 2 && plan.SlotItem == 3;
+            bool reflow = Near(plan.DisplacementFor(2, sources), 0f)      // source above the slot: stays (it hides)
+                && Near(plan.DisplacementFor(3, sources), 40f)            // gap 80 - one removed row above
+                && Near(plan.DisplacementFor(4, sources), 40f)            // the second source, already displaced
+                && Near(plan.DisplacementFor(5, sources), 0f)             // both removals now cancel the gap...
+                && Near(plan.DisplacementFor(37, sources), 0f);           // ...so the content height never changed
+            bool bounded = Near(plan.DisplacementFor(0, sources), 0f) && Near(plan.DisplacementFor(1, sources), 0f)
+                && Near(plan.DisplacementFor(38, sources), 0f) && Near(plan.DisplacementFor(39, sources), 0f);
+            bool hides = plan.IsHiddenSource(2, sources) && plan.IsHiddenSource(4, sources)
+                && !plan.IsHiddenSource(3, sources) && !plan.IsHiddenSource(5, sources);
+            // The gap's leading edge accounts for the rows removed ABOVE it (content AND viewport space).
+            bool preview = plan.RemovedAboveSlot(sources) == 1
+                && Near(plan.PreviewOffset(80f, sources), 80f)
+                && Near(plan.PreviewY(80f, 30f, sources), 50f);
+
+            // A larger, non-contiguous block: 5 sources scattered across the range, slot in the middle of them.
+            var big = SortableMath.Plan(2, 36, 10, 5, e, sameList: true, previewCap: 3);
+            Span<int> spread = stackalloc int[] { 3, 5, 9, 20, 30 };      // items; 3 of them are above slotItem 12
+            bool bigGap = Near(big.GapExtent, 200f) && big.PreviewRows == 3 && big.RemovedAboveSlot(spread) == 3;
+            bool bigNet = Near(big.DisplacementFor(2, spread), 0f)
+                && Near(big.DisplacementFor(12, spread), 200f - 3f * e)
+                && Near(big.DisplacementFor(37, spread), 0f);             // sum(removal) == N => net zero at the tail
+
+            // CROSS-list copy: no removal, and the gap is CAPPED so a 500-track copy cannot blow the viewport - with
+            // the preview reading the SAME extent (the A4 mismatch is structurally impossible now).
+            var copy = SortableMath.Plan(2, 36, 4, 500, e, sameList: false, previewCap: 3);
+            bool capped = copy.GapRows == 3 && Near(copy.GapExtent, 120f) && copy.PreviewRows == 3
+                && copy.RemovedAboveSlot(sources) == 0
+                && Near(copy.DisplacementFor(5, sources), 0f)
+                && Near(copy.DisplacementFor(6, sources), 120f)
+                && !copy.IsHiddenSource(6, sources);
+
+            Check("sortable.gap virtual removal opens an EXACT N*extent same-list gap over a non-contiguous dragged set with a net-zero content-height delta, hides exactly the source rows, positions the preview by the removals above it, leaves items outside the insertable range untouched, and caps a cross-list copy's gap at the preview cap",
+                exactGap && reflow && bounded && hides && preview && bigGap && bigNet && capped,
+                $"gap={exactGap} reflow={reflow} bounded={bounded} hides={hides} preview={preview} big=({bigGap},{bigNet}) copy={capped}");
+        }
+
+        // sortable.empty - S5 cause 2. An EMPTY (or still-loading) destination resolves to slot 0 with a live gap so
+        // the drop APPENDS; the old lane bailed on a zero-extent viewport and discarded the drop silently.
+        {
+            var empty = SortableMath.Plan(firstItem: 2, count: 0, slot: 0, draggedCount: 2, itemExtent: 40f,
+                sameList: false, previewCap: 3);
+            bool active = empty.IsActive && empty.Slot == 0 && Near(empty.GapExtent, 80f)
+                && Near(empty.PreviewOffset(120f, default), 120f);
+            bool noRows = Near(empty.DisplacementFor(2, default), 0f) && Near(empty.DisplacementFor(0, default), 0f);
+            bool slotZero = SortableMath.SlotFromOffset(999f, 120f, 40f, 0) == 0
+                && SortableMath.SlotFromOffset(999f, default, 0) == 0;
+            // A payload with nothing in it, or a list with no usable extent, is inert - no phantom gap.
+            bool inert = !SortableMath.Plan(2, 10, 3, 0, 40f, true).IsActive
+                && !SortableMath.Plan(2, 10, 3, 2, 0f, true).IsActive
+                && !SortableMath.Plan(2, 10, -1, 2, 40f, true).IsActive;
+            Check("sortable.empty an empty destination still resolves slot 0 with a live gap at the leading edge (the drop APPENDS instead of being silently discarded), while an empty payload / extent-less list stays inert",
+                active && noRows && slotZero && inert,
+                $"active={active} noRows={noRows} slotZero={slotZero} inert={inert}");
+        }
+
+        // sortable.normalize - the one normalization every removal query assumes: sorted, de-duplicated, in range.
+        {
+            Span<int> raw = stackalloc int[] { 7, 3, 7, -1, 3, 99, 0 };
+            int n = SortableMath.Normalize(raw, 10);
+            bool normalized = n == 3 && raw[0] == 0 && raw[1] == 3 && raw[2] == 7;
+            var live = raw[..n];
+            bool queries = SortableMath.RemovedBefore(0, live) == 0 && SortableMath.RemovedBefore(4, live) == 2
+                && SortableMath.RemovedBefore(100, live) == 3
+                && SortableMath.IsSource(3, live) && !SortableMath.IsSource(4, live);
+            Check("sortable.normalize the dragged-index set sorts, de-duplicates and drops out-of-range members in place, and the removal queries binary-search it",
+                normalized && queries, $"n={n} normalized={normalized} queries={queries}");
+        }
     }
 
     static void VirtualDisclosureChecks(StringTable strings)

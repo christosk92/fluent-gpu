@@ -4890,3 +4890,82 @@ sealed class ChipDragProbe : Component
         ],
     };
 }
+
+// ── Wave 4: the framework-owned sortable core ────────────────────────────────────────────────────────────────────
+// A bound virtual list that declares an InsertionOptions and NOTHING else — no lane, no Configure, no displacement
+// provider, no coordinate anywhere in the probe. Items 0..1 lead the insertable range, 2..37 are insertable and
+// 38..39 trail it (the "Recommended songs" shape), so one gate covers the prefix (C1) and trailing (A12) bounds.
+sealed class InsertionProbe : Component
+{
+    public const int N = 40;
+    public const float RowH = 40f;
+    public const int First = 2;
+    public const int Insertable = 36;
+    public static readonly ColorF PreviewFill = ColorF.FromRgba(220, 90, 90);
+    static readonly DragSource RowDrag = Drag.Source("res", static () => "payload");
+
+    readonly MeasuredStackVirtualLayout _layout = new(RowH);
+    public readonly ItemsViewController Ctl = new();
+    public bool SameList = true;
+    public int[] Sources = [];
+    public int DraggedCount = 1;
+    public bool Editable = true;
+    public bool DepositResult = true;
+    /// <summary>Set to keep the commit IN FLIGHT so the gate can assert the gap is HELD for the optimistic-membership
+    /// handoff (a synchronously-resolved commit owns no handoff and tears down at once, by design).</summary>
+    public TaskCompletionSource<bool>? Pending;
+    public int DepositSlot = -1, Deposits, Enters, Leaves, LandedSlot = -1, LandedCount;
+
+    public override Element Render()
+        => ItemsView.CreateBound(N,
+            static scope => new BoxEl
+            {
+                Height = RowH, Fill = ColorF.FromRgba(38, 44, 52),
+                CanDrag = true, Draggable = RowDrag,
+            },
+            RepeatLayout.Measured(_layout),
+            new ListOptions
+            {
+                Overscan = 2,
+                Controller = Ctl,
+                Insertion = new InsertionOptions
+                {
+                    AcceptKinds = ["res"],
+                    CanAccept = _ => Editable,
+                    IsSameList = _ => SameList,
+                    SourceIndices = _ => Sources,
+                    DraggedCount = _ => DraggedCount,
+                    Range = () => (First, Insertable),
+                    OnDeposit = (_, slot) =>
+                    {
+                        Deposits++; DepositSlot = slot;
+                        return Pending?.Task ?? Task.FromResult(DepositResult);
+                    },
+                    GapPreview = (_, _) => new BoxEl
+                    {
+                        Key = "insertion-preview-card", Height = 8f, Fill = PreviewFill, HitTestVisible = false,
+                    },
+                    OnLanded = (slot, count) => { LandedSlot = slot; LandedCount = count; },
+                },
+            });
+}
+
+// The S5 cause-2 shape: a destination whose list is EMPTY (or still loading). The gap must still open at the leading
+// edge and the drop must resolve to an append, never a silent discard.
+sealed class EmptyInsertionProbe : Component
+{
+    public int DepositSlot = -1, Deposits;
+    public override Element Render()
+        => ItemsView.CreateBound(0,
+            static _ => new BoxEl { Height = 40f },
+            RepeatLayout.Stack(40f),
+            new ListOptions
+            {
+                Insertion = new InsertionOptions
+                {
+                    AcceptKinds = ["res"],
+                    DraggedCount = static _ => 2,
+                    OnDeposit = (_, slot) => { Deposits++; DepositSlot = slot; return Task.FromResult(false); },
+                },
+            });
+}

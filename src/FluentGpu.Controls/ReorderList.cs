@@ -97,14 +97,26 @@ public sealed class ReorderList
     public void Begin(int draggedIndex, ReadOnlySpan<float> itemExtents, float spacing = 0f)
     {
         if ((uint)draggedIndex >= (uint)itemExtents.Length) { Reset(); return; }
+        Sample(itemExtents, spacing);
+        StartDrag(draggedIndex);
+    }
+
+    /// <summary>Uniform-extent overload (fixed-row ListView / tab strip): all <paramref name="count"/> items share
+    /// <paramref name="itemExtent"/>.</summary>
+    public void Begin(int draggedIndex, int count, float itemExtent, float spacing = 0f)
+    {
+        if ((uint)draggedIndex >= (uint)count) { Reset(); return; }
+        Sample(count, itemExtent, spacing);
+        StartDrag(draggedIndex);
+    }
+
+    /// <summary>Refresh the RESTING geometry table WITHOUT starting a drag — the cross-list hover path, where a
+    /// foreign session needs a slot before any local lift exists (and therefore before <see cref="Begin"/> has ever
+    /// run). Grow-only, allocation-free once grown; leaves the drag state untouched.</summary>
+    public void Sample(ReadOnlySpan<float> itemExtents, float spacing = 0f)
+    {
+        EnsureCapacity(itemExtents.Length);
         _count = itemExtents.Length;
-        if (_extents.Length < _count)
-        {
-            int cap = _extents.Length > 0 ? _extents.Length : 8;
-            while (cap < _count) cap *= 2;
-            _extents = new float[cap];
-            _starts = new float[cap];
-        }
         float pos = 0f;
         for (int i = 0; i < _count; i++)
         {
@@ -113,32 +125,59 @@ public sealed class ReorderList
             pos += itemExtents[i] + spacing;
         }
         _spacing = spacing;
-        _dragged = draggedIndex;
-        _pending = draggedIndex;
-        _target = draggedIndex;
-        _dwellRemainingMs = 0f;
-        Columns = 0;   // 1-D mode
     }
 
-    /// <summary>Uniform-extent overload (fixed-row ListView / tab strip): all <paramref name="count"/> items share
-    /// <paramref name="itemExtent"/>.</summary>
-    public void Begin(int draggedIndex, int count, float itemExtent, float spacing = 0f)
+    /// <summary>Uniform-extent <see cref="Sample(ReadOnlySpan{float},float)"/>.</summary>
+    public void Sample(int count, float itemExtent, float spacing = 0f)
     {
-        if ((uint)draggedIndex >= (uint)count) { Reset(); return; }
+        count = Math.Max(0, count);
+        EnsureCapacity(count);
         _count = count;
-        if (_extents.Length < _count)
-        {
-            int cap = _extents.Length > 0 ? _extents.Length : 8;
-            while (cap < _count) cap *= 2;
-            _extents = new float[cap];
-            _starts = new float[cap];
-        }
         for (int i = 0; i < _count; i++)
         {
             _extents[i] = itemExtent;
             _starts[i] = i * (itemExtent + spacing);
         }
         _spacing = spacing;
+    }
+
+    /// <summary>Insertion slot (0..<see cref="Count"/>) for a resting main-axis offset, over the SAMPLED prefix sums —
+    /// so a variable-extent list (an <c>ExtentOf</c> consumer) resolves the slot exactly instead of assuming a uniform
+    /// pitch (C3). Reduces to the uniform midpoint rule byte-for-byte when the extents are equal.</summary>
+    public int SlotAtOffset(float mainOffset)
+    {
+        if (_count <= 0 || !float.IsFinite(mainOffset) || mainOffset <= _starts[0]) return 0;
+        int lo = 0, hi = _count - 1;
+        while (lo < hi)                                   // largest i with _starts[i] <= mainOffset
+        {
+            int mid = (lo + hi + 1) >> 1;
+            if (_starts[mid] <= mainOffset) lo = mid; else hi = mid - 1;
+        }
+        int slot = mainOffset > _starts[lo] + _extents[lo] * 0.5f ? lo + 1 : lo;
+        return Math.Clamp(slot, 0, _count);
+    }
+
+    /// <summary>Resting main-axis offset of the boundary BEFORE <paramref name="slot"/> (the insertion-line position),
+    /// centred in the inter-item gap. Reads the sampled prefix sums — variable extents included.</summary>
+    public float BoundaryOffset(int slot)
+    {
+        if (_count <= 0) return 0f;
+        slot = Math.Clamp(slot, 0, _count);
+        float pos = slot < _count ? _starts[slot] : _starts[_count - 1] + _extents[_count - 1] + _spacing;
+        return pos - _spacing * 0.5f;
+    }
+
+    private void EnsureCapacity(int count)
+    {
+        if (_extents.Length >= count) return;
+        int cap = _extents.Length > 0 ? _extents.Length : 8;
+        while (cap < count) cap *= 2;
+        _extents = new float[cap];
+        _starts = new float[cap];
+    }
+
+    private void StartDrag(int draggedIndex)
+    {
         _dragged = draggedIndex;
         _pending = draggedIndex;
         _target = draggedIndex;

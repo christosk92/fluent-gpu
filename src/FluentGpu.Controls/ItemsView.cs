@@ -21,6 +21,7 @@ public sealed class ItemsViewController
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
+    internal Action<object>? ObserveInsertionMembershipImpl;
     internal Action<bool>? CompleteDisclosureImpl;
     internal readonly Signal<int> DisclosureVersion = new(0);
     internal ItemDisclosureRequest? PendingDisclosure;
@@ -95,6 +96,16 @@ public sealed class ItemsViewController
         var begin = BeginRemovalImpl;
         if (begin is null) commit();
         else begin(normalized, commit);
+    }
+
+    /// <summary>The optimistic-membership HANDOFF edge for a configured <see cref="InsertionOptions"/>: call it from a
+    /// layout effect keyed on the backing collection's identity. A NEW token after a deposit means the real list has
+    /// accepted the mutation, so the temporary gap closes into its FLIP instead of holding a blank intermediate frame.
+    /// No-op without an insertion destination.</summary>
+    public void ObserveInsertionMembership(object token)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+        ObserveInsertionMembershipImpl?.Invoke(token);
     }
 
     /// <summary>Begin or retarget one contiguous disclosure band. Expand callers insert the range first; collapse callers
@@ -419,6 +430,10 @@ public sealed class ItemsView : Component
     /// <summary>Optional bound-slot removal choreography, invoked through <see cref="ItemsViewController"/>.</summary>
     public RemovalOptions? Removal;
     public DisclosureOptions? Disclosure;
+    /// <summary>Declarative insertion destination (<see cref="InsertionOptions"/>): the view mounts its own drop
+    /// target and owns ALL insertion geometry — slot, exact live gap with virtual-removal accounting, the 2px accent
+    /// line + terminal dot, the in-gap preview, the source-row hide and the commit/teardown lifecycle.</summary>
+    public InsertionOptions? Insertion;
 
     public int OverscanItems = 4;
     /// <summary>Flex participation of the view (host box + viewport). 1 (default) = FILL the parent-given size — the
@@ -524,6 +539,7 @@ public sealed class ItemsView : Component
             ItemCountSignal = o.CountSignal,
             Removal = o.Removal,
             Disclosure = o.Disclosure,
+            Insertion = o.Insertion,
         });
     }
 
@@ -573,6 +589,7 @@ public sealed class ItemsView : Component
             ItemFadeFrom = o.Entrance?.ItemFadeFrom,
             Removal = o.Removal,
             Disclosure = o.Disclosure,
+            Insertion = o.Insertion,
             ContentType = o.ContentType,
             CacheExtentPx = o.CacheExtentPx,
             PersistentPrefixCount = o.PersistentPrefixCount,
@@ -631,6 +648,7 @@ public sealed class ItemsView : Component
             CountSignal = items.Count,
             Scroll = o.Scroll,
             Reorder = o.Reorder,
+            Insertion = o.Insertion,
             Entrance = o.Entrance,
             Removal = o.Removal,
             Disclosure = o.Disclosure,
@@ -729,6 +747,16 @@ public sealed class ItemsView : Component
         var typeLastMs = UseRef(0L);
         var pendingFocus = UseRef(-1);
         var lastTabStop = UseRef(-1);                      // bound mode: the index currently holding the roving tab stop
+        var insertionRef = UseRef<ItemsViewInsertion?>(null);
+        var lastEntranceVer = UseRef(int.MinValue);        // last DisplacementVersion the entrance seeds were applied for
+        var post = UsePost();                              // consumes no hook cell (safe to call unconditionally)
+
+        // The framework-owned sortable core. Created once per mount (the options record is frozen at mount like every
+        // other unpacked option), then fed the view's LIVE geometry below — the app never supplies a coordinate.
+        ItemsViewInsertion? insertion = null;
+        if (Insertion is { } insertionOptions)
+            insertion = insertionRef.Value ??= new ItemsViewInsertion(insertionOptions);
+        int insertionVer = insertion?.Version.Value ?? 0;   // subscribe — a gap open/retarget/clear re-seeds + re-previews
 
         var model = Selection ?? ownModel;
         int count = ItemCountSignal is { } cs ? cs.Value : ItemCount >= 0 ? ItemCount : Items.Count;
@@ -772,6 +800,22 @@ public sealed class ItemsView : Component
         bool horizontal = spec.Horizontal;
 
         var sceneRef = Context.Scene;
+
+        if (insertion is { } ins)
+        {
+            // Everything the insertion needs is ALREADY here: the scene, the memoized virtual layout (measured bands
+            // included), the axis, the live item count and the persistent prefix. This is the whole point of ruling (f):
+            // the values apps used to shovel into a hand-wired lane are the view's own state.
+            ins.Scene = sceneRef;
+            ins.Layout = layout;
+            ins.Horizontal = horizontal;
+            ins.ItemCount = count;
+            ins.Prefix = Math.Clamp(PersistentPrefixCount, 0, count);
+            ins.FallbackExtent = spec.Extent > 0f ? spec.Extent
+                               : spec.Estimate > 0f ? spec.Estimate : ListItemExtent;
+            ins.ViewportOf = () => viewportNode.Value;
+            ins.Post = post;
+        }
 
         // ── helpers (close over the locals above) ───────────────────────────────────────────────────
 
@@ -1193,6 +1237,7 @@ public sealed class ItemsView : Component
             ctl.CompleteDisclosureImpl = expanded
                 => Context.CompleteVirtualDisclosure?.Invoke(viewportNode.Value, expanded);
             ctl.DisclosureDiagnostic = Disclosure?.Diagnostic;
+            ctl.ObserveInsertionMembershipImpl = insertion is null ? null : insertion.ObserveMembership;
         }
 
         // Seed after the changed item model has reconciled and laid out, but before paint: an expanding range therefore
@@ -1273,12 +1318,24 @@ public sealed class ItemsView : Component
         // body is cold/edge-triggered, never a frame phase.
         UseLayoutEffect(() =>
         {
-            var disp = ItemDisplacement;
+            var ins = insertion;
+            // A configured insertion OWNS the displacement while its gap is open; the external ReorderOptions provider
+            // (the non-insertion consumers) keeps working untouched otherwise. Virtual removal also drives a per-row
+            // OPACITY seed — a same-list source is "in the chip", so it must HIDE, not merely dim (design ruling (a)).
+            var disp = ins is { Active: true } ? ins.Displacement : ItemDisplacement;
+            bool insHides = ins is not null && (ins.HidesSources || ins.OpacityEngaged);
             var anim = Context.Anim;
-            if (disp is null || anim is null || sceneRef is null) return;
+            if (anim is null || sceneRef is null) return;
             var motion = DisplacementMotion;           // one token read per bump (readonly POD — no per-row resolve, no alloc)
-            var flip = ItemFlipFrom;                   // optional FLIP start override (data-reorder glide)
-            var fade = ItemFadeFrom;                   // optional opacity seed + stagger delay (added-row ease-in)
+            // ENTRANCE seeds (the owner's FLIP/fade choreography) belong to exactly ONE DisplacementVersion bump: the
+            // write that filled them. An insertion gap open/retarget/clear re-runs this effect on its OWN channel, and
+            // replaying a spent choreography there is a phantom half-fade on rows that never moved (A8). Gate them on
+            // the entrance channel's own edge — the app no longer has to hand-guard a shared bus.
+            bool entranceEdge = lastEntranceVer.Value != dispVer;
+            lastEntranceVer.Value = dispVer;
+            var flip = entranceEdge ? ItemFlipFrom : null;   // optional FLIP start override (data-reorder glide)
+            var fade = entranceEdge ? ItemFadeFrom : null;   // optional opacity seed + stagger delay (added-row ease-in)
+            if (disp is null && !insHides && flip is null && fade is null) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp)) return;
             int dragged = DraggedSlot?.Peek() ?? -1;   // resting index whose translate DragController owns (skip the seed)
@@ -1300,6 +1357,7 @@ public sealed class ItemsView : Component
             }
 
             var n = first;
+            bool anyHidden = false;
             for (int ord = 0; !n.IsNull && sceneRef.IsLive(n); ord++, n = sceneRef.NextSibling(n))
             {
                 int item = ord < prefix ? ord : restingBase + ord - prefix;
@@ -1312,7 +1370,7 @@ public sealed class ItemsView : Component
                 // DragController.Promote/ApplyPresented), so this holds even when DraggedSlot is unwired (every preset
                 // currently leaves it null) or its index doesn't align with the realized window.
                 if ((sceneRef.Flags(n) & NodeFlags.DragGhost) != 0 || item == dragged) continue;
-                var (dx, dy) = disp(item);             // (0,0) for non-displaced (non-dragged) items
+                (float dx, float dy) = disp is null ? (0f, 0f) : disp(item);   // (0,0) for non-displaced items
                 var fd = fade?.Invoke(item);           // opacity seed (from→1) + the row's stagger delay
                 float delay = fd?.delayMs ?? 0f;
                 ref NodePaint p = ref sceneRef.Paint(n);
@@ -1327,8 +1385,16 @@ public sealed class ItemsView : Component
                     anim.SeedValue(n, AnimChannel.TranslateY, dy, in motion, from: f?.dy, delayMs: delay);
                 if (fd is { } o)
                     anim.SeedValue(n, AnimChannel.Opacity, 1f, in motion, from: o.from, delayMs: o.delayMs);
+                if (!insHides) continue;
+                // Virtual removal: hide the dragged rows, restore everyone else. Written through the SAME seed so it
+                // survives recycling and so the restore is a glide, not a pop, when the gesture ends.
+                float opacity = ins!.IsDraggedSource(item) ? 0f : 1f;
+                if (opacity <= 0f) anyHidden = true;
+                if (MathF.Abs(opacity - p.Opacity) > 0.01f)
+                    anim.SeedValue(n, AnimChannel.Opacity, opacity, in motion, delayMs: delay);
             }
-        }, dispVer);
+            if (ins is not null) ins.OpacityEngaged = anyHidden;
+        }, HashCode.Combine(dispVer, insertionVer));
 
         // ── item template: content wrapped in the WinUI ItemContainer chrome (or the L4 skin's chrome) ──
         bool multi = SelectionMode == ItemsSelectionMode.Multiple;
@@ -1509,6 +1575,23 @@ public sealed class ItemsView : Component
             : ((BoxEl)Repeater.ItemsRepeater(count, containerTemplate, in spec, keyOf: KeyOf, transition: Transition))
                 with { OnRealized = h => viewportNode.Value = h };
 
+        // Declarative insertion: the view hosts its OWN drop surface — the list body, the in-gap preview and the
+        // accent line stacked over one accepting target. Every consumer that sets Insertion gets the premiere
+        // destination by declaration; a view without it is byte-identical to before (no wrapper node at all).
+        if (insertion is { } insHost)
+            itemsHost = new BoxEl
+            {
+                Key = "fg-insertion-host",
+                ZStack = true, Grow = Grow, Shrink = 1f, MinHeight = 0f, ClipToBounds = true,
+                DropTarget = insHost.Spec,
+                Children =
+                [
+                    itemsHost,
+                    Embed.Comp(() => new ItemsViewInsertionPreview(insHost)),
+                    insHost.Line(),
+                ],
+            };
+
         ItemsViewController? disclosureController = Controller;
         bool watchesDisclosure = disclosureController is not null
             && (disclosureController.PendingDisclosure is not null || disclosureController.ActiveDisclosure is not null);
@@ -1537,6 +1620,419 @@ public sealed class ItemsView : Component
             Justify = FlexJustify.Center,
             Children = [new TextEl(i < Items.Count ? Items[i] : string.Empty) { Size = 13f, Color = Tok.TextPrimary }],
         };
+}
+
+/// <summary>
+/// THE framework-owned sortable core behind <see cref="InsertionOptions"/> — everything a live insertion needs, driven
+/// entirely from the view's OWN geometry. It owns the <see cref="DropTargetSpec"/>, resolves the slot through
+/// <see cref="SortableMath"/> against the virtual layout's MEASURED bands, publishes the reflow plan (one
+/// <see cref="InsertionPlan"/>, so gap and preview can never disagree), and runs the drop/teardown lifecycle
+/// (epoch-gated commit, optimistic-membership handoff, unconditional clear on a refusal or a dead viewport).
+/// <para>Steady-state cost per pointer move: no allocation — the source-index buffer is grow-only and every geometry
+/// query is arithmetic over the layout seam.</para>
+/// </summary>
+internal sealed class ItemsViewInsertion
+{
+    internal const float LineThickness = 2f;      // researched insertion cue: a 2px accent line…
+    internal const float TerminalDot = 8f;        // …with an 8px terminal dot at its leading end (colourblind-legible)
+
+    /// <summary>Bumped whenever the published plan changes — the ItemsView subscribes, so the displacement seed and the
+    /// in-gap preview both re-run on exactly the same edge (the two can never show different slots).</summary>
+    internal readonly Signal<int> Version = new(0);
+    /// <summary>Viewport-space main-axis position of the gap's leading edge (a bound transform, not a re-render).</summary>
+    internal readonly Signal<float> Offset = new(0f);
+    internal readonly Signal<int> SlotSignal = new(-1);
+
+    /// <summary>The ItemsView displacement provider while a gap is open (one delegate, bound once — the seed loop
+    /// calls it per realized row and must not allocate).</summary>
+    internal readonly Func<int, (float dx, float dy)> Displacement;
+
+    internal readonly InsertionOptions Options;
+    internal readonly DropTargetSpec Spec;
+
+    internal SceneStore? Scene;
+    internal IVirtualLayout? Layout;
+    internal Func<NodeHandle>? ViewportOf;
+    internal Action<Action>? Post;
+    internal bool Horizontal;
+    internal int ItemCount;
+    internal int Prefix;
+    internal float FallbackExtent = ItemsView.ListItemExtent;
+    /// <summary>Latched by the displacement seed: source rows are currently hidden, so the next pass must run even
+    /// after the gesture ends (to animate them back to full opacity).</summary>
+    internal bool OpacityEngaged;
+
+    private int[] _sources = [];
+    private int _sourceCount;
+    private object? _payload;
+    private InsertionPlan _plan;
+    private NodeHandle _dragSource;
+
+    // Gesture-local policy snapshot. A re-render mid-drag (a live membership push, a breakpoint cross, a sort change)
+    // must not move the range the user is aiming at out from under the pointer. The GEOMETRY is read live instead —
+    // it comes from the layout seam, which is self-consistent by construction.
+    private bool _gesture;
+    private int _gFirst, _gCount;
+    private bool _gSameList;
+
+    // Commit / optimistic-membership handoff.
+    private object? _membershipToken, _commitBaseline;
+    private int _commitEpoch;
+    private bool _awaiting, _landedPending;
+    private int _landedSlot, _landedCount;
+
+    internal ItemsViewInsertion(InsertionOptions options)
+    {
+        Options = options;
+        Displacement = DisplacementForItem;
+        Spec = new DropTargetSpec(options.AcceptKinds, Enter, Over, Leave, Drop)
+        {
+            CanAccept = s => Accepts(s.Payload),
+            VisualPolicy = options.VisualPolicy,
+            SpotlightWhen = options.SpotlightWhen,
+        };
+    }
+
+    internal bool Active => _plan.IsActive;
+    internal bool HidesSources => _plan.IsActive && _plan.SameList && _sourceCount > 0;
+    internal ReadOnlySpan<int> Sources => _sources.AsSpan(0, _sourceCount);
+    internal bool IsDraggedSource(int item) => _plan.IsHiddenSource(item, Sources);
+
+    /// <summary>The owner's optimistic-membership edge (see <see cref="ItemsViewController.ObserveInsertionMembership"/>):
+    /// a NEW snapshot means the real list accepted the mutation, so the temporary gap can close into its FLIP without a
+    /// blank intermediate frame.</summary>
+    internal void ObserveMembership(object token)
+    {
+        _membershipToken = token;
+        if (!_awaiting || ReferenceEquals(_commitBaseline, token)) return;
+        _awaiting = false;
+        Clear();
+        FireLanded();
+    }
+
+    // ── drop-target lifecycle ───────────────────────────────────────────────────────────────────────
+
+    private void Enter(DragSession s)
+    {
+        (_gFirst, _gCount) = ResolveRange();
+        _gSameList = Options.IsSameList?.Invoke(s.Payload) ?? false;
+        _gesture = true;
+        Over(s);
+    }
+
+    private void Over(DragSession s)
+    {
+        if (!Accepts(s.Payload)) { Clear(); return; }
+        var scene = Scene;
+        var getVp = ViewportOf;
+        if (scene is null || getVp is null) { Clear(); return; }
+        var vp = getVp();
+        // A dead / not-yet-realized viewport cannot place a slot. Tear the projection DOWN instead of bailing bare: a
+        // plain return strands the last gap and its preview at a stale offset for the rest of the gesture (A6).
+        if (vp.IsNull || !scene.IsLive(vp)) { Clear(); return; }
+
+        float offset = 0f, cross = 0f;
+        if (scene.TryGetScroll(vp, out var sc))
+        {
+            offset = Horizontal ? sc.OffsetX : sc.OffsetY;
+            cross = Horizontal ? sc.ViewportH : sc.ViewportW;
+        }
+        (int first, int count) = _gesture ? (_gFirst, _gCount) : ResolveRange();
+        float leading = LeadingOf(first, cross);
+        float extent = RepresentativeExtent(first, count, cross);
+        if (!(extent > 0f)) { Clear(); return; }
+
+        var rect = scene.AbsoluteRect(vp);
+        float pointer = Horizontal ? s.Position.X - rect.X : s.Position.Y - rect.Y;
+        float contentOffset = pointer + offset;
+        int slot = SlotAt(contentOffset, first, count, leading, extent, cross);
+
+        bool same = _gesture ? _gSameList : Options.IsSameList?.Invoke(s.Payload) ?? false;
+        bool payloadChanged = !ReferenceEquals(_payload, s.Payload);
+        if (payloadChanged)
+        {
+            _payload = s.Payload;
+            CaptureSources(s.Payload, same, first, count);
+        }
+        int dragged = same && _sourceCount > 0 ? _sourceCount
+                    : Math.Max(1, Options.DraggedCount?.Invoke(s.Payload) ?? 1);
+
+        var plan = SortableMath.Plan(first, count, slot, dragged, extent, same, Options.PreviewCap);
+        var sources = Sources;
+        Offset.Value = plan.PreviewY(leading, offset, sources);
+        // The press-source row is the ONE node DragController also writes opacity on (Stationary dim). L1 Move runs
+        // before this L2 Over in every dispatch path, so the hide lands last and wins for the frame; the anim seed in
+        // the displacement pass covers the post-reconcile re-assert. Only a source INSIDE this viewport is ours —
+        // a foreign session's source (or an external drag rooted at the scene root) must never be touched.
+        _dragSource = Contains(scene, vp, s.Source) ? s.Source : NodeHandle.Null;
+        HideDragSource(scene, plan.SameList && _sourceCount > 0);
+
+        s.Effect = same ? DropEffect.Move : DropEffect.Copy;
+        if (Options.Caption is { } caption) s.Caption = caption(s.Payload, slot);
+
+        if (plan == _plan && !payloadChanged) return;
+        _plan = plan;
+        SlotSignal.Value = plan.IsActive ? slot : -1;
+        Bump();
+    }
+
+    private void Leave(DragSession _)
+    {
+        _gesture = false;
+        if (!_awaiting) Clear();
+    }
+
+    private void Drop(DragSession s)
+    {
+        var plan = _plan;
+        object? payload = s.Payload;
+        // Accept is answered against the gesture snapshot; the scope closes only afterwards.
+        bool accepted = plan.IsActive && Accepts(payload) && Options.OnDeposit is not null;
+        _gesture = false;
+        if (!accepted) { Clear(); return; }
+
+        _commitBaseline = _membershipToken;
+        int epoch = ++_commitEpoch;
+        _landedSlot = plan.Slot;
+        _landedCount = plan.DraggedCount;
+        var commit = Options.OnDeposit!(payload, plan.Slot);
+        // Hold the gap open only while a commit that can still publish a membership snapshot is in flight — that
+        // snapshot is the handoff edge ObserveMembership waits for. A commit that already resolved WITHOUT issuing a
+        // mutation owns no handoff, so latching on it would strand the gap forever.
+        _awaiting = !commit.IsCompletedSuccessfully || commit.Result;
+        _landedPending = _awaiting;
+        if (!_awaiting) Clear();
+        _ = CompleteAsync(commit, epoch);
+    }
+
+    /// <summary>The teardown fallback. The fast path is <see cref="ObserveMembership"/> handing the gap to the real
+    /// list; a commit that faults, or that the backend collapses without publishing, still ends the wait here.</summary>
+    private async Task CompleteAsync(Task<bool> commit, int epoch)
+    {
+        bool ok = false;
+        try { ok = await commit.ConfigureAwait(false); }
+        catch { ok = false; }
+        finally
+        {
+            void Finish()
+            {
+                if (epoch != _commitEpoch) return;
+                if (!ok) _landedPending = false;
+                if (_awaiting) { _awaiting = false; Clear(); }
+                FireLanded();
+            }
+            var post = Post;
+            if (post is null) Finish(); else post(Finish);
+        }
+    }
+
+    private void FireLanded()
+    {
+        if (!_landedPending) return;
+        _landedPending = false;
+        Options.OnLanded?.Invoke(_landedSlot, _landedCount);
+    }
+
+    private void Clear()
+    {
+        bool changed = _plan.IsActive || _payload is not null || _sourceCount != 0;
+        if (HidesSources && Scene is { } scene) HideDragSource(scene, false);
+        _plan = default;
+        _payload = null;
+        _sourceCount = 0;
+        _dragSource = NodeHandle.Null;
+        if (SlotSignal.Peek() >= 0) SlotSignal.Value = -1;
+        // OpacityEngaged forces one more seed pass so hidden rows animate back to full opacity.
+        if (changed || OpacityEngaged) Bump();
+    }
+
+    private void Bump() => Version.Value = Version.Peek() + 1;
+
+    // ── policy ──────────────────────────────────────────────────────────────────────────────────────
+
+    private bool Accepts(object? payload) => Options.CanAccept?.Invoke(payload) ?? true;
+
+    private (int First, int Count) ResolveRange()
+    {
+        int total = Math.Max(0, ItemCount);
+        if (Options.Range?.Invoke() is { } r)
+        {
+            int f = Math.Clamp(r.First, 0, total);
+            return (f, Math.Clamp(r.Count, 0, total - f));
+        }
+        int prefix = Math.Clamp(Prefix, 0, total);
+        return (prefix, total - prefix);
+    }
+
+    private void CaptureSources(object? payload, bool sameList, int first, int count)
+    {
+        _sourceCount = 0;
+        if (!sameList || Options.SourceIndices is not { } resolve) return;
+        var list = resolve(payload);
+        if (list is null || list.Count == 0) return;
+        if (_sources.Length < list.Count)
+        {
+            int cap = _sources.Length > 0 ? _sources.Length : 8;
+            while (cap < list.Count) cap *= 2;
+            _sources = new int[cap];                       // grow-only: a gesture pays this at most once
+        }
+        int n = 0;
+        for (int i = 0; i < list.Count; i++)
+        {
+            int display = list[i];
+            if ((uint)display < (uint)count) _sources[n++] = first + display;   // → absolute item space
+        }
+        _sourceCount = SortableMath.Normalize(_sources.AsSpan(0, n), int.MaxValue);
+    }
+
+    // ── geometry (all read from the view's own layout seam — never an app estimate) ──────────────────
+
+    /// <summary>MEASURED content-space offset of the first insertable item: with a hero + chrome persistent prefix
+    /// that is the real height those two items measured, which is exactly what the app used to guess.</summary>
+    private float LeadingOf(int first, float cross)
+    {
+        var layout = Layout;
+        if (first <= 0) return 0f;
+        if (layout is null) return first * FallbackExtent;
+        if (first >= ItemCount) return layout.ContentExtent(Math.Max(0, ItemCount), cross);
+        var r = layout.ItemRect(first, cross);
+        return Horizontal ? r.X : r.Y;
+    }
+
+    private float RepresentativeExtent(int first, int count, float cross)
+    {
+        var layout = Layout;
+        if (layout is null || count <= 0 || first >= ItemCount) return FallbackExtent;
+        var r = layout.ItemRect(first, cross);
+        float e = Horizontal ? r.W : r.H;
+        return e > 0f ? e : FallbackExtent;
+    }
+
+    private int SlotAt(float contentOffset, int first, int count, float leading, float extent, float cross)
+    {
+        if (count <= 0) return 0;                          // empty list: slot 0 (the drop appends, never discards)
+        // A MEASURED layout answers "which item's band holds this offset" in O(log n) — the exact fix for a variable
+        // row (an open versions drawer) making a uniform-stride slot land rows off.
+        if (Layout is IMeasuredVirtualLayout measured)
+        {
+            int index = Math.Clamp(measured.IndexAt(contentOffset, cross), first, first + count - 1);
+            float start = measured.OffsetOf(index, cross);
+            var band = Layout!.ItemRect(index, cross);
+            return SortableMath.SlotFromBand(contentOffset, index - first, start,
+                Horizontal ? band.W : band.H, count);
+        }
+        return SortableMath.SlotFromOffset(contentOffset, leading, extent, count);
+    }
+
+    private (float dx, float dy) DisplacementForItem(int item)
+    {
+        float d = _plan.DisplacementFor(item, Sources);
+        return Horizontal ? (d, 0f) : (0f, d);
+    }
+
+    /// <summary>Is <paramref name="node"/> inside this view's viewport? (Bounded parent walk — the drag source of a
+    /// FOREIGN session, or the scene root of an external drag, is not ours to dim.)</summary>
+    private static bool Contains(SceneStore scene, NodeHandle viewport, NodeHandle node)
+    {
+        if (node.IsNull || viewport.IsNull || node == viewport || !scene.IsLive(node)) return false;
+        var n = node;
+        for (int depth = 0; depth < 64 && !n.IsNull; depth++)
+        {
+            n = scene.Parent(n);
+            if (n == viewport) return true;
+        }
+        return false;
+    }
+
+    private void HideDragSource(SceneStore scene, bool hide)
+    {
+        var node = _dragSource;
+        if (node.IsNull || !scene.IsLive(node)) return;
+        ref NodePaint p = ref scene.Paint(node);
+        float target = hide ? 0f : 1f;
+        if (!hide && p.Opacity >= 1f) return;
+        if (hide && p.Opacity <= 0f) return;
+        p.Opacity = target;
+        scene.Mark(node, NodeFlags.PaintDirty);
+    }
+
+    // ── elements (the framework's own cue; the app supplies only the in-gap CONTENT) ─────────────────
+
+    /// <summary>The 2px accent insertion line with its 8px terminal dot, positioned by a bound transform (no
+    /// re-render per move) and faded out while no gap is open.</summary>
+    internal Element Line()
+    {
+        var dot = new BoxEl
+        {
+            Key = "dot", Width = TerminalDot, Height = TerminalDot, Shrink = 0f,
+            Corners = Radii.PillAll, Fill = Tok.AccentDefault,
+        };
+        var bar = new BoxEl
+        {
+            Key = "bar", Grow = 1f, Shrink = 1f,
+            Width = Horizontal ? LineThickness : float.NaN,
+            Height = Horizontal ? float.NaN : LineThickness,
+            Fill = Tok.AccentDefault,
+        };
+        return new BoxEl
+        {
+            Key = "fg-insertion-line",
+            Direction = Horizontal ? (byte)1 : (byte)0,
+            AlignItems = FlexAlign.Center,
+            Width = Horizontal ? TerminalDot : float.NaN,
+            Height = Horizontal ? float.NaN : TerminalDot,
+            Shrink = 0f, HitTestVisible = false,
+            Opacity = Prop.Of(() => SlotSignal.Value >= 0 ? 1f : 0f),
+            Transform = Prop.Of(LineTransform),
+            Transition = MotionTok.ControlFaster,
+            Children = [dot, bar],
+        };
+    }
+
+    private Affine2D LineTransform()
+    {
+        float at = Offset.Value - TerminalDot * 0.5f;
+        return Horizontal ? Affine2D.Translation(at, 0f) : Affine2D.Translation(0f, at);
+    }
+
+    internal InsertionPlan PlanPeek => _plan;
+    internal object? PayloadPeek => _payload;
+}
+
+/// <summary>The in-gap preview host: the framework owns the gap's SIZE and POSITION; the app's
+/// <see cref="InsertionOptions.GapPreview"/> owns the cards drawn in it. The idle branch keeps the SAME key as the
+/// active one — an unkeyed idle box against a keyed active one remounts the subtree on every open and close (A13).</summary>
+internal sealed class ItemsViewInsertionPreview : Component
+{
+    private readonly ItemsViewInsertion _owner;
+    public ItemsViewInsertionPreview(ItemsViewInsertion owner) => _owner = owner;
+
+    public override Element Render()
+    {
+        _ = _owner.Version.Value;                          // the ONE re-render edge (same edge the gap displacement uses)
+        var plan = _owner.PlanPeek;
+        var payload = _owner.PayloadPeek;
+        var template = _owner.Options.GapPreview;
+        if (!plan.IsActive || payload is null || template is null)
+            return new BoxEl { Key = "fg-insertion-preview", Height = 0f, Shrink = 0f, HitTestVisible = false };
+
+        bool horizontal = _owner.Horizontal;
+        float gap = plan.GapExtent;
+        return new BoxEl
+        {
+            Key = "fg-insertion-preview",
+            Direction = horizontal ? (byte)0 : (byte)1,
+            Width = horizontal ? gap : float.NaN,
+            Height = horizontal ? float.NaN : gap,
+            Shrink = 0f, HitTestVisible = false, ClipToBounds = true,
+            Transform = Prop.Of(() =>
+            {
+                float at = _owner.Offset.Value;
+                return horizontal ? Affine2D.Translation(at, 0f) : Affine2D.Translation(0f, at);
+            }),
+            Children = [template(payload, plan.Slot)],
+        };
+    }
 }
 
 /// <summary>Frame-clock settle watcher mounted only while one disclosure track is active.</summary>

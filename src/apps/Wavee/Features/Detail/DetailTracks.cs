@@ -122,8 +122,8 @@ sealed class TrackList : Component
     // Pure item transitions, seeded IN the render that commits the new order (same frame — a late seed reads as a
     // jump-then-snap-back flash): a removed row simply vanishes while the rows below FLIP-glide up to reclaim the space;
     // an added row's neighbors part (FLIP down) and the row itself fades in at its slot. No overlays, no remounts.
-    readonly ItemsViewController _listCtl = new();             // scroll anchoring (ScrollOffset/ScrollBy)
-    readonly PlaylistDropLane _playlistDrop;
+    readonly ItemsViewController _listCtl = new();             // scroll anchoring (ScrollOffset/ScrollBy) + insertion handoff
+    InsertionOptions? _insertion;                              // the declarative drop destination (framework-owned geometry)
     readonly Signal<int> _dispVer = new(0);                    // bump → the ItemsView displacement seed re-runs (FLIP/fade)
     readonly Signal<int> _videoDropRow = new(-1);              // slot index a compatible .mp4 file drag is hovering (-1 = none)
     int _resetEpoch;                                          // render-local identity epoch: curated re-cut → keyed remount + fresh scroll state
@@ -235,7 +235,6 @@ sealed class TrackList : Component
         _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeroImmersive = verticalHeroImmersive;
-        _playlistDrop = new PlaylistDropLane(_listCtl, _dispVer);
     }
 
     int TrackStart => _verticalHeader && !_cfg.HasTrailing ? VerticalTrackStart : 0;
@@ -604,7 +603,9 @@ sealed class TrackList : Component
             _viewKey = (new((SortColumn)(-1), false), "\0", TrackFilterState.Default);
             _viewSavedSet = null;
         }
-        UseLayoutEffect(() => _playlistDrop.ObserveMembership(model.Tracks), DepKey.FromRef(model.Tracks));
+        // The optimistic-membership handoff edge for the framework-owned insertion gap: a NEW track-set instance means
+        // the real list accepted the mutation, so the temporary gap closes into its FLIP with no blank frame between.
+        UseLayoutEffect(() => _listCtl.ObserveInsertionMembership(model.Tracks), DepKey.FromRef(model.Tracks));
 
         int tier = ClampTier(_tier.Value);       // subscribe → re-render (new header/chrome) on a breakpoint cross
         var shape = rowShape.Value;              // the SAME value the persistent rows read — header and rows stay aligned
@@ -753,7 +754,8 @@ sealed class TrackList : Component
                         Controller = _listCtl,
                         CountSignal = _listCount,
                         Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
-                        Reorder = new ReorderOptions { ItemDisplacement = _playlistDrop.Displacement, DisplacementVersion = _dispVer },
+                        Reorder = new ReorderOptions { DisplacementVersion = _dispVer },
+                        Insertion = Insertion(),
                         Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = SeedFlip, ItemFadeFrom = SeedFade },
                     });
             }
@@ -796,7 +798,8 @@ sealed class TrackList : Component
                         ScrollKey = _route.Value.Name + ":r" + _resetEpoch,
                         OnScrollGeometryChanged = SwipeCloseObserver(),
                     },
-                    Reorder = new ReorderOptions { ItemDisplacement = _playlistDrop.Displacement, DisplacementVersion = _dispVer },
+                    Reorder = new ReorderOptions { DisplacementVersion = _dispVer },
+                    Insertion = Insertion(),
                     Entrance = new EntranceOptions
                     {
                         // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
@@ -814,21 +817,11 @@ sealed class TrackList : Component
         // StaggerRows follows the ItemsView's virtual viewport to the currently realized row roots. That gives albums,
         // playlists, singles and liked songs one shared per-visible-row blur-rise while leaving cold realization and
         // recycling untouched; newly realized overscan/scroll rows do not replay the navigation reveal.
+        // The insertion destination is declared ON the list (see Insertion()) — no wrapper lane, no Configure, and no
+        // app-side geometry at all: the ItemsView owns viewport, scroll offset, MEASURED extents, prefix and slot. The
+        // page-level gates (editable? sorted? filtered?) are answered LIVE by CanAccept, so a refused drop is a refusal
+        // the engine can cue rather than a destination that silently never mounted.
         Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
-        if (model.ContextUri is { Length: > 0 } dropUri && model.Capabilities.CanEditItems
-            && _acts is { } dropActs && _lib is not null && Context.Scene is { } scene)
-        {
-            float leading = _verticalHeader && !_cfg.HasTrailing
-                ? verticalHeroH + DetailVerticalLayout.ChromeExtent(verticalHasContentFilter ? ContentFilterChips.VerticalExtent : 0f)
-                : 0f;
-            _playlistDrop.Configure(scene, visible, rowH, leading, TrackStart, dropUri,
-                allowSameListMove: PlaylistReorderRules.AllowsSameListMove(
-                    sort.Column == SortColumn.Index && !sort.Descending, query, filters),
-                commit: (payload, displaySlot) => WaveeResourceDrop.DepositTracksAsync(
-                    dropActs, dropUri, model.Title, payload, OriginalInsertionIndex(displaySlot)),
-                post: _post!);
-            list = _playlistDrop.Wrap(list);
-        }
 
         // Key the list by density + filter → either REMOUNTS it (a clean slot template with the right row height /
         // filtered window). Sort is NOT in the key — each bound row re-skins itself to the new order via its
@@ -933,6 +926,78 @@ sealed class TrackList : Component
         if (displaySlot >= view.Length) return _tracks.Count;
         return view[displaySlot];
     }
+
+    // ── the declarative drop destination (framework-owned geometry; this page declares only INTENT) ───────────────────
+    // Created ONCE and reused by all three list branches (flat · recommendations · vertical hero). Every delegate reads
+    // LIVE page state — the record is frozen at mount like every other ItemsView option, so a captured snapshot would
+    // answer for a playlist the user left three navigations ago.
+    InsertionOptions Insertion() => _insertion ??= new InsertionOptions
+    {
+        AcceptKinds = [WaveeDragKinds.Resource],
+        CanAccept = CanDropResource,
+        IsSameList = IsSameListDrop,
+        SourceIndices = DropSourceDisplayRows,
+        DraggedCount = DropTrackCount,
+        // The insertable sub-range: the TRACK rows only. The vertical-hero layout leads with hero + chrome as
+        // persistent prefix items, and a recommendations-capable list appends a header + N cards — neither may ride
+        // the gap down, and the framework derives the LEADING extent from the prefix items' MEASURED heights (the
+        // hard-coded 420/200 + ChromeExtent estimate this replaces was one of the four "cannot drop" causes).
+        Range = () => (TrackStart, View().Length),
+        OnDeposit = DepositAtAsync,
+        GapPreview = (payload, _) => WaveeResourceDrag.Unwrap(payload) is { } resource
+            ? PlaylistInsertionPreview.Cards(resource, TrackRow.RowHeightFor(_h.Density.Peek()))
+            : new BoxEl { Height = 0f },
+        PreviewCap = PlaylistInsertionPreview.Cap,
+    };
+
+    /// <summary>The page-level write gate, answered LIVE (a nav preview that becomes editable must not need a remount).</summary>
+    bool DropEditable => _model.ContextUri is { Length: > 0 } && _model.Capabilities.CanEditItems
+                         && _acts is not null && _lib is not null;
+
+    bool IsSameListDrop(object? payload)
+        => WaveeResourceDrag.Unwrap(payload) is { SourceRows.Count: > 0 } resource
+           && string.Equals(resource.SourcePlaylistUri, _model.ContextUri, StringComparison.Ordinal);
+
+    bool CanDropResource(object? payload)
+    {
+        if (!DropEditable) return false;
+        if (WaveeResourceDrag.Unwrap(payload) is not { CanCopyTracks: true }) return false;
+        if (!IsSameListDrop(payload)) return true;
+        // A same-list move addresses ORIGINAL membership rows through the DISPLAYED order, so it is only unambiguous
+        // while the displayed order IS the membership order (PlaylistReorderRules).
+        var sort = _h.Sort.Peek();
+        return PlaylistReorderRules.AllowsSameListMove(
+            sort.Column == SortColumn.Index && !sort.Descending, _h.Query.Peek(), _h.Filters.Peek());
+    }
+
+    int DropTrackCount(object? payload)
+        => WaveeResourceDrag.Unwrap(payload) is { Tracks.Count: > 0 } resource ? resource.Tracks!.Count : 1;
+
+    /// <summary>The dragged rows as DISPLAY positions (what the view's virtual-removal math needs). The payload carries
+    /// ORIGINAL membership indices; a same-list move is only legal in natural order, so the map is normally the
+    /// identity — the scan is the defensive fallback, and it runs once per gesture, never per move.</summary>
+    IReadOnlyList<int>? DropSourceDisplayRows(object? payload)
+    {
+        if (WaveeResourceDrag.Unwrap(payload) is not { SourceRows.Count: > 0 } resource) return null;
+        var rows = resource.SourceRows!;
+        var view = View();
+        var display = new List<int>(rows.Count);
+        for (int i = 0; i < rows.Count; i++)
+        {
+            int at = PlaylistReorderRules.DisplayRowOf(rows[i].Index, view);
+            if (at >= 0) display.Add(at);
+        }
+        return display;
+    }
+
+    /// <summary>The commit. <paramref name="displaySlot"/> is the RAW slot the user aimed at: the backend's move
+    /// convention already discounts the rows removed above it (pinned by MoveRowsConventionTests), so correcting here
+    /// would move the block twice.</summary>
+    Task<bool> DepositAtAsync(object? payload, int displaySlot)
+        => _acts is { } acts && _model.ContextUri is { Length: > 0 } uri
+            ? WaveeResourceDrop.DepositTracksAsync(acts, uri, _model.Title, payload,
+                OriginalInsertionIndex(displaySlot))
+            : Task.FromResult(false);
 
     WaveeResourceDragPayload? TrackDragPayload(int itemIndex, int trackStart)
     {
@@ -1048,11 +1113,8 @@ sealed class TrackList : Component
                     ItemClipTopFadeBand = DetailVerticalLayout.StickyFadeBand,
                     OnScrollGeometryChanged = SwipeCloseObserver(),
                 },
-                Reorder = new ReorderOptions
-                {
-                    ItemDisplacement = _playlistDrop.Displacement,
-                    DisplacementVersion = _dispVer,
-                },
+                Reorder = new ReorderOptions { DisplacementVersion = _dispVer },
+                Insertion = Insertion(),
                 Entrance = new EntranceOptions
                 {
                     StaggerColdRealize = staggerCold,
