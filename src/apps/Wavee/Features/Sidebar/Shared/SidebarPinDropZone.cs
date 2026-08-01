@@ -53,6 +53,9 @@ sealed class SidebarPinDropZone : Component
         var spec = UseMemo(() => Drop.Target<WaveeResourceDragPayload>(
             WaveeDragKinds.Resource,
             accepts: static p => p.CanPin,
+            // The zone's own copy says "drop to pin"; the chip says WHAT gets pinned, which is the half the user is
+            // dragging and can no longer see once the chip covers it.
+            caption: static p => Strings.Drag.Pin(p.Name),
             onEnter: (_, _) => over.Value = true,
             onOver: (_, _) => over.Value = true,
             onLeave: _ => over.Value = false,

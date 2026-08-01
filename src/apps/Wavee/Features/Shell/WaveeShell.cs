@@ -851,6 +851,7 @@ sealed class WaveeShell : Component
         {
             var tab = _open[i];
             var destination = DestinationOf(tab);
+            int index = i;
             items[i] = new TabViewItem
             {
                 Header = tab.Label,
@@ -861,6 +862,15 @@ sealed class WaveeShell : Component
                     ? Drag.Source(WaveeDragKinds.Resource,
                         () => WaveeResourceDragPayload.FromDestination(d, _actions))
                     : null,
+                // Spring-load NAVIGATION (locked decision: no deposit-on-tab). Holding a drag over a tab switches to it,
+                // so the destination the user actually wants can be reached mid-gesture instead of forcing them to
+                // cancel, navigate and start over. SpringLoadOnly is what keeps that honest: the tab never accepts a
+                // drop and is never published as a refusal either, so merely travelling ACROSS the strip on the way to
+                // the sidebar leaves the chip silent rather than flashing a not-allowed glyph at every tab it passes.
+                DropTarget = Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+                    springLoadMs: WaveeResourceDrag.SpringLoadMs,
+                    onSpringLoad: (_, _) => ActivateTab(index),
+                    springLoadOnly: true),
             };
         }
         return items;
@@ -972,6 +982,16 @@ sealed class WaveeShell : Component
         var (title, glyph) = ShellNav.Dest(r);
         _open[i] = _open[i] with { Key = r.Name, Label = title, Glyph = glyph, Arg = r.Arg };
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
+    }
+
+    /// <summary>Select tab <paramref name="i"/> AND follow its route — the pair every tab activation needs (writing the
+    /// selection signal alone moves the highlight without navigating, which is what makes a spring-load useless).</summary>
+    void ActivateTab(int i)
+    {
+        if ((uint)i >= (uint)_open.Count || _selectedTab.Peek() == i) return;
+        _selectedTab.Value = i;
+        var t = _open[i];
+        Go(t.Key, t.Arg, NavTransitionKind.Neutral);
     }
 
     void OpenNewTab(string key)

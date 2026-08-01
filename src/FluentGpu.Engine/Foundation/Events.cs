@@ -378,6 +378,27 @@ public sealed record DropTargetSpec(
     /// cached/constant string where the reason cannot change mid-gesture.</summary>
     public Func<DragSession, string?>? RefusalCaption { get; init; }
 
+    /// <summary>SPRING-LOADING (the macOS Finder / WinUI ~500ms dwell convention): hold a compatible drag still over
+    /// this surface for this many milliseconds and <see cref="OnSpringLoad"/> fires ONCE — the container opens itself so
+    /// the user can keep going without dropping first (a collapsed folder expands, a tab navigates). 0 (default) = off.
+    /// <para>The dwell accumulates on the NEAREST kind-matched target that configures it, whether that target accepts
+    /// the payload, refuses it through <see cref="CanAccept"/>, or is a pure <see cref="SpringLoadOnly"/> waypoint — a
+    /// spring-load is a NAVIGATION affordance, not a drop, so tying it to acceptance would make exactly the surfaces
+    /// that need it (a folder you cannot drop INTO, a tab that takes no deposit) unable to have it. It re-arms only
+    /// after the pointer leaves and re-enters; small movements inside the target do not reset it.</para></summary>
+    public float SpringLoadDelayMs { get; init; }
+
+    /// <summary>Fired once per Enter after <see cref="SpringLoadDelayMs"/> of dwell (see there). The session is THE live
+    /// reused instance — copy what you keep. Null ⇒ no spring-load regardless of the delay.</summary>
+    public Action<DragSession>? OnSpringLoad { get; init; }
+
+    /// <summary>This surface is a spring-load WAYPOINT, never a drop destination: it is skipped for acceptance AND for
+    /// the refusal cue, so hovering it neither accepts nor accuses — only its <see cref="OnSpringLoad"/> can fire.
+    /// <para>The Finder tab-bar shape. Without it a "hold to navigate" surface has to pretend: either accept and
+    /// silently no-op the drop (the failure mode this whole contract exists to kill), or refuse and wear a not-allowed
+    /// glyph while the drag merely PASSES OVER it on the way somewhere real.</para></summary>
+    public bool SpringLoadOnly { get; init; }
+
     /// <summary>Ordinal accept test over <see cref="AcceptKinds"/> (cast-free, 0-alloc).</summary>
     public bool Accepts(string kind)
     {

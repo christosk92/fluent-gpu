@@ -162,6 +162,11 @@ static class WaveeRootlist
 
 static class WaveeResourceDrag
 {
+    /// <summary>How long a drag has to rest on a container before it opens itself (a collapsed sidebar folder expands,
+    /// a tab activates). 500ms is the platform convention shared by macOS spring-loaded folders and WinUI's
+    /// hold-to-open surfaces — long enough that merely travelling ACROSS a folder never opens it.</summary>
+    public const float SpringLoadMs = 500f;
+
     /// <summary>Unwrap either a plain source or an item owned by <see cref="Reorderable"/>.</summary>
     public static WaveeResourceDragPayload? Unwrap(object? payload) => payload switch
     {

@@ -191,6 +191,17 @@ public sealed class SceneStore : ISceneBackend
     /// <c>Input.DragController</c> exactly like <see cref="DragGhost"/>; null = no plate.</summary>
     public ColorF? DragGhostBackplate { get; set; }
 
+    /// <summary>
+    /// A destination's override of the <see cref="DragLift.Stationary"/> SOURCE-row dim, for the one frame shape where
+    /// two owners disagree about the same node's opacity: a same-list insertion performs VIRTUAL REMOVAL (the dragged
+    /// rows go to 0 — they are "in the chip"), while <c>DragController.ReassertPresented</c> re-writes the style's
+    /// 0.4 dim after every mid-drag reconcile. The re-assert runs AFTER the animation compose in the frame, so without
+    /// this the press-source row flickers back to 0.4 on every reconcile frame while its siblings stay hidden.
+    /// <para>Set by the insertion while it hides sources, cleared when it stops (and at session end). Null = the
+    /// source's own <c>DragVisualStyle.Opacity</c> stands, which is the unchanged default for every other drag.</para>
+    /// </summary>
+    public float? DragSourceOpacityOverride { get; set; }
+
     /// <summary>The drag OVERLAY root (a mounted <c>DragPreviewLayer</c> registers its container here): excluded from
     /// the clipped main pass and re-walked UNCLIPPED in the topmost band — above the main pass, above the
     /// <see cref="DragGhost"/> band and above the connected-animation overlays — so a drag chip can never be clipped by

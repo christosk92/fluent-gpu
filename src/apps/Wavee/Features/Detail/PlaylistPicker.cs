@@ -79,6 +79,11 @@ public sealed class PlaylistPickerPanel : Component
 {
     public required Func<IReadOnlyList<Track>> GetTracks;
     public required Action Close;
+    /// <summary>Optional override for what picking a playlist DOES — the MOVE variant deposits into the target and then
+    /// removes the rows from their source list. Null (the default) is the plain add, with its own toast.</summary>
+    public Action<string, string>? Deposit;
+    /// <summary>Hide this playlist from the list — a move's own source, which it can only be a no-op against.</summary>
+    public string? ExcludeUri;
 
     public override Element Render()
     {
@@ -92,9 +97,12 @@ public sealed class PlaylistPickerPanel : Component
         var pls = store?.Playlists.Value.Value ?? Array.Empty<PlaylistSummary>();
         var getTracks = GetTracks;
         var close = Close;
+        var deposit = Deposit;
+        string? exclude = ExcludeUri;
 
         void AddTo(string uri, string name)
         {
+            if (deposit is not null) { deposit(uri, name); close(); return; }
             if (lib is null) return;
             _ = lib.AddTracksAsync(uri, getTracks());
             close();
@@ -115,6 +123,7 @@ public sealed class PlaylistPickerPanel : Component
                 try
                 {
                     string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
+                    if (deposit is not null) { deposit(uri, name); close(); return; }
                     await lib.AddTracksAsync(uri, getTracks()).ConfigureAwait(false);
                     close();
                     Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
@@ -135,6 +144,7 @@ public sealed class PlaylistPickerPanel : Component
         {
             var p = pls[i];
             if (!IsRealPlaylist(p.Uri) || !p.CanEdit) continue;
+            if (exclude is { Length: > 0 } && string.Equals(p.Uri, exclude, StringComparison.Ordinal)) continue;
             if (q.Length > 0 && p.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) continue;
             rows.Add(PlaylistRow(p, () => AddTo(p.Uri, p.Name)));
         }

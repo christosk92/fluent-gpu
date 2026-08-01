@@ -37,6 +37,9 @@ public static class Menus
     public static IReadOnlyList<MenuFlyoutItem> TrackRows(in ActionContext ctx, bool showGoToAlbum = true)
     {
         var rows = new List<MenuFlyoutItem>(8) { AddToPlaylistItem(in ctx) };
+        // MOVE is offered only where a source to move OUT of exists (an editable playlist context) — everywhere else
+        // "move" and "add" would be the same verb twice.
+        if (MoveToPlaylistItem(in ctx) is { } move) rows.Add(move);
 
         if (ctx.Target.Single is { } single)
         {
@@ -155,6 +158,94 @@ public static class Menus
         return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.AddToPlaylist), items, Icons.Add, enabled: canAdd);
     }
 
+    // ── Move to playlist ▸ (same picker, MOVE semantics: deposit into the target, then drop the source rows) ────────
+    /// <summary>The menu equivalent of dragging these rows into another playlist — the a11y/Pragmatic answer to a drag
+    /// (an outcome-equivalent command, never a simulated one). Offered only when the tracks sit in an editable playlist
+    /// whose membership rows we can actually remove; otherwise there is nothing to move OUT of and Add already covers it.
+    /// <para>It is honestly a COPY-then-REMOVE, not an atomic server move: Spotify exposes no cross-playlist move op.
+    /// The order is deliberate — a failed add leaves the source untouched, whereas removing first can lose the rows.</para></summary>
+    static MenuFlyoutItem? MoveToPlaylistItem(in ActionContext ctx)
+    {
+        var s = ctx.S;
+        var tracks = ctx.Target.Tracks;
+        if (s.Library is null || tracks.Count == 0) return null;
+        if (!ActionRules.CanRemoveFromPlaylist(ctx.Target.Host) || ctx.Target.Host is not { } host) return null;
+        string source = host.PlaylistUri;
+
+        var items = new List<MenuFlyoutItem>(MaxInlinePlaylists + 3)
+        {
+            new(Loc.Get(Strings.Detail.NewPlaylist), Icons.Add, true, () => CreateAndMove(s, tracks, host)),
+        };
+
+        s.Store?.EnsurePlaylists();
+        var pls = s.Store?.Playlists.Value.Peek();
+        if (pls is { Count: > 0 })
+        {
+            int shown = 0;
+            for (int i = 0; i < pls.Count && shown < MaxInlinePlaylists; i++)
+            {
+                var p = pls[i];
+                if (!p.CanEdit || !p.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
+                if (string.Equals(p.Uri, source, StringComparison.Ordinal)) continue;   // moving into itself is a no-op
+                var uri = p.Uri;
+                var name = p.Name;
+                items.Add(new MenuFlyoutItem(name, null, true, () => MoveTo(s, uri, name, tracks, host)));
+                shown++;
+            }
+        }
+
+        items.Add(MenuFlyoutItem.Separator);
+        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MorePlaylists), null, s.Overlay is not null,
+            () => OpenPicker(s, tracks, Loc.Get(Strings.Menu.MoveToPlaylist),
+                             (uri, name) => MoveTo(s, uri, name, tracks, host), source)));
+
+        return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Menu.MoveToPlaylist), items, Icons.Forward);
+    }
+
+    static void MoveTo(ActionServices s, string uri, string name, IReadOnlyList<Track> tracks, PlaylistHost host)
+    {
+        if (s.Library is not { } lib || tracks.Count == 0 || host.Rows.Count == 0) return;
+        if (string.Equals(uri, host.PlaylistUri, StringComparison.Ordinal)) return;
+        // Undo payload for the remove half (uri/title/uid per row), exactly as RemoveFromThisPlaylist records it.
+        var refs = new ActivityTrackRef[tracks.Count];
+        for (int i = 0; i < refs.Length; i++)
+            refs[i] = new ActivityTrackRef(tracks[i].Uri, tracks[i].Title, tracks[i].ContextUid);
+        string from = host.PlaylistUri;
+        var rows = host.Rows;
+        _ = Run();
+
+        async Task Run()
+        {
+            try
+            {
+                await lib.AddTracksAsync(uri, tracks).ConfigureAwait(false);
+                await lib.RemovePlaylistRowsAsync(from, rows, refs).ConfigureAwait(false);
+                Toast.Show(Strings.Menu.MovedToPlaylist(name), new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Success,
+                    ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
+                });
+            }
+            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
+        }
+    }
+
+    static void CreateAndMove(ActionServices s, IReadOnlyList<Track> tracks, PlaylistHost host)
+    {
+        if (s.Library is not { } lib || tracks.Count == 0) return;
+        string name = Loc.Get(Strings.Detail.NewPlaylist);
+        _ = Run();
+        async Task Run()
+        {
+            try
+            {
+                string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
+                MoveTo(s, uri, name, tracks, host);
+            }
+            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
+        }
+    }
+
     /// <summary>Add to an existing playlist — the PlaylistPickerPanel.AddTo behavior verbatim (fire the write, toast
     /// with a Go-to-playlist action; failures surface through the activity log / fail-loud mutation seam).</summary>
     static void AddTo(ActionServices s, string uri, string name, IReadOnlyList<Track> tracks)
@@ -192,13 +283,14 @@ public static class Menus
 
     /// <summary>"More playlists…" — the full existing PlaylistPickerPanel, hosted in a centered ContentDialog (the
     /// originating menu is gone by invoke time, so there is no anchor rect to open a flyout at).</summary>
-    static void OpenPicker(ActionServices s, IReadOnlyList<Track> tracks)
+    static void OpenPicker(ActionServices s, IReadOnlyList<Track> tracks,
+                           string? title = null, Action<string, string>? deposit = null, string? exclude = null)
     {
         if (s.Overlay is not { } overlay || s.Library is null || tracks.Count == 0) return;
         OverlayHandle? handle = null;
         handle = ContentDialog.Show(overlay, d =>
         {
-            d.Title = Loc.Get(Strings.Detail.AddToPlaylist);
+            d.Title = title ?? Loc.Get(Strings.Detail.AddToPlaylist);
             d.PrimaryText = "";                                   // rows act; the dialog only needs a dismiss
             d.CloseText = Loc.Get(Strings.Auth.Cancel);
             d.DefaultButton = ContentDialog.DefaultBtn.Close;
@@ -206,6 +298,8 @@ public static class Menus
             {
                 GetTracks = () => tracks,
                 Close = () => handle?.Close(),
+                Deposit = deposit,
+                ExcludeUri = exclude,
             });
         });
     }

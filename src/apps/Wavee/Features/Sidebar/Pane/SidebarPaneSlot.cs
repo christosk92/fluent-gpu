@@ -349,9 +349,16 @@ sealed class SidebarPaneSlot : Component
         bool reordering = _o.TryBandOf(index, out _);
         bool rootlistItem = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
         var resource = WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem);
+        // Spring-load: hold a drag over a CLOSED folder and it opens, so its children become reachable mid-gesture.
+        // Re-checked inside the callback rather than trusted from `expanded` — the row is re-rendered on every folder
+        // version bump, but the gesture that fires this outlives any single render, and ActivateFolder is a TOGGLE.
+        Action springLoad = () =>
+        {
+            if (_o.Prefs is { } p && !p.IsFolderExpanded(folderId)) _o.ActivateFolder(folderId, snapshot.Name, index);
+        };
         DropTargetSpec? drop = rootlistItem
-            ? _o.ResourceDropSpec(row.SectionId, -1, null, null, resource, index)
-            : PinSpec(section, row.SectionId, index);
+            ? _o.ResourceDropSpec(row.SectionId, -1, null, null, resource, index, springLoad)
+            : PinSpec(section, row.SectionId, index, springLoad);
 
         var spec = new SidebarRowSpec
         {
@@ -1029,11 +1036,13 @@ sealed class SidebarPaneSlot : Component
     /// <summary>A PINNED row is also a drop target, so dragging a playlist/album/artist onto the pinned band pins it AT
     /// that position. Deliberately scoped to the band (never the whole pane): a pane-wide accept would pin an entity the
     /// moment a row was nudged, which is the accidental-pin hazard Classic avoided by scoping too.</summary>
-    DropTargetSpec? PinSpec(SidebarSectionSpec section, string sectionId, int index)
+    DropTargetSpec? PinSpec(SidebarSectionSpec section, string sectionId, int index, Action? onSpringLoad = null)
     {
         if (section.Kind != SidebarSectionKind.Pinned) return null;
         int slot = PinSlot(sectionId, index);
-        return slot >= 0 ? _o.ResourceDropSpec(sectionId, slot, null, null, rootPlanIndex: index) : null;
+        return slot >= 0
+            ? _o.ResourceDropSpec(sectionId, slot, null, null, rootPlanIndex: index, onSpringLoad: onSpringLoad)
+            : null;
     }
 
     int PinSlot(string sectionId, int index)

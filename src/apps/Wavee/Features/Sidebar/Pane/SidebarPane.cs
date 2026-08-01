@@ -890,6 +890,12 @@ sealed class SidebarPane : Component
             // The built-in insertion line's geometry assumes one uniform pitch from the list origin, which a FLAT plan of
             // mixed-height rows does not have — it would draw in the wrong place, so displacement is the only cue.
             ShowInsertionLine = false,
+            // ONE visual per gesture. A sidebar row's ReorderPayload unwraps to a WaveeResourceDragPayload, so the
+            // shell's DragPreviewLayer renders the chip for it — and the default GHOST lift would ALSO translate the
+            // live row under the cursor: two moving pictures of one drag, which is exactly the S1/S4 failure this
+            // campaign removed everywhere else. Opacity 0 rather than 0.4: here the vacated slot IS the origin gap, so
+            // a dimmed row still sitting in it would read as a duplicate of the chip.
+            DragStyle = new DragVisualStyle { Lift = DragLift.Stationary, Opacity = 0f },
         };
         _reorder[sectionId] = ro;
         return ro;
@@ -1022,7 +1028,8 @@ sealed class SidebarPane : Component
     /// route to the playlist mutation seam; pinnable resources route to the shared pin store.</summary>
     internal DropTargetSpec ResourceDropSpec(string sectionId, int slot, string? playlistUri, string? playlistName,
                                              WaveeResourceDragPayload? rootTarget = null,
-                                             int rootPlanIndex = -1)
+                                             int rootPlanIndex = -1,
+                                             Action? onSpringLoad = null)
     {
         bool Compatible(WaveeResourceDragPayload source)
         {
@@ -1038,8 +1045,39 @@ sealed class SidebarPane : Component
             return slot >= 0 && source.CanPin;
         }
 
-        void Hover(WaveeResourceDragPayload p, DragSession _)
-            => _resourceDropRow.Value = Compatible(p) ? rootPlanIndex : -1;
+        // The CAPTION is written here rather than through the facade's caption hook because this row's outcome depends
+        // on WHERE in it the pointer is (an editable playlist's centre deposits tracks; its edges file it in the
+        // rootlist), and only the session carries that. Hover runs on both Enter and Over, which is exactly the refresh
+        // cadence a pointer-dependent caption needs.
+        void Hover(WaveeResourceDragPayload p, DragSession s)
+        {
+            _resourceDropRow.Value = Compatible(p) ? rootPlanIndex : -1;
+            s.Caption = CaptionFor(p, s);
+        }
+
+        string? CaptionFor(WaveeResourceDragPayload p, DragSession s)
+        {
+            // A same-band reorder is this section's own gesture: its feedback is the displacement, and naming it "Pin X"
+            // would claim a pin that already exists (Reorderable's own rule, applied to the row-level target too).
+            if (s.Payload is ReorderPayload own && ReferenceEquals(own.Owner, ReorderFor(sectionId))) return null;
+            if (rootTarget is { } root && p.RootlistItem
+                && p.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder)
+            {
+                bool canDeposit = root.Kind == WaveeResourceKind.Playlist
+                    && playlistUri is { Length: > 0 } && p.CanCopyTracks;
+                var placement = RootlistPlacementFor(rootPlanIndex,
+                    root.Kind == WaveeResourceKind.Folder, canDeposit, s.Position);
+                if (placement != RootlistDropPlacement.Inside || !canDeposit)
+                    // Only "inside a folder" is worth a sentence. A before/after filing is an ORDERING, and the row it
+                    // lands next to is already under the pointer — captioning it would narrate what the user can see.
+                    return root.Kind == WaveeResourceKind.Folder && placement == RootlistDropPlacement.Inside
+                        ? Strings.Drag.MoveInto(root.Name)
+                        : null;
+            }
+            if (playlistUri is { Length: > 0 } && p.CanCopyTracks) return Strings.Drag.AddTo(playlistName ?? "");
+            if (slot >= 0 && p.CanPin) return Strings.Drag.Pin(p.Name);
+            return null;
+        }
         void Leave(DragSession _) { if (_resourceDropRow.Peek() == rootPlanIndex) _resourceDropRow.Value = -1; }
 
         void CommitDrop(WaveeResourceDragPayload source, DragSession s)
@@ -1088,7 +1126,12 @@ sealed class SidebarPane : Component
         return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
             accepts: Compatible, onDrop: CommitDrop, onEnter: Hover, onOver: Hover, onLeave: Leave,
             visualPolicy: DropTargetVisualPolicy.Spotlight,
-            refusalCaption: WhyRefused);
+            refusalCaption: WhyRefused,
+            // Spring-load (a COLLAPSED folder row supplies the callback): dwelling opens the container so the user can
+            // keep travelling into it. It is armed even when this row REFUSES the payload — opening a folder is
+            // navigation, not a deposit, and the folder whose contents you are aiming at is often not itself a target.
+            springLoadMs: onSpringLoad is null ? 0f : WaveeResourceDrag.SpringLoadMs,
+            onSpringLoad: onSpringLoad is null ? null : (_, _) => onSpringLoad());
     }
 
     internal bool IsResourceDropActive(int planIndex)

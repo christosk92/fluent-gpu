@@ -23,6 +23,11 @@ namespace FluentGpu.Input;
 ///   mutable <see cref="DragSession"/> instance is reused for the whole gesture (0 steady-state alloc per move);
 ///   handlers copy what they keep.
 ///
+/// Spring-loading (<see cref="DropTargetSpec.SpringLoadDelayMs"/>) rides the same <see cref="Tick"/>: the dwell on the
+/// nearest kind-matched spring-configured target accumulates per frame and fires <c>OnSpringLoad</c> once per Enter, so
+/// a collapsed container opens itself under a held drag. <see cref="HasActiveWork"/> reports the armed window, which is
+/// what keeps frames coming while the pointer is perfectly still.
+///
 /// Edge auto-scroll (the rbd/WinUI "drag near the viewport edge keeps scrolling" behavior) is engine-level here so
 /// every drag gets it: while a session is live, the pointer entering the hot zone of the nearest OVERFLOWING
 /// scrollable ancestor arms a proportional scroll velocity the host drives via <see cref="Tick"/>. Constants and
@@ -56,6 +61,10 @@ public sealed class DragDropContext
     private DropTargetSpec? _overSpec;   // its spec (cached so Leave/Over/Drop never re-query a dead column)
     private NodeHandle _refused;         // nearest kind-matched CanAccept-refuser while nothing accepts (the cue seam)
     private DropTargetSpec? _refusedSpec;
+    private NodeHandle _spring;          // nearest kind-matched target that configures spring-loading (accepting or not)
+    private DropTargetSpec? _springSpec;
+    private float _springDwellMs;        // hover dwell on THAT node (reset on change, never on a move inside it)
+    private bool _springFired;           // once per Enter — re-arms only when _spring changes
     private int _spotlightTargetVersion = -1;
     private DragLift _lift;              // L1's lift mode for this gesture (see PruneDead's dead-source rule)
     private DropEffect _defaultEffect = DropEffect.Move;   // the engine's advisory effect over an accepting target;
@@ -90,8 +99,16 @@ public sealed class DragDropContext
     /// <summary>The accepting target currently under the pointer (<see cref="NodeHandle.Null"/> when none / idle).</summary>
     public NodeHandle OverTarget => _active ? _over : NodeHandle.Null;
 
-    /// <summary>True while an edge auto-scroll is armed or running — the host keeps frames coming and calls <see cref="Tick"/>.</summary>
-    public bool HasActiveWork => _active && _edgeVelocity != 0f;
+    /// <summary>True while an edge auto-scroll is armed/running OR a spring-load is counting down — the host keeps
+    /// frames coming and calls <see cref="Tick"/>. The spring term is what makes a STILL pointer keep ticking: the
+    /// dwell is measured in frames, and an in-app gesture's own <c>DragActive</c> keep-alive does not cover an
+    /// external (OS) drag, which emits no L1 gesture at all.</summary>
+    public bool HasActiveWork => _active && (_edgeVelocity != 0f || SpringArmed);
+
+    /// <summary>A spring-load is configured on the current dwell host and has not fired yet for this Enter.</summary>
+    private bool SpringArmed
+        => !_spring.IsNull && !_springFired
+           && _springSpec is { OnSpringLoad: not null } s && s.SpringLoadDelayMs > 0f;
 
     /// <summary>Called by the dispatcher at L1 promotion: walk up from the promoted node for the nearest ENABLED
     /// <see cref="DragSource"/>, resolve its payload once, and open the session. Returns false when the chain carries
@@ -126,6 +143,7 @@ public sealed class DragDropContext
             _overSpec = null;
             _refused = NodeHandle.Null;
             _refusedSpec = null;
+            ClearSpring();
             RefreshSpotlight(force: true);
             return true;
         }
@@ -165,6 +183,7 @@ public sealed class DragDropContext
         _overSpec = null;
         _refused = NodeHandle.Null;
         _refusedSpec = null;
+        ClearSpring();
         RefreshSpotlight(force: true);
         return true;
     }
@@ -181,7 +200,7 @@ public sealed class DragDropContext
         _session.Mods = mods;
         RefreshSpotlight(force: false);
 
-        var next = FindTarget(hit, out var refuser, out var refuserSpec);
+        var next = FindTarget(hit, out var refuser, out var refuserSpec, out var springHost, out var springSpec);
         if (next != _over)
         {
             if (!_over.IsNull && _scene.IsLive(_over))
@@ -206,6 +225,7 @@ public sealed class DragDropContext
         // The refusal cue is resolved LAST so an accepting target's own Caption always wins: a refuser is published
         // only when nothing on the chain accepted, in which case the caption slot is free by construction.
         UpdateRefusal(_over.IsNull ? refuser : NodeHandle.Null, _over.IsNull ? refuserSpec : null);
+        UpdateSpring(springHost, springSpec);
 
         UpdateEdgeScroll(hit, abs);
     }
@@ -279,6 +299,7 @@ public sealed class DragDropContext
             _session.RefusedTarget = NodeHandle.Null;
             _session.Caption = null;
         }
+        if (!_spring.IsNull && !_scene.IsLive(_spring)) ClearSpring();
         if (!_scrollViewport.IsNull && !_scene.IsLive(_scrollViewport))
         {
             _scrollViewport = NodeHandle.Null;
@@ -287,17 +308,21 @@ public sealed class DragDropContext
         }
     }
 
-    /// <summary>Phase-7 host tick: drive the armed edge auto-scroll — hold the 50ms delay-start, then scroll the
-    /// viewport by velocity·dt through <see cref="ScrollBy"/> (clamped writes; hitting the boundary stops it, the
-    /// WinUI at-the-edge suppression). Returns true while armed/scrolling so the host keeps frames coming. 0-alloc.</summary>
+    /// <summary>Phase-7 host tick, driving the two time-based behaviours of a live session. (1) SPRING-LOAD: accumulate
+    /// the dwell on the current host and fire it once. (2) EDGE AUTO-SCROLL: hold the 50ms delay-start, then scroll the
+    /// viewport by velocity·dt through <see cref="ScrollBy"/> (clamped writes; hitting the boundary stops it, the WinUI
+    /// at-the-edge suppression). Returns true while EITHER still has work so the host keeps frames coming — the two are
+    /// deliberately independent, since a spring-load usually counts down over a perfectly stationary pointer. 0-alloc.</summary>
     public bool Tick(float dtMs)
     {
-        if (!_active || _edgeVelocity == 0f) return false;
+        if (!_active) return false;
+        bool springArmed = TickSpring(dtMs);
+        if (_edgeVelocity == 0f) return springArmed;
         if (_scrollViewport.IsNull || !_scene.IsLive(_scrollViewport) || ScrollBy is null)
         {
             _edgeVelocity = 0f;
             _edgeScrolling = false;
-            return false;
+            return springArmed;
         }
         if (!_edgeScrolling)
         {
@@ -310,7 +335,7 @@ public sealed class DragDropContext
         {
             _edgeVelocity = 0f;       // pinned to the boundary → stop (cpp:1686-1690 at-the-edge suppression)
             _edgeScrolling = false;
-            return false;
+            return springArmed;
         }
         // The pointer did not move, but the target's content geometry did. Re-run the current destination's projection
         // so insertion slots/previews track edge autoscroll continuously instead of lagging until the next mouse event.
@@ -326,16 +351,28 @@ public sealed class DragDropContext
     /// <para><paramref name="refuser"/> reports the NEAREST target that matched the kind but was turned away by its
     /// <see cref="DropTargetSpec.CanAccept"/> — the surface the user aimed at and that owes them a reason. It is
     /// meaningful only when the return value is Null (an accepting ancestor makes the drop succeed anyway).</para></summary>
-    private NodeHandle FindTarget(NodeHandle hit, out NodeHandle refuser, out DropTargetSpec? refuserSpec)
+    private NodeHandle FindTarget(NodeHandle hit, out NodeHandle refuser, out DropTargetSpec? refuserSpec,
+                                 out NodeHandle springHost, out DropTargetSpec? springSpec)
     {
         refuser = NodeHandle.Null;
         refuserSpec = null;
+        springHost = NodeHandle.Null;
+        springSpec = null;
         if (!_scene.HasDropTargets) return NodeHandle.Null;
         for (var n = hit; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if (!_scene.TryGetDropTarget(n, out var spec) || spec is null) continue;
             if (!spec.Accepts(_session.Kind)) continue;
+            // The spring host is the NEAREST kind-matched target that configures one, decided BEFORE acceptance: a
+            // spring-load opens a container, it does not receive a payload, so a folder that refuses this drop (and a
+            // pure SpringLoadOnly waypoint) must still be able to open itself under the pointer.
+            if (springHost.IsNull && spec.OnSpringLoad is not null && spec.SpringLoadDelayMs > 0f)
+            {
+                springHost = n;
+                springSpec = spec;
+            }
+            if (spec.SpringLoadOnly) continue;   // a waypoint: never a destination, never a refusal
             if (spec.CanAccept is { } canAccept && !canAccept(_session))
             {
                 if (refuser.IsNull) { refuser = n; refuserSpec = spec; }   // nearest refuser wins the cue
@@ -361,6 +398,42 @@ public sealed class DragDropContext
         }
         if (_refused.IsNull) return;
         _session.Caption = _refusedSpec?.RefusalCaption?.Invoke(_session);
+    }
+
+    /// <summary>Re-home the spring-load dwell. A CHANGE of host restarts the clock and re-arms the one-shot; staying on
+    /// the same node keeps counting (a pointer that jitters inside a folder is still dwelling on it). 0-alloc; no
+    /// re-render — nothing is published until the spring actually fires.</summary>
+    private void UpdateSpring(NodeHandle node, DropTargetSpec? spec)
+    {
+        if (node != _spring)
+        {
+            _spring = node;
+            _springDwellMs = 0f;
+            _springFired = false;
+        }
+        _springSpec = node.IsNull ? null : spec;
+    }
+
+    private void ClearSpring()
+    {
+        _spring = NodeHandle.Null;
+        _springSpec = null;
+        _springDwellMs = 0f;
+        _springFired = false;
+    }
+
+    /// <summary>Accumulate the hover dwell and fire the spring-load once. Returns true while still ARMED (the host must
+    /// keep frames coming for a motionless pointer); false once it has fired or nothing is armed.</summary>
+    private bool TickSpring(float dtMs)
+    {
+        if (!SpringArmed) return false;
+        if (!_scene.IsLive(_spring)) { ClearSpring(); return false; }
+        _springDwellMs += dtMs;
+        if (_springDwellMs < _springSpec!.SpringLoadDelayMs) return true;
+        _springFired = true;
+        _springSpec.OnSpringLoad!(_session);
+        _requestRerender();
+        return false;
     }
 
     private void UpdateEdgeScroll(NodeHandle hit, Point2 abs)
@@ -441,6 +514,7 @@ public sealed class DragDropContext
         _overSpec = null;
         _refused = NodeHandle.Null;
         _refusedSpec = null;
+        ClearSpring();
         _defaultEffect = DropEffect.Move;
         _scrollViewport = NodeHandle.Null;
         _edgeVelocity = 0f;

@@ -359,7 +359,10 @@ public sealed class DragController
             // STATIONARY: dim + hit-test opt-out ONLY. No translate, no shadow, no NodeFlags.DragGhost and no
             // SceneStore.DragGhost — the row keeps its slot and its clip, and the recorder's ghost band stays idle
             // (the chip draws in the DragOverlay band instead). PaintDirty alone: nothing moved.
-            p.Opacity = _dragStyle.Opacity;
+            // A same-list insertion that VIRTUALLY REMOVED this row owns its opacity for the gesture (it hides the whole
+            // dragged block, this node included); re-asserting the style dim over it would strobe the press-source row
+            // back to 0.4 on every reconcile frame while its siblings stay hidden.
+            p.Opacity = _scene.DragSourceOpacityOverride ?? _dragStyle.Opacity;
             _scene.Flags(_node) &= ~NodeFlags.HitTestVisible;   // drop-target hit-tests see THROUGH the dimmed source
             _scene.Mark(_node, NodeFlags.PaintDirty);
             return;
@@ -534,6 +537,9 @@ public sealed class DragController
         ref NodePaint p = ref _scene.Paint(node);
         p.Opacity = _restingOpacity;
         if (_wasHitTestVisible) _scene.Flags(node) |= NodeFlags.HitTestVisible;
+        // The gesture is over, so no destination owns this node's dim any more (the safety net for a destination whose
+        // own teardown never ran — a virtualized-away insertion, a torn-down page).
+        _scene.DragSourceOpacityOverride = null;
         if (_dragStyle.Lift == DragLift.Stationary)
         {
             // Stationary touched nothing but opacity + hit-test — restoring more (transform/shadow/ghost flag) would

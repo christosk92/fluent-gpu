@@ -74,6 +74,10 @@ public static class Drag
 ///
 /// A transparent target is invisible to the user, so any <c>accepts</c> test that can turn away a payload the surface
 /// LOOKS like it should take ought to pass <c>refusalCaption</c> too — see <see cref="DropTargetSpec.RefusalCaption"/>.
+///
+/// <para><c>springLoadMs</c>/<c>onSpringLoad</c> add the Finder dwell-to-open behaviour (see
+/// <see cref="DropTargetSpec.SpringLoadDelayMs"/>); <c>springLoadOnly</c> declares a surface that ONLY does that — it
+/// takes no drop and raises no refusal cue, the tab-bar shape.</para>
 /// </summary>
 public static class Drop
 {
@@ -88,9 +92,12 @@ public static class Drop
                                            bool settleOnDrop = false,
                                            DropTargetVisualPolicy visualPolicy = DropTargetVisualPolicy.None,
                                            Func<DragSession, bool>? spotlightWhen = null,
-                                           Func<T, string?>? refusalCaption = null)
+                                           Func<T, string?>? refusalCaption = null,
+                                           float springLoadMs = 0f,
+                                           Action<T, DragSession>? onSpringLoad = null,
+                                           bool springLoadOnly = false)
         => Target(new[] { kind }, accepts, onDrop, caption, onEnter, onOver, onLeave, settleOnDrop, visualPolicy,
-                  spotlightWhen, refusalCaption);
+                  spotlightWhen, refusalCaption, springLoadMs, onSpringLoad, springLoadOnly);
 
     /// <summary>Typed target over several kinds (e.g. an in-app resource AND <see cref="DropKinds.Files"/>).</summary>
     public static DropTargetSpec Target<T>(string[] kinds,
@@ -103,7 +110,10 @@ public static class Drop
                                            bool settleOnDrop = false,
                                            DropTargetVisualPolicy visualPolicy = DropTargetVisualPolicy.None,
                                            Func<DragSession, bool>? spotlightWhen = null,
-                                           Func<T, string?>? refusalCaption = null)
+                                           Func<T, string?>? refusalCaption = null,
+                                           float springLoadMs = 0f,
+                                           Action<T, DragSession>? onSpringLoad = null,
+                                           bool springLoadOnly = false)
     {
         // The caption is applied on BOTH Enter and Over: the engine clears session.Caption on every target change, and
         // an Over-only refresh keeps it correct when a target's caption depends on the pointer (an insertion slot).
@@ -133,6 +143,11 @@ public static class Drop
             RefusalCaption = refusalCaption is not null
                 ? s => TryUnwrap<T>(s.Payload, out var v) ? refusalCaption(v) : null
                 : null,
+            SpringLoadDelayMs = springLoadMs,
+            OnSpringLoad = onSpringLoad is not null
+                ? s => { if (TryUnwrap<T>(s.Payload, out var v)) onSpringLoad(v, s); }
+                : null,
+            SpringLoadOnly = springLoadOnly,
         };
     }
 

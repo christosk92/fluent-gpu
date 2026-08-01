@@ -949,6 +949,7 @@ sealed class TrackList : Component
         // hard-coded 420/200 + ChromeExtent estimate this replaces was one of the four "cannot drop" causes).
         Range = () => (TrackStart, View().Length),
         OnDeposit = DepositAtAsync,
+        Caption = InsertionCaption,
         RefusalCaption = DropRefusalCaption,
         GapPreview = (payload, _) => WaveeResourceDrag.Unwrap(payload) is { } resource
             ? PlaylistInsertionPreview.Cards(resource, TrackRow.RowHeightFor(_h.Density.Peek()))
@@ -1003,6 +1004,25 @@ sealed class TrackList : Component
         _ => null,
     };
 
+    /// <summary>What this drop will DO, said in the chip. The verb is the whole point — the line and the gap show WHERE
+    /// the block lands, but nothing else distinguishes a same-playlist MOVE (the rows leave their old slots) from a
+    /// COPY out of another list, and those are different edits to the user's library.
+    /// <para>A container payload (an album/playlist whose tracks are still behind a cold resolver) deliberately gets no
+    /// number: the count is genuinely unknown until the drop resolves it, and a placeholder "1" would be a lie.</para></summary>
+    string? InsertionCaption(object? payload, int _)
+    {
+        if (WaveeResourceDrag.Unwrap(payload) is not { } resource) return null;
+        int rows = resource.SourceRows?.Count ?? 0;
+        int tracks = resource.Tracks?.Count ?? 0;
+        return PlaylistReorderRules.VerbFor(IsSameListDrop(payload), rows, tracks) switch
+        {
+            PlaylistDropVerb.MoveRows => Strings.Drag.MoveTracks(rows),
+            PlaylistDropVerb.AddTracks => Strings.Drag.AddTracks(tracks),
+            PlaylistDropVerb.AddContainer => Strings.Drag.AddTo(_model.Title),
+            _ => null,
+        };
+    }
+
     int DropTrackCount(object? payload)
         => WaveeResourceDrag.Unwrap(payload) is { Tracks.Count: > 0 } resource ? resource.Tracks!.Count : 1;
 
@@ -1031,6 +1051,38 @@ sealed class TrackList : Component
             ? WaveeResourceDrop.DepositTracksAsync(acts, uri, _model.Title, payload,
                 OriginalInsertionIndex(displaySlot))
             : Task.FromResult(false);
+
+    /// <summary>Alt+Up / Alt+Down: move the selected rows one position, through the SAME mutation seam and the same
+    /// pre-move index convention the drag commits with (<c>MovePlaylistRowsAsync</c>). The rules themselves live in the
+    /// engine-free <see cref="PlaylistReorderRules"/> so they are pinned by tests rather than by this call site.
+    /// <para>The selection is re-pointed at the landed rows immediately: display order IS membership order here (the
+    /// gate guarantees it), so the block's new indices are known without waiting for the snapshot — which is what keeps
+    /// a held Alt+Down walking the same block down the list instead of dragging a different one each press.</para></summary>
+    bool TryBlockMove(int delta)
+    {
+        if (_lib is not { } lib || _model.ContextUri is not { Length: > 0 } uri) return false;
+        var sort = _h.Sort.Peek();
+        if (!PlaylistReorderRules.AllowsBlockMove(_model.Capabilities.CanEditItems,
+                sort.Column == SortColumn.Index && !sort.Descending, _h.Query.Peek(), _h.Filters.Peek()))
+            return false;
+        if (HostInfo() is not { } host || host.Rows.Count == 0) return false;
+
+        var rows = host.Rows;
+        Span<int> indices = rows.Count <= 64 ? stackalloc int[rows.Count] : new int[rows.Count];
+        for (int i = 0; i < rows.Count; i++) indices[i] = rows[i].Index;
+        int to = PlaylistReorderRules.BlockMoveTarget(indices, _tracks.Count, delta);
+        if (to < 0) return false;
+
+        int first = indices[0];
+        for (int i = 1; i < indices.Length; i++) if (indices[i] < first) first = indices[i];
+        _ = lib.MovePlaylistRowsAsync(uri, rows, to);
+
+        int start = TrackStart + first + delta;
+        _selection.ClearSelection();
+        _selection.SelectRange(start, start + rows.Count - 1);
+        _selection.AnchorIndex = start;
+        return true;
+    }
 
     WaveeResourceDragPayload? TrackDragPayload(int itemIndex, int trackStart)
     {
@@ -2866,6 +2918,13 @@ sealed class TrackList : Component
             {
                 if (args.KeyCode == Keys.Enter) { onInteraction(ItemContainerTrigger.EnterKey, args.Mods); args.Handled = true; }
                 else if (args.KeyCode == Keys.Space && !args.IsRepeat) { onInteraction(ItemContainerTrigger.SpaceKey, SelectorVisualsBound.MultiSelectMods(_checksVisibleRead(), args.Mods)); args.Handled = true; }
+                // Alt+Up / Alt+Down: shift the SELECTED block one row — the keyboard equivalent of the drag reorder
+                // (Alt because bare arrows are the list's own roving navigation). Under the same gates the drag has:
+                // an editable playlist in natural order with no query or filter, else it silently does nothing rather
+                // than move a row the display order cannot name.
+                else if (args.Alt && (args.KeyCode == Keys.Up || args.KeyCode == Keys.Down)
+                         && TryBlockMove(args.KeyCode == Keys.Up ? -1 : +1))
+                    args.Handled = true;
             },
             OnFocusChanged = onFocusChanged,
             // A no-op pointer-exit registers PointerBit so the row counts as the "interactive ancestor" whose hover

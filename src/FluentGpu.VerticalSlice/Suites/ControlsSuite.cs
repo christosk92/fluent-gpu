@@ -2744,6 +2744,51 @@ static class ControlsSuite
                 $"lifted={lifted} held={held} restored={restored} op={host.Scene.Paint(row).Opacity:0.00}");
         }
 
+        // e5dragdrop.hidesource — the OTHER half of the re-assert (Wave 4 residual). A Stationary source's dim and a
+        // same-list insertion's VIRTUAL REMOVAL both own the press-source row's opacity, and they disagree: the
+        // insertion hides the whole dragged block (0 — those rows are in the chip), while ReassertPresented re-writes
+        // the source style's 0.4 after every mid-drag reconcile, AFTER the frame's animation compose. The visible bug
+        // was one row strobing back to 0.4 while its siblings stayed hidden. SceneStore.DragSourceOpacityOverride is
+        // the destination's declaration of ownership; without it the re-assert wins the frame it runs on.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-hidesource", new Size2(420, 320), 1f)); window.Show();
+            var probe = new DragStationaryClobberProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var row = Child(scene, scene.Root, 0);
+            var c = CenterOf(scene, row);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 40f, c.Y + 24f), 0, 0));
+            host.RunFrame();
+            // Stationary: dimmed in place, never hoisted into the ghost band.
+            bool dimmed = host.Input.Drag.IsActive && Near(scene.Paint(row).Opacity, Drag.SourceDimOpacity)
+                          && (scene.Flags(row) & NodeFlags.DragGhost) == 0 && scene.DragGhost.IsNull;
+
+            scene.DragSourceOpacityOverride = 0f;   // what a same-list insertion publishes while it hides its sources
+            probe.Rev.Value = 1;                    // reconcile the row mid-drag, with NO pointer move
+            host.RunFrame();
+            bool hidden = Near(scene.Paint(row).Opacity, 0f) && host.Input.Drag.IsActive;
+
+            scene.DragSourceOpacityOverride = null; // the pointer left the insertion: the source's own dim is back
+            probe.Rev.Value = 2;
+            host.RunFrame();
+            bool redimmed = Near(scene.Paint(row).Opacity, Drag.SourceDimOpacity);
+
+            // A destination whose teardown never ran must not leave the override latched onto the next gesture.
+            scene.DragSourceOpacityOverride = 0f;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 40f, c.Y + 24f), 0, 0));
+            host.RunFrame();
+            bool released = Near(scene.Paint(row).Opacity, 1f) && !host.Input.Drag.IsActive
+                            && scene.DragSourceOpacityOverride is null;
+
+            Check("e5dragdrop.hidesource a destination that virtually removes the dragged rows owns the Stationary source's opacity: the post-reconcile re-assert writes SceneStore.DragSourceOpacityOverride instead of the source style's dim, restores the dim when the override clears, and the gesture's end releases the override even if the destination never tore down",
+                dimmed && hidden && redimmed && released,
+                $"dimmed={dimmed} hidden={hidden} redimmed={redimmed} released={released} op={scene.Paint(row).Opacity:0.00}");
+        }
+
         // e5dragdrop.animconflict — the anim slab and the drag both wrote LocalTransform/Opacity (bug E13): a hover/press
         // MotionTarget on a dragged card fought the lift, and because DragController re-anchors off the node's CURRENT
         // resting origin the stomped translate double-counted into a per-frame runaway. Compose now skips both channels
@@ -3233,6 +3278,163 @@ static class ControlsSuite
                 cued && silentOverNothing && acceptUnaffected && swapped && clearedAtEnd
                 && glyphOnRefusal && noGlyphOverNothing && noGlyphOverTarget,
                 $"cued={cued} silent={silentOverNothing} accept={acceptUnaffected} swap={swapped} cleared={clearedAtEnd} glyph=({glyphOnRefusal},{noGlyphOverNothing},{noGlyphOverTarget})");
+        }
+
+        // e5dragdrop.springload — the Finder/WinUI "hold a drag over a closed container and it opens itself" dwell.
+        // Three shapes have to work, and the reason they are ONE gate is that they share one dwell host: an ACCEPTING
+        // target (a sidebar folder you can also drop into), a target that REFUSES this payload (a folder that cannot
+        // take these tracks — it still has to be openable, or the user is stuck outside the tree the drop lives in),
+        // and a SpringLoadOnly waypoint (a tab: it takes no drop at all, and must not wear a not-allowed cue for it).
+        // The once-per-Enter rule and the still-pointer keep-alive are the other two halves — a spring that re-fired
+        // every frame would thrash the tree, and one the host let the loop idle through would never fire at all.
+        {
+            var scene = new SceneStore();
+            int okFires = 0, refusedFires = 0, wayFires = 0;
+            var accepting = Drop.Target<string>("k",
+                onDrop: static (_, _) => { },
+                springLoadMs: 500f, onSpringLoad: (_, _) => okFires++);
+            var refusing = Drop.Target<string>("k",
+                accepts: static p => p != "no",
+                refusalCaption: static _ => "Clear sorting to reorder",
+                springLoadMs: 500f, onSpringLoad: (_, _) => refusedFires++);
+            var waypoint = Drop.Target<string>("k",
+                springLoadMs: 500f, onSpringLoad: (_, _) => wayFires++, springLoadOnly: true);
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 300, Height = 300,
+                Children =
+                [
+                    new BoxEl { Key = "ok", Width = 300, Height = 60, DropTarget = accepting },
+                    new BoxEl { Key = "no", Width = 300, Height = 60, DropTarget = refusing },
+                    new BoxEl { Key = "way", Width = 300, Height = 60, DropTarget = waypoint },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var dd = disp.DragDrop;
+            var okNode = Child(scene, scene.Root, 0);
+            var noNode = Child(scene, scene.Root, 1);
+            var wayNode = Child(scene, scene.Root, 2);
+            var session = dd.Session;
+
+            dd.ExternalBegin("k", "no", new Point2(10, 10), KeyModifiers.None);
+            // 1. ACCEPTING target: dwell accumulates across frames with a MOTIONLESS pointer, and HasActiveWork is what
+            //    keeps those frames coming (an OS drag has no L1 gesture whose own keep-alive would cover it).
+            dd.Move(okNode, new Point2(10, 30), 0f, 0f, KeyModifiers.None);
+            bool armed = dd.HasActiveWork;
+            bool tickWhileArmed = dd.Tick(100f);           // still counting down: the host is TOLD to keep going
+            for (int i = 0; i < 3; i++) dd.Tick(100f);
+            bool notYet = okFires == 0 && dd.HasActiveWork;
+            bool tickOnFiring = dd.Tick(100f);             // the frame the 500ms lands on: fires, then disarms
+            bool fired = okFires == 1;
+            for (int i = 0; i < 5; i++) dd.Tick(100f);
+            bool onceOnly = okFires == 1 && !dd.HasActiveWork && !tickOnFiring;
+
+            // 2. Re-arm ONLY after leaving and coming back (a jitter inside the target keeps the old dwell).
+            dd.Move(scene.Root, new Point2(10, 290), 0f, 0f, KeyModifiers.None);
+            dd.Move(okNode, new Point2(12, 32), 0f, 0f, KeyModifiers.None);
+            bool rearmed = dd.HasActiveWork && okFires == 1;
+            for (int i = 0; i < 5; i++) dd.Tick(100f);
+            bool refired = okFires == 2;
+
+            // 3. A REFUSING target still springs: opening a container is navigation, not a drop. The refusal cue is
+            //    untouched by it (the user is told both "not here" and — after the dwell — shown what is inside).
+            dd.Move(noNode, new Point2(10, 90), 0f, 0f, KeyModifiers.None);
+            bool refusedCue = session.OverTarget.IsNull && session.RefusedTarget == noNode
+                              && session.Caption == "Clear sorting to reorder";
+            for (int i = 0; i < 5; i++) dd.Tick(100f);
+            bool refusedSprang = refusedFires == 1 && session.RefusedTarget == noNode;
+
+            // 4. A SpringLoadOnly waypoint is silent in BOTH directions: it never accepts and never accuses.
+            dd.Move(wayNode, new Point2(10, 150f), 0f, 0f, KeyModifiers.None);
+            bool waySilent = session.OverTarget.IsNull && session.RefusedTarget.IsNull && session.Caption is null;
+            for (int i = 0; i < 5; i++) dd.Tick(100f);
+            bool waySprang = wayFires == 1;
+
+            dd.Cancel();
+            bool idle = !dd.HasActiveWork && !dd.Tick(1000f) && wayFires == 1;
+
+            Check("e5dragdrop.springload a dwell on the nearest spring-configured target fires OnSpringLoad exactly once per Enter (re-arming only after a leave), keeps HasActiveWork true while counting down so a motionless pointer still gets frames, and works for an accepting target, a CanAccept-refuser (whose refusal cue is unchanged) and a SpringLoadOnly waypoint that neither accepts nor accuses",
+                armed && notYet && tickWhileArmed && fired && onceOnly && rearmed && refired
+                && refusedCue && refusedSprang && waySilent && waySprang && idle,
+                $"armed={armed} notYet={notYet} tick={tickWhileArmed} fired={fired} once={onceOnly} rearm=({rearmed},{refired}) refuse=({refusedCue},{refusedSprang}) way=({waySilent},{waySprang}) idle={idle}");
+        }
+
+        // e5dragdrop.block — ReorderList.BlockLength (design ruling e). The whole point of an ADDITIVE block API is that
+        // the existing single-item surfaces (sidebar pins, tabs, TreeView rows) keep their exact geometry, so the first
+        // half of this gate is a byte-identity proof: the same drag driven through Begin(i, extents) and through
+        // Begin(i, 1, extents) must agree bit-for-bit on every published number. The second half is the block algebra
+        // itself — displacement by the block's whole span, a projection that reduces to a contiguous remove+insert, and
+        // a Move<T> overload that lands the collection exactly where the projection said it would.
+        {
+            float[] extents = [10f, 24f, 10f, 40f, 10f, 16f];
+            bool identical = true;
+            foreach (float spacing in new[] { 0f, 6f })
+                for (int d = 0; d < extents.Length; d++)
+                    foreach (float delta in new[] { -80f, -21f, 0f, 17f, 95f })
+                    {
+                        var classic = new ReorderList { DwellMs = 0f };
+                        var block1 = new ReorderList { DwellMs = 0f };
+                        classic.Begin(d, extents, spacing);
+                        block1.Begin(d, 1, extents, spacing);
+                        classic.Update(delta); classic.Advance(1f);
+                        block1.Update(delta); block1.Advance(1f);
+                        identical &= block1.BlockLength == 1
+                                     && classic.PendingIndex == block1.PendingIndex
+                                     && classic.TargetIndex == block1.TargetIndex
+                                     && classic.DraggedTargetStart.Equals(block1.DraggedTargetStart);
+                        Span<int> a = stackalloc int[extents.Length];
+                        Span<int> b = stackalloc int[extents.Length];
+                        classic.ProjectOrder(a); block1.ProjectOrder(b);
+                        for (int i = 0; i < extents.Length; i++)
+                            identical &= a[i] == b[i] && classic.OffsetFor(i).Equals(block1.OffsetFor(i));
+                    }
+
+            // A 2-long block at [1,2] of six uniform 10px rows, moved FORWARD to slot 3 → [0,3,4,1,2,5].
+            var fwd = new ReorderList { DwellMs = 0f };
+            fwd.BeginBlock(1, 2, 6, 10f);
+            bool sizes = fwd.BlockLength == 2 && fwd.DraggedIndex == 1;
+            fwd.Update(26f);            // block centre 20+26=46 clears row 4's midpoint (45), not row 5's (55)
+            fwd.Advance(1f);
+            Span<int> order = stackalloc int[6];
+            fwd.ProjectOrder(order);
+            bool fwdSlot = fwd.TargetIndex == 3;
+            bool fwdOrder = order[0] == 0 && order[1] == 3 && order[2] == 4 && order[3] == 1 && order[4] == 2 && order[5] == 5;
+            // Displaced rows shift by the block's WHOLE span (2 x 10), the block's own rows take no hint, and the block
+            // lands at the start slot 3 owns (30).
+            bool fwdOffsets = Near(fwd.OffsetFor(0), 0f) && Near(fwd.OffsetFor(1), 0f) && Near(fwd.OffsetFor(2), 0f)
+                              && Near(fwd.OffsetFor(3), -20f) && Near(fwd.OffsetFor(4), -20f) && Near(fwd.OffsetFor(5), 0f)
+                              && Near(fwd.DraggedTargetStart, 30f);
+            // The forward slot is clamped to Count − BlockLength: a block can never start past the last legal landing.
+            fwd.Update(400f); fwd.Advance(1f);
+            bool fwdClamp = fwd.TargetIndex == 4 && fwd.MoveTarget(+3) == false;
+
+            // The same block moved BACKWARD (a 3-long run at [2,3,4] of six rows → slot 0).
+            var back = new ReorderList { DwellMs = 0f };
+            back.BeginBlock(2, 3, 6, 10f);
+            back.Update(-35f);
+            back.Advance(1f);
+            Span<int> border = stackalloc int[6];
+            back.ProjectOrder(border);
+            bool backOk = back.TargetIndex == 0
+                          && border[0] == 2 && border[1] == 3 && border[2] == 4
+                          && border[3] == 0 && border[4] == 1 && border[5] == 5
+                          && Near(back.OffsetFor(0), 30f) && Near(back.OffsetFor(1), 30f)
+                          && Near(back.OffsetFor(5), 0f) && Near(back.DraggedTargetStart, 0f);
+
+            // Move<T>(list, from, blockLength, to) applies EXACTLY the projection above; length 1 is the old overload.
+            var list = new List<int> { 0, 1, 2, 3, 4, 5 };
+            ReorderList.Move(list, 1, 2, 3);
+            bool moved = list is [0, 3, 4, 1, 2, 5];
+            var single = new List<int> { 0, 1, 2, 3 };
+            var reference = new List<int> { 0, 1, 2, 3 };
+            ReorderList.Move(single, 0, 1, 2);
+            ReorderList.Move(reference, 0, 2);
+            bool oneIsOld = single is [1, 2, 0, 3] && reference is [1, 2, 0, 3];
+
+            Check("e5dragdrop.block ReorderList grows an ADDITIVE contiguous-block mode: BlockLength 1 is bit-identical to the classic single-item path across every published number, while a real block displaces siblings by its whole span, projects to a contiguous remove+insert, clamps its landing slot to Count-BlockLength, and commits through Move<T>(list, from, blockLength, to)",
+                identical && sizes && fwdSlot && fwdOrder && fwdOffsets && fwdClamp && backOk && moved && oneIsOld,
+                $"identity={identical} sizes={sizes} fwd=({fwdSlot},{fwdOrder},{fwdOffsets},{fwdClamp}) back={backOk} move=({moved},{oneIsOld})");
         }
 
         // e5dragdrop.armblock — Element.BlocksDragArm. A press inside a draggable row arms the ROW (the WinUI

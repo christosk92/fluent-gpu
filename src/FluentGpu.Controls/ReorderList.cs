@@ -51,6 +51,7 @@ public sealed class ReorderList
     private int _count;
     private float _spacing;
     private int _dragged = -1;
+    private int _block = 1;          // contiguous dragged BLOCK length (1 = the classic single-item reorder)
     private int _pending = -1;       // latest computed slot (under the pointer)
     private int _target = -1;        // dwell-committed slot the hints currently show
     private float _dwellRemainingMs;
@@ -65,7 +66,17 @@ public sealed class ReorderList
 
     public bool IsActive => _dragged >= 0;
     public int Count => _count;
+    /// <summary>The dragged block's FIRST original index (the single dragged item when <see cref="BlockLength"/> is 1).</summary>
     public int DraggedIndex => _dragged;
+
+    /// <summary>How many CONTIGUOUS items are being dragged as one unit (ruling e). 1 (the default, and what every
+    /// <c>Begin</c> overload without a block argument sets) is the classic single-item reorder, byte-identical to the
+    /// pre-block engine — the block arithmetic below reduces to the old expressions term for term at length 1, and the
+    /// existing gates pin that.
+    /// <para>Slots are expressed as the block's landing START, so a valid target is 0..<c>Count − BlockLength</c>.
+    /// Non-contiguous multi-selection is deliberately NOT this API's job: it rides the insertion view's virtual-removal
+    /// math (design ruling a), which needs no notion of a single moving run.</para></summary>
+    public int BlockLength => _block;
 
     /// <summary>Grid column count for the 2-D mode (0 ⇒ 1-D mode). Set by <see cref="Begin2D"/>; the 1-D
     /// <see cref="Begin(int,System.ReadOnlySpan{float},float)"/> overloads leave it 0.</summary>
@@ -85,10 +96,27 @@ public sealed class ReorderList
         get
         {
             if (_dragged < 0 || _target < 0) return 0f;
-            if (_target > _dragged) return _starts[_target] + _extents[_target] - _extents[_dragged];
             if (_target < _dragged) return _starts[_target];
-            return _starts[_dragged];
+            if (_target == _dragged) return _starts[_dragged];
+            // Forward: the block starts where the run it jumped over used to end. At BlockLength 1 the general form
+            // below is algebraically the old `_starts[t] + ext[t] − ext[d]`, but not bit-for-bit in float — so the
+            // single-item path keeps the exact old expression and the block path is the generalization.
+            if (_block <= 1) return _starts[_target] + _extents[_target] - _extents[_dragged];
+            return _starts[_dragged] + BoundaryStart(_target + _block) - BoundaryStart(_dragged + _block);
         }
+    }
+
+    /// <summary>Resting start of slot <paramref name="i"/>, extended one slot past the end (the append boundary).</summary>
+    private float BoundaryStart(int i)
+        => i < _count ? _starts[i] : _starts[_count - 1] + _extents[_count - 1] + _spacing;
+
+    /// <summary>Total main-axis room the dragged block occupies INCLUDING its inter-item spacing — the amount every
+    /// displaced sibling shifts by. Reduces to <c>_extents[_dragged] + _spacing</c> at length 1.</summary>
+    private float BlockShift()
+    {
+        float shift = 0f;
+        for (int i = 0; i < _block; i++) shift += _extents[_dragged + i] + _spacing;
+        return shift;
     }
 
     /// <summary>Start a reorder for <paramref name="draggedIndex"/> over items with the given resting main-axis
@@ -98,7 +126,16 @@ public sealed class ReorderList
     {
         if ((uint)draggedIndex >= (uint)itemExtents.Length) { Reset(); return; }
         Sample(itemExtents, spacing);
-        StartDrag(draggedIndex);
+        StartDrag(draggedIndex, 1);
+    }
+
+    /// <summary>Block overload (ruling e): drag <paramref name="blockLength"/> CONTIGUOUS items starting at
+    /// <paramref name="draggedIndex"/> as one unit. <c>blockLength = 1</c> is exactly the overload above.</summary>
+    public void Begin(int draggedIndex, int blockLength, ReadOnlySpan<float> itemExtents, float spacing = 0f)
+    {
+        if (!ValidBlock(draggedIndex, blockLength, itemExtents.Length)) { Reset(); return; }
+        Sample(itemExtents, spacing);
+        StartDrag(draggedIndex, blockLength);
     }
 
     /// <summary>Uniform-extent overload (fixed-row ListView / tab strip): all <paramref name="count"/> items share
@@ -107,8 +144,22 @@ public sealed class ReorderList
     {
         if ((uint)draggedIndex >= (uint)count) { Reset(); return; }
         Sample(count, itemExtent, spacing);
-        StartDrag(draggedIndex);
+        StartDrag(draggedIndex, 1);
     }
+
+    /// <summary>Uniform-extent BLOCK overload (ruling e) — the fixed-row list / tab-strip shape with a multi-item
+    /// selection. Deliberately NOT another <c>Begin</c>: <c>Begin(i, n, extent)</c> and a block overload
+    /// <c>Begin(i, block, n, extent)</c> differ only by an int-vs-float third argument, and an integral extent literal
+    /// would silently bind to the wrong one.</summary>
+    public void BeginBlock(int draggedIndex, int blockLength, int count, float itemExtent, float spacing = 0f)
+    {
+        if (!ValidBlock(draggedIndex, blockLength, count)) { Reset(); return; }
+        Sample(count, itemExtent, spacing);
+        StartDrag(draggedIndex, blockLength);
+    }
+
+    private static bool ValidBlock(int draggedIndex, int blockLength, int count)
+        => draggedIndex >= 0 && blockLength >= 1 && count > 0 && draggedIndex + blockLength <= count;
 
     /// <summary>Refresh the RESTING geometry table WITHOUT starting a drag — the cross-list hover path, where a
     /// foreign session needs a slot before any local lift exists (and therefore before <see cref="Begin"/> has ever
@@ -176,9 +227,10 @@ public sealed class ReorderList
         _starts = new float[cap];
     }
 
-    private void StartDrag(int draggedIndex)
+    private void StartDrag(int draggedIndex, int blockLength)
     {
         _dragged = draggedIndex;
+        _block = blockLength < 1 ? 1 : blockLength;
         _pending = draggedIndex;
         _target = draggedIndex;
         _dwellRemainingMs = 0f;
@@ -195,6 +247,7 @@ public sealed class ReorderList
         _count = count;
         Columns = Math.Max(1, columns);
         _dragged = draggedIndex;
+        _block = 1;   // the grid path is single-tile by construction
         _pending = draggedIndex;
         _target = draggedIndex;
         _dwellRemainingMs = 0f;
@@ -246,14 +299,19 @@ public sealed class ReorderList
     public bool Update(float dragDelta)
     {
         if (_dragged < 0 || _count == 0) return false;
-        float center = _starts[_dragged] + _extents[_dragged] * 0.5f + dragDelta;
+        int last = _dragged + _block - 1;
+        // The BLOCK's centre (its own leading start to its own trailing end); at length 1 this is the old expression.
+        float center = _block <= 1
+            ? _starts[_dragged] + _extents[_dragged] * 0.5f + dragDelta
+            : _starts[_dragged] + (_starts[last] + _extents[last] - _starts[_dragged]) * 0.5f + dragDelta;
 
         int slot = _dragged;
         if (dragDelta > 0f)
         {
-            for (int j = _dragged + 1; j < _count; j++)
+            // Passing item j (the first item BEYOND the block) lands the block's start at j − block + 1.
+            for (int j = last + 1; j < _count; j++)
             {
-                if (center > _starts[j] + _extents[j] * 0.5f) slot = j;
+                if (center > _starts[j] + _extents[j] * 0.5f) slot = j - _block + 1;
                 else break;
             }
         }
@@ -292,7 +350,7 @@ public sealed class ReorderList
     public bool MoveTarget(int delta)
     {
         if (_dragged < 0 || _count == 0 || delta == 0) return false;
-        int next = Math.Clamp(_target + delta, 0, _count - 1);
+        int next = Math.Clamp(_target + delta, 0, _count - _block);
         if (next == _target) return false;
         _target = next;
         _pending = next;
@@ -305,9 +363,11 @@ public sealed class ReorderList
     /// else (and the dragged item itself) is 0.</summary>
     public float OffsetFor(int index)
     {
-        if (_dragged < 0 || _target < 0 || index == _dragged || (uint)index >= (uint)_count) return 0f;
-        float shift = _extents[_dragged] + _spacing;
-        if (_target > _dragged && index > _dragged && index <= _target) return -shift;
+        if (_dragged < 0 || _target < 0 || (uint)index >= (uint)_count) return 0f;
+        if (index >= _dragged && index < _dragged + _block) return 0f;   // the block itself never takes a hint
+        float shift = BlockShift();
+        // Forward: everything from just past the block up to the block's new trailing edge closes the gap it left.
+        if (_target > _dragged && index >= _dragged + _block && index <= _target + _block - 1) return -shift;
         if (_target < _dragged && index >= _target && index < _dragged) return shift;
         return 0f;
     }
@@ -322,10 +382,10 @@ public sealed class ReorderList
         for (int i = 0; i < _count; i++) order[i] = i;
         if (_dragged < 0 || _target < 0 || _target == _dragged) return;
         if (_target > _dragged)
-            for (int i = _dragged; i < _target; i++) order[i] = i + 1;
+            for (int i = _dragged; i < _target; i++) order[i] = i + _block;
         else
-            for (int i = _dragged; i > _target; i--) order[i] = i - 1;
-        order[_target] = _dragged;
+            for (int i = _dragged + _block - 1; i >= _target + _block; i--) order[i] = i - _block;
+        for (int k = 0; k < _block; k++) order[_target + k] = _dragged + k;
     }
 
     /// <summary>Finish the reorder at the LATEST pending slot (the release point under the pointer — the dwell shown
@@ -356,9 +416,25 @@ public sealed class ReorderList
         list.Insert(to, item);
     }
 
+    /// <summary>Block form of <see cref="Move{T}(IList{T},int,int)"/> (ruling e): lift <paramref name="blockLength"/>
+    /// contiguous items at <paramref name="from"/> and re-insert them at <paramref name="to"/> — which, exactly like
+    /// the single-item form, is the POST-removal index (the same number <see cref="ProjectOrder"/> projects to and
+    /// <see cref="Complete"/> commits). <c>blockLength == 1</c> delegates to the single-item overload verbatim.</summary>
+    public static void Move<T>(IList<T> list, int from, int blockLength, int to)
+    {
+        if (blockLength <= 1) { Move(list, from, to); return; }
+        if (from == to || from < 0 || from + blockLength > list.Count) return;
+        if ((uint)to > (uint)(list.Count - blockLength)) return;
+        var lifted = new T[blockLength];
+        for (int i = 0; i < blockLength; i++) lifted[i] = list[from + i];
+        for (int i = blockLength - 1; i >= 0; i--) list.RemoveAt(from + i);
+        for (int i = 0; i < blockLength; i++) list.Insert(to + i, lifted[i]);
+    }
+
     private void Reset()
     {
         _dragged = -1;
+        _block = 1;
         _pending = -1;
         _target = -1;
         _dwellRemainingMs = 0f;

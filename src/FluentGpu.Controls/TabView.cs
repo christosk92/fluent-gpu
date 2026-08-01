@@ -34,6 +34,11 @@ public sealed record TabViewItem
     public Func<ContextMenuModel?>? ContextMenu { get; init; }
     /// <summary>Optional drag source attached to the header body only; the close button is deliberately excluded.</summary>
     public DragSource? Drag { get; init; }
+    /// <summary>Optional drop target on the whole tab header. The intended use is SPRING-LOADING
+    /// (<see cref="DropTargetSpec.SpringLoadDelayMs"/> + <see cref="DropTargetSpec.SpringLoadOnly"/>): hold a drag over
+    /// a tab and it activates, so the user can navigate to the destination they actually want mid-gesture. A tab that
+    /// genuinely receives a payload can use a full target here too.</summary>
+    public DropTargetSpec? DropTarget { get; init; }
 }
 
 /// <summary>A WinUI TabView (controls\dev\TabView): a horizontal strip of tab headers atop the selected tab's content.

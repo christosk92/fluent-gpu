@@ -332,6 +332,9 @@ public sealed class TabStrip : Component
             MinWidth = MinTabWidth,
             MaxWidth = MaxTabWidth,
             Shrink = 1f,
+            // The whole tab header is the drop surface (the spring-load hover area) — not the inner body the drag
+            // source sits on, whose padding gaps would make the dwell drop out as the pointer wandered.
+            DropTarget = item.DropTarget,
             Children = layers.ToArray(),
         };
     }

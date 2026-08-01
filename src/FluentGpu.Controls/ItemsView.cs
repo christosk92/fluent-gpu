@@ -1947,6 +1947,12 @@ internal sealed class ItemsViewInsertion
 
     private void HideDragSource(SceneStore scene, bool hide)
     {
+        // The press-source row has TWO owners while a same-list insertion is open: this virtual removal (0 — the row is
+        // "in the chip") and DragController's Stationary re-assert, which re-writes the source's authored dim on every
+        // mid-drag reconcile, AFTER the frame's animation compose. Publish the hidden value as the drag's source-opacity
+        // override so the re-assert agrees instead of strobing this one row back to 0.4 while its siblings stay hidden.
+        // Written before the node guard: the teardown must release the override even when the row itself is gone.
+        scene.DragSourceOpacityOverride = hide ? 0f : null;
         var node = _dragSource;
         if (node.IsNull || !scene.IsLive(node)) return;
         ref NodePaint p = ref scene.Paint(node);

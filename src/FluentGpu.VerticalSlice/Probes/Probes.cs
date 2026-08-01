@@ -4810,6 +4810,31 @@ sealed class DragReconcileClobberProbe : Component
     }
 }
 
+// Stationary source-row dim vs. an insertion's VIRTUAL REMOVAL — two owners of one node's opacity. Same shape as
+// DragReconcileClobberProbe, but the row is a real Drag.Source (Stationary + the 0.4 "it's in the chip" dim) so the
+// post-reconcile re-assert has a style opacity to re-write and a destination override to defer to.
+sealed class DragStationaryClobberProbe : Component
+{
+    public readonly Signal<int> Rev = new(0);
+    public override Element Render()
+    {
+        int rev = Rev.Value;
+        return new BoxEl
+        {
+            Width = 400f, Height = 300f, Fill = ColorF.FromRgba(20, 20, 20),
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "row", Width = 300f, Height = 60f,
+                    Fill = ColorF.FromRgba(40, 40, (byte)(40 + rev)),
+                    Draggable = Drag.Source("res", static () => "p"),
+                },
+            ],
+        };
+    }
+}
+
 // Anim/drag double-owner (E13): a plain CanDrag row the gate seeds a live transform/opacity animation on before
 // promoting the drag — the drag must own both channels for the gesture, the animation before and after it.
 sealed class DragAnimConflictProbe : Component
