@@ -130,4 +130,36 @@ public static class WaveeBuiltInDataSources
             attached.Clear();
         };
     }
+
+#if DEBUG || FLUENTGPU_DIAG
+    /// <summary>Diagnostic-only labelled variant of <see cref="Attach(SidebarDataSourceTable,Action{Action},Action)"/>.
+    /// Each source needs its own handler so a wake capture can identify the source that raised <c>Changed</c>.</summary>
+    public static Action Attach(SidebarDataSourceTable table, Action<Action> post, Action<string> onChanged)
+    {
+        ArgumentNullException.ThrowIfNull(table);
+        ArgumentNullException.ThrowIfNull(post);
+        ArgumentNullException.ThrowIfNull(onChanged);
+
+        var attached = new List<(ISidebarDataSource Source, Action Handler)>();
+        foreach (var source in table.All)
+        {
+            (source as ISidebarDataSourceLifecycle)?.Attach(post);
+            string sourceId = source.Id;
+            Action handler = () => onChanged(sourceId);
+            source.Changed += handler;
+            attached.Add((source, handler));
+        }
+
+        return () =>
+        {
+            for (int i = 0; i < attached.Count; i++)
+            {
+                var entry = attached[i];
+                entry.Source.Changed -= entry.Handler;
+                (entry.Source as ISidebarDataSourceLifecycle)?.Detach();
+            }
+            attached.Clear();
+        };
+    }
+#endif
 }

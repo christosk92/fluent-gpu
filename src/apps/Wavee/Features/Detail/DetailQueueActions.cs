@@ -7,15 +7,18 @@ static class DetailQueueActions
 {
     public const int MaxBatch = 50;
 
+    // WHERE a queue verb lands is the player's business, not this table's: with no active device the controller routes
+    // LOCAL (starting playback when the session is idle — PlaybackController.EnqueueLocalAsync), with one it forwards.
+    // The old "remote device required" gate here predates local playback and swallowed every idle-local enqueue; the
+    // one case that genuinely cannot proceed (no local audio stack) is refused BY the controller, which raises its own
+    // "choose a remote device" toast. So these report what they ISSUED and the caller confirms it.
     public static int PlayNext(IPlaybackPlayer? player, IReadOnlyList<Track> tracks, int max = MaxBatch)
     {
         if (player is null) return 0;
         int n = Count(tracks, max);
         if (n <= 0) return 0;
         _ = player.PlayNextAsync(ToPlaybackContextTracks(tracks, n));
-        // Queueing only works when a remote device is playing (local playback is unsupported). With none active the call
-        // was rejected → the standard "choose a remote device" toast fired; return 0 so the caller shows no "added" toast.
-        return RemoteActive(player) ? n : 0;
+        return n;
     }
 
     public static int AddToEnd(IPlaybackPlayer? player, IReadOnlyList<Track> tracks, int max = MaxBatch)
@@ -23,14 +26,20 @@ static class DetailQueueActions
         if (player is null) return 0;
         int n = Count(tracks, max);
         if (n <= 0) return 0;
-        if (!RemoteActive(player)) return 0;   // defense-in-depth: queueing is remote-only; the caller (DetailShell) already guards + prompts. No "added" toast.
         for (int i = 0; i < n; i++) _ = player.EnqueueAsync(tracks[i]);
         return n;
     }
 
-    // A remote Connect device is the active playback target. Since local playback is unsupported, an active device is
-    // always a remote one — so a non-empty ActiveDeviceId means enqueue/play-next will actually forward and succeed.
-    static bool RemoteActive(IPlaybackPlayer player) => !string.IsNullOrEmpty(player.State.ActiveDeviceId);
+    /// <summary>Insert at a queue-relative SLOT (the drag-drop deposit; index 0 == <see cref="PlayNext"/>). Returns the
+    /// number of tracks issued — capped at <paramref name="max"/>, so a caller that dropped more can say so.</summary>
+    public static int InsertAt(IPlaybackPlayer? player, IReadOnlyList<Track> tracks, int index, int max = MaxBatch)
+    {
+        if (player is null) return 0;
+        int n = Count(tracks, max);
+        if (n <= 0) return 0;
+        _ = player.InsertIntoQueueAsync(ToPlaybackContextTracks(tracks, n), System.Math.Max(0, index));
+        return n;
+    }
 
     public static PlaybackContextTrack[] ToPlaybackContextTracks(IReadOnlyList<Track> tracks, int count)
     {

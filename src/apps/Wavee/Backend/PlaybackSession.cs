@@ -404,9 +404,14 @@ public sealed class PlaybackSession
     }
 
     /// <summary>Front-insert tracks ahead of the user queue ("play next"), preserving their order; same q-uid minting rule.</summary>
-    public QueueSnapshot EnqueueNextUser(IReadOnlyList<QueuedTrack> tracks)
+    public QueueSnapshot EnqueueNextUser(IReadOnlyList<QueuedTrack> tracks) => InsertUserQueue(tracks, 0);
+
+    /// <summary>Insert tracks into the user queue at <paramref name="index"/> (queue-relative; clamped to the queue's
+    /// bounds), preserving their order — the drag-drop "drop at this slot" primitive. Index 0 IS play-next.</summary>
+    public QueueSnapshot InsertUserQueue(IReadOnlyList<QueuedTrack> tracks, int index)
     {
-        for (int i = 0; i < tracks.Count; i++) _userQueue.Insert(i, NewQueueItem(tracks[i]));
+        int at = Math.Clamp(index, 0, _userQueue.Count);
+        for (int i = 0; i < tracks.Count; i++) _userQueue.Insert(at + i, NewQueueItem(tracks[i]));
         return Bump();
     }
 

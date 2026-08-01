@@ -30,6 +30,7 @@ namespace Wavee;
 sealed class QueuePanel : Component
 {
     const float QueueArt = 34f;
+    const float RowExtent = 44f;   // the queue row's resting main-axis extent (its MinHeight) — the reorder slot pitch
     const int PageSize = 100;   // rows REALIZED per visual page — the underlying queue is never truncated; the section
                                 // paginates visually with an explicit "Show more (N left)" affordance per page.
 
@@ -38,6 +39,21 @@ sealed class QueuePanel : Component
     readonly Signal<int> _upPages = new(1);
     readonly Signal<int> _autoPages = new(1);
     readonly SwipeGroup _swipeGroup = new();
+
+    // "Next in queue" is the one REORDERABLE + INSERTABLE section (locked decision: the user queue is the only part of
+    // the queue whose order is the user's to choose — a context continuation and the autoplay tail are the source's).
+    // Plain keyed rows are exactly what Reorderable's live projection wants (LiveProject moves the dragged row through
+    // the keyed diff and FLIP animates its neighbours), which is why this panel's non-virtualized design gets premiere
+    // reorder for free while the virtualized lists need ItemsView's InsertionOptions.
+    readonly Reorderable _reorder = new(WaveeDragKinds.Resource)
+    {
+        ItemExtent = RowExtent,
+        Spacing = 0f,
+        DragStyle = new DragVisualStyle { Lift = DragLift.Stationary, Opacity = Drag.SourceDimOpacity },
+        // A queue row dragged OUT lands on the surface it was dropped on (a playlist, the player bar) and leaves the
+        // queue alone — without this the downward travel to reach that surface would also commit a local reorder.
+        RequireDropOnList = true,
+    };
 
     public override Element Render()
     {
@@ -111,6 +127,9 @@ sealed class QueuePanel : Component
         string? source = ctxName.Value.Value is { Length: > 0 } rn ? rn : ImmediateContextName(ctxUri);
         string? sourceHref = source is { Length: > 0 } ? RichText.RouteForUri(ctxUri) : null;
 
+        // Fresh closures every render: they read THIS render's rows, and the panel re-renders on every queue push.
+        ConfigureReorder(b, acts, display, userQueue);
+
         var content = new List<Element>(8);
         if (source is { Length: > 0 })
             content.Add(PlayingFrom(source, sourceHref, go));
@@ -120,17 +139,24 @@ sealed class QueuePanel : Component
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.NextInQueue), userQueue.Count,
                 viewer ? null : () => ClearUserQueue(b, display)));
-            content.Add(Rows("q", userQueue, b, lib, go, display, removable: !viewer, dim: false, _queuePages, acts, menuOverlay, _swipeGroup));
+            // The one insertion LANE: the user queue's own rows. Grow is dropped (the wrapper defaults to filling the
+            // free space of the scroll column, which would push every later section to the bottom of a short queue).
+            content.Add((BoxEl)_reorder.List(
+                Rows("q", userQueue, b, lib, go, display, removable: !viewer, dim: false, _queuePages, acts, menuOverlay,
+                     _swipeGroup, reorder: viewer ? null : _reorder))
+                with { Grow = 0f, Key = "lane:q" });
         }
         if (ctxUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.NextUp), ctxUp.Count, null));
-            content.Add(Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, _upPages, acts, menuOverlay, _swipeGroup));
+            content.Add(RefusingLane("u", Loc.Get(Strings.Drag.CantReorderNextUp),
+                Rows("u", ctxUp, b, lib, go, display, removable: !viewer, dim: false, _upPages, acts, menuOverlay, _swipeGroup)));
         }
         if (autoplay && autoUp.Count > 0)
         {
             content.Add(SectionHeader(Loc.Get(Strings.Player.Autoplay), autoUp.Count, null, sub: Loc.Get(Strings.Player.AutoplayHint)));
-            content.Add(Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, _autoPages, acts, menuOverlay, _swipeGroup));
+            content.Add(RefusingLane("a", Loc.Get(Strings.Drag.CantReorderAutoplay),
+                Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, _autoPages, acts, menuOverlay, _swipeGroup)));
         }
         if (track is null && userQueue.Count == 0 && ctxUp.Count == 0)
             content.Add(new BoxEl
@@ -138,6 +164,18 @@ sealed class QueuePanel : Component
                 Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Padding = Edges4.All(22f),
                 Children = [new TextEl(Loc.Get(Strings.Player.NothingPlaying)) { Size = 13f, Color = Tok.TextSecondary }],
             });
+
+        Element body = new BoxEl
+        {
+            Direction = 1, MinHeight = 0f,
+            Padding = new Edges4(0f, 0f, 0f, 14f),
+            Children = content.ToArray(),
+        };
+        // With NO user queue there is no lane to aim at, and a drop that lands nowhere is the "cannot drop in this
+        // mode" failure this campaign exists to kill. The same Reorderable then mounts around the whole panel body:
+        // item count 0 ⇒ every position resolves to slot 0, which is the play-next insert.
+        if (userQueue.Count == 0)
+            body = (BoxEl)_reorder.List(body) with { Grow = 0f, Key = "lane:empty" };
 
         return new BoxEl
         {
@@ -152,15 +190,89 @@ sealed class QueuePanel : Component
                     AutoEdgeFade = true,
                     ScrollKey = "queuepanel",
                     OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()),
-                    Content = new BoxEl
-                    {
-                        Direction = 1, MinHeight = 0f,
-                        Padding = new Edges4(0f, 0f, 0f, 14f),
-                        Children = content.ToArray(),
-                    },
+                    Content = body,
                 },
             ],
         };
+    }
+
+    // ── drag & drop: the user queue is the one reorderable + insertable section ───────────────────────────────────────
+
+    /// <summary>Point the section's <see cref="Reorderable"/> at THIS render's rows. Everything here is a fresh closure
+    /// on purpose: the panel re-renders on every queue push, and a delegate captured at mount would move the wrong row.</summary>
+    void ConfigureReorder(PlaybackBridge b, ActionServices? acts, Signal<IReadOnlyList<QueueEntry>> display,
+                          List<QueueEntry> userQueue)
+    {
+        // Slot math spans the REALIZED rows only (the section paginates at PageSize) — the rows the user can see are
+        // the rows they can aim between.
+        int shown = Math.Min(userQueue.Count, Math.Max(1, _queuePages.Peek()) * PageSize);
+        _reorder.Scene = Context.Scene;
+        _reorder.RequestRender = Context.RequestRerender;
+        _reorder.ItemCount = shown;
+        _reorder.ItemOf = slot => (uint)slot < (uint)userQueue.Count
+            ? WaveeResourceDragPayload.ForTrack(userQueue[slot].Track)
+            : null;
+        _reorder.OnReorder = (from, to) => MoveInSection(b, display, userQueue, from, to);
+        _reorder.OnCrossCommit = (payload, _, _, _, slot) => InsertAtSlot(b, acts, payload, slot);
+        // A viewer's queue belongs to the active device: an insert forwards as a set_queue rewrite, so drops still
+        // work — only the local reorder path is withheld (MoveQueueItemAsync is a no-op while another device is active).
+        _reorder.CanAcceptForeign = static p => WaveeResourceDrop.CanDepositTracks(p);
+        _reorder.ForeignRefusalCaption = static p => WaveeResourceDrag.Unwrap(p) is { } r
+            // Locked decision: an artist has no single obvious track set, so it is refused rather than guessed at.
+            ? Loc.Get(r.Kind == WaveeResourceKind.Artist ? Strings.Drag.CantAddArtist : Strings.Drag.NothingToAdd)
+            : null;
+        _reorder.ForeignCaption = static (_, _) => Loc.Get(Strings.Drag.AddToQueue);
+    }
+
+    /// <summary>A section whose order is NOT the user's to change (a context continuation, the autoplay tail). It is a
+    /// kind-matched REFUSER, not empty space: without it a drag over these rows is silent, and silence is what "drag &amp;
+    /// drop is broken" is made of.</summary>
+    static Element RefusingLane(string tag, string why, Element rows) => new BoxEl
+    {
+        Key = "lane:" + tag,
+        Direction = 1,
+        DropTarget = Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+            accepts: static _ => false,
+            refusalCaption: _ => why),
+        Children = [rows],
+    };
+
+    /// <summary>Move a row inside its own section — the ONE path behind both the drag reorder and the context menu's
+    /// ±1 verbs. The optimistic snapshot mirrors the session op exactly (remove + insert at the post-removal index),
+    /// which for a ±1 move is the same result the old swap produced.</summary>
+    static void MoveInSection(PlaybackBridge b, Signal<IReadOnlyList<QueueEntry>> display,
+                              IReadOnlyList<QueueEntry> section, int from, int to)
+    {
+        if ((uint)from >= (uint)section.Count) return;
+        int at = Math.Clamp(to, 0, section.Count - 1);
+        if (at == from) return;
+        var entry = section[from];
+        if (entry.ItemId.IsNone) return;
+        _ = b.Player.MoveQueueItemAsync(entry.ItemId, at);
+        display.Value = QueueOrder.Move(display.Peek(), section, from, at);
+    }
+
+    /// <summary>Deposit a foreign payload into the user queue at the slot the insertion line marked. Albums/playlists
+    /// resolve cold (never during the drag), and the batch cap is surfaced rather than silently applied.</summary>
+    static void InsertAtSlot(PlaybackBridge b, ActionServices? acts, object? payload, int slot)
+    {
+        if (WaveeResourceDrag.Unwrap(payload) is not { CanCopyTracks: true } resource) return;
+        _ = Run();
+
+        async Task Run()
+        {
+            IReadOnlyList<Track> tracks;
+            try { tracks = await resource.ResolveTracksAsync().ConfigureAwait(false); }
+            catch { return; }
+            int n = DetailQueueActions.InsertAt(b.Player, tracks, slot);
+            if (n <= 0) return;
+            int total = tracks.Count;
+            acts?.Post?.Invoke(() => Toast.Show(
+                n < total
+                    ? Strings.Detail.AddedFirstToQueue(Strings.Detail.SongCount(n))
+                    : Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)),
+                new ToastOptions { Severity = InfoBarSeverity.Success }));
+        }
     }
 
     // ── "Playing from {source}" breadcrumb — borderless single line above the card (WaveeMusic ContextCard). ──
@@ -280,12 +392,26 @@ sealed class QueuePanel : Component
     // the UNDERLYING queue is untouched; every hidden track is one click away and the remaining count is always visible. ──
     static Element Rows(string sectionTag, List<QueueEntry> entries, PlaybackBridge b, LibraryBridge? lib,
         Action<string, string?>? go, Signal<IReadOnlyList<QueueEntry>> display, bool removable, bool dim, Signal<int> pages,
-        ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null)
+        ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null,
+        Reorderable? reorder = null)
     {
         int n = Math.Min(entries.Count, Math.Max(1, pages.Value) * PageSize);
         var kids = new List<Element>(n + 1);
         for (int i = 0; i < n; i++)
-            kids.Add(QueueRow(b, lib, go, display, entries[i], i, entries.Count, zebra: (i & 1) != 0, removable, dim, acts, menuOverlay, swipeGroup));
+        {
+            // The reorderable section renders its rows through the live PROJECTION: mid-drag the dragged row occupies
+            // the slot it would land in and the keyed diff + FLIP glide its neighbours out of the way (the WinUI
+            // part-to-make-room motion this panel's plain keyed rows can express natively).
+            int item = reorder is { } ro ? ro.ItemAt(i) : i;
+            if ((uint)item >= (uint)entries.Count) item = i;
+            var row = QueueRow(b, lib, go, display, entries[item], item, entries, zebra: (i & 1) != 0, removable, dim,
+                               acts, menuOverlay, swipeGroup, reorder is null);
+            // Direction 1 on the wrapper: its single child must stretch across the WIDTH (a row-direction wrapper
+            // would size the row to its content and collapse the zebra/hover plate to the text).
+            kids.Add(reorder is { } r
+                ? (BoxEl)r.Item(item, row, key: RowKey(entries[item])) with { Direction = 1 }
+                : row);
+        }
         if (entries.Count > n)
             kids.Add(ShowMore(sectionTag, Math.Min(PageSize, entries.Count - n), entries.Count - n,
                 () => pages.Value = pages.Peek() + 1));
@@ -312,45 +438,37 @@ sealed class QueuePanel : Component
     };
 
     static Element QueueRow(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go,
-        Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, int bucketIndex, int bucketCount, bool zebra, bool removable, bool dim,
-        ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null)
+        Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, int bucketIndex, IReadOnlyList<QueueEntry> section,
+        bool zebra, bool removable, bool dim,
+        ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null,
+        bool ownDrag = true)
     {
         var t = entry.Track;
+        int bucketCount = section.Count;
         var st = TrackRow.StateOf(b, lib, t);
         Action? like = t.Uri.Length > 0 && lib is not null ? () => lib.ToggleSaved(t.Uri, t.Title) : null;
 
         void Remove()
         {
             _ = b.Player.RemoveQueueItemAsync(entry.ItemId);
-            var cur = new List<QueueEntry>(display.Peek());
-            cur.RemoveAll(x => entry.ItemId.IsNone ? x.EntryId == entry.EntryId : x.ItemId == entry.ItemId);
-            display.Value = cur;
+            display.Value = QueueOrder.Remove(display.Peek(), entry);
         }
 
         bool canMove = removable && !entry.ItemId.IsNone;
         void Move(int delta)
         {
             if (!canMove) return;
-            int target = Math.Clamp(bucketIndex + delta, 0, bucketCount - 1);
-            if (target == bucketIndex) return;
-            _ = b.Player.MoveQueueItemAsync(entry.ItemId, target);
-
-            var cur = new List<QueueEntry>(display.Peek());
-            var sectionPositions = new List<int>();
-            for (int i = 0; i < cur.Count; i++)
-                if (entry.Bucket == QueueBucket.UserQueue
-                    ? cur[i].Bucket == QueueBucket.UserQueue
-                    : cur[i].Bucket == QueueBucket.NextUp && cur[i].Provider == entry.Provider)
-                    sectionPositions.Add(i);
-            if ((uint)bucketIndex >= (uint)sectionPositions.Count || (uint)target >= (uint)sectionPositions.Count) return;
-            int from = sectionPositions[bucketIndex], to = sectionPositions[target];
-            (cur[from], cur[to]) = (cur[to], cur[from]);
-            display.Value = cur;
+            MoveInSection(b, display, section, bucketIndex, bucketIndex + delta);
         }
 
         var row = new BoxEl
         {
             Key = RowKey(entry),
+            // Rows the Reorderable owns get their drag source from it (payload = the ReorderPayload every Wavee target
+            // already unwraps); every other row drags itself as a COPY — the queue is never mutated by a drag OUT.
+            Draggable = ownDrag
+                ? Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t))
+                : null,
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 44f,
             Padding = new Edges4(6f, 0f, 4f, 0f),
             Corners = CornerRadius4.All(6f),
@@ -369,6 +487,7 @@ sealed class QueuePanel : Component
                 new BoxEl
                 {
                     Width = 26f, Height = 44f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    BlocksDragArm = true,   // its own affordance — a press on the heart is never a drag handle
                     Children = [TrackRow.Heart(st.Saved, like)],
                 },
                 new BoxEl
@@ -407,7 +526,7 @@ sealed class QueuePanel : Component
                 acts is not null && menuOverlay is not null
                     ? new BoxEl
                     {
-                        Opacity = 0f, HoverOpacity = 1f, Shrink = 0f,
+                        Opacity = 0f, HoverOpacity = 1f, Shrink = 0f, BlocksDragArm = true,
                         Children =
                         [
                             new BoxEl
@@ -429,6 +548,7 @@ sealed class QueuePanel : Component
                         Corners = CornerRadius4.All(13f),
                         HoverFill = WaveeColors.RowPressed,
                         Role = AutomationRole.Button, Cursor = CursorId.Hand,
+                        BlocksDragArm = true,
                         OnClick = Remove,
                         Children = [new TextEl(Icons.ChromeClose) { Size = 9f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
                     }

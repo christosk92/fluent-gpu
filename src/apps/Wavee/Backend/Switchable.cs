@@ -97,6 +97,9 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public Task EnqueueAsync(string trackUri, CancellationToken ct = default) => Cur.EnqueueAsync(trackUri, ct);
     public Task EnqueueAsync(Track track, CancellationToken ct = default) => Cur.EnqueueAsync(track, ct);
     public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) => Cur.PlayNextAsync(tracks, ct);
+    // Forwarded explicitly: the interface's default would resolve HERE (front-insert/append) and never reach the inner
+    // player's exact slot insert.
+    public Task InsertIntoQueueAsync(IReadOnlyList<PlaybackContextTrack> tracks, int index, CancellationToken ct = default) => Cur.InsertIntoQueueAsync(tracks, index, ct);
     public Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default) => Cur.StartRadioAsync(seedUri, displayName, ct);
 }
 

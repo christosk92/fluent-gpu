@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -308,12 +309,22 @@ sealed class PlayerBarContent : Component
         if (showLike)
             leftKids.Add(Transport(liked ? Icons.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
                     onRealized: h => likeNode.Value = h)
-                with { Key = "like", Shrink = 0f, Animate = ItemMotion });
+                // The cluster is a drag handle (below); the heart is its own affordance, so a press on it must not
+                // arm the drag — the first few px of a like-press would otherwise lift the track.
+                with { Key = "like", Shrink = 0f, Animate = ItemMotion, BlocksDragArm = true });
 
         var left = new BoxEl
         {
             Key = "left", Width = leftW, Shrink = 0f, MinWidth = 0f, Animate = MoveMotion,
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = L.LeftGap, ClipToBounds = true, Children = leftKids.ToArray(),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = L.LeftGap, ClipToBounds = true,
+            // The now-playing cluster drags the CURRENT track (drop it on a playlist, the sidebar, the queue). The
+            // payload factory Peeks at promotion time — the mounted cluster outlives every track change, so a
+            // render-time capture would drag whatever was playing when the bar was built.
+            Draggable = track is null
+                ? null
+                : Drag.Source(WaveeDragKinds.Resource,
+                    () => b.CurrentTrack.Peek() is { } dragged ? WaveeResourceDragPayload.ForTrack(dragged) : null),
+            Children = leftKids.ToArray(),
         };
         // Right-click / Menu key / long-press on the now-playing cluster: the track menu (Host = null → no Remove
         // rows). The factory Peeks the CURRENT track at open — never the render-time capture.
@@ -357,10 +368,22 @@ sealed class PlayerBarContent : Component
             Gap = L.SeekGap, Animate = MoveMotion, Children = seekKids.ToArray(),
         };
 
+        // Drop on the transport = PLAY NEXT (locked decision): a front-insert into the user queue, never an immediate
+        // playback change — a drag must not take the current track away mid-listen. The caption says so explicitly,
+        // because "dropped it on the player" could equally read as "play this now".
         var centre = new BoxEl
         {
             Key = "centre", Grow = 1f, Shrink = 1f, MinWidth = 0f, Animate = MoveMotion,
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Start, Gap = clusterGap,
+            DropTarget = Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+                accepts: static p => p.CanCopyTracks,
+                onDrop: (p, _) => PlayNextDrop(b, acts, p),
+                caption: static _ => Loc.Get(Strings.Drag.PlayNext),
+                refusalCaption: static p => Loc.Get(p.Kind == WaveeResourceKind.Artist
+                    // Locked decision: an artist has no single obvious track set — refuse rather than guess.
+                    ? Strings.Drag.CantAddArtist
+                    : Strings.Drag.NothingToAdd),
+                visualPolicy: DropTargetVisualPolicy.Spotlight),
             Children = [transportGroup, seekRow],
         };
 
@@ -562,6 +585,29 @@ sealed class PlayerBarContent : Component
             Shadow = Elevation.DockTop,
             Children = [topEdge, row],
         };
+    }
+
+    /// <summary>The bar's one deposit: resolve the payload's tracks (cold — never during the drag) and FRONT-insert
+    /// them into the user queue. Capped by the shared queue batch limit, and a truncation is said out loud rather than
+    /// silently applied.</summary>
+    static void PlayNextDrop(PlaybackBridge b, ActionServices? acts, WaveeResourceDragPayload payload)
+    {
+        _ = Run();
+
+        async Task Run()
+        {
+            IReadOnlyList<Track> tracks;
+            try { tracks = await payload.ResolveTracksAsync().ConfigureAwait(false); }
+            catch { return; }
+            int n = DetailQueueActions.PlayNext(b.Player, tracks);
+            if (n <= 0) return;
+            int total = tracks.Count;
+            acts?.Post?.Invoke(() => Toast.Show(
+                n < total
+                    ? Strings.Detail.AddedFirstToQueue(Strings.Detail.SongCount(n))
+                    : Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)),
+                new ToastOptions { Severity = InfoBarSeverity.Success }));
+        }
     }
 
     // ── intents (optimistic: write the signal first so the UI is instant, then the bridge reconciles) ──

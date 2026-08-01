@@ -6,9 +6,9 @@ using Xunit;
 
 namespace Wavee.Tests.Actions;
 
-// The pure decision core behind the action predicates (Actions/ActionRules.cs) + the device-gated queue verbs
-// (DetailQueueActions) the PlayNext/AddToQueue actions ride: no remote device → the call still fires (the player
-// surfaces the standard "choose a remote device" prompt) but the verb reports 0 → the caller shows no success toast.
+// The pure decision core behind the action predicates (Actions/ActionRules.cs) + the queue verbs (DetailQueueActions)
+// the PlayNext/AddToQueue/drag-drop paths ride: they ISSUE the intent and report how many tracks went (capped at
+// MaxBatch), leaving the local-vs-remote routing — and the one refusal, "no local audio stack" — to the player.
 public class ActionRulesTests
 {
     // ── ToggleLike checked-state: checked iff ALL saved ────────────────────────────────────────────────────────────
@@ -71,15 +71,15 @@ public class ActionRulesTests
         Assert.Null(ActionRules.RouteFor(in tracks));
     }
 
-    // ── PlayNext / AddToEnd device gate (regression: no device → fire + report 0 → no success toast) ──────────────
+    // ── PlayNext / AddToEnd routing (regression: the old remote-device gate swallowed every idle-LOCAL enqueue) ────
     [Fact]
-    public void PlayNext_NoActiveDevice_FiresButReportsZero()
+    public void PlayNext_NoActiveDevice_StillQueuesAndReportsCount()
     {
-        var p = new RecordingPlayer();   // ActiveDeviceId null — no remote device
+        var p = new RecordingPlayer();   // ActiveDeviceId null — playback routes local
         int n = DetailQueueActions.PlayNext(p, new[] { T.Mk("a"), T.Mk("b") });
 
-        Assert.Equal(0, n);                          // caller shows NO "added" toast
-        Assert.Single(p.PlayNextCalls);              // the intent still fired → the standard device prompt path
+        Assert.Equal(2, n);                          // the caller confirms what was issued
+        Assert.Single(p.PlayNextCalls);
         Assert.Equal(2, p.PlayNextCalls[0].Count);
     }
 
@@ -96,13 +96,43 @@ public class ActionRulesTests
     }
 
     [Fact]
-    public void AddToEnd_NoActiveDevice_EnqueuesNothing()
+    public void AddToEnd_NoActiveDevice_StillEnqueuesLocally()
     {
         var p = new RecordingPlayer();
         int n = DetailQueueActions.AddToEnd(p, new[] { T.Mk("a") });
 
-        Assert.Equal(0, n);
-        Assert.Empty(p.Enqueued);   // remote-only verb: nothing silently queued locally
+        // Where it lands is the player's decision (local host / forwarded / refused with its own toast) — this table
+        // no longer pre-empts it with a device gate that predated local playback.
+        Assert.Equal(1, n);
+        Assert.Equal(new[] { "spotify:track:a" }, p.Enqueued);
+    }
+
+    // ── the drag-drop slot insert: the queue-relative index rides the call, and the batch cap is reported ──────────
+    [Fact]
+    public void InsertAt_PassesSlotAndCapsTheBatch()
+    {
+        var p = new RecordingPlayer();
+        var many = new Track[DetailQueueActions.MaxBatch + 7];
+        for (int i = 0; i < many.Length; i++) many[i] = T.Mk("t" + i);
+
+        Assert.Equal(2, DetailQueueActions.InsertAt(p, new[] { T.Mk("a"), T.Mk("b") }, 3));
+        Assert.Equal(3, p.InsertCalls[0].Index);
+        Assert.Equal("spotify:track:a", p.InsertCalls[0].Tracks[0].Uri);
+
+        Assert.Equal(DetailQueueActions.MaxBatch, DetailQueueActions.InsertAt(p, many, 0));
+        Assert.Equal(DetailQueueActions.MaxBatch, p.InsertCalls[1].Tracks.Count);   // truncated, and the caller is told
+
+        Assert.Equal(0, DetailQueueActions.InsertAt(p, System.Array.Empty<Track>(), 0));
+        Assert.Equal(0, DetailQueueActions.InsertAt(null, new[] { T.Mk("a") }, 0));
+        Assert.Equal(2, p.InsertCalls.Count);
+    }
+
+    [Fact]
+    public void InsertAt_NegativeSlot_ClampsToPlayNext()
+    {
+        var p = new RecordingPlayer();
+        DetailQueueActions.InsertAt(p, new[] { T.Mk("a") }, -4);
+        Assert.Equal(0, p.InsertCalls[0].Index);
     }
 
     [Fact]

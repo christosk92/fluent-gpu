@@ -43,6 +43,22 @@ public interface IPlaybackPlayer
     Task EnqueueAsync(Track track, CancellationToken ct = default);
     /// <summary>Insert tracks at the FRONT of the user-queue ("play next" — before already-queued items).</summary>
     Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default);
+    /// <summary>Insert tracks into the user-queue at a QUEUE-RELATIVE index (0 = play next, ≥ the queue length =
+    /// append) — the drag-and-drop "drop at this slot" verb, of which <see cref="PlayNextAsync"/> is the index-0 case.
+    /// <para>The default implementation is honest about what the two older verbs can do on their own: a front insert
+    /// for slot 0, an append for anything else. A player that owns a real queue model (the live controller) overrides
+    /// it with the exact insert.</para></summary>
+    Task InsertIntoQueueAsync(IReadOnlyList<PlaybackContextTrack> tracks, int index, CancellationToken ct = default)
+    {
+        if (index <= 0) return PlayNextAsync(tracks, ct);
+        return Append();
+
+        async Task Append()
+        {
+            for (int i = 0; i < tracks.Count; i++)
+                await EnqueueAsync(tracks[i].Uri, ct).ConfigureAwait(false);
+        }
+    }
     /// <summary>Start a radio seeded by a track/artist uri (Apple-Music-style): resolve the seed → a concrete radio
     /// playlist (<c>inspiredby-mix/v2/seed_to_playlist</c>), then either play it immediately (nothing playing) or PARK it
     /// as the new context so the currently-playing track finishes first and playback flows into the radio on track-end

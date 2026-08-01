@@ -788,40 +788,73 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         finally { _lock.Release(); }
     }
 
-    // play-next: insert at the FRONT of the user queue. LOCAL → EnqueueNext (head-insert, before existing queue). REMOTE →
-    // a full set_queue snapshot: the inserted tracks + the existing user queue as provider:"queue", then the resident
-    // context continuation as provider:"context". prev_tracks is empty (no history model); queue_revision echoes the cluster.
-    public async Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default)
+    // play-next: insert at the FRONT of the user queue — the index-0 case of the slot insert below (one code path, so a
+    // drag dropped at slot 0 and the "Play next" verb can never diverge).
+    public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default)
+        => InsertIntoQueueAsync(tracks, 0, ct);
+
+    // Insert at a QUEUE-RELATIVE slot. LOCAL → InsertUserQueue (head-insert at 0 = play-next; clamped to the queue).
+    // REMOTE → a full set_queue snapshot: the device's own queue as the cluster reports it with our tracks spliced in
+    // after `index` of its provider:"queue" rows, then the resident context continuation as provider:"context".
+    // prev_tracks is echoed verbatim (no history model of our own); queue_revision echoes the cluster.
+    public async Task InsertIntoQueueAsync(IReadOnlyList<PlaybackContextTrack> tracks, int index, CancellationToken ct = default)
     {
         var refs = ToQueuedRefs(tracks);
         if (refs.Length == 0) return;
+        int at = Math.Max(0, index);
         if (RouteLocal())
         {
-            if (RejectLocalPlay()) return;   // local play-next would seed a local queue that can never play → toast + abort
+            if (RejectLocalPlay()) return;   // a local insert would seed a local queue that can never play → toast + abort
             var hydrated = await _contexts.HydrateAsync(refs, ct).ConfigureAwait(false);
             await _lock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var snap = _session.EnqueueNextUser(hydrated);
-                if (hydrated.Count > 0) WarmFastTrack(hydrated[0].Track, "play-next");
-                EmitSnap(snap, EvKind.QueueChanged);
+                if (_session.Current is null && hydrated.Count > 0)
+                {
+                    // Rule §3, the same one EnqueueLocalAsync applies: with NOTHING playing there is no "next" to
+                    // insert before — parking rows in a queue that never runs is the silent-no-op reading. Start them.
+                    SetQueueContext(hydrated[0].Track.Uri, hydrated, 0);
+                    WarmFastTrack(hydrated[0].Track, "queue-insert");
+                    await LoadAndPlayCurrentAsync(EvKind.Started, ct).ConfigureAwait(false);
+                }
+                else
+                {
+                    var snap = _session.InsertUserQueue(hydrated, at);
+                    if (hydrated.Count > 0) WarmFastTrack(hydrated[0].Track, at == 0 ? "play-next" : "queue-insert");
+                    EmitSnap(snap, EvKind.QueueChanged);
+                }
             }
             finally { _lock.Release(); }
             return;
         }
         var target = _projection.ActiveDeviceId;
         if (_outbound is null || string.IsNullOrEmpty(target)) return;
-        // Rewrite the ACTIVE device's queue as the cluster reports it (its real prev/next, uid+provider preserved) with our
-        // tracks inserted at the FRONT of the up-next — NOT our local QueueCore, which is stale/empty when we're a viewer.
-        // prev_tracks + the context continuation are echoed verbatim so the remote queue isn't clobbered, and queue_revision
-        // comes from the same cluster snapshot (so it matches the server's; remote routing can't happen without a cluster).
+        // Rewrite the ACTIVE device's queue as the cluster reports it (its real prev/next, uid+provider preserved) —
+        // NOT our local QueueCore, which is stale/empty when we're a viewer. prev_tracks + the context continuation are
+        // echoed verbatim so the remote queue isn't clobbered, and queue_revision comes from the same cluster snapshot
+        // (so it matches the server's; remote routing can't happen without a cluster).
         var clusterPrev = _projection.ClusterPrevTracks;
         var clusterNext = _projection.ClusterNextTracks;
         var prev = new List<QueueWireEntry>(clusterPrev.Count);
         foreach (var t in clusterPrev) prev.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue", t.Metadata));
         var next = new List<QueueWireEntry>(refs.Length + clusterNext.Count);
-        foreach (var r in refs)        next.Add(new QueueWireEntry(r.Uri, r.Uid, true, r.Metadata));                 // inserted play-next → queue
-        foreach (var t in clusterNext) next.Add(new QueueWireEntry(t.Uri, t.Uid, t.Provider == "queue", t.Metadata));// the device's queue, verbatim
+        bool placed = false;
+        int queueSeen = 0;
+        foreach (var t in clusterNext)
+        {
+            bool queued = t.Provider == "queue";
+            // Splice in once we have passed `at` of the device's queued rows — or as soon as its queue section ends
+            // (a slot past the end clamps to "last queued row"), which for at == 0 is the head, byte-identical to the
+            // pre-slot play-next.
+            if (!placed && (queueSeen >= at || !queued))
+            {
+                foreach (var r in refs) next.Add(new QueueWireEntry(r.Uri, r.Uid, true, r.Metadata));
+                placed = true;
+            }
+            if (queued) queueSeen++;
+            next.Add(new QueueWireEntry(t.Uri, t.Uid, queued, t.Metadata));
+        }
+        if (!placed) foreach (var r in refs) next.Add(new QueueWireEntry(r.Uri, r.Uid, true, r.Metadata));
         var json = OutboundEnvelope.SetQueue(_ourDeviceId, ParseRevision(), prev, next, NewId(), NewId(), Now(), NewId());
         var r2 = await _outbound.SendAsync(target, json, ct).ConfigureAwait(false);
         if (!r2.Ok) _log.Info($"outbound set_queue → {target}: failed ({r2.Status})");

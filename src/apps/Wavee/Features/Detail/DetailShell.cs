@@ -261,17 +261,17 @@ sealed class DetailShell : Component
             _ = svc.Player.PlayAsync(uri, 0);
         }
         // Add-to-queue / add-to-playlist act on THIS context's tracks (capped batch); each confirms with a toast.
+        // No device gate here any more: queueing routes LOCAL when no remote device is active (an idle session starts
+        // playing the queued track), and the one case that cannot proceed — no local audio stack — is refused by the
+        // controller, which raises the "choose a remote device" toast itself. The old page-level guard predated local
+        // playback and turned every idle enqueue into a prompt. Same rule in LibraryPage / the track context menus.
         void AddToQueue()
         {
-            // Queueing is remote-only (local playback is unsupported). No active device ⇒ prompt to choose one (the toast
-            // opens the player-bar device picker) instead of the old silent no-op.
-            if (bridge is null || string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge?.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.AddToEnd(svc?.Player, m.Tracks);
             if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }
         void PlayNext()
         {
-            if (bridge is null || string.IsNullOrEmpty(bridge.ActiveDeviceId.Peek())) { bridge?.NotifyLocalPlaybackUnsupported(); return; }
             int n = DetailQueueActions.PlayNext(svc?.Player, m.Tracks);
             if (n > 0) Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)), new ToastOptions { Severity = InfoBarSeverity.Success });
         }

@@ -46,6 +46,7 @@ namespace Wavee.Tests.Actions
     internal sealed class RecordingPlayer : IPlaybackPlayer, IPlaybackState
     {
         public readonly List<IReadOnlyList<PlaybackContextTrack>> PlayNextCalls = new();
+        public readonly List<(int Index, IReadOnlyList<PlaybackContextTrack> Tracks)> InsertCalls = new();
         public readonly List<string> Enqueued = new();
         public readonly List<string> PlayedTracks = new();
         public readonly List<QueueItemId> Removed = new();
@@ -77,6 +78,8 @@ namespace Wavee.Tests.Actions
         public Task EnqueueAsync(string trackUri, CancellationToken ct = default) { Enqueued.Add(trackUri); return Task.CompletedTask; }
         public Task EnqueueAsync(Track track, CancellationToken ct = default) { Enqueued.Add(track.Uri); return Task.CompletedTask; }
         public Task PlayNextAsync(IReadOnlyList<PlaybackContextTrack> tracks, CancellationToken ct = default) { PlayNextCalls.Add(tracks); return Task.CompletedTask; }
+        public Task InsertIntoQueueAsync(IReadOnlyList<PlaybackContextTrack> tracks, int index, CancellationToken ct = default)
+        { InsertCalls.Add((index, tracks)); return Task.CompletedTask; }
         public Task<string?> StartRadioAsync(string seedUri, string? displayName = null, CancellationToken ct = default) { RadioSeeds.Add(seedUri); return Task.FromResult(RadioResult); }
         public IPlaybackState State => this;
 

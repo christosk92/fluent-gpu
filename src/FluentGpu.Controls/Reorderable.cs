@@ -67,6 +67,7 @@ public sealed class Reorderable
     private NodeHandle _listNode;        // List() wrapper node (cross-list insertion math + scroll offset)
     private bool _crossOver;             // a foreign session is hovering this list
     private int _crossInsert = -1;       // its current insertion slot (0..ItemCount)
+    private bool _selfDrop;              // this gesture was RELEASED over this list (see RequireDropOnList)
 
     public Reorderable(string kind)
     {
@@ -79,6 +80,11 @@ public sealed class Reorderable
         _dropSpec = new DropTargetSpec(_kinds, OnTargetEnter, OnTargetOver, OnTargetLeave, OnTargetDrop)
         {
             SettleOnDrop = true,
+            // The list's OWN gesture is always accepted (its commit path runs through the source's completion, and a
+            // refused target would strand the drag with a not-allowed cue over its own list). Unset gates ⇒ accept
+            // everything of the kind, which is the historical behavior.
+            CanAccept = s => IsOwnPayload(s.Payload) || CanAcceptForeign is not { } gate || gate(s.Payload),
+            RefusalCaption = s => IsOwnPayload(s.Payload) ? null : ForeignRefusalCaption?.Invoke(s.Payload),
         };
     }
 
@@ -133,6 +139,33 @@ public sealed class Reorderable
     /// projection would swap content under the lifted node; instead the resting order holds during the drag and the
     /// insertion LINE shows the pending slot (commit still lands exactly where shown).</summary>
     public bool LiveProject = true;
+
+    // ── drop POLICY (all optional; unset ⇒ byte-identical to the pre-policy list) ──────────────────
+    /// <summary>Lift styling for the item drag sources <see cref="Item"/> builds. Null (default) ⇒ the engine's ghost
+    /// lift. Set <c>new DragVisualStyle { Lift = DragLift.Stationary, Opacity = Drag.SourceDimOpacity }</c> on a list
+    /// whose app mounts a <see cref="DragPreviewLayer"/>, so the row dims in place and the CHIP is the moving visual
+    /// (otherwise the row is lifted AND the chip is drawn — two visuals for one gesture).</summary>
+    public DragVisualStyle? DragStyle;
+
+    /// <summary>Capability gate for FOREIGN payloads (this list's own <see cref="ReorderPayload"/> is always accepted).
+    /// False makes the list transparent to that payload — discovery continues to a compatible ancestor — instead of
+    /// accepting a drop it would silently no-op. Null ⇒ every payload of <see cref="Kind"/> is accepted.</summary>
+    public Func<object?, bool>? CanAcceptForeign;
+
+    /// <summary>Why a kind-matched foreign payload was refused by <see cref="CanAcceptForeign"/> (see
+    /// <see cref="DropTargetSpec.RefusalCaption"/> — a transparent target is otherwise indistinguishable from empty
+    /// space). Null ⇒ the chip's not-allowed glyph alone.</summary>
+    public Func<object?, string?>? ForeignRefusalCaption;
+
+    /// <summary>Drop caption for an accepted foreign payload at the live insertion slot ("Add to queue"), refreshed on
+    /// every move. Null ⇒ no caption. Same-list reorders never caption (their feedback is the displacement).</summary>
+    public Func<object?, int, string?>? ForeignCaption;
+
+    /// <summary>Commit a POINTER reorder only when the gesture was actually released over THIS list (default false =
+    /// the historical behavior: any completion commits at the dwell slot). A list whose items are also dragged OUT to
+    /// foreign targets needs this: without it, dragging a row away and dropping it somewhere else still commits the
+    /// local move the downward drag happened to project. Keyboard lift/drop is unaffected (it has no pointer release).</summary>
+    public bool RequireDropOnList;
 
     // ── read surface (consumers render from these) ────────────────────────────────────────────────
     /// <summary>A lift is in flight on THIS list (pointer drag or keyboard lift).</summary>
@@ -228,7 +261,10 @@ public sealed class Reorderable
         return new BoxEl
         {
             Key = key ?? "reorder#" + index,
-            Draggable = new DragSource(Kind, () => new ReorderPayload(this, index, ItemOf?.Invoke(index))),
+            Draggable = new DragSource(Kind, () => new ReorderPayload(this, index, ItemOf?.Invoke(index)))
+            {
+                Style = DragStyle,
+            },
             OnDragStarted = _ => BeginGesture(index),
             OnDragDelta = OnDelta,
             OnDragCompleted = _ => CompleteGesture(),
@@ -285,6 +321,7 @@ public sealed class Reorderable
     {
         _kbLifted = -1;
         _crossConsumed = false;
+        _selfDrop = false;
         _lastDeltaWallMs = Environment.TickCount64;
         BeginCore(index);
         InvalidateOrder();   // projection starts as identity (target == dragged) — no render needed yet
@@ -310,16 +347,24 @@ public sealed class Reorderable
             _crossConsumed = false;
             Core.Cancel();
         }
+        else if (RequireDropOnList && !_selfDrop)
+        {
+            // Released away from this list (a foreign deposit target, or empty space): the downward travel that got
+            // the pointer there is NOT a reorder intent. Drop the hints; the foreign target owns the outcome.
+            Core.Cancel();
+        }
         else
         {
             Core.Complete();   // fires OnReorder(from, to) iff the slot actually changed
         }
+        _selfDrop = false;
         Changed();
     }
 
     private void CancelGesture()
     {
         _crossConsumed = false;
+        _selfDrop = false;
         Core.Cancel();
         Changed();
     }
@@ -424,8 +469,11 @@ public sealed class Reorderable
 
     private void OnTargetOver(DragSession s)
     {
-        if (s.Payload is ReorderPayload rp && ReferenceEquals(rp.Owner, this)) return;   // same-list: displacement, no line
+        if (IsOwnPayload(s.Payload)) return;   // same-list: displacement, no line
         int slot = SlotFromPosition(s.Position);
+        // Captioned per move, not per slot change: the engine clears Session.Caption on every target change, so a
+        // caption published only on the slot edge would vanish the moment the pointer re-entered from a sibling target.
+        if (ForeignCaption is { } caption) s.Caption = caption(s.Payload, slot);
         if (!_crossOver || slot != _crossInsert)
         {
             _crossOver = true;
@@ -451,7 +499,11 @@ public sealed class Reorderable
 
         if (s.Payload is ReorderPayload rp)
         {
-            if (ReferenceEquals(rp.Owner, this)) return;   // same-list: the gesture completion commits (SettleOnDrop glide)
+            if (ReferenceEquals(rp.Owner, this))
+            {
+                _selfDrop = true;   // the release happened HERE — RequireDropOnList lists may now commit
+                return;             // same-list: the gesture completion commits (SettleOnDrop glide)
+            }
             rp.Owner._crossConsumed = true;                // the source's completion cancels its local reorder
             var commit = OnCrossCommit ?? rp.Owner.OnCrossCommit;
             commit?.Invoke(rp.Item, rp.Index, rp.Owner, this, to);
@@ -463,6 +515,10 @@ public sealed class Reorderable
         }
         if (hadLine) RequestRender?.Invoke();
     }
+
+    /// <summary>This payload is THIS list's own lifted item (the same-list gesture), rather than a foreign session.</summary>
+    private bool IsOwnPayload(object? payload)
+        => payload is ReorderPayload rp && ReferenceEquals(rp.Owner, this);
 
     // ── geometry (cross-list pointer → slot; cold per-move path) ─────────────────────────────────
 

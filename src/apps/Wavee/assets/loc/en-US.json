@@ -10,7 +10,11 @@
     "clearSortingToReorder": "Clear sorting to reorder",
     "clearFiltersToReorder": "Clear filters to reorder",
     "addTo": "Add to {name}",
-    "dropOnListToReorder": "Drop on the list to reorder"
+    "dropOnListToReorder": "Drop on the list to reorder",
+    "addToQueue": "Add to queue",
+    "playNext": "Play next",
+    "cantReorderNextUp": "Can’t reorder what’s playing next",
+    "cantReorderAutoplay": "Can’t reorder Autoplay"
   },
   "detail": {
     "play": "Play",
@@ -35,6 +39,7 @@
     "addToPlaylist": "Add to playlist",
     "copyToPlaylist": "Copy to playlist",
     "addedToQueue": "Added {count} to queue",
+    "addedFirstToQueue": "Added the first {count} to queue",
     "addedToPlaylist": "Added to {name}",
     "goToPlaylist": "Open",
     "findPlaylist": "Find a playlist",

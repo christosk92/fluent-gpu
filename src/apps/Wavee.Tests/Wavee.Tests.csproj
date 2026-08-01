@@ -188,8 +188,11 @@
     <Compile Include="..\Wavee\Actions\SpotifyLink.cs" />
     <Compile Include="..\Wavee\Actions\TrackTargetResolver.cs" />
     <Compile Include="..\..\FluentGpu.Controls\SelectionModel.cs" />
-    <!-- the device-gated queue verbs (Wavee.Core + BCL only) — the PlayNext/AddToEnd no-device regression tests -->
+    <!-- the queue verbs + their batch cap (Wavee.Core + BCL only) — the PlayNext/AddToEnd/InsertAt routing tests -->
     <Compile Include="..\Wavee\Features\Detail\DetailQueueActions.cs" />
+    <!-- the queue panel's OPTIMISTIC reorder as pure data (Wavee.Core + BCL only) — QueueOrderTests pin it against the
+         authoritative remove+insert session op the panel used to mirror with a swap -->
+    <Compile Include="..\Wavee\Features\Player\QueueOrder.cs" />
     <!-- artist hero height response (Wavee.Core + BCL only) — ArtistHeroLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\ArtistHeroLayout.cs" />
     <Compile Include="..\Wavee\Features\Detail\AlbumDrawerRows.cs" />

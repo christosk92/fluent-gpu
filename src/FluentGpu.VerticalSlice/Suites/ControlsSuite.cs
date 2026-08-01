@@ -3352,6 +3352,75 @@ static class ControlsSuite
                 $"slots={slots} boundaries={boundaries} reduces={reduces} uniformBoundary={uniformBoundary} live=({liveSlot},{liveLine:0.#})");
         }
 
+        // e5dragdrop.reorder.policy — a sortable list is also a DESTINATION and a SOURCE of drags that leave it, which
+        // the bare Reorderable could express none of: its drop spec accepted every payload of its kind (so a payload it
+        // could do nothing with dropped into a silent no-op), it could not caption or explain a refusal, its items were
+        // always GHOST-lifted (a second visual on top of an app's chip), and ANY completion committed the dwell slot —
+        // so dragging a row OUT to a foreign target also reordered the list the downward travel had projected.
+        {
+            var scene = new SceneStore();
+            int deposits = 0, depositSlot = -1, commits = 0;
+            var ro = new Reorderable("res")
+            {
+                ItemCount = 4, ItemExtent = 40f, Spacing = 0f, Scene = scene, RequestRender = static () => { },
+                DragStyle = new DragVisualStyle { Lift = DragLift.Stationary, Opacity = Drag.SourceDimOpacity },
+                CanAcceptForeign = static p => p is string s && s != "no",
+                ForeignRefusalCaption = static _ => "Nothing to add",
+                ForeignCaption = static (_, slot) => "Add at " + slot,
+                RequireDropOnList = true,
+                OnReorder = (_, _) => commits++,
+                OnCrossCommit = (_, _, _, _, slot) => { deposits++; depositSlot = slot; },
+            };
+            var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+            bool styled = item.Draggable is { Style: { } style }
+                          && style.Lift == DragLift.Stationary && Near(style.Opacity, Drag.SourceDimOpacity);
+
+            new TreeReconciler(scene, strings).ReconcileRoot(
+                ro.List(new BoxEl { Width = 200, Height = 160 }), null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var session = disp.DragDrop.Session;
+            var at = new Point2(50f, 50f);        // inside item 1's first half ⇒ slot 1
+            var node = disp.DiagHitTest(at);
+
+            // A payload the list can do nothing with: transparent (no OverTarget) but NOT silent — the reason rides
+            // the session for the chip to render beside its not-allowed glyph.
+            disp.DragDrop.ExternalBegin("res", "no", at, KeyModifiers.None);
+            disp.DragDrop.Move(node, at, 0f, 0f, KeyModifiers.None);
+            bool refused = session.OverTarget.IsNull && !session.RefusedTarget.IsNull
+                           && session.Caption == "Nothing to add" && !ro.InsertionVisible;
+            disp.DragDrop.Cancel();
+
+            // An accepted one captions per move and deposits at the slot the line marked.
+            disp.DragDrop.ExternalBegin("res", "ok", at, KeyModifiers.None);
+            disp.DragDrop.Move(node, at, 0f, 0f, KeyModifiers.None);
+            bool captioned = !session.OverTarget.IsNull && session.Caption == "Add at 1" && ro.InsertionIndex == 1;
+            disp.DragDrop.TryDrop(at, KeyModifiers.None, out _);
+            bool deposited = deposits == 1 && depositSlot == 1;
+
+            // RequireDropOnList: the list's OWN gesture, released somewhere else, commits nothing…
+            var args = new DragEventArgs { TotalDy = 120f };   // from item 0 past item 2's centre ⇒ pending slot 2
+            item.OnDragStarted?.Invoke(args);
+            item.OnDragDelta?.Invoke(args);
+            item.OnDragCompleted?.Invoke(args);
+            bool noCommitAway = commits == 0;
+
+            // …and the same gesture RELEASED over the list does commit — after being accepted despite the foreign gate
+            // refusing everything that is not one of its strings (a list must never refuse its own item).
+            item.OnDragStarted?.Invoke(args);
+            item.OnDragDelta?.Invoke(args);
+            disp.DragDrop.ExternalBegin("res", new ReorderPayload(ro, 0, null), at, KeyModifiers.None);
+            disp.DragDrop.Move(node, at, 0f, 0f, KeyModifiers.None);
+            bool ownAccepted = !session.OverTarget.IsNull && session.Caption is null && !ro.InsertionVisible;
+            disp.DragDrop.TryDrop(at, KeyModifiers.None, out _);
+            item.OnDragCompleted?.Invoke(args);
+            bool commitOnList = commits == 1 && deposits == 1;   // its own drop is NOT a cross-list deposit
+
+            Check("e5dragdrop.reorder.policy Reorderable takes a foreign-payload gate + captions (refusal included), styles its items' lift, and with RequireDropOnList commits a pointer reorder ONLY when the gesture was released over the list — while its OWN payload is always accepted and never captioned",
+                styled && refused && captioned && deposited && noCommitAway && ownAccepted && commitOnList,
+                $"styled={styled} refused={refused} caption={captioned} deposit=({deposits},{depositSlot}) away={noCommitAway} own={ownAccepted} commit={commitOnList}");
+        }
+
         // e5dragdrop.settle.cancel — Escape mid-insertion. The most-modal gesture: the L2 session closes with OnLeave
         // on the live target, so the gap, the preview, the hidden source rows and the drop spotlight all tear down —
         // and NO deposit runs. A cancel that left the projection open was the "stale cards stuck at the top" failure.
