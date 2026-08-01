@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 
@@ -31,6 +31,13 @@ public enum DrawOp : int
                                // third DestOut PSO (SrcBlend=ZERO, DestBlend=INV_SRC_ALPHA) — no new shader, and coverage
                                // AA, per-corner radii, and both clip tiers come free. Painter order only: later siblings
                                // (letterbox bars, transport chrome) simply repaint over the hole.
+    EraseRoundRect = 18,       // the GENERAL rounded-rect ERASE (gpu-renderer.md §7.4): dst' = dst×(1−Strength×cov×Opacity).
+                               // The SAME SDF shader on the SAME DestOut PSO as DrawVideo — no new shader/PSO/RHI method —
+                               // but with no surface identity: it is pure geometry, so it is not a video anything. Its one
+                               // use is CUTOUTS inside an opacity group (the drop-spotlight scrim band): fill the group
+                               // opaque, erase the holes, composite once at the group alpha ⇒ a scrim with rounded,
+                               // anti-aliased windows over the compatible drop targets. Emitted OUTSIDE a group it erases
+                               // the canvas itself — that is DrawVideo's contract, use that opcode instead.
 }
 
 /// <summary>Per-opcode command counts for the current <see cref="DrawList"/>. Stored as scalar fields so the host can
@@ -39,7 +46,7 @@ public struct DrawListOpcodeStats
 {
     public int FillRoundRect, DrawGlyphRun, PushClip, PopClip, DrawImage, DrawRoundRectStroke, DrawShadow;
     public int DrawGradientRect, PushLayer, PopLayer, DrawGradientStroke, DrawArc, DrawPolylineStroke, DrawTabShape, DrawGlyphRunGradient;
-    public int DrawIconMask, DrawVideo;
+    public int DrawIconMask, DrawVideo, EraseRoundRect;
 
     public void Add(DrawOp op)
     {
@@ -62,6 +69,7 @@ public struct DrawListOpcodeStats
             case DrawOp.DrawGlyphRunGradient: DrawGlyphRunGradient++; break;
             case DrawOp.DrawIconMask: DrawIconMask++; break;
             case DrawOp.DrawVideo: DrawVideo++; break;
+            case DrawOp.EraseRoundRect: EraseRoundRect++; break;
         }
     }
 
@@ -84,6 +92,7 @@ public struct DrawListOpcodeStats
         DrawGlyphRunGradient += other.DrawGlyphRunGradient;
         DrawIconMask += other.DrawIconMask;
         DrawVideo += other.DrawVideo;
+        EraseRoundRect += other.EraseRoundRect;
     }
 
     public readonly bool CanTranslateCopiedSpan
@@ -110,10 +119,11 @@ public struct DrawListOpcodeStats
         DrawGlyphRunGradient = DrawGlyphRunGradient - other.DrawGlyphRunGradient,
         DrawIconMask = DrawIconMask - other.DrawIconMask,
         DrawVideo = DrawVideo - other.DrawVideo,
+        EraseRoundRect = EraseRoundRect - other.EraseRoundRect,
     };
 
     public override readonly string ToString()
-        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo}";
+        => $"fill={FillRoundRect} glyph={DrawGlyphRun} glyphGrad={DrawGlyphRunGradient} clip={PushClip}/{PopClip} img={DrawImage} stroke={DrawRoundRectStroke} shadow={DrawShadow} grad={DrawGradientRect}/{DrawGradientStroke} layer={PushLayer}/{PopLayer} arc={DrawArc} poly={DrawPolylineStroke} tab={DrawTabShape} icon={DrawIconMask} video={DrawVideo} erase={EraseRoundRect}";
 }
 
 /// <summary>How a <see cref="FillRoundRectCmd"/> fills its interior.</summary>
@@ -285,6 +295,10 @@ public readonly record struct DrawIconMaskCmd(RectF Rect, ColorF Tint, int PathI
 // DComp visual independently. <see cref="VideoReady"/> (0..1) is the ERASE STRENGTH — the backend writes premultiplied
 // (0,0,0,VideoReady·cov·Opacity) through a DestOut blend, so 1 fully clears the hole and 0 records nothing.
 public readonly record struct DrawVideoCmd(RectF Dst, CornerRadius4 Radii, int SurfaceId, float VideoReady, Affine2D Transform, float Opacity);
+// A general rounded-rect ERASE (DrawOp.EraseRoundRect): dst' = dst x (1 - Strength*coverage*Opacity), premultiplied.
+// Same SDF geometry contract as FillRoundRectCmd, drawn through the DestOut PSO DrawVideo already builds. Pure geometry:
+// no surface identity, no registry. The scrim band uses it INSIDE an opacity group to cut spotlight windows.
+public readonly record struct EraseRoundRectCmd(RectF Rect, CornerRadius4 Radii, float Strength, Affine2D Transform, float Opacity);
 
 /// <summary>
 /// Flat POD command stream consumed by the RHI (<c>SubmitDrawList</c>). The slice grows a single contiguous buffer;
@@ -653,6 +667,17 @@ public sealed class DrawList
         PushSort(sortKey);
     }
 
+    /// <summary>The general rounded-rect ERASE (see <see cref="EraseRoundRectCmd"/>): scrub the destination toward
+    /// premultiplied zero by <paramref name="strength"/> x coverage x <paramref name="opacity"/>. Meant for CUTOUTS inside
+    /// an opacity group (<see cref="PushOpacityLayer"/>) — outside one it erases the canvas, which is
+    /// <see cref="DrawVideo"/>'s contract.</summary>
+    public void EraseRoundRect(in RectF rect, in CornerRadius4 radii, float strength, in Affine2D transform, float opacity, ulong sortKey = 0)
+    {
+        WriteOp(DrawOp.EraseRoundRect);
+        WritePayload(new EraseRoundRectCmd(rect, radii, Math.Clamp(strength, 0f, 1f), transform, opacity));
+        PushSort(sortKey);
+    }
+
     private void WriteOp(DrawOp op)
     {
         Ensure(sizeof(int));
@@ -741,6 +766,10 @@ public sealed class DrawList
                     // Exact under translation, like FillRoundRect: the hole is pure geometry and the presenter drives the
                     // video visual's own rect independently (PumpNow), so a rebased span can never desync from it.
                     if (!TranslatePayload<DrawVideoCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
+                    break;
+                case DrawOp.EraseRoundRect:
+                    // Exact under translation, like FillRoundRect: an erase is pure geometry.
+                    if (!TranslatePayload<EraseRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
                 default:
                     return false;

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using FluentGpu.Animation;
@@ -7,6 +7,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
 
@@ -168,6 +169,10 @@ sealed class WaveeShell : Component
     internal static Action<bool>? ProbeSidebarDrawer;    // open/close the real narrow overlay drawer
     internal static Func<SidebarPaneFrameSnapshot>? ProbeSidebarPaneFrame; // settled rendered-width invariant probe
     NodeHandle _sidebarPaneNode;
+    // The shell's CONTENT region (chrome rows above, docked player bar below) — the scope of the drag-drop spotlight
+    // scrim. Captured at realize + re-published whenever the region is re-arranged.
+    NodeHandle _contentRegionNode;
+    SceneStore? _contentScene;
     InputHooks? _inputHooks;
 
     public WaveeShell(IAppSettings settings, SidebarPreferences sidebar)
@@ -243,6 +248,15 @@ sealed class WaveeShell : Component
         _historyStore.Add(new Route("home"));   // record this session's first visit
         if (_historyStore.Entries.Count == 1)   // only seed fake data on a fresh install (nothing loaded from disk)
             SeedFakeHistory();
+    }
+
+    /// <summary>Publish the content region's absolute rect as the engine's drop-spotlight scrim scope. Idempotent and
+    /// cheap (one scalar write); called from realize + every re-arrange of the region.</summary>
+    void PublishScrimClip()
+    {
+        if (_contentScene is not { } sc || _contentRegionNode.IsNull || !sc.IsLive(_contentRegionNode)) return;
+        RectF r = sc.AbsoluteRect(_contentRegionNode);
+        sc.SpotlightScrimClip = r.IsEmpty ? null : r;
     }
 
     SidebarPaneFrameSnapshot ReadSidebarPaneFrame()
@@ -326,6 +340,7 @@ sealed class WaveeShell : Component
     public override Element Render()
     {
         _inputHooks = UseContext(InputHooks.Current);
+        _contentScene = Context.Scene;   // captured at render: PublishScrimClip runs from layout, outside any render context
         _requestTheme = UseContext(ThemeControl.Request);   // host's live re-theme trigger (animated in-place; no remount)
         // Float the auto-mounted toast lane ABOVE the fixed bottom player bar (idempotent static write — the
         // ToastHost-registration idiom): reserve the player-bar height on the docked (bottom) edge.
@@ -705,7 +720,16 @@ sealed class WaveeShell : Component
                 // RunSubtree fix keeps the IsolateLayout card's own box flush at rest; this clip covers the settle window
                 // and is correct composition regardless. The Hero fly draws in a separate top band; popups live in the
                 // OUTER OverlayHost ZStack — neither is affected.)
-                ) with { Grow = 1f, Shrink = 1f, MinHeight = 0f, ClipToBounds = true },
+                ) with
+                {
+                    Grow = 1f, Shrink = 1f, MinHeight = 0f, ClipToBounds = true,
+                    // Scope the drag-drop spotlight scrim to THIS region: the title bar and the docked player bar stay
+                    // fully lit while the page dims behind a drag (the bar keeps showing what is playing, and the
+                    // caption buttons keep reading as live chrome). Re-published on every re-arrange, so a resize or a
+                    // chrome-height change can never leave a stale rect behind.
+                    OnRealized = h => { _contentRegionNode = h; PublishScrimClip(); },
+                    OnBoundsChanged = _ => PublishScrimClip(),
+                },
                 Embed.Comp(() => new PlayerBar()),
             ],
         };

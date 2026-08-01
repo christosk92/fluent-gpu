@@ -317,7 +317,21 @@ public enum DropTargetVisualPolicy : byte
 /// vocabulary instead of hand-authoring unrelated opacity values.</summary>
 public static class DragVisualTok
 {
-    public const float SpotlightBackgroundOpacity = 0.28f;
+    /// <summary>The drop-spotlight SCRIM colour — an explicit band the recorder paints over the app while a drag has
+    /// compatible spotlight destinations, with a rounded cutout per destination (gpu-renderer.md §7.4). Opaque black:
+    /// the scrim's strength is <see cref="ScrimOpacity"/>, applied ONCE as the band's opacity-group alpha (the colour is
+    /// filled at alpha 1 inside the group so the cutouts erase cleanly).
+    /// <para>Deliberately ONE constant, not a theme pair: the recorder is theme-blind (its only colour inputs are the
+    /// focus/scrollbar/text-edit styles the host hands it per frame), so a light-vs-dark scrim would need a new host-
+    /// plumbed colour on <c>SceneRecorder.Record</c>. Black at <see cref="ScrimOpacity"/> reads correctly on the dark
+    /// theme this app ships; a light-theme softening is a known residual, not a silent approximation.</para></summary>
+    public static readonly ColorF ScrimColor = ColorF.FromRgba(0x00, 0x00, 0x00, 0xFF);
+
+    /// <summary>How dark the drop-spotlight scrim is (the band's opacity-group alpha). Replaces the old
+    /// <c>SpotlightBackgroundOpacity</c> multiply/divide hack, which faded the whole app to 0.28 of its authored alpha —
+    /// a comparable visual weight, but achieved by mutating every node's opacity (and un-mutating the targets' again,
+    /// which double-lit any translucent target).</summary>
+    public const float ScrimOpacity = 0.55f;
 }
 
 /// <summary>
@@ -347,10 +361,11 @@ public sealed record DropTargetSpec(
     /// <summary>Opt this destination into compatible-target spotlighting for the duration of a drag.</summary>
     public DropTargetVisualPolicy VisualPolicy { get; init; }
 
-    /// <summary>Per-SESSION spotlight policy (plumbing for the scrim wave): when set and it returns false for the live
-    /// session, this target does not participate in the drag dim even though its <see cref="VisualPolicy"/> opts in —
-    /// so a same-list reorder never dims the app. Null (default) = the <see cref="VisualPolicy"/> decides alone.
-    /// INERT today: the spotlight pass still keys off <see cref="VisualPolicy"/> only; the scrim rework consumes it.</summary>
+    /// <summary>Per-SESSION spotlight policy: when set and it returns false for the live session, this target does not
+    /// participate in the drag scrim even though its <see cref="VisualPolicy"/> opts in — so a same-list reorder never
+    /// dims the app it is reordering inside. Null (default) = the <see cref="VisualPolicy"/> decides alone. Evaluated
+    /// on the cold refresh edge (<c>SceneStore.RefreshDropSpotlight</c>), never during record; a session with no
+    /// surviving spotlight destination emits no scrim band at all.</summary>
     public Func<DragSession, bool>? SpotlightWhen { get; init; }
 
     /// <summary>The REFUSAL cue: why this target — which matched the session's <see cref="AcceptKinds"/> — said no.

@@ -56,13 +56,13 @@ public sealed class DragPreviewLayer : Component
         SceneStore? scene = Context.Scene;   // captured at render: the bind thunk runs outside any render context
         Element? body = state.Active ? Preview?.Invoke(state) : null;
 
-        // Register as the engine's drag-overlay band (and keep the legacy spotlight exemption until the scrim wave
-        // replaces it). Cleared on unmount so a freed layer can't leave a dead handle in the recorder's band.
+        // Register as the engine's drag-overlay band. That registration is the WHOLE story now: the band is emitted
+        // above the drop-spotlight scrim, so the chip is lit by construction and needs no exemption from anything (the
+        // presentation-only exempt registry the multiply/divide dim required is deleted).
         UseLayoutEffect(() =>
         {
             if (Context.Scene is not { } sc) return null;
             sc.DragOverlay = _root;
-            sc.SetDropSpotlightExempt(_root, exempt: true);
             var captured = _root;
             return () => { if (sc.DragOverlay == captured) sc.DragOverlay = NodeHandle.Null; };
         }, DepKey.Empty);

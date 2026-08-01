@@ -1,4 +1,4 @@
-# FluentGpu — Subsystem Design: Scene (SoA RenderNode store) + Foundation memory model + DrawList encoding framework
+﻿# FluentGpu — Subsystem Design: Scene (SoA RenderNode store) + Foundation memory model + DrawList encoding framework
 
 **Primary assemblies:** **`FluentGpu.Foundation`** (the `Handle`, the four allocators incl. `ChunkedArena`,
 `StringTable`, the typed-handle wrappers, `ImageRefTable` slab) · **`FluentGpu.Scene`** (the SoA `SceneStore`,
@@ -644,6 +644,13 @@ public enum DrawOp : byte {
                           //   emit-order/limitation contract: gpu-renderer.md §3.1/§7.3. Adds no column — the scene
                           //   side is `VisualKind.Video` reusing the Image payload slot (§2.4). Ordering is
                           //   painter/tree order only (NO pass bucket). Same POD-registration contract.
+    EraseRoundRect,       // = 18 (AS-BUILT 2026-08): a GENERAL rounded-rect DestOut erase — the same SDF shader,
+                          //   RectInstance and DestOut PSO as DrawVideo, minus the surface identity (pure geometry,
+                          //   no registry, no VisualKind, no column). Its use is CUTOUTS inside an opacity group:
+                          //   the drop-spotlight scrim fills a veil at alpha 1 and erases one rounded window per
+                          //   compatible drop destination, so the group composites as one veil with clean windows.
+                          //   Payload shape + raster + the band-order contract: gpu-renderer.md §7.4 (policy:
+                          //   input-a11y.md). Same POD-registration contract.
     DrawIconMask,         // a ThemedIcon vector-layer mask (controls.md; shape+raster: gpu-renderer.md DrawIconMaskCmd):
                           //   a CPU-rasterized colorless R8 coverage mask (interned geometry in IconGeometryTable.Shared,
                           //   keyed by PathId), tinted per-instance and drawn through the EXISTING glyph atlas/PSO — no

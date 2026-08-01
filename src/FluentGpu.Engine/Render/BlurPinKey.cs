@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 
@@ -76,6 +76,7 @@ public static class BlurPinKey
                 case DrawOp.DrawArc:             { var c = MemoryMarshal.Read<DrawArcCmd>(cmds.Slice(bodyOff));             FoldStruct(ref h, c with { Transform = Reb(c.Transform, ox, oy) }); pos = bodyOff + Unsafe.SizeOf<DrawArcCmd>(); break; }
                 case DrawOp.DrawPolylineStroke:  { var c = MemoryMarshal.Read<DrawPolylineStrokeCmd>(cmds.Slice(bodyOff));  FoldStruct(ref h, c with { Transform = Reb(c.Transform, ox, oy) }); pos = bodyOff + Unsafe.SizeOf<DrawPolylineStrokeCmd>(); break; }
                 case DrawOp.DrawTabShape:        { var c = MemoryMarshal.Read<DrawTabShapeCmd>(cmds.Slice(bodyOff));        FoldStruct(ref h, c with { Transform = Reb(c.Transform, ox, oy) }); pos = bodyOff + Unsafe.SizeOf<DrawTabShapeCmd>(); break; }
+                case DrawOp.EraseRoundRect:      { var c = MemoryMarshal.Read<EraseRoundRectCmd>(cmds.Slice(bodyOff));      FoldStruct(ref h, c with { Transform = Reb(c.Transform, ox, oy) }); pos = bodyOff + Unsafe.SizeOf<EraseRoundRectCmd>(); break; }
                 case DrawOp.PushClip:            { var c = MemoryMarshal.Read<ClipCmd>(cmds.Slice(bodyOff));               FoldStruct(ref h, RebClip(in c, ox, oy)); pos = bodyOff + Unsafe.SizeOf<ClipCmd>(); break; }
                 case DrawOp.PopClip:             { pos = bodyOff; break; }   // no payload; the op code is already folded
                 default:                         return false;               // nested PushLayer or unknown ⇒ don't cache

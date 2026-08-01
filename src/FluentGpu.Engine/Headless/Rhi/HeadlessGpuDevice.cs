@@ -1,4 +1,4 @@
-using System.Runtime.CompilerServices;
+﻿using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Render;
@@ -29,6 +29,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     private readonly List<DrawTabShapeCmd> _tabShapes = new(8);
     private readonly List<DrawIconMaskCmd> _iconMasks = new(16);
     private readonly List<DrawVideoCmd> _videos = new(4);
+    private readonly List<EraseRoundRectCmd> _erases = new(4);
     private readonly List<int> _videoClipDepth = new(4);
     private readonly List<(int id, int w, int h)> _uploads = new(32);
     private readonly Dictionary<int, (int w, int h)> _resident = new(32);
@@ -78,6 +79,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     /// backend ERASES these rects toward premultiplied zero so the DComp video visual below the swapchain shows through;
     /// headless just captures the payload.</summary>
     public IReadOnlyList<DrawVideoCmd> LastVideos => _videos;
+    /// <summary>General rounded-rect ERASES recorded this frame (DrawOp.EraseRoundRect) — the drop-spotlight scrim's
+    /// cutouts. The real backend runs them through the DestOut PSO against whatever surface is bound (an opacity-group
+    /// RT for the scrim); headless just captures the payload in emission order.</summary>
+    public IReadOnlyList<EraseRoundRectCmd> LastErases => _erases;
     /// <summary>Clip-stack depth at each <see cref="LastVideos"/> command (parallel list) — a PiP hole records INSIDE
     /// its rounded container's clip, which is where its corner rounding actually comes from.</summary>
     public IReadOnlyList<int> LastVideoClipDepths => _videoClipDepth;
@@ -140,6 +145,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _tabShapes.Clear();
         _iconMasks.Clear();
         _videos.Clear();
+        _erases.Clear();
         _videoClipDepth.Clear();
         LastClear = ctx.Clear;
         FrameCount++;
@@ -224,6 +230,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
                     _videos.Add(MemoryMarshal.Read<DrawVideoCmd>(drawList.Slice(pos)));
                     _videoClipDepth.Add(balance);
                     pos += Unsafe.SizeOf<DrawVideoCmd>();
+                    break;
+                case DrawOp.EraseRoundRect:
+                    _erases.Add(MemoryMarshal.Read<EraseRoundRectCmd>(drawList.Slice(pos)));
+                    pos += Unsafe.SizeOf<EraseRoundRectCmd>();
                     break;
                 default:
                     return; // unknown opcode — stop (corrupt stream guard)

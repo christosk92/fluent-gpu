@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -3277,6 +3277,226 @@ static class ControlsSuite
             Check("e5dragdrop.armblock Element.BlocksDragArm stops TryArm's upward walk at itself — a press on a card's own button never arms the card's drag, while a press on ordinary card content still does and a draggable node with the bit still arms itself",
                 armsFromPlainChild && blockedFromBarrier && selfStillArms,
                 $"plainChild={armsFromPlainChild} barrier={blockedFromBarrier} self={selfStillArms}");
+        }
+
+        DragScrimChecks();
+    }
+
+    // ── Wave 5: the drop-spotlight SCRIM band ─────────────────────────────────────────────────────────────
+    // The dim is now ONE explicit band — an opacity group at DragVisualTok.ScrimOpacity holding a flat scrim fill with
+    // one rounded ERASE per compatible destination — instead of the old ×0.28 root multiply + ÷0.28 per-target divide.
+    static void DragScrimChecks()
+    {
+        var strings = new StringTable();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // A scene with ONE compatible spotlight target (rounded) and one incompatible one, with a drag already open.
+        static (SceneStore scene, InputDispatcher disp, NodeHandle ok, NodeHandle no) ScrimScene(
+            StringTable strings, HeadlessFontSystem fonts, Func<DragSession, bool>? spotlightWhen)
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Width = 300, Height = 200,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "ok", Width = 100, Height = 60, Corners = new CornerRadius4(8f, 8f, 8f, 8f),
+                        DropTarget = new DropTargetSpec(["resource"])
+                        {
+                            VisualPolicy = DropTargetVisualPolicy.Spotlight,
+                            SpotlightWhen = spotlightWhen,
+                        },
+                    },
+                    new BoxEl
+                    {
+                        Key = "no", Width = 100, Height = 60,
+                        DropTarget = new DropTargetSpec(["resource"])
+                        {
+                            VisualPolicy = DropTargetVisualPolicy.Spotlight,
+                            CanAccept = static _ => false,
+                        },
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.DragDrop.ExternalBegin("resource", "payload", new Point2(50, 30), KeyModifiers.None);
+            return (scene, disp, Child(scene, scene.Root, 0), Child(scene, scene.Root, 1));
+        }
+
+        static HeadlessGpuDevice RecordTo(SceneStore scene)
+        {
+            var dl = new DrawList();
+            SceneRecorder.Record(scene, dl);
+            var dev = new HeadlessGpuDevice();
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(300, 200), 1f, ColorF.Transparent));
+            return dev;
+        }
+
+        static int ScrimFillIndex(HeadlessGpuDevice dev)
+        {
+            for (int i = 0; i < dev.LastRects.Count; i++)
+                if (dev.LastRects[i].Fill == DragVisualTok.ScrimColor) return i;
+            return -1;
+        }
+
+        // e5dragdrop.scrim.cutout — the band exists, is ONE opacity group at the token alpha, and cuts exactly one
+        // rounded window: over the COMPATIBLE destination, carrying that node's own corner radii. The refuser gets no
+        // window, and no node's own opacity was touched to achieve any of it — the deleted hack multiplied the root
+        // by 0.28 and divided every spotlight subtree back out again.
+        {
+            var (scene, disp, ok, no) = ScrimScene(strings, fonts, spotlightWhen: null);
+            var dev = RecordTo(scene);
+            int iScrim = ScrimFillIndex(dev);
+            bool banded = iScrim >= 0;
+            int groups = 0;
+            for (int i = 0; i < dev.LastLayers.Count; i++)
+                if (dev.LastLayers[i].Kind == (int)LayerKind.Opacity && Near(dev.LastLayers[i].GroupAlpha, DragVisualTok.ScrimOpacity)) groups++;
+            RectF okRect = scene.AbsoluteRect(ok), noRect = scene.AbsoluteRect(no);
+            bool oneHole = dev.LastErases.Count == 1;
+            bool overTarget = oneHole
+                && Near(dev.LastErases[0].Transform.Dx, okRect.X) && Near(dev.LastErases[0].Transform.Dy, okRect.Y)
+                && Near(dev.LastErases[0].Rect.W, okRect.W) && Near(dev.LastErases[0].Rect.H, okRect.H)
+                && Near(dev.LastErases[0].Radii.TopLeft, 8f) && Near(dev.LastErases[0].Radii.BottomRight, 8f);
+            bool notOverRefuser = !oneHole || !Near(dev.LastErases[0].Transform.Dx, noRect.X);
+            bool opacityUntouched = Near(scene.Paint(scene.Root).Opacity, 1f) && Near(scene.Paint(ok).Opacity, 1f);
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.scrim.cutout a live drag with compatible spotlight destinations records ONE scrim band — an opacity group at DragVisualTok.ScrimOpacity holding a flat scrim fill — with exactly one rounded ERASE cut over the compatible destination (its own corner radii), none over the refuser, and no node opacity mutated to do it",
+                banded && groups == 1 && oneHole && overTarget && notOverRefuser && opacityUntouched,
+                $"banded={banded}@{iScrim} groups={groups} holes={dev.LastErases.Count} overTarget={overTarget} notRefuser={notOverRefuser} opacityUntouched={opacityUntouched}");
+        }
+
+        // e5dragdrop.scrim.policy — DropTargetSpec.SpotlightWhen is CONSUMED: a session it refuses leaves that target
+        // out of the spotlight set, and with no root left the band is not emitted at all (Wavee same-list reorder, A14).
+        {
+            var (scene, disp, _, _) = ScrimScene(strings, fonts, spotlightWhen: static _ => false);
+            var dev = RecordTo(scene);
+            bool noGroup = true;
+            for (int i = 0; i < dev.LastLayers.Count; i++)
+                if (dev.LastLayers[i].Kind == (int)LayerKind.Opacity && Near(dev.LastLayers[i].GroupAlpha, DragVisualTok.ScrimOpacity)) noGroup = false;
+            bool noScrim = !scene.DropSpotlightActive && ScrimFillIndex(dev) < 0 && dev.LastErases.Count == 0 && noGroup;
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.scrim.policy a DropTargetSpec.SpotlightWhen that refuses the live session drops that target from the spotlight set — and with no compatible destination left the recorder emits NO scrim band at all (a same-list reorder never dims the app)",
+                noScrim, $"active={scene.DropSpotlightActive} scrimFill={ScrimFillIndex(dev)} holes={dev.LastErases.Count} noGroup={noGroup}");
+        }
+
+        // e5dragdrop.scrim.clip — SceneStore.SpotlightScrimClip scopes the band (Wavee: the content region, so the title
+        // bar and the docked player bar stay lit) and every cutout is intersected with it too.
+        {
+            var (scene, disp, ok, _) = ScrimScene(strings, fonts, spotlightWhen: null);
+            var clip = new RectF(0f, 20f, 300f, 120f);   // a "chrome" band excluded top and bottom — and the target's top 20px
+            scene.SpotlightScrimClip = clip;
+            var dev = RecordTo(scene);
+            int iScrim = ScrimFillIndex(dev);
+            bool scoped = iScrim >= 0
+                && Near(dev.LastRects[iScrim].Transform.Dx, clip.X) && Near(dev.LastRects[iScrim].Transform.Dy, clip.Y)
+                && Near(dev.LastRects[iScrim].Rect.W, clip.W) && Near(dev.LastRects[iScrim].Rect.H, clip.H);
+            RectF okRect = scene.AbsoluteRect(ok);
+            RectF expected = okRect.Intersect(clip);
+            bool holeScoped = dev.LastErases.Count == 1
+                && Near(dev.LastErases[0].Transform.Dy, expected.Y) && Near(dev.LastErases[0].Rect.H, expected.H)
+                && expected.H < okRect.H;
+            scene.SpotlightScrimClip = null;
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.scrim.clip SceneStore.SpotlightScrimClip scopes the scrim band to a content region — the veil rect IS that region and each cutout is intersected with it, so app chrome outside the region is never dimmed",
+                scoped && holeScoped,
+                $"scoped={scoped} holeScoped={holeScoped} holes={dev.LastErases.Count}");
+        }
+
+        // e5dragdrop.scrim.band — band ORDER: the scrim covers the main pass, but the drag ghost and the chip
+        // (DragOverlay) paint ABOVE it. Painter order in the recorded stream is the contract (the RHI replays in
+        // emission order), and it is what retires the old spotlight-exemption registry.
+        {
+            var scene = new SceneStore();
+            var mainFill = ColorF.FromRgba(0x11, 0x22, 0x33);
+            var ghostFill = ColorF.FromRgba(0x44, 0x55, 0x66);
+            var chipFill = ColorF.FromRgba(0x77, 0x88, 0x99);
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 400, Height = 300, ClipToBounds = true,
+                Children =
+                [
+                    new BoxEl { Key = "main", Width = 100, Height = 40, Fill = mainFill },
+                    new BoxEl
+                    {
+                        Key = "target", Width = 100, Height = 40,
+                        DropTarget = new DropTargetSpec(["resource"]) { VisualPolicy = DropTargetVisualPolicy.Spotlight },
+                    },
+                    new BoxEl { Key = "ghost", Width = 100, Height = 40, Fill = ghostFill },
+                    new BoxEl { Key = "chip", Width = 100, Height = 40, Fill = chipFill },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var ghostNode = Child(scene, scene.Root, 2);
+            var chipNode = Child(scene, scene.Root, 3);
+            scene.Flags(ghostNode) |= NodeFlags.DragGhost;
+            scene.DragGhost = ghostNode;
+            scene.DragOverlay = chipNode;
+            var disp = new InputDispatcher(scene);
+            disp.DragDrop.ExternalBegin("resource", "payload", new Point2(50, 20), KeyModifiers.None);
+
+            var dev = RecordTo(scene);
+            int iMain = -1, iScrim = -1, iGhost = -1, iChip = -1;
+            for (int i = 0; i < dev.LastRects.Count; i++)
+            {
+                var col = dev.LastRects[i].Fill;
+                if (col == mainFill) iMain = i;
+                else if (col == DragVisualTok.ScrimColor) iScrim = i;
+                else if (col == ghostFill) iGhost = i;
+                else if (col == chipFill) iChip = i;
+            }
+            bool ordered = iMain >= 0 && iScrim > iMain && iGhost > iScrim && iChip > iGhost;
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.scrim.band the scrim band records AFTER the whole main pass and BEFORE the drag-ghost and DragOverlay bands — ordinary content dims while the lifted visual and the drag chip stay lit above the veil",
+                ordered, $"main={iMain} scrim={iScrim} ghost={iGhost} chip={iChip}");
+        }
+
+        // e5dragdrop.scrim.cancel — the band is drag-scoped: ending the gesture clears the spotlight roots, so the very
+        // next record emits neither the veil nor any cutout.
+        {
+            var (scene, disp, _, _) = ScrimScene(strings, fonts, spotlightWhen: null);
+            var during = RecordTo(scene);
+            bool lit = ScrimFillIndex(during) >= 0 && during.LastErases.Count == 1;
+            disp.DragDrop.Cancel();
+            var after = RecordTo(scene);
+            bool cleared = !scene.DropSpotlightActive && ScrimFillIndex(after) < 0 && after.LastErases.Count == 0;
+            Check("e5dragdrop.scrim.cancel the scrim is drag-scoped — cancelling the session clears the spotlight roots and the next record emits neither the veil nor any cutout",
+                lit && cleared, $"lit={lit} cleared={cleared}");
+        }
+
+        // e5dragdrop.scrim.alloc — the band must be steady-state allocation-free: a drag-move frame with the scrim live
+        // still allocates 0 bytes on phases 6-13 (pure rect math over the scene's own root list, no scratch buffers).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-scrim-alloc", new Size2(480, 320), 1f)); window.Show();
+            var probe = new ChipDragProbe { SpotlightSink = true };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var src = Child(scene, Child(scene, scene.Root, 0), 0);
+            var c = CenterOf(scene, src);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f, c.Y), 0, 0));
+            host.RunFrame();
+            bool scrimLive = scene.DropSpotlightActive;
+            for (int i = 1; i <= 24; i++)   // warm: chip mount, draw-list growth, shaping
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f + i, c.Y), 0, 0));
+                host.RunFrame();
+            }
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 60f, c.Y), 0, 0));
+            var frameA = host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 66f, c.Y), 0, 0));
+            var frameB = host.RunFrame();
+            bool quiet = frameA.HotPhaseAllocBytes == 0 && frameB.HotPhaseAllocBytes == 0;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 66f, c.Y), 0, 0));
+            host.RunFrame();
+            Check("e5dragdrop.scrim.alloc a drag-move frame with the spotlight scrim live allocates 0 bytes on phases 6-13 — the band is rect math over the scene's own spotlight-root list, with no per-frame list or scratch buffer",
+                scrimLive && quiet,
+                $"scrimLive={scrimLive} allocA={frameA.HotPhaseAllocBytes}B allocB={frameB.HotPhaseAllocBytes}B");
         }
     }
 

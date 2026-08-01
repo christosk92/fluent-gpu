@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 
@@ -58,6 +58,13 @@ public sealed class SceneStore : ISceneBackend
     // is bounded to the page area (never sails over the sidebar / window chrome) while still clearing the inner rail
     // scissor. Reset to Infinite when no fly is in flight. Read once per frame by the SceneRecorder overlay pass.
     public RectF OverlayClip = RectF.Infinite;
+
+    // Scope for the drop-spotlight SCRIM band (window DIP). Null = the whole scene root, i.e. the full window. An app
+    // whose chrome must stay lit (Wavee excludes its title bar + player bar) sets it to its CONTENT region; the scrim
+    // rect and every cutout are intersected with it. Persistent scalar CONFIG, not per-frame state: it survives scene
+    // resets and is re-asserted by its owner on layout, so a drag never has to know about it. Read once per frame by
+    // the SceneRecorder scrim band, and only while a drag actually has spotlight destinations.
+    public RectF? SpotlightScrimClip;
 
     // Effective device-pixel scale (DIP→px), set by AppHost each frame from the window scale (1 in headless / on DPI
     // change re-read). Scroll transform rounding and recorder-side self-blur support geometry share it so both land on
@@ -156,8 +163,10 @@ public sealed class SceneStore : ISceneBackend
     // from BoxEl.Draggable / BoxEl.DropTarget; Input.DragDropContext reads them at promotion / per pointer move.
     private readonly Dictionary<int, DragSource> _dragSources = new();
     private readonly Dictionary<int, DropTargetSpec> _dropTargets = new();
-    private readonly HashSet<int> _dropSpotlightRoots = new();
-    private readonly HashSet<int> _dropSpotlightExemptRoots = new();
+    // Compatible spotlight destinations for the LIVE drag, in registry order. A List (not a HashSet): the scrim band
+    // ITERATES it once per frame to cut one rounded window per root, and the set is tiny (a handful of opt-in targets),
+    // so the linear Contains the membership tests use is cheaper than a hash lookup and the order is stable.
+    private readonly List<int> _dropSpotlightRoots = new(8);
     private int _dropTargetsVersion;
     private bool _dropSpotlightActive;
     private NodeHandle _dropSpotlightOver;
@@ -389,7 +398,6 @@ public sealed class SceneStore : ISceneBackend
         if (_dragSources.Count != 0) _dragSources.Remove(idx);
         if (_dropTargets.Count != 0 && _dropTargets.Remove(idx)) _dropTargetsVersion++;
         if (_dropSpotlightRoots.Count != 0) _dropSpotlightRoots.Remove(idx);
-        if (_dropSpotlightExemptRoots.Count != 0) _dropSpotlightExemptRoots.Remove(idx);
         if (_dropSpotlightOver == node) _dropSpotlightOver = NodeHandle.Null;
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
         if (DragGhost == node) { DragGhost = NodeHandle.Null; DragGhostBackplate = null; }   // a freed ghost must not linger in the recorder's top band
@@ -1496,22 +1504,16 @@ public sealed class SceneStore : ISceneBackend
         return false;
     }
 
-    /// <summary>Register a top-band presentation subtree (for example DragPreviewLayer) that must stay legible while
-    /// ordinary app content is dimmed. This is presentation-only and never participates in target discovery.</summary>
-    public void SetDropSpotlightExempt(NodeHandle h, bool exempt)
-    {
-        if (h.IsNull || !IsLive(h)) return;
-        int idx = (int)h.Raw.Index;
-        if (exempt) _dropSpotlightExemptRoots.Add(idx);
-        else _dropSpotlightExemptRoots.Remove(idx);
-    }
+    /// <summary>How many compatible spotlight destinations the live drag has — the scrim band's cutout count.</summary>
+    public int DropSpotlightRootCount => DropSpotlightActive ? _dropSpotlightRoots.Count : 0;
 
-    public bool IsUnderDropSpotlightExempt(NodeHandle h)
+    /// <summary>The i-th compatible spotlight destination (0 &lt;= i &lt; <see cref="DropSpotlightRootCount"/>). The
+    /// recorder cuts one rounded window per root out of the scrim band; a root freed since the last refresh comes back
+    /// dead (<c>IsLive</c> false) and is skipped there rather than being pruned mid-record.</summary>
+    public NodeHandle DropSpotlightRootAt(int i)
     {
-        if (!DropSpotlightActive) return false;
-        for (var n = h; !n.IsNull; n = Parent(n))
-            if (_dropSpotlightExemptRoots.Contains((int)n.Raw.Index)) return true;
-        return false;
+        int idx = _dropSpotlightRoots[i];
+        return new NodeHandle(new Handle((uint)idx, _gen[idx]));
     }
 
     public NodeHandle DropSpotlightOver => _dropSpotlightActive ? _dropSpotlightOver : NodeHandle.Null;
@@ -1528,7 +1530,11 @@ public sealed class SceneStore : ISceneBackend
             var node = new NodeHandle(new Handle((uint)idx, _gen[idx]));
             if (!IsLive(node) || (_flags[idx] & NodeFlags.Disabled) != 0) continue;
             if (spec.CanAccept is { } canAccept && !canAccept(session)) continue;
-            _dropSpotlightRoots.Add(idx);
+            // Per-SESSION policy (DropTargetSpec.SpotlightWhen): a target may opt into the dim in general and still
+            // refuse it for THIS gesture — a same-list reorder must not scrim the app it is reordering inside (A14).
+            // Evaluated here, on the cold refresh edge, so record stays free of policy delegates.
+            if (spec.SpotlightWhen is { } spotlightWhen && !spotlightWhen(session)) continue;
+            if (!_dropSpotlightRoots.Contains(idx)) _dropSpotlightRoots.Add(idx);
         }
         _dropSpotlightActive = _dropSpotlightRoots.Count != 0;
         if (!_dropSpotlightActive || !_dropSpotlightRoots.Contains((int)_dropSpotlightOver.Raw.Index))

@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 <#
 .SYNOPSIS
     Canonical-spec drift gate for the docs/design/ docs.
@@ -37,6 +37,11 @@ $rules = @(
         Name    = 'depkey-union'
         Pattern = '\[FieldOffset\(\d+\)\]\s*public\s+readonly\s+(object|string)'
         Why     = 'DepKey is pure-scalar + a side GcDepTable. A [FieldOffset] GC-ref/scalar union is illegal CLR layout (TypeLoadException).'
+    },
+    @{
+        Name    = 'spotlight-dim'
+        Pattern = 'SpotlightBackgroundOpacity|SetDropSpotlightExempt|IsUnderDropSpotlightExempt'
+        Why     = 'The drop-spotlight dim is an explicit SCRIM BAND with per-target cutouts (gpu-renderer.md 7.4 + input-a11y.md): DragVisualTok.ScrimColor/ScrimOpacity + SceneStore.SpotlightScrimClip + DropTargetSpec.SpotlightWhen. The 0.28 per-node opacity multiply/divide token and the presentation-only spotlight-exemption registry are deleted.'
     },
     @{
         Name    = 'bind-props'

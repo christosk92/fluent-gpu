@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
@@ -1389,6 +1389,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     PushRun(PrimKind.VideoHole);
                     break;
                 }
+                case DrawOp.EraseRoundRect:
+                {
+                    // The general rounded-rect erase — the SAME instance/shader/DestOut PSO as the video hole punch
+                    // above, minus the surface identity. Colour (0,0,0,Strength) with Kind 0 (rounded-rect SDF) so the
+                    // PS emits premultiplied (0,0,0, Strength*cov*opacity) and the blend leaves dst x (1 - that): the
+                    // scrim's cutouts get corner AA, per-corner radii and the tier-2 rounded clip for free. Bound
+                    // surface = whatever is active, i.e. the opacity-group RT for the scrim band.
+                    var e = MemoryMarshal.Read<EraseRoundRectCmd>(cmds.Slice(pos));
+                    pos += Unsafe.SizeOf<EraseRoundRectCmd>();
+                    if (e.Strength <= 0f || e.Opacity <= 0f) break;   // nothing to erase
+                    var einst = new RectInstance
+                    {
+                        PosX = e.Rect.X, PosY = e.Rect.Y, W = e.Rect.W, H = e.Rect.H,
+                        RTL = e.Radii.TopLeft, RTR = e.Radii.TopRight, RBR = e.Radii.BottomRight, RBL = e.Radii.BottomLeft,
+                        R = 0f, G = 0f, B = 0f, A = e.Strength,
+                        M11 = e.Transform.M11, M12 = e.Transform.M12, M21 = e.Transform.M21, M22 = e.Transform.M22,
+                        Dx = e.Transform.Dx, Dy = e.Transform.Dy, Opacity = e.Opacity,
+                    };
+                    ApplyRoundedClip(ref einst);
+                    _rectInsts.Add(einst);
+                    _frameRectCount++;
+                    PushRun(PrimKind.VideoHole);
+                    break;
+                }
                 case DrawOp.PushLayer:
                     pos += Unsafe.SizeOf<PushLayerCmd>();         // wired to the backdrop subsystem (phase 5)
                     break;
@@ -2191,6 +2215,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.DrawVideo: pos += Unsafe.SizeOf<DrawVideoCmd>(); break;
+                case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
                 case DrawOp.PushLayer:
                     var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
@@ -2233,6 +2258,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.DrawTabShape: pos += Unsafe.SizeOf<DrawTabShapeCmd>(); break;
                 case DrawOp.DrawIconMask: pos += Unsafe.SizeOf<DrawIconMaskCmd>(); break;
                 case DrawOp.DrawVideo: pos += Unsafe.SizeOf<DrawVideoCmd>(); break;
+                case DrawOp.EraseRoundRect: pos += Unsafe.SizeOf<EraseRoundRectCmd>(); break;
                 case DrawOp.PushLayer: pos += Unsafe.SizeOf<PushLayerCmd>(); depth++; break;
                 case DrawOp.PopLayer:
                     pos += Unsafe.SizeOf<PopLayerCmd>();

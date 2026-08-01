@@ -936,6 +936,11 @@ sealed class TrackList : Component
         AcceptKinds = [WaveeDragKinds.Resource],
         CanAccept = CanDropResource,
         IsSameList = IsSameListDrop,
+        // Scrim policy (A14): a SAME-LIST reorder must never dim the app. The user is aiming inside the very list they
+        // are looking at — darkening everything but that list adds a full-window veil to a gesture whose destination is
+        // already under the pointer, and the line + gap already say where the block lands. A CROSS-list deposit is the
+        // opposite case (the destination is somewhere else entirely), so it keeps the scrim.
+        SpotlightWhen = s => !IsSameListDrop(s.Payload),
         SourceIndices = DropSourceDisplayRows,
         DraggedCount = DropTrackCount,
         // The insertable sub-range: the TRACK rows only. The vertical-hero layout leads with hero + chrome as

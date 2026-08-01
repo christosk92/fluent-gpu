@@ -1,4 +1,4 @@
-# FluentGpu — Subsystem Design: GPU 2D Rendering Engine (the custom batched renderer)
+﻿# FluentGpu — Subsystem Design: GPU 2D Rendering Engine (the custom batched renderer)
 
 > **ACTUALIZED v1 (hardened).** This is the current, self-contained design for the batched 2D
 > renderer. It supersedes the original synthesis: it folds the [hardened-v1-plan](../hardened-v1-plan.md)
@@ -755,6 +755,67 @@ inflate the video node's damage to the full `Dst` whenever any node overlapping 
 until partial present exists. Flush-wise the hole rides the UI swapchain `Present` while the child placement
 rides the per-frame DComp `Commit` the video pump issues: two flushes on one frame turn, not one
 (`docs/plans/video-phase1-plan.md §2`, correction #4).
+
+---
+
+### 7.4 Top bands + the drop-spotlight scrim (`EraseRoundRectCmd`)
+
+**The band order (this doc is the authority; the recorder implements it).** A frame's commands are emitted in
+exactly this order, and painter order — not the `SortKey` — is what the RHI replays:
+
+| # | Band | Emitted | Depth (SortKey high half) | Clip |
+|---|------|---------|---------------------------|------|
+| 1 | **Main pass** | `Walk(scene.Root)` | `0 + recursion depth` | the ancestor clip chain |
+| 2 | **Orphan fallback** | rootless exit orphans only (a parented exit replays inside its former parent's Walk) | `0` | `Infinite` |
+| 3 | **Drop-spotlight scrim** | one opacity group: scrim fill + one erase per compatible destination | `(1<<16) − 1` (top of band 0) | `SceneStore.SpotlightScrimClip` ?? the root rect |
+| 4 | **Drag ghost** | `SceneStore.DragGhost` subtree, re-walked at its live parent-world origin | `1<<16` | `Infinite` |
+| 5 | **Connected-animation overlays** | each `SceneStore.OverlayAt(i)` | `(1<<16) \| 1` | `SceneStore.OverlayClip` |
+| 6 | **Drag overlay (the chip)** | `SceneStore.DragOverlay` subtree | `(1<<16) \| 2` | `Infinite` |
+
+Bands 4–6 are excluded from band 1 by the recorder's skip set, so each is drawn exactly once. The scrim sits
+**between** the ordinary content and every hoisted drag/overlay visual, which is the whole contract: app content
+dims, the lifted ghost and the drag chip stay lit *by construction*. (The chip needed a presentation-only
+"spotlight exemption" registry under the old scheme; that registry is deleted — see `input-a11y.md`.)
+
+**What the scrim is.** While a typed drag has at least one compatible spotlight destination
+(`SceneStore.DropSpotlightActive`; policy is `input-a11y.md`'s), the recorder emits ONE band:
+
+```
+PushLayer(kind = Opacity, GroupAlpha = DragVisualTok.ScrimOpacity, deviceRect = scrim)
+  FillRoundRect(scrim, DragVisualTok.ScrimColor, opacity 1)             // the veil, opaque inside the group
+  EraseRoundRect(hole_i, radii_i, strength 1, opacity 1)   for each i   // one window per destination
+PopLayer(scrim)
+```
+
+`scrim` = `SceneStore.SpotlightScrimClip` when set (an app scopes the veil to its content region so window
+chrome stays lit), else the scene root's rect. `hole_i` = destination `i`'s absolute rect ∩ every
+`ClipsToBounds` ancestor's rect ∩ `scrim`, with the destination's **own** `CornerRadius4`, so a half-scrolled
+row cannot punch a window through its list's edge and a rounded card gets a rounded window.
+
+**Why a group + an erase, not per-node opacity.** The predecessor multiplied the scene root's opacity by a
+constant and divided it back out on every spotlight subtree. That mutated a channel the nodes themselves own:
+it double-lit translucent targets (a 0.6-alpha card came back at 0.6/0.28), it could not be scoped to a region
+at all, and it forced the exemption registry so hoisted bands escaped the divide. The group makes the veil one
+explicit primitive: the fill lands at alpha 1 in the group's RT, the erases scrub windows in **that RT only**
+(never the canvas beneath — the §7.3 limitation, used here deliberately), and the composite lays exactly one
+uniform veil at `ScrimOpacity`. Cost: one offscreen composite sized to `scrim`, only while a drag has
+destinations. Honest residual: the erase is a **layer-local** effect, so the scrim band must never itself be
+nested in an acrylic layer.
+
+**`EraseRoundRectCmd` (payload shape owned here; enum registration: `scene-memory.md` §4.1).**
+
+```csharp
+public readonly record struct EraseRoundRectCmd(
+    RectF Rect, CornerRadius4 Radii, float Strength, Affine2D Transform, float Opacity);
+```
+
+Raster is `DrawVideo`'s, exactly: the same rounded-box SDF shader, the same `RectInstance`, the same **DestOut**
+PSO and the same `PrimKind.VideoHole` run class (`dst' = dst × (1 − Strength·cov·Opacity)`), so coverage AA,
+per-corner radii and both clip tiers come free — **no new shader, PSO, texture or RHI method**. The two opcodes
+are deliberately separate rather than one: `DrawVideoCmd` carries a `SurfaceId` and the "erase the canvas so a
+DComp child shows through" contract, while this one is pure geometry with no surface identity and is meant to
+run **inside** a group. Using `DrawVideo` for a scrim cutout would put a non-video in the video registry's
+diagnostic path; using this one on the main canvas erases to transparent and is a bug.
 
 ---
 

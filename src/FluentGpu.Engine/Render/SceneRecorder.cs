@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Render;
@@ -361,6 +361,53 @@ public static class SceneRecorder
                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
+        // E5 drop-spotlight SCRIM band. One explicit band — a flat DragVisualTok.ScrimColor rect with a rounded CUTOUT
+        // per compatible destination — emitted AFTER the main pass + the orphan fallback (so it covers all ordinary
+        // content) and BEFORE the ghost / connected-overlay / chip bands (so the lifted visual and the drag chip paint
+        // ABOVE it). It replaces the old multiply/divide hack (root opacity ×0.28, then ÷0.28 back on every spotlight
+        // subtree), which mutated a channel the nodes themselves own: it double-lit translucent targets, forced a
+        // presentation-only exemption registry for the chip layer, and could not be scoped to a content region at all.
+        //
+        // Compositing: the band is a flat OPACITY GROUP at ScrimOpacity. Inside it the scrim fills at alpha 1 and each
+        // cutout ERASES (DestOut) to premultiplied zero, so the composite lays exactly one uniform veil with clean,
+        // anti-aliased, per-corner-rounded windows — the erase can only reach the group's own RT, never the canvas
+        // under it. Costs one offscreen composite for the scrim's rect, and only while a drag actually has spotlight
+        // destinations. Alloc-free: pure rect math over the scene's own root list, no scratch buffers.
+        if (scene.DropSpotlightActive)
+        {
+            RectF scrim = scene.SpotlightScrimClip ?? scene.AbsoluteRect(scene.Root);
+            if (!scrim.IsEmpty)
+            {
+                ulong scrimKey = (ulong)ScrimBandDepth << 32;
+                int scrimPushOffset = dl.BytePosition;
+                dl.PushOpacityLayer(scrim, default, DragVisualTok.ScrimOpacity, scrimKey);
+                dl.PatchOpacityLayerExtent(scrimPushOffset, in scrim);
+                dl.FillRoundRect(new RectF(0f, 0f, scrim.W, scrim.H), default, DragVisualTok.ScrimColor,
+                                 Affine2D.Translation(scrim.X, scrim.Y), 1f, scrimKey);
+                int rootCount = scene.DropSpotlightRootCount;
+                for (int i = 0; i < rootCount; i++)
+                {
+                    var root = scene.DropSpotlightRootAt(i);
+                    if (root.IsNull || !scene.IsLive(root)) continue;   // freed since the last cold refresh
+                    if ((scene.Flags(root) & NodeFlags.Visible) == 0) continue;
+                    RectF hole = scene.AbsoluteRect(root);
+                    // The destination's own ancestor scissors bound what of it is actually on screen — a row scrolled
+                    // half out of its list must not punch a window through the list's edge. Walk to the root and fold
+                    // every ClipsToBounds ancestor in, then scope to the scrim itself.
+                    for (var a = scene.Parent(root); !a.IsNull; a = scene.Parent(a))
+                        if ((scene.Flags(a) & NodeFlags.ClipsToBounds) != 0)
+                            hole = hole.Intersect(scene.AbsoluteRect(a));
+                    hole = hole.Intersect(scrim);
+                    if (hole.IsEmpty) continue;
+                    // The destination's OWN corner radii, so the window reads as that card/row and not as a rectangle
+                    // cut around it. Clamped by the DrawList's shape contract when the clip shaved the box.
+                    dl.EraseRoundRect(new RectF(0f, 0f, hole.W, hole.H), scene.Paint(root).Corners, 1f,
+                                      Affine2D.Translation(hole.X, hole.Y), 1f, scrimKey);
+                }
+                dl.PopLayer(scrim, scrimKey);
+            }
+        }
+
         // E5 drag-ghost top band: walk the ghost subtree at its LIVE parent-world origin (scroll / animated ancestor
         // translations included — AbsoluteRect minus the node's own bounds offset and translate; Walk re-applies
         // both) with an INFINITE clip. Emitted last ⇒ the painter draws it over the whole frame.
@@ -538,6 +585,12 @@ public static class SceneRecorder
     // Record's top-band walks); only the low 16 bits count recursion levels within a band.
     private const int MaxRecordDepth = 512;
 
+    /// <summary>Sort depth for the drop-spotlight scrim band. The high 16 bits of a record depth are the Z-BAND (0 = the
+    /// main pass + orphan fallback, 1 = the drag ghost, (1&lt;&lt;16)|1 = connected-animation overlays, (1&lt;&lt;16)|2 =
+    /// the drag chip). The scrim is not a band of its own: it is the LAST thing in band 0 — above every ordinary node,
+    /// below every hoisted drag/overlay visual — so it takes the top of band 0's depth range.</summary>
+    private const int ScrimBandDepth = (1 << 16) - 1;
+
     /// <summary>[Conditional("DEBUG")] record-depth tripwire: a scene deeper than <see cref="MaxRecordDepth"/> levels
     /// (within its z-band — the high bits of <paramref name="depth"/> are the band, not recursion) is a runaway (a
     /// reconciler cycle or pathological nesting), not a real UI — fail loudly here instead of overflowing the
@@ -701,21 +754,6 @@ public static class SceneRecorder
         float childScaleY = netScaleY * p.LocalTransform.M22;
 
         float opacity = parentOpacity * ResolveOpacity(flags, in p, in inherited, nodeInteractive, hasLocalProgress, localHoverT, localPressT);
-        if (scene.DropSpotlightActive)
-        {
-            bool insideTarget = scene.IsUnderDropSpotlightRoot(node) || scene.IsUnderDropSpotlightExempt(node);
-            if (node == scene.Root)
-            {
-                if (!insideTarget) opacity *= DragVisualTok.SpotlightBackgroundOpacity;
-            }
-            else if (insideTarget)
-            {
-                var parent = scene.Parent(node);
-                if (parent.IsNull || (!scene.IsUnderDropSpotlightRoot(parent)
-                    && !scene.IsUnderDropSpotlightExempt(parent)))
-                    opacity /= DragVisualTok.SpotlightBackgroundOpacity;
-            }
-        }
 
         // Presented extent (layout-transition "Reveal"): the node's own fill + its child clip are drawn at PresentedW/H
         // when set (which may exceed the model bounds during a shrink), while layout/hit-test keep the model Bounds.

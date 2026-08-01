@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -4858,6 +4858,9 @@ sealed class ChipDragProbe : Component
     public int Enters, Overs, Drops;
     public object? DroppedPayload;
     public string? CaptionAtDrop;
+    /// <summary>Opt the sink into the drop-spotlight scrim (set BEFORE the first frame; default false keeps every
+    /// pre-scrim gate on this probe byte-identical).</summary>
+    public bool SpotlightSink;
 
     Element SourceRow() => new BoxEl
     {
@@ -4872,7 +4875,8 @@ sealed class ChipDragProbe : Component
             onEnter: (_, _) => Enters++,
             onOver: (_, _) => Overs++,
             onDrop: (p, s) => { Drops++; DroppedPayload = p; CaptionAtDrop = s.Caption; },
-            caption: static p => "Add " + p),
+            caption: static p => "Add " + p,
+            visualPolicy: SpotlightSink ? DropTargetVisualPolicy.Spotlight : DropTargetVisualPolicy.None),
     };
 
     public override Element Render() => new BoxEl
