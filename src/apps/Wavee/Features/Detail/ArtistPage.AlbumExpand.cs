@@ -152,12 +152,22 @@ sealed class AlbumDrawerPanel : Component
             n,
             scope =>
             {
-                Element row = SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib)), _showChecks);
+                // One plain wrapper carries BOTH the drag source and the context menu (AccentPill's own root has bound
+                // visuals, so neither may go there). Unconditional: the drag does not depend on the action services,
+                // and the pre-existing conditional wrapper made the row's shape differ between hosts for no reason.
+                BoxEl row = new BoxEl
+                {
+                    Direction = 1,
+                    // A COPY source — an album drawer has no membership rows to move. The index is read at PROMOTION,
+                    // never captured: bound slots recycle.
+                    Draggable = Drag.Source(WaveeDragKinds.Resource, () => DrawerPayload(tracks, n, scope.Index.Peek())),
+                    Children = [SelectorVisualsBound.AccentPill(scope,
+                        Embed.Comp(() => new DrawerTrackRow(this, scope, tracks, n, bridge, lib)), _showChecks)],
+                };
                 // Right-click / long-press / the row's "…" cell: the selection-aware track menu (Explorer semantics —
-                // inside a multi-selection acts on all of it). Attached on a wrapper (the SearchPage songs pattern:
-                // AccentPill's root carries bound visuals, so the menu chains on a plain BoxEl above it).
+                // inside a multi-selection acts on all of it).
                 if (acts is { } a && menuOverlay is { } ov)
-                    row = new BoxEl { Direction = 1, Children = [row] }.WithContextMenu(ov, () => TrackContextMenu.Build(
+                    row = row.WithContextMenu(ov, () => TrackContextMenu.Build(
                         a, _sel, i => (uint)i < (uint)n ? tracks[i] : null,
                         scope.Index.Peek(), static () => null));
                 if (acts is null) return row;
@@ -185,6 +195,18 @@ sealed class AlbumDrawerPanel : Component
                 Grow = 0f,
                 Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
             });
+
+    /// <summary>The drawer row's drag payload: the whole SELECTION when the gesture starts on a selected row (Explorer
+    /// semantics — the same rule the row's context menu follows), else that one track.</summary>
+    WaveeResourceDragPayload? DrawerPayload(IReadOnlyList<Track> tracks, int n, int index)
+    {
+        if ((uint)index >= (uint)n) return null;
+        if (!_sel.IsSelected(index)) return WaveeResourceDragPayload.ForTrack(tracks[index]);
+        var picked = new List<Track>();
+        for (int i = 0; i < _sel.ItemCount && i < n; i++)
+            if (_sel.IsSelected(i)) picked.Add(tracks[i]);
+        return WaveeResourceDragPayload.ForTracks(picked);
+    }
 
     sealed class DrawerTrackRow : Component
     {
@@ -397,7 +419,9 @@ sealed class DiscoGrid : Component
             onPlay: () => _play(al.Uri),
             onNavigate: () => _go("album:" + al.Uri, al.Name),
             accent: Surfaces.SchemeFor(al.Cover?.Url) is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : null,
-            menu: _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, al.Uri, al.Name, al.Cover, subtitle) : null);
+            menu: _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, al.Uri, al.Name, al.Cover, subtitle) : null,
+            drag: Drag.Source(WaveeDragKinds.Resource,
+                () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover, _acts)));
         if (card is BoxEl b)
         {
             // Force ONE height (square cover + chrome) so every card is uniform → the drawer's hug spacing is exact.

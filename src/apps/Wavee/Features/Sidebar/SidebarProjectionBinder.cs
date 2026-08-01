@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Text;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
@@ -88,6 +90,20 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     bool _started;
     bool _rebuilding;
     bool _dirty = true;
+
+#if DEBUG || FLUENTGPU_DIAG
+    // The pump is the only computation subscribed to the projection inputs. Comparing its folded lanes therefore
+    // identifies the producer that keeps the entire sidebar alive without a global Signal<T> subscription ledger.
+    static readonly bool s_binderDiag = Diag.EnvFlag("WAVEE_SIDEBAR_BINDER_DIAG");
+    SidebarBinderTriggers _diagLastTriggers;
+    string _diagLastChange = "initial";
+    long _diagLastReportMs;
+    int _diagPumpRenders;
+    int _diagTriggerChanges;
+    int _diagRebuilds;
+    int _diagSourceNotifications;
+    bool _diagHaveTriggers;
+#endif
 
     public SidebarProjectionBinder(SidebarPreferences prefs, LibraryStore library,
                                   PlayLogStore? playLog = null, PlaybackBridge? playback = null)
@@ -200,7 +216,13 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
         _dirty = false;
 
         _rebuilding = true;
-        try { Rebuild(); }
+        try
+        {
+#if DEBUG || FLUENTGPU_DIAG
+            if (s_binderDiag) _diagRebuilds++;
+#endif
+            Rebuild();
+        }
         finally { _rebuilding = false; }
 
         // A source that fired Changed mid-rebuild (an inline fetch completion) only marked us dirty; settle now.
@@ -209,7 +231,13 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
             _dirty = false;
             _lastTriggers = Read(subscribe: false);
             _rebuilding = true;
-            try { Rebuild(); }
+            try
+            {
+#if DEBUG || FLUENTGPU_DIAG
+                if (s_binderDiag) _diagRebuilds++;
+#endif
+                Rebuild();
+            }
             finally { _rebuilding = false; }
         }
         return true;

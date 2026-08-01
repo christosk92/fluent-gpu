@@ -50,6 +50,7 @@ sealed class ConcertHubPage : Component
 
     readonly ConcertLocationController _location = new();
     Services? _svc;
+    ActionServices? _acts;      // resolved per render; read at drag PROMOTION by the promo card's payload factory
     Action<Action> _post = static run => run();
     Ref<NodeHandle> _anchor = null!;
 
@@ -58,6 +59,9 @@ sealed class ConcertHubPage : Component
         var svc = UseContext(Services.Slot);
         var go = UseContext(HistoryStore.NavCtx);
         var overlay = UseContext(Overlay.Service);
+        // Only the playlist-promo card uses this: it is the one concert surface that stands for a real Wavee resource
+        // (concerts, merch and gallery photos have no resource kind, so they are deliberately not drag sources).
+        _acts = UseContext(ActionServices.Slot);
         if (svc is null) return new BoxEl { Grow = 1f };
 
         _svc = svc;
@@ -265,11 +269,12 @@ sealed class ConcertHubPage : Component
 
     Element PromoShelf(string sectionKey, IReadOnlyList<PlaylistRef> promos, Action<string, string?> go)
     {
+        var acts = _acts;
         int n = Math.Min(promos.Count, 16);
         return PagedShelf.Create(
             n,
             cardAt: (i, w) => PlaylistPromoCard(promos[i],
-                () => go("pl:" + promos[i].Uri, promos[i].Name), w),
+                () => go("pl:" + promos[i].Uri, promos[i].Name), w, acts),
             header: SectionCaption(Upper(Loc.Get(Strings.Concerts.PlaylistsForScene))),
             headerGap: Spacing.S,
             measured: true, keyOf: i => promos[i].Uri) with { Key = "hub-promos:" + sectionKey };
@@ -277,7 +282,7 @@ sealed class ConcertHubPage : Component
 
     // The promo card keeps the existing playlist-card look (cover + title + source) WITHOUT the play FAB: every
     // MediaCard variant hard-mounts NowPlayingOverlay, and no concert surface may wire playback — navigation only.
-    static Element PlaylistPromoCard(PlaylistRef playlist, Action onClick, float cardW)
+    static Element PlaylistPromoCard(PlaylistRef playlist, Action onClick, float cardW, ActionServices? acts)
     {
         float inner = MathF.Max(48f, cardW - 2f * Spacing.S);
         return new BoxEl
@@ -290,6 +295,11 @@ sealed class ConcertHubPage : Component
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand, OnClick = onClick,
+            // The promo card IS a playlist: drag it to the sidebar to pin or file it, onto another playlist to copy
+            // its tracks. (Concerts / merch / gallery photos stay non-draggable — they have no resource kind.)
+            Draggable = Drag.Source(WaveeDragKinds.Resource,
+                () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, playlist.Uri, playlist.Name,
+                                                         playlist.Cover, acts)),
             Children =
             [
                 Surfaces.Artwork(playlist.Cover, playlist.Uri.GetHashCode() & 0x7fffffff, inner, inner,

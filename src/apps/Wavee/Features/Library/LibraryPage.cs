@@ -44,6 +44,7 @@ sealed class LibraryPage : Component
     readonly Signal<string> _sAlbum = new("");         // selected matched-album uri
     readonly Signal<SearchSnapshot> _searchSnapshot = new(new("", LibrarySearchResults.Empty));
     Services? _svcRef;                                 // cached in Render → play a track from the search facets
+    ActionServices? _actsRef;                          // cached in Render → the library items' drag payloads (resolver + rootlist)
     // Responsive collapse (F2): under a narrow content area the multi-column row becomes a single-column breadcrumb
     // drill-in. `_collapsed` is written from the root OnBoundsChanged (value-gated, hysteresis via LibraryLayoutBreakpoints);
     // `_depth` is the visible level (0 master · 1 discography/detail · 2 tracks). Both are ignored in the wide layout.
@@ -96,6 +97,7 @@ sealed class LibraryPage : Component
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
+        _actsRef = UseContext(ActionServices.Slot);
         var store = UseContext(LibraryStore.Slot);
         var bridge = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);   // rail state (Task B4): the 3-column artist layout tightens its mid pane when the rail is open
@@ -710,7 +712,7 @@ sealed class LibraryPage : Component
                 new TextEl(it.Title) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 compact ? new BoxEl() : new TextEl(it.Subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ] });
-        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Children = children.ToArray() };
+        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Draggable = NavDrag(it), Children = children.ToArray() };
     }
 
     // Pure content — fills whatever cell the grid layouter hands it (no width passed in); the engine measures it at the
@@ -720,8 +722,20 @@ sealed class LibraryPage : Component
         float pad = it.Circular ? 16f : Spacing.S;
         var children = new List<Element>(2) { Surfaces.ArtworkFill(it.Cover, it.Circular ? Radii.Full : 6f) };
         if (!compact) children.Add(new TextEl(it.Title) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, AlignSelf = it.Circular ? FlexAlign.Center : FlexAlign.Start });
-        return new BoxEl { Direction = 1, Gap = Spacing.S, ClipToBounds = true, Padding = new Edges4(pad, pad, pad, pad), Children = children.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.S, ClipToBounds = true, Padding = new Edges4(pad, pad, pad, pad), Draggable = NavDrag(it), Children = children.ToArray() };
     }
+
+    /// <summary>A library item is a DRAG SOURCE only — this list has Single selection and no reorder, so there is
+    /// nothing to drop INTO it. The kind comes from the item's own route key (the list is per-kind, but the search
+    /// facets mix them), which is the one value that is authoritative on every branch.</summary>
+    DragSource NavDrag(NavItem it) => Drag.Source(WaveeDragKinds.Resource,
+        () => WaveeResourceDragPayload.ForEntity(KindOfRoute(it.RouteKey), it.Uri, it.Title, it.Cover, _actsRef));
+
+    static WaveeResourceKind KindOfRoute(string routeKey) =>
+        routeKey.StartsWith("artist:", StringComparison.Ordinal) ? WaveeResourceKind.Artist
+        : routeKey.StartsWith("show:", StringComparison.Ordinal) ? WaveeResourceKind.Show
+        : routeKey.StartsWith("pl:", StringComparison.Ordinal) ? WaveeResourceKind.Playlist
+        : WaveeResourceKind.Album;
 
     // ── right pane(s) ──
     Element DetailColumn(Loadable<DetailModel> detail, Services svc, PlaybackBridge? bridge, bool hasSel)
@@ -1123,6 +1137,7 @@ sealed class LibraryArtistPane : Component
     readonly Signal<string> _aFilter;
     readonly Action? _onDrill;                   // collapsed drill-in: notify the host when a release is picked (→ tracks level)
     readonly SelectionModel _discoSel = new();   // discography grid single-selection (drives the 3rd column)
+    ActionServices? _actsRef;                    // cached in Render → the discography items' drag payloads
     static readonly string[] NoSuggest = Array.Empty<string>();
 
     public LibraryArtistPane(Loadable<Artist> artist, Signal<string> albumKey,
@@ -1132,6 +1147,7 @@ sealed class LibraryArtistPane : Component
     public override Element Render()
     {
         var go = UseContext(HistoryStore.NavCtx);
+        _actsRef = UseContext(ActionServices.Slot);
         var st = (LoadState)_artist.State.Value;   // subscribe
         var a = _artist.Value.Value;               // subscribe
         var albums = a?.TopAlbums ?? Array.Empty<Album>();
@@ -1245,7 +1261,7 @@ sealed class LibraryArtistPane : Component
     }
 
     // Grid card: cover + title, plus a "year · KIND" subtitle in non-compact grids (compact drops it, like the picker).
-    static Element DiscoCardContent(Album al, bool compact)
+    Element DiscoCardContent(Album al, bool compact)
     {
         var children = new List<Element>(3)
         {
@@ -1254,11 +1270,11 @@ sealed class LibraryArtistPane : Component
         };
         if (!compact)
             children.Add(new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
-        return new BoxEl { Direction = 1, Gap = Spacing.XS, ClipToBounds = true, Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS), Children = children.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.XS, ClipToBounds = true, Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS), Draggable = AlbumDrag(al), Children = children.ToArray() };
     }
 
     // List row: 40px cover (dropped when compact) + title + "year · KIND" subtitle — mirrors the left picker's NavRowContent.
-    static Element DiscoRowContent(Album al, bool compact)
+    Element DiscoRowContent(Album al, bool compact)
     {
         var children = new List<Element>(2);
         if (!compact)
@@ -1270,8 +1286,11 @@ sealed class LibraryArtistPane : Component
                 new TextEl(al.Name) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 compact ? new BoxEl() : new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ] });
-        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Children = children.ToArray() };
+        return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Draggable = AlbumDrag(al), Children = children.ToArray() };
     }
+
+    DragSource AlbumDrag(Album al) => Drag.Source(WaveeDragKinds.Resource,
+        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover, _actsRef));
 
     static string KindLabel(AlbumKind k) => k switch
     {

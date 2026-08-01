@@ -363,6 +363,8 @@ public sealed class AppHost : IDisposable
     private readonly FloatSignal _dragPosY = new(0f);
     private bool _dragWasActive;
     private NodeHandle _dragOverPrev;                    // edge-detection state (scalar compares per frame, 0 alloc)
+    private NodeHandle _dragRefusedPrev;                 // refusal is its own edge: over-nothing and over-a-refuser
+                                                         // share OverTarget=Null + Effect=None + a null caption
     private DropEffect _dragEffectPrev;
     private string? _dragCaptionPrev;
     // Last live-session snapshot, retained across the settle window so the chip can animate out with its own content.
@@ -2096,7 +2098,8 @@ public sealed class AppHost : IDisposable
         if (dd.IsActive)
         {
             var s = dd.Session;
-            return new DragState(true, s.Kind, s.Position, s.Payload, s.Effect, s.Caption);
+            return new DragState(true, s.Kind, s.Position, s.Payload, s.Effect, s.Caption,
+                                 Refused: !s.RefusedTarget.IsNull);
         }
         // The gesture is over but its chip is still settling: keep reporting Active with the LAST live snapshot (plus
         // the settle phase/target) so the preview can glide out instead of vanishing at the release frame.
@@ -2504,10 +2507,12 @@ public sealed class AppHost : IDisposable
                 _dragPosX.SetIfChanged(ds.Position.X);
                 _dragPosY.SetIfChanged(ds.Position.Y);
                 bool dragEdge = !_dragWasActive || ds.OverTarget != _dragOverPrev || ds.Effect != _dragEffectPrev
+                                || ds.RefusedTarget != _dragRefusedPrev
                                 || !string.Equals(ds.Caption, _dragCaptionPrev, StringComparison.Ordinal);
                 if (dragEdge)
                 {
                     _dragOverPrev = ds.OverTarget;
+                    _dragRefusedPrev = ds.RefusedTarget;
                     _dragEffectPrev = ds.Effect;
                     _dragCaptionPrev = ds.Caption;
                     _dragEpoch.Value = _dragEpoch.Peek() + 1;
@@ -2529,6 +2534,7 @@ public sealed class AppHost : IDisposable
                 _dragSettleRequested = false;
                 _dragSettlePending = DragSettlePhase.None;
                 _dragOverPrev = NodeHandle.Null;
+                _dragRefusedPrev = NodeHandle.Null;
                 _dragEffectPrev = DropEffect.None;
                 _dragCaptionPrev = null;
                 _dragEpoch.Value = _dragEpoch.Peek() + 1;

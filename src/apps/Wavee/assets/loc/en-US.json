@@ -1,6 +1,17 @@
 {
   "$culture": "en-US",
   "$comment": "Wavee base culture — every user-facing UI string. Other cultures override per-key and fall back here. Keys flatten to a `Wavee.Strings` class via FluentGpu.SourceGen (Strings.Detail.Play == \"detail.play\"); parameterized keys expose a typed format method.",
+  "drag": {
+    "$comment": "Drag & drop refusal captions. A refusing drop target is TRANSPARENT to the engine (discovery walks past it), so these are the only thing that tells the user why a drag was turned away — the drag chip shows them beside its not-allowed glyph.",
+    "cantEditPlaylist": "Can’t edit this playlist",
+    "stillLoading": "Still loading…",
+    "cantAddArtist": "Can’t add an artist",
+    "nothingToAdd": "Nothing to add",
+    "clearSortingToReorder": "Clear sorting to reorder",
+    "clearFiltersToReorder": "Clear filters to reorder",
+    "addTo": "Add to {name}",
+    "dropOnListToReorder": "Drop on the list to reorder"
+  },
   "detail": {
     "play": "Play",
     "pause": "Pause",

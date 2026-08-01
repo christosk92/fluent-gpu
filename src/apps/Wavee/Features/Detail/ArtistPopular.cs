@@ -175,16 +175,26 @@ sealed class ArtistPopular : Component
         // Density props freeze at mount (component-props contract), so the tier is IN the key — a tier flip is a
         // deliberate remount. The ordinal deliberately is not (see RowKey); the row still RECEIVES it, for the rank
         // number and its own _live read.
-        Element row = Embed.Comp(() => new ChartRow(this, i, _go, _lib, art, showDuration, fullPlays, stackSub))
+        Element content = Embed.Comp(() => new ChartRow(this, i, _go, _lib, art, showDuration, fullPlays, stackSub))
             with { Key = "row:" + t.Uri + tier };
-        if (_acts is { } a && _overlay is { } ov)
+        // A pass-through wrapper carrying the drag source (and, when services exist, the context menu): the row owns
+        // its own 56px height (which is exactly the shelf's cell), so this must not add a height contract of its own
+        // (that is what let the old cap leak into a stretched slot).
+        //
+        // Axis arbitration is the ENGINE's, and it lands the right way here for free: DragController's arena-lite
+        // reads the item's reorder axis off its PARENT container's main axis, and a shelf CELL is a column — so a
+        // VERTICAL lift runs along that axis and the drag wins outright, while a HORIZONTAL sweep is perpendicular
+        // to it, finds the shelf's overflowing horizontal viewport, and yields to the pan that pages the chart.
+        BoxEl row = new BoxEl
         {
-            // A pass-through wrapper: the row owns its own 56px height (which is exactly the shelf's cell), so this
-            // must not add a height contract of its own (that is what let the old cap leak into a stretched slot).
-            row = new BoxEl { Direction = 1, Children = [row] }
-                .WithContextMenu(ov, () => TrackContextMenu.BuildSingle(a, t));
-        }
-        return row;
+            Direction = 1,
+            // No selection model on this chart — one track, always a COPY.
+            Draggable = Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t)),
+            Children = [content],
+        };
+        return _acts is { } a && _overlay is { } ov
+            ? row.WithContextMenu(ov, () => TrackContextMenu.BuildSingle(a, t))
+            : row;
     }
 
     // The density-tier tag that rides in the row KEY. A LITERAL per band, never a concat: Card runs on every realize, a

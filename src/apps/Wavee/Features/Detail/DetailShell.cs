@@ -81,6 +81,7 @@ sealed class DetailShell : Component
     readonly Signal<bool> _albumRailCollapsed;
     readonly Signal<bool> _playlistRailCollapsed;
     readonly Signal<float> _railFade = new(1f);
+    ActionServices? _actsRef;             // resolved per render; read by the hero cover's drag payload inside RowChildren
 
     public DetailShell(Signal<Route> route, Loadable<DetailModel> model, Image? fallbackCover = null, IAppSettings? settings = null)
     {
@@ -136,6 +137,8 @@ sealed class DetailShell : Component
         _ = AppearancePrefs.Epoch.Value;
         bool colorWashesDisabled = settings?.Get(WaveeSettings.DisableColorWashes) ?? false;
         var bridge = UseContext(PlaybackBridge.Slot);
+        var acts = UseContext(ActionServices.Slot);   // the page-BODY drop destination (see PageDropTarget)
+        _actsRef = acts;                             // …and the hero cover's drag payload, built inside RowChildren
         var libBridge = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
         var shellTint = UseContext(ShellTint.Slot);
@@ -440,7 +443,8 @@ sealed class DetailShell : Component
             Element verticalContent = new BoxEl
             {
                 Direction = 1, Grow = 1f, ClipToBounds = true,
-                Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers, _model), right],
+                DropTarget = PageDropTarget(m, acts),
+                Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers, _model, acts: acts), right],
             };
             // The pinned chrome bar now lives INSIDE TrackList's ZStack overlay so it floats over the list AND the album
             // trailing scroller and never remounts when a query/filter remounts the list.
@@ -500,6 +504,9 @@ sealed class DetailShell : Component
             // mid-glyph ("Plays"→"Pl") instead of the table reflowing to a tighter tier. `right` already shrinks (below);
             // the fix is to let its PARENT shrink so the reduced width actually reaches it.
             Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, MaxWidth = 1600f,
+            // The hero/rail column is a SIBLING of the track list, so a drag released over the cover, the title or the
+            // actions used to reach no destination at all — the dead zone this closes.
+            DropTarget = PageDropTarget(m, acts),
             Children = RowChildren(m, handlers, railW, titleSize, descLines, right,
                 resizableRail, railCollapsed, railWidthSignal, railCollapsedSignal, kind, settings),
         };
@@ -528,6 +535,48 @@ sealed class DetailShell : Component
                 twoColumnPage,
             ],
         };
+    }
+
+    /// <summary>The page-BODY drop destination: "anywhere on this playlist page" → APPEND.
+    /// <para>The track list owns insertion at a precise slot, and the engine always picks the NEAREST accepting target,
+    /// so this never competes with it — it only catches the area the list does not cover. In the two-column layout that
+    /// is the whole hero/rail column (cover, title, description, actions), which was previously a dead zone where a
+    /// drag released and simply did nothing.</para>
+    /// <para>It is mounted for every TRACKS page with a context, not only editable ones, so a read-only playlist can
+    /// explain itself there too instead of staying silent.</para></summary>
+    DropTargetSpec? PageDropTarget(DetailModel m, ActionServices? acts)
+    {
+        if (_cfg.Content != DetailContent.Tracks || acts is null) return null;
+        if (m.ContextUri is not { Length: > 0 } uri) return null;
+        string name = m.Title;
+        bool editable = m.Capabilities.CanEditItems && acts.Library is not null;
+
+        // A page-body drop can only ever APPEND, so a same-playlist row drag has nothing to do here — and treating it
+        // as a copy would duplicate the user's own rows into their own playlist. Refuse it, and say where to aim.
+        // The same-list case is kept OUT of the shared decision table: that table answers "may this list take this
+        // payload at a slot", and a body drop has no slot to speak of.
+        bool SameList(WaveeResourceDragPayload p)
+            => p.SourceRows is { Count: > 0 } && string.Equals(p.SourcePlaylistUri, uri, StringComparison.Ordinal);
+        PlaylistDropRefusal Verdict(WaveeResourceDragPayload p)
+            => PlaylistDropRefusalRules.Evaluate(editable, loading: false, p.CanCopyTracks,
+                                                 sameList: false, naturalOrder: true, filtered: false);
+
+        return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+            accepts: p => !SameList(p) && Verdict(p) == PlaylistDropRefusal.None,
+            onDrop: (p, _) => WaveeResourceDrop.DepositTracks(acts, uri, name, p, insertionIndex: null),
+            caption: _ => Strings.Drag.AddTo(name),
+            refusalCaption: p => SameList(p)
+                ? Loc.Get(Strings.Drag.DropOnListToReorder)
+                : Verdict(p) switch
+                {
+                    PlaylistDropRefusal.NotEditable => Loc.Get(Strings.Drag.CantEditPlaylist),
+                    // Locked decision: an artist has no single obvious track set — refuse rather than guess. Future
+                    // work is to let the USER pick what to deposit (top tracks / a release), not to choose for them.
+                    PlaylistDropRefusal.NoTracks => p.Kind == WaveeResourceKind.Artist
+                        ? Loc.Get(Strings.Drag.CantAddArtist)
+                        : Loc.Get(Strings.Drag.NothingToAdd),
+                    _ => null,
+                });
     }
 
     // The two-column row's children. Collapsed keeps a compact identity strip — `[compact, grip, right]` — so the rail
@@ -567,7 +616,7 @@ sealed class DetailShell : Component
             // PAINT-BOUND (WaveeShell's sidebar-fade pattern): the resist-zone cue rides the compositor's opacity
             // channel, so a drag toward the detent never re-renders the rail subtree.
             Opacity = Prop.Of(() => _railFade.Value),
-            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model)],
+            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model, _actsRef)],
         };
         return resizableRail
             ? [railFaded, DetailRailGrip(railWidthSignal, railCollapsedSignal, kind, settings, collapsedNow: false), right]

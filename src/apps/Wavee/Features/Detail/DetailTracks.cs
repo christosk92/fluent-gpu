@@ -944,6 +944,7 @@ sealed class TrackList : Component
         // hard-coded 420/200 + ChromeExtent estimate this replaces was one of the four "cannot drop" causes).
         Range = () => (TrackStart, View().Length),
         OnDeposit = DepositAtAsync,
+        RefusalCaption = DropRefusalCaption,
         GapPreview = (payload, _) => WaveeResourceDrag.Unwrap(payload) is { } resource
             ? PlaylistInsertionPreview.Cards(resource, TrackRow.RowHeightFor(_h.Density.Peek()))
             : new BoxEl { Height = 0f },
@@ -958,17 +959,44 @@ sealed class TrackList : Component
         => WaveeResourceDrag.Unwrap(payload) is { SourceRows.Count: > 0 } resource
            && string.Equals(resource.SourcePlaylistUri, _model.ContextUri, StringComparison.Ordinal);
 
-    bool CanDropResource(object? payload)
+    /// <summary>Score this drop against the live page state ONCE — the accept test and the refusal cue both read the
+    /// same verdict, so a refusal can never be explained with a reason the gate did not actually use.
+    /// <para>A same-list MOVE addresses original membership rows through the DISPLAYED order, so it is unambiguous only
+    /// while the display IS the membership order (PlaylistReorderRules); a foreign COPY has no such constraint.</para></summary>
+    PlaylistDropRefusal DropVerdict(object? payload)
     {
-        if (!DropEditable) return false;
-        if (WaveeResourceDrag.Unwrap(payload) is not { CanCopyTracks: true }) return false;
-        if (!IsSameListDrop(payload)) return true;
-        // A same-list move addresses ORIGINAL membership rows through the DISPLAYED order, so it is only unambiguous
-        // while the displayed order IS the membership order (PlaylistReorderRules).
         var sort = _h.Sort.Peek();
-        return PlaylistReorderRules.AllowsSameListMove(
-            sort.Column == SortColumn.Index && !sort.Descending, _h.Query.Peek(), _h.Filters.Peek());
+        return PlaylistDropRefusalRules.Evaluate(
+            editable: DropEditable,
+            // A still-shimmering page has no membership to insert into: Wave 4 made an EMPTY list accept at slot 0, and
+            // without this a PENDING one looks identical to it and swallows the drop.
+            loading: _full.State.Peek() == (byte)LoadState.Pending,
+            payloadHasTracks: WaveeResourceDrag.Unwrap(payload) is { CanCopyTracks: true },
+            sameList: IsSameListDrop(payload),
+            naturalOrder: sort.Column == SortColumn.Index && !sort.Descending,
+            filtered: !PlaylistReorderRules.AllowsSameListMove(true, _h.Query.Peek(), _h.Filters.Peek()));
     }
+
+    bool CanDropResource(object? payload) => DropVerdict(payload) == PlaylistDropRefusal.None;
+
+    /// <summary>The refusal CUE. Wave 4 made every one of these gates answer live, which turned four silent
+    /// "nothing happens" failures into four honest refusals — but a refusing target is transparent, so without a
+    /// caption the user still just sees the drag pass over the list. This is the sentence the chip shows next to its
+    /// not-allowed glyph.</summary>
+    string? DropRefusalCaption(object? payload) => DropVerdict(payload) switch
+    {
+        PlaylistDropRefusal.NotEditable => Loc.Get(Strings.Drag.CantEditPlaylist),
+        PlaylistDropRefusal.Loading => Loc.Get(Strings.Drag.StillLoading),
+        // FUTURE WORK (locked product decision): an artist has no single obvious track set, so we refuse rather than
+        // guess. The intended answer is to let the USER choose what to deposit — a picker offering the artist's top
+        // tracks or a release from their discography — not to silently pick one for them.
+        PlaylistDropRefusal.NoTracks => WaveeResourceDrag.Unwrap(payload)?.Kind == WaveeResourceKind.Artist
+            ? Loc.Get(Strings.Drag.CantAddArtist)
+            : Loc.Get(Strings.Drag.NothingToAdd),
+        PlaylistDropRefusal.Sorted => Loc.Get(Strings.Drag.ClearSortingToReorder),
+        PlaylistDropRefusal.Filtered => Loc.Get(Strings.Drag.ClearFiltersToReorder),
+        _ => null,
+    };
 
     int DropTrackCount(object? payload)
         => WaveeResourceDrag.Unwrap(payload) is { Tracks.Count: > 0 } resource ? resource.Tracks!.Count : 1;
@@ -1310,7 +1338,7 @@ sealed class TrackList : Component
             Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, orientation, artSize, availW,
                 compactLeft, collapseDistance, _verticalCompactInteractive,
                 _searchExpanded, _selectionCommandsVisible!,
-                toolbar, compactSearch, compactSelection)],
+                toolbar, compactSearch, compactSelection, _acts)],
         };
         return new BoxEl
         {
@@ -2395,6 +2423,9 @@ sealed class TrackList : Component
         // 48px default row and overlap its neighbour — cap + clip keeps the 40px art (centred) fully visible.
         Direction = 0, AlignItems = FlexAlign.Center, MinHeight = rowH, MaxHeight = rowH, ClipToBounds = true,
         Padding = new Edges4(TrackRow.PadX - TrackRow.RowInset, 0f, TrackRow.PadX - TrackRow.RowInset, 0f),
+        // A rec row carries its full Track and joins NO selection, so its payload is always exactly this one track —
+        // and always a COPY: a recommendation is not yet a member of anything.
+        Draggable = Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t)),
         Children =
         [
             TrackRow.ArtCard(

@@ -1690,6 +1690,7 @@ internal sealed class ItemsViewInsertion
             CanAccept = s => Accepts(s.Payload),
             VisualPolicy = options.VisualPolicy,
             SpotlightWhen = options.SpotlightWhen,
+            RefusalCaption = options.RefusalCaption is { } why ? s => why(s.Payload) : null,
         };
     }
 

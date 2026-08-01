@@ -267,13 +267,19 @@ sealed class SidebarPaneSlot : Component
 
         // A Reorderable installs its OWN drag source and position track; a second one is a documented stomp. A TRACK is
         // never a pin drag source at all (locked decision 4 is enforced by the KIND, not per surface).
-        bool rootlistItem = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
-        WaveeResourceDragPayload? resource = rootlistItem
+        bool treeRow = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
+        // Rootlist membership is a fact about the ENTITY, not about which section happens to be showing it: a PINNED or
+        // recently-played playlist row is the very same rootlist member as its tree row. Flagging it there too is what
+        // lets that row be filed into a folder; keying the flag off the section (as this used to) meant the identical
+        // playlist was file-able from one list and inert from another.
+        bool rootlistItem = !reordering && snapshot.Kind is SidebarEntryKind.Playlist or SidebarEntryKind.Folder;
+        // The DESTINATION half stays tree-only: a pinned row is a rootlist member but not a rootlist ORDERING slot.
+        WaveeResourceDragPayload? resource = treeRow
             ? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem: true)
             : null;
         WaveeResourceDragPayload? drag = null;
         if (!reordering && !track)
-            drag = resource ?? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc);
+            drag = resource ?? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem);
         DropTargetSpec? drop = (snapshot.Kind == SidebarEntryKind.Playlist && snapshot.CanEdit) || resource is not null
             ? _o.ResourceDropSpec(row.SectionId, PinSlot(row.SectionId, index),
                 snapshot.Kind == SidebarEntryKind.Playlist && snapshot.CanEdit ? snapshot.Uri : null,
@@ -426,7 +432,7 @@ sealed class SidebarPaneSlot : Component
         if (!_o.TryBandOf(index, out _) && SidebarPinId.FromRoute(key) is not null)
         {
             var destination = SidebarDestination.FromRoute(key, null, title);
-            if (destination is { } d) drag = WaveeResourceDragPayload.FromDestination(d, _o.Acts?.Svc);
+            if (destination is { } d) drag = WaveeResourceDragPayload.FromDestination(d, _o.Acts);
         }
         var drop = PinSpec(section, section.Id, index);
 

@@ -92,6 +92,18 @@ sealed class HomePage : Component
             else Play(c.Uri);
         }
 
+        // Every home card is a drag SOURCE for the entity it stands for — drop it on a sidebar playlist to add its
+        // tracks, on a folder to file it, on the pin band to pin it. The payload factory is gesture-COLD (it runs once,
+        // at promotion), so it reads `acts` live rather than snapshotting anything here.
+        // A TRACK card is deliberately excluded: the feed carries only a uri for it — no Track object, and no by-uri
+        // track read exists — so its payload could be neither pinned nor deposited. A drag every surface refuses is
+        // worse than no drag at all.
+        DragSource? CardDrag(HomeCard c)
+            => c.Kind == HomeCardKind.Track
+                ? null
+                : Drag.Source(WaveeDragKinds.Resource,
+                    () => WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.Of(c.Kind), c.Uri, c.Title, c.Image, acts));
+
         Element Tile(HomeCard c, string section = "", int index = -1)
         {
             string? url = HomeImageDiagnostics.Enabled ? HomeImageDiagnostics.NormalizedUrl(c.Image) : null;
@@ -101,7 +113,8 @@ sealed class HomePage : Component
                     ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
                     : null,
                 menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                    circular: c.Kind == HomeCardKind.Artist));
+                    circular: c.Kind == HomeCardKind.Artist),
+                drag: CardDrag(c));
             return tile is BoxEl box ? box with { Key = "home-quick:" + c.Uri, Animate = MotionRecipes.CardRefit } : tile;
         }
 
@@ -122,7 +135,8 @@ sealed class HomePage : Component
                     () => NavCard(c), () => PlayCard(c), w,
                     circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri,
                     menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                        circular: c.Kind == HomeCardKind.Artist));
+                        circular: c.Kind == HomeCardKind.Artist),
+                    drag: CardDrag(c));
             },
             measured: true,
             header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
@@ -145,7 +159,8 @@ sealed class HomePage : Component
                         circular: c.Kind == HomeCardKind.Artist),
                     // Hover peek: preview tracks from the batched feedBaselineLookup cache (primed when the feed lands).
                     previewsOf: Wavee.SpotifyLive.HomeBaselinePreviews.For,
-                    previewsEpoch: Wavee.SpotifyLive.HomeBaselinePreviews.Epoch);
+                    previewsEpoch: Wavee.SpotifyLive.HomeBaselinePreviews.Epoch,
+                    drag: CardDrag(c));
             },
             measured: true,
             header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
@@ -173,7 +188,8 @@ sealed class HomePage : Component
                 Element compact = MediaCard.Compact(c.Image, c.Title, c.Subtitle ?? "", c.Uri, c.Kind,
                     () => NavCard(c), () => PlayCard(c), art, cardH,
                     Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                        circular: c.Kind == HomeCardKind.Artist));
+                        circular: c.Kind == HomeCardKind.Artist),
+                    drag: CardDrag(c));
                 cards[i] = compact is BoxEl b
                     ? b with { Key = "home-compact:" + c.Uri, Animate = MotionRecipes.CardRefit }
                     : compact;

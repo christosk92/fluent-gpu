@@ -76,7 +76,11 @@ sealed partial class ArtistPage : Component
             groups.Add(Section(Loc.Get(Strings.Artist.ArtistPick),
                 MediaCard.ArtistPick(pick, artistName, artistImage, artistBackground,
                     onClick: () => go(target, pick.Title),
-                    onPlay: () => play(pick.TargetUri))) with { Key = "featured:pick" });
+                    onPlay: () => play(pick.TargetUri),
+                    // A pinned item can point at any entity, so the kind comes from the uri — the same discrimination
+                    // `target` above used, so the drag payload can never disagree with the click's destination.
+                    drag: CardDrag(WaveeDragKindMap.OfUri(pick.TargetUri), pick.TargetUri, pick.Title, pick.Cover)))
+                with { Key = "featured:pick" });
         }
         if (upcoming is { IsUpcoming: true } next)
             groups.Add(Section(Loc.Get(Strings.Artist.Upcoming), UpcomingMasthead(next, go, accent))
@@ -175,14 +179,17 @@ sealed partial class ArtistPage : Component
         };
     }
 
-    static Element ReleaseMasthead(Album al, string eyebrow, Action<string, string?> go, Action<string> play)
+    // Instance (was static) so the latest-release card can reach the page's `_acts` for its drag payload — the same
+    // reason CardMenu is an instance method.
+    Element ReleaseMasthead(Album al, string eyebrow, Action<string, string?> go, Action<string> play)
     {
         string meta = ReleaseMeta(al);
         string subtitle = meta.Length == 0 ? eyebrow : eyebrow + " · " + meta;
         return MediaCard.Compact(al.Cover, al.Name, subtitle, al.Uri, HomeCardKind.Album,
             onClick: () => go("album:" + al.Uri, al.Name),
             onPlay: () => play(al.Uri), art: 96f, cardH: 116f,
-            menu: null);
+            menu: null,
+            drag: CardDrag(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover));
     }
 
     static string ReleaseMeta(Album al)

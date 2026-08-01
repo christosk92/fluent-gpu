@@ -37,7 +37,8 @@ static class DetailVerticalHero
                                 float compactLeft, float collapseDistance,
                                 IReadSignal<bool> compactInteractive,
                                 IReadSignal<bool> searchExpanded, IReadSignal<bool> selectionCommandsVisible,
-                                Element toolbar, Element compactSearch, Element compactSelection)
+                                Element toolbar, Element compactSearch, Element compactSelection,
+                                ActionServices? acts = null)
     {
         bool side = o == DetailHeroOrientation.SideBySide;
         bool compact = o == DetailHeroOrientation.Compact;
@@ -86,6 +87,9 @@ static class DetailVerticalHero
             // Apple melts the lower ~⅓ of the bitmap into the opaque page wash (longer melt = less hard plate).
             EdgeFade = immersive ? new EdgeFadeSpec(EdgeMask.Bottom, MathF.Min(260f, artSize * 0.34f)) : null,
             TransformOriginX = 0f, TransformOriginY = 0f,
+            // The cover drags the whole entity this page is about. On the framing box, not on the editable
+            // cover inside it, so that cover's FILE drop target is untouched (see WaveeDetailDrag.Hero).
+            Draggable = WaveeDetailDrag.Hero(m, acts),
             Children =
             [
                 editable

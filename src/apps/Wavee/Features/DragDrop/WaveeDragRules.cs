@@ -1,0 +1,126 @@
+using Wavee.Core;
+
+namespace Wavee;
+
+/// <summary>
+/// The PURE decisions behind Wavee's drag sources and its playlist drop refusals — engine-free, so <c>Wavee.Tests</c>
+/// can compile them (the same split that put the chip's resolution rules in <see cref="WaveeDragChipModel"/>).
+///
+/// <para>Two things live here. First the KIND MAP: every card surface names its entity with a different enum
+/// (<see cref="HomeCardKind"/> on the home feed, <see cref="SearchHitKind"/> in search, <see cref="SidebarEntryKind"/>
+/// in the sidebar), and a payload that mislabels its kind silently loses a capability three layers away — an album
+/// drag that says "route" cannot resolve tracks, a playlist that says "album" cannot be filed into a folder. One table
+/// per source enum, tested, beats a switch re-typed at twenty call sites.</para>
+/// </summary>
+static class WaveeDragKindMap
+{
+    /// <summary>Home-feed card kind → drag kind. <see cref="HomeCardKind.Liked"/> is the Liked Songs pseudo-playlist:
+    /// it navigates and pins like a playlist and its tracks resolve through the playlist reader, so it maps there.</summary>
+    public static WaveeResourceKind Of(HomeCardKind kind) => kind switch
+    {
+        HomeCardKind.Album => WaveeResourceKind.Album,
+        HomeCardKind.Artist => WaveeResourceKind.Artist,
+        HomeCardKind.Track => WaveeResourceKind.Track,
+        _ => WaveeResourceKind.Playlist,   // Playlist + Liked
+    };
+
+    /// <summary>Search hit kind → drag kind. An AUDIOBOOK is a show in every way this payload cares about (it pins as
+    /// one and carries no resolvable track list); <see cref="SearchHitKind.Author"/>/<see cref="SearchHitKind.User"/>
+    /// are people with no Wavee resource behind them, so they fall to <see cref="WaveeResourceKind.Route"/> — pinnable,
+    /// never depositable.</summary>
+    public static WaveeResourceKind Of(SearchHitKind kind) => kind switch
+    {
+        SearchHitKind.Track => WaveeResourceKind.Track,
+        SearchHitKind.Artist => WaveeResourceKind.Artist,
+        SearchHitKind.Album => WaveeResourceKind.Album,
+        SearchHitKind.Playlist => WaveeResourceKind.Playlist,
+        SearchHitKind.Podcast or SearchHitKind.Audiobook => WaveeResourceKind.Show,
+        SearchHitKind.Episode => WaveeResourceKind.Episode,
+        _ => WaveeResourceKind.Route,
+    };
+
+    /// <summary>Spotify URI → drag kind, for the surfaces whose card carries nothing BUT a uri (an artist's pinned
+    /// item can target any entity). Mirrors <c>RichText.RouteForUri</c>'s discrimination order — the more specific
+    /// <c>:prerelease:</c> scheme before <c>:album:</c> — so a card's drag payload can never disagree with the route
+    /// its click navigates to. An unrecognised uri is a <see cref="WaveeResourceKind.Route"/>: pinnable, inert
+    /// everywhere else, which is the safe reading of "we don't know what this is".</summary>
+    public static WaveeResourceKind OfUri(string? uri)
+    {
+        if (string.IsNullOrEmpty(uri)) return WaveeResourceKind.Route;
+        if (uri == "spotify:collection:tracks") return WaveeResourceKind.Playlist;   // Liked Songs reads as a playlist
+        if (uri.Contains(":playlist:", System.StringComparison.Ordinal)) return WaveeResourceKind.Playlist;
+        if (uri.Contains(":prerelease:", System.StringComparison.Ordinal)) return WaveeResourceKind.Album;
+        if (uri.Contains(":album:", System.StringComparison.Ordinal)) return WaveeResourceKind.Album;
+        if (uri.Contains(":artist:", System.StringComparison.Ordinal)) return WaveeResourceKind.Artist;
+        if (uri.Contains(":show:", System.StringComparison.Ordinal)) return WaveeResourceKind.Show;
+        if (uri.Contains(":episode:", System.StringComparison.Ordinal)) return WaveeResourceKind.Episode;
+        if (uri.Contains(":track:", System.StringComparison.Ordinal)) return WaveeResourceKind.Track;
+        return WaveeResourceKind.Route;
+    }
+
+    /// <summary>Sidebar projection kind → drag kind (the one the sidebar's own payload factory uses).</summary>
+    public static WaveeResourceKind Of(SidebarEntryKind kind) => kind switch
+    {
+        SidebarEntryKind.Playlist => WaveeResourceKind.Playlist,
+        SidebarEntryKind.Album => WaveeResourceKind.Album,
+        SidebarEntryKind.Artist => WaveeResourceKind.Artist,
+        SidebarEntryKind.Show => WaveeResourceKind.Show,
+        SidebarEntryKind.Folder => WaveeResourceKind.Folder,
+        SidebarEntryKind.Track => WaveeResourceKind.Track,
+        _ => WaveeResourceKind.Route,
+    };
+}
+
+/// <summary>Why a playlist destination turned a drag away. A refusing drop target is TRANSPARENT by design (discovery
+/// walks past it to an accepting ancestor), so without a named reason the user sees nothing at all happen — the
+/// "cannot drop in this mode" report. Each value maps to one caption the drag chip shows beside its not-allowed
+/// glyph.</summary>
+enum PlaylistDropRefusal : byte
+{
+    /// <summary>Nothing to explain — the drop is allowed.</summary>
+    None = 0,
+    /// <summary>An editorial/daylist/someone-else's playlist: the user simply cannot write to it.</summary>
+    NotEditable,
+    /// <summary>The track list has not arrived yet, so there is no membership to insert into.</summary>
+    Loading,
+    /// <summary>The payload carries no tracks and can resolve none — an artist, a route, a podcast show.</summary>
+    NoTracks,
+    /// <summary>A same-list reorder under a non-natural SORT: display positions no longer name membership rows.</summary>
+    Sorted,
+    /// <summary>A same-list reorder under a search/filter: the display is a SUBSET, so a slot is ambiguous.</summary>
+    Filtered,
+}
+
+/// <summary>The single decision table behind <c>DetailTracks</c>'s insertion <c>CanAccept</c> and its refusal caption:
+/// one function answers BOTH, so a refusal can never be cued with a reason the accept test did not actually use (the
+/// two drifting apart is how a "cannot drop" ends up unexplained).</summary>
+static class PlaylistDropRefusalRules
+{
+    /// <summary>Evaluate a drop against the destination's live state.
+    /// <para>Order matters and is deliberate: page-level write capability first (nothing else can rescue a read-only
+    /// playlist), then whether the destination is even loaded, then the payload's own ability to produce tracks, and
+    /// only then the same-list-move ambiguities — a foreign COPY is legal under any sort or filter, because it
+    /// appends/inserts by display position without having to name existing membership rows.</para></summary>
+    /// <param name="editable">The destination is a playlist this user can write to (<c>CanEditItems</c> + a context uri).</param>
+    /// <param name="loading">The destination's track list is still Pending (a shimmer, not a list).</param>
+    /// <param name="payloadHasTracks">The payload carries a track snapshot or can resolve one.</param>
+    /// <param name="sameList">The payload's rows came from THIS playlist — a MOVE, not a copy.</param>
+    /// <param name="naturalOrder">The display order IS the membership order (sort = Index, ascending).</param>
+    /// <param name="filtered">A search query or a filter chip is narrowing the display.</param>
+    public static PlaylistDropRefusal Evaluate(bool editable, bool loading, bool payloadHasTracks,
+                                               bool sameList, bool naturalOrder, bool filtered)
+    {
+        if (!editable) return PlaylistDropRefusal.NotEditable;
+        if (loading) return PlaylistDropRefusal.Loading;
+        if (!payloadHasTracks) return PlaylistDropRefusal.NoTracks;
+        if (!sameList) return PlaylistDropRefusal.None;
+        if (!naturalOrder) return PlaylistDropRefusal.Sorted;
+        if (filtered) return PlaylistDropRefusal.Filtered;
+        return PlaylistDropRefusal.None;
+    }
+
+    /// <summary>The accept test, expressed against the same table so the two can never disagree.</summary>
+    public static bool Accepts(bool editable, bool loading, bool payloadHasTracks,
+                               bool sameList, bool naturalOrder, bool filtered)
+        => Evaluate(editable, loading, payloadHasTracks, sameList, naturalOrder, filtered) == PlaylistDropRefusal.None;
+}

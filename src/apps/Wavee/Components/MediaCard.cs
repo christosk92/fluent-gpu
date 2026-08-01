@@ -113,6 +113,8 @@ public static class MediaCard
                     BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
                     Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
                     ClickRequestsContext = true, Cursor = CursorId.Hand, Role = AutomationRole.Button,
+                    // Pressing the "…" opens the menu; it must never double as a handle for dragging the card.
+                    BlocksDragArm = true,
                     Children = [ FabGlyph(Icons.More, 13f, Tok.OnMediaPrimary) ],
                 },
             ],
@@ -131,6 +133,7 @@ public static class MediaCard
             BorderWidth = onDark ? 1f : 0f,
             BorderColor = onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
             ClickRequestsContext = true, Cursor = CursorId.Hand, Role = AutomationRole.Button,
+            BlocksDragArm = true,   // its own affordance — see MoreCorner
             Children = [ FabGlyph(Icons.More, 15f, onDark ? Tok.OnMediaPrimary : Tok.TextSecondary) ],
         }.Skeletonized(false)
         : new BoxEl();
@@ -173,9 +176,14 @@ public static class MediaCard
     // ── Shelf card: square (album/playlist) or circular (artist) cover, sized to fill `cardW`. ───────────
     // `menu` (all five factories): an optional attached context menu (right-click / Menu key / long-press) — the
     // calling component resolves the overlay service + builds the lazy model (Menus.CardAttach); null = no menu.
+    // `drag` (all eight factories, the same seam shape as `menu`): the card as a DRAG SOURCE. The caller supplies it
+    // because only the call site knows which entity the card stands for — a card factory sees a uri and a title, never
+    // "this is an album". It attaches to the card ITSELF, never to a padding/gutter wrapper: the wrapper is the shelf's
+    // spacing, and lifting it would drag a rectangle of empty margin. Null = the card is not draggable (the default,
+    // so every unconverted call site is byte-identical).
     public static Element Shelf(Image? cover, string title, string subtitle, string uri,
                                 Action onClick, Action onPlay, float cardW, bool circular = false, string? morphKey = null,
-                                Action<string>? onNavUri = null, MenuAttach? menu = null)
+                                Action<string>? onNavUri = null, MenuAttach? menu = null, DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
         float inner = MathF.Max(48f, cardW - 2f * Pad);
@@ -251,9 +259,11 @@ public static class MediaCard
         var card = (CardShell(content, onClick) with
         {
             Grow = 1f,
+            Draggable = drag,
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
         }).WithMenu(menu);
+        // The padding box is the shelf's GUTTER, not the card — the drag source above deliberately sits inside it.
         return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [ card ] };
     }
 
@@ -263,7 +273,8 @@ public static class MediaCard
     // responsive grid whose track width isn't known at template time.
     /// <summary>Dense horizontal Home card used by canonical “Made For {0}” modules.</summary>
     public static Element Compact(Image? cover, string title, string subtitle, string uri, HomeCardKind kind,
-                                  Action onClick, Action onPlay, float art, float cardH, MenuAttach? menu = null)
+                                  Action onClick, Action onPlay, float art, float cardH, MenuAttach? menu = null,
+                                  DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
         bool circular = kind == HomeCardKind.Artist;
@@ -288,7 +299,7 @@ public static class MediaCard
             Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillCardSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
-            OnClick = onClick, PressScale = 0.99f,
+            OnClick = onClick, PressScale = 0.99f, Draggable = drag,
             WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -3f },
             WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
             Transition = MotionTok.ControlNormal,
@@ -313,6 +324,7 @@ public static class MediaCard
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
         };
+        // The outer box is vertical GUTTER only — the drag source is the card above it.
         return new BoxEl { Direction = 1, Padding = new Edges4(0f, 3f, 0f, 3f), Children = [ card.WithMenu(menu) ] };
     }
 
@@ -320,7 +332,7 @@ public static class MediaCard
     /// is where that matters most, since a whole screen of covers decodes at once.</remarks>
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
                                    Action onClick, Action onPlay, bool circular = false, Action? onNavigate = null,
-                                   ColorF? accent = null, MenuAttach? menu = null)
+                                   ColorF? accent = null, MenuAttach? menu = null, DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
         float r = circular ? Radii.Full : Radii.Card;
@@ -362,6 +374,7 @@ public static class MediaCard
         // saturated artwork colours. The expanded drawer owner still gets its explicit accent border from the caller.
         return (CardShell(content, onClick) with
         {
+            Draggable = drag,
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
         }).WithMenu(menu);
@@ -371,7 +384,7 @@ public static class MediaCard
     /// Spotify omits it, the artist hero image preserves that same two-surface composition. Only artists without either
     /// image fall back to the compact object card. Both shapes use the shared media-card interaction shell.</summary>
     public static Element ArtistPick(PinnedItem pinned, string artistName, Image? artistImage, Image? artistBackground,
-                                     Action onClick, Action onPlay)
+                                     Action onClick, Action onPlay, DragSource? drag = null)
     {
         Image? background = pinned.BackgroundImage?.Url is { Length: > 0 }
             ? pinned.BackgroundImage
@@ -463,7 +476,7 @@ public static class MediaCard
             };
         }
 
-        return CardShell(content, onClick, persistent: true);
+        return CardShell(content, onClick, persistent: true) with { Draggable = drag };
     }
 
     // Editorial home card: intentionally reserved for HomeFeedBaselineSectionData. Normal home sections keep the regular
@@ -478,19 +491,25 @@ public static class MediaCard
     // after a swept countdown ring — peeks the recommendation's preview tracks (previewsOf, the feedBaselineLookup cache).
     // Component props freeze at mount. Identity is the component key; width changes flow through the responsive shelf's
     // retained layout and no longer remount the entire editorial subtree in 16px buckets.
+    // `drag` crosses the ComponentEl boundary as a frozen ctor field ON PURPOSE: a DragSource is gesture-COLD config
+    // (a kind string + a payload FACTORY that runs once at promotion), so freezing it at mount freezes nothing live —
+    // the factory closure reads the app's state when the drag actually starts. That is the component-props contract's
+    // "config, not data" case, unlike the hover signal above.
     public static Element EditorialCard(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                         Action onClick, Action onPlay, float cardW, MenuAttach? menu = null,
                                         Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf = null,
-                                        IReadSignal<int>? previewsEpoch = null)
+                                        IReadSignal<int>? previewsEpoch = null,
+                                        DragSource? drag = null)
         => Embed.Comp(() => new EditorialCardCore(cover, eyebrow, title, subtitle, uri, kind, onClick, onPlay, cardW, menu,
-                                                  previewsOf, previewsEpoch))
+                                                  previewsOf, previewsEpoch, drag))
            with
            {
                Key = $"edcard:{uri}",
                // The deriver can't see into the component — hand it the resting card shape (no hover, no peek).
                SkeletonProxy = () => EditorialCardCore.Build(cover, eyebrow, title, subtitle, uri, kind, onClick, onPlay,
                    MathF.Min(cardW, 360f), menu, hovered: false, peek: null, counting: false,
-                   arcCapture: null, spotlightCenter: new Point2(0.5f, 0.35f), pointerMove: null, pointerExit: null),
+                   arcCapture: null, spotlightCenter: new Point2(0.5f, 0.35f), pointerMove: null, pointerExit: null,
+                   drag: null),   // a SKELETON is not a drag source: there is no entity behind it yet
            };
 
     // The stateful editorial-card core. Hover choreography (every channel animated — no snaps):
@@ -507,6 +526,7 @@ public static class MediaCard
         readonly Image? _cover; readonly string? _eyebrow; readonly string _title; readonly string _subtitle;
         readonly string _uri; readonly HomeCardKind _kind; readonly Action _onClick; readonly Action _onPlay; readonly float _cardW;
         readonly MenuAttach? _menu;
+        readonly DragSource? _drag;
         readonly Func<string, IReadOnlyList<HomePreviewTrack>?>? _previewsOf;
         readonly IReadSignal<int>? _previewsEpoch;
 
@@ -519,10 +539,11 @@ public static class MediaCard
 
         public EditorialCardCore(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                  Action onClick, Action onPlay, float cardW, MenuAttach? menu,
-                                 Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf, IReadSignal<int>? previewsEpoch)
+                                 Func<string, IReadOnlyList<HomePreviewTrack>?>? previewsOf, IReadSignal<int>? previewsEpoch,
+                                 DragSource? drag)
         {
             _cover = cover; _eyebrow = eyebrow; _title = title; _subtitle = subtitle; _uri = uri; _kind = kind;
-            _onClick = onClick; _onPlay = onPlay; _cardW = cardW; _menu = menu;
+            _onClick = onClick; _onPlay = onPlay; _cardW = cardW; _menu = menu; _drag = drag;
             _previewsOf = previewsOf; _previewsEpoch = previewsEpoch;
             _liveCardW = cardW;
         }
@@ -596,14 +617,14 @@ public static class MediaCard
             return Build(_cover, _eyebrow, _title, _subtitle, _uri, _kind, _onClick, _onPlay, cardW, _menu,
                 hovered, revealed && hasPeek ? previews : null, counting,
                 arcCapture: h => _arcNode = h, spotlightCenter: Prop<Point2>.FromSignal(_spotlightCenter),
-                pointerMove: PointerMove, pointerExit: HoverEnd);
+                pointerMove: PointerMove, pointerExit: HoverEnd, drag: _drag);
         }
 
         internal static Element Build(Image? cover, string? eyebrow, string title, string subtitle, string uri, HomeCardKind kind,
                                       Action onClick, Action onPlay, float cardW, MenuAttach? menu,
                                       bool hovered, IReadOnlyList<HomePreviewTrack>? peek, bool counting,
                                       Action<NodeHandle>? arcCapture, Prop<Point2> spotlightCenter,
-                                      Action<Point2>? pointerMove, Action? pointerExit)
+                                      Action<Point2>? pointerMove, Action? pointerExit, DragSource? drag)
         {
             const float editorialScale = 1.25f;
             float artH = MathF.Max(360f, cardW * 1.25f);
@@ -792,7 +813,7 @@ public static class MediaCard
             return new BoxEl
             {
                 ZStack = true,
-                OnClick = onClick, PressScale = 0.99f,
+                OnClick = onClick, PressScale = 0.99f, Draggable = drag,
                 // Elevate above sibling editorial cards while hovered so the lift halo survives (design z-index:2).
                 HoverElevatePaint = true,
                 OnPointerMoveWithin = pointerMove,
@@ -856,7 +877,8 @@ public static class MediaCard
 
     // ── 16:9 video card (sized to a supplied cardW from a measured shelf): wide thumbnail + title + duration. ──
     public static Element VideoCard(Image? thumb, string title, string duration, string uri,
-                                    Action onClick, Action onPlay, float cardW, MenuAttach? menu = null)
+                                    Action onClick, Action onPlay, float cardW, MenuAttach? menu = null,
+                                    DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
         float inner = MathF.Max(64f, cardW - 2f * Pad);
@@ -869,7 +891,7 @@ public static class MediaCard
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Shadow = Elevation.Card,
-            HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick,
+            HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick, Draggable = drag,
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children =
@@ -893,7 +915,7 @@ public static class MediaCard
     }
 
     // ── Wide "jump back in" tile: cover + title (fills, ellipsised) + trailing now-playing/play overlay ───
-    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null, MenuAttach? menu = null)
+    public static Element QuickPick(Image? cover, string title, string uri, Action onClick, Action onPlay, ColorF? accent = null, Element? diagnostics = null, MenuAttach? menu = null, DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
         var card = new BoxEl
@@ -901,7 +923,7 @@ public static class MediaCard
             Direction = 0, Height = QuickH, AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Corners = CornerRadius4.All(Radii.Card), Fill = AccentCardFill(accent), HoverFill = AccentCardHoverFill(accent),
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true, OnClick = onClick,
-            Shadow = Elevation.Card,
+            Shadow = Elevation.Card, Draggable = drag,
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children =
@@ -930,7 +952,7 @@ public static class MediaCard
                               Action onClick, Action onPlay,
                               string? eyebrow = null, ColorF? eyebrowColor = null, string? typeChip = null, Element? trailing = null, bool large = false,
                               string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false,
-                              MenuAttach? menu = null)
+                              MenuAttach? menu = null, DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
         float art = large ? 84f : 48f;
@@ -980,7 +1002,7 @@ public static class MediaCard
                 HoverFill = Tok.FillCardDefault,
                 PressedFill = Tok.FillSubtleTertiary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Role = AutomationRole.Button, OnClick = onClick,
+                Role = AutomationRole.Button, OnClick = onClick, Draggable = drag,
                 OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
                 OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
                 Children =
@@ -1007,7 +1029,7 @@ public static class MediaCard
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             // The row is the interactive ancestor (OnClick + a no-op pointer-exit), so the cover's hover-revealed play FAB
             // resolves off ROW hover — identical to the card behavior.
-            Role = AutomationRole.Button, OnClick = onClick,
+            Role = AutomationRole.Button, OnClick = onClick, Draggable = drag,
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children = kids.ToArray(),
@@ -1033,6 +1055,8 @@ public static class MediaCard
         // the lower-right sector to be cut out (the visible "Pac-Man" wedge). Keep the plate geometry stable; color and
         // the card's own press response still provide hover/press feedback.
         OnClick = onClick, Cursor = CursorId.Hand,
+        // A press on the play FAB is a PLAY, never the start of a card drag (the arm walk stops here).
+        BlocksDragArm = true,
         Children = [ FabGlyph(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
@@ -1046,6 +1070,7 @@ public static class MediaCard
         BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
         Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
         OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
+        BlocksDragArm = true,   // a cover action button is its own affordance, not a card drag handle
         Children = [ FabGlyph(glyph, size * 0.40f, Tok.OnMediaPrimary) ],
     }, tooltip);
 
@@ -1093,6 +1118,7 @@ sealed class CardLibraryAction : Component
             BorderColor = _onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
             Role = AutomationRole.Button, Cursor = CursorId.Hand,
             OnClick = () => lib.ToggleSaved(_uri, _name),
+            BlocksDragArm = true,   // save/follow is its own affordance, not a card drag handle
             Children = [ Icon(saved ? Icons.HeartFill : Icons.Heart, 17f, saved ? Tok.AccentTextPrimary : idle) ],
         }, tip);
     }
@@ -1240,6 +1266,7 @@ sealed class NowPlayingOverlay : Component
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(_fab / 2f), Fill = fill, HoverFill = hover, PressedFill = pressed,
                 Shadow = Elevation.Card, Role = AutomationRole.Button, Cursor = CursorId.Hand, OnClick = Toggle,
+                BlocksDragArm = true,
                 Children = [ Icon(playingHere ? Icons.Pause : Icons.Play, _fab * 0.38f, ink) ],
             }, Loc.Get(playingHere ? Strings.Home.Pause : Strings.Home.Play));
         }

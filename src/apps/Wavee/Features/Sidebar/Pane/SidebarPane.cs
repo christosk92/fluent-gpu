@@ -947,13 +947,16 @@ sealed class SidebarPane : Component
         if (row.EntryIndex >= 0 && row.EntryIndex < Plan.Entries.Count)
         {
             var e = Plan.Entries[row.EntryIndex];
-            return WaveeResourceDragPayload.FromEntry(e, Acts?.Svc);
+            // The entry says what this is, so the payload can carry rootlist membership honestly even though the row
+            // is being dragged inside a reorderable pin band — dropping it on a FOLDER files it (see SidebarPaneSlot).
+            return WaveeResourceDragPayload.FromEntry(e, Acts?.Svc,
+                e.Kind is SidebarEntryKind.Playlist or SidebarEntryKind.Folder);
         }
         // A hand-placed row (a route shortcut / an unresolved entity): its Key is its identity, which is also its pin id
         // for every pinnable form.
         var destination = SidebarDestination.FromRoute(row.Key, null, "");
         return destination is { } d
-            ? WaveeResourceDragPayload.FromDestination(d, Acts?.Svc)
+            ? WaveeResourceDragPayload.FromDestination(d, Acts)
             : null;
     }
 
@@ -1025,7 +1028,12 @@ sealed class SidebarPane : Component
         {
             if (rootTarget is not null && source.RootlistItem
                 && source.Kind is WaveeResourceKind.Playlist or WaveeResourceKind.Folder)
-                return !string.Equals(source.Id, rootTarget.Id, StringComparison.Ordinal);
+                // Identity is checked on BOTH keys now that rootlist payloads also arrive from outside the sidebar
+                // (a tab, a card, a detail hero), where the Id is the entity's uri rather than a sidebar pin id — the
+                // Id compare alone would let a playlist be filed relative to its own row.
+                return !string.Equals(source.Id, rootTarget.Id, StringComparison.Ordinal)
+                       && !(source.Uri.Length > 0
+                            && string.Equals(source.Uri, rootTarget.Uri, StringComparison.Ordinal));
             if (playlistUri is { Length: > 0 } && source.CanCopyTracks) return true;
             return slot >= 0 && source.CanPin;
         }
@@ -1065,9 +1073,22 @@ sealed class SidebarPane : Component
             if (slot >= 0) AcceptForeign(sectionId, s.Payload, slot);
         }
 
+        // The refusal cue is deliberately NARROW: only a row that IS a track destination explains itself, and only for
+        // the one refusal a user can act on — a payload with no tracks behind it. Every other refusal here means "this
+        // row was never a destination for this thing", where a sentence would be noise on top of the chip's glyph.
+        string? WhyRefused(WaveeResourceDragPayload source)
+            => playlistUri is { Length: > 0 } && !source.CanCopyTracks
+                // Locked decision: an artist has no single obvious track set, so we refuse rather than guess. Future
+                // work is a picker that lets the USER choose what to deposit (top tracks / a release).
+                ? Loc.Get(source.Kind == WaveeResourceKind.Artist
+                    ? Strings.Drag.CantAddArtist
+                    : Strings.Drag.NothingToAdd)
+                : null;
+
         return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
             accepts: Compatible, onDrop: CommitDrop, onEnter: Hover, onOver: Hover, onLeave: Leave,
-            visualPolicy: DropTargetVisualPolicy.Spotlight);
+            visualPolicy: DropTargetVisualPolicy.Spotlight,
+            refusalCaption: WhyRefused);
     }
 
     internal bool IsResourceDropActive(int planIndex)

@@ -42,10 +42,14 @@ sealed class BrowsePage : Component
     readonly HashSet<string> _expanding = new(StringComparer.Ordinal);
     // The live page resource, so "Show all" republishes INTO it rather than owning a second copy of the model.
     Loadable<BrowsePageModel?>? _pageRes;
+    // Resolved per render, read by the card factories at drag PROMOTION (the payload factory is cold) — the same
+    // late-binding shape ArtistPage uses for its own card menus.
+    ActionServices? _acts;
 
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
+        _acts = UseContext(ActionServices.Slot);
         var model = UseContext(Props);
         var post = UsePost();
 
@@ -147,7 +151,12 @@ sealed class BrowsePage : Component
                 return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri,
                     onClick: () => model?.Go(RouteFor(c.Uri), null),
                     onPlay: () => model?.Play(c.Uri),
-                    cardW: w);
+                    cardW: w,
+                    // A BrowseCard carries no kind field; the uri decides — the same discrimination RouteFor uses for
+                    // the click, so the drag and the navigation can never name different entities.
+                    drag: Drag.Source(WaveeDragKinds.Resource,
+                        () => WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.OfUri(c.Uri), c.Uri, c.Title,
+                                                                 c.Image, _acts)));
             },
             header: ShelfHeader(s, svc, post),
             pager: ShelfPager.Chevrons,

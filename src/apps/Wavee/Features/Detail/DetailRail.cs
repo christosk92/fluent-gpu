@@ -39,7 +39,7 @@ static class DetailRail
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
     // the description's line cap (descMaxLines) — and only then the rail's own scrollbar (last resort).
-    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, int descMaxLines, Loadable<DetailModel> modelSource)
+    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, int descMaxLines, Loadable<DetailModel> modelSource, ActionServices? acts = null)
     {
         float cover = CoverEdge(railW);
         var kids = new List<Element>(10);
@@ -50,6 +50,9 @@ static class DetailRail
         {
             Width = cover, Height = cover, Corners = CornerRadius4.All(Radii.Card),
             Shadow = Elevation.Card, ClipToBounds = true,
+            // The cover drags the whole entity. On the FRAMING box, not on the editable cover inside it, so the
+            // file-drop target that cover owns stays untouched (see WaveeDetailDrag.Hero).
+            Draggable = WaveeDetailDrag.Hero(m, acts),
             Children = [editable ? PlaylistInlineEdit.Cover(modelSource, cover) : HeroArtwork(m, cover, saturation: 1.18f)],
         });
 
@@ -203,7 +206,7 @@ static class DetailRail
     // cluster + the context actions (copy-to-playlist / add-to-queue) stack full-width below. Center-aligned so the cover
     // and the text block balance (only a small symmetric gap, never a big wedge under the cover). The title wraps to
     // ≤3 lines (no truncation). The list's own command bar follows below (in the track list chrome). Drops the description.
-    public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> modelSource, bool includeReleasePanel = true)
+    public static Element BuildHeader(DetailModel m, DetailConfig cfg, DetailHandlers h, Loadable<DetailModel> modelSource, bool includeReleasePanel = true, ActionServices? acts = null)
     {
         const float coverSz = 140f;
         var info = new List<Element>(4);
@@ -239,6 +242,7 @@ static class DetailRail
                 {
                     Width = coverSz, Height = coverSz, Corners = CornerRadius4.All(Radii.Card),
                     Shadow = Elevation.Card, ClipToBounds = true,
+                    Draggable = WaveeDetailDrag.Hero(m, acts),
                     Children = [editable ? PlaylistInlineEdit.Cover(modelSource, coverSz) : HeroArtwork(m, coverSz)],
                 },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS, Children = info.ToArray() },

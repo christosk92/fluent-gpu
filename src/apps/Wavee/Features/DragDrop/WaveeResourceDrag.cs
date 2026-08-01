@@ -64,22 +64,13 @@ sealed record WaveeResourceDragPayload(
 
     public static WaveeResourceDragPayload FromEntry(SidebarLibraryEntry entry, Services? svc, bool rootlistItem = false)
     {
-        var kind = entry.Kind switch
-        {
-            SidebarEntryKind.Playlist => WaveeResourceKind.Playlist,
-            SidebarEntryKind.Album => WaveeResourceKind.Album,
-            SidebarEntryKind.Artist => WaveeResourceKind.Artist,
-            SidebarEntryKind.Show => WaveeResourceKind.Show,
-            SidebarEntryKind.Folder => WaveeResourceKind.Folder,
-            SidebarEntryKind.Track => WaveeResourceKind.Track,
-            _ => WaveeResourceKind.Route,
-        };
+        var kind = WaveeDragKindMap.Of(entry.Kind);
         return new(kind, entry.Id, entry.Uri, entry.Name,
             TrackResolver: ResolverFor(kind, entry.Uri, svc), RootlistItem: rootlistItem,
             ArtUrl: WaveeDragChipModel.ArtOf(entry.Cover));
     }
 
-    public static WaveeResourceDragPayload FromDestination(SidebarDestination destination, Services? svc)
+    public static WaveeResourceDragPayload FromDestination(SidebarDestination destination, ActionServices? acts)
     {
         var kind = destination.Kind switch
         {
@@ -91,12 +82,43 @@ sealed record WaveeResourceDragPayload(
             _ => WaveeResourceKind.Route,
         };
         // A destination is a ROUTE record — it carries no cover (the tab strip never had one to show), so a tab drag's
-        // chip falls back to the kind glyph tile.
+        // chip falls back to the kind glyph tile. It carries no OWNERSHIP either, so rootlist membership is looked up
+        // rather than assumed: that is what lets a tab dragged onto a sidebar folder file itself (see WaveeRootlist).
         return new(kind, destination.PinId, destination.Uri, destination.Name,
-            TrackResolver: ResolverFor(kind, destination.Uri, svc));
+            TrackResolver: ResolverFor(kind, destination.Uri, acts?.Svc),
+            RootlistItem: WaveeRootlist.IsMember(acts, kind, destination.Uri));
     }
 
-    static Func<CancellationToken, Task<IReadOnlyList<Track>>>? ResolverFor(
+    /// <summary>ONE track in hand — the payload carries the track itself, so every playlist destination can actually
+    /// deposit it. A track payload without this list resolves nothing (<c>CanCopyTracks</c> false) and is inert on the
+    /// exact surfaces a song drag exists for.</summary>
+    public static WaveeResourceDragPayload ForTrack(Track track)
+        => new(WaveeResourceKind.Track, track.Id is { Length: > 0 } id ? id : track.Uri, track.Uri, track.Title,
+               new[] { track });
+
+    /// <summary>A track SELECTION from a list that is not an editable playlist (search results, an album drawer, the
+    /// top-tracks chart, a recommendation strip). No <c>SourcePlaylistUri</c>/<c>SourceRows</c>: with no membership
+    /// rows behind it every destination correctly treats this as a COPY rather than a move.</summary>
+    public static WaveeResourceDragPayload? ForTracks(IReadOnlyList<Track> tracks)
+        => tracks.Count switch
+        {
+            0 => null,
+            1 => ForTrack(tracks[0]),
+            _ => new(WaveeResourceKind.Track, tracks[0].Uri, tracks[0].Uri,
+                     Strings.Sidebar.SongCount(tracks.Count), tracks),
+        };
+
+    /// <summary>The navigable ENTITY a card or a hero cover stands for. The uri doubles as the identity (a card has no
+    /// sidebar pin id), the resolver comes from the kind, and rootlist membership is LOOKED UP rather than guessed —
+    /// a card never knows it on its own, and claiming it falsely would offer a folder a move it cannot perform.</summary>
+    public static WaveeResourceDragPayload ForEntity(WaveeResourceKind kind, string uri, string name,
+                                                     Image? cover, ActionServices? acts, string? artUrl = null)
+        => new(kind, uri, uri, name,
+               TrackResolver: ResolverFor(kind, uri, acts?.Svc),
+               RootlistItem: WaveeRootlist.IsMember(acts, kind, uri),
+               ArtUrl: artUrl ?? WaveeDragChipModel.ArtOf(cover));
+
+    internal static Func<CancellationToken, Task<IReadOnlyList<Track>>>? ResolverFor(
         WaveeResourceKind kind, string uri, Services? svc)
     {
         if (svc is null || uri.Length == 0) return null;
@@ -106,7 +128,35 @@ sealed record WaveeResourceDragPayload(
         if (kind == WaveeResourceKind.Album)
             return async ct => (await svc.Library.GetAlbumAsync(uri, ct).ConfigureAwait(false))?.Tracks
                 ?? Array.Empty<Track>();
+        // Deliberately NOT resolved:
+        //  • ARTIST — locked product decision: an artist has no single obvious track set, so an artist dropped on a
+        //    playlist is refused with a cue instead of silently depositing a guess. Future work: let the user CHOOSE
+        //    what to deposit (top tracks / a discography picker) rather than the app inventing an answer.
+        //  • SHOW / EPISODE — Wavee.Core models an episode as its own record, not a Track (no artists, no album ref),
+        //    and a synthetic Track would be a fabrication that leaks into real playlist mutations. Adding episodes to
+        //    playlists needs an Episode-aware deposit seam, not an adapter here.
         return null;
+    }
+}
+
+/// <summary>Is this resource one of the user's OWN rootlist items (a saved playlist, or a folder in their sidebar
+/// tree)? Only a rootlist member can be FILED into a sidebar folder, and only the library store actually knows —
+/// a home card, a search hit and a tab all carry a bare uri.
+/// <para>The lookup is a linear scan of the already-loaded playlist summaries, run ONCE per gesture at drag promotion
+/// (the payload factory is cold by contract), never per pointer move. It answers false when the store has not loaded,
+/// which is the honest reading: "not known to be in the rootlist" must not present as "is".</para></summary>
+static class WaveeRootlist
+{
+    public static bool IsMember(ActionServices? acts, WaveeResourceKind kind, string uri)
+    {
+        // A FOLDER only ever originates inside the sidebar tree, where the projection sets the flag directly; there is
+        // no folder uri to look up here.
+        if (kind != WaveeResourceKind.Playlist || uri.Length == 0) return false;
+        if (acts?.Store is not { } store) return false;
+        var playlists = store.Playlists.Value.Peek();
+        for (int i = 0; i < playlists.Count; i++)
+            if (string.Equals(playlists[i].Uri, uri, StringComparison.Ordinal)) return true;
+        return false;
     }
 }
 
@@ -149,6 +199,24 @@ static class WaveeResourceDrag
         WaveeResourceKind.Route => Icons.Home,
         _ => Icons.MusicNote,
     };
+}
+
+/// <summary>The detail page's HERO cover as a drag source: dragging the artwork drags the whole entity the page is
+/// about (drop it on a sidebar playlist to add its tracks, on a folder to file it, on the pin band to pin it).
+/// <para>It coexists with the editable-cover FILE drop target underneath: those are opposite directions of two
+/// different gestures — a press-and-drag on the cover LIFTS this payload, while an OS file drag hovering the cover
+/// still targets the <c>DropKinds.Files</c> spec, which never accepts <see cref="WaveeDragKinds.Resource"/>. They also
+/// live on different nodes (this on the framing box, the file target on the editable cover inside it).</para></summary>
+static class WaveeDetailDrag
+{
+    public static DragSource? Hero(DetailModel m, ActionServices? acts)
+    {
+        if (m.ContextUri is not { Length: > 0 } uri) return null;
+        var kind = WaveeDragKindMap.OfUri(uri);
+        if (kind == WaveeResourceKind.Route) return null;   // nothing this payload could be dropped on
+        return Drag.Source(WaveeDragKinds.Resource,
+            () => WaveeResourceDragPayload.ForEntity(kind, uri, m.Title, m.Cover, acts));
+    }
 }
 
 static class WaveeResourceDrop

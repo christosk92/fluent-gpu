@@ -42,6 +42,7 @@ sealed class AlbumTrailing : Component
     public override Element Render()
     {
         var svc = UseContext(Services.Slot);
+        var acts = UseContext(ActionServices.Slot);   // only for the trailing shelves' DRAG payloads (resolver + rootlist)
         var m = _full.Value.Value;                 // subscribe → re-render preview→full (the loaders re-key on `ready`)
         var tracks = m.Tracks;
         bool ready = tracks.Count > 0;             // the album fetch completed (hero + tracks are in) → seed the loaders
@@ -70,7 +71,7 @@ sealed class AlbumTrailing : Component
                 Skel.Region(
                     trailing,
                     TrailingSkeleton,
-                    data => TrailingSections(m, data, shortRelease, _h),
+                    data => TrailingSections(m, data, shortRelease, _h, acts),
                     reveal: SkelReveal.FadeOnly,
                     onFailed: () => new BoxEl(),
                     isEmpty: data => !HasTrailingSections(m, data, shortRelease),
@@ -81,7 +82,8 @@ sealed class AlbumTrailing : Component
         };
     }
 
-    static Element TrailingSections(DetailModel m, AlbumTrailingData data, bool shortRelease, DetailHandlers h)
+    static Element TrailingSections(DetailModel m, AlbumTrailingData data, bool shortRelease, DetailHandlers h,
+                                    ActionServices? acts)
     {
         var sections = new List<Element>(8);
 
@@ -97,16 +99,16 @@ sealed class AlbumTrailing : Component
         var moreBy = m.MoreByArtist is { Count: > 0 } mb ? mb
             : data.About?.TopAlbums is { Count: > 0 } ta ? ta : null;
         if (moreBy is { Count: > 0 } && m.Artists.Count > 0)
-            sections.Add(AlbumShelf(Strings.Detail.MoreBy(m.Artists[0].Name), moreBy, h));
+            sections.Add(AlbumShelf(Strings.Detail.MoreBy(m.Artists[0].Name), moreBy, h, acts));
 
         if (data.Featured.Count > 0)
-            sections.Add(FeaturedSection(data.Featured, h));
+            sections.Add(FeaturedSection(data.Featured, h, acts));
 
         if (data.Merch.Count > 0)
             sections.Add(MerchSection(data.Merch));
 
         if (data.Similar.Count > 0)
-            sections.Add(AlbumShelf(Loc.Get(Strings.Detail.SimilarAlbums), data.Similar, h));
+            sections.Add(AlbumShelf(Loc.Get(Strings.Detail.SimilarAlbums), data.Similar, h, acts));
 
         return new BoxEl
         {
@@ -439,7 +441,9 @@ sealed class AlbumTrailing : Component
     };
 
     // "Featured on" — a playlist PagedShelf (the More-by recipe, playlists instead of albums).
-    static Element FeaturedSection(IReadOnlyList<PlaylistSummary> pls, DetailHandlers h) => new BoxEl
+    // `acts` is threaded in (DetailHandlers carries only Actions) purely so these cards can be DRAG SOURCES: the
+    // payload's track resolver and its rootlist lookup both need the composition root.
+    static Element FeaturedSection(IReadOnlyList<PlaylistSummary> pls, DetailHandlers h, ActionServices? acts) => new BoxEl
     {
         Direction = 1,
         Grow = 1f,
@@ -450,14 +454,17 @@ sealed class AlbumTrailing : Component
             PagedShelf.Create(
                 pls.Count,
                 cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].OwnerName, pls[i].Uri,
-                    () => h.OpenPlaylist(pls[i]), () => h.PlayContext(pls[i].Uri), w),
+                    () => h.OpenPlaylist(pls[i]), () => h.PlayContext(pls[i].Uri), w,
+                    drag: Drag.Source(WaveeDragKinds.Resource,
+                        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, pls[i].Uri, pls[i].Name,
+                                                                 pls[i].Cover, acts))),
                 measured: true,
                 header: WaveeType.RailHeader(Loc.Get(Strings.Detail.FeaturedOn))),
         ],
     };
 
     // Album shelf (More-by / Similar albums) — a PagedShelf of square album cards: open the album, or play it from the card.
-    static Element AlbumShelf(string header, IReadOnlyList<Album> albums, DetailHandlers h) => new BoxEl
+    static Element AlbumShelf(string header, IReadOnlyList<Album> albums, DetailHandlers h, ActionServices? acts) => new BoxEl
     {
         Direction = 1,
         Grow = 1f,
@@ -468,7 +475,10 @@ sealed class AlbumTrailing : Component
             PagedShelf.Create(
                 albums.Count,
                 cardAt: (i, w) => MediaCard.Shelf(albums[i].Cover, albums[i].Name, AlbumSubtitle(albums[i]), albums[i].Uri,
-                    () => h.OpenAlbum(albums[i]), () => h.PlayContext(albums[i].Uri), w),
+                    () => h.OpenAlbum(albums[i]), () => h.PlayContext(albums[i].Uri), w,
+                    drag: Drag.Source(WaveeDragKinds.Resource,
+                        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, albums[i].Uri, albums[i].Name,
+                                                                 albums[i].Cover, acts))),
                 measured: true,
                 header: WaveeType.RailHeader(header)),
         ],

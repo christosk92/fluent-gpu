@@ -3694,6 +3694,11 @@ public sealed class TreeReconciler
                 if (b.HoverElevateClipRoot) ii.HandlerMask |= InteractionInfo.HoverElevateClipRootBit;
                 else ii.HandlerMask &= ~InteractionInfo.HoverElevateClipRootBit;
 
+                // Element.BlocksDragArm: the drag-ARM barrier DragController.TryArm's upward walk stops at (a card's
+                // play FAB must not be a handle for dragging the card). Discriminator only — same toggle-both-ways rule.
+                if (b.BlocksDragArm) ii.HandlerMask |= InteractionInfo.BlocksDragArmBit;
+                else ii.HandlerMask &= ~InteractionInfo.BlocksDragArmBit;
+
                 if (b.OnKeyDown is not null) { ii.HandlerMask |= InteractionInfo.KeyBit; _scene.SetKeyHandler(node, b.OnKeyDown); }
                 else { ii.HandlerMask &= ~(uint)InteractionInfo.KeyBit; _scene.SetKeyHandler(node, null); }
 

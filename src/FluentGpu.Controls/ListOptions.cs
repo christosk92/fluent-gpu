@@ -110,6 +110,11 @@ public sealed record InsertionOptions
     public Func<object?, int, Element>? GapPreview { get; init; }
     /// <summary>Optional drop caption (<see cref="DragSession.Caption"/>) refreshed per move — "Move 3 tracks".</summary>
     public Func<object?, int, string?>? Caption { get; init; }
+    /// <summary>Why a payload this list COULD have taken (its kind matched) was turned away by <see cref="CanAccept"/> —
+    /// "Clear sorting to reorder", "Can't edit this playlist". A refusing target is transparent by design, so without
+    /// this the user gets no signal at all and reads the whole feature as broken; the chip renders it beside the
+    /// not-allowed glyph. See <see cref="DropTargetSpec.RefusalCaption"/>. Null ⇒ the glyph alone.</summary>
+    public Func<object?, string?>? RefusalCaption { get; init; }
     /// <summary>Fired once after a deposit LANDS (the membership handoff, else the commit's success edge) with the
     /// landed <c>(slot, count)</c> — the seam an app renders its own post-drop flash from. The framework deliberately
     /// ships no app visual here beyond the line and the gap.</summary>

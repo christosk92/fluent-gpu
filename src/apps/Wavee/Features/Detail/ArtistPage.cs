@@ -35,6 +35,13 @@ sealed partial class ArtistPage : Component
     MenuAttach? CardMenu(string uri, string name, Image? image = null, string? subtitle = null, bool circular = false)
         => _menuOverlay is { } ov ? Menus.CardAttach(_acts, ov, uri, name, image, subtitle, circular) : null;
 
+    /// <summary>The drag source for this page's shelf cards. Like <see cref="CardMenu"/> it reads <c>_acts</c> at
+    /// PROMOTION (the payload factory is cold), so a page whose services arrive after the first render still drags.
+    /// <paramref name="kind"/> is explicit where the shelf knows it and derived from the uri where it does not.</summary>
+    DragSource CardDrag(WaveeResourceKind kind, string uri, string name, Image? cover)
+        => Drag.Source(WaveeDragKinds.Resource,
+            () => WaveeResourceDragPayload.ForEntity(kind, uri, name, cover, _acts));
+
     internal static string? UriOf(Route r) =>
         r.Name.StartsWith("artist:", StringComparison.Ordinal) ? r.Name["artist:".Length..] : null;
 

@@ -71,6 +71,9 @@ public static class Drag
 /// <see cref="ReorderPayload"/> (a sortable list's own gesture), so one target serves both a foreign drop and a
 /// same-list reorder. A payload that doesn't unwrap makes the target transparent — discovery continues to a compatible
 /// ancestor, exactly as a failing <see cref="DropTargetSpec.CanAccept"/> does.
+///
+/// A transparent target is invisible to the user, so any <c>accepts</c> test that can turn away a payload the surface
+/// LOOKS like it should take ought to pass <c>refusalCaption</c> too — see <see cref="DropTargetSpec.RefusalCaption"/>.
 /// </summary>
 public static class Drop
 {
@@ -84,8 +87,10 @@ public static class Drop
                                            Action<DragSession>? onLeave = null,
                                            bool settleOnDrop = false,
                                            DropTargetVisualPolicy visualPolicy = DropTargetVisualPolicy.None,
-                                           Func<DragSession, bool>? spotlightWhen = null)
-        => Target(new[] { kind }, accepts, onDrop, caption, onEnter, onOver, onLeave, settleOnDrop, visualPolicy, spotlightWhen);
+                                           Func<DragSession, bool>? spotlightWhen = null,
+                                           Func<T, string?>? refusalCaption = null)
+        => Target(new[] { kind }, accepts, onDrop, caption, onEnter, onOver, onLeave, settleOnDrop, visualPolicy,
+                  spotlightWhen, refusalCaption);
 
     /// <summary>Typed target over several kinds (e.g. an in-app resource AND <see cref="DropKinds.Files"/>).</summary>
     public static DropTargetSpec Target<T>(string[] kinds,
@@ -97,7 +102,8 @@ public static class Drop
                                            Action<DragSession>? onLeave = null,
                                            bool settleOnDrop = false,
                                            DropTargetVisualPolicy visualPolicy = DropTargetVisualPolicy.None,
-                                           Func<DragSession, bool>? spotlightWhen = null)
+                                           Func<DragSession, bool>? spotlightWhen = null,
+                                           Func<T, string?>? refusalCaption = null)
     {
         // The caption is applied on BOTH Enter and Over: the engine clears session.Caption on every target change, and
         // an Over-only refresh keeps it correct when a target's caption depends on the pointer (an insertion slot).
@@ -122,6 +128,11 @@ public static class Drop
             SettleOnDrop = settleOnDrop,
             VisualPolicy = visualPolicy,
             SpotlightWhen = spotlightWhen,
+            // Only a payload of this target's own type can be REFUSED by it — one that doesn't unwrap was never for
+            // this surface, so it stays a pass-through with nothing to explain.
+            RefusalCaption = refusalCaption is not null
+                ? s => TryUnwrap<T>(s.Payload, out var v) ? refusalCaption(v) : null
+                : null,
         };
     }
 

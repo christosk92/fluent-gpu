@@ -29,7 +29,8 @@ sealed partial class ArtistPage : Component
                     albums[i].Year > 0 ? albums[i].Year.ToString() : KindLabel(albums[i].Kind), albums[i].Uri,
                     () => go("album:" + albums[i].Uri, albums[i].Name), () => play(albums[i].Uri), w,
                     menu: CardMenu(albums[i].Uri, albums[i].Name, albums[i].Cover,
-                        albums[i].Artists.Count > 0 ? albums[i].Artists[0].Name : null)),
+                        albums[i].Artists.Count > 0 ? albums[i].Artists[0].Name : null),
+                    drag: CardDrag(WaveeResourceKind.Album, albums[i].Uri, albums[i].Name, albums[i].Cover)),
                 measured: true, header: AccentHeader(Loc.Get(Strings.Artist.AppearsOn))),
         ],
     };

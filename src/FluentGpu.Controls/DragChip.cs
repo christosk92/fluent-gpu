@@ -50,8 +50,9 @@ public readonly record struct DragChipSpec(
 /// <see cref="MaxWidth"/> with a flyout-class shadow, at most three info pieces (art + title + subtitle) all
 /// ellipsized, a top-trailing <see cref="InfoBadge"/> count for multi-drag over a two-card stacked backdrop, a ~4°
 /// pickup tilt with a 1.02 scale (Trello) faded in by the declarative <c>Enter</c> transition, the target's
-/// <see cref="DragState.Caption"/> as a trailing row, and an explicit not-allowed glyph whenever the live
-/// <see cref="DragState.Effect"/> is <see cref="DropEffect.None"/> — refusals are never silent.
+/// <see cref="DragState.Caption"/> as a trailing row, and an explicit not-allowed glyph whenever
+/// <see cref="DragState.Refused"/> — a kind-compatible surface turned this payload away — so refusals are never silent
+/// (hovering nothing at all stays silent, which is what keeps the glyph meaningful).
 /// </summary>
 public static class DragChip
 {
@@ -87,7 +88,10 @@ public static class DragChip
     public static Element Render(in DragChipSpec spec, in DragState state)
     {
         bool multi = spec.Count >= 2;
-        bool refused = state.Effect == DropEffect.None;
+        // The cue fires on an EXPLICIT refusal (a kind-compatible target that said no), never on
+        // <see cref="DropEffect.None"/> alone: that value also means "over empty space", and a glyph that shouts
+        // "not allowed" at every gap between targets teaches the user to ignore it.
+        bool refused = state.Refused;
         string? caption = state.Caption;
 
         // ── the card itself: opaque surface + flyout-class elevation, capped at MaxWidth ──

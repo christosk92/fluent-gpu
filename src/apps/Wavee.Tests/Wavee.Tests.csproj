@@ -197,6 +197,10 @@
     <!-- the drag-chip resolution rules (Wavee.Core + BCL only; the chip SPEC type is a Controls type, which is exactly
          why the decisions live in this engine-free model) — WaveeDragChipModelTests -->
     <Compile Include="..\Wavee\Features\DragDrop\WaveeDragChipModel.cs" />
+    <!-- the per-surface drag KIND map + the playlist drop-refusal decision table. Same engine-free split, same reason:
+         which WaveeResourceKind a card carries, and WHY a drop was turned away, are DECISIONS — the elements and the
+         DropTargetSpec they feed are not — WaveeDragRulesTests -->
+    <Compile Include="..\Wavee\Features\DragDrop\WaveeDragRules.cs" />
     <!-- the live music-video data service (Backend-only deps), source-included so VideoAssociationTests can drive it -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyVideoService.cs" />
     <!-- the upcoming-release resolver (kind 138) + its seam/null/switchable trio — Backend + Wavee.Core deps only, so

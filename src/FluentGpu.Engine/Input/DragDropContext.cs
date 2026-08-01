@@ -54,6 +54,8 @@ public sealed class DragDropContext
     private bool _active;
     private NodeHandle _over;            // current accepting target (Null = over nothing that accepts)
     private DropTargetSpec? _overSpec;   // its spec (cached so Leave/Over/Drop never re-query a dead column)
+    private NodeHandle _refused;         // nearest kind-matched CanAccept-refuser while nothing accepts (the cue seam)
+    private DropTargetSpec? _refusedSpec;
     private int _spotlightTargetVersion = -1;
     private DragLift _lift;              // L1's lift mode for this gesture (see PruneDead's dead-source rule)
     private DropEffect _defaultEffect = DropEffect.Move;   // the engine's advisory effect over an accepting target;
@@ -75,6 +77,7 @@ public sealed class DragDropContext
         _scene = scene;
         _requestRerender = requestRerender;
         _over = NodeHandle.Null;
+        _refused = NodeHandle.Null;
         _scrollViewport = NodeHandle.Null;
     }
 
@@ -111,6 +114,7 @@ public sealed class DragDropContext
             _session.VelocityY = 0f;
             _session.Source = n;
             _session.OverTarget = NodeHandle.Null;
+            _session.RefusedTarget = NodeHandle.Null;
             _session.Effect = DropEffect.None;
             _session.Caption = null;
             _session.Mods = mods;
@@ -120,6 +124,8 @@ public sealed class DragDropContext
             _active = true;
             _over = NodeHandle.Null;
             _overSpec = null;
+            _refused = NodeHandle.Null;
+            _refusedSpec = null;
             RefreshSpotlight(force: true);
             return true;
         }
@@ -147,6 +153,7 @@ public sealed class DragDropContext
         _session.VelocityY = 0f;
         _session.Source = _scene.Root;          // NOT Null — PruneDead Cancels when !IsLive(Source)
         _session.OverTarget = NodeHandle.Null;
+        _session.RefusedTarget = NodeHandle.Null;
         _session.Effect = DropEffect.None;
         _session.Caption = null;
         _session.Mods = mods;
@@ -156,6 +163,8 @@ public sealed class DragDropContext
         _active = true;
         _over = NodeHandle.Null;
         _overSpec = null;
+        _refused = NodeHandle.Null;
+        _refusedSpec = null;
         RefreshSpotlight(force: true);
         return true;
     }
@@ -172,7 +181,7 @@ public sealed class DragDropContext
         _session.Mods = mods;
         RefreshSpotlight(force: false);
 
-        var next = FindTarget(hit);
+        var next = FindTarget(hit, out var refuser, out var refuserSpec);
         if (next != _over)
         {
             if (!_over.IsNull && _scene.IsLive(_over))
@@ -194,6 +203,9 @@ public sealed class DragDropContext
             _session.OverTarget = _over;
         }
         if (!_over.IsNull && _scene.IsLive(_over)) _overSpec?.OnOver?.Invoke(_session);
+        // The refusal cue is resolved LAST so an accepting target's own Caption always wins: a refuser is published
+        // only when nothing on the chain accepted, in which case the caption slot is free by construction.
+        UpdateRefusal(_over.IsNull ? refuser : NodeHandle.Null, _over.IsNull ? refuserSpec : null);
 
         UpdateEdgeScroll(hit, abs);
     }
@@ -260,6 +272,13 @@ public sealed class DragDropContext
             _session.OverTarget = NodeHandle.Null;
             _scene.SetDropSpotlightOver(NodeHandle.Null);
         }
+        if (!_refused.IsNull && !_scene.IsLive(_refused))
+        {
+            _refused = NodeHandle.Null;
+            _refusedSpec = null;
+            _session.RefusedTarget = NodeHandle.Null;
+            _session.Caption = null;
+        }
         if (!_scrollViewport.IsNull && !_scene.IsLive(_scrollViewport))
         {
             _scrollViewport = NodeHandle.Null;
@@ -303,19 +322,45 @@ public sealed class DragDropContext
     // ── internals ─────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Nearest enabled drop target on the chain whose AcceptKinds contains the session's Kind. Non-accepting
-    /// targets do NOT block accepting ancestors (Flutter DragTarget pass-through).</summary>
-    private NodeHandle FindTarget(NodeHandle hit)
+    /// targets do NOT block accepting ancestors (Flutter DragTarget pass-through).
+    /// <para><paramref name="refuser"/> reports the NEAREST target that matched the kind but was turned away by its
+    /// <see cref="DropTargetSpec.CanAccept"/> — the surface the user aimed at and that owes them a reason. It is
+    /// meaningful only when the return value is Null (an accepting ancestor makes the drop succeed anyway).</para></summary>
+    private NodeHandle FindTarget(NodeHandle hit, out NodeHandle refuser, out DropTargetSpec? refuserSpec)
     {
+        refuser = NodeHandle.Null;
+        refuserSpec = null;
         if (!_scene.HasDropTargets) return NodeHandle.Null;
         for (var n = hit; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
             if (!_scene.TryGetDropTarget(n, out var spec) || spec is null) continue;
             if (!spec.Accepts(_session.Kind)) continue;
-            if (spec.CanAccept is { } canAccept && !canAccept(_session)) continue;
+            if (spec.CanAccept is { } canAccept && !canAccept(_session))
+            {
+                if (refuser.IsNull) { refuser = n; refuserSpec = spec; }   // nearest refuser wins the cue
+                continue;
+            }
             return n;
         }
         return NodeHandle.Null;
+    }
+
+    /// <summary>Publish (or clear) the refusal cue. A CHANGE of refuser re-renders — the chip's not-allowed glyph and
+    /// caption are content, not a bound transform. The caption is re-read on every move while refused so a reason that
+    /// depends on the pointer (a slot, a section) stays truthful; steady-state that is one delegate call.</summary>
+    private void UpdateRefusal(NodeHandle node, DropTargetSpec? spec)
+    {
+        if (node != _refused)
+        {
+            _refused = node;
+            _refusedSpec = spec;
+            _session.RefusedTarget = node;
+            if (node.IsNull) _session.Caption = null;   // left the refuser: its reason leaves with it
+            _requestRerender();
+        }
+        if (_refused.IsNull) return;
+        _session.Caption = _refusedSpec?.RefusalCaption?.Invoke(_session);
     }
 
     private void UpdateEdgeScroll(NodeHandle hit, Point2 abs)
@@ -394,6 +439,8 @@ public sealed class DragDropContext
         _active = false;
         _over = NodeHandle.Null;
         _overSpec = null;
+        _refused = NodeHandle.Null;
+        _refusedSpec = null;
         _defaultEffect = DropEffect.Move;
         _scrollViewport = NodeHandle.Null;
         _edgeVelocity = 0f;
@@ -402,6 +449,7 @@ public sealed class DragDropContext
         _session.Kind = "";
         _session.Source = NodeHandle.Null;
         _session.OverTarget = NodeHandle.Null;
+        _session.RefusedTarget = NodeHandle.Null;
         _session.Effect = DropEffect.None;
         _session.Caption = null;
         _lift = DragLift.Ghost;

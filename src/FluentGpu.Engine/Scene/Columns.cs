@@ -708,6 +708,14 @@ public struct InteractionInfo
                                                     // scope and records it after the scope closes, against the clip
                                                     // in effect OUTSIDE this node. Paint-order only, like the bit
                                                     // above: never a hit/press/focus target.
+    public const uint BlocksDragArmBit = 1u << 19;         // Element.BlocksDragArm: a drag-ARM BARRIER. DragController's
+                                                    // TryArm walks UP from the press target for the nearest DragBit
+                                                    // node (a press on a row's child drags the row — the WinUI item-
+                                                    // container rule); a child that is its own affordance — a card's
+                                                    // play FAB, its "…" corner — must not be a handle for the card's
+                                                    // drag, so this bit STOPS that walk at itself. Discriminator only:
+                                                    // never a hit/press/focus target, deliberately outside
+                                                    // AnyInteractiveMask. Clear as `~BlocksDragArmBit`.
     public const uint ClickRequestsContextBit = 1u << 16;  // BoxEl.ClickRequestsContext (input-a11y §6.5.1): a
                                                     // commit-time DISCRIMINATOR only — a left-click / touch-tap /
                                                     // Space-Enter activation of this node re-enters the context-request

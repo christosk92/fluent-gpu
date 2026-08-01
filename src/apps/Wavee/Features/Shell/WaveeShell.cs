@@ -835,7 +835,7 @@ sealed class WaveeShell : Component
                 ContextMenu = destination is null ? null : () => TabMenu(tab),
                 Drag = destination is { } d
                     ? Drag.Source(WaveeDragKinds.Resource,
-                        () => WaveeResourceDragPayload.FromDestination(d, _actions.Svc))
+                        () => WaveeResourceDragPayload.FromDestination(d, _actions))
                     : null,
             };
         }

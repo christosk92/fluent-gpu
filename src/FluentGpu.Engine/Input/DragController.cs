@@ -170,14 +170,23 @@ public sealed class DragController
 
     /// <summary>Arm a drag candidate from a left press: walk up from <paramref name="pressTarget"/> for the nearest
     /// enabled node carrying <see cref="InteractionInfo.DragBit"/> (a press on a child of a draggable row arms the row,
-    /// like WinUI's item container). Returns false when nothing in the chain is draggable.</summary>
+    /// like WinUI's item container). Returns false when nothing in the chain is draggable.
+    /// <para>A node carrying <see cref="InteractionInfo.BlocksDragArmBit"/> (<c>Element.BlocksDragArm</c>) STOPS the
+    /// walk at itself: a card's play FAB or "…" button is its own affordance, not a handle for dragging the card. It
+    /// blocks only the ANCESTOR search — a barrier that is itself draggable still arms (its own DragBit is tested
+    /// first), which is what lets a draggable row host a non-dragging child of its own.</para></summary>
     public bool TryArm(NodeHandle pressTarget, Point2 abs, PointerKind kind, KeyModifiers mods, uint timestampMs)
     {
         if (_active || !_node.IsNull) return false;
         for (var n = pressTarget; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
-            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.DragBit) == 0) continue;
+            uint mask = _scene.Interaction(n).HandlerMask;
+            if ((mask & InteractionInfo.DragBit) == 0)
+            {
+                if ((mask & InteractionInfo.BlocksDragArmBit) != 0) return false;   // barrier: no ancestor drag arms
+                continue;
+            }
             _node = n;
             _pressAbs = abs;
             _lastAbs = abs;

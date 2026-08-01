@@ -361,6 +361,15 @@ public sealed record BoxEl : Element
     /// it with O(1) space and zero allocation; at rest (no hover) the element paints in normal document order.</summary>
     public bool HoverElevatePaint { get; init; }
 
+    /// <summary>Drag-ARM barrier: a press that lands on (or inside) this element never arms a DRAGGABLE ANCESTOR's
+    /// gesture. A draggable row/card normally lets a press on any of its children start the drag (the WinUI
+    /// item-container rule, implemented as an upward walk from the press target); set this on a child that is its own
+    /// affordance — a card's play FAB, its "…" corner button, an inline toggle — so pressing it stays a press on THAT
+    /// control instead of becoming a handle for dragging the card. Purely a discriminator: layout, hit-testing, and
+    /// this element's own click/press handling are unaffected, and it says nothing about whether the element itself is
+    /// draggable (set <c>Draggable</c>/<c>CanDrag</c> for that).</summary>
+    public bool BlocksDragArm { get; init; }
+
     /// <summary>Clip-ESCAPE root for a hover-elevated descendant (pairs with <see cref="HoverElevatePaint"/>): set on a
     /// clipping viewport (a shelf's paged strip) to let the hovered card's lift + halo paint OUTSIDE this clip. The
     /// recorder HOISTS the deferred elevated descendant out of this node's whole record scope — its clip AND its

@@ -3164,6 +3164,135 @@ static class ControlsSuite
                 && captioned && committed && refusedTyped && refusedType,
                 $"defaults={defaults} ghostOptIn={ghostOptIn} hidden={hidden} unwrap=({direct},{wrapped},{rejects}) caption={captioned} drop={committed} refuseValue={refusedTyped} refuseType={refusedType}");
         }
+
+        // e5dragdrop.refusal — the S5 seam: a target that MATCHED the drag's kind but refused it through CanAccept is
+        // deliberately transparent (discovery walks past it to an accepting ancestor), so it never becomes OverTarget
+        // and none of its handlers fire. That is correct routing and terrible feedback: the user aims at the surface
+        // the feature exists for and NOTHING happens — "cannot drop in this mode".
+        //
+        // The fix is one published fact, not a new event: while nothing on the chain accepts, the engine reports the
+        // NEAREST kind-matched refuser as Session.RefusedTarget and its RefusalCaption as the session Caption. The
+        // distinction from empty space is the whole point — DropEffect.None means BOTH "over a refuser" and "over
+        // nothing", so a chip keyed on the effect alone would shout "not allowed" at every gap between targets.
+        {
+            var scene = new SceneStore();
+            int refusedEnters = 0, okEnters = 0;
+            var refusing = Drop.Target<string>("k",
+                accepts: static p => p != "no",
+                onEnter: (_, _) => refusedEnters++,
+                refusalCaption: static _ => "Clear sorting to reorder");
+            var accepting = Drop.Target<string>("k",
+                caption: static _ => "Add",
+                onEnter: (_, _) => okEnters++);
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 300, Height = 200,
+                Children =
+                [
+                    new BoxEl { Key = "no", Width = 300, Height = 60, DropTarget = refusing },
+                    new BoxEl { Key = "yes", Width = 300, Height = 60, DropTarget = accepting },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var refuser = Child(scene, scene.Root, 0);
+            var acceptor = Child(scene, scene.Root, 1);
+            var session = disp.DragDrop.Session;
+
+            // ONE gesture whose payload the first target refuses and the second accepts — so every transition below is
+            // exercised against the same live session, which is where the caption bookkeeping actually has to hold.
+            disp.DragDrop.ExternalBegin("k", "no", new Point2(10, 10), KeyModifiers.None);
+            // Over the REFUSER: no target entered, no effect — but the refusal and its reason are published.
+            disp.DragDrop.Move(refuser, new Point2(10, 30), 0f, 0f, KeyModifiers.None);
+            bool cued = session.RefusedTarget == refuser && session.Caption == "Clear sorting to reorder"
+                        && session.OverTarget.IsNull && session.Effect == DropEffect.None && refusedEnters == 0;
+            // Over NOTHING: silent. This is what keeps the not-allowed glyph meaningful.
+            disp.DragDrop.Move(scene.Root, new Point2(10, 190), 0f, 0f, KeyModifiers.None);
+            bool silentOverNothing = session.RefusedTarget.IsNull && session.Caption is null;
+            // An ACCEPTING target is untouched by any of this: it enters, it captions, and it reports no refusal.
+            disp.DragDrop.Move(acceptor, new Point2(10, 90), 0f, 0f, KeyModifiers.None);
+            bool acceptUnaffected = okEnters == 1 && session.OverTarget == acceptor
+                                    && session.RefusedTarget.IsNull && session.Caption == "Add";
+            // Back onto the refuser: the accepted caption is REPLACED by the refusal's, never left stacked behind it.
+            disp.DragDrop.Move(refuser, new Point2(10, 30), 0f, 0f, KeyModifiers.None);
+            bool swapped = session.OverTarget.IsNull && session.RefusedTarget == refuser
+                           && session.Caption == "Clear sorting to reorder";
+            disp.DragDrop.Cancel();
+            bool clearedAtEnd = session.RefusedTarget.IsNull && session.Caption is null;
+
+            // …and the CHIP reads exactly that fact: the not-allowed glyph appears iff DragState.Refused.
+            var spec = new DragChipSpec(Title: "Song", Count: 1);
+            bool glyphOnRefusal = HasNotAllowedGlyph(DragChip.Render(spec,
+                new DragState(true, "k", default, "no", DropEffect.None, "why", Refused: true)));
+            bool noGlyphOverNothing = !HasNotAllowedGlyph(DragChip.Render(spec,
+                new DragState(true, "k", default, "no", DropEffect.None)));
+            bool noGlyphOverTarget = !HasNotAllowedGlyph(DragChip.Render(spec,
+                new DragState(true, "k", default, "ok", DropEffect.Copy, "Add")));
+
+            Check("e5dragdrop.refusal a kind-matched target refused by CanAccept publishes Session.RefusedTarget + its RefusalCaption (while still entering nothing), empty space publishes neither, an accepting target is unaffected, and the chip's not-allowed glyph keys on Refused — not on DropEffect.None, which cannot tell a refusal from a gap",
+                cued && silentOverNothing && acceptUnaffected && swapped && clearedAtEnd
+                && glyphOnRefusal && noGlyphOverNothing && noGlyphOverTarget,
+                $"cued={cued} silent={silentOverNothing} accept={acceptUnaffected} swap={swapped} cleared={clearedAtEnd} glyph=({glyphOnRefusal},{noGlyphOverNothing},{noGlyphOverTarget})");
+        }
+
+        // e5dragdrop.armblock — Element.BlocksDragArm. A press inside a draggable row arms the ROW (the WinUI
+        // item-container rule, implemented as an upward walk from the press target), which is exactly wrong for a
+        // child that is its own affordance: a card's play FAB or its "…" button would become a drag handle, so the
+        // first 4px of a press on Play would lift the card instead of playing it. The barrier stops the walk.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 300, Height = 200,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "card", Width = 300, Height = 100, CanDrag = true,
+                        Draggable = Drag.Source("k", static () => "p"),
+                        Children =
+                        [
+                            new BoxEl { Key = "label", Width = 150, Height = 100 },
+                            new BoxEl { Key = "fab", Width = 40, Height = 40, OnClick = static () => { }, BlocksDragArm = true },
+                        ],
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var card = Child(scene, scene.Root, 0);
+            var label = Child(scene, card, 0);
+            var fab = Child(scene, card, 1);
+
+            var ctl = new DragController(scene, static () => { });
+            bool armsFromPlainChild = ctl.TryArm(label, new Point2(10, 10), PointerKind.Mouse, KeyModifiers.None, 0)
+                                      && ctl.IsArmed;
+            ctl.Disarm();
+            bool blockedFromBarrier = !ctl.TryArm(fab, new Point2(160, 10), PointerKind.Mouse, KeyModifiers.None, 0)
+                                      && !ctl.IsArmed;
+            // The barrier blocks only the ANCESTOR search — a node that is ITSELF draggable still arms.
+            bool selfStillArms = ctl.TryArm(card, new Point2(10, 10), PointerKind.Mouse, KeyModifiers.None, 0)
+                                 && ctl.IsArmed;
+            ctl.Disarm();
+
+            Check("e5dragdrop.armblock Element.BlocksDragArm stops TryArm's upward walk at itself — a press on a card's own button never arms the card's drag, while a press on ordinary card content still does and a draggable node with the bit still arms itself",
+                armsFromPlainChild && blockedFromBarrier && selfStillArms,
+                $"plainChild={armsFromPlainChild} barrier={blockedFromBarrier} self={selfStillArms}");
+        }
+    }
+
+    /// <summary>Does this chip subtree carry the not-allowed glyph? Walks the ELEMENT tree (the chip is pure data →
+    /// elements), so the check reads the same thing a user would see rather than a flag the renderer might ignore.</summary>
+    static bool HasNotAllowedGlyph(Element? e)
+    {
+        switch (e)
+        {
+            case null: return false;
+            case TextEl t: return t.Text == DragChip.NotAllowedGlyph;
+            case BoxEl b:
+                foreach (var c in b.Children) if (HasNotAllowedGlyph(c)) return true;
+                return false;
+            default: return false;
+        }
     }
 
     // -- the framework-owned sortable core (pure geometry - no scene, no host) ---------------------------

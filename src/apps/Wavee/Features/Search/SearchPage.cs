@@ -408,6 +408,10 @@ sealed class SearchSongs : Component
                     Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
                         ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
                         : (LayoutTransition?)null,
+                    // Search results are a COPY source: no SourcePlaylistUri/SourceRows, so a playlist destination adds
+                    // rather than moves. A drag starting inside the multi-selection carries all of it (the DetailTracks
+                    // rule); the row index is read at PROMOTION, never captured, because slots recycle.
+                    Draggable = Drag.Source(WaveeDragKinds.Resource, () => SongsPayload(model, scope.Index.Peek())),
                     Children = [SelectorVisualsBound.AccentPill(scope, Embed.Comp(() => new SearchSongRow(model, scope, bridge, lib)), showChecks)],
                 };
                 // Right-click / long-press: the selection-aware track menu (Explorer semantics — inside a multi-
@@ -445,6 +449,20 @@ sealed class SearchSongs : Component
                 Grow = 0f,
                 Scroll = new ScrollOptions { OnScrollGeometryChanged = (g => _swipeGroup.AnyOpen ? BitConverter.SingleToInt32Bits(g.OffsetY) : 0L, _ => _swipeGroup.Close()) },
             });
+    }
+
+    /// <summary>The Songs-list drag payload for the row at <paramref name="index"/>: the whole SELECTION when the drag
+    /// starts on a selected row (Explorer semantics, matching the track context menu), else that one row. Null when the
+    /// index no longer resolves — a null payload simply means "nothing to drag".</summary>
+    static WaveeResourceDragPayload? SongsPayload(Model model, int index)
+    {
+        int n = Math.Min(model.Max, model.Tracks.Count);
+        if ((uint)index >= (uint)n) return null;
+        if (!model.Selection.IsSelected(index)) return WaveeResourceDragPayload.ForTrack(model.Tracks[index]);
+        var picked = new List<Track>();
+        for (int i = 0; i < model.Selection.ItemCount && i < n; i++)
+            if (model.Selection.IsSelected(i)) picked.Add(model.Tracks[i]);
+        return WaveeResourceDragPayload.ForTracks(picked);
     }
 
     sealed class SearchSongRow : Component
@@ -542,6 +560,21 @@ sealed class SearchAllList : Component
     static MenuAttach? TrackMenu(ActionServices? acts, IOverlayService? overlay, Track t)
         => acts is null || overlay is null ? null : Menus.TrackAttach(acts, overlay, t);
 
+    // ── drag sources ────────────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>A uri-only hit row's drag source. A TRACK hit looks itself up in the page's own results first (the same
+    /// track that produced the hit is in <c>SearchResults.Tracks</c>) — that is what turns an otherwise inert track
+    /// payload into one a playlist can actually take. Album/playlist hits resolve their tracks on drop through the
+    /// library reader; artist/show/episode hits carry none by design and are refused with a cue. The lookup runs inside
+    /// the payload factory, so it is cold: once per gesture, never per render.</summary>
+    static DragSource EntityDrag(ActionServices? acts, Model model, SearchTopHit h)
+        => Drag.Source(WaveeDragKinds.Resource, () =>
+            h.Kind == SearchHitKind.Track && TrackOf(model, h.Uri) is { } t
+                ? WaveeResourceDragPayload.ForTrack(t)
+                : WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.Of(h.Kind), h.Uri, h.Name, h.Image, acts));
+
+    static DragSource TrackDrag(Track t) => Drag.Source(WaveeDragKinds.Resource,
+        () => WaveeResourceDragPayload.ForTrack(t));
+
     internal static Element Build(SearchResults r, LibraryBridge? lib, Model model,
                                   ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
@@ -602,7 +635,21 @@ sealed class SearchAllList : Component
             typeChip: large ? null : h.TypeLabel, detail: large ? null : h.Detail, trailing: trailing, large: large,
             meta: large ? null : h.Meta, detailBelowArt: h.Kind == SearchHitKind.Audiobook,
             onSubtitleNav: key => model.Go(key, null),   // artist/album names in the subtitle are individually clickable
-            menu: CardMenu(acts, menuOverlay, h.Uri, h.Name, h.Image, h.Subtitle, h.RoundImage));
+            menu: CardMenu(acts, menuOverlay, h.Uri, h.Name, h.Image, h.Subtitle, h.RoundImage),
+            drag: EntityDrag(acts, model, h));
+    }
+
+    /// <summary>The page's own results ARE the track resolver for a uri-only track hit: the same track that produced
+    /// the top hit is in <c>SearchResults.Tracks</c>. There is no by-uri track read in the library seam, so this
+    /// (bounded, cold, once per gesture) scan is the honest way to give a track hit a depositable payload; a miss just
+    /// leaves the drag an entity payload.</summary>
+    static Track? TrackOf(Model model, string uri)
+    {
+        if (uri.Length == 0) return null;
+        var tracks = model.Results.Tracks;
+        for (int i = 0; i < tracks.Count; i++)
+            if (string.Equals(tracks[i].Uri, uri, StringComparison.Ordinal)) return tracks[i];
+        return null;
     }
 
     static List<Element> FallbackRows(SearchResults r, LibraryBridge? lib, Model model,
@@ -646,7 +693,8 @@ sealed class SearchAllList : Component
         t.Image, t.Title, (VideoPresence.HasVideo(t) ? "Music video" : "Song") + " • " + Names(t.Artists), t.Uri, false,
         () => model.PlayKnownTrack(t), () => model.PlayKnownTrack(t), typeChip: "Song",
         trailing: SaveButton(t.Uri.Length > 0 && (lib?.IsSaved(t.Uri) ?? false), () => { if (t.Uri.Length > 0) lib?.ToggleSaved(t.Uri, t.Title); }),
-        menu: TrackMenu(acts, menuOverlay, t));
+        menu: TrackMenu(acts, menuOverlay, t),
+        drag: TrackDrag(t));
 
     static Element ArtistRow(Artist a, LibraryBridge? lib, Model model, bool large,
                              ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
@@ -654,7 +702,10 @@ sealed class SearchAllList : Component
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
         trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large,
-        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Image, Loc.Get(Strings.Search.TypeArtist), circular: true));
+        menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Image, Loc.Get(Strings.Search.TypeArtist), circular: true),
+        // An artist is PINNABLE but carries no tracks — dropping it on a playlist is refused with a cue, never a guess.
+        drag: Drag.Source(WaveeDragKinds.Resource,
+            () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Artist, a.Uri, a.Name, a.Image, acts)));
 
     static Element AlbumRow(Album a, Model model, bool large,
                             ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
@@ -662,14 +713,18 @@ sealed class SearchAllList : Component
         () => model.Go("album:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeAlbum), large: large,
         menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Cover,
-            a.Artists.Count > 0 ? a.Artists[0].Name : Loc.Get(Strings.Search.TypeAlbum)));
+            a.Artists.Count > 0 ? a.Artists[0].Name : Loc.Get(Strings.Search.TypeAlbum)),
+        drag: Drag.Source(WaveeDragKinds.Resource,
+            () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, a.Uri, a.Name, a.Cover, acts)));
 
     static Element PlaylistRow(Playlist p, Model model, bool large,
                                ActionServices? acts = null, IOverlayService? menuOverlay = null) => MediaCard.Row(
         p.Cover, p.Name, Loc.Get(Strings.Search.TypePlaylist), p.Uri, false,
         () => model.Go("pl:" + p.Uri, p.Name), () => model.PlayContext(p.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypePlaylist), large: large,
-        menu: CardMenu(acts, menuOverlay, p.Uri, p.Name, p.Cover, Loc.Get(Strings.Search.TypePlaylist)));
+        menu: CardMenu(acts, menuOverlay, p.Uri, p.Name, p.Cover, Loc.Get(Strings.Search.TypePlaylist)),
+        drag: Drag.Source(WaveeDragKinds.Resource,
+            () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, p.Uri, p.Name, p.Cover, acts)));
 
     static Action OpenFor(Model model, SearchHitKind kind, string uri, string name) => kind switch
     {
@@ -684,6 +739,7 @@ sealed class SearchAllList : Component
     {
         Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f),
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.1f, OnClick = toggle,
+        BlocksDragArm = true,   // the row drags; this button saves — a press here is never a drag handle
         Children = [Icon(saved ? Icons.Accept : Icons.Add, 16f, saved ? Tok.AccentDefault : Tok.TextSecondary)],
     };
 
@@ -692,6 +748,7 @@ sealed class SearchAllList : Component
         Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Padding = new Edges4(16f, 6f, 16f, 6f), Corners = CornerRadius4.All(16f),
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.04f, OnClick = toggle,
+        BlocksDragArm = true,   // see SaveButton
         Children = [new TextEl(following ? "Following" : "Follow") { Size = 12f, Weight = 700, Color = Tok.TextPrimary }],
     };
 

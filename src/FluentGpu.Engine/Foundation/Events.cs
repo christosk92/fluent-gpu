@@ -353,6 +353,16 @@ public sealed record DropTargetSpec(
     /// INERT today: the spotlight pass still keys off <see cref="VisualPolicy"/> only; the scrim rework consumes it.</summary>
     public Func<DragSession, bool>? SpotlightWhen { get; init; }
 
+    /// <summary>The REFUSAL cue: why this target — which matched the session's <see cref="AcceptKinds"/> — said no.
+    /// A target refusing through <see cref="CanAccept"/> is deliberately transparent (discovery continues to an
+    /// accepting ancestor), so it never becomes <c>OverTarget</c> and none of its handlers fire: without this seam a
+    /// refusal is indistinguishable from empty space and reads as "drag &amp; drop is broken". When NOTHING on the chain
+    /// accepts, the engine publishes the NEAREST kind-matched refuser as <see cref="DragSession.RefusedTarget"/> and
+    /// this delegate's text as the session <see cref="DragSession.Caption"/>, which the chip renders beside its
+    /// not-allowed glyph ("Clear sorting to reorder"). Null ⇒ the glyph alone. Called per move while refused — return a
+    /// cached/constant string where the reason cannot change mid-gesture.</summary>
+    public Func<DragSession, string?>? RefusalCaption { get; init; }
+
     /// <summary>Ordinal accept test over <see cref="AcceptKinds"/> (cast-free, 0-alloc).</summary>
     public bool Accepts(string kind)
     {
@@ -383,6 +393,12 @@ public sealed class DragSession
     public NodeHandle Source;
     /// <summary>The accepting target currently under the pointer (Null when over nothing that accepts).</summary>
     public NodeHandle OverTarget;
+    /// <summary>The nearest target under the pointer that MATCHED this session's Kind but refused through
+    /// <see cref="DropTargetSpec.CanAccept"/> — published ONLY while nothing on the chain accepts (an accepting
+    /// ancestor means the drop still succeeds, so there is nothing to refuse). Null over empty space and over an
+    /// accepting target: that is exactly the distinction the chip's not-allowed glyph needs, since
+    /// <see cref="Effect"/> is <see cref="DropEffect.None"/> in BOTH the refusal and the over-nothing case.</summary>
+    public NodeHandle RefusedTarget;
     /// <summary>Advisory effect (engine: Move while over an accepting target, None otherwise; targets may refine).</summary>
     public DropEffect Effect;
     /// <summary>Optional drop CAPTION (the WinUI <c>DragUIOverride.Caption</c> analogue — "Add 3 tracks to Chill"):
@@ -410,15 +426,21 @@ public enum DragSettlePhase : byte { None = 0, ToTarget = 1, Home = 2 }
 /// <param name="Position">The pointer in window (DIP) space.</param>
 /// <param name="Payload">The drag payload (<see cref="FileDropData"/> for OS files; the source's typed payload otherwise).</param>
 /// <param name="Effect">The live advisory <see cref="DropEffect"/> — <see cref="DropEffect.None"/> while over nothing
-/// that accepts, which is what a chip renders its "not allowed" glyph from.</param>
-/// <param name="Caption">The current target's drop caption (<see cref="DragSession.Caption"/>), or null.</param>
+/// that accepts AND while over a target that refused, which is why the not-allowed cue reads <paramref name="Refused"/>
+/// instead: only the latter is a refusal the user needs told about.</param>
+/// <param name="Caption">The current target's drop caption (<see cref="DragSession.Caption"/>), or — while
+/// <paramref name="Refused"/> — the refuser's <see cref="DropTargetSpec.RefusalCaption"/>. Null when neither applies.</param>
 /// <param name="Settle">Non-<see cref="DragSettlePhase.None"/> only during the ~250ms post-gesture settle window a
 /// Stationary-lift drag publishes; <see cref="Active"/> stays true across it so the chip can animate out.</param>
 /// <param name="SettleTarget">Where the chip settles TO: the drop point (ToTarget) or the source's resting rect (Home).</param>
+/// <param name="Refused">A compatible-KIND target under the pointer explicitly refused this payload
+/// (<see cref="DragSession.RefusedTarget"/>) — the one state a not-allowed cue belongs in. False over empty space, so
+/// hovering nothing stays silent rather than accusing every gap between targets of refusing.</param>
 public readonly record struct DragState(
     bool Active, string Kind, Point2 Position, object? Payload,
     DropEffect Effect = DropEffect.None, string? Caption = null,
-    DragSettlePhase Settle = DragSettlePhase.None, RectF SettleTarget = default);
+    DragSettlePhase Settle = DragSettlePhase.None, RectF SettleTarget = default,
+    bool Refused = false);
 
 /// <summary>
 /// Well-known drag KIND discriminators for OS-originated (OLE) drags delivered through the external-drop seam
