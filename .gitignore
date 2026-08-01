@@ -4,6 +4,7 @@
 [Dd]ebug/
 [Rr]elease/
 artifacts/
+benchmarks/FrameworkComparison/results/
 *.user
 *.suo
 .vs/

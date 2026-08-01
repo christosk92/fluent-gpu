@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Bench.Contracts\Bench.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\src\FluentGpu.Engine\FluentGpu.Engine.csproj" />
+    <ProjectReference Include="..\..\..\src\FluentGpu.Controls\FluentGpu.Controls.csproj" />
+    <ProjectReference Include="..\..\..\src\FluentGpu.Windows\FluentGpu.Windows.csproj" />
+  </ItemGroup>
+</Project>

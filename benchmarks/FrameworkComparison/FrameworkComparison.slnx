@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Shared/">
+    <Project Path="Bench.Contracts/Bench.Contracts.csproj" />
+    <Project Path="Bench.Runner/Bench.Runner.csproj" />
+    <Project Path="Bench.FrameIdCapture/Bench.FrameIdCapture.csproj" />
+    <Project Path="Bench.Tests/Bench.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Hosts/">
+    <Project Path="FluentGpuBench/FluentGpuBench.csproj" />
+    <Project Path="WinUIBench/WinUIBench.csproj" />
+  </Folder>
+</Solution>

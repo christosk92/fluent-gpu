@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.26100.0</TargetPlatformMinVersion>
+    <RuntimeIdentifier>win-arm64</RuntimeIdentifier>
+    <PlatformTarget>ARM64</PlatformTarget>
+    <Platforms>ARM64</Platforms>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <WindowsAppSdkVersion Condition="'$(WindowsAppSdkVersion)' == ''">2.3.1</WindowsAppSdkVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <NoWarn>$(NoWarn);CA1416</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Public, production Windows App SDK baseline. Its exact version and published binary hash are archived with every run. -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="$(WindowsAppSdkVersion)" />
+    <ProjectReference Include="..\Bench.Contracts\Bench.Contracts.csproj" />
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+  <!--
+    `dotnet publish` of an unpackaged WinUI 3 app leaves the app's own XAML assets behind in the build output: the
+    layout resfile list is computed for MSIX only, so WinUIBench.pri and the compiled App.xbf / BenchTemplates.xbf never
+    reach the publish folder. Application.LoadComponent("ms-appx:///App.xaml") then resolves nothing *without throwing*,
+    and the process runs with an EMPTY Application.Resources - no XamlControlsResources (WinUI's own control styles) and
+    no benchmark row template. The only scenario that reads a resource, virtual-scroll, therefore died in its
+    constructor with a stowed COMException (0xC000027B) that looked exactly like a WinUI virtualization failure, while
+    every other scenario silently measured unstyled controls. Publish the assets explicitly.
+  -->
+  <Target Name="PublishAppXamlAssets" AfterTargets="ComputeResolvedFilesToPublishList">
+    <ItemGroup>
+      <_AppXamlAsset Include="$(TargetDir)*.xbf" />
+      <_AppXamlAsset Include="$(TargetDir)$(AssemblyName).pri" />
+      <ResolvedFileToPublish Include="@(_AppXamlAsset)">
+        <RelativePath>%(Filename)%(Extension)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
+</Project>
