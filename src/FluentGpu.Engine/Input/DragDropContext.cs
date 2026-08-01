@@ -55,6 +55,7 @@ public sealed class DragDropContext
     private NodeHandle _over;            // current accepting target (Null = over nothing that accepts)
     private DropTargetSpec? _overSpec;   // its spec (cached so Leave/Over/Drop never re-query a dead column)
     private int _spotlightTargetVersion = -1;
+    private DragLift _lift;              // L1's lift mode for this gesture (see PruneDead's dead-source rule)
     private DropEffect _defaultEffect = DropEffect.Move;   // the engine's advisory effect over an accepting target;
                                                            // Move for in-app drags, Copy for an OS file drop (Explorer convention)
 
@@ -91,8 +92,12 @@ public sealed class DragDropContext
 
     /// <summary>Called by the dispatcher at L1 promotion: walk up from the promoted node for the nearest ENABLED
     /// <see cref="DragSource"/>, resolve its payload once, and open the session. Returns false when the chain carries
-    /// no source — the gesture stays a plain L1 reorder drag and drop targets never see it.</summary>
-    public bool TryBegin(NodeHandle promoted, Point2 abs, KeyModifiers mods, PointerKind kind)
+    /// no source — the gesture stays a plain L1 reorder drag and drop targets never see it.
+    /// <paramref name="lift"/> is the L1 controller's <see cref="DragController.ActiveLift"/> — THE seam between the two
+    /// layers: a <see cref="DragLift.Stationary"/> session survives its source node being virtualized away (see
+    /// <see cref="PruneDead"/>), because the drag visual is an independent chip rather than the source row.</summary>
+    public bool TryBegin(NodeHandle promoted, Point2 abs, KeyModifiers mods, PointerKind kind,
+                         DragLift lift = DragLift.Ghost)
     {
         if (_active) return false;
         for (var n = promoted; !n.IsNull; n = _scene.Parent(n))
@@ -107,9 +112,11 @@ public sealed class DragDropContext
             _session.Source = n;
             _session.OverTarget = NodeHandle.Null;
             _session.Effect = DropEffect.None;
+            _session.Caption = null;
             _session.Mods = mods;
             _session.Pointer = kind;
             _defaultEffect = DropEffect.Move;   // in-app reorder/transfer
+            _lift = lift;
             _active = true;
             _over = NodeHandle.Null;
             _overSpec = null;
@@ -141,9 +148,11 @@ public sealed class DragDropContext
         _session.Source = _scene.Root;          // NOT Null — PruneDead Cancels when !IsLive(Source)
         _session.OverTarget = NodeHandle.Null;
         _session.Effect = DropEffect.None;
+        _session.Caption = null;
         _session.Mods = mods;
         _session.Pointer = PointerKind.Mouse;   // an OLE drag presents as a mouse cursor
         _defaultEffect = defaultEffect;
+        _lift = DragLift.Ghost;                 // no in-tree source to lift; Source is already the (live) scene root
         _active = true;
         _over = NodeHandle.Null;
         _overSpec = null;
@@ -176,6 +185,7 @@ public sealed class DragDropContext
             _scene.SetDropSpotlightOver(next);
             _session.OverTarget = next;
             _session.Effect = next.IsNull ? DropEffect.None : _defaultEffect;   // targets may refine in OnEnter/OnOver
+            _session.Caption = null;   // the caption belongs to the target being ENTERED — a target never has to unset it
             if (!next.IsNull) _overSpec?.OnEnter?.Invoke(_session);
             _requestRerender();
         }
@@ -234,7 +244,15 @@ public sealed class DragDropContext
     {
         if (!_active) return;
         RefreshSpotlight(force: false);
-        if (!_scene.IsLive(_session.Source)) { Cancel(); return; }
+        if (!_scene.IsLive(_session.Source))
+        {
+            // A STATIONARY-lift session outlives its source row (virtualized away / list rebuilt): the payload was
+            // resolved at promotion and the drag visual is the DragPreviewLayer chip, so the gesture must still be able
+            // to reach a drop. Reparent onto the live scene root — exactly what ExternalBegin does for an OS drag
+            // (:141), which is the same "no in-tree source" shape. Ghost lift keeps aborting: its visual is the corpse.
+            if (_lift == DragLift.Stationary && !_scene.Root.IsNull) _session.Source = _scene.Root;
+            else { Cancel(); return; }
+        }
         if (!_over.IsNull && !_scene.IsLive(_over))
         {
             _over = NodeHandle.Null;
@@ -385,5 +403,7 @@ public sealed class DragDropContext
         _session.Source = NodeHandle.Null;
         _session.OverTarget = NodeHandle.Null;
         _session.Effect = DropEffect.None;
+        _session.Caption = null;
+        _lift = DragLift.Ghost;
     }
 }

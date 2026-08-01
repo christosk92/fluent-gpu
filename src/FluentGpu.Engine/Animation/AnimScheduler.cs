@@ -171,8 +171,15 @@ public sealed partial class AnimEngine
         var tf = Affine2D.Translation(acc.Tx, acc.Ty);
         if (acc.Rot != 0f) tf = tf.Multiply(Affine2D.Rotation(acc.Rot * (MathF.PI / 180f)));
         if (acc.Sx != 1f || acc.Sy != 1f) tf = tf.Multiply(Affine2D.Scale(acc.Sx, acc.Sy));
-        p.LocalTransform = tf;
-        p.Opacity = acc.Op;
+        // Channel ownership: while a node is the lifted drag visual, DragController owns its transform and opacity for
+        // the whole gesture (it re-anchors the translate off the node's CURRENT resting origin every move). Writing
+        // them here stomps the drag translate, which RetargetFromRest then double-counts into a per-frame runaway —
+        // and a hover/press MotionTarget on a dragged card would fight the lift. Every other channel still composes.
+        if ((_scene.Flags(node) & NodeFlags.DragGhost) == 0)
+        {
+            p.LocalTransform = tf;
+            p.Opacity = acc.Op;
+        }
         p.BlurSigma = MathF.Max(0f, acc.Blur);
         if (!float.IsNaN(acc.Sw)) p.PresentedW = acc.Sw;
         if (!float.IsNaN(acc.Sh)) p.PresentedH = acc.Sh;

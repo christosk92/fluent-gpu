@@ -134,6 +134,7 @@ sealed class TrackList : Component
     const int ReDealRows = 24;                                 // seed a viewport's worth; ItemFadeFrom is queried per REALIZED row anyway
     readonly Dictionary<int, (float dx, float dy)> _flip = new();        // new display index → FLIP start residual (dy DIP)
     readonly Dictionary<int, (float from, float delayMs)> _fade = new(); // added display index → opacity ease-in + stagger
+    int _flipEpoch = -1;                                       // the _dispVer value the seeds above were written for
     Track[]? _lastDisplayed;                                   // displayed (view-ordered) snapshot — the keyed-diff baseline
     LibraryBridge? _lib;                                       // Mutations bridge → per-row heart saved-state + toggle (null when no Mutations source)
     ActionServices? _acts;                                     // the signals-first action system (row context menus + batch bar) — cached in Render like _lib
@@ -753,7 +754,7 @@ sealed class TrackList : Component
                         CountSignal = _listCount,
                         Scroll = new ScrollOptions { ScrollKey = _route.Value.Name + ":r" + _resetEpoch, AutoEdgeFade = !_cfg.HasTrailing, OnScrollGeometryChanged = SwipeCloseObserver() },
                         Reorder = new ReorderOptions { ItemDisplacement = _playlistDrop.Displacement, DisplacementVersion = _dispVer },
-                        Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null, ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null },
+                        Entrance = new EntranceOptions { StaggerColdRealize = staggerCold, ItemFlipFrom = SeedFlip, ItemFadeFrom = SeedFade },
                     });
             }
             return visible == 0
@@ -801,8 +802,8 @@ sealed class TrackList : Component
                         // Realize the full oversized row window immediately. Bound slots are persistent; exposing partial
                         // materialization during scroll reads as cut-off rows under the fixed chrome.
                         StaggerColdRealize = staggerCold,
-                        ItemFlipFrom = i => _flip.TryGetValue(i, out var f) ? f : null,
-                        ItemFadeFrom = i => _fade.TryGetValue(i, out var f) ? f : null,
+                        ItemFlipFrom = SeedFlip,
+                        ItemFadeFrom = SeedFade,
                     },
                 });
         }
@@ -821,7 +822,8 @@ sealed class TrackList : Component
                 ? verticalHeroH + DetailVerticalLayout.ChromeExtent(verticalHasContentFilter ? ContentFilterChips.VerticalExtent : 0f)
                 : 0f;
             _playlistDrop.Configure(scene, visible, rowH, leading, TrackStart, dropUri,
-                allowSameListMove: sort.Column == SortColumn.Index && !sort.Descending,
+                allowSameListMove: PlaylistReorderRules.AllowsSameListMove(
+                    sort.Column == SortColumn.Index && !sort.Descending, query, filters),
                 commit: (payload, displaySlot) => WaveeResourceDrop.DepositTracksAsync(
                     dropActs, dropUri, model.Title, payload, OriginalInsertionIndex(displaySlot)),
                 post: _post!);
@@ -914,6 +916,16 @@ sealed class TrackList : Component
         return _rowItems is { } items && items.TryPeek(itemIndex, out var track, trackStart) ? track : null;
     }
 
+    // The FLIP/fade seeds belong to exactly ONE _dispVer bump — the Choreograph / ReDeal write that filled them. That
+    // same version signal doubles as the drop lane's displacement bus, so every gap open/retarget/clear re-runs the
+    // ItemsView seed effect; without this epoch check the re-run replays a spent choreography as a phantom
+    // half-fade on rows that never moved (the visible symptom: rows fading mid-drag).
+    (float dx, float dy)? SeedFlip(int display)
+        => _dispVer.Peek() == _flipEpoch && _flip.TryGetValue(display, out var f) ? f : null;
+
+    (float from, float delayMs)? SeedFade(int display)
+        => _dispVer.Peek() == _flipEpoch && _fade.TryGetValue(display, out var f) ? f : null;
+
     int OriginalInsertionIndex(int displaySlot)
     {
         var view = View();
@@ -995,16 +1007,8 @@ sealed class TrackList : Component
     {
         int itemCount = VerticalTrackStart + Math.Max(visible, 1);
         int DisplayOf(int itemIndex) => itemIndex - VerticalTrackStart;
-        (float dx, float dy)? FlipFrom(int itemIndex)
-        {
-            int d = DisplayOf(itemIndex);
-            return d >= 0 && _flip.TryGetValue(d, out var f) ? f : null;
-        }
-        (float from, float delayMs)? FadeFrom(int itemIndex)
-        {
-            int d = DisplayOf(itemIndex);
-            return d >= 0 && _fade.TryGetValue(d, out var f) ? f : null;
-        }
+        (float dx, float dy)? FlipFrom(int itemIndex) => SeedFlip(DisplayOf(itemIndex));
+        (float from, float delayMs)? FadeFrom(int itemIndex) => SeedFade(DisplayOf(itemIndex));
 
         return ItemsView.CreateBound(
             itemCount,
@@ -1111,7 +1115,9 @@ sealed class TrackList : Component
             _fade[n] = (0f, Math.Min(addOrd++, 8) * 20f);              // …with a 20ms/row stagger, capped (no cascades)
         }
 
-        _dispVer.Value = _dispVer.Peek() + 1;   // the ItemsView (a child, renders after this) seeds in the SAME frame
+        // Claim the bump: only THIS version replays these seeds (the drop lane shares the bus — see SeedFlip).
+        _flipEpoch = _dispVer.Peek() + 1;
+        _dispVer.Value = _flipEpoch;            // the ItemsView (a child, renders after this) seeds in the SAME frame
     }
 
     // ── Breakpoint re-deal ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1154,7 +1160,8 @@ sealed class TrackList : Component
             _flip[i] = (0f, 6f);                                  // rise into place…
             _fade[i] = (0f, Math.Min(ord, cap) * step);           // …behind a capped top-down stagger
         }
-        _dispVer.Value = _dispVer.Peek() + 1;   // the ItemsView (a child, renders after this) seeds in the SAME frame
+        _flipEpoch = _dispVer.Peek() + 1;       // claim the bump (see SeedFlip)
+        _dispVer.Value = _flipEpoch;            // the ItemsView (a child, renders after this) seeds in the SAME frame
     }
 
     float VerticalHeaderHeight(bool subscribe = false)

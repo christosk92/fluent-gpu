@@ -3307,6 +3307,45 @@ static class ScrollSuite
                 $"band={bandState}/{bandClip}/{suffixFade} depths={heroDraw.ClipDepth}/{chromeDraw.ClipDepth}/{rowDraw.ClipDepth} hits={heroHit.Raw.Index}/{chromeHit.Raw.Index}/{rowHit.Raw.Index}");
         }
 
+        // e11virt.prefix-disp — the reorder displacement seed maps a realized-child ORDINAL to its item index with the
+        // canonical FlexLayout.VirtualIndex rule (ord < prefix ? ord : FirstRealized + ord − prefix). The old flat
+        // FirstRealized + ord ignored the sticky prefix, so on a prefixed list the gap opened `prefix` rows off AND the
+        // sticky hero/chrome rows themselves were displaced. The predicate here targets items [F, F+3): under the
+        // canonical mapping that is realized ordinals 2,3,4 and NEVER the two prefix ordinals; under the flat mapping it
+        // would be ordinals 0 (prefix!), 1 (prefix!) and 2.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("prefix-disp", new Size2(320, 360), 1f));
+            window.Show();
+            var probe = new PrefixDisplacementProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var vp = FindScrollable(scene, scene.Root);
+
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150, 150), 0, 0, ScrollDelta: 2000f));
+            for (int i = 0; i < 90; i++) host.RunFrame();
+            scene.TryGetScroll(vp, out var sc);
+            int first = sc.FirstRealized;
+            bool deepWindow = first > PrefixDisplacementProbe.Prefix + 2;
+
+            probe.Displacement = i => i >= first && i < first + 3 ? (0f, 24f) : (0f, 0f);
+            probe.Ver.Value = probe.Ver.Peek() + 1;
+            for (int i = 0; i < 60; i++) host.RunFrame();
+
+            Span<float> dy = stackalloc float[6];
+            int ord = 0;
+            for (var n = scene.FirstChild(sc.ContentNode); !n.IsNull && ord < dy.Length; n = scene.NextSibling(n), ord++)
+                dy[ord] = scene.Paint(n).LocalTransform.Dy;
+            bool prefixUntouched = Near(dy[0], 0f, 0.5f) && Near(dy[1], 0f, 0.5f);
+            bool windowDisplaced = Near(dy[2], 24f, 0.5f) && Near(dy[3], 24f, 0.5f) && Near(dy[4], 24f, 0.5f);
+            bool boundedBelow = Near(dy[5], 0f, 0.5f);
+
+            Check("e11virt.prefix-disp the ItemsView displacement seed maps realized ordinals through the canonical prefix rule — the sticky persistent prefix is never displaced and the first recyclable ordinal resolves to FirstRealized (a flat FirstRealized+ord displaces the hero and lands the gap `prefix` rows off)",
+                deepWindow && ord == 6 && prefixUntouched && windowDisplaced && boundedBelow,
+                $"first={first} realizedOrds={ord} dy=[{dy[0]:0.#},{dy[1]:0.#},{dy[2]:0.#},{dy[3]:0.#},{dy[4]:0.#},{dy[5]:0.#}]");
+        }
+
         // e11virt.6 — typed ItemsRepeater (E11-L2): the (index, item) template binds without casts, and an
         // ItemCollectionTransition stamps the engine FLIP/fade spec on each item root — Moves = Position FLIP,
         // Adds/Removes = opacity 0↔1, over ControlFastAnimationDuration 167ms decelerate (the ItemContainer.xaml:54-56

@@ -25,14 +25,26 @@ sealed class PlaylistDropLane
     readonly Signal<int> _previewVersion = new(0);
     readonly DropTargetSpec _target;
     SceneStore? _scene;
+    // Resting geometry — rewritten by every Configure, i.e. by every render of the owning page.
     int _count;
     int _firstItemIndex;
     float _itemExtent;
     float _leadingExtent;
     string _targetUri = "";
     bool _allowSameListMove;
+    // Gesture-local snapshot, taken at Enter. A re-render mid-drag (a live membership push, a breakpoint cross, a
+    // sort/filter change) must not move the slot the user is aiming at out from under the pointer, so Over/Drop read
+    // these and never the resting fields. The scene/controller/commit/post seams stay live: they are identities, not
+    // geometry, and the commit must target the CURRENT page state.
+    bool _gesture;
+    int _gCount;
+    int _gFirstItemIndex;
+    float _gItemExtent;
+    float _gLeadingExtent;
+    string _gTargetUri = "";
+    bool _gAllowSameListMove;
     WaveeResourceDragPayload? _previewPayload;
-    Func<object?, int, Task>? _commit;
+    Func<object?, int, Task<bool>>? _commit;
     Action<Action>? _post;
     object? _membershipToken;
     object? _commitBaseline;
@@ -52,7 +64,7 @@ sealed class PlaylistDropLane
 
     public void Configure(SceneStore scene, int itemCount, float itemExtent, float leadingExtent,
                           int firstItemIndex, string targetUri, bool allowSameListMove,
-                          Func<object?, int, Task> commit, Action<Action> post)
+                          Func<object?, int, Task<bool>> commit, Action<Action> post)
     {
         _scene = scene;
         _count = Math.Max(0, itemCount);
@@ -96,16 +108,31 @@ sealed class PlaylistDropLane
         ],
     };
 
+    // The gesture snapshot answers for the whole gesture; outside one (the engine's pre-Enter compatibility probe) the
+    // resting configuration is the truth.
+    string TargetUri => _gesture ? _gTargetUri : _targetUri;
+    bool AllowSameListMove => _gesture ? _gAllowSameListMove : _allowSameListMove;
+
     bool CanAccept(object? payload)
     {
         var resource = WaveeResourceDrag.Unwrap(payload);
         if (resource is not { CanCopyTracks: true }) return false;
         bool sameListMove = resource.SourceRows is { Count: > 0 }
-            && string.Equals(resource.SourcePlaylistUri, _targetUri, StringComparison.Ordinal);
-        return !sameListMove || _allowSameListMove;
+            && string.Equals(resource.SourcePlaylistUri, TargetUri, StringComparison.Ordinal);
+        return !sameListMove || AllowSameListMove;
     }
 
-    void Enter(DragSession session) => Over(session);
+    void Enter(DragSession session)
+    {
+        _gesture = true;
+        _gCount = _count;
+        _gFirstItemIndex = _firstItemIndex;
+        _gItemExtent = _itemExtent;
+        _gLeadingExtent = _leadingExtent;
+        _gTargetUri = _targetUri;
+        _gAllowSameListMove = _allowSameListMove;
+        Over(session);
+    }
 
     void Over(DragSession session)
     {
@@ -114,27 +141,34 @@ sealed class PlaylistDropLane
             ClearPreview();
             return;
         }
-        float extent = _itemExtent;
+        float extent = _gItemExtent;
         var viewport = _controller.Viewport;
-        if (extent <= 0f || _scene is not { } scene || viewport.IsNull || !scene.IsLive(viewport)) return;
+        // A dead/zero-extent viewport (an empty or still-loading playlist, a recycled list) cannot place a slot. Tear
+        // the projection down instead of bailing bare: a plain return leaves the last slot's gap and preview cards
+        // stranded at a stale Y for the rest of the gesture.
+        if (extent <= 0f || _scene is not { } scene || viewport.IsNull || !scene.IsLive(viewport))
+        {
+            ClearPreview();
+            return;
+        }
         var rect = scene.AbsoluteRect(viewport);
         float offset = _controller.ScrollOffset;
-        float contentY = session.Position.Y - rect.Y + offset - _leadingExtent;
+        float contentY = session.Position.Y - rect.Y + offset - _gLeadingExtent;
         int slot = (int)MathF.Floor((contentY + extent * 0.5f) / extent);
-        slot = Math.Clamp(slot, 0, _count);
+        slot = Math.Clamp(slot, 0, _gCount);
 
         int total = payload.Tracks is { Count: > 0 } tracks ? tracks.Count : 1;
         int previewRows = Math.Min(PreviewRowCap, total);
         float previewExtent = previewRows * extent;
-        bool projectionChanged = _projection.Update(slot, _firstItemIndex, previewExtent);
+        bool projectionChanged = _projection.Update(slot, _gFirstItemIndex, previewExtent, _gCount);
         bool payloadChanged = !ReferenceEquals(_previewPayload, payload);
         _previewPayload = payload;
-        float previewY = _leadingExtent + slot * extent - offset;
+        float previewY = _gLeadingExtent + slot * extent - offset;
         _lineY.Value = previewY - Spacing.XXS * 0.5f;
         _previewY.Value = previewY;
         _slot.Value = slot;
         session.Effect = payload.SourceRows is { Count: > 0 }
-            && string.Equals(payload.SourcePlaylistUri, _targetUri, StringComparison.Ordinal)
+            && string.Equals(payload.SourcePlaylistUri, TargetUri, StringComparison.Ordinal)
                 ? DropEffect.Move
                 : DropEffect.Copy;
         if (projectionChanged || payloadChanged)
@@ -143,27 +177,40 @@ sealed class PlaylistDropLane
 
     void Leave(DragSession _)
     {
+        _gesture = false;
         if (!_awaitingMembership) ClearPreview();
     }
 
     void Drop(DragSession session)
     {
         int slot = _slot.Peek();
-        if (slot < 0 || !CanAccept(session.Payload) || _commit is not { } commit)
+        object? payload = session.Payload;
+        // CanAccept is answered against the gesture snapshot; the scope closes only afterwards.
+        bool accepted = slot >= 0 && CanAccept(payload);
+        _gesture = false;
+        if (!accepted || _commit is not { } commit)
         {
             ClearPreview();
             return;
         }
 
-        _awaitingMembership = true;
         _commitBaseline = _membershipToken;
         int epoch = ++_commitEpoch;
-        _ = CompleteAsync(commit, session.Payload, slot, epoch);
+        var commitTask = commit(payload, slot);
+        // Hold the gap open only while a commit that can still publish a membership snapshot is in flight — that
+        // snapshot is the handoff edge ObserveMembership waits for. A commit that already resolved without issuing
+        // any mutation (a playlist dropped on itself, an empty track resolve) owns no handoff, so latching on it
+        // would strand the preview until the post pump ran while Leave was forbidden from clearing it.
+        _awaitingMembership = !commitTask.IsCompletedSuccessfully || commitTask.Result;
+        if (!_awaitingMembership) ClearPreview();
+        _ = CompleteAsync(commitTask, epoch);
     }
 
-    async Task CompleteAsync(Func<object?, int, Task> commit, object? payload, int slot, int epoch)
+    /// <summary>The teardown fallback. The fast path is <see cref="ObserveMembership"/> handing the gap to the real
+    /// list; a commit that faults, or that the backend collapses without publishing, still ends the wait here.</summary>
+    async Task CompleteAsync(Task commit, int epoch)
     {
-        try { await commit(payload, slot).ConfigureAwait(false); }
+        try { await commit.ConfigureAwait(false); }
         finally
         {
             _post?.Invoke(() =>
@@ -195,7 +242,10 @@ sealed class PlaylistDropLane
             _ = _owner._previewVersion.Value;
             int slot = _owner._slot.Peek();
             var payload = _owner._previewPayload;
-            if (slot < 0 || payload is null) return new BoxEl { Height = 0f, HitTestVisible = false };
+            // SAME key as the active branch: an unkeyed idle box against a keyed active one remounts the subtree on
+            // every open and close, so the gesture paid a mount/unmount per drag instead of a patch.
+            if (slot < 0 || payload is null)
+                return new BoxEl { Key = "playlist-drop-preview", Height = 0f, HitTestVisible = false };
 
             float rowH = _owner._itemExtent;
             var tracks = payload.Tracks;

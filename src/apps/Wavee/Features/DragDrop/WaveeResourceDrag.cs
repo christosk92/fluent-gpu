@@ -169,35 +169,44 @@ static class WaveeResourceDrop
 
     /// <summary>The awaitable deposit seam used by live insertion previews. The library mutation source publishes its
     /// optimistic snapshot synchronously before the returned network task completes, so callers can hand visual ownership
-    /// to the real list immediately while still retaining an error-completion edge.</summary>
-    public static Task DepositTracksAsync(ActionServices acts, string targetUri, string targetName,
-                                          object? payload, int? insertionIndex)
+    /// to the real list immediately while still retaining an error-completion edge.
+    /// <para>The result is "a mutation was issued and completed" — false for every no-op refusal below and for a failed
+    /// commit. A live insertion preview keys its teardown on it: only a true can promise the membership snapshot that
+    /// closes the gap, so the refusals must be answerable SYNCHRONOUSLY wherever possible (they are, except the empty
+    /// track resolve) or the preview waits on a handoff that never comes.</para></summary>
+    public static Task<bool> DepositTracksAsync(ActionServices acts, string targetUri, string targetName,
+                                                object? payload, int? insertionIndex)
     {
         if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { } resource)
-            return Task.CompletedTask;
-        if (!resource.CanCopyTracks) return Task.CompletedTask;
+            return Task.FromResult(false);
+        if (!resource.CanCopyTracks) return Task.FromResult(false);
+        bool sameList = insertionIndex is not null
+            && string.Equals(resource.SourcePlaylistUri, targetUri, StringComparison.Ordinal)
+            && resource.SourceRows is { Count: > 0 };
+        // Dropping a playlist onto itself without membership refs would append a duplicate of the entire playlist.
+        // Treat that ambiguous container-on-itself gesture as a no-op; track-row drags still move.
+        if (!sameList && resource.Kind == WaveeResourceKind.Playlist
+            && string.Equals(resource.Uri, targetUri, StringComparison.Ordinal))
+            return Task.FromResult(false);
         return Run();
 
-        async Task Run()
+        async Task<bool> Run()
         {
             try
             {
                 bool moved = false;
-                if (insertionIndex is { } at
-                    && string.Equals(resource.SourcePlaylistUri, targetUri, StringComparison.Ordinal)
-                    && resource.SourceRows is { Count: > 0 } rows)
+                if (sameList && insertionIndex is { } at && resource.SourceRows is { } rows)
                 {
+                    // `at` is the PRE-move insertion index ("insert before the row currently at this index") — the
+                    // convention PlaylistMutationSource.BuildMoveOps / UserPlaylistSource.MoveRows both implement by
+                    // discounting the rows removed above it. Pinned by MoveRowsConventionTests; do NOT pre-correct here.
                     await lib.MovePlaylistRowsAsync(targetUri, rows, at).ConfigureAwait(false);
                     moved = true;
                 }
                 else
                 {
-                    // Dropping a playlist onto itself without membership refs would append a duplicate of the entire
-                    // playlist. Treat that ambiguous container-on-itself gesture as a no-op; track-row drags still move.
-                    if (resource.Kind == WaveeResourceKind.Playlist
-                        && string.Equals(resource.Uri, targetUri, StringComparison.Ordinal)) return;
                     var tracks = await resource.ResolveTracksAsync().ConfigureAwait(false);
-                    if (tracks.Count == 0) return;
+                    if (tracks.Count == 0) return false;
                     if (insertionIndex is { } insert)
                         await lib.InsertTracksAsync(targetUri, tracks, insert).ConfigureAwait(false);
                     else
@@ -207,10 +216,12 @@ static class WaveeResourceDrop
                 if (!moved)
                     acts.Post?.Invoke(() => Toast.Show(Strings.Detail.AddedToPlaylist(targetName),
                         new ToastOptions { Severity = InfoBarSeverity.Success }));
+                return true;
             }
             catch (Exception ex)
             {
                 acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex));
+                return false;
             }
         }
     }

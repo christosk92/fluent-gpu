@@ -1283,22 +1283,26 @@ public sealed class ItemsView : Component
             if (vp.IsNull || !sceneRef.IsLive(vp)) return;
             int dragged = DraggedSlot?.Peek() ?? -1;   // resting index whose translate DragController owns (skip the seed)
 
-            NodeHandle first; int restingBase;
+            NodeHandle first; int restingBase, prefix;
             if (sceneRef.TryGetScroll(vp, out var sc))
             {
-                restingBase = sc.FirstRealized;        // realized window: ord-th child ⇒ resting index FirstRealized+ord
+                // Canonical realized-ordinal → item mapping (FlexLayout.VirtualIndex): the sticky persistent prefix
+                // occupies the LEADING ordinals 1:1 and the recyclable window starts after it. A flat
+                // FirstRealized + ord displaces the wrong rows entirely once a prefix exists (the sticky hero moves).
+                prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+                restingBase = sc.FirstRealized;
                 first = sceneRef.FirstChild(sc.ContentNode);
             }
             else
             {
-                restingBase = 0;                       // non-virtual fallback (Wrap/Inline): ord == index
+                prefix = 0; restingBase = 0;           // non-virtual fallback (Wrap/Inline): ord == index
                 first = sceneRef.FirstChild(vp);
             }
 
             var n = first;
             for (int ord = 0; !n.IsNull && sceneRef.IsLive(n); ord++, n = sceneRef.NextSibling(n))
             {
-                int item = restingBase + ord;
+                int item = ord < prefix ? ord : restingBase + ord - prefix;
                 // Skip the pointer-dragged ghost UNCONDITIONALLY. Its translate is owned by DragController, which
                 // re-asserts it every move; OffsetFor(dragged)==0 does NOT make the seed a no-op here, because `fromY`
                 // below is the LIVE drag translate, so |0 − fromY| > eps fires a Replace TranslateY track that fights

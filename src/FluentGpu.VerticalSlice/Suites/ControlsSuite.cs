@@ -2636,6 +2636,533 @@ static class ControlsSuite
             Check("e5dragdrop.8b steady drag frame is 0-alloc on phases 6–13 (transform-only repaint of the lifted visual)",
                 zero && tracked, $"{dragFrame.HotPhaseAllocBytes} bytes dx={root.LastTotalDx:0.#} tdx={host.Scene.Paint(item).LocalTransform.Dx:0.#}");
         }
+
+        // e5dragdrop.touch — L2 parity on the touch path (bug E4). A horizontal touch drag along the item axis resolves
+        // DragReorder in the §7A arena; the claim must ALSO open the typed session (TryBegin), drive it per move
+        // (Enter/Over on the target under the contact) and pair TryDrop with Complete on release — exactly the mouse
+        // PointerMove/PointerUp branches. Before this the touch path was L1-only: no drop ever fired and the session
+        // (with its global spotlight dim) leaked for the rest of the process.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-touch-l2", new Size2(500, 340), 1f)); window.Show();
+            var probe = new TouchDragDropProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var scroller = FindScrollable(scene, scene.Root);
+            scene.TryGetScroll(scroller, out var tsc);
+            var strip = Child(scene, tsc.ContentNode, 0);
+            var source = Child(scene, strip, 0);          // "a" — the typed drag source
+            var target = Child(scene, strip, 2);          // "c" — the spotlight drop target
+            var from = CenterOf(scene, source);
+            var to = CenterOf(scene, target);
+
+            TouchGesture(window, host, from, new Point2(to.X, from.Y), 12, pointerId: 71, msPerStep: 16f);
+
+            bool sessionRan = probe.Enters >= 1 && probe.Overs >= 1;
+            bool dropped = probe.Drops == 1 && (probe.DroppedPayload as string) == "payload";
+            bool closed = !host.Input.DragDrop.IsActive && !host.Input.Drag.IsActive
+                          && host.Input.DragDrop.OverTarget.IsNull && !scene.DropSpotlightActive;
+            Check("e5dragdrop.touch an arena-claimed TOUCH drag-reorder drives the full L2 session (TryBegin at the claim, Move per contact move, TryDrop paired with Complete on lift): the target sees Enter/Over/Drop and the session + drop spotlight close on release",
+                sessionRan && dropped && closed,
+                $"enter={probe.Enters} over={probe.Overs} leave={probe.Leaves} drop={probe.Drops} payload={probe.DroppedPayload ?? "null"} l2Active={host.Input.DragDrop.IsActive} l1Active={host.Input.Drag.IsActive} spotlight={scene.DropSpotlightActive}");
+        }
+
+        // e5dragdrop.prune — a virtualized-away / rebuilt source node (bug E10). The dragged node's OnDragCanceled column
+        // dies with its slot, so PruneDead used to Reset() SILENTLY: the L2 session (and its spotlight) outlived the
+        // gesture forever. The L2 source here is an ANCESTOR that survives the rebuild, so DragDropContext.PruneDead's
+        // own dead-source guard cannot close it — only the new OnAbandoned notification can.
+        {
+            var scene = new SceneStore();
+            int abandoned = 0;
+            var rec = new TreeReconciler(scene, strings);
+            var source = new DragSource("res", static () => "p");
+            var sinkSpec = new DropTargetSpec(["res"]) { VisualPolicy = DropTargetVisualPolicy.Spotlight };
+            Element Sink() => new BoxEl { Key = "sink", Width = 200, Height = 60, DropTarget = sinkSpec };
+            var before = new BoxEl
+            {
+                Width = 300, Height = 200, Draggable = source,
+                Children = [new BoxEl { Key = "row", Width = 200, Height = 60, CanDrag = true }, Sink()],
+            };
+            var after = new BoxEl { Width = 300, Height = 200, Draggable = source, Children = [Sink()] };
+            rec.ReconcileRoot(before, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            disp.Drag.OnAbandoned += () => abandoned++;   // append: the dispatcher's own DragDrop.Cancel wiring stays
+            var row = Child(scene, scene.Root, 0);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 30), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(140, 30), 0, 0) });   // promote + TryBegin
+            bool lifted = disp.Drag.IsActive && disp.Drag.ActiveNode == row
+                          && disp.DragDrop.IsActive && scene.DropSpotlightActive;
+
+            rec.ReconcileRoot(after, before);   // in-place diff: the dragged row is freed, the L2 source ancestor survives
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            bool rowDead = !scene.IsLive(row);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(150, 30), 0, 0) });   // dispatch-start PruneDead
+
+            bool closed = abandoned == 1 && !disp.Drag.IsActive && !disp.DragDrop.IsActive
+                          && !scene.DropSpotlightActive && scene.DragGhost.IsNull;
+            Check("e5dragdrop.prune a drag whose node is freed by a reconcile reports OnAbandoned (its own OnDragCanceled column is dead), which closes the L2 session and clears the drop spotlight instead of leaking them for the process",
+                lifted && rowDead && closed,
+                $"lifted={lifted} rowDead={rowDead} abandoned={abandoned} l1={disp.Drag.IsActive} l2={disp.DragDrop.IsActive} spotlight={scene.DropSpotlightActive}");
+        }
+
+        // e5dragdrop.reassert — a mid-drag reconcile commit re-applies the dragged row's AUTHORED opacity/hit-test
+        // (ApplyBox writes them unconditionally), and Tick cannot repair it: a settled/snap gesture early-outs before
+        // ApplyPresented, so the frame RECORDS an un-lifted row (bug E9). The host re-asserts the ghost post-reconcile.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-reassert", new Size2(420, 320), 1f)); window.Show();
+            var probe = new DragReconcileClobberProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var row = Child(host.Scene, host.Scene.Root, 0);
+            var c = CenterOf(host.Scene, row);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 40f, c.Y + 24f), 0, 0));   // promote (0-stamp ⇒ snap-tracking)
+            host.RunFrame();
+            bool lifted = host.Input.Drag.IsActive && Near(host.Scene.Paint(row).Opacity, 0.80f)
+                && Near(host.Scene.Paint(row).LocalTransform.Dx, 40f) && Near(host.Scene.Paint(row).LocalTransform.Dy, 24f);
+
+            probe.Rev.Value = 1;      // re-render the row mid-drag: NO pointer move accompanies the commit
+            host.RunFrame();
+            bool held = Near(host.Scene.Paint(row).Opacity, 0.80f)
+                && (host.Scene.Flags(row) & NodeFlags.DragGhost) != 0
+                && (host.Scene.Flags(row) & NodeFlags.HitTestVisible) == 0
+                && host.Scene.DragGhost == row
+                && Near(host.Scene.Paint(row).LocalTransform.Dx, 40f) && Near(host.Scene.Paint(row).LocalTransform.Dy, 24f);
+
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 40f, c.Y + 24f), 0, 0));
+            host.RunFrame();
+            bool restored = Near(host.Scene.Paint(row).Opacity, 1f) && !host.Input.Drag.IsActive
+                && (host.Scene.Flags(row) & NodeFlags.DragGhost) == 0;
+            Check("e5dragdrop.reassert a reconcile commit that re-renders the dragged row mid-drag does not clobber the ghost for a frame — the host re-asserts translate/opacity/hit-test/DragGhost after the reconcile, with no pointer move, and release still restores the resting visuals",
+                lifted && held && restored,
+                $"lifted={lifted} held={held} restored={restored} op={host.Scene.Paint(row).Opacity:0.00}");
+        }
+
+        // e5dragdrop.animconflict — the anim slab and the drag both wrote LocalTransform/Opacity (bug E13): a hover/press
+        // MotionTarget on a dragged card fought the lift, and because DragController re-anchors off the node's CURRENT
+        // resting origin the stomped translate double-counted into a per-frame runaway. Compose now skips both channels
+        // for a DragGhost node — the drag owns them for the gesture's duration, the animation before and after it.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-animconflict", new Size2(420, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new DragAnimConflictProbe());
+            host.RunFrame();
+            var scene = host.Scene;
+            var row = Child(scene, scene.Root, 0);
+            var c = CenterOf(scene, row);
+
+            // A long linear RAMP on both contested channels: if the slab still owned them the values would keep drifting
+            // under a stationary pointer, so "constant across held frames" is the ownership proof (no arithmetic on the
+            // composed matrix required).
+            host.Animation.Animate(row, AnimChannel.TranslateY, 0f, -120f, 6000f, Easing.Linear);
+            host.Animation.Animate(row, AnimChannel.Opacity, 1f, 0.2f, 6000f, Easing.Linear);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            float animDyBefore = scene.Paint(row).LocalTransform.Dy;
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            bool animLive = scene.Paint(row).LocalTransform.Dy < animDyBefore - 0.5f && scene.Paint(row).Opacity < 0.99f;
+
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 50f, c.Y), 0, 0));   // promote
+            host.RunFrame();
+            float heldDx = scene.Paint(row).LocalTransform.Dx, heldDy = scene.Paint(row).LocalTransform.Dy;
+            bool dragOwns = host.Input.Drag.IsActive && Near(scene.Paint(row).Opacity, 0.80f) && Near(heldDx, 50f);
+            for (int i = 0; i < 8; i++) host.RunFrame();   // pointer held still while the ramp keeps running
+            bool stationary = Near(scene.Paint(row).LocalTransform.Dx, heldDx, 0.01f)
+                && Near(scene.Paint(row).LocalTransform.Dy, heldDy, 0.01f)
+                && Near(scene.Paint(row).Opacity, 0.80f);
+
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 50f, c.Y), 0, 0));
+            host.RunFrame();
+            float afterDy = scene.Paint(row).LocalTransform.Dy;
+            for (int i = 0; i < 6; i++) host.RunFrame();
+            bool animResumed = !host.Input.Drag.IsActive
+                && scene.Paint(row).LocalTransform.Dy < afterDy + 0.01f && scene.Paint(row).Opacity < 0.99f
+                && Near(scene.Paint(row).LocalTransform.Dx, 0f);
+            Check("e5dragdrop.animconflict a node carrying a live anim-slab transform/opacity ramp hands both channels to the drag on promotion (the ghost holds still under a stationary pointer at 0.80 opacity instead of drifting with the ramp) and the slab takes them back after Complete",
+                animLive && dragOwns && stationary && animResumed,
+                $"animLive={animLive} dragOwns={dragOwns}(dx={heldDx:0.##} op={scene.Paint(row).Opacity:0.00}) stationary={stationary} resumed={animResumed}");
+        }
+
+        DragChipChecks();
+    }
+
+    /// <summary>Ancestor-chain containment (the preview layer's container sits under its component host node, not
+    /// directly under the root).</summary>
+    static bool IsDescendantOf(SceneStore scene, NodeHandle node, NodeHandle ancestor)
+    {
+        for (var n = scene.Parent(node); !n.IsNull; n = scene.Parent(n))
+            if (n == ancestor) return true;
+        return false;
+    }
+
+    // ── Wave 2: the chip system (DragLift.Stationary + the DragOverlay band + the declarative facade) ─────────────
+    static void DragChipChecks()
+    {
+        var strings = new StringTable();
+        var fonts = new HeadlessFontSystem(strings);
+
+        // e5dragdrop.chip.stationary — the Stationary lift touches EXACTLY two channels on the source: its opacity
+        // (dimmed "it's in the chip") and its hit-test bit (so drop discovery sees through it). No translate, no
+        // shadow, no NodeFlags.DragGhost, no SceneStore.DragGhost — the whole ghost-band machinery stays idle, which
+        // is what makes the chip immune to the ghost's clipping/blend/clamp failures. Release restores both.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 300, Height = 200,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "row", Width = 200, Height = 60, CanDrag = true,
+                        Draggable = Drag.Source("chip", static () => "p"),
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var row = Child(scene, scene.Root, 0);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 30), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(160, 70), 0, 0) });   // promote
+            var lifted = scene.Paint(row);
+            bool stationary = disp.Drag.IsActive && disp.Drag.ActiveLift == DragLift.Stationary
+                && lifted.LocalTransform.Dx == 0f && lifted.LocalTransform.Dy == 0f
+                && (scene.Flags(row) & NodeFlags.DragGhost) == 0 && scene.DragGhost.IsNull
+                && !scene.TryGetShadow(row, out _)
+                && Near(lifted.Opacity, Drag.SourceDimOpacity)
+                && (scene.Flags(row) & NodeFlags.HitTestVisible) == 0;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(280, 150), 0, 0) });
+            bool stayedPut = scene.Paint(row).LocalTransform.Dx == 0f && scene.Paint(row).LocalTransform.Dy == 0f
+                && Near(scene.Paint(row).Opacity, Drag.SourceDimOpacity);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(280, 150), 0, 0) });
+            bool restored = Near(scene.Paint(row).Opacity, 1f) && !disp.Drag.IsActive
+                && (scene.Flags(row) & NodeFlags.HitTestVisible) != 0
+                && scene.Paint(row).LocalTransform.Dx == 0f;
+            Check("e5dragdrop.chip.stationary a DragLift.Stationary source is dimmed + hit-test-transparent IN PLACE — never translated, never shadowed, never hoisted into the DragGhost band — and release restores both channels",
+                stationary && stayedPut && restored,
+                $"stationary={stationary} stayedPut={stayedPut} restored={restored} op={scene.Paint(row).Opacity:0.00} ghost={scene.DragGhost.IsNull}");
+        }
+
+        // e5dragdrop.chip.compositor — THE contract that makes the chip affordable: with a DragPreviewLayer mounted and
+        // a Stationary drag live, a pointer-move frame re-renders ZERO components and allocates ZERO bytes on phases
+        // 6–13. The chip follows through a BOUND transform over the engine's drag-position signals; the drag epoch
+        // (which does re-render the preview) is edge-triggered, so a move that changes no target/effect/caption is a
+        // pure compositor write. Before this, AppHost bumped the epoch EVERY frame while a drag was live.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-chip-compositor", new Size2(480, 320), 1f)); window.Show();
+            var probe = new ChipDragProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var column = Child(scene, scene.Root, 0);
+            var src = Child(scene, column, 0);
+            // The mounted DragPreviewLayer registers its own container as the engine's overlay band root.
+            bool registered = !scene.DragOverlay.IsNull && scene.IsLive(scene.DragOverlay)
+                              && scene.DragOverlay != column && IsDescendantOf(scene, scene.DragOverlay, scene.Root);
+
+            var c = CenterOf(scene, src);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f, c.Y), 0, 0));   // promote + mount the chip
+            host.RunFrame();
+            bool chipUp = host.Input.Drag.IsActive && host.Input.DragDrop.IsActive
+                          && !scene.FirstChild(scene.DragOverlay).IsNull;
+
+            // Warm: the chip's mount render, its Enter spring, draw-list growth and text shaping all settle here.
+            for (int i = 1; i <= 24; i++)
+            {
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f + i, c.Y), 0, 0));
+                host.RunFrame();
+            }
+            var wrapper = scene.FirstChild(scene.DragOverlay);
+            float beforeDx = scene.Paint(wrapper).LocalTransform.Dx;
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 60f, c.Y), 0, 0));
+            var frameA = host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 66f, c.Y), 0, 0));
+            var frameB = host.RunFrame();
+            float afterDx = scene.Paint(wrapper).LocalTransform.Dx;
+
+            bool quiet = frameA.ComponentsRendered == 0 && frameB.ComponentsRendered == 0
+                         && frameA.HotPhaseAllocBytes == 0 && frameB.HotPhaseAllocBytes == 0;
+            bool followed = afterDx > beforeDx + 1f;      // the chip actually tracked the pointer over those frames
+            bool sourceHeld = Near(scene.Paint(src).Opacity, Drag.SourceDimOpacity)
+                              && scene.Paint(src).LocalTransform.Dx == 0f;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(c.X + 66f, c.Y), 0, 0));
+            host.RunFrame();
+            Check("e5dragdrop.chip.compositor a drag-move frame with a mounted DragPreviewLayer re-renders 0 components and allocates 0 bytes on phases 6-13 — the chip follows via a bound transform over the engine drag-position signals, and the drag epoch only bumps on target/effect/caption edges",
+                registered && chipUp && quiet && followed && sourceHeld,
+                $"registered={registered} chipUp={chipUp} rendersA={frameA.ComponentsRendered} rendersB={frameB.ComponentsRendered} allocA={frameA.HotPhaseAllocBytes}B allocB={frameB.HotPhaseAllocBytes}B dx {beforeDx:0.#}->{afterDx:0.#} srcHeld={sourceHeld}");
+        }
+
+        // e5dragdrop.chip.band — band ORDER in the recorded DrawList: main pass, then the DragGhost band, then the
+        // DragOverlay band. The chip therefore paints above every clipped surface AND above a legacy lifted ghost,
+        // which is the whole point of hoisting it out of the tree (dnd-kit's DragOverlay).
+        {
+            var scene = new SceneStore();
+            ColorF mainFill = ColorF.FromRgba(0x11, 0x22, 0x33);
+            ColorF ghostFill = ColorF.FromRgba(0x44, 0x55, 0x66);
+            ColorF chipFill = ColorF.FromRgba(0x77, 0x88, 0x99);
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 400, Height = 300, ClipToBounds = true,
+                Children =
+                [
+                    new BoxEl { Key = "main", Width = 100, Height = 40, Fill = mainFill },
+                    new BoxEl { Key = "ghost", Width = 100, Height = 40, Fill = ghostFill },
+                    new BoxEl { Key = "chip", Width = 100, Height = 40, Fill = chipFill },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var ghostNode = Child(scene, scene.Root, 1);
+            var chipNode = Child(scene, scene.Root, 2);
+            scene.Flags(ghostNode) |= NodeFlags.DragGhost;
+            scene.DragGhost = ghostNode;
+            scene.DragOverlay = chipNode;
+
+            var dl = new DrawList();
+            SceneRecorder.Record(scene, dl);
+            var dev = new HeadlessGpuDevice();
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+            int iMain = -1, iGhost = -1, iChip = -1;
+            for (int i = 0; i < dev.LastRects.Count; i++)
+            {
+                var col = dev.LastRects[i].Fill;
+                if (col == mainFill) iMain = i;
+                else if (col == ghostFill) iGhost = i;
+                else if (col == chipFill) iChip = i;
+            }
+            bool ordered = iMain >= 0 && iGhost > iMain && iChip > iGhost;
+            bool once = dev.LastRects.Count(r => r.Fill == chipFill) == 1;   // hoisted, not ALSO drawn in the main pass
+            Check("e5dragdrop.chip.band the DragOverlay subtree records in its own top band AFTER the main pass and AFTER the DragGhost band (and exactly once — it is skipped in the clipped main pass)",
+                ordered && once, $"main={iMain} ghost={iGhost} chip={iChip} chipDraws={dev.LastRects.Count(r => r.Fill == chipFill)}");
+        }
+
+        // e5dragdrop.chip.clamp — the chip is clamped to the window (dnd-kit restrictToWindowEdges): dragging into the
+        // bottom-right corner must not push it half off-screen (screenshot S4's clipped ghost).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-chip-clamp", new Size2(480, 320), 1f)); window.Show();
+            var probe = new ChipDragProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var src = Child(scene, Child(scene, scene.Root, 0), 0);
+            var c = CenterOf(scene, src);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f, c.Y), 0, 0));
+            host.RunFrame();
+            for (int i = 0; i < 4; i++) host.RunFrame();   // let the chip measure (OnBoundsChanged feeds the clamp)
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(478f, 318f), 0, 0));   // into the corner
+            host.RunFrame();
+            host.RunFrame();
+
+            var wrapper = scene.FirstChild(scene.DragOverlay);
+            var chipRect = scene.AbsoluteRect(wrapper);
+            var rootRect = scene.AbsoluteRect(scene.Root);
+            float unclampedX = 478f + DragPreviewLayer.CursorOffsetX;
+            bool inside = chipRect.W > 1f && chipRect.H > 1f
+                          && chipRect.X + chipRect.W <= rootRect.X + rootRect.W + 0.5f
+                          && chipRect.Y + chipRect.H <= rootRect.Y + rootRect.H + 0.5f;
+            bool actuallyClamped = scene.Paint(wrapper).LocalTransform.Dx < unclampedX - 1f;
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(478f, 318f), 0, 0));
+            host.RunFrame();
+            Check("e5dragdrop.chip.clamp the drag chip is clamped to the scene root — dragged into the bottom-right corner its measured box stays fully inside the window instead of clipping at the edge",
+                inside && actuallyClamped,
+                $"inside={inside} clamped={actuallyClamped} chip=({chipRect.X:0.#},{chipRect.Y:0.#},{chipRect.W:0.#},{chipRect.H:0.#}) root=({rootRect.W:0.#}x{rootRect.H:0.#})");
+        }
+
+        // e5dragdrop.chip.survive — a Stationary gesture OUTLIVES its source row. The chip is the visual and the
+        // payload was resolved at promotion, so a virtualized-away / rebuilt source must not abort the drag (the E10
+        // Ghost-mode abort is exactly wrong here): PruneDead reparents the session onto the scene root (the
+        // ExternalBegin pattern) and the drop still commits on the target.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-chip-survive", new Size2(480, 320), 1f)); window.Show();
+            var probe = new ChipDragProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var column = Child(scene, scene.Root, 0);
+            var src = Child(scene, column, 0);
+            var c = CenterOf(scene, src);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f, c.Y), 0, 0));
+            host.RunFrame();
+            bool began = host.Input.Drag.IsActive && host.Input.DragDrop.IsActive;
+
+            probe.ShowSource.Value = false;   // the source row is freed by the reconcile, mid-gesture
+            host.RunFrame();
+            bool srcDead = !scene.IsLive(src);
+            var sink = Child(scene, Child(scene, scene.Root, 0), 0);   // the sink is the only row left
+            var sc = CenterOf(scene, sink);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(sc.X, sc.Y), 0, 0));
+            host.RunFrame();
+            bool aliveOverTarget = host.Input.Drag.IsActive && host.Input.DragDrop.IsActive
+                                   && host.Input.DragDrop.OverTarget == sink
+                                   && host.Input.Drag.SourceRecycled
+                                   && host.Input.DragDrop.Session.Source == scene.Root;   // reparented, not cancelled
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(sc.X, sc.Y), 0, 0));
+            host.RunFrame();
+            bool committed = probe.Drops == 1 && (probe.DroppedPayload as string) == ChipDragProbe.PayloadValue
+                             && !host.Input.Drag.IsActive && !host.Input.DragDrop.IsActive;
+            Check("e5dragdrop.chip.survive a Stationary drag whose SOURCE row is freed mid-gesture stays alive (the chip carries it): PruneDead reparents the session onto the scene root instead of cancelling, and the drop still commits on the target",
+                began && srcDead && aliveOverTarget && committed,
+                $"began={began} srcDead={srcDead} alive={aliveOverTarget} drops={probe.Drops} payload={probe.DroppedPayload ?? "null"} l1={host.Input.Drag.IsActive} l2={host.Input.DragDrop.IsActive}");
+        }
+
+        // e5dragdrop.ghost.layer — GHOST-mode hardening (E2/E3). The lifted subtree composites as ONE opacity GROUP
+        // (PushLayer{Opacity} at the ghost alpha, children at full per-primitive alpha) so its own text can no longer
+        // double-blend against the row underneath (screenshot S3), and a styled Backplate fills an OPAQUE plate under
+        // the whole subtree INSIDE that group — before any child draws.
+        {
+            var scene = new SceneStore();
+            ColorF plate = ColorF.FromRgba(0x2A, 0x2B, 0x2C);
+            ColorF childFill = ColorF.FromRgba(0x90, 0xA0, 0xB0);
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 400, Height = 300,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "row", Width = 200, Height = 60, CanDrag = true,
+                        // Transparent row fill — the substrate the backplate exists for.
+                        Draggable = new DragSource("chip", static () => "p")
+                        {
+                            Style = new DragVisualStyle { Lift = DragLift.Ghost, Opacity = 0.75f, Backplate = plate },
+                        },
+                        Children = [new BoxEl { Key = "label", Width = 120, Height = 20, Fill = childFill }],
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var row = Child(scene, scene.Root, 0);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 30), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(140, 50), 0, 0) });   // promote
+            bool grouped = scene.Paint(row).OpacityGroup && scene.DragGhost == row
+                           && scene.DragGhostBackplate is { } bp && bp == plate;
+
+            var dl = new DrawList();
+            SceneRecorder.Record(scene, dl);
+            var dev = new HeadlessGpuDevice();
+            dev.SubmitDrawList(dl.Bytes, dl.SortKeys, new FrameInfo(new Size2(400, 300), 1f, ColorF.Transparent));
+            bool layer = false;
+            foreach (var l in dev.LastLayers)
+                if (l.Kind == (int)LayerKind.Opacity && Near(l.GroupAlpha, 0.75f)) layer = true;
+            int iPlate = -1, iChild = -1;
+            for (int i = 0; i < dev.LastRects.Count; i++)
+            {
+                if (dev.LastRects[i].Fill == plate) iPlate = i;
+                else if (dev.LastRects[i].Fill == childFill) iChild = i;
+            }
+            bool plated = iPlate >= 0 && iChild > iPlate;
+            bool balanced = dev.LayerBalance == 0;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(140, 50), 0, 0) });
+            bool cleared = !scene.Paint(row).OpacityGroup && scene.DragGhostBackplate is null && scene.DragGhost.IsNull;
+            Check("e5dragdrop.ghost.layer a lifted ghost composites as one opacity GROUP at its ghost alpha (no per-primitive double-blend) with the styled Backplate filled opaquely UNDER the whole subtree inside that group; restore clears both",
+                grouped && layer && plated && balanced && cleared,
+                $"grouped={grouped} layer={layer} plate={iPlate} child={iChild} balance={dev.LayerBalance} cleared={cleared}");
+        }
+
+        // e5dragdrop.ghost.clamp — E6: the lifted ghost RECT is clamped to the scene root, so dragging far past the
+        // window edge parks it flush against the edge instead of half-disappearing.
+        {
+            var scene = new SceneStore();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 300, Height = 200,
+                Children = [new BoxEl { Key = "row", Width = 100, Height = 40, CanDrag = true }],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var row = Child(scene, scene.Root, 0);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(50, 20), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(60, 30), 0, 0) });    // promote, still inside
+            bool freeInside = Near(scene.Paint(row).LocalTransform.Dx, 10f) && Near(scene.Paint(row).LocalTransform.Dy, 10f);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(900, 700), 0, 0) });  // way past both edges
+            var t = scene.Paint(row).LocalTransform;
+            bool clamped = Near(t.Dx, 200f) && Near(t.Dy, 160f);   // 300-100 and 200-40 from the row's (0,0) rest
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(-400, -300), 0, 0) });
+            var t2 = scene.Paint(row).LocalTransform;
+            bool clampedNeg = Near(t2.Dx, 0f) && Near(t2.Dy, 0f);
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(-400, -300), 0, 0) });
+            Check("e5dragdrop.ghost.clamp the lifted ghost rect is clamped to the scene root on both axes (restrictToWindowEdges) — an unconstrained drag parks it flush against the edge instead of clipping off-window",
+                freeInside && clamped && clampedNeg,
+                $"free={freeInside} max=({t.Dx:0.#},{t.Dy:0.#}) min=({t2.Dx:0.#},{t2.Dy:0.#})");
+        }
+
+        // e5dragdrop.facade — the declarative surface (ruling f levels 1-3): Drag.Source ships the premiere DEFAULTS
+        // (Stationary lift + the 0.4 source dim), and Drop.Target<T> unwraps the payload for the app — directly OR out
+        // of a sortable list's ReorderPayload — gates acceptance on the TYPED predicate, and publishes the caption on
+        // enter (which the engine clears on every target change, so a target never unsets it).
+        {
+            var src = Drag.Source("k", static () => "p");
+            bool defaults = src.Style is { } st && st.Lift == DragLift.Stationary
+                            && Near(st.Opacity, 0.4f) && st.Shadow is null && st.Backplate is null;
+            bool ghostOptIn = Drag.Source("k", static () => "p", lift: DragLift.Ghost).Style!.Value.Lift == DragLift.Ghost;
+            bool hidden = Near(Drag.SourceHidden("k", static () => "p").Style!.Value.Opacity, 0f);
+
+            bool direct = Drop.TryUnwrap<string>("payload", out var d1) && d1 == "payload";
+            var owner = new Reorderable("k");
+            bool wrapped = Drop.TryUnwrap<string>(new ReorderPayload(owner, 3, "payload"), out var d2) && d2 == "payload";
+            bool rejects = !Drop.TryUnwrap<string>(42, out _) && !Drop.TryUnwrap<string>(null, out _);
+
+            var scene = new SceneStore();
+            int enters = 0, drops = 0;
+            string? dropped = null;
+            var spec = Drop.Target<string>("k",
+                accepts: static p => p != "no",
+                onDrop: (p, _) => { drops++; dropped = p; },
+                caption: static p => "Add " + p,
+                onEnter: (_, _) => enters++);
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 200, Height = 100,
+                Children = [new BoxEl { Key = "t", Width = 200, Height = 100, DropTarget = spec }],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+
+            disp.DragDrop.ExternalBegin("k", "ok", new Point2(50, 50), KeyModifiers.None);
+            disp.DragDrop.Move(scene.Root, new Point2(50, 50), 0f, 0f, KeyModifiers.None);
+            var target = Child(scene, scene.Root, 0);
+            disp.DragDrop.Move(target, new Point2(50, 50), 0f, 0f, KeyModifiers.None);
+            bool captioned = enters == 1 && disp.DragDrop.Session.Caption == "Add ok";
+            disp.DragDrop.TryDrop(new Point2(50, 50), KeyModifiers.None, out _);
+            bool committed = drops == 1 && dropped == "ok" && disp.DragDrop.Session.Caption is null;
+
+            // A payload the typed predicate refuses makes the target TRANSPARENT — it never enters, never drops.
+            enters = 0; drops = 0;
+            disp.DragDrop.ExternalBegin("k", "no", new Point2(50, 50), KeyModifiers.None);
+            disp.DragDrop.Move(target, new Point2(50, 50), 0f, 0f, KeyModifiers.None);
+            bool refusedTyped = enters == 0 && disp.DragDrop.OverTarget.IsNull;
+            // …and so does a payload of the wrong TYPE, even on a matching kind (no silent accept-then-no-op drop).
+            disp.DragDrop.Cancel();
+            disp.DragDrop.ExternalBegin("k", 42, new Point2(50, 50), KeyModifiers.None);
+            disp.DragDrop.Move(target, new Point2(50, 50), 0f, 0f, KeyModifiers.None);
+            bool refusedType = enters == 0 && disp.DragDrop.OverTarget.IsNull;
+            disp.DragDrop.Cancel();
+
+            Check("e5dragdrop.facade Drag.Source ships the premiere defaults (Stationary lift + 0.4 source dim, Ghost still opt-in) and Drop.Target<T> unwraps direct AND ReorderPayload payloads, gates on the typed predicate, and sets the session caption on enter",
+                defaults && ghostOptIn && hidden && direct && wrapped && rejects
+                && captioned && committed && refusedTyped && refusedType,
+                $"defaults={defaults} ghostOptIn={ghostOptIn} hidden={hidden} unwrap=({direct},{wrapped},{rejects}) caption={captioned} drop={committed} refuseValue={refusedTyped} refuseType={refusedType}");
+        }
     }
 
     static void VirtualInsertionPreviewChecks()
@@ -2643,19 +3170,20 @@ static class ControlsSuite
         var version = new Signal<int>(0);
         var preview = new VirtualInsertionPreviewController(version);
 
-        bool opened = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f);
+        bool opened = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f, itemCount: 8);
         var prefix = preview.DisplacementFor(3);
         var suffix = preview.DisplacementFor(4);
+        var appended = preview.DisplacementFor(10);   // firstItemIndex + itemCount → a trailing non-item row
         int afterOpen = version.Peek();
-        bool duplicate = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f);
-        bool retargeted = preview.Update(slot: 1, firstItemIndex: 2, extent: 48f);
+        bool duplicate = preview.Update(slot: 2, firstItemIndex: 2, extent: 96f, itemCount: 8);
+        bool retargeted = preview.Update(slot: 1, firstItemIndex: 2, extent: 48f, itemCount: 8);
         var retargetPrefix = preview.DisplacementFor(2);
         var retargetSuffix = preview.DisplacementFor(3);
         bool cleared = preview.Clear();
 
-        Check("virtual-insertion.1 a prefixed ItemsView opens one stable suffix gap and ignores an identical retarget",
-            opened && prefix.dy == 0f && suffix.dy == 96f && afterOpen == 1 && !duplicate && version.Peek() == 3,
-            $"opened={opened} prefix={prefix.dy} suffix={suffix.dy} version={version.Peek()}");
+        Check("virtual-insertion.1 a prefixed ItemsView opens one stable suffix gap bounded by the item count (appended trailing rows never displace) and ignores an identical retarget",
+            opened && prefix.dy == 0f && suffix.dy == 96f && appended.dy == 0f && afterOpen == 1 && !duplicate && version.Peek() == 3,
+            $"opened={opened} prefix={prefix.dy} suffix={suffix.dy} appended={appended.dy} version={version.Peek()}");
         Check("virtual-insertion.2 midpoint retarget publishes immediately and clear restores resting displacement",
             retargeted && retargetPrefix.dy == 0f && retargetSuffix.dy == 48f && cleared
             && preview.DisplacementFor(3).dy == 0f && !preview.Active,

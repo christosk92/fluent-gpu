@@ -417,6 +417,10 @@ public sealed class InputDispatcher
         _scene = scene;
         Drag = new DragController(scene, () => RequestRerender());
         DragDrop = new DragDropContext(scene, () => RequestRerender()) { ScrollBy = AutoScrollBy };
+        // A drag whose node was freed by a reconcile has no live OnDragCanceled column to fire, so the L1 controller
+        // reports the abort here: the L2 session ends (OnLeave on a live target) and its drop spotlight clears — Cancel
+        // requests the re-render itself. Without this the session (and the global dim) outlive the gesture forever.
+        Drag.OnAbandoned = () => DragDrop.Cancel();
         // The arena drives the FSM bank: a swept loser resets to Idle (emits nothing, §7A.5); the winner is granted hard
         // capture and lets its FSM emit. The DRAG-REORDER / pan / click EXECUTION stays on the scalar path (so the
         // single-recognizer common case is observably identical), but the win sink now ROUTES a UseGesture declaration
@@ -914,7 +918,7 @@ public sealed class InputDispatcher
                         _dragTarget = NodeHandle.Null;
                         // L2: a chain carrying a BoxEl.Draggable opens THE session (payload resolved once at this
                         // promotion edge) and immediately evaluates the target under the pointer.
-                        if (DragDrop.TryBegin(Drag.ActiveNode, e.PositionPx, e.Mods, e.Pointer))
+                        if (DragDrop.TryBegin(Drag.ActiveNode, e.PositionPx, e.Mods, e.Pointer, Drag.ActiveLift))
                             DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
                         handled++;
                         break;
@@ -1097,7 +1101,7 @@ public sealed class InputDispatcher
                         // (DropTargetSpec.SettleOnDrop) keeps the FLIP drop-glide into the new slot.
                         SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);
                         bool dropped = DragDrop.TryDrop(e.PositionPx, e.Mods, out bool settleGlide);
-                        Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs, suppressSettle: dropped && !settleGlide);
+                        Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs, suppressSettle: dropped && !settleGlide, dropped: dropped);
                         _down = NodeHandle.Null;
                         _dragTarget = NodeHandle.Null;
                         handled++;
@@ -1254,7 +1258,8 @@ public sealed class InputDispatcher
     /// Runs inside the contact's SlotIn/SlotOut window, so it operates on the loaded working scalars.</summary>
     private void CancelPointerContact(in InputEvent e)
     {
-        // A captured item-drag/L2 session is single-pointer today (mouse/pen) — cancel it on this contact's loss.
+        // A captured item-drag/L2 session is single-pointer today (mouse/pen OR the arena-claimed touch reorder) —
+        // cancel it on this contact's loss. L2 first: OnLeave fires on a live target while the session still exists.
         if (Drag.IsActive || DragDrop.IsActive) { DragDrop.Cancel(); Drag.Cancel(); }
         if (e.Pointer == PointerKind.Touch) ClearTouchHover();   // a touch contact never leaves a latched hover behind
         // A contact lost mid-thumb-drag drops the bar's PointerOverScrollbar/PointerOver reveal so it fades (touch has no
@@ -1884,7 +1889,14 @@ public sealed class InputDispatcher
         // mouse path; no content pan, no touch hover. The list does NOT scroll (Pan was swept).
         if (_touchReorder)
         {
-            if (_scene.IsLive(_reorderTarget) && Drag.IsActive) Drag.Move(e.PositionPx, e.Mods, e.TimestampMs, arenaGoverned: true);
+            if (_scene.IsLive(_reorderTarget) && Drag.IsActive)
+            {
+                Drag.Move(e.PositionPx, e.Mods, e.TimestampMs, arenaGoverned: true);
+                // L2 (mouse-path parity): target Enter/Over/Leave + edge auto-scroll on the chain under the contact.
+                // Gated on a live session — a plain CanDrag reorder never pays the extra hit-test walk.
+                if (DragDrop.IsActive)
+                    DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
+            }
             return true;
         }
 
@@ -2412,6 +2424,11 @@ public sealed class InputDispatcher
         // the current move so the controller promotes this frame (arena-governed ⇒ no YieldsToPan re-arbitration).
         Drag.TryArm(_reorderTarget, _panAnchorPx, e.Pointer, e.Mods, e.TimestampMs);
         Drag.Move(e.PositionPx, e.Mods, e.TimestampMs, arenaGoverned: true);
+        // L2 parity with the mouse promotion edge: a chain carrying a BoxEl.Draggable opens THE session (payload
+        // resolved once, here) and immediately evaluates the target under the pointer. Touch drags are otherwise
+        // L1-only — no drop targets, no captions, no edge auto-scroll.
+        if (Drag.IsActive && DragDrop.TryBegin(Drag.ActiveNode, e.PositionPx, e.Mods, e.Pointer, Drag.ActiveLift))
+            DragDrop.Move(HitTestAny(e.PositionPx), e.PositionPx, Drag.VelocityX, Drag.VelocityY, e.Mods);
     }
 
     /// <summary>Pointer-up sweep (§7A.2 rule 4) for the contact's arena: the clean-tap resolution. Feeds OnUp to the Tap/
@@ -2592,8 +2609,14 @@ public sealed class InputDispatcher
             // mouse PointerUp Drag.IsActive branch — Complete fires OnDragCompleted (the app commits the reorder), suppresses
             // the click (the lifted row never clicks — already enforced by the nulled _down at claim), and hands OnSettle the
             // drop→resting rects for the FLIP glide. arena-governed needs no flag here (the gesture is over).
-            if (Drag.IsActive) Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs);
-            else Drag.Disarm();   // armed-but-never-promoted safety (shouldn't reach: the claim promotes on the same move)
+            // The L2 drop runs FIRST (OnDrop reads the live session while the visuals are still lifted) and a drop on a
+            // non-reorder target suppresses the spring-back glide — the mouse PointerUp pairing, verbatim.
+            if (Drag.IsActive)
+            {
+                bool dropped = DragDrop.TryDrop(e.PositionPx, e.Mods, out bool settleGlide);
+                Drag.Complete(e.PositionPx, e.Mods, e.TimestampMs, suppressSettle: dropped && !settleGlide, dropped: dropped);
+            }
+            else { DragDrop.Cancel(); Drag.Disarm(); }   // armed-but-never-promoted safety (shouldn't reach: the claim promotes on the same move)
             _reorderTarget = NodeHandle.Null;
             _touchReorder = false;
             handled = true;

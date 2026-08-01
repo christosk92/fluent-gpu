@@ -4745,3 +4745,148 @@ sealed class VideoHoleProbe : Component
         ],
     };
 }
+
+// ── Wave 1A drag&drop probes ────────────────────────────────────────────────────────────────────────
+
+// Touch L2 parity (E4): a horizontal strip inside a VERTICAL scroller — the gate.arena.reorder-vs-pan geometry, so a
+// horizontal touch drag along the item axis resolves DragReorder in the §7A arena. Item "a" is a TYPED drag source and
+// item "c" a spotlight drop target, so the claimed touch reorder must ALSO open, move and drop an L2 session.
+sealed class TouchDragDropProbe : Component
+{
+    public int Enters, Overs, Leaves, Drops;
+    public object? DroppedPayload;
+    public override Element Render()
+        => Ui.ScrollView(new BoxEl
+        {
+            Direction = 1,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 0, Gap = 8, Height = 80,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            Key = "a", Width = 120, Height = 80, Fill = ColorF.FromRgba(50, 40, 40),
+                            CanDrag = true, Draggable = new DragSource("res", static () => "payload"),
+                        },
+                        new BoxEl { Key = "b", Width = 120, Height = 80, Fill = ColorF.FromRgba(40, 50, 40) },
+                        new BoxEl
+                        {
+                            Key = "c", Width = 120, Height = 80, Fill = ColorF.FromRgba(40, 40, 50),
+                            DropTarget = new DropTargetSpec(["res"],
+                                OnEnter: _ => Enters++, OnOver: _ => Overs++, OnLeave: _ => Leaves++,
+                                OnDrop: s => { Drops++; DroppedPayload = s.Payload; })
+                            { VisualPolicy = DropTargetVisualPolicy.Spotlight },
+                        },
+                    ],
+                },
+                new BoxEl { Width = 300, Height = 1600f, Fill = ColorF.FromRgba(28, 28, 28) },   // tall filler ⇒ vertical overflow
+            ],
+        }) with { Width = 460f, Height = 300f };
+}
+
+// Mid-drag reconcile clobber (E9): bumping Rev re-renders this component, so the reconciler re-applies the dragged
+// row's AUTHORED opacity/hit-test over the lifted ghost. The host must re-assert the ghost in the same frame.
+sealed class DragReconcileClobberProbe : Component
+{
+    public readonly Signal<int> Rev = new(0);
+    public override Element Render()
+    {
+        int rev = Rev.Value;   // subscribe: a bump re-renders → the row BoxEl is patched mid-drag
+        return new BoxEl
+        {
+            Width = 400f, Height = 300f, Fill = ColorF.FromRgba(20, 20, 20),
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = "row", Width = 300f, Height = 60f,
+                    Fill = ColorF.FromRgba(40, 40, (byte)(40 + rev)), CanDrag = true,
+                },
+            ],
+        };
+    }
+}
+
+// Anim/drag double-owner (E13): a plain CanDrag row the gate seeds a live transform/opacity animation on before
+// promoting the drag — the drag must own both channels for the gesture, the animation before and after it.
+sealed class DragAnimConflictProbe : Component
+{
+    public override Element Render() => new BoxEl
+    {
+        Width = 400f, Height = 300f, Fill = ColorF.FromRgba(20, 20, 20),
+        Children = [new BoxEl { Key = "row", Width = 300f, Height = 60f, Fill = ColorF.FromRgba(44, 44, 44), CanDrag = true }],
+    };
+}
+
+// Prefix-corrected displacement seed (C1): a bound virtual list with a 2-item sticky prefix. The displacement predicate
+// is set by the gate AFTER scrolling (so it can key on the live FirstRealized) and bumped through Ver.
+sealed class PrefixDisplacementProbe : Component
+{
+    public const int N = 400;
+    public const float RowH = 40f;
+    public const int Prefix = 2;
+    public readonly Signal<int> Ver = new(0);
+    public Func<int, (float dx, float dy)> Displacement = static _ => (0f, 0f);
+    public override Element Render()
+        => ItemsView.CreateBound(N,
+            scope => new BoxEl
+            {
+                Height = RowH,
+                Fill = scope.Index.Peek() < Prefix ? ColorF.FromRgba(90, 40, 120) : ColorF.FromRgba(38, 44, 52),
+            },
+            RepeatLayout.Stack(RowH),
+            new ListOptions
+            {
+                Overscan = 2,
+                PersistentPrefixCount = Prefix,
+                Reorder = new ReorderOptions { ItemDisplacement = i => Displacement(i), DisplacementVersion = Ver },
+            });
+}
+
+// ── Wave 2 chip system ────────────────────────────────────────────────────────────────────────────────────────────
+// The production shape end-to-end: a Drag.Source (Stationary lift by default) row, a typed Drop.Target<string>, and a
+// DragPreviewLayer mounted as the TOP child of the root ZStack. A pointer-move frame must therefore dim the source IN
+// PLACE and move the chip through its BOUND transform — no component re-render, no allocation. Flipping ShowSource
+// frees the source row mid-gesture (the virtualized-away case the Stationary lift must survive).
+sealed class ChipDragProbe : Component
+{
+    public const string PayloadValue = "chip-payload";
+    public readonly Signal<bool> ShowSource = new(true);
+    public int Enters, Overs, Drops;
+    public object? DroppedPayload;
+    public string? CaptionAtDrop;
+
+    Element SourceRow() => new BoxEl
+    {
+        Key = "src", Width = 200f, Height = 48f, Fill = ColorF.FromRgba(0x40, 0x40, 0x40),
+        CanDrag = true, Draggable = Drag.Source("chip", static () => PayloadValue),
+    };
+
+    Element SinkRow() => new BoxEl
+    {
+        Key = "sink", Width = 200f, Height = 48f, Fill = ColorF.FromRgba(0x28, 0x38, 0x28),
+        DropTarget = Drop.Target<string>("chip",
+            onEnter: (_, _) => Enters++,
+            onOver: (_, _) => Overs++,
+            onDrop: (p, s) => { Drops++; DroppedPayload = p; CaptionAtDrop = s.Caption; },
+            caption: static p => "Add " + p),
+    };
+
+    public override Element Render() => new BoxEl
+    {
+        ZStack = true, Width = 480f, Height = 320f, Fill = ColorF.FromRgba(0x12, 0x12, 0x12),
+        Children =
+        [
+            new BoxEl
+            {
+                Direction = 1, Gap = 8f, Padding = Edges4.All(12f),
+                Children = ShowSource.Value ? [SourceRow(), SinkRow()] : [SinkRow()],
+            },
+            DragPreviewLayer.Of(DragChip.Resolve(static s =>
+                s.Payload is string p ? new DragChipSpec(Title: p) : DragChipSpec.None)),
+        ],
+    };
+}

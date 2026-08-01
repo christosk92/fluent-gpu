@@ -866,6 +866,22 @@ public sealed partial class RenderContext
         return hooks?.GetDragState?.Invoke() ?? default;
     }
 
+    // Host-less fallback (a component rendered with no AppHost — a unit fixture): stable, never written, so a bound
+    // preview simply stays at the origin instead of needing a null-check in every bind thunk.
+    private static readonly FluentGpu.Signals.FloatSignal s_idleDragPosX = new(0f);
+    private static readonly FluentGpu.Signals.FloatSignal s_idleDragPosY = new(0f);
+
+    /// <summary>The live drag POSITION as two engine-owned float signals (window DIP) — the compositor-only companion to
+    /// <see cref="UseDragState"/>: bind a preview's <c>Transform</c> to them and the chip follows the pointer with NO
+    /// component re-render, no reconcile and no allocation per move (<see cref="UseDragState"/>'s epoch is edge-triggered
+    /// precisely so this is the follow mechanism). Reading them here does NOT subscribe the caller — read <c>.Value</c>
+    /// inside the bind thunk, which is the computation that should re-run.</summary>
+    public (FluentGpu.Signals.FloatSignal X, FluentGpu.Signals.FloatSignal Y) UseDragPosition()
+    {
+        var hooks = UseContext(InputHooks.Current);
+        return (hooks?.DragPosX ?? s_idleDragPosX, hooks?.DragPosY ?? s_idleDragPosY);
+    }
+
     /// <summary>
     /// A value that eases toward <paramref name="target"/> one step per render whenever the target changes. It steps ONLY
     /// when this component re-renders for some other reason — for motion prefer the retained engine path

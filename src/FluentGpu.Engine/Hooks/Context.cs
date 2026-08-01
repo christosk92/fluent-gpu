@@ -276,6 +276,14 @@ public sealed class InputHooks
     /// <summary>Snapshot the live drag (active/kind/position/payload) — <see cref="DragState.Active"/> false when idle.</summary>
     public Func<DragState>? GetDragState;
 
+    /// <summary>The live drag pointer position (window DIP) as two engine-owned scalar SIGNALS, written by the host on
+    /// every drag move/tick. A drag preview BINDS its transform to these (compositor-only: no component re-render, no
+    /// reconcile, no layout, 0 alloc per move) instead of re-rendering off <see cref="DragEpoch"/> — which is why the
+    /// epoch is EDGE-triggered (begin/end, target/effect/caption change) rather than per-frame. Meaningless while no
+    /// drag is live (they hold the last position).</summary>
+    public FloatSignal? DragPosX;
+    public FloatSignal? DragPosY;
+
     /// <summary>Arm the caret blinker for a (newly focused) editor's TEXT node; float = blink half-period ms
     /// (<c>IPlatformTextInput.CaretBlinkMs</c>).</summary>
     public Action<NodeHandle, float>? CaretFocus;

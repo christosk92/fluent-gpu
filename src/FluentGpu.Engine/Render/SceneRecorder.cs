@@ -302,6 +302,13 @@ public static class SceneRecorder
         // a skipped popup subtree stays with its popup window (no main-window hoist).
         var ghost = scene.DragGhost;
         bool hasGhost = !ghost.IsNull && scene.IsLive(ghost) && !UnderAnySkipRoot(scene, skipRoots, ghost);
+        // E5 drag OVERLAY (SceneStore.DragOverlay — a mounted DragPreviewLayer's container): the same hoist as the
+        // ghost, one band HIGHER, so a drag chip paints above the main pass, the ghost band AND the connected-animation
+        // overlays and can never be clipped by an ancestor scissor. Registered for the layer's whole lifetime (idle it
+        // is an empty box), so the exclusion is stable frame-to-frame and no ancestor span can go stale from it.
+        var dragOverlay = scene.DragOverlay;
+        bool hasDragOverlay = !dragOverlay.IsNull && scene.IsLive(dragOverlay)
+                              && !UnderAnySkipRoot(scene, skipRoots, dragOverlay);
         int overlayCount = scene.OverlayCount;
         if (hasGhost) disabledReasons |= SpanReuseDisabledReason.DragGhost;   // DragGhost stays GLOBAL this wave (drags are rare; scope later)
         if (scene.DropSpotlightActive) disabledReasons |= SpanReuseDisabledReason.DragSpotlight;
@@ -319,10 +326,11 @@ public static class SceneRecorder
         bool spanStoreOn = spans is not null
             && (disabledReasons & (SpanReuseDisabledReason.DragGhost | SpanReuseDisabledReason.DragSpotlight)) == 0;
         stats.SpanReuseDisabledReasons = disabledReasons;
-        Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 1 + overlayCount];
+        Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 2 + overlayCount];
         skipRoots.CopyTo(skips);
         int skipCount = skipRoots.Length;
         if (hasGhost) skips[skipCount++] = ghost;
+        if (hasDragOverlay) skips[skipCount++] = dragOverlay;   // drawn in its own top band below, never in the main pass
         // Connected-animation overlays are excluded from the clipped main pass and re-walked LAST in their own
         // top band (below). Add them to the skip set so a tree-resident overlay (the DragGhost case) is not also
         // drawn clipped in the main pass; standalone overlays are not tree descendants so this is belt-and-suspenders.
@@ -361,10 +369,13 @@ public static class SceneRecorder
             var abs = scene.AbsoluteRect(ghost);
             ref RectF gb = ref scene.Bounds(ghost);
             ref NodePaint gp = ref scene.Paint(ghost);
+            // E11: the popup skipRoots must be threaded through — a windowed popup that happens to live INSIDE the
+            // dragged subtree renders in its own popup window, and passing `default` here drew it a second time,
+            // unclipped, in the main window's ghost band.
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
                  1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, default, null, 0, true, false, ref stats);
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
         // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
@@ -385,6 +396,20 @@ public static class SceneRecorder
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, default, null, 0, true, false, ref stats);
         }
+        // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
+        // AFTER the connected-animation overlays, so the drag chip is the topmost thing in the frame. Unclipped, at
+        // parent opacity 1 (the chip owns its own alpha), with the popup skipRoots threaded like every other band.
+        if (hasDragOverlay)
+        {
+            var abs = scene.AbsoluteRect(dragOverlay);
+            ref RectF ob = ref scene.Bounds(dragOverlay);
+            ref NodePaint op = ref scene.Paint(dragOverlay);
+            Walk(scene, dl, images, dragOverlay,
+                 Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
+                 1f, (1 << 16) | 2, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
+        }
+
         // E9 own-subtree carve-out: now that every entry + every cached-acrylic own-subtree range is known, bake each
         // layer's EXTERNAL damage rect + this frame's epoch into its PushLayerCmd (before the DrawList is published).
         PatchDamageRanges(dl, stats.HasDamage ? stats.Damage : default, damageEpoch);
@@ -1066,6 +1091,14 @@ public static class SceneRecorder
         if (drawSelf && p.BorderWidth <= 0f && p.ValidationBorder.A <= 0f
             && IsOccludedByOpaqueChild(scene, node, in world, p.ChildShiftX, p.ChildShiftY, in deviceBounds, in recordClip, inMotion))
             drawSelf = false;
+        // E3 drag-ghost BACKPLATE (DragVisualStyle.Backplate, published at promotion as SceneStore.DragGhostBackplate):
+        // an opaque plate under the WHOLE lifted subtree, drawn INSIDE the ghost's opacity group (DragController sets
+        // NodePaint.OpacityGroup on the lift) and before the node's own fill — so a transparent list row stops letting
+        // the content beneath the ghost read through its text. Corner radii come from the ghost node itself (square when
+        // it has none). One handle compare per node per frame, and DragGhost is Null except during a lifted drag.
+        if (node == scene.DragGhost && scene.DragGhostBackplate is { } dragBackplate && overlapsRecordClip)
+            dl.FillRoundRect(local, p.Corners, dragBackplate, world, opacity, key);
+
         GradientSpec nodeGradient = default;
         bool hasNodeGradient = maybeSparsePaint && scene.TryGetGradient(node, out nodeGradient) && nodeGradient.Stops is { Length: > 0 };
         if (drawSelf)

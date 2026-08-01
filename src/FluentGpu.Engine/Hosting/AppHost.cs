@@ -355,8 +355,31 @@ public sealed class AppHost : IDisposable
     private readonly Signal<object?> _inputHooksSig;
     private readonly Signal<object?> _frameClockSig = new(0L);
     private long _frameClock;
-    private readonly Signal<int> _dragEpoch = new(0);    // bumped each frame while a typed drag is live (+once on end) → UseDragState
+    // Drag epoch → UseDragState. EDGE-triggered (session begin/end, OverTarget / Effect / Caption change, settle
+    // start+expiry): the chip FOLLOWS through the DragPosX/Y binds below, so bumping this per frame — as it used to —
+    // re-rendered the whole preview subtree at pointer rate for a value nothing read.
+    private readonly Signal<int> _dragEpoch = new(0);
+    private readonly FloatSignal _dragPosX = new(0f);    // live drag pointer, window DIP — bound, never re-rendered
+    private readonly FloatSignal _dragPosY = new(0f);
     private bool _dragWasActive;
+    private NodeHandle _dragOverPrev;                    // edge-detection state (scalar compares per frame, 0 alloc)
+    private DropEffect _dragEffectPrev;
+    private string? _dragCaptionPrev;
+    // Last live-session snapshot, retained across the settle window so the chip can animate out with its own content.
+    private string _dragLastKind = "";
+    private object? _dragLastPayload;
+    private Point2 _dragLastPos;
+    private DropEffect _dragLastEffect;
+    // Drop-settle window published through DragState (Stationary lift only; Ghost keeps the OnSettle FLIP).
+    private DragSettlePhase _dragSettlePhase;
+    private RectF _dragSettleTarget;
+    private float _dragSettleLeftMs;
+    private DragSettlePhase _dragSettlePending;
+    private RectF _dragSettlePendingTarget;
+    private bool _dragSettleRequested;
+    /// <summary>The chip-settle window a Stationary drag publishes on release (research target: ~250ms ease into the
+    /// slot). The layer animates within it; the host tears the preview down when it expires.</summary>
+    public const float DragSettleMs = 250f;
     private Size2 _lastViewportDip;
     // Window-visibility ambient (Activation.IsActive): false while minimized OR while the app has signalled a power
     // suspend (SetWindowActive(false)). UseIsActive AND-folds it with each component's KeepAlive-parked state. Written
@@ -1585,7 +1608,8 @@ public sealed class AppHost : IDisposable
         if (_bakedBlurQueue.HasJobs) r |= WakeReasons.BakedBlurPending;
         if (_images.HasActiveCrossfades) r |= WakeReasons.ImageCrossfades;
         if (_scene.OrphanCount > 0) r |= WakeReasons.Orphans;
-        if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll
+        if (_dispatcher.Drag.HasActiveWork || _dispatcher.DragDrop.HasActiveWork
+            || _dragSettlePhase != DragSettlePhase.None) r |= WakeReasons.DragDropWork;   // E5: ghost spring easing / edge auto-scroll / chip settle
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
         if (_dispatcher.HasArmedHold) r |= WakeReasons.GestureHold;   // §7A touch long-press: a STATIONARY held finger emits no input, so keep frames coming until TickGestureArenas fires the ~500ms Hold (then this clears and the loop idles)
         if (_dispatcher.HasPendingTouchPress) r |= WakeReasons.TouchPress;
@@ -1828,8 +1852,22 @@ public sealed class AppHost : IDisposable
         // instance AND the channel-default (a DragPreviewLayer mounted by a static factory reaches it via Default).
         _inputHooks.DragEpoch = _dragEpoch;
         _inputHooks.GetDragState = ReadDragState;
+        _inputHooks.DragPosX = _dragPosX;
+        _inputHooks.DragPosY = _dragPosY;
         InputHooks.Current.Default.DragEpoch = _dragEpoch;
         InputHooks.Current.Default.GetDragState = ReadDragState;
+        InputHooks.Current.Default.DragPosX = _dragPosX;
+        InputHooks.Current.Default.DragPosY = _dragPosY;
+
+        // E5 chip settle: a Stationary gesture has no lifted node to FLIP home, so the controller reports the settle
+        // WINDOW instead and the host publishes it in DragState for the preview layer to animate through. Latched here
+        // (the gesture ends during input dispatch, before Paint's drag block drains it).
+        _dispatcher.Drag.OnStationarySettle = (phase, target) =>
+        {
+            _dragSettlePending = phase;
+            _dragSettlePendingTarget = target;
+            _dragSettleRequested = true;
+        };
 
         // E5 drop-settle: the released drag visual glides from the drop point into its (possibly reordered) slot via
         // the same FLIP pipeline that moves displaced siblings — the seeded spring is retargeted velocity-continuously
@@ -2055,9 +2093,17 @@ public sealed class AppHost : IDisposable
     private DragState ReadDragState()
     {
         var dd = _dispatcher.DragDrop;
-        if (!dd.IsActive) return default;
-        var s = dd.Session;
-        return new DragState(true, s.Kind, s.Position, s.Payload);
+        if (dd.IsActive)
+        {
+            var s = dd.Session;
+            return new DragState(true, s.Kind, s.Position, s.Payload, s.Effect, s.Caption);
+        }
+        // The gesture is over but its chip is still settling: keep reporting Active with the LAST live snapshot (plus
+        // the settle phase/target) so the preview can glide out instead of vanishing at the release frame.
+        if (_dragSettlePhase != DragSettlePhase.None)
+            return new DragState(true, _dragLastKind, _dragLastPos, _dragLastPayload, _dragLastEffect,
+                                 null, _dragSettlePhase, _dragSettleTarget);
+        return default;
     }
 
     /// <summary>Run <paramref name="action"/> on the UI thread at the top of the next frame. THREAD-SAFE — callable from
@@ -2446,10 +2492,47 @@ public sealed class AppHost : IDisposable
             // last it left one queued computation every single frame, so the RuntimePending wake reason fired on every
             // frame and the loop could never fall out of display rate. Only when watched — 0-alloc when nothing polls.
             if (_frameClockSig.HasSubscribers) _frameClockSig.Value = ++_frameClock;
-            // Drag epoch: while a typed drag is live, bump each frame so a DragPreviewLayer re-renders and follows the
-            // cursor; bump once more when it ends so the preview tears down. Only the preview subtree re-renders.
+            // ── Live drag publication (see the _dragEpoch field comment) ────────────────────────────────────────────
+            // POSITION goes out as two float SIGNALS every frame: a bound preview transform is a compositor write, so a
+            // drag move costs no render/reconcile/layout and no allocation. The EPOCH — which does re-render the preview
+            // subtree — bumps only on the edges a preview's CONTENT depends on: session begin/end, the target under the
+            // pointer, the advisory effect, and the target's caption. All scalar/reference compares; 0 alloc.
             bool dragActive = _dispatcher.DragDrop.IsActive;
-            if (dragActive || _dragWasActive) _dragEpoch.Value = _dragEpoch.Peek() + 1;
+            if (dragActive)
+            {
+                var ds = _dispatcher.DragDrop.Session;
+                _dragPosX.SetIfChanged(ds.Position.X);
+                _dragPosY.SetIfChanged(ds.Position.Y);
+                bool dragEdge = !_dragWasActive || ds.OverTarget != _dragOverPrev || ds.Effect != _dragEffectPrev
+                                || !string.Equals(ds.Caption, _dragCaptionPrev, StringComparison.Ordinal);
+                if (dragEdge)
+                {
+                    _dragOverPrev = ds.OverTarget;
+                    _dragEffectPrev = ds.Effect;
+                    _dragCaptionPrev = ds.Caption;
+                    _dragEpoch.Value = _dragEpoch.Peek() + 1;
+                }
+                // Retained for the settle window (the session is cleared the instant the gesture ends).
+                _dragLastKind = ds.Kind;
+                _dragLastPayload = ds.Payload;
+                _dragLastPos = ds.Position;
+                _dragLastEffect = ds.Effect;
+                if (_dragSettlePhase != DragSettlePhase.None) _dragSettlePhase = DragSettlePhase.None;   // a new gesture cancels a stale settle
+            }
+            else if (_dragWasActive)
+            {
+                // The gesture ended since the last frame. A Stationary lift asked for a settle window (its chip glides
+                // to the drop point / back home); everything else tears the preview down on this same bump.
+                _dragSettlePhase = _dragSettleRequested ? _dragSettlePending : DragSettlePhase.None;
+                _dragSettleTarget = _dragSettlePendingTarget;
+                _dragSettleLeftMs = _dragSettlePhase != DragSettlePhase.None ? DragSettleMs : 0f;
+                _dragSettleRequested = false;
+                _dragSettlePending = DragSettlePhase.None;
+                _dragOverPrev = NodeHandle.Null;
+                _dragEffectPrev = DropEffect.None;
+                _dragCaptionPrev = null;
+                _dragEpoch.Value = _dragEpoch.Peek() + 1;
+            }
             _dragWasActive = dragActive;
             // Live re-theme: a Tok.Use/SetAccent bumped Tok.Epoch (or RequestThemeTransition was called). Re-render every
             // mounted component IN PLACE so each re-reads the new token set, and arm the cross-fade window around EXACTLY
@@ -2651,7 +2734,26 @@ public sealed class AppHost : IDisposable
             _caretBlinker.Tick(dtMs);                          // 7 focused-editor caret blink (toggles TextEditState)
             // 7 E5 edge auto-scroll (drag near an overflowing viewport edge).
             bool dragEdgeActive = _dispatcher.DragDrop.Tick(dtMs);
+            // 7 E5: a reconcile ran THIS frame, so ApplyBox restored the dragged node's authored opacity/shadow/hit-test.
+            // Re-assert the ghost before Tick — a settled/snap gesture early-outs and would otherwise record one
+            // un-lifted frame. Guarded on IsActive so an ordinary reconcile frame pays nothing.
+            if (reconciled && _dispatcher.Drag.IsActive) _dispatcher.Drag.ReassertPresented();
             _dispatcher.Drag.Tick(dtMs);                       // 7 E5 ghost: spring-lag easing + re-pin over the scrolled origin
+            // 7 E5 chip settle: run the ~250ms post-gesture window down, then bump the epoch once so the preview layer
+            // re-renders with Active=false and unmounts the chip. Bumping here schedules NEXT frame's re-render, which
+            // is exactly right — the settle's last frame still has to paint.
+            if (_dragSettlePhase != DragSettlePhase.None && !_dispatcher.DragDrop.IsActive)
+            {
+                _dragSettleLeftMs -= dtMs;
+                if (_dragSettleLeftMs <= 0f)
+                {
+                    _dragSettlePhase = DragSettlePhase.None;
+                    _dragSettleTarget = default;
+                    _dragLastPayload = null;                   // release the payload's GC edge with the preview
+                    _dragLastKind = "";
+                    _dragEpoch.Value = _dragEpoch.Peek() + 1;
+                }
+            }
             _dispatcher.TickGestureArenas(dtMs);               // 7 §7A arena timer tick (Hold long-press promotion on idle-held frames)
             long tAnim = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegAnim, db, dt0); dt0 = Stopwatch.GetTimestamp(); }

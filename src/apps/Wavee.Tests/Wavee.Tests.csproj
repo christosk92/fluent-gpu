@@ -126,6 +126,8 @@
     <!-- shared detail-track command-bar fit + query/facet predicate (engine-free) -->
     <Compile Include="..\Wavee\Features\Detail\DetailTrackCommandBarLayout.cs" />
     <Compile Include="..\Wavee\Features\Detail\TrackFilterModel.cs" />
+    <!-- the same-list drag-reorder gate over that filter state (BCL only) — PlaylistReorderRulesTests -->
+    <Compile Include="..\Wavee\Features\Detail\PlaylistReorderRules.cs" />
     <!-- the "when does this album actually drop?" ladder (Wavee.Core + BCL only, split out of DetailConfig.cs for exactly
          this reason — DetailConfig drags FluentGpu.Controls + the Strings table) — PreReleaseModelTests -->
     <Compile Include="..\Wavee\Features\Detail\PreReleaseDerivation.cs" />

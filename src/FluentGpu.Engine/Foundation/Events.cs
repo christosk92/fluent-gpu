@@ -248,6 +248,21 @@ public static class Keys
 public enum DropEffect : byte { None = 0, Move = 1, Copy = 2, Link = 3 }
 
 /// <summary>
+/// How a promoted drag treats the SOURCE node's visual (the E5 lift mode).
+/// <list type="bullet">
+/// <item><see cref="Ghost"/> (default, byte-identical to the pre-chip engine) — the source row IS the drag visual: the
+/// controller translates it, dims it, gives it a lifted shadow and hoists its subtree into the recorder's unclipped
+/// <c>DragGhost</c> top band.</item>
+/// <item><see cref="Stationary"/> — the source row STAYS in its slot and is only dimmed + made hit-test-transparent;
+/// the drag visual is an independent compact chip drawn by a <c>DragPreviewLayer</c> in the
+/// <see cref="FluentGpu.Scene.SceneStore.DragOverlay"/> band. No translate, no shadow, no ghost hoist — so the whole
+/// ghost-band cost and its clipping/blend hazards are bypassed, and the gesture SURVIVES the source being virtualized
+/// away (the chip, not the row, carries it).</item>
+/// </list>
+/// </summary>
+public enum DragLift : byte { Ghost = 0, Stationary = 1 }
+
+/// <summary>
 /// Styling for the lifted drag GHOST (the moving visual of a dragged node) — the per-source override of the engine's
 /// hardcoded defaults (opacity 0.80 + a flyout-class shadow). All knobs are optional; an object initializer is safe
 /// (the parameterless ctor seeds the Fluent defaults). Carried on <see cref="DragSource.Style"/>; null there ⇒ default.
@@ -255,13 +270,24 @@ public enum DropEffect : byte { None = 0, Move = 1, Copy = 2, Link = 3 }
 public readonly record struct DragVisualStyle
 {
     public DragVisualStyle() { }
-    /// <summary>Ghost opacity (WinUI ListViewItemDragThemeOpacity = 0.80 default).</summary>
+    /// <summary>Ghost opacity (WinUI ListViewItemDragThemeOpacity = 0.80 default). In
+    /// <see cref="DragLift.Stationary"/> this is the SOURCE row's dim (the Atlassian 0.4 "it's in the chip" cue).</summary>
     public float Opacity { get; init; } = 0.80f;
-    /// <summary>Ghost drop shadow; null ⇒ the engine's default flyout-depth shadow.</summary>
+    /// <summary>Ghost drop shadow; null ⇒ the engine's default flyout-depth shadow. Ignored under
+    /// <see cref="DragLift.Stationary"/> (a stationary source is never lifted).</summary>
     public ShadowSpec? Shadow { get; init; } = null;
-    /// <summary>Uniform scale about the ghost's center (1 = none; e.g. 1.03 for a subtle "lift").</summary>
+    /// <summary>Uniform scale about the ghost's center (1 = none; e.g. 1.03 for a subtle "lift"). Ignored under
+    /// <see cref="DragLift.Stationary"/>.</summary>
     public float Scale { get; init; } = 1f;
-    /// <summary>The engine default (opacity 0.80, default shadow, no scale).</summary>
+    /// <summary>Lift mode — see <see cref="DragLift"/>. Default <see cref="DragLift.Ghost"/>, so an unstyled or
+    /// partially-styled source keeps the historical behavior exactly.</summary>
+    public DragLift Lift { get; init; } = DragLift.Ghost;
+    /// <summary>Ghost-mode only: an OPAQUE plate filled beneath the lifted subtree (inside its opacity group, using the
+    /// ghost node's own corner radii). A list row with a transparent fill (plain/zebra rows) otherwise lets the content
+    /// under the ghost read straight THROUGH its text — the S3 "both texts fully legible → garbage" failure. Null (the
+    /// default) = no plate.</summary>
+    public ColorF? Backplate { get; init; } = null;
+    /// <summary>The engine default (opacity 0.80, default shadow, no scale, Ghost lift, no backplate).</summary>
     public static readonly DragVisualStyle Default = new();
 }
 
@@ -321,6 +347,12 @@ public sealed record DropTargetSpec(
     /// <summary>Opt this destination into compatible-target spotlighting for the duration of a drag.</summary>
     public DropTargetVisualPolicy VisualPolicy { get; init; }
 
+    /// <summary>Per-SESSION spotlight policy (plumbing for the scrim wave): when set and it returns false for the live
+    /// session, this target does not participate in the drag dim even though its <see cref="VisualPolicy"/> opts in —
+    /// so a same-list reorder never dims the app. Null (default) = the <see cref="VisualPolicy"/> decides alone.
+    /// INERT today: the spotlight pass still keys off <see cref="VisualPolicy"/> only; the scrim rework consumes it.</summary>
+    public Func<DragSession, bool>? SpotlightWhen { get; init; }
+
     /// <summary>Ordinal accept test over <see cref="AcceptKinds"/> (cast-free, 0-alloc).</summary>
     public bool Accepts(string kind)
     {
@@ -353,9 +385,19 @@ public sealed class DragSession
     public NodeHandle OverTarget;
     /// <summary>Advisory effect (engine: Move while over an accepting target, None otherwise; targets may refine).</summary>
     public DropEffect Effect;
+    /// <summary>Optional drop CAPTION (the WinUI <c>DragUIOverride.Caption</c> analogue — "Add 3 tracks to Chill"):
+    /// targets set it in <c>OnEnter</c>/<c>OnOver</c>; the engine clears it on every target CHANGE and at session end,
+    /// so a target never has to unset it. Surfaced to the preview chip through <see cref="DragState.Caption"/>.</summary>
+    public string? Caption;
     public KeyModifiers Mods;
     public PointerKind Pointer;
 }
+
+/// <summary>The drop-settle window a <c>DragPreviewLayer</c> chip animates through after a
+/// <see cref="DragLift.Stationary"/> gesture ends (rbd's "nothing ever teleports"): <see cref="ToTarget"/> = an
+/// accepted drop (glide into the drop point and fade), <see cref="Home"/> = a refusal/cancel (glide back to the source
+/// row's resting rect). <see cref="None"/> = no settle in flight.</summary>
+public enum DragSettlePhase : byte { None = 0, ToTarget = 1, Home = 2 }
 
 /// <summary>
 /// A reactive, copied SNAPSHOT of the live drag (the value <c>UseDragState()</c> returns) — safe to hold across a
@@ -367,7 +409,16 @@ public sealed class DragSession
 /// <param name="Kind">The drag source's kind discriminator (<see cref="DropKinds.Files"/> for an OS file drag).</param>
 /// <param name="Position">The pointer in window (DIP) space.</param>
 /// <param name="Payload">The drag payload (<see cref="FileDropData"/> for OS files; the source's typed payload otherwise).</param>
-public readonly record struct DragState(bool Active, string Kind, Point2 Position, object? Payload);
+/// <param name="Effect">The live advisory <see cref="DropEffect"/> — <see cref="DropEffect.None"/> while over nothing
+/// that accepts, which is what a chip renders its "not allowed" glyph from.</param>
+/// <param name="Caption">The current target's drop caption (<see cref="DragSession.Caption"/>), or null.</param>
+/// <param name="Settle">Non-<see cref="DragSettlePhase.None"/> only during the ~250ms post-gesture settle window a
+/// Stationary-lift drag publishes; <see cref="Active"/> stays true across it so the chip can animate out.</param>
+/// <param name="SettleTarget">Where the chip settles TO: the drop point (ToTarget) or the source's resting rect (Home).</param>
+public readonly record struct DragState(
+    bool Active, string Kind, Point2 Position, object? Payload,
+    DropEffect Effect = DropEffect.None, string? Caption = null,
+    DragSettlePhase Settle = DragSettlePhase.None, RectF SettleTarget = default);
 
 /// <summary>
 /// Well-known drag KIND discriminators for OS-originated (OLE) drags delivered through the external-drop seam

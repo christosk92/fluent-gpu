@@ -177,6 +177,17 @@ public sealed class SceneStore : ISceneBackend
     /// last, so the lifted visual escapes every ancestor scissor and paints above overlays. Null = no drag.</summary>
     public NodeHandle DragGhost { get; set; }
 
+    /// <summary>Optional OPAQUE plate filled beneath the <see cref="DragGhost"/> subtree (inside its opacity group,
+    /// with the ghost node's own corner radii) — the promotion-time <c>DragVisualStyle.Backplate</c>. Set/cleared by
+    /// <c>Input.DragController</c> exactly like <see cref="DragGhost"/>; null = no plate.</summary>
+    public ColorF? DragGhostBackplate { get; set; }
+
+    /// <summary>The drag OVERLAY root (a mounted <c>DragPreviewLayer</c> registers its container here): excluded from
+    /// the clipped main pass and re-walked UNCLIPPED in the topmost band — above the main pass, above the
+    /// <see cref="DragGhost"/> band and above the connected-animation overlays — so a drag chip can never be clipped by
+    /// an ancestor scissor nor overdrawn. Null = no layer mounted.</summary>
+    public NodeHandle DragOverlay { get; set; }
+
     /// <summary>Optional interner for text-id lifetime accounting: when set, freeing a node (or rewriting its dynamic
     /// text) releases its <c>paint.Text</c> / <c>TextStyle.Family</c> refs so streamed virtual-list text is reclaimed
     /// instead of accumulating for the process lifetime. Wired by the reconciler at composition.</summary>
@@ -381,7 +392,8 @@ public sealed class SceneStore : ISceneBackend
         if (_dropSpotlightExemptRoots.Count != 0) _dropSpotlightExemptRoots.Remove(idx);
         if (_dropSpotlightOver == node) _dropSpotlightOver = NodeHandle.Null;
         if (_gestureSubs.Count != 0) _gestureSubs.Remove(idx);   // drop the node's UseGesture declaration with it (handler closures released)
-        if (DragGhost == node) DragGhost = NodeHandle.Null;   // a freed ghost must not linger in the recorder's top band
+        if (DragGhost == node) { DragGhost = NodeHandle.Null; DragGhostBackplate = null; }   // a freed ghost must not linger in the recorder's top band
+        if (DragOverlay == node) DragOverlay = NodeHandle.Null;   // …nor a freed preview-layer root in the overlay band
         if ((flags & NodeFlags.ConnectedOverlay) != 0) RemoveOverlay(node);   // a freed overlay must not linger in the band
         OnFreeIndex?.Invoke(idx);   // symmetric teardown of INDEX-keyed external side-tables (AnimEngine transitions / ScrollIntegrator timers)
         _recordDirty[idx] = 0;

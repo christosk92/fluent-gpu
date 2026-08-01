@@ -75,6 +75,10 @@ public abstract class Component
     /// begin/move/end. Render a cursor-following custom preview (see <c>DragPreviewLayer</c>) from it.</summary>
     protected DragState UseDragState() => Context.UseDragState();
 
+    /// <summary>The live drag pointer position as two engine-owned float signals — bind a preview's transform to them
+    /// for a compositor-only follow (no re-render per move). See <see cref="RenderContext.UseDragPosition"/>.</summary>
+    protected (FluentGpu.Signals.FloatSignal X, FluentGpu.Signals.FloatSignal Y) UseDragPosition() => Context.UseDragPosition();
+
     // ── Timing hooks (frame-clock HostTimerQueue; never the media clock) ────────────────────────────────────────────
     /// <summary>A read signal that follows <paramref name="source"/> after <paramref name="ms"/> of quiet (trailing-edge
     /// debounce; zero re-render). See <see cref="RenderContext.UseDebouncedValue{T}(IReadSignal{T}, float)"/>.</summary>
