@@ -28,11 +28,13 @@ public enum WakeReasons
     GestureHold = 1 << 14,      // _dispatcher.HasArmedHold (§7A touch long-press timer keep-alive on a stationary held finger)
     PopupAnim = 1 << 15,        // a windowed-popup desktop-acrylic open reveal (CompositionBackdrop) is mid-animation — keep presenting so its per-frame clip inset advances to settle
     TouchPress = 1 << 16,       // delayed 100ms pressed visual for touch inside a scrollable viewport
-    VideoPresenting = 1 << 17,  // a media player is actively presenting a video surface (playing / ramping to play) — keep pumping at DISPLAY rate so frames advance (VideoSurfaceRegistry.HasActivePresentation)
+    VideoPresenting = 1 << 17,  // retained diagnostic bit; native video presentation no longer drives the host cadence
     Timer = 1 << 18,            // a HostTimerQueue timer is DUE this frame (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue) — a pending-but-future timer sets NO bit (it only shapes RecommendedWaitMs, so the loop still idles)
     WarmCadence = 1 << 19,      // post-input warm-cadence hold: keep rendering ~1s after the last input before full quiesce (GPUI ProMotion re-ramp lesson) — real window only
     ImageReady = 1 << 20,       // a decode worker published a completion that the UI thread can apply now
     BakedBlurPending = 1 << 21, // queued static derivatives, serviced at a low 30 Hz budget only after interaction settles
+    FrameClockPoller = 1 << 22, // an explicit FrameClock.Tick subscriber (for example the smooth compositor-bound playhead)
+    VideoPumpPending = 1 << 23, // one coalesced native-video / geometry pump must run after layout settles
 }
 
 /// <summary>
@@ -46,12 +48,13 @@ public enum WakeReasons
 internal sealed class WakeDiagnostics
 {
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    private const int ReasonCount = 22;
+    private const int ReasonCount = 24;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
         "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
+        "frameClockPoller", "videoPumpPending",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake

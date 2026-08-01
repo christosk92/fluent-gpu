@@ -92,7 +92,7 @@ public interface IMediaPlayer : IAsyncDisposable
     /// engine state into the player signals, binds the produced DirectComposition handle into <paramref name="binding"/>
     /// (the hole the control draws), and sizes/places the video child at <paramref name="videoRect"/> (DIP) ×
     /// <paramref name="scale"/> (device px). A no-op for audio-only / headless players. The control (<c>MediaPlayerElement</c>)
-    /// calls this every frame it is mounted; it is cheap and idempotent once steady-state.</summary>
+    /// calls this for an initial hand-off and coalesced native/geometry/transport requests; it is not a per-frame repaint path.</summary>
     void PumpVideo(VideoBinding binding, RectF videoRect, float scale);
 
     // ── transport: idempotent, coalescing — complete (never throw) on supersession ────────────────────────────────────

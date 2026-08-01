@@ -1420,6 +1420,63 @@ static class ScrollSuite
                 spread, $"dirtyFrames={dirtyFrames} growthFrames={growthFrames} awake={everAwakeWhileDirty} finalClean={finalClean} finalWidth={finalWidth} invariant={invariantHeld}");
         }
 
+        // ── gate.virt.budgetScalesWithVelocity — E4b: the per-frame realize pool is a FLOOR lifted toward a ceiling in
+        // proportion to the rows/second the visible edge is consuming. Deliberately does NOT pin SteadyRealizeBudgetForTest
+        // (the neighbouring budget gates do) — this one exercises the REAL production formula, because the regression it
+        // guards is exactly the flat floor: under a sustained fast fling the mandatory band advances faster than a
+        // velocity-independent refill, the warm halo drains to mandatory+floor, and every row entering the band becomes a
+        // COLD realize. ────────────────────────────────────────────────────────────────────────────────────────────────
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("virt-budget-velocity", new Size2(640, 480), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, new FastFlingProbe());
+            host.SmoothScroll = true;
+            host.RunFrame();
+            for (int i = 0; i < 40 && host.HasActiveWork; i++) host.RunFrame();   // settle the mount-deferred halo at rest
+            var vp = host.Scene.Root; host.Scene.TryGetScroll(vp, out var sc0); var content = sc0.ContentNode;
+            var ptr = new Point2(150, 200);
+
+            const int Frames = 72, Half = Frames / 2, Ramp = 12;   // Ramp = frames the chase needs to reach fling speed
+            int blanks = 0, maxWidth = 0, mandWidth = 0;
+            int loMin = int.MaxValue, hiMin = int.MaxValue;        // min realized width per half of the sustained run
+            int streak = 0, loStreak = 0, hiStreak = 0;            // consecutive budget-deferred frames per half
+            float maxVel = 0f, prevOff = 0f, minTravel = float.MaxValue, endOff = 0f;
+            for (int f = 0; f < Frames; f++)
+            {
+                window.QueueInput(new InputEvent(InputKind.Wheel, ptr, 0, 0, 240f));   // constant, sustained fling — never reaches the end
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sc);
+                int width = sc.LastRealized - sc.FirstRealized;
+                maxVel = MathF.Max(maxVel, MathF.Abs(sc.FlingVelocity));
+                float travel = sc.OffsetY - prevOff; prevOff = sc.OffsetY; endOff = sc.OffsetY;
+
+                // The anti-flicker invariant still holds at every speed: the drawn visible band is always realized.
+                float drawn = -host.Scene.Paint(content).LocalTransform.Dy;
+                int vFirst = (int)MathF.Floor(drawn / FastFlingProbe.RowH);
+                int vLast = Math.Min(FastFlingProbe.N, (int)MathF.Ceiling((drawn + sc.ViewportH) / FastFlingProbe.RowH));
+                if (!(sc.FirstRealized <= vFirst && sc.LastRealized >= vLast)) blanks++;
+                mandWidth = Math.Max(mandWidth, (vLast - vFirst) + 2);   // visible + 1 guard row/side = the budget-exempt band
+
+                streak = host.Reconciler.HasBudgetDeferredVirtuals ? streak + 1 : 0;
+                if (f < Ramp) continue;                                  // ignore the chase ramp; measure the sustained fling only
+                minTravel = MathF.Min(minTravel, travel);
+                maxWidth = Math.Max(maxWidth, width);
+                if (f < Half) { loMin = Math.Min(loMin, width); loStreak = Math.Max(loStreak, streak); }
+                else { hiMin = Math.Min(hiMin, width); hiStreak = Math.Max(hiStreak, streak); }
+            }
+            // The fling travels ≈239 px ≈ 30 rows/frame — it OUTRUNS a flat 12-row refill, which is the precondition that
+            // makes this gate discriminating. Negative control (SteadyRealizeVelocityFactor pinned to 0, i.e. the pre-E4b
+            // flat floor): maxWidth=53 == mandWidth (the halo drains to the mandatory band — every entering row is a cold
+            // realize) and the budget-deferred streak GROWS across the run, loStreak=36 → hiStreak=72. With E4b:
+            // maxWidth=131, loStreak=hiStreak=1. Both `velocityScaled` and `streakBounded` fire on the regression.
+            bool velocityScaled = maxWidth > mandWidth + 12;
+            bool noProgressiveDrain = hiMin >= loMin;      // the halo does not shrink frame over frame as the fling runs on
+            bool streakBounded = hiStreak <= loStreak;     // deferral does not accumulate in the back half of the run
+            Check("gate.virt.budgetScalesWithVelocity a sustained fast fling on the REAL budget formula keeps a warm halo wider than mandatory+SteadyRealizeRowsPerFrame (E4b velocity term), never drains it frame over frame, keeps the budget-deferred streak bounded, and still never blanks a visible row",
+                velocityScaled && noProgressiveDrain && streakBounded && blanks == 0,
+                $"maxWidth={maxWidth} mandWidth={mandWidth} loMin={loMin} hiMin={hiMin} loStreak={loStreak} hiStreak={hiStreak} maxVel={maxVel:F0} minTravel={minTravel:F0} endOff={endOff:F0} blanks={blanks}");
+        }
+
         // ── gate.virt.nestedRailDefersInner — mounting a virtual rail realizes the visible cards only; the overscan
         // halo fills over subsequent frames (the nested-rail-into-view spike flattener). ─────────────────────────────────
         {

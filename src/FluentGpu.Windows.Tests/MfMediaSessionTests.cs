@@ -248,6 +248,30 @@ public sealed class MfMediaSessionTests
         Assert.Contains(presenter.Calls, c => c.StartsWith("Bind("));
     }
 
+    [Fact]
+    public void Repaint_IsInvalidationDriven_AndNativeEventsRequestOneFollowingPump()
+    {
+        var (s, _, eng) = NewSession();
+        var binding = NewBinding(out _);
+        eng.MetadataLoaded = true; eng.NativeW = 1280; eng.NativeH = 720; eng.Handle = 0xBEEF;
+        int requested = 0;
+        s.PumpRequested += () => requested++;
+
+        s.PumpVideo(binding, Rect, 1f);       // initial metadata/handle/geometry hand-off
+        Assert.Equal(1, eng.RepaintCalls);
+
+        s.PumpVideo(binding, Rect, 1f);       // identical host work is not a repaint
+        Assert.Equal(1, eng.RepaintCalls);
+
+        eng.RaiseStateChanged();               // MF worker event -> one coalesced caller request
+        Assert.Equal(1, requested);
+        s.PumpVideo(binding, Rect, 1f);
+        Assert.Equal(2, eng.RepaintCalls);
+
+        s.PumpVideo(binding, new RectF(0, 0, 640, 360), 1f); // geometry invalidates once
+        Assert.Equal(3, eng.RepaintCalls);
+    }
+
     // ── idempotent transport ─────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]

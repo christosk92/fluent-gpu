@@ -8,8 +8,8 @@ namespace FluentGpu.Controls;
 /// <summary>
 /// The DATA an app supplies for the framework-rendered drag chip — never elements, never positions. Populate it from
 /// the drag payload in a <see cref="DragChip.Resolve"/> callback; the framework renders the premiere card (opaque, max
-/// <see cref="DragChip.MaxWidth"/>, art + title + subtitle, corner count badge, stacked backdrop for multi-drag, pickup
-/// tilt, caption row, not-allowed cue, cursor offset and window clamp).
+/// <see cref="DragChip.MaxWidth"/>, art + title + subtitle, corner count badge, stacked backdrop for multi-drag, the
+/// pickup tilt FLASH, caption row, not-allowed cue, cursor offset and window clamp).
 /// </summary>
 /// <param name="Art">Optional leading artwork ELEMENT (an <c>ImageEl</c>, an avatar, a glyph tile). Wins over
 /// <paramref name="ArtSource"/>.</param>
@@ -49,7 +49,8 @@ public readonly record struct DragChipSpec(
 /// Rendering follows the researched target spec (Atlassian/Apple/dnd-kit): an OPAQUE compact card capped at
 /// <see cref="MaxWidth"/> with a flyout-class shadow, at most three info pieces (art + title + subtitle) all
 /// ellipsized, a top-trailing <see cref="InfoBadge"/> count for multi-drag over a two-card stacked backdrop, a ~4°
-/// pickup tilt with a 1.02 scale (Trello) faded in by the declarative <c>Enter</c> transition, the target's
+/// pickup tilt with a 1.02 scale (Trello) that FLASHES at lift and eases back to flat over
+/// <see cref="PickupFlashMs"/> — see <see cref="TiltDeg"/> — under the declarative <c>Enter</c> pop, the target's
 /// <see cref="DragState.Caption"/> as a trailing row, and an explicit not-allowed glyph whenever
 /// <see cref="DragState.Refused"/> — a kind-compatible surface turned this payload away — so refusals are never silent
 /// (hovering nothing at all stays silent, which is what keeps the glyph meaningful).
@@ -60,10 +61,19 @@ public static class DragChip
     public const float MaxWidth = 280f;
     /// <summary>Leading artwork edge (square).</summary>
     public const float ArtSize = 40f;
-    /// <summary>Pickup tilt in degrees (Trello's drag card).</summary>
+    /// <summary>Pickup tilt in degrees (Trello's drag card) — the value the FLASH starts from, never a resting pose.
+    /// See <see cref="PickupFlashMs"/>.</summary>
     public const float TiltDeg = 4f;
-    /// <summary>Pickup scale — the card reads as lifted off the page.</summary>
+    /// <summary>Pickup scale — the card reads as lifted off the page. Flashes with the tilt and settles to 1.</summary>
     public const float PickupScale = 1.02f;
+    /// <summary>How long the pickup flash takes to ease from (<see cref="TiltDeg"/>, <see cref="PickupScale"/>) back to
+    /// flat and unscaled — once per gesture, at the moment of lift. Mirrors <c>MotionTokenId.ControlFast</c>, which is
+    /// the token <see cref="DragPreviewLayer"/> actually seeds with (name the motion, never its numbers); this constant
+    /// exists so a caller — or a gate — can say how long the chip takes to settle.</summary>
+    public const float PickupFlashMs = 150f;
+    /// <summary>Stable key for the chip's root wrapper: the preview re-renders on caption / target / effect edges, so
+    /// the node the pickup flash is seeded on must survive those edges or the flash would replay mid-drag.</summary>
+    public const string ChipRootKey = "drag-chip-root";
     /// <summary>Per-card offset of the stacked backdrop shown for a multi-item drag.</summary>
     public const float StackOffset = 4f;
     /// <summary>Segoe Fluent "blocked" glyph for a refusal (WinUI's not-allowed drag cursor equivalent).</summary>
@@ -158,21 +168,20 @@ public static class DragChip
             }
             : card;
 
-        // Pickup: a constant tilt + scale on this node (Trello), with the pop faded/scaled in by the declarative Enter
-        // transition on the wrapper — two nodes, because a static decomposed transform and an animated transform
-        // channel cannot share one owner.
-        var tilted = new BoxEl
-        {
-            Rotation = TiltDeg, ScaleX = PickupScale, ScaleY = PickupScale,
-            HitTestVisible = false,
-            Children = [body],
-        };
+        // Pickup: the tilt is a FLASH, not a pose. <see cref="DragPreviewLayer"/> seeds it on the box that mounts this
+        // chip (the Rotation/ScaleX/ScaleY channels) and it eases back to flat within PickupFlashMs; the card spends the rest of the
+        // gesture square, with the shadow and the dimmed source row carrying "lifted" from there on. Held statically it
+        // read as a misrendered card — a permanently crooked rectangle with crooked text, which is the one thing a drag
+        // preview must not look like. Only the pop (scale + fade in) stays declarative on this wrapper: it is the
+        // element's OWN mount transition, while the tilt is a transform-channel animation and the two cannot share one
+        // transform owner.
         return new BoxEl
         {
+            Key = ChipRootKey,
             HitTestVisible = false,
             Enter = new EnterExit(Sx: 0.92f, Sy: 0.92f, Opacity: 0f, Active: true),
             Transition = MotionTok.ItemPlacement,
-            Children = [tilted],
+            Children = [body],
         };
     }
 

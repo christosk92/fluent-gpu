@@ -73,6 +73,8 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     public int ErrorHr => _errorHr;
     public string EventTrace => string.Join(",", _trace);
     public string LastEventName => _lastEventRaw < 0 ? "<none>" : ((MF_MEDIA_ENGINE_EVENT)_lastEventRaw).ToString().Replace("MF_MEDIA_ENGINE_EVENT_", "");
+    /// <inheritdoc/>
+    public event Action? StateChanged;
 
     /// <summary>The current media-engine readyState (0 HAVE_NOTHING … 4 HAVE_ENOUGH_DATA).</summary>
     public uint ReadyState => Invoke(() => _engine != null ? _engine->GetReadyState() : (ushort)0);
@@ -312,6 +314,9 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
         }
+        // EventNotify runs on an MF worker. Consumers only post/coalesce a UI-thread pump; never let a subscriber
+        // exception cross the COM boundary or interfere with the native engine callback.
+        try { StateChanged?.Invoke(); } catch { }
     }
 
     // Marshal a func onto the engine thread and wait (the engine's COM is single-thread-affine to that MTA thread).

@@ -25,5 +25,7 @@ public interface IProtectedVideoPlayer : IDisposable
     void SetVolume(float volume);
     void SetRate(float rate);
     void Stop();
+    /// <summary>Read one native snapshot and write value-gated surface intents. Called only for a coalesced session
+    /// request (not once per host frame).</summary>
     void Pump(in VideoBinding binding);
 }

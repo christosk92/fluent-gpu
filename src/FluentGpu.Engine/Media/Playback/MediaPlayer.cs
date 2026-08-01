@@ -18,7 +18,7 @@ namespace FluentGpu.Media;
 /// <see cref="OpenAsync"/> surfaces an honest <see cref="MediaError.NoBackend"/> rather than pretending. The routing +
 /// signal-forwarding + backend-swap wiring is fully real and exercised headlessly via a registered test backend.</para>
 /// </summary>
-public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
+public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable, IVideoPumpSource
 {
     private readonly MediaPlayerCore _core = new();
     private readonly MediaSignalSink _sink;
@@ -32,6 +32,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     private CueTrack? _activeCaptions;
 
     private IMediaSession? _session;
+    private IVideoPumpSource? _videoPumpSource;
     private MediaKind _currentKind = MediaKind.Auto;
     private bool _disposed;
 
@@ -55,6 +56,8 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     public MediaPlayerCore Core => _core;
     /// <summary>The current routed session (null before the first successful open).</summary>
     public IMediaSession? Session => _session;
+    /// <inheritdoc/>
+    public event Action? PumpRequested;
 
     // ── the one-call easy path (all funnel into Play(MediaSource)) ───────────────────────────────────────────────────
 
@@ -73,6 +76,26 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     }
 
     private static bool LooksLikeUri(string s) => s.Contains("://", StringComparison.Ordinal);
+
+    // A session may raise this from a native/media worker thread. Consumers (the media element) marshal it to the UI
+    // thread before requesting the registry pump, so this facade deliberately does no scene work here.
+    private void OnSessionPumpRequested() { if (!_disposed) PumpRequested?.Invoke(); }
+    private void RequestVideoPump() { if (!_disposed) PumpRequested?.Invoke(); }
+
+    private void AttachVideoPumpSource(IMediaSession session)
+    {
+        DetachVideoPumpSource();
+        if (session is not IVideoPumpSource source) return;
+        _videoPumpSource = source;
+        source.PumpRequested += OnSessionPumpRequested;
+    }
+
+    private void DetachVideoPumpSource()
+    {
+        if (_videoPumpSource is not { } source) return;
+        source.PumpRequested -= OnSessionPumpRequested;
+        _videoPumpSource = null;
+    }
 
     // ── IMediaPlayer reactive surface (forwarded to the shared core) ─────────────────────────────────────────────────
     /// <inheritdoc/>
@@ -142,10 +165,11 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
             _core.SetActiveCue(captions.ActiveCue.Peek());
         }
 
-        // Tell the host whether this video needs the frame loop kept awake at display rate. "Presenting" means the user
-        // intends playback AND the session is either advancing (Playing) or ramping toward it (Opening/Buffering — e.g.
-        // the DRM/CDM licensing handshake): keep pumping so frames advance and the DRM transport is driven to actually
-        // play. Gated so a paused, stopped, ended, or audio-only player lets the loop idle:
+        // Preserve active-presentation diagnostics. This no longer wakes the host: native DirectComposition video
+        // presents decoded frames independently, while the UI playhead owns its explicit FrameClock subscription.
+        // "Presenting" means the user intends playback AND the session is either advancing (Playing) or ramping toward
+        // it (Opening/Buffering — e.g. the DRM/CDM licensing handshake). Gated so paused/stopped/audio-only players
+        // report false:
         //  • audio-only sessions don't implement IVideoSurfaceSession (video-capable check below);
         //  • a resolved audio-only MF source (video-capable but no natural size) only counts while still ramping.
         // Read back after the pump so it reflects the state the session just published.
@@ -154,13 +178,11 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
             bool videoCapable = _session is IVideoSurfaceSession;
             var st = _core.State.Peek();
             bool hasVideo = !_core.NaturalSize.Peek().IsEmpty;
-            // Ramping = the DRM/CDM licensing handshake / initial buffer, where the natural size may not be known yet —
-            // keep pumping so the handshake completes. ActivePlayback = a resolved video the user intends to play:
+            // Ramping = the DRM/CDM licensing handshake / initial buffer, where the natural size may not be known yet.
+            // ActivePlayback = a resolved video the user intends to play:
             // Playing (advancing), Ready, OR Paused — Paused is CRITICAL: on resume, IsPlayRequested flips true while the
-            // state is still Paused (the native engine hasn't resumed yet), and the pump is what drives the transport
-            // re-assert that actually resumes it. Excluding Paused here made resume-after-pause hang (the loop idled, the
-            // pump stopped, the native never got the resume). Play-intent false (user paused) → not presenting → the loop
-            // idles; Idle/Ended/Failed → not presenting.
+            // state is still Paused (the native engine has not acknowledged resume yet). Play-intent false (user paused)
+            // and Idle/Ended/Failed report not-presenting.
             bool ramping = st is PlaybackState.Opening or PlaybackState.Buffering or PlaybackState.Stalled;
             bool activePlayback = hasVideo && st is PlaybackState.Ready or PlaybackState.Paused or PlaybackState.Playing;
             bool presenting = videoCapable && _core.IsPlayRequested.Peek() && (ramping || activePlayback);
@@ -175,6 +197,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     {
         if (_disposed) return ValueTask.CompletedTask;
         _core.SetPlayRequested(true);
+        RequestVideoPump();
         return _session?.PlayAsync() ?? ValueTask.CompletedTask;
     }
 
@@ -183,6 +206,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
     {
         if (_disposed) return ValueTask.CompletedTask;
         _core.SetPlayRequested(false);
+        RequestVideoPump();
         return _session?.PauseAsync() ?? ValueTask.CompletedTask;
     }
 
@@ -193,18 +217,27 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         _core.SetPlayRequested(false);
         _core.SetState(PlaybackState.Idle);
         _core.SettleTransport();
+        RequestVideoPump();
     }
 
     /// <inheritdoc/>
     public ValueTask SeekAsync(TimeSpan to, SeekMode mode = SeekMode.Accurate)
-        => _disposed ? ValueTask.CompletedTask : (_session?.SeekAsync(to, mode) ?? ValueTask.CompletedTask);
+    {
+        if (_disposed) return ValueTask.CompletedTask;
+        RequestVideoPump();
+        return _session?.SeekAsync(to, mode) ?? ValueTask.CompletedTask;
+    }
 
     /// <inheritdoc/>
     public ValueTask StepFrame(int delta)
-        => _disposed ? ValueTask.CompletedTask : (_session?.SeekAsync(_core.Position.Peek() + TimeSpan.FromMilliseconds(33.0 * delta), SeekMode.Accurate) ?? ValueTask.CompletedTask);
+    {
+        if (_disposed) return ValueTask.CompletedTask;
+        RequestVideoPump();
+        return _session?.SeekAsync(_core.Position.Peek() + TimeSpan.FromMilliseconds(33.0 * delta), SeekMode.Accurate) ?? ValueTask.CompletedTask;
+    }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (_disposed) return; _core.Rate.Value = (float)rate; _session?.SetRate(rate); }
+    public void SetRate(double rate) { if (_disposed) return; _core.Rate.Value = (float)rate; _session?.SetRate(rate); RequestVideoPump(); }
     /// <inheritdoc/>
     public void SetVolume(double volume) { if (_disposed) return; _core.Volume.Value = (float)Math.Clamp(volume, 0, 1); _session?.SetVolume(volume); }
     /// <inheritdoc/>
@@ -285,6 +318,7 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         // internally, but retaining the previous live session here leaks clocks, network requests and native handles.
         if (_session is not null)
         {
+            DetachVideoPumpSource();
             await _session.DisposeAsync().ConfigureAwait(false);
             _session = null;
         }
@@ -305,7 +339,9 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
             var session = await backend.OpenAsync(source, opts, ct).ConfigureAwait(false);
             _session = session;
             _currentKind = kind;
+            AttachVideoPumpSource(session);
             session.ConnectSignals(_sink);
+            RequestVideoPump();
             await LoadExternalSubtitlesAsync(source, opts.Network, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -362,11 +398,13 @@ public sealed class MediaPlayer : IMediaPlayer, IAsyncDisposable
         if (_disposed) return;
         _disposed = true;
         _core.SettleTransport();
+        DetachVideoPumpSource();
         if (_session is not null)
         {
             await _session.DisposeAsync().ConfigureAwait(false);
             _session = null;
         }
+        PumpRequested = null;
     }
 }
 

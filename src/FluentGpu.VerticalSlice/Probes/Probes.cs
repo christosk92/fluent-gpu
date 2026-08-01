@@ -930,6 +930,19 @@ sealed class VirtualProbe : Component
            with { Width = 300, Height = 400 };
 }
 
+// E4b: a fast-fling shape — short rows (many rows/second cross the visible edge at fling speed) plus a deep overscan
+// halo, so the per-frame realize pool is the binding constraint on how much WARM halo survives a sustained fling.
+sealed class FastFlingProbe : Component
+{
+    public const int N = 20_000;
+    public const float RowH = 8f;
+    public override Element Render()
+        => Virtual.List(N, RowH,
+               renderItem: i => new BoxEl { Height = RowH, Fill = ColorF.FromRgba(30, 30, 30) },
+               keyOf: i => "ff" + i)
+           with { Width = 300, Height = 400, Overscan = 40 };
+}
+
 // A deliberately stateful/custom layout that keeps returning its OLD upper window bound after ItemCount shrinks.
 // Real layouts can briefly have the same stale cached geometry; the reconciler seam must constrain it to the current
 // count before using layout-produced values as Math.Clamp bounds.
@@ -4869,6 +4882,55 @@ sealed class PrefixDisplacementProbe : Component
                 PersistentPrefixCount = Prefix,
                 Reorder = new ReorderOptions { ItemDisplacement = i => Displacement(i), DisplacementVersion = Ver },
             });
+}
+
+// ── The drop-spotlight over a RECYCLING virtual list ──────────────────────────────────────────────────────────────
+// The signals-first bound realize path (ItemsView.CreateBound): the row is built ONCE per slot and recycled by a
+// SIGNAL WRITE — the node handle survives, the element tree is never rebuilt, so BoxEl.DropTarget is written to the
+// scene exactly once per slot. A slot bound to logical item 4 (compatible) and then recycled onto item 5
+// (incompatible) therefore keeps the SAME DropTargetSpec instance; only the live signal read inside CanAccept tells
+// the two apart. That is the shape the sidebar rail uses, and it is what the spotlight root set has to track.
+sealed class SpotlightScrollProbe : Component
+{
+    public const int N = 60;
+    public const float RowH = 40f;
+    public const float ViewportH = 200f;
+    public const string Kind = "res";
+
+    /// <summary>Only EVEN logical items are compatible destinations — an odd row under a cutout is a wrong row lit.</summary>
+    public static bool AcceptsIndex(int i) => (i & 1) == 0;
+
+    public readonly ItemsViewController Ctl = new();
+
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Width = 240f, Height = ViewportH,
+        Children =
+        [
+            ItemsView.CreateBound(N,
+                static scope =>
+                {
+                    var index = scope.Index;   // the per-slot bind signal; Peek so the gate never subscribes a record read
+                    return new BoxEl
+                    {
+                        Height = RowH,
+                        DropTarget = new DropTargetSpec([Kind])
+                        {
+                            VisualPolicy = DropTargetVisualPolicy.Spotlight,
+                            CanAccept = _ => AcceptsIndex(index.Peek()),
+                        },
+                    };
+                },
+                RepeatLayout.Stack(RowH),
+                new ListOptions
+                {
+                    Overscan = 1, Grow = 1f,
+                    Controller = Ctl,
+                    SelectionMode = ItemsSelectionMode.None,
+                    Selector = SelectorVisual.None,
+                }),
+        ],
+    };
 }
 
 // ── Wave 2 chip system ────────────────────────────────────────────────────────────────────────────────────────────

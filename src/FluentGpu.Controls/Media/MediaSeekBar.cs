@@ -11,14 +11,14 @@ namespace FluentGpu.Controls.Media;
 /// <summary>
 /// The media transport's scrub bar — a bespoke, compositor-bound seek control that REPLACES a per-frame
 /// <c>Slider.Create</c> in <see cref="MediaPlayerElement"/>. It is an autonomous <see cref="Component"/> (embedded via
-/// <c>Embed.Comp</c>) so the element's per-frame video-pump re-render does NOT recreate it (which destroyed any in-flight
-/// drag and snapped the thumb back). Three properties make it correct where a controlled slider was not:
+/// <c>Embed.Comp</c>) so source/geometry video pumps never recreate it (which would destroy an in-flight drag and snap
+/// the thumb back). Three properties make it correct where a controlled slider was not:
 /// <list type="bullet">
 /// <item><b>Scrub gate.</b> While the user is dragging, the displayed fraction follows the finger and IGNORES the
 ///   playhead, so the transport's position tick can't yank the thumb out from under the pointer.</item>
 /// <item><b>Compositor-bound playhead.</b> The fill/thumb positions are bound <c>Transform</c>s reading ONE
 ///   <see cref="FloatSignal"/> (<c>_displayFrac</c>) — moving the playhead never re-renders/relayouts this component. A
-///   mounted per-frame ticker advances that signal from <see cref="IMediaPlayer.PositionSeconds"/> while playing.</item>
+///   mounted frame-clock ticker advances that signal by interpolation while playing, between coarse reported positions.</item>
 /// <item><b>Live scrub + accurate commit.</b> Dragging issues fast <see cref="SeekMode.Keyframe"/> seeks for preview
 ///   (throttled); releasing issues one <see cref="SeekMode.Accurate"/> seek — driving the native transport (DRM or
 ///   clear) to the exact target.</item>
@@ -45,6 +45,10 @@ public sealed class MediaSeekBar : Component
 
     private NodeHandle _self;
     private long _lastSeekMs = long.MinValue;       // throttle anchor for live keyframe seeks
+    // A low-cadence native position report seeds this anchor. The mounted FrameClock ticker advances from it without
+    // re-rendering the player element or requiring the native video session to pump every display frame.
+    private long _positionAnchorWallMs;
+    private float _positionAnchorSeconds;
 
     /// <summary>Re-derive <c>_displayFrac</c> from the current model — called by the ticker every frame while playing,
     /// and from an effect so a paused bar still shows the right resting position. Zero alloc; value-gated writes.</summary>
@@ -53,7 +57,14 @@ public sealed class MediaSeekBar : Component
         if (_scrubbing.Peek()) { _displayFrac.Value = _scrubFrac.Peek(); return; }   // scrub gate
         double durSec = Player.Duration.Peek().TotalSeconds;
         if (durSec <= 0.0) { if (_displayFrac.Peek() != 0f) _displayFrac.Value = 0f; return; }
-        float frac = (float)Math.Clamp(Player.PositionSeconds.Peek() / durSec, 0.0, 1.0);
+        float position = Player.PositionSeconds.Peek();
+        if (Player.IsPlaying.Peek() && !Player.IsBuffering.Peek())
+        {
+            long elapsedMs = Math.Max(0, Environment.TickCount64 - _positionAnchorWallMs);
+            float rate = Math.Max(0f, Player.Rate.Peek());
+            position = _positionAnchorSeconds + elapsedMs * 0.001f * rate;
+        }
+        float frac = (float)Math.Clamp(position / durSec, 0.0, 1.0);
         // Quantize to the live track's whole-pixel granularity: most ticker frames land on the same pixel, so the write
         // is a true no-op (no bind re-run, no redundant GPU submit); a real pixel step still advances smoothly.
         float w = _width.Peek();
@@ -63,16 +74,22 @@ public sealed class MediaSeekBar : Component
 
     public override Element Render()
     {
-        // LOW-frequency subscriptions ONLY (never the position — that would re-render this component every frame).
+        // Low-frequency subscriptions ONLY. Position reports re-render this isolated leaf to re-anchor interpolation;
+        // they never re-render the player element or run every display frame.
         var st = Player.State.Value;
         bool playing = Player.IsPlaying.Value;
         bool buffering = Player.IsBuffering.Value;
         double durSec = Player.Duration.Value.TotalSeconds;
+        float reportedPosition = Player.PositionSeconds.Value;
+        _positionAnchorSeconds = reportedPosition;
+        _positionAnchorWallMs = Environment.TickCount64;
         bool enabled = durSec > 0.0 && st is not (PlaybackState.Idle or PlaybackState.Failed);
 
         // Re-seed the resting display when the enabling inputs change (duration arrives, play/pause edge). The playing
-        // ticker covers per-frame advance; a seek-while-paused re-seeds in OnCommit.
-        UseEffect(() => Recompute(), HashCode.Combine(enabled, playing, (int)(durSec * 1000)));
+        // ticker covers panel-rate interpolation; a seek-while-paused re-seeds in OnCommit.
+        int modelKey = HashCode.Combine(HashCode.Combine(enabled, playing, buffering), (int)(durSec * 1000),
+            (int)(reportedPosition * 1000));
+        UseEffect(() => Recompute(), modelKey);
 
         var s = Slider.DefaultStyle;
         float ringD = s.ThumbRingDiameter;
@@ -143,8 +160,8 @@ public sealed class MediaSeekBar : Component
             Children = [rail, thumb],
         };
 
-        // Per-frame ticker: advances _displayFrac from the playhead while playing; unmounted when paused/stopped so the
-        // frame loop can idle. It NEVER re-renders this component (only writes a signal the compositor binds read).
+        // Frame-clock ticker: interpolates _displayFrac while playing; unmounted when paused/stopped so the frame loop
+        // can idle. It NEVER re-renders this component (only writes a signal the compositor binds read).
         bool canAdvance = enabled && playing && !buffering;
         Element? ticker = canAdvance ? Embed.Comp(() => new MediaSeekTicker { Owner = this }) : null;
 
@@ -226,6 +243,8 @@ public sealed class MediaSeekBar : Component
         float f = _scrubFrac.Peek();
         var target = TimeSpan.FromSeconds(Math.Clamp(f * durSec, 0.0, durSec));
         _displayFrac.Value = f;                    // hold the committed position; the ticker/effect converges as the playhead catches up
+        _positionAnchorSeconds = (float)target.TotalSeconds;
+        _positionAnchorWallMs = Environment.TickCount64;
         _scrubbing.Value = false;                  // release the gate; SeekAsync publishes the target position, so no snap-back
         _lastSeekMs = (long)target.TotalMilliseconds;
         _ = Player.SeekAsync(target, SeekMode.Accurate);

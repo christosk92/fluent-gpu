@@ -104,8 +104,24 @@ public sealed class CoverColorPlane
         }
     }
 
-    /// <summary>Marshal background completions onto the UI thread. Call once from a mount effect with <c>UsePost()</c>.</summary>
-    public void Activate(Action<Action> post) => _post = post ?? (static a => a());
+    /// <summary>Marshal background completions onto the UI thread. Call once from a mount effect with <c>UsePost()</c>.
+    /// Also warms the persisted table off-thread (see <see cref="Prewarm"/>) — startup is the last moment before the
+    /// first frame at which the disk read is free.</summary>
+    public void Activate(Action<Action> post)
+    {
+        _post = post ?? (static a => a());
+        Prewarm();
+    }
+
+    /// <summary>Parse the persisted table on a background thread so the FIRST render-path read is already a dictionary
+    /// lookup. Without this the cold load rode <see cref="EnsureLoadedLocked"/> on whichever caller happened to be first
+    /// — in practice the always-mounted player bar's art tile, whose <see cref="TryGetTint"/> then paid a synchronous
+    /// <c>File.ReadAllBytes</c> + <c>JsonDocument.Parse</c> INSIDE <c>Render()</c> (RenderBudget flagged 100-325ms
+    /// one-shot renders of <c>PlayerBarContent</c>). Idempotent and race-free by construction: the work is the same
+    /// <see cref="EnsureLoadedLocked"/> under the same <c>_gate</c>, so a UI-thread read that beats this task simply
+    /// does the load itself (the old behaviour, now the rare fallback rather than the norm) and this task then finds
+    /// <c>_loaded</c> set and returns.</summary>
+    public void Prewarm() => _ = Task.Run(() => { lock (_gate) EnsureLoadedLocked(); });
 
     public static string DefaultPath()
     {

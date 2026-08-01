@@ -903,14 +903,14 @@ public sealed class AppHost : IDisposable
     private const double ScrollPresentGpuBudgetMs = 8.0;
     private double _gpuBoundEma;   // smoothed recent GPU fence-wait (ms); governor input
     private const double GpuBoundBudgetMs = 10.0;   // sustained fence-wait above this ⇒ can't hold 120 (8.3ms) → pace to ambient
-    // The governor NEVER paces these: genuine interactions (would add input/scroll latency) + active video (needs the panel
-    // rate). It DOES pace art-reveal crossfades / one-shot transitions / ambient loops when GPU-bound (a 60Hz crossfade is
+    // The governor NEVER paces these: genuine interactions (would add input/scroll latency) + an explicit UI frame-clock
+    // poller (for example the compositor-bound playback playhead). It DOES pace art-reveal crossfades / one-shot transitions / ambient loops when GPU-bound (a 60Hz crossfade is
     // imperceptible, and the GPU can't do better than ~60 at that size anyway). Narrower than LatencySensitiveWake — which
     // includes the Image* bits — so the governor reliably engages during maximized playback where those bits stay set.
     private const WakeReasons GovernorNeverPace =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
-        WakeReasons.VideoPresenting;
+        WakeReasons.FrameClockPoller;
     private const WakeReasons LatencySensitiveWake =
         WakeReasons.Interact | WakeReasons.ScrollAnim | WakeReasons.Repeat |
         WakeReasons.DragActive | WakeReasons.DragDropWork | WakeReasons.GestureHold | WakeReasons.TouchPress |
@@ -924,9 +924,9 @@ public sealed class AppHost : IDisposable
         // preserved exactly where it was argued (during and right after a scroll); past the scroll holds the reveals
         // keep running, at the 30 Hz ambient cadence, which is imperceptible for a crossfade.
         WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady |
-        // Active video presentation is DISPLAY-rate motion (a playing video advances every refresh) — exempt it from the
-        // 30 Hz ambient cap so playback runs at the panel's full frame rate, not the ambient-throttled cadence.
-        WakeReasons.VideoPresenting;
+        // A mounted FrameClock consumer explicitly requested panel-rate UI work (the seek playhead uses this); native
+        // DirectComposition video advances independently and instead posts a one-shot VideoPumpPending when needed.
+        WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending;
     // The image bits of LatencySensitiveWake — display-rate ONLY while an interaction is live or just ended.
     private const WakeReasons ImageWake =
         WakeReasons.ImageCrossfades | WakeReasons.ImagesPending | WakeReasons.ImageReady;
@@ -949,8 +949,8 @@ public sealed class AppHost : IDisposable
         WakeReasons.FrameNeeded | WakeReasons.RuntimePending | WakeReasons.ScrollAnim |
         WakeReasons.DragDropWork | WakeReasons.DragActive | WakeReasons.GestureHold | WakeReasons.TouchPress |
         WakeReasons.PopupAnim | WakeReasons.ImagesPending | WakeReasons.ImageReady | WakeReasons.ImageCrossfades | WakeReasons.Orphans |
-        // A video presenting under a modal/seek loop must keep pumping so the frame keeps advancing.
-        WakeReasons.VideoPresenting |
+        // An explicit UI frame-clock poller or a queued native-video hand-off must not be swallowed by a modal loop.
+        WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending |
         // A due frame-clock timer (a debounce/timeout/interval) must still fire while the user drags/resizes the window.
         WakeReasons.Timer;
     private static bool OnlyAmbientWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
@@ -1615,12 +1615,12 @@ public sealed class AppHost : IDisposable
         if (_dispatcher.Drag.IsActive) r |= WakeReasons.DragActive;   // E5 reorder dwell keep-alive: a live drag keeps frames coming so the 200/300ms FrameClock dwell tickers advance even on a motionless pointer (DragController.cs:118)
         if (_dispatcher.HasArmedHold) r |= WakeReasons.GestureHold;   // §7A touch long-press: a STATIONARY held finger emits no input, so keep frames coming until TickGestureArenas fires the ~500ms Hold (then this clears and the loop idles)
         if (_dispatcher.HasPendingTouchPress) r |= WakeReasons.TouchPress;
-        // A media player actively presenting a video surface (playing, or ramping to play through the DRM/CDM licensing
-        // handshake) must keep the loop ticking at DISPLAY rate — otherwise the loop idles the instant the initial
-        // FrameNeeded clears, the MediaPlayerElement pump stops, and the video freezes (advancing only when a seek/pause
-        // pokes _frameNeeded). Cleared the moment playback pauses/stops/ends or the surface is released, so a paused,
-        // audio-only, or idle player still lets the loop sleep. O(1) counter read (VideoSurfaceRegistry).
-        if (_videoSurfaces.HasActivePresentation) r |= WakeReasons.VideoPresenting;
+        // A compositor-bound UI clock (not native video presentation) is an explicit request for panel-rate frames.
+        // This keeps the seek playhead smooth while a native DirectComposition video presents decoded frames on its own.
+        if (_frameClockSig.HasSubscribers) r |= WakeReasons.FrameClockPoller;
+        // Native engines / geometry changes request one coalesced post-layout video pump. It is deliberately distinct
+        // from playback state: a playing DComp video must not turn every host frame into a repaint.
+        if (_videoSurfaces.HasPendingPumps) r |= WakeReasons.VideoPumpPending;
         // A windowed popup's desktop-acrylic open reveal is driven per-frame on Present (CompositionBackdrop.TickAnimation),
         // so it needs the loop to keep presenting until it settles — otherwise (no engine animation active for windowed
         // menus) the loop idle-skips and the reveal freezes at its seed. O(popups) ≈ O(1) (typically 0–1 menus open).
@@ -2696,12 +2696,11 @@ public sealed class AppHost : IDisposable
             _inputHooks.RunAfterAnimations();                  // 7.1 tree lifecycle finalizers (overlays) before record/present
             RunIncrementalLayout();                            // 7 scoped subtree relayout for SizeMode.Relayout
             RunReflowLayout(layoutSize);                       // 7 boundary-scoped re-solve for SizeMode.Reflow (smooth reflow)
-            // 7.2 video pump: engine-invoked per-binding pump (the video pump / viewport writes LEAVE the control's
-            // Render — Render is pure). Each registered media element reads its now-final laid-out area + this scale and
-            // writes value-gated video intents; the phase-11.5 Drain flushes them the same frame. Single-writer
-            // enforced by the registry (fullscreen ownership transfer). Runs on every backend incl. headless so the
-            // pump cadence is FRAME-driven not render-driven; zero-alloc (mount-registered closures over a fixed array).
-            _videoSurfaces.PumpAll(_scene.DeviceScale);
+            // 7.2 video pump: event/geometry/transport requests are coalesced into one post-layout turn per surface.
+            // Native DirectComposition video presents decoded frames independently, so a playing video no longer turns
+            // every host frame into RepaintCurrentFrame. Render remains pure; registered pumps only write value-gated
+            // intents, with fullscreen single-writer ownership enforced by the registry.
+            _videoSurfaces.PumpPending(_scene.DeviceScale);
             ReclaimSettledOrphans();                           // 7 free settled exit orphans
             _connected.Settle();                               // 7 retire landed shared-element flies (reveal dest, unpin, free overlay)
             _connected.SyncDetached();                         // 7 flag-gated rebuild: mirror the engine-animated fly into its DetachedNode snapshot (RecordDetached draws it)
@@ -2812,6 +2811,11 @@ public sealed class AppHost : IDisposable
             else if (layoutNeeded) _dispatcher.RefreshHoverAfterLayoutMove();
 
             ScrollBindEval.ApplyContinuousPass(_scene);        // 7.7 steady-frame scroll binds (collapsed hero / fade copy)
+            // 7.8 drop-spotlight re-collect. AFTER reconcile/layout/realize + the scroll writes above and BEFORE record,
+            // so the scrim's cutouts describe the bindings and the geometry THIS frame paints. A recycling virtual list
+            // rebinds a realized row's logical item without ever rewriting its drop-target spec, so the per-move version
+            // gate alone left the set stale in place (see DragDropContext.SyncSpotlightBeforeRecord). No-op when idle.
+            _dispatcher.DragDrop.SyncSpotlightBeforeRecord();
 
             var focus = new FocusVisualStyle(Tok.FocusOuter, Tok.FocusInner, Tok.FocusThickness);
             // WinUI text-edit decor brushes: selection = TextControlSelectionHighlightColor (= AccentFillColorSelectedTextBackgroundBrush),

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
@@ -14,7 +15,7 @@ namespace FluentGpu.WindowsApi.Media.PlayReady;
 /// as clear video — nothing downstream changes. A CDM/license shortfall surfaces as a typed
 /// <see cref="MediaErrorCategory.Drm"/> error (never a silent black frame).
 /// </summary>
-public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
+public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
 {
     private readonly IProtectedVideoPlayer _player;
     private readonly ProtectedVideoRequest _request;
@@ -44,6 +45,18 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
     private long _startTicks;
     private bool _watchdogFired;
 
+    // The desktop PlayReady backend exposes a native snapshot rather than a media-engine event callback. Poll it at a
+    // deliberately low cadence only while opening, buffering, playing, or settling a transport command. That preserves
+    // protected-session state/position progress without turning every panel frame into a UI-thread video repaint.
+    private const int PumpPollMs = 250;
+    private const int TransportSettlePollMs = 1_000;
+    private Timer? _pumpPoll;
+    private bool _pumpPollActive;
+    private long _pollUntilTicks;
+
+    /// <inheritdoc/>
+    public event Action? PumpRequested;
+
     /// <summary>Create a protected session over <paramref name="player"/> for <paramref name="request"/>.</summary>
     public ProtectedMediaSession(IProtectedVideoPlayer player, ProtectedVideoRequest request, MediaOpenOptions opts)
     {
@@ -62,7 +75,46 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         sink.State(PlaybackState.Opening);
         _publishedState = PlaybackState.Opening;
         StartOnce();
+        KeepPollingFor(TransportSettlePollMs);
+        RequestPump();
     }
+
+    private static void PumpPollTick(object? state) => ((ProtectedMediaSession)state!).RequestPump();
+
+    private void RequestPump()
+    {
+        if (_disposed) return;
+        try { PumpRequested?.Invoke(); } catch { }
+    }
+
+    private void KeepPollingFor(int durationMs)
+    {
+        if (_disposed) return;
+        _pollUntilTicks = Math.Max(_pollUntilTicks, Environment.TickCount64 + durationMs);
+        SetPumpPoll(true);
+    }
+
+    private void SetPumpPoll(bool active)
+    {
+        if (_disposed || _pumpPollActive == active) return;
+        _pumpPollActive = active;
+        if (active)
+        {
+            _pumpPoll ??= new Timer(PumpPollTick, this, Timeout.Infinite, Timeout.Infinite);
+            _pumpPoll.Change(0, PumpPollMs);
+        }
+        else
+        {
+            _pumpPoll?.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+    }
+
+    private bool ShouldPoll(ProtectedVideoState state)
+        => !_disposed && !_errorPublished &&
+            (Environment.TickCount64 < _pollUntilTicks
+             || state is ProtectedVideoState.Launching or ProtectedVideoState.Connecting or ProtectedVideoState.Loading
+                 or ProtectedVideoState.Licensed or ProtectedVideoState.Buffering
+             || (_playRequested && state is not (ProtectedVideoState.Error or ProtectedVideoState.Ended or ProtectedVideoState.Stopped)));
 
     private void StartOnce()
     {
@@ -87,6 +139,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         StartOnce();
         _playRequested = true;
         _sink?.PlayRequested(true);
+        KeepPollingFor(TransportSettlePollMs);
+        RequestPump();
         return _player.PlayAsync();
     }
 
@@ -96,6 +150,8 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         if (_disposed) return ValueTask.CompletedTask;
         _playRequested = false;
         _sink?.PlayRequested(false);
+        KeepPollingFor(TransportSettlePollMs);
+        RequestPump();
         return _player.PauseAsync();
     }
 
@@ -108,10 +164,18 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         await _player.SeekAsync(ms).ConfigureAwait(false);
         _sink?.Position(TimeSpan.FromMilliseconds(ms));
         _sink?.SettleTransport();
+        KeepPollingFor(TransportSettlePollMs);
+        RequestPump();
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (!_disposed) _player.SetRate((float)rate); }
+    public void SetRate(double rate)
+    {
+        if (_disposed) return;
+        _player.SetRate((float)rate);
+        KeepPollingFor(TransportSettlePollMs);
+        RequestPump();
+    }
     /// <inheritdoc/>
     public void SetVolume(double volume)
     {
@@ -150,6 +214,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
                     _player.Error.Value ?? "Protected playback failed (CDM/license).", null, _locus, MediaRecovery.NeedsLicense));
                 Publish(sink, PlaybackState.Failed);
             }
+            SetPumpPoll(false);
             return;
         }
 
@@ -167,6 +232,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
                     "(see %LOCALAPPDATA%\\FluentGpu\\PlayReady\\desktop-playready.log).",
                 null, _locus, MediaRecovery.NeedsLicense));
             Publish(sink, PlaybackState.Failed);
+            SetPumpPoll(false);
             return;
         }
 
@@ -205,6 +271,7 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
 
         Publish(sink, MapState(pv));
         sink.Position(TimeSpan.FromMilliseconds(posMs));
+        SetPumpPoll(ShouldPoll(pv));
     }
 
     private static PlaybackState MapState(ProtectedVideoState s) => s switch
@@ -233,6 +300,10 @@ public sealed class ProtectedMediaSession : IMediaSession, IVideoSurfaceSession
         if (_disposed) return ValueTask.CompletedTask;
         _disposed = true;
         _sink = null;
+        _pumpPollActive = false;
+        _pumpPoll?.Dispose();
+        _pumpPoll = null;
+        PumpRequested = null;
         var player = _player;
         return new ValueTask(Task.Run(() =>
         {

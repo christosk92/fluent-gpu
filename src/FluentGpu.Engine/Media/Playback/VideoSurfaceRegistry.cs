@@ -5,7 +5,7 @@ using FluentGpu.Signals;
 
 namespace FluentGpu.Media;
 
-/// <summary>The engine-invoked per-frame video pump for one binding (see <see cref="VideoSurfaceRegistry.RegisterPump"/>).
+/// <summary>The engine-invoked video pump for one binding (see <see cref="VideoSurfaceRegistry.RegisterPump"/>).
 /// Given the current DIP→device <paramref name="scale"/>, it reads the live laid-out area and writes video intents /
 /// drives <see cref="IMediaPlayer.PumpVideo"/> — so the control's <c>Render</c> stays a pure function.</summary>
 public delegate void VideoPump(float scale);
@@ -38,27 +38,29 @@ public sealed class VideoSurfaceRegistry
         public int Z;
         public nuint DesiredHandle;   // the DComp surface handle to bind (0 = none produced yet)
         public bool ReleasePending;   // token released on the UI side; the host destroys the surface then frees the slot
-        public bool Presenting;       // a media player is actively presenting into this surface (playing / ramping) — drives the host wake reason; does NOT affect the presenter drain
+        public bool Presenting;       // diagnostic playback state; does NOT affect the presenter drain or host cadence
+        public bool PumpPending;      // one coalesced UI-thread pump is requested for this slot
 
         // host-resolved (render thread):
         public VideoSurfaceId SurfaceId;   // none until first created
         public nuint BoundHandle;          // last handle actually bound (detects a change)
         public bool Dirty;                 // an intent changed → the next Drain re-applies it
 
-        // single-writer pump ownership (UI thread): the ONE owner whose registered pump drives this slot each frame.
+        // single-writer pump ownership (UI thread): the ONE owner whose registered pump drives this slot.
         public object? PumpOwner;
     }
 
     private readonly Entry[] _entries = new Entry[MaxSurfaces];
     private readonly Signal<VideoSurfaceId>[] _surfaceSignals;
     private bool _anyDirty;
-    private int _presentingCount;   // number of slots a media player is actively presenting into (O(1) wake read)
+    private int _presentingCount;   // diagnostic census of slots a media player is actively presenting into
+    private int _pendingPumpCount;  // slots with one coalesced pump awaiting the next host frame
     private static readonly bool s_diag = Environment.GetEnvironmentVariable("FG_DRM_DIAG") == "1";
 
     // ── per-binding pump callbacks (engine-invoked each frame; replaces the control's side-effecting Render) ──────────
     private struct PumpReg { public bool InUse; public int Token; public object? Owner; public VideoPump? Pump; }
     private readonly PumpReg[] _pumps = new PumpReg[MaxSurfaces];
-    private long _pumpInvocations;         // total OWNER pumps actually invoked (fix: pump count tracks FRAMES, not renders)
+    private long _pumpInvocations;         // total owner pumps actually invoked (tracks requests, not renders/frames)
     private long _suppressedNonOwnerPumps; // non-owner pumps suppressed by the single-writer contract (ownership diag)
 
     public VideoSurfaceRegistry()
@@ -129,11 +131,10 @@ public sealed class VideoSurfaceRegistry
         MarkDirty(ref e);
     }
 
-    /// <summary>Mark whether a media player is actively presenting new frames into this surface (playing, or ramping to
-    /// play). This is the source of truth for <see cref="HasActivePresentation"/> — the host folds it into a frame-loop
-    /// wake reason so a playing video keeps the loop ticking at display rate. Value-gated + O(1); it does NOT mark the
-    /// entry dirty (presenting has no effect on the presenter drain). Cleared automatically on <see cref="Release"/> /
-    /// <see cref="DestroyAll"/>. A media player must set it back to <c>false</c> on pause/stop/unbind.</summary>
+    /// <summary>Record whether a media player is actively presenting new frames into this surface (playing, or ramping
+    /// to play). This is diagnostic state only: native DirectComposition video presents decoded frames independently;
+    /// it no longer makes the host redraw at display rate. Value-gated + O(1); it does NOT mark the entry dirty.
+    /// Cleared automatically on <see cref="Release"/> / <see cref="DestroyAll"/>.</summary>
     public void SetPresenting(int token, bool presenting)
     {
         int i = token - 1;
@@ -144,8 +145,8 @@ public sealed class VideoSurfaceRegistry
         _presentingCount += presenting ? 1 : -1;
     }
 
-    /// <summary>True when at least one surface has an active presentation in flight (a media player is playing / ramping
-    /// into it). Read once per frame by the host wake computation; O(1), zero-alloc.</summary>
+    /// <summary>True when at least one surface has active presentation state. Retained for diagnostics; it does not
+    /// control host wake cadence.</summary>
     public bool HasActivePresentation => _presentingCount > 0;
 
     /// <summary>Bind the DirectComposition surface handle produced by a video source (the single DRM attach point).
@@ -163,7 +164,8 @@ public sealed class VideoSurfaceRegistry
     {
         int i = token - 1;
         if ((uint)i >= MaxSurfaces || !_entries[i].InUse) return;
-        if (_entries[i].Presenting) { _entries[i].Presenting = false; _presentingCount--; }   // stop keeping the loop awake the instant the owner releases
+        if (_entries[i].Presenting) { _entries[i].Presenting = false; _presentingCount--; }
+        ClearPumpPending(ref _entries[i]);
         _entries[i].ReleasePending = true;
         MarkDirty(ref _entries[i]);
     }
@@ -178,9 +180,9 @@ public sealed class VideoSurfaceRegistry
 
     // ── per-binding pump seam (UI thread; engine-invoked per frame — the video pump leaves the control's Render) ──────
 
-    /// <summary>Register a per-frame pump for a surface slot, owned by <paramref name="owner"/>. The host invokes it
-    /// each frame (via <see cref="PumpAll"/>) with the current DIP→device scale, AFTER layout settles — so the pump
-    /// reads the live laid-out area and writes video intents with NO side effect in the control's Render. The FIRST
+    /// <summary>Register an on-demand pump for a surface slot, owned by <paramref name="owner"/>. The host invokes it
+    /// after a coalesced <see cref="RequestPump"/> and layout settlement, with the current DIP→device scale — so the
+    /// pump reads the live laid-out area and writes video intents with NO side effect in the control's Render. The FIRST
     /// registrant of a slot becomes its initial pump owner. Returns a registration id (>0), or 0 when the slot is dead
     /// or the pump pool is exhausted.</summary>
     public int RegisterPump(int token, object owner, VideoPump pump)
@@ -192,6 +194,7 @@ public sealed class VideoSurfaceRegistry
             if (_pumps[i].InUse) continue;
             _pumps[i] = new PumpReg { InUse = true, Token = token, Owner = owner, Pump = pump };
             _entries[ti].PumpOwner ??= owner;   // first registrant claims the slot
+            RequestPump(token);                  // establish geometry / handle binding once after mount
             return i + 1;
         }
         return 0;
@@ -213,17 +216,20 @@ public sealed class VideoSurfaceRegistry
             for (int j = 0; j < MaxSurfaces; j++)
                 if (_pumps[j].InUse && _pumps[j].Token == token) { next = _pumps[j].Owner; break; }
             _entries[ti].PumpOwner = next;
+            if (next is null) ClearPumpPending(ref _entries[ti]);
+            else RequestPump(token);             // hand-off writes the new owner's geometry immediately
         }
     }
 
     /// <summary>Transfer single-writer pump ownership of a slot to <paramref name="owner"/> (the first-class fullscreen
-    /// hand-off, replacing the "exactly one instance pumps" convention). Only the owner's registered pump runs each
-    /// frame; a non-owner pump is a no-op counted in <see cref="SuppressedNonOwnerPumpCount"/>.</summary>
+    /// hand-off, replacing the "exactly one instance pumps" convention). Only the owner's registered pump runs for a
+    /// request; alternates are counted in <see cref="SuppressedNonOwnerPumpCount"/>.</summary>
     public void TransferOwnership(int token, object owner)
     {
         int ti = token - 1;
         if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse || owner is null) return;
         _entries[ti].PumpOwner = owner;
+        RequestPump(token);
     }
 
     /// <summary>True when <paramref name="owner"/> currently owns the slot's pump.</summary>
@@ -233,33 +239,59 @@ public sealed class VideoSurfaceRegistry
         return (uint)ti < MaxSurfaces && _entries[ti].InUse && ReferenceEquals(_entries[ti].PumpOwner, owner);
     }
 
-    /// <summary>Invoke every registered pump whose owner holds its slot; a non-owner pump is suppressed (counted). The
-    /// host calls this once per frame on the UI thread after layout is settled and before <see cref="Drain"/>. Zero
-    /// managed allocation: iterates a fixed array and invokes mount-registered delegates. Runs on every backend
-    /// (headless too) so the pump cadence is frame-driven, not render-driven.</summary>
-    public void PumpAll(float scale)
+    /// <summary>Request one UI-thread video pump after layout settles. Requests are value-gated per slot: a burst of
+    /// native state events, geometry changes, or transport commands yields one pump, not a permanent frame-loop reason.
+    /// The caller must be on the UI thread; background media callbacks post through their control first.</summary>
+    public void RequestPump(int token)
     {
-        for (int i = 0; i < MaxSurfaces; i++)
+        int ti = token - 1;
+        if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse) return;
+        ref Entry e = ref _entries[ti];
+        if (e.PumpPending) return;
+        e.PumpPending = true;
+        _pendingPumpCount++;
+    }
+
+    /// <summary>True when at least one coalesced video pump must run on the next host frame. O(1), zero-alloc.</summary>
+    public bool HasPendingPumps => _pendingPumpCount > 0;
+
+    /// <summary>Invoke each requested slot's current owner once. The host calls this on the UI thread after layout is
+    /// settled and before <see cref="Drain"/>. Clearing the pending bit before invoking allows a re-entrant native event
+    /// to request exactly one FOLLOWING pump. Zero managed allocation: fixed arrays and mount-registered delegates.</summary>
+    public void PumpPending(float scale)
+    {
+        if (_pendingPumpCount == 0) return;
+        for (int ti = 0; ti < MaxSurfaces; ti++)
         {
-            ref PumpReg p = ref _pumps[i];
-            if (!p.InUse || p.Pump is null) continue;
-            int ti = p.Token - 1;
-            if ((uint)ti >= MaxSurfaces || !_entries[ti].InUse) continue;
-            if (ReferenceEquals(p.Owner, _entries[ti].PumpOwner))
+            ref Entry e = ref _entries[ti];
+            if (!e.InUse || !e.PumpPending) continue;
+
+            // Clear first: the callback may synchronously receive a native event and queue its next settled turn.
+            e.PumpPending = false;
+            _pendingPumpCount--;
+
+            int ownerIndex = -1;
+            int alternates = 0;
+            for (int i = 0; i < MaxSurfaces; i++)
             {
-                p.Pump(scale);
-                _pumpInvocations++;
+                ref PumpReg p = ref _pumps[i];
+                if (!p.InUse || p.Token != ti + 1 || p.Pump is null) continue;
+                if (ReferenceEquals(p.Owner, e.PumpOwner)) ownerIndex = i;
+                else alternates++;
             }
-            else
+            if (alternates != 0)
             {
-                _suppressedNonOwnerPumps++;   // single-writer contract: a non-owner pump does nothing this frame
-                if (s_diag) Console.Error.WriteLine($"[drm-reg] non-owner pump suppressed for token {p.Token}");
+                _suppressedNonOwnerPumps += alternates;
+                if (s_diag) Console.Error.WriteLine($"[drm-reg] {alternates} non-owner pump(s) suppressed for token {ti + 1}");
             }
+            if (ownerIndex < 0) continue;    // registration vanished; a later mount will request again
+            _pumps[ownerIndex].Pump!(scale);
+            _pumpInvocations++;
         }
     }
 
-    /// <summary>Total owner-pump invocations since construction — the frame-phase pump cadence probe (pure-render gate:
-    /// this tracks FRAMES, not component renders).</summary>
+    /// <summary>Total owner-pump invocations since construction — the coalesced pump cadence probe (pure-render gate:
+    /// this tracks requests, not component renders or host frames).</summary>
     public long PumpInvocationCount => _pumpInvocations;
     /// <summary>Non-owner pump attempts suppressed by the single-writer contract (ownership-transfer gate probe).</summary>
     public long SuppressedNonOwnerPumpCount => _suppressedNonOwnerPumps;
@@ -286,6 +318,7 @@ public sealed class VideoSurfaceRegistry
             {
                 if (!e.SurfaceId.IsNone) { presenter.Destroy(e.SurfaceId); changed = true; }
                 if (e.Presenting) _presentingCount--;   // keep the wake counter balanced when a presenting slot is freed
+                ClearPumpPending(ref e);
                 _surfaceSignals[i].Value = default;
                 e = default;   // free the slot
                 continue;
@@ -351,10 +384,17 @@ public sealed class VideoSurfaceRegistry
         }
         _anyDirty = false;
         _presentingCount = 0;
+        _pendingPumpCount = 0;
         if (changed) presenter.Commit();
     }
 
     private void MarkDirty(ref Entry e) { e.Dirty = true; _anyDirty = true; }
+    private void ClearPumpPending(ref Entry e)
+    {
+        if (!e.PumpPending) return;
+        e.PumpPending = false;
+        _pendingPumpCount--;
+    }
 
     private ref Entry Slot(int token)
     {
@@ -400,18 +440,19 @@ public readonly struct VideoBinding
     public void SetContentSize(SizeI px) { if (_registry is { } r) r.SetContentSize(Token, (uint)Math.Max(0, px.Width), (uint)Math.Max(0, px.Height)); }
     /// <summary>Show/hide the surface.</summary>
     public void SetVisible(bool visible) { if (_registry is { } r) r.SetVisible(Token, visible); }
-    /// <summary>Mark whether a media player is actively presenting new frames into this surface (playing / ramping to
-    /// play). Keeps the host frame loop ticking at display rate while true (see
-    /// <see cref="VideoSurfaceRegistry.HasActivePresentation"/>); set back to <c>false</c> on pause/stop.</summary>
+    /// <summary>Record whether a media player is actively presenting new frames into this surface (playing / ramping to
+    /// play). Diagnostic only; native video presentation does not force the host's frame cadence.</summary>
     public void SetPresenting(bool presenting) { if (_registry is { } r) r.SetPresenting(Token, presenting); }
     /// <summary>Bind the DirectComposition surface handle produced by a video source (the DRM attach point).</summary>
     public void Bind(nuint dcompSurfaceHandle) { if (_registry is { } r) r.Bind(Token, dcompSurfaceHandle); }
     /// <summary>Tear the surface down (also done automatically when the owning component unmounts).</summary>
     public void Release() { if (_registry is { } r) r.Release(Token); }
 
-    /// <summary>Register a per-frame pump owned by <paramref name="owner"/> (the engine invokes it each frame — the
-    /// video pump leaves the control's Render). Returns a registration id, or 0 when this binding is inert.</summary>
+    /// <summary>Register an on-demand pump owned by <paramref name="owner"/> (the engine invokes it after a coalesced
+    /// request — the video pump leaves the control's Render). Returns a registration id, or 0 when this binding is inert.</summary>
     public int RegisterPump(object owner, VideoPump pump) => _registry?.RegisterPump(Token, owner, pump) ?? 0;
+    /// <summary>Request one coalesced pump after layout settles (native event, transport, activation, or geometry change).</summary>
+    public void RequestPump() { if (_registry is { } r) r.RequestPump(Token); }
     /// <summary>Drop a pump registration returned by <see cref="RegisterPump"/>.</summary>
     public void UnregisterPump(int regId) { if (_registry is { } r) r.UnregisterPump(regId); }
     /// <summary>Transfer single-writer pump ownership of this slot to <paramref name="owner"/> (fullscreen hand-off).</summary>

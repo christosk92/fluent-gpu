@@ -1432,6 +1432,9 @@ sealed class LyricLineView : Component
                 // Glyphs + the blur layer mount/step while the row is still dim + blurred (never on the focal row), and a
                 // peripheral line pays neither a second glyph run nor a blur layer.
                 Blur = near ? (_centered ? 13f : 9f) : 0f,
+                // Scroll motion translates this stationary glyph subtree every frame. Reuse its retained blur when it
+                // exists; otherwise render crisp for the moving frame and rebuild the full halo after settling.
+                BlurCachePolicy = BlurCachePolicy.HoldIfCached,
                 Opacity = GlowOpacity(),
                 HitTestVisible = false,
                 Children = [LineText(near ? _line.Text : "", Tok.TextPrimary with { A = 0.4f })],
@@ -1452,7 +1455,10 @@ sealed class LyricLineView : Component
         {
             Direction = 1,
             Blur = blur,
-            BlurCachePolicy = BlurCachePolicy.Normal,
+            // The depth-of-field bands are static at rest but scroll with the lyrics viewport. Holding a compatible
+            // cached blur avoids a fresh Gaussian for every scroll submit; a cache miss stays crisp until the viewport
+            // settles, when the normal recorder path refreshes it.
+            BlurCachePolicy = BlurCachePolicy.HoldIfCached,
             OnRealized = h => _reportDof(_index, h),
             Children = [textEl],
         };

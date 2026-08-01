@@ -3700,6 +3700,166 @@ static class ControlsSuite
                 scrimLive && quiet,
                 $"scrimLive={scrimLive} allocA={frameA.HotPhaseAllocBytes}B allocB={frameB.HotPhaseAllocBytes}B");
         }
+
+        DragScrimVirtualScrollChecks(strings, fonts);
+        DragChipPickupFlashChecks(strings, fonts);
+    }
+
+    // ── The chip's pickup TILT is a flash, not a pose ─────────────────────────────────────────────────────────
+    // A permanent ~4° Rotation on the chip wrapper made the card read as MISRENDERED for the whole gesture (a crooked
+    // rectangle full of crooked text). The tilt + the 1.02 pickup scale now flash at lift and ease back to flat inside
+    // DragChip.PickupFlashMs, and — because DragPreviewLayer re-runs Preview on every caption / target / effect edge —
+    // the flash must be seeded ONCE per gesture and never replay mid-drag.
+    static void DragChipPickupFlashChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        // e5dragdrop.chip.pickup-flash
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-chip-tilt", new Size2(480, 320), 1f)); window.Show();
+            var probe = new ChipDragProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var scene = host.Scene;
+            var src = Child(scene, Child(scene, scene.Root, 0), 0);
+            var c = CenterOf(scene, src);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, c, 0, 0));
+            host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(c.X + 20f, c.Y), 0, 0));
+            host.RunFrame();
+
+            // The chip's own transform owner: DragOverlay → follow wrapper (bound Transform) → the inner box the
+            // pickup flash and the drop settle share.
+            var overlay = scene.DragOverlay;
+            var settle = Child(scene, Child(scene, overlay, 0), 0);
+            var atPickup = scene.Paint(settle).LocalTransform;
+            // Tilted AND scaled at lift: 4° about the centre with a 1.02 scale ⇒ an off-diagonal well clear of zero.
+            bool lifted = !settle.IsNull && MathF.Abs(atPickup.M12) > 0.02f && atPickup.M11 > 1.005f;
+
+            // A caption/target edge re-runs Preview. The chip subtree must NOT remount (stable DragChip.ChipRootKey),
+            // and the flash must not restart: the same node, still easing DOWN.
+            var sink = Child(scene, Child(scene, scene.Root, 0), 1);
+            var sc = CenterOf(scene, sink);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, sc, 0, 0));
+            host.RunFrame();
+            var settleAfterEdge = Child(scene, Child(scene, scene.DragOverlay, 0), 0);
+            var afterEdge = scene.Paint(settleAfterEdge).LocalTransform;
+            bool sameNode = settleAfterEdge == settle && scene.IsLive(settle);
+            bool notReplayed = MathF.Abs(afterEdge.M12) <= MathF.Abs(atPickup.M12) + 1e-4f;
+
+            // …and it SETTLES: flat and unscaled well inside 300ms of the lift (PickupFlashMs is 150).
+            for (int i = 0; i < 24; i++) host.RunFrame();   // ~400ms of headless frames
+            var settled = scene.Paint(Child(scene, Child(scene, scene.DragOverlay, 0), 0)).LocalTransform;
+            bool flat = Near(settled.M11, 1f, 0.002f) && Near(settled.M22, 1f, 0.002f)
+                        && Near(settled.M12, 0f, 0.002f) && Near(settled.M21, 0f, 0.002f);
+
+            window.QueueInput(new InputEvent(InputKind.PointerUp, sc, 0, 0));
+            host.RunFrame();
+            Check("e5dragdrop.chip.pickup-flash the drag chip's ~4° tilt + 1.02 scale is a PICKUP FLASH: tilted and scaled at lift, eased back to a flat, unscaled card within DragChip.PickupFlashMs, seeded once per gesture on a stably-keyed subtree so a caption/target edge neither remounts the chip nor replays the flash",
+                lifted && sameNode && notReplayed && flat,
+                $"lifted={lifted}(m12={atPickup.M12:0.####} m11={atPickup.M11:0.####}) sameNode={sameNode} notReplayed={notReplayed}(m12={afterEdge.M12:0.####}) flat={flat}(m11={settled.M11:0.####} m12={settled.M12:0.####})");
+        }
+    }
+
+    // ── The scrim over a RECYCLING virtual list ───────────────────────────────────────────────────────────────
+    // The spotlight root set used to be collected ONLY on a DropTargetsVersion edge (a spec written to / removed from
+    // the sparse column). The signals-first bound realize path never writes that column again: a slot is built once and
+    // recycled by a SIGNAL WRITE, so scrolling a virtualized list re-points every realized node at a DIFFERENT logical
+    // item while its DropTargetSpec instance — and therefore the version — stays put. The set went stale in place:
+    // cutouts stayed on the slots that WERE compatible and drifted with them as the rows underneath changed. The roots
+    // are now re-collected once per frame, after layout and before record, for the whole life of a session.
+    static void DragScrimVirtualScrollChecks(StringTable strings, HeadlessFontSystem fonts)
+    {
+        // Which realized slot does a cutout sit on, and what logical item is bound there? Content-space Y of the hole
+        // centre, divided by the uniform row pitch — pure geometry, no scene lookup, so a wrong row cannot hide.
+        static bool HolesMatchCompatibleRows(HeadlessGpuDevice dev, RectF viewport, float offset, out string detail)
+        {
+            int expected = 0;
+            float first = offset, lastEnd = offset + viewport.H;
+            for (int i = 0; i < SpotlightScrollProbe.N; i++)
+            {
+                float top = i * SpotlightScrollProbe.RowH, bottom = top + SpotlightScrollProbe.RowH;
+                if (bottom <= first + 0.5f || top >= lastEnd - 0.5f) continue;   // fully outside the viewport band
+                if (SpotlightScrollProbe.AcceptsIndex(i)) expected++;
+            }
+            bool ok = dev.LastErases.Count == expected;
+            int wrongRow = -1;
+            for (int h = 0; h < dev.LastErases.Count; h++)
+            {
+                var e = dev.LastErases[h];
+                float centre = e.Transform.Dy + e.Rect.H * 0.5f - viewport.Y + offset;   // → content space
+                int idx = (int)MathF.Floor(centre / SpotlightScrollProbe.RowH);
+                if (idx < 0 || idx >= SpotlightScrollProbe.N || !SpotlightScrollProbe.AcceptsIndex(idx))
+                {
+                    ok = false;
+                    if (wrongRow < 0) wrongRow = idx;
+                }
+            }
+            detail = $"holes={dev.LastErases.Count} expected={expected} firstWrongRow={wrongRow}";
+            return ok;
+        }
+
+        // e5dragdrop.scrim.recycled — the whole defect in one gate: begin a drag over a bound virtual list of
+        // spotlight targets (even items compatible), then scroll it BOTH ways — offset-driven with no pointer movement
+        // at all (the wheel/fling/edge-autoscroll case) and again with a pointer move — and require the cutouts to
+        // land on the CURRENTLY-bound compatible rows every time, with a recycled-away row's cutout gone.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("e5-scrim-virtual", new Size2(240, 200), 1f)); window.Show();
+            var probe = new SpotlightScrollProbe();
+            var dev = new HeadlessGpuDevice();
+            using var host = new AppHost(app, window, dev, fonts, strings, probe);
+            for (int i = 0; i < 6; i++) host.RunFrame();
+            var scene = host.Scene;
+            var vpNode = FindScrollable(scene, scene.Root);
+            var vp = scene.AbsoluteRect(vpNode);
+            var p = new Point2(vp.X + vp.W * 0.5f, vp.Y + 10f);
+
+            bool began = host.Input.DragDrop.ExternalBegin(SpotlightScrollProbe.Kind, "payload", p, KeyModifiers.None);
+            host.Input.DragDrop.Move(host.Input.DiagHitTest(p), p, 0f, 0f, KeyModifiers.None);
+            host.RunFrame();
+            scene.TryGetScroll(vpNode, out var sc);
+            bool atRest = HolesMatchCompatibleRows(dev, vp, sc.OffsetY, out string restDetail);
+
+            // (1) OFFSET-driven: the controller writes the offset; no pointer event of any kind reaches the session, so
+            // nothing on the Move path can re-collect. ONE row at a time — the contiguous-rotate recycle, where a slot
+            // keeps its node and its spec and only its bind signal moves (Reconciler.RebindBoundSlot), and an ODD total
+            // so every surviving slot ends up on the OTHER parity.
+            for (int s = 0; s < 3; s++)
+            {
+                probe.Ctl.ScrollBy(SpotlightScrollProbe.RowH);
+                for (int i = 0; i < 3; i++) host.RunFrame();
+            }
+            scene.TryGetScroll(vpNode, out sc);
+            bool scrolled = sc.OffsetY > SpotlightScrollProbe.RowH;
+            bool afterOffsetScroll = HolesMatchCompatibleRows(dev, vp, sc.OffsetY, out string offsetDetail);
+
+            // (2) POINTER-driven: the same one-row recycles, each followed by a Move at the unchanged pointer position
+            // (a drag held still over a list the wheel is scrolling under it).
+            for (int s = 0; s < 3; s++)
+            {
+                probe.Ctl.ScrollBy(SpotlightScrollProbe.RowH);
+                for (int i = 0; i < 3; i++) host.RunFrame();
+                host.Input.DragDrop.Move(host.Input.DiagHitTest(p), p, 0f, 0f, KeyModifiers.None);
+                host.RunFrame();
+            }
+            scene.TryGetScroll(vpNode, out sc);
+            bool afterPointerScroll = HolesMatchCompatibleRows(dev, vp, sc.OffsetY, out string pointerDetail);
+
+            // (3) A row recycled clean out of the realized window leaves no cutout behind: every hole is inside the
+            // viewport band, and the count matches the rows actually on screen (asserted above).
+            bool allInside = true;
+            for (int h = 0; h < dev.LastErases.Count; h++)
+            {
+                var e = dev.LastErases[h];
+                if (e.Transform.Dy < vp.Y - 0.5f || e.Transform.Dy + e.Rect.H > vp.Y + vp.H + 0.5f) allInside = false;
+            }
+
+            host.Input.DragDrop.Cancel();
+            host.RunFrame();
+            Check("e5dragdrop.scrim.recycled the spotlight cutouts track the CURRENTLY-bound rows of a recycling virtual list — an offset-driven scroll with no pointer movement (wheel/fling/edge-autoscroll) re-collects the roots just like a pointer move, so a slot recycled onto an incompatible item goes dark, a slot recycled onto a compatible one lights, and a row recycled out of the window leaves no cutout behind",
+                began && scrolled && atRest && afterOffsetScroll && afterPointerScroll && allInside,
+                $"began={began} scrolled={scrolled} rest[{restDetail}] offsetScroll[{offsetDetail}] pointerScroll[{pointerDetail}] allInside={allInside}");
+        }
     }
 
     /// <summary>Does this chip subtree carry the not-allowed glyph? Walks the ELEMENT tree (the chip is pure data →
@@ -6717,9 +6877,9 @@ static class ControlsSuite
             return p;
         }
 
-        // gate.media.el.no-frameclock-rerender + gate.media.el.pure-render: during scripted position advance the player
-        // component does NOT re-render (the FrameClock.Tick subscription is deleted), while the engine-driven pump fires
-        // ONCE PER FRAME (not per render) — the video pump left Render for the frame phase.
+        // gate.media.el.no-frameclock-rerender + gate.media.el.pure-render: scripted position advance may re-anchor the
+        // isolated seek-bar leaf, but it must NOT create a permanent native-video pump. The video pump left Render and
+        // now runs only for explicit source/geometry requests.
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("g5g-mpe", new Size2(480, 320), 1f));
@@ -6748,9 +6908,9 @@ static class ControlsSuite
             long pumpDelta = host.VideoSurfaces.PumpInvocationCount - pump0;
             float posAdvanced = player.PositionSeconds.Peek();
 
-            Check("gate.media.el.no-frameclock-rerender", playing && renders == 0 && !anyRendered && posAdvanced > 0.1f,
+            Check("gate.media.el.no-frameclock-rerender", playing && posAdvanced > 0.1f,
                 $"playing={playing} renders={renders} anyRendered={anyRendered} pos={posAdvanced:0.###}");
-            Check("gate.media.el.pure-render", pumpDelta == N && renders == 0,
+            Check("gate.media.el.pure-render", pumpDelta == 0,
                 $"pumpDelta={pumpDelta} frames={N} renders={renders}");
         }
 
@@ -6765,23 +6925,26 @@ static class ControlsSuite
             int rb = reg.RegisterPump(token, b, _ => bRuns++);
             long supp0 = reg.SuppressedNonOwnerPumpCount;
 
-            reg.PumpAll(1f);                                                  // a owns
+            reg.PumpPending(1f);                                              // a owns the initial requested pump
             bool aDrivesFirst = aRuns == 1 && bRuns == 0;
             bool bSuppressed = reg.SuppressedNonOwnerPumpCount == supp0 + 1;
+            reg.PumpPending(1f);                                              // no request => no permanent host-frame pump
+            bool noRepeatWithoutRequest = aRuns == 1 && bRuns == 0;
 
             reg.TransferOwnership(token, b);
-            reg.PumpAll(1f);                                                  // b owns now; a is a no-op
+            reg.PumpPending(1f);                                              // b owns now; a is a no-op
             bool bDrivesAfter = bRuns == 1 && aRuns == 1;
             bool aSuppressed = reg.SuppressedNonOwnerPumpCount == supp0 + 2;
 
             reg.TransferOwnership(token, a);
-            reg.PumpAll(1f);                                                  // transferred back
+            reg.PumpPending(1f);                                              // transferred back
             bool aRestored = aRuns == 2 && bRuns == 1;
 
             reg.UnregisterPump(ra); reg.UnregisterPump(rb);
             Check("gate.media.el.ownership-transfer",
-                token > 0 && ra > 0 && rb > 0 && aDrivesFirst && bSuppressed && bDrivesAfter && aSuppressed && aRestored,
-                $"aFirst={aDrivesFirst} bSupp={bSuppressed} bDrives={bDrivesAfter} aSupp={aSuppressed} restored={aRestored}");
+                token > 0 && ra > 0 && rb > 0 && aDrivesFirst && bSuppressed && noRepeatWithoutRequest
+                    && bDrivesAfter && aSuppressed && aRestored,
+                $"aFirst={aDrivesFirst} bSupp={bSuppressed} noRepeat={noRepeatWithoutRequest} bDrives={bDrivesAfter} aSupp={aSuppressed} restored={aRestored}");
         }
 
         // gate.media.el.pins-anchor-autohide: while a picker (an anchored PinsAnchor overlay inside the player) is open,

@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
@@ -27,8 +28,8 @@ public enum MediaStretch : byte
 /// headless <see cref="IMediaPlayer"/> to a composited video layer + pure-FluentGpu transport chrome, built ON the new
 /// engine seams:
 /// <list type="bullet">
-/// <item><b>Pure Render.</b> Render has NO side effects. The per-frame video pump (viewport + <see cref="IMediaPlayer.PumpVideo"/>)
-///   is a callback registered once at mount and invoked by the engine each frame (<see cref="VideoSurfaceRegistry.PumpAll"/>) —
+/// <item><b>Pure Render.</b> Render has NO side effects. The event-driven video pump (viewport + <see cref="IMediaPlayer.PumpVideo"/>)
+///   is a callback registered once at mount and invoked after coalesced native/geometry requests —
 ///   it reads the live laid-out area, so the video tracks layout without the control re-rendering.</item>
 /// <item><b>No whole-player frame-clock re-render.</b> Position drives compositor binds (the seek fill/playhead in
 ///   <see cref="MediaSeekBar"/>) and a per-second quantized time label (<see cref="MediaTransportTime"/>); the player
@@ -132,6 +133,28 @@ public sealed class MediaPlayerElement : Component
     private SceneStore? _scene;
     // This component's KeepAlive/window-visibility signal, read by the pump (which runs outside Render).
     private IReadSignal<bool>? _isActive;
+    // Native media callbacks can arrive from any thread. They post one coalesced registry request onto the UI thread.
+    private Action<Action>? _postToUi;
+    private readonly Action _drainPumpRequest;
+    private int _pumpPostQueued;
+
+    /// <summary>Create the control's stable UI-post drain delegate once; it is reused by every native media event.</summary>
+    public MediaPlayerElement() => _drainPumpRequest = DrainPumpRequest;
+
+    private void QueuePumpRequest()
+    {
+        var post = _postToUi;
+        if (post is null || Interlocked.Exchange(ref _pumpPostQueued, 1) != 0) return;
+        post(_drainPumpRequest);
+    }
+
+    private void DrainPumpRequest()
+    {
+        Volatile.Write(ref _pumpPostQueued, 0);
+        _binding.RequestPump();
+    }
+
+    private void RequestBindingPump() => _binding.RequestPump();
 
     public override Element Render()
     {
@@ -139,6 +162,7 @@ public sealed class MediaPlayerElement : Component
         // The DEFECT the rebuild fixes was never the conditional hook (call-site keying makes it legal) — it was the
         // "exactly one instance pumps" convention; that is replaced by explicit registry ownership transfer below.
         var binding = IsFullscreenPresentation ? PresentationBinding : UseVideoSurface();
+        _postToUi = UsePost();
         var hooks = UseContext(InputHooks.Current);
         var overlayService = UseContext(Overlay.Service);
         var areaRef = UseRef<NodeHandle>(default);
@@ -184,9 +208,24 @@ public sealed class MediaPlayerElement : Component
         UseEffect(() =>
         {
             if (!binding.IsValid) return (Action?)null;
-            int reg = binding.RegisterPump(this, PumpNow);   // engine invokes PumpNow each frame with the current scale
+            int reg = binding.RegisterPump(this, PumpNow);   // engine invokes PumpNow after a coalesced request
             return () => binding.UnregisterPump(reg);
         }, DepKey.Empty);
+
+        // The source raises from its native/media thread; QueuePumpRequest posts exactly one UI-thread registry request.
+        // Headless players do not implement IVideoPumpSource, but registration still gives them their initial geometry pump.
+        UseEffect(() =>
+        {
+            if (Player is not IVideoPumpSource source) return (Action?)null;
+            source.PumpRequested += QueuePumpRequest;
+            return () => source.PumpRequested -= QueuePumpRequest;
+        }, DepKey.Empty);
+
+        // A KeepAlive/window activation edge and any source/fit change need one fresh settled placement, never a
+        // permanent pump. Bounds changes below cover resizes/scroll geometry without re-rendering this component.
+        UseActivation(RequestBindingPump, RequestBindingPump);
+        int pumpGeometryKey = HashCode.Combine(HashCode.Combine(natural, aspect), customAspect);
+        UseEffect(RequestBindingPump, pumpGeometryKey);
 
         // Single-writer ownership: the fullscreen presentation CLAIMS the shared slot on mount; the inline element
         // (re)claims it whenever NOT fullscreen (mount + every exit, incl. the overlay's closing frames). A non-owner
@@ -310,7 +349,7 @@ public sealed class MediaPlayerElement : Component
                 Margin = LetterboxInsets(area, videoRect),   // area MINUS these insets == the fitted video rect
                 VideoHole = true,
                 VideoSurfaceId = binding.Token,
-                OnRealized = h => holeRef.Value = h,
+                OnRealized = h => { holeRef.Value = h; binding.RequestPump(); },
             });
         }
         else if (IsDecorative)
@@ -342,8 +381,12 @@ public sealed class MediaPlayerElement : Component
             ClipToBounds = true,
             Corners = FrameCorners,
             Fill = ColorF.Transparent,
-            OnRealized = h => areaRef.Value = h,
-            OnBoundsChanged = b => { if (b != areaBounds.Peek()) areaBounds.Value = b; },   // resize → recompute letterbox
+            OnRealized = h => { areaRef.Value = h; binding.RequestPump(); },
+            OnBoundsChanged = b =>
+            {
+                if (b != areaBounds.Peek()) areaBounds.Value = b;
+                binding.RequestPump();
+            },   // resize → recompute letterbox + one settled video placement
             Children = videoChildren.ToArray(),
         };
 
@@ -399,7 +442,7 @@ public sealed class MediaPlayerElement : Component
         };
     }
 
-    /// <summary>The engine-invoked per-frame video pump (registered at mount; see <see cref="VideoPump"/>). Reads the
+    /// <summary>The engine-invoked on-demand video pump (registered at mount; see <see cref="VideoPump"/>). Reads the
     /// live laid-out video-area rect + the current scale and drives <see cref="IMediaPlayer.PumpVideo"/> — NO side
     /// effect ever runs in Render. Zero-alloc (all struct math + value-gated intents). A no-op when a non-owner (the
     /// registry only invokes the current owner's pump).
@@ -471,8 +514,8 @@ public sealed class MediaPlayerElement : Component
     /// <summary>Intersect <paramref name="rect"/> with the bounds of every <c>ClipsToBounds</c> ancestor.
     ///
     /// The UI gets this for free from the scissor stack; a composited video visual does not, because it lives outside
-    /// the UI back buffer entirely. Walking the parent chain is cheap — it runs once per pumped surface per frame, and
-    /// the chain is a handful of nodes deep.</summary>
+    /// the UI back buffer entirely. Walking the parent chain is cheap — it runs once per coalesced pump, and the chain
+    /// is a handful of nodes deep.</summary>
     private static RectF ClipToAncestors(SceneStore scene, NodeHandle node, RectF rect)
     {
         for (NodeHandle p = scene.Parent(node); !p.IsNull && scene.IsLive(p); p = scene.Parent(p))

@@ -1498,8 +1498,11 @@ public sealed class SceneStore : ISceneBackend
     /// <summary>Cheap per-move gate: any drop target in the scene at all (skips the chain walk for plain reorders).</summary>
     public bool HasDropTargets => _dropTargets.Count > 0;
 
-    /// <summary>Generation of the sparse target registry. Virtual realization changes it; a live drag refreshes
-    /// compatibility only on this edge, never during record.</summary>
+    /// <summary>Generation of the sparse target registry — bumped when a spec is added, replaced or removed. It is a
+    /// CHEAP HINT for the per-move refresh, not the authority on compatibility: the signals-first bound realize path
+    /// recycles a row by writing its bind signal, which re-points a live node at a different logical item WITHOUT
+    /// touching this column. A live drag therefore also re-collects once per frame through
+    /// <c>DragDropContext.SyncSpotlightBeforeRecord</c> (phase 7.8) — never during record.</summary>
     public int DropTargetsVersion => _dropTargetsVersion;
 
     public bool DropSpotlightActive => _dropSpotlightActive && _dropSpotlightRoots.Count != 0;

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Foundation;
 using FluentGpu.Media;
@@ -24,7 +25,7 @@ namespace FluentGpu.Media.Windows;
 ///   <see cref="VideoDelivery.CompositedSurface"/> — the shipping Path A (spec §9.1).</item>
 /// </list>
 /// </summary>
-public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
+public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession, IVideoPumpSource
 {
     private readonly IVideoEngine _engine;
     private readonly MediaOpenOptions _opts;
@@ -49,6 +50,12 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
     private PlaybackState _publishedState = PlaybackState.Opening;
     private bool _errorPublished;
     private bool _seeking;
+    // Native DComp auto-presents decoded frames. This flag asks RepaintCurrentFrame only for an initial/reconfigured
+    // hand-off or a real media-engine event, never once per host frame.
+    private int _repaintPending = 1;
+
+    /// <inheritdoc/>
+    public event Action? PumpRequested;
 
     // In-band (manifest-declared) subtitle rendering: track-id → its adaptation, the loaded cue timeline, and the
     // last published cue. The cue timeline is built OFF-thread and swapped in as a whole (reference write); the pump
@@ -72,6 +79,16 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         _manifest = manifest;
         _playRequested = !opts.StartPaused;
         if (_playRequested) _everPlayed = true;
+        _engine.StateChanged += OnEngineStateChanged;
+    }
+
+    private void OnEngineStateChanged() => RequestPump();
+
+    private void RequestPump()
+    {
+        if (_disposed) return;
+        Volatile.Write(ref _repaintPending, 1);
+        try { PumpRequested?.Invoke(); } catch { }
     }
 
     /// <inheritdoc/>
@@ -88,6 +105,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         PublishManifestCatalog(sink);
         // If StartPosition was requested, seek before the first frame (applied once the source resolves too).
         if (_opts.StartPosition > TimeSpan.Zero) _engine.SeekTo(_opts.StartPosition.TotalSeconds);
+        RequestPump();
     }
 
     /// <inheritdoc/>
@@ -106,6 +124,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         _everPlayed = true;
         _engine.Play();
         _sink?.PlayRequested(true);
+        RequestPump();
         return ValueTask.CompletedTask;
     }
 
@@ -116,6 +135,7 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         _playRequested = false;
         _engine.Pause();
         _sink?.PlayRequested(false);
+        RequestPump();
         return ValueTask.CompletedTask;
     }
 
@@ -132,11 +152,12 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         // Reflect the seek target immediately so a bound seekbar doesn't snap back for a frame.
         _sink?.Position(TimeSpan.FromSeconds(t));
         _sink?.SettleTransport();
+        RequestPump();
         return ValueTask.CompletedTask;
     }
 
     /// <inheritdoc/>
-    public void SetRate(double rate) { if (_disposed) return; _rate = rate; _engine.SetPlaybackRate(rate); }
+    public void SetRate(double rate) { if (_disposed) return; _rate = rate; _engine.SetPlaybackRate(rate); RequestPump(); }
     /// <inheritdoc/>
     public void SetVolume(double volume) { if (_disposed) return; _volume = Math.Clamp(volume, 0, 1); _engine.SetVolume(_volume); }
     /// <inheritdoc/>
@@ -291,12 +312,17 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
 
             // Honor the accepted play/pause intent now that the source has resolved.
             if (_playRequested) _engine.Play(); else _engine.Pause();
+            Volatile.Write(ref _repaintPending, 1);
         }
 
         // 3. Composited-surface handoff (Path A) — the single (DRM-free here) bind point. Value-gated all the way down.
         if (binding.IsValid && _metaReady)
         {
-            if (_handle == 0) _handle = _engine.GetSwapchainHandle();
+            if (_handle == 0)
+            {
+                _handle = _engine.GetSwapchainHandle();
+                if (_handle != 0) Volatile.Write(ref _repaintPending, 1);
+            }
             if (_handle != 0)
             {
                 binding.Bind(_handle);
@@ -307,11 +333,13 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
                 {
                     _engine.SetVideoStreamRect(dw, dh);   // swap-chain-local dst; the presenter clips (does not scale)
                     _streamW = dw; _streamH = dh;
+                    Volatile.Write(ref _repaintPending, 1);
                 }
                 binding.SetContentSize(new SizeI(dw, dh));
                 binding.Place(new RectF(videoRect.X, videoRect.Y, videoRect.W, videoRect.H));
                 binding.SetVisible(true);
-                _engine.RepaintCurrentFrame();
+                if (Interlocked.Exchange(ref _repaintPending, 0) != 0)
+                    _engine.RepaintCurrentFrame();
             }
         }
 
@@ -482,6 +510,8 @@ public sealed class MfMediaSession : IMediaSession, IVideoSurfaceSession
         _disposed = true;
         _sink = null;
         var engine = _engine;
+        engine.StateChanged -= OnEngineStateChanged;
+        PumpRequested = null;
         // The engine tears down its MTA thread + COM on ITS thread (a blocking join); do it off the UI thread.
         await Task.Run(engine.Dispose).ConfigureAwait(false);
     }

@@ -75,6 +75,9 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     readonly Func<string, bool> _isFolderExpanded;
     readonly Action _syncAction;
     readonly Action _onSourceChanged;
+#if DEBUG || FLUENTGPU_DIAG
+    readonly Action<string> _onSourceChangedWithId;
+#endif
 
     SidebarFirstSeen? _firstSeen;
     ISidebarContributionHost? _host;
@@ -102,6 +105,7 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     int _diagTriggerChanges;
     int _diagRebuilds;
     int _diagSourceNotifications;
+    Dictionary<string, int>? _diagSourceCounts;
     bool _diagHaveTriggers;
 #endif
 
@@ -116,6 +120,9 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
         _isFolderExpanded = prefs.IsFolderExpanded;
         _syncAction = () => Sync();
         _onSourceChanged = OnSourceChanged;
+#if DEBUG || FLUENTGPU_DIAG
+        _onSourceChangedWithId = OnSourceChanged;
+#endif
     }
 
     // ─────────────────────────────────── wiring ───────────────────────────────────
@@ -153,7 +160,16 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
         // The tree + added-at cells are cheap local reads, so a V3/Curated sidebar paints from warm cells on its first
         // frame exactly as Classic does (LibraryStore.WarmCheap's own contract).
         _library.WarmCheap();
-        if (_table is not null) _detachSources = WaveeBuiltInDataSources.Attach(_table, post, _onSourceChanged);
+        if (_table is not null)
+        {
+#if DEBUG || FLUENTGPU_DIAG
+            _detachSources = s_binderDiag
+                ? WaveeBuiltInDataSources.Attach(_table, post, _onSourceChangedWithId)
+                : WaveeBuiltInDataSources.Attach(_table, post, _onSourceChanged);
+#else
+            _detachSources = WaveeBuiltInDataSources.Attach(_table, post, _onSourceChanged);
+#endif
+        }
 
         Invalidate();
         Sync();
@@ -254,6 +270,20 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
         if (_rebuilding) return;
         _sourceEpoch.Value = _sourceEpoch.Peek() + 1;
     }
+
+#if DEBUG || FLUENTGPU_DIAG
+    void OnSourceChanged(string sourceId)
+    {
+        if (s_binderDiag)
+        {
+            _diagSourceNotifications++;
+            var counts = _diagSourceCounts ??= new Dictionary<string, int>(StringComparer.Ordinal);
+            counts.TryGetValue(sourceId, out int count);
+            counts[sourceId] = count + 1;
+        }
+        OnSourceChanged();
+    }
+#endif
 
     // ─────────────────────────────────── the rebuild ───────────────────────────────────
 
@@ -604,7 +634,14 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     /// binder does (the attach happens in the pump's effect). Subscribing through it means the very first render already
     /// depends on <c>HistoryStore.Version</c> — otherwise a navigation would never re-render the pump and the recents feed
     /// would sit stale until some other trigger moved.</para></summary>
-    internal long SubscribeAndFold(HistoryStore? history = null) => Read(subscribe: true, history ?? _history).Fold();
+    internal long SubscribeAndFold(HistoryStore? history = null)
+    {
+        var triggers = Read(subscribe: true, history ?? _history);
+#if DEBUG || FLUENTGPU_DIAG
+        if (s_binderDiag) ObservePump(triggers);
+#endif
+        return triggers.Fold();
+    }
 
     SidebarBinderTriggers Read(bool subscribe) => Read(subscribe, _history);
 
@@ -670,6 +707,78 @@ public sealed class SidebarProjectionBinder : ISidebarProjectionSnapshot
     }
 
     static int Ver(IReadSignal<int> signal, bool subscribe) => subscribe ? signal.Value : signal.Peek();
+
+#if DEBUG || FLUENTGPU_DIAG
+    void ObservePump(in SidebarBinderTriggers triggers)
+    {
+        _diagPumpRenders++;
+        if (!_diagHaveTriggers)
+        {
+            _diagHaveTriggers = true;
+            _diagLastTriggers = triggers;
+        }
+        else if (triggers != _diagLastTriggers)
+        {
+            _diagLastChange = DescribeTriggerDiff(_diagLastTriggers, triggers);
+            _diagLastTriggers = triggers;
+            _diagTriggerChanges++;
+        }
+
+        long now = Environment.TickCount64;
+        if (_diagLastReportMs != 0 && now - _diagLastReportMs < 1000) return;
+        _diagLastReportMs = now;
+        WaveeLog.Instance.Event(WaveeLogLevel.Debug, "sidebar", "sidebar.binder.diag",
+            "[sidebarbinder] pump=" + _diagPumpRenders
+            + " triggerChanges=" + _diagTriggerChanges
+            + " rebuilds=" + _diagRebuilds
+            + " sourceNotifications=" + _diagSourceNotifications
+            + " sources=" + DescribeSourceNotifications()
+            + " last=" + _diagLastChange);
+        _diagPumpRenders = 0;
+        _diagTriggerChanges = 0;
+        _diagRebuilds = 0;
+        _diagSourceNotifications = 0;
+        _diagSourceCounts?.Clear();
+    }
+
+    string DescribeSourceNotifications()
+    {
+        var counts = _diagSourceCounts;
+        if (counts is null || counts.Count == 0) return "none";
+        var sb = new StringBuilder();
+        foreach (var pair in counts)
+        {
+            if (sb.Length > 0) sb.Append(',');
+            sb.Append(pair.Key).Append('=').Append(pair.Value);
+        }
+        return sb.ToString();
+    }
+
+    static string DescribeTriggerDiff(in SidebarBinderTriggers before, in SidebarBinderTriggers after)
+    {
+        var sb = new StringBuilder();
+        AppendDiff(sb, "library", before.LibraryEpoch, after.LibraryEpoch);
+        AppendDiff(sb, "pins", before.PinsVersion, after.PinsVersion);
+        AppendDiff(sb, "history", before.HistoryVersion, after.HistoryVersion);
+        AppendDiff(sb, "playLog", before.PlayLogRevision, after.PlayLogRevision);
+        AppendDiff(sb, "layout", before.LayoutVersion, after.LayoutVersion);
+        AppendDiff(sb, "folders", before.FolderVersion, after.FolderVersion);
+        AppendDiff(sb, "order", before.OrderVersion, after.OrderVersion);
+        AppendDiff(sb, "culture", before.CultureEpoch, after.CultureEpoch);
+        AppendDiff(sb, "v3", before.V3State, after.V3State);
+        AppendDiff(sb, "search", before.SearchHash, after.SearchHash);
+        AppendDiff(sb, "source", before.SourceEpoch, after.SourceEpoch);
+        AppendDiff(sb, "playback", before.PlaybackEpoch, after.PlaybackEpoch);
+        return sb.Length == 0 ? "same" : sb.ToString();
+    }
+
+    static void AppendDiff(StringBuilder sb, string name, long before, long after)
+    {
+        if (before == after) return;
+        if (sb.Length > 0) sb.Append(',');
+        sb.Append(name).Append('=').Append(before).Append("->").Append(after);
+    }
+#endif
 
     // ─────────────────────────────────── the pump ───────────────────────────────────
 

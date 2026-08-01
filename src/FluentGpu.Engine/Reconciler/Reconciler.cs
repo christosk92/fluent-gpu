@@ -131,9 +131,23 @@ public sealed class TreeReconciler
     // The budget clips ONLY the overscan refill: it extends the realized window toward the desired directional-overscan
     // window on the velocity side first, stops when exhausted, and leaves the viewport VirtualRangeDirty so the remainder
     // trickles in over subsequent frames. Reset when FrameEpoch changes (host bumps it once per Paint).
+    //
+    // E4b velocity-scaled ceiling: the flat floor alone is a refill-RATE mismatch. The mandatory band grows by however
+    // many rows the visible edge crossed that frame — that growth scales with fling velocity and is uncapped by design
+    // (the anti-flicker invariant above). The overscan halo, refilled at a FLAT 12 rows/frame, therefore drains frame
+    // over frame under a sustained fast fling; once it is gone every row entering the mandatory band is a COLD realize
+    // instead of a warm recycler hit, and comps/realize-ms climb in lockstep until deceleration lets it drain. So the
+    // per-frame pool is lifted from the floor toward a ceiling in proportion to the rows/second the edge is consuming
+    // (|FlingVelocity| / avgExtent). This changes ONLY the fill RATE — never the window SIZE, which stays the
+    // velocity-INDEPENDENT fixed sum E5's DirectionalOverscan enforces (the zero-alloc bound-slot guarantee).
     private const int SteadyRealizeRowsPerFrame = 12;
+    private const int SteadyRealizeRowsCeiling = 36;
+    private const float SteadyRealizeVelocityFactor = 0.20f;
     internal int? SteadyRealizeBudgetForTest;   // VerticalSlice-only override (InternalsVisibleTo); null ⇒ the const
     private int SteadyRealizeBudget => SteadyRealizeBudgetForTest ?? SteadyRealizeRowsPerFrame;
+    // Resolves through the SAME override as the floor: a gate that pins the budget gets ceiling == floor ⇒ zero
+    // velocity room ⇒ byte-identical pre-E4b behavior, with no change needed on the test side.
+    private int SteadyRealizeCeiling => SteadyRealizeBudgetForTest ?? SteadyRealizeRowsCeiling;
     private int _frameRealizeBudgetUsed;
     private int _budgetFrameEpoch = -1;
     private int _budgetDeferredCount;   // O(1) census of viewports whose overscan is mid-spread (mirrors _warmingCount)
@@ -1979,7 +1993,7 @@ public sealed class TreeReconciler
         }
 
         // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row pool.
-        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, ref first, ref last);
+        bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, avgExtent, ref first, ref last);
         bool stayDirty = budgetDeficit || (mount && !eagerOverscan);
         if (last < first) last = first;
         int w = last - first;
@@ -2038,8 +2052,15 @@ public sealed class TreeReconciler
     /// and already covered by <paramref name="first"/>/<paramref name="last"/>; extend the overscan halo toward the desired
     /// window on the velocity side first, charging the shared per-frame row pool. Already-realized rows still inside the
     /// desired window are kept for free (never contracted by budget), so the charge is only the NEW extension and the pass
-    /// is idempotent. Returns true when budget ran out before the desired window was reached (overscan still owed).</summary>
-    private bool ClipRealizeBudget(in ScrollState sc, int mandFirst, int mandLast, ref int first, ref int last)
+    /// is idempotent. Returns true when budget ran out before the desired window was reached (overscan still owed).
+    /// <para>E4b — the pool is not flat: <c>SteadyRealizeRowsPerFrame</c> is the FLOOR (unchanged at rest and at slow
+    /// scroll) and the fling lifts it toward <c>SteadyRealizeRowsCeiling</c> in proportion to the rows/second the
+    /// visible edge is consuming — <c>extra = clamp(⌈|FlingVelocity|·SteadyRealizeVelocityFactor / avgExtent⌉, 0,
+    /// ceiling − floor)</c>, with <paramref name="avgExtent"/> the caller's <c>ContentExtent / ItemCount</c>. Without
+    /// it the halo drains under a sustained fling (the mandatory band grows with velocity, a flat refill does not) and
+    /// every row entering the band becomes a cold realize. This scales the refill RATE only: the desired window
+    /// <c>[first,last)</c> handed in is E5's velocity-INDEPENDENT fixed-sum window and is never widened here.</para></summary>
+    private bool ClipRealizeBudget(in ScrollState sc, int mandFirst, int mandLast, float avgExtent, ref int first, ref int last)
     {
         int df = first, dl = last;   // desired directional-overscan window (already ⊇ mandatory)
         // "Have" = rows already realized this scroll episode, clamped into [desired, mandatory] — so the mandatory band
@@ -2050,7 +2071,13 @@ public sealed class TreeReconciler
             haveFirst = Math.Clamp(sc.FirstRealized, df, mandFirst);
             haveLast = Math.Clamp(sc.LastRealized, mandLast, dl);
         }
-        int budget = Math.Max(0, SteadyRealizeBudget - _frameRealizeBudgetUsed);
+        // E4b: floor + velocity-scaled extra, clamped to the ceiling's headroom (scalar math only — no alloc).
+        int floor = SteadyRealizeBudget;
+        int room = Math.Max(0, SteadyRealizeCeiling - floor);
+        int extra = avgExtent > 0f
+            ? Math.Clamp((int)MathF.Ceiling(MathF.Abs(sc.FlingVelocity) * SteadyRealizeVelocityFactor / avgExtent), 0, room)
+            : 0;
+        int budget = Math.Max(0, floor + extra - _frameRealizeBudgetUsed);
         int lowWant = haveFirst - df;    // overscan rows still owed below
         int highWant = dl - haveLast;    // overscan rows still owed above
         bool forward = sc.FlingVelocity >= 0f;   // velocity side = ahead: fill it first

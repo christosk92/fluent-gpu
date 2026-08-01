@@ -137,7 +137,8 @@ sealed class WaveeApp : Component
             store.Activate(post);
             _services.Sidebar.Activate(post);
             // The cover-colour plane bumps its epoch from background batch completions; art tiles subscribe to it, so
-            // the bump has to land on the UI thread like every other bridge signal.
+            // the bump has to land on the UI thread like every other bridge signal. Activating here ALSO pre-warms the
+            // persisted colour table off-thread, so no art slot ever pays the cold disk read inside Render().
             Wavee.SpotifyLive.CoverColorPlane.Current.Activate(post);
 
             // Persist volume changes (local intents AND remote echoes both land on bridge.Volume) with a coarse poll —

@@ -22,7 +22,6 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
     NewReleaseNotification[] _snapshot = Array.Empty<NewReleaseNotification>();
     NotificationFeedState _state = NotificationFeedState.Idle;
     CancellationTokenSource? _cts;
-    bool _seeded;
     bool _disposed;
     int _rev;
 
@@ -38,15 +37,16 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
 
     public void EnsureFresh()
     {
-        if (!_seeded) { _seeded = true; _ = FetchAsync(); }
-        else _ = FetchAsync();   // the PathfinderResource TTL (5 min) absorbs the actual network cost
+        // A fetch already in flight is left alone: cancelling-and-relaunching on every binder rebuild churned the
+        // pathfinder round-trip (and its Apply/Fire) once per frame. _cts is non-null for exactly the fetch's lifetime.
+        if (Volatile.Read(ref _cts) is not null) return;
+        _ = FetchAsync();   // the PathfinderResource TTL (5 min) absorbs the actual network cost
     }
 
     public Task RefreshAsync(CancellationToken ct) => FetchAsync();
 
     async Task FetchAsync()
     {
-        _seeded = true;
         var cts = new CancellationTokenSource();
         var prev = Interlocked.Exchange(ref _cts, cts);
         if (prev is not null) { try { prev.Cancel(); } catch (ObjectDisposedException) { } }
@@ -89,12 +89,31 @@ sealed class SpotifyWhatsNewService : IWhatsNewService, IDisposable
 
     void Apply(List<NewReleaseNotification> list)
     {
+        // Fire ONLY on a real content/state delta. A cache-hit refetch resolves to a byte-identical feed; publishing it
+        // anyway bumped the sidebar's source epoch, which re-ran the binder, which refetched — a self-sustaining
+        // every-frame render loop that never let the app go idle.
+        var next = list.Count == 0 ? NotificationFeedState.Empty : NotificationFeedState.Populated;
+        bool changed = false;
         lock (_gate)
         {
-            _snapshot = list.ToArray();
-            _state = list.Count == 0 ? NotificationFeedState.Empty : NotificationFeedState.Populated;
+            if (_state != next) changed = true;
+            if (!changed && !SameFeed(_snapshot, list)) changed = true;
+            if (changed)
+            {
+                _snapshot = list.ToArray();
+                _state = next;
+            }
         }
-        Fire();
+        if (changed) Fire();
+    }
+
+    // Element-wise structural compare (NewReleaseNotification is a record). No LINQ — this file stays allocation-lean.
+    static bool SameFeed(NewReleaseNotification[] current, List<NewReleaseNotification> next)
+    {
+        if (current.Length != next.Count) return false;
+        for (int i = 0; i < current.Length; i++)
+            if (!current[i].Equals(next[i])) return false;
+        return true;
     }
 
     void ApplyFailure(string reason)

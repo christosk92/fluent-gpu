@@ -67,6 +67,22 @@ public sealed class DragPreviewLayer : Component
             return () => { if (sc.DragOverlay == captured) sc.DragOverlay = NodeHandle.Null; };
         }, DepKey.Empty);
 
+        // PICKUP FLASH (once per gesture): the chip springs into view already tilted ~4° and scaled 1.02 (Trello's card)
+        // and eases straight back to FLAT and unscaled inside DragChip.PickupFlashMs. Held for the whole drag — which is
+        // what a static Rotation on the chip did — the tilt stops reading as "lifted" and starts reading as a
+        // misrendered card; after the flash the shadow and the dimmed source row carry the lift on their own.
+        // Seeded on the SAME inner box the settle uses (one transform owner, animated channels only) and keyed on the
+        // session's Active edge, so the caption / target / effect re-renders that re-run Preview cannot replay it — and
+        // the chip root carries a stable key (DragChip.ChipRootKey) so those re-renders never remount this subtree.
+        bool active = state.Active;
+        UseLayoutEffect(() =>
+        {
+            if (!active || _settleNode.IsNull || Context.Anim is not { } anim) return;
+            anim.SeedValue(_settleNode, AnimChannel.Rotation, 0f, MotionTokenId.ControlFast, from: DragChip.TiltDeg);
+            anim.SeedValue(_settleNode, AnimChannel.ScaleX, 1f, MotionTokenId.ControlFast, from: DragChip.PickupScale);
+            anim.SeedValue(_settleNode, AnimChannel.ScaleY, 1f, MotionTokenId.ControlFast, from: DragChip.PickupScale);
+        }, DepKey.From(active));
+
         // Drop settle (~250ms): the gesture is over but DragState stays Active across the window so the chip can glide
         // into the drop point (ToTarget) or back to the source row (Home) instead of vanishing — rbd's "nothing ever
         // teleports". Seeded on the settle EDGE onto the inner box, which owns the transform the follow wrapper doesn't.

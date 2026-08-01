@@ -16,6 +16,8 @@ namespace FluentGpu.Windows.Tests;
 /// <see cref="Playing"/>) so a test can model the "intent accepted but engine not yet advancing" (buffering) gap.</summary>
 internal sealed class FakeVideoEngine : IVideoEngine
 {
+    public event Action? StateChanged;
+
     public int InitializeResult;
     public int InitializeCalls, PlayCalls, PauseCalls, DisposeCalls, RepaintCalls;
     public double LastSeek = double.NaN, LastRate = 1, LastVolume = 1;
@@ -52,6 +54,7 @@ internal sealed class FakeVideoEngine : IVideoEngine
     public void SetMuted(bool muted) => LastMuted = muted;
     public void SetLoop(bool loop) => LastLoop = loop;
     public void Dispose() => DisposeCalls++;
+    public void RaiseStateChanged() => StateChanged?.Invoke();
 }
 
 /// <summary>A recording <see cref="IVideoPresenter"/> — no DComp. Captures the calls the registry drain makes so a test

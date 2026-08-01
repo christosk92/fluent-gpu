@@ -492,16 +492,40 @@ public sealed class DragDropContext
         return EdgeScrollMaxSpeed - (distanceFromEdge / EdgeScrollZonePx) * (EdgeScrollMaxSpeed - EdgeScrollMinSpeed);
     }
 
+    /// <summary>Phase-7.8 host hook, called once per frame while a session is live — AFTER reconcile/layout/realize and
+    /// the scroll-offset writes, BEFORE record. Re-collects the spotlight roots unconditionally.
+    /// <para>The version gate below is NOT sufficient on its own. <c>DropTargetsVersion</c> only moves when the sparse
+    /// spec column is WRITTEN, and the signals-first bound realize path never writes it again: a row is built once per
+    /// slot and recycled by a bind-signal write (<c>Reconciler.RebindBoundSlot</c>), so a scrolling virtualized list
+    /// re-points every realized node at a different logical item while its <see cref="DropTargetSpec"/> instance — and
+    /// therefore the version — stays exactly where it was. The set then went stale IN PLACE: the cutouts stayed on the
+    /// slots that WERE compatible and travelled with them as the rows underneath changed, which is the "wrong rows lit,
+    /// highlights drift while the sidebar scrolls" defect. A <see cref="DropTargetSpec.CanAccept"/> that reads a signal
+    /// has the same problem with no virtualization at all.</para>
+    /// <para>The cost is one pass over the realized drop targets per frame, only while a drag is live, and it lands at a
+    /// fixed point in the frame rather than during record (which the recorder's contract still forbids). 0-alloc: the
+    /// dictionary walk uses a struct enumerator and the root list is cleared, not reallocated.</para></summary>
+    public void SyncSpotlightBeforeRecord()
+    {
+        if (!_active) return;
+        CollectSpotlight();   // no _requestRerender: this frame is already being recorded
+    }
+
     private void RefreshSpotlight(bool force)
     {
         int version = _scene.DropTargetsVersion;
         if (!force && version == _spotlightTargetVersion) return;
-        _spotlightTargetVersion = version;
+        CollectSpotlight();
+        _requestRerender();
+    }
+
+    private void CollectSpotlight()
+    {
+        _spotlightTargetVersion = _scene.DropTargetsVersion;
         _scene.RefreshDropSpotlight(_session);
         if (!_over.IsNull && _scene.IsLive(_over))
             _overSpec = _scene.TryGetDropTarget(_over, out var current) ? current : null;
         _scene.SetDropSpotlightOver(_over);
-        _requestRerender();
     }
 
     private void End()
