@@ -15,6 +15,40 @@ https://github.com/user-attachments/assets/8e82a2cc-b908-40df-88f9-30438b44c02c
 
 ---
 
+## Benchmarked head-to-head against WinUI 3
+
+Same pixel-parity workloads, same machine, both frameworks as ARM64 NativeAOT, SHA-verified binaries,
+**620/620 runs, zero crashes**. Full data, methodology, and every caveat — including where WinUI 3 wins —
+in [`benchmarks/FrameworkComparison`](benchmarks/FrameworkComparison).
+
+Navigating a realistic page (hero + card grid + track list, built fresh per navigation — the thing an app
+does all day): fluent-gpu holds the full 120 Hz frame rate; WinUI 3 runs at half.
+
+![Page navigation: FluentGpu 8.4 ms holds the 8.33 ms budget every frame, WinUI 16.7 ms takes two vblanks](benchmarks/FrameworkComparison/assets/nav-frame-time.png)
+
+No averaging — every individual frame from all display-paced runs:
+
+![All 5,000 raw navigation frames: FluentGpu one tight band on budget, WinUI centered at double the budget with spikes past 40 ms](benchmarks/FrameworkComparison/assets/nav-every-frame.png)
+
+Launch cost doesn't grow with content — 225 styled controls cost **0.47 ms** over an empty window
+(WinUI 3: **91 ms**):
+
+![Marginal content cost: 225 buttons 0.47 vs 91.2 ms (194x), 1,125 texts 31.4 vs 91.6 ms](benchmarks/FrameworkComparison/assets/content-cost.png)
+
+| Measured (p50 unless noted) | WinUI 3 | fluent-gpu |
+|---|---:|---:|
+| Navigation frame time / worst | 16.7 ms / 64 ms | **8.4 ms / 10.9 ms** |
+| CPU per navigation | 6.3 ms | **1.1 ms** |
+| Memory after 1,000 un-paced navigations | 2.5 GiB private | **104 MiB — flat** |
+| Scroll a 10k-row virtualized list (CPU/frame) | 0.98 ms | **0.31 ms** |
+| Swap a 499-node subtree (CPU) | 2.38 ms | **0.70 ms** |
+| Cold start, 225-button window | 201 ms | **110 ms** |
+
+WinUI 3 keeps a lighter empty-window memory floor (37 vs 88 MiB private) and ~1 ms tighter p90/p99 on
+trivial single-node mutations — printed in the full results just as large as the wins.
+
+---
+
 ## What it is
 
 fluent-gpu keeps the part of [WinUI](https://github.com/microsoft/microsoft-ui-xaml) developers actually want — Fluent visuals, a real control kit, Mica, DirectWrite text — and throws away the part that hurts. You write UI in pure C#: immutable `Element` records assembled with a fluent DSL, rendered by `Component.Render()`, with co-located hooks and a keyed diffing reconciler. **No XAML, no ViewModels, no code-behind.**
