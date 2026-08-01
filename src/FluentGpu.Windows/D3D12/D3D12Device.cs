@@ -251,8 +251,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     public ISwapchain CreateSwapchain(in SwapchainDesc desc)
     {
+        long bootT0 = System.Diagnostics.Stopwatch.GetTimestamp();
         if (_device == null) InitDevice();
+        long bootT1 = System.Diagnostics.Stopwatch.GetTimestamp();
         EnsurePipelines();
+        if (s_bootDiag)
+        {
+            long bootT2 = System.Diagnostics.Stopwatch.GetTimestamp();
+            double f = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+            Console.Error.WriteLine($"[boot.d3d12] InitDevice={(bootT1 - bootT0) * f:F1}ms EnsurePipelines={(bootT2 - bootT1) * f:F1}ms");
+        }
 
         bool composited = desc.Composited || (_primarySwapchain is null && _composited);
         var target = new D3D12Swapchain(this, (HWND)desc.PresentTarget.Value,
@@ -265,34 +273,100 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         return target;
     }
 
+    // FG_DIAG cold-start attribution (runtime-gated, not Diag.CompiledIn, so the published Release bench can report).
+    private static readonly bool s_bootDiag = FluentGpu.Foundation.Diag.EnvFlag("FG_DIAG");
+
+    // Pipeline bring-up order for the parallel stage table below (index == task slot; used for the [boot.pipe] lines).
+    private static readonly string[] s_pipeStageNames =
+        ["roundrect", "shadow", "arc", "polyline", "gradient", "acrylic", "opacity", "glyphs", "image-textures", "image", "baked-blur"];
+
+    /// <summary>
+    /// Builds the SDF shared resources + the eleven draw pipelines. The SDF bring-up is SERIAL and FIRST (five of the
+    /// pipelines take it as an <c>Init</c> argument and only read it afterwards); the eleven that follow run
+    /// CONCURRENTLY, because cold start is dominated by their ~2 dozen serial <c>D3DCompile</c> calls (see
+    /// <see cref="ShaderCompiler"/>, whose persistent DXBC disk cache covers the warm path). This is safe by
+    /// construction: each pipeline only compiles its own shader sources and calls <c>ID3D12Device</c> creation methods
+    /// (root signatures, PSOs, buffers, descriptor heaps), which the D3D12 spec declares free-threaded, plus the
+    /// read-only <c>ID3D12CommandQueue::GetTimestampFrequency</c>. Each task builds into a LOCAL and the instance
+    /// fields are published only after the join, so no caller can observe a half-initialized pipeline.
+    /// </summary>
     private void EnsurePipelines()
     {
         if (_rectPipe is not null) return;
+        long sdfT0 = System.Diagnostics.Stopwatch.GetTimestamp();
         _sdf = new SdfSharedResources();
         _sdf.Init(_device);
-        _rectPipe = new RoundRectPipeline();
-        _rectPipe.Init(_device, _sdf);
-        _shadowPipe = new ShadowPipeline();
-        _shadowPipe.Init(_device, _sdf);
-        _arcPipe = new ArcPipeline();
-        _arcPipe.Init(_device, _sdf);
-        _polylinePipe = new PolylineStrokePipeline();
-        _polylinePipe.Init(_device, _sdf);
-        _gradPipe = new GradientPipeline();
-        _gradPipe.Init(_device, _sdf);
-        _acrylic = new AcrylicCompositor();
-        _acrylic.Init(_device);
-        _opacity = new OpacityLayerCompositor();
-        _opacity.Init(_device, _queue);
-        _glyphs = new GlyphRenderer();
-        _glyphs.SetLivenessSource(_strings);   // reclaimed text ids → prompt run-cache eviction (quad-array recycling)
-        _glyphs.Init(_device);
-        _imageTextures = new ImageTextureStore();
-        _imageTextures.Init(_device);
-        _imagePipe = new ImagePipeline();
-        _imagePipe.Init(_device);
-        _bakedBlur = new BakedBlurCompositor();
-        _bakedBlur.Init(_device, _queue);
+        var sdf = _sdf;
+        double sdfMs = (System.Diagnostics.Stopwatch.GetTimestamp() - sdfT0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+
+        RoundRectPipeline? rectPipe = null;
+        ShadowPipeline? shadowPipe = null;
+        ArcPipeline? arcPipe = null;
+        PolylineStrokePipeline? polylinePipe = null;
+        GradientPipeline? gradPipe = null;
+        AcrylicCompositor? acrylic = null;
+        OpacityLayerCompositor? opacity = null;
+        GlyphRenderer? glyphs = null;
+        ImageTextureStore? imageTextures = null;
+        ImagePipeline? imagePipe = null;
+        BakedBlurCompositor? bakedBlur = null;
+
+        var ms = new double[s_pipeStageNames.Length];        // per-slot elapsed; distinct elements, one writer each
+        var tasks = new Task[s_pipeStageNames.Length];
+        Task Stage(int slot, Action build) => Task.Run(() =>
+        {
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
+            build();
+            ms[slot] = (System.Diagnostics.Stopwatch.GetTimestamp() - t0) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        });
+
+        tasks[0] = Stage(0, () => { var p = new RoundRectPipeline(); p.Init(_device, sdf); rectPipe = p; });
+        tasks[1] = Stage(1, () => { var p = new ShadowPipeline(); p.Init(_device, sdf); shadowPipe = p; });
+        tasks[2] = Stage(2, () => { var p = new ArcPipeline(); p.Init(_device, sdf); arcPipe = p; });
+        tasks[3] = Stage(3, () => { var p = new PolylineStrokePipeline(); p.Init(_device, sdf); polylinePipe = p; });
+        tasks[4] = Stage(4, () => { var p = new GradientPipeline(); p.Init(_device, sdf); gradPipe = p; });
+        tasks[5] = Stage(5, () => { var p = new AcrylicCompositor(); p.Init(_device); acrylic = p; });
+        tasks[6] = Stage(6, () => { var p = new OpacityLayerCompositor(); p.Init(_device, _queue); opacity = p; });
+        tasks[7] = Stage(7, () =>
+        {
+            var p = new GlyphRenderer();
+            p.SetLivenessSource(_strings);   // reclaimed text ids → prompt run-cache eviction (quad-array recycling)
+            p.Init(_device);
+            glyphs = p;
+        });
+        tasks[8] = Stage(8, () => { var p = new ImageTextureStore(); p.Init(_device); imageTextures = p; });
+        tasks[9] = Stage(9, () => { var p = new ImagePipeline(); p.Init(_device); imagePipe = p; });
+        tasks[10] = Stage(10, () => { var p = new BakedBlurCompositor(); p.Init(_device, _queue); bakedBlur = p; });
+
+        try
+        {
+            Task.WaitAll(tasks);
+        }
+        catch (AggregateException ex)
+        {
+            // Surface the real bring-up failure (Check(...)'s InvalidOperationException) with its own stack, not a wrapper.
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.InnerExceptions[0]).Throw();
+        }
+
+        // Publish AFTER the join: Task.WaitAll is the barrier, so every field below is fully constructed when read.
+        _rectPipe = rectPipe;
+        _shadowPipe = shadowPipe;
+        _arcPipe = arcPipe;
+        _polylinePipe = polylinePipe;
+        _gradPipe = gradPipe;
+        _acrylic = acrylic;
+        _opacity = opacity;
+        _glyphs = glyphs;
+        _imageTextures = imageTextures;
+        _imagePipe = imagePipe;
+        _bakedBlur = bakedBlur;
+
+        if (s_bootDiag)
+        {
+            Console.Error.WriteLine($"[boot.pipe] sdf-shared: {sdfMs:F1}ms (serial)");
+            for (int i = 0; i < s_pipeStageNames.Length; i++)
+                Console.Error.WriteLine($"[boot.pipe] {s_pipeStageNames[i]}: {ms[i]:F1}ms (parallel)");
+        }
     }
 
     private static void Check(HRESULT hr, string what)

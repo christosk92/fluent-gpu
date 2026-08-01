@@ -294,22 +294,7 @@ float4 PSMain(V i) : SV_Target
     }
 
     private static ID3DBlob* Compile(string hlsl, string entry, string target)
-    {
-        byte[] src = Encoding.ASCII.GetBytes(hlsl);
-        byte[] ent = Encoding.ASCII.GetBytes(entry + "\0");
-        byte[] tgt = Encoding.ASCII.GetBytes(target + "\0");
-        ID3DBlob* code = null; ID3DBlob* err = null;
-        fixed (byte* ps = src) fixed (byte* pe = ent) fixed (byte* pt = tgt)
-        {
-            HRESULT hr = D3DCompile(ps, (nuint)src.Length, null, null, null, (sbyte*)pe, (sbyte*)pt, 0, 0, &code, &err);
-            if ((int)hr < 0)
-            {
-                string msg = err != null ? Marshal.PtrToStringAnsi((nint)err->GetBufferPointer()) ?? "" : "";
-                throw new InvalidOperationException($"acrylic shader {entry} failed: {msg}");
-            }
-        }
-        return code;
-    }
+        => ShaderCompiler.Compile(hlsl, entry, target, "acrylic");
 
     private ID3D12PipelineState* MakePso(ID3D12RootSignature* root, ID3DBlob* vs, ID3DBlob* ps, bool blend)
     {

@@ -664,40 +664,10 @@ float4 BlurPS(V i) : SV_Target
     }
 
     private static ID3DBlob* CompileSource(string hlsl, string entry, string target)
-    {
-        byte[] src = Encoding.ASCII.GetBytes(hlsl);
-        byte[] ent = Encoding.ASCII.GetBytes(entry + "\0");
-        byte[] tgt = Encoding.ASCII.GetBytes(target + "\0");
-        ID3DBlob* code = null; ID3DBlob* err = null;
-        fixed (byte* ps = src) fixed (byte* pe = ent) fixed (byte* pt = tgt)
-        {
-            HRESULT hr = D3DCompile(ps, (nuint)src.Length, null, null, null, (sbyte*)pe, (sbyte*)pt, 0, 0, &code, &err);
-            if ((int)hr < 0)
-            {
-                string msg = err != null ? Marshal.PtrToStringAnsi((nint)err->GetBufferPointer()) ?? "" : "";
-                throw new InvalidOperationException($"opacity-layer blur shader {entry} failed: {msg}");
-            }
-        }
-        return code;
-    }
+        => ShaderCompiler.Compile(hlsl, entry, target, "opacity-layer blur");
 
     private static ID3DBlob* Compile(string entry, string target)
-    {
-        byte[] src = Encoding.ASCII.GetBytes(Hlsl);
-        byte[] ent = Encoding.ASCII.GetBytes(entry + "\0");
-        byte[] tgt = Encoding.ASCII.GetBytes(target + "\0");
-        ID3DBlob* code = null; ID3DBlob* err = null;
-        fixed (byte* ps = src) fixed (byte* pe = ent) fixed (byte* pt = tgt)
-        {
-            HRESULT hr = D3DCompile(ps, (nuint)src.Length, null, null, null, (sbyte*)pe, (sbyte*)pt, 0, 0, &code, &err);
-            if ((int)hr < 0)
-            {
-                string msg = err != null ? Marshal.PtrToStringAnsi((nint)err->GetBufferPointer()) ?? "" : "";
-                throw new InvalidOperationException($"opacity-layer shader {entry} failed: {msg}");
-            }
-        }
-        return code;
-    }
+        => ShaderCompiler.Compile(Hlsl, entry, target, "opacity-layer");
 
     /// <summary>Adopt the canvas size; size-mismatched pool entries are retired (fence-gated). Allocation itself is
     /// lazy — nothing is created until the first <see cref="Acquire"/>.</summary>

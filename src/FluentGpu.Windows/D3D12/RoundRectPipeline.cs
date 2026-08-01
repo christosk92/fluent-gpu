@@ -55,7 +55,8 @@ internal enum RectPass : byte
 /// (rect/radii/color) is read in the VS from a root StructuredBuffer; the PS evaluates the analytic rounded-box SDF
 /// with single-pass AA. E9 variants live in the same PS: dashed outlines (perimeter arc-length modulation),
 /// checkerboard fills, the WinUI selected-tab shape, and the tier-2 rounded-clip coverage clamp.
-/// Shaders are compiled at runtime (D3DCompile → DXBC sm5.1; DXC→DXIL offline is the spec's eventual path).
+/// Shaders go through <see cref="ShaderCompiler"/> — D3DCompile → DXBC sm5.1, backed by the persistent content-hashed
+/// bytecode cache, so only a machine-cold start pays the compile (DXC→DXIL offline is the spec's eventual path).
 /// </summary>
 internal sealed unsafe class RoundRectPipeline : IDisposable
 {
@@ -299,22 +300,7 @@ float4 PSMain(VSO i) : SV_Target
     private static ID3DBlob* Compile(string entry, string target) => CompileFrom(Hlsl, entry, target);
 
     private static ID3DBlob* CompileFrom(string source, string entry, string target)
-    {
-        byte[] src = Encoding.ASCII.GetBytes(source);
-        byte[] ent = Encoding.ASCII.GetBytes(entry + "\0");
-        byte[] tgt = Encoding.ASCII.GetBytes(target + "\0");
-        ID3DBlob* code = null; ID3DBlob* err = null;
-        fixed (byte* ps = src) fixed (byte* pe = ent) fixed (byte* pt = tgt)
-        {
-            HRESULT hr = D3DCompile(ps, (nuint)src.Length, null, null, null, (sbyte*)pe, (sbyte*)pt, 0, 0, &code, &err);
-            if ((int)hr < 0)
-            {
-                string msg = err != null ? Marshal.PtrToStringAnsi((nint)err->GetBufferPointer()) ?? "" : "";
-                throw new InvalidOperationException($"shader {entry} ({target}) failed: {msg}");
-            }
-        }
-        return code;
-    }
+        => ShaderCompiler.Compile(source, entry, target);
 
     private void BuildPipeline(ID3D12Device* device)
     {

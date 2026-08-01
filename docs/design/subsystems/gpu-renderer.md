@@ -1005,6 +1005,35 @@ transpiler** (compute/D2D1-only).
 - `shapes_common.hlsli` single-sources the SDF/gamma/brush math; DXIL and SPIR-V come from the same text →
   no per-backend drift.
 
+### 14.1 As-built interim (runtime D3DCompile + a persistent bytecode cache)
+
+The MADE decision above is the **endgame and still owns the target shape**. It is NOT yet what ships. The
+as-built Windows backend (`src/FluentGpu.Windows/D3D12/`) is honest about the gap:
+
+- **Shader sources are inline C# `const string` HLSL** on each pipeline class, compiled at **runtime** by
+  `D3DCompile` to **DXBC `sm5.1`** (not DXC → DXIL `sm6.0`). There is no `.hlsl` file set and no MSBuild
+  compile step yet, so there is no bytecode to embed.
+- **One chokepoint.** Every pipeline routes through the single `ShaderCompiler.Compile(source, entry, target, label)`
+  method — no pipeline calls `D3DCompile` directly. That chokepoint is what makes the swap to embedded
+  bytecode a one-file change when the offline step lands.
+- **Unconditional persistent bytecode cache.** `ShaderCompiler` keys each compile on a content hash
+  (SHA256 over source ‖ entry ‖ target ‖ a cache-format version) and stores the resulting DXBC under
+  `%TEMP%\fluent-gpu\shadercache` — the same location family as the engine's `DiskImageCache`. Publication is
+  atomic (temp file + move), corrupt or unreadable entries **fail closed** to a fresh compile, and entries are
+  swept once per process at 30 days. The cache is pure acceleration: every failure mode (read-only volume,
+  corrupt entry, a concurrent writer losing the move race) degrades to compiling, never to a wrong pipeline.
+  Only a **machine-cold** start pays the full compile set.
+- **Parallel pipeline bring-up.** `D3D12Device.EnsurePipelines` initializes the SDF shared resources serially
+  first (the SDF pipelines take it as an `Init` argument), then builds the remaining pipelines
+  **concurrently** — legal because `ID3D12Device` creation calls (root signatures, PSOs, buffers, descriptor
+  heaps) are free-threaded, and each pipeline publishes into its device field only after the join. This is
+  what keeps the machine-cold first launch from paying the compile set end to end.
+
+**Why the endgame is not scheduled:** reaching offline DXC → DXIL requires extracting the inline C# HLSL
+strings into real `.hlsl` modules (the table above), adding the MSBuild DXC target, and source-generating the
+`byte[]` constants — a real refactor of every pipeline, not a flag. It is a **flagged follow-up with no
+milestone**. Until it lands, treat §14's table + pipeline as the target and this subsection as the truth.
+
 ---
 
 ## 15. Thread placement, build order, off-thread descope

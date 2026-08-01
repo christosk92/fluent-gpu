@@ -132,6 +132,22 @@ public static class FluentApp
             Diag.Sink = Console.Error.WriteLine;   // engine diagnostics -> console (Debug/FLUENTGPU_DIAG only)
         }
 
+        // FG_DIAG cold-start attribution: phase deltas to stderr, runtime-gated so the published Release binary can
+        // report its own bring-up. "sinceStart" anchors at OS process creation (includes CreateProcess + runtime init).
+        long bootPrev = System.Diagnostics.Stopwatch.GetTimestamp();
+        void BootStamp(string label)
+        {
+            if (!consoleDiagnostics) return;
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            Console.Error.WriteLine($"[boot] {label}: +{(now - bootPrev) * 1000.0 / System.Diagnostics.Stopwatch.Frequency:F1}ms");
+            bootPrev = now;
+        }
+        if (consoleDiagnostics)
+        {
+            using var proc = System.Diagnostics.Process.GetCurrentProcess();
+            Console.Error.WriteLine($"[boot] runcore-entry: sinceProcessStart={(DateTime.Now - proc.StartTime).TotalMilliseconds:F1}ms");
+        }
+
         var strings = new StringTable();
         using var app = new Win32App();
         // customFrame: the app draws its own WinUI TitleBar (caption stripped, engine caption buttons, snap layouts) —
@@ -143,6 +159,7 @@ public static class FluentApp
             o.Mica,
             CustomFrame: o.CustomFrame,
             MinClientSizeDip: new Size2(o.MinWidth, o.MinHeight)));
+        BootStamp("create-window");
         // Publish the real top-level HWND so app-layer callers (the Windows-APIs page: SMTC / pickers / taskbar) can pass
         // it as their explicit nint hwnd — the host accessor, not an Engine-seam invention. Cleared when the run ends.
         WindowHandle = window.Handle.Value;
@@ -155,11 +172,14 @@ public static class FluentApp
         else if (Win32Theme.Accent() is { } b) Theme.Accent = ColorF.FromRgba(b.R, b.G, b.B);
         Win32Theme.ApplyWindowMaterial(window.Handle.Value, Theme.Dark, s_mica, s_customFrame, s_micaAlt);
         if (o.Mica) Theme.WindowBackground = ColorF.Transparent;
+        BootStamp("accent+material");
 
         // Text measurement runs through DirectWrite (the same design advances + line-break math the D3D12 GlyphRenderer
         // uses to render), so measured wrap/height matches rendered wrap/height exactly. (GDI measure is retired here.)
         var fonts = new DirectWriteFontSystem(strings);
+        BootStamp("directwrite-fonts");
         IGpuDevice device = new D3D12Device(strings, composited: o.Mica);
+        BootStamp("d3d12device-ctor");
 
         // Real image pipeline: WIC constrained decode on a worker pool, behind a disk-cached HTTP/2 fetcher.
         using var imageFetcher = new DefaultImageFetcher(diskCache: new DiskImageCache());
@@ -169,8 +189,10 @@ public static class FluentApp
         using var imageDecoder = new DecodeScheduler(new WicImageCodec(), imageFetcher,
             new DecodeOptions { PixelPool = pixelPool });
         var images = new ImageCache(imageDecoder, ImageCacheBudgetBytes());
+        BootStamp("image-pipeline");
 
         using var host = new AppHost(app, window, device, fonts, strings, root(), images);
+        BootStamp("apphost-ctor");
         host.PixelPool = pixelPool;   // before the first RunFrame
         host.SmoothScroll = true;   // inertial wheel scrolling + auto-hiding scrollbars (the real-app default)
         // App-set ambient power throttle (>0): pace perpetual loop animation (spinner/shimmer/equalizer/media-playhead) to
@@ -214,6 +236,7 @@ public static class FluentApp
         }
 
         window.Show();
+        BootStamp("window-show");
 
         // Optional diagnostic-harness takeover (the gallery's SoakProbe longevity / leak-hunt + targeted-stress modes,
         // gated on FG_SOAK / FG_STRESS_* / FG_WAKE_AUDIT). Installed via FluentApp.DiagnosticRun; when it handles the

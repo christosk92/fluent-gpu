@@ -101,22 +101,7 @@ float4 PSMain(VSOut i) : SV_Target
     }
 
     private static ID3DBlob* Compile(string entry, string target)
-    {
-        byte[] src = Encoding.ASCII.GetBytes(Hlsl);
-        byte[] ent = Encoding.ASCII.GetBytes(entry + "\0");
-        byte[] tgt = Encoding.ASCII.GetBytes(target + "\0");
-        ID3DBlob* code = null; ID3DBlob* err = null;
-        fixed (byte* ps = src) fixed (byte* pe = ent) fixed (byte* pt = tgt)
-        {
-            HRESULT hr = D3DCompile(ps, (nuint)src.Length, null, null, null, (sbyte*)pe, (sbyte*)pt, 0, 0, &code, &err);
-            if ((int)hr < 0)
-            {
-                string msg = err != null ? Marshal.PtrToStringAnsi((nint)err->GetBufferPointer()) ?? "" : "";
-                throw new InvalidOperationException($"arc shader {entry} ({target}) failed: {msg}");
-            }
-        }
-        return code;
-    }
+        => ShaderCompiler.Compile(Hlsl, entry, target, "arc");
 
     private void BuildPipeline(ID3D12Device* device)
     {
