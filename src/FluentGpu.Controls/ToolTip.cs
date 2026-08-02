@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -116,7 +117,21 @@ public sealed class ToolTip : Component
     /// dropped (the toggle-tooltip staleness bug). <see cref="Wrap"/> routes them through re-pushed props instead; when
     /// present they WIN over the fields and the ToolTip re-renders reactively (props are signal-backed). Read with
     /// <c>UsePropsOrDefault</c>.</summary>
-    public sealed record ToolTipSlots(Element Target, string Text);
+    public sealed record ToolTipSlots(Element Target, string Text)
+    {
+        // The compiler-generated record equality walks the whole wrapped Element tree, field by field, EVERY time the
+        // parent re-pushes props — and the delivery seam compares props on every parent render. For a shell that wraps
+        // dozens of targets that deep walk is the single hottest thing in a reconcile flush, and it decides nothing:
+        // Element is immutable, so a rebuilt target is a different instance whose subtree could only compare equal by
+        // accident. Comparing the target by REFERENCE is therefore both far cheaper and semantics-preserving in the
+        // safe direction — a rebuilt target is unequal, so it still re-renders; only a genuinely identical instance
+        // (the parent handed back the same element) short-circuits.
+        public bool Equals(ToolTipSlots? other)
+            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text;
+
+        public override int GetHashCode()
+            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text);
+    }
 
     public static Element Wrap(Element target, string text)
         => Embed.Comp(new ToolTipSlots(target, text), () => new ToolTip());
