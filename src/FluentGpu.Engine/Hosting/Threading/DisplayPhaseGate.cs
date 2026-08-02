@@ -86,6 +86,49 @@ internal sealed class DisplayPhaseGate
         return true;
     }
 
+    /// <summary>UI thread. Arm the gate at PUBLISH time rather than waiting for the next <see cref="Blocks"/> poll, and
+    /// report whether the frame just published is still owed a present.
+    ///
+    /// <b>Why this exists.</b> <see cref="Blocks"/> runs at the TOP of a frame, before the frame is produced; a producing
+    /// cycle therefore left the gate DISARMED for its entire duration (record + layout + publish) and only re-armed on
+    /// the next poll. The render thread's present-ack callback elides its wake whenever the gate is unarmed — so on
+    /// exactly the frames that produced content, no wake was owed and the loop fell back to the wall-clock pace timer.
+    /// A wall-clock cap can bound how OFTEN the loop produces but never WHEN, which is the whole phase problem: measured
+    /// ~7.9 ms production against an 8.333 ms grid ⇒ ~4% of slots slip ⇒ 115 fps on a 120 Hz panel. Arming here closes
+    /// the window: the ack that lands for THIS publish finds the gate armed and delivers the wake, so the next cycle
+    /// starts on the display's phase.
+    ///
+    /// The handshake is the same fenced arm-then-recheck as <see cref="Blocks"/>, for the same reason — see the type
+    /// comment. Arming without the recheck would lose the wake to a present that lands between the two operations.
+    ///
+    /// <b>Never counts.</b> <see cref="GatedFrames"/> is the census of frames DECLINED (frames DropOldest was about to
+    /// discard). A publish is a frame that WAS produced, so this must not inflate it or the census stops meaning what
+    /// the pacing argument uses it for. The stretch it opens is shared with <see cref="Blocks"/>: a subsequent poll
+    /// inside the same stretch measures the stall ceiling from the PUBLISH stamp, which is the correct origin (the
+    /// present is owed from the moment the frame was handed over, not from the next poll).</summary>
+    /// <param name="publishSeq">The seq just returned by PUBLISH — the frame whose present is now owed.</param>
+    /// <param name="nowTicks">Caller's monotonic stamp; becomes the stretch origin for the stall ceiling.</param>
+    /// <returns>True when a present is still owed for <paramref name="publishSeq"/> (the gate is now armed).</returns>
+    public bool ArmAtPublish(ulong publishSeq, long nowTicks)
+    {
+        if (publishSeq <= _readAck()) return Open(ceilingEscape: false);
+
+        if (!_inStretch)
+        {
+            _inStretch = true;
+            _sinceTicks = nowTicks;
+            // Full fence, NOT Volatile.Write — identical ordering requirement to Blocks(); the recheck below is only
+            // authoritative because of it.
+            Interlocked.Exchange(ref _armed, 1);
+            if (publishSeq <= _readAck()) return Open(ceilingEscape: false);
+            return true;
+        }
+
+        // Already armed inside an open stretch (Blocks gated, then the ceiling escape produced this frame): the arm and
+        // the stretch origin both stand. The ceiling is checked by Blocks alone — publishing must never open the gate.
+        return true;
+    }
+
     /// <summary>Open the gate and disarm. Idempotent; safe to call when already open.</summary>
     public bool Open() => Open(ceilingEscape: false);
 

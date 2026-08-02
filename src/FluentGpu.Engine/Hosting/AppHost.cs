@@ -2974,6 +2974,13 @@ public sealed class AppHost : IDisposable
                 // present stamp be attributed back to the offsets this frame baked in (it was previously discarded).
                 _framePublishSeq = _renderSeam.Publish(_drawList.Bytes, _drawList.SortKeys, in submitInfo,
                     suppressVsync: keepAlive, interactivePresent: interactivePresent);
+                // Arm the display-phase gate for the frame we JUST handed over, before waking the render thread. The
+                // gate is polled at the top of a frame, so a producing cycle used to run its whole record/layout/publish
+                // with the gate disarmed — and OnRenderPresentAck elides its wake when unarmed, so the ack for this very
+                // frame delivered nothing and the loop fell back to the wall-clock pace. Arming here (and BEFORE the
+                // wake, so the ack cannot land in the gap) is what puts the producing frames back on the display's
+                // phase. Never counts a gated frame: this one was produced, not declined.
+                if (_asyncActive) _phaseGate?.ArmAtPublish(_framePublishSeq, Stopwatch.GetTimestamp());
                 if (_renderThread is not null)
                 {
                     if (_asyncActive) _renderThread.WakeAsync();   // async: UI does NOT wait (present happens later, render-side)

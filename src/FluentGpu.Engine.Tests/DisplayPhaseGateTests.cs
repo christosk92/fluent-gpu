@@ -150,6 +150,98 @@ public sealed class DisplayPhaseGateTests
         Assert.Equal(3, gate.GatedFrames);   // unchanged
     }
 
+    /// <summary>ARM-AT-PUBLISH, the ordinary case. A frame was just handed to the seam and no ack has caught up, so the
+    /// gate must arm immediately — otherwise the render thread's present callback sees "not armed" for the very frame it
+    /// is acking and elides the wake, which is what left producing cycles paced by the wall clock instead of the
+    /// display.</summary>
+    [Fact]
+    public void ArmAtPublish_ArmsWhenPresentOwed()
+    {
+        ulong ack = 4;
+        var gate = new DisplayPhaseGate(() => ack);
+
+        Assert.True(gate.ArmAtPublish(publishSeq: 5, nowTicks: 100));
+        Assert.True(gate.IsArmed);
+        Assert.Equal(100, gate.SinceTicksForTest);
+    }
+
+    /// <summary>The same race <see cref="AckRacesBetweenReadAndArm_OpensAndDisarms"/> covers for <c>Blocks</c>, at the
+    /// publish site: the present lands between the first ack read and the arm. The recheck must notice and leave the
+    /// gate DISARMED, or the render thread posts a wake at a loop that is not parked.</summary>
+    [Fact]
+    public void ArmAtPublish_AckAlreadyLanded_OpensAndDisarms()
+    {
+        // Case 1: the ack was already current on the FIRST read (a fast present beat us to the call).
+        ulong current = 5;
+        var settled = new DisplayPhaseGate(() => current);
+        Assert.False(settled.ArmAtPublish(publishSeq: 5, nowTicks: 10));
+        Assert.False(settled.IsArmed);
+        Assert.Equal(0, settled.SinceTicksForTest);
+
+        // Case 2: THE RACE — stale on the first read, current on the recheck.
+        int reads = 0;
+        var raced = new DisplayPhaseGate(() => { reads++; return reads == 1 ? 4UL : 5UL; });
+        Assert.False(raced.ArmAtPublish(publishSeq: 5, nowTicks: 10));
+        Assert.False(raced.IsArmed);
+        Assert.Equal(2, reads);              // the recheck actually happened
+        Assert.Equal(0, raced.SinceTicksForTest);
+    }
+
+    /// <summary>Publish and poll share ONE stretch, and its origin is the publish stamp. The present is owed from the
+    /// moment the frame was handed over, so the stall ceiling must be measured from there — measuring it from the next
+    /// poll would stretch the liveness backstop by however long the poll took to come round.</summary>
+    [Fact]
+    public void ArmAtPublish_SharesStretchWithBlocks_CeilingFromPublish()
+    {
+        ulong ack = 4;                       // never advances
+        var gate = new DisplayPhaseGate(() => ack);
+
+        Assert.True(gate.ArmAtPublish(publishSeq: 5, nowTicks: 1000));
+        Assert.Equal(1000, gate.SinceTicksForTest);
+
+        // A poll inside the stretch neither re-stamps the origin nor re-arms a second stretch.
+        Assert.True(gate.Blocks(5, nowTicks: 1500, ceilingTicks: Ceiling));
+        Assert.Equal(1000, gate.SinceTicksForTest);
+        Assert.True(gate.IsArmed);
+
+        // ...and the ceiling fires relative to the PUBLISH stamp, not to the first poll.
+        Assert.False(gate.Blocks(5, nowTicks: 1000 + Ceiling, ceilingTicks: Ceiling));
+        Assert.False(gate.IsArmed);
+        Assert.Equal(1, gate.CeilingEscapes);
+
+        // Publishing again inside a still-open stretch (the frame the ceiling escape produced) keeps the arm and does
+        // not open the gate: only Blocks owns the ceiling decision.
+        Assert.True(gate.Blocks(6, nowTicks: 1000 + Ceiling + 1, ceilingTicks: Ceiling));
+        Assert.True(gate.ArmAtPublish(publishSeq: 6, nowTicks: 1000 + Ceiling + 2));
+        Assert.True(gate.IsArmed);
+        Assert.Equal(1000 + Ceiling + 1, gate.SinceTicksForTest);   // the earlier stretch origin stands
+    }
+
+    /// <summary>GatedFrames is the census of frames DECLINED — the argument that the gate drops exactly what DropOldest
+    /// would have discarded rests on it. A publish is a frame that WAS produced, so no path through
+    /// <c>ArmAtPublish</c> may touch the counter (nor the ceiling-escape counter).</summary>
+    [Fact]
+    public void ArmAtPublish_DoesNotCountGatedFrames()
+    {
+        ulong ack = 0;
+        var gate = new DisplayPhaseGate(() => ack);
+
+        Assert.True(gate.ArmAtPublish(1, nowTicks: 0));
+        Assert.True(gate.ArmAtPublish(2, nowTicks: 1));   // second publish inside the same open stretch
+        Assert.Equal(0, gate.GatedFrames);
+        Assert.Equal(0, gate.CeilingEscapes);
+
+        // A real decline still counts, and the publish before it did not pre-inflate the census.
+        Assert.True(gate.Blocks(2, nowTicks: 2, ceilingTicks: Ceiling));
+        Assert.Equal(1, gate.GatedFrames);
+
+        // Opening through the ack does not count either.
+        ack = 2;
+        Assert.False(gate.ArmAtPublish(2, nowTicks: 3));
+        Assert.Equal(1, gate.GatedFrames);
+        Assert.Equal(0, gate.CeilingEscapes);
+    }
+
     /// <summary>The handshake under real concurrency — the only check that exercises the actual memory barriers rather
     /// than a scripted delegate. A present thread advances the ack at an unpredictable instant while the UI thread
     /// gates. The invariant is "no lost wake": whenever the gate reports blocked it must be armed, so the render
@@ -158,28 +250,44 @@ public sealed class DisplayPhaseGateTests
     /// The producer YIELDS rather than spins, deliberately. A hard <c>SpinWait</c> loop here pegged a core and starved
     /// the timing-sensitive tests in other classes — xUnit runs classes in parallel, and this test failed
     /// <c>AudioFeedRaceTests</c> from the outside while passing itself. A test that damages its neighbours is a bad
-    /// test even when it is green.</summary>
+    /// test even when it is green.
+    ///
+    /// The loop mirrors the real frame shape: poll the gate, and on the frames it lets through, PUBLISH — so
+    /// <c>ArmAtPublish</c> runs against the same live presenter and is held to the same invariant. Arming at publish is
+    /// the point where a lost wake would be most expensive (the ack for the frame just handed over is the one the loop
+    /// is about to sleep on), so it must be covered by the concurrent check, not only by scripted delegates.</summary>
     [Fact]
     public void UnderConcurrentAcks_BlockedAlwaysImpliesArmed()
     {
         long ack = 0;
+        long published = 0;
         var gate = new DisplayPhaseGate(() => (ulong)Volatile.Read(ref ack));
         var violations = new List<string>();
         using var stop = new ManualResetEventSlim(false);
 
+        // The render thread can only acknowledge frames it was actually handed, so the ack CHASES the publish seq at an
+        // unpredictable instant. A free-running counter would race so far ahead of the loop that the gate never armed
+        // and the arm path would go untested.
         var presenter = new Thread(() =>
         {
-            while (!stop.IsSet) { Interlocked.Increment(ref ack); Thread.Yield(); }
+            while (!stop.IsSet) { Volatile.Write(ref ack, Volatile.Read(ref published)); Thread.Yield(); }
         }) { IsBackground = true };
         presenter.Start();
 
         for (int i = 1; i <= 5_000; i++)
         {
-            bool blocked = gate.Blocks((ulong)i, nowTicks: i, ceilingTicks: long.MaxValue);
+            bool blocked = gate.Blocks((ulong)Volatile.Read(ref published), nowTicks: i, ceilingTicks: long.MaxValue);
             // The load-bearing invariant. A blocked-but-unarmed gate is precisely the lost wake: the UI parks and
             // nothing will ever nudge it.
             if (blocked && !gate.IsArmed) violations.Add($"iteration {i}: blocked but not armed");
             if (!blocked && gate.IsArmed) violations.Add($"iteration {i}: opened but left armed");
+
+            if (blocked) continue;
+            // The gate opened ⇒ the frame is produced and PUBLISHED; arm for the present it now owes. Same invariant,
+            // at the site where losing a wake is most expensive: this is the ack the loop is about to sleep on.
+            bool owed = gate.ArmAtPublish((ulong)Interlocked.Increment(ref published), nowTicks: i);
+            if (owed && !gate.IsArmed) violations.Add($"iteration {i}: publish owes a present but is not armed");
+            if (!owed && gate.IsArmed) violations.Add($"iteration {i}: publish acked but left armed");
         }
         stop.Set();
         presenter.Join(2000);
