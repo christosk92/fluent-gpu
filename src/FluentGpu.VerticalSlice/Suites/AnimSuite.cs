@@ -48,6 +48,7 @@ static class AnimSuite
         NavigationSelectionChecks();
         ExpressiveMotionChecks(strings);
         BlurPinKeyChecks(strings);
+        ScrollBlurPolicyChecks();
         SkeletonChecks(strings);
         ProjectionChecks(strings);
         EnterExitChecks(strings);
@@ -352,6 +353,72 @@ static class AnimSuite
             Check("gate.blur.tightWorkGeometry.outsideClip: a clip outside the halo schedules zero blur work",
                 outside.VisibleOutput.IsEmpty && outside.RequiredSource.IsEmpty && outside.Work.IsEmpty,
                 $"out={outside.VisibleOutput} src={outside.RequiredSource} work={outside.Work}");
+        }
+    }
+
+    // A lyric follow translates the scroll content just like a wheel scroll, but it is programmatic rather than direct
+    // manipulation. It must invalidate spans (the entering text has moved) without downgrading a newly-emphasized DoF
+    // layer to HoldIfCached: that policy renders a crisp fallback on a cache miss, which made every lyric line flash
+    // active at the hand-off. A genuine user scroll still gets the hold policy.
+    static void ScrollBlurPolicyChecks()
+    {
+        var scene = new SceneStore();
+        var viewport = scene.CreateNode(1);
+        var content = scene.CreateNode(1);
+        var lyric = scene.CreateNode(1);
+        scene.Root = viewport;
+        scene.AppendChild(viewport, content);
+        scene.AppendChild(content, lyric);
+        scene.Flags(viewport) |= NodeFlags.ClipsToBounds;
+        ref ScrollState scroll = ref scene.ScrollRef(viewport);
+        scroll.ContentNode = content;
+        scene.Bounds(viewport) = new RectF(0f, 0f, 240f, 160f);
+        scene.Bounds(content) = new RectF(0f, 0f, 240f, 320f);
+        scene.Bounds(lyric) = new RectF(0f, 48f, 240f, 42f);
+        ref NodePaint lyricPaint = ref scene.Paint(lyric);
+        lyricPaint = NodePaint.Default;
+        lyricPaint.VisualKind = VisualKind.Box;
+        lyricPaint.Fill = ColorF.FromRgba(0xF5, 0xF5, 0xF5);
+        lyricPaint.BlurSigma = 8f;
+        lyricPaint.BlurCachePolicy = BlurCachePolicy.HoldIfCached;
+
+        var dl = new DrawList();
+        scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -18f);
+        scene.Mark(content, NodeFlags.TransformDirty);
+        SceneRecordStats programmatic = SceneRecorder.Record(scene, dl);
+        BlurCachePolicy programmaticPolicy = FirstBlurPolicy(dl.Bytes);
+
+        scene.ClearTransformDirty();
+        scene.ClearRecordDirty();
+        scroll.UserScrollActive = true;
+        scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -36f);
+        scene.Mark(content, NodeFlags.TransformDirty);
+        SceneRecordStats user = SceneRecorder.Record(scene, dl);
+        BlurCachePolicy userPolicy = FirstBlurPolicy(dl.Bytes);
+
+        bool programmaticKeepsDof = programmatic.BlurHoldCandidateCount == 0
+            && programmaticPolicy == BlurCachePolicy.Normal;
+        bool userMayHold = user.BlurHoldCandidateCount == 1
+            && userPolicy == BlurCachePolicy.HoldIfCached;
+        Check("gate.lyrics.programmaticFollowKeepsDoF: a programmatic content translation records the full blur, while direct user scroll may hold it",
+            programmaticKeepsDof && userMayHold,
+            $"programmatic={programmaticPolicy}/hold{programmatic.BlurHoldCandidateCount} user={userPolicy}/hold{user.BlurHoldCandidateCount}");
+
+        static BlurCachePolicy FirstBlurPolicy(ReadOnlySpan<byte> bytes)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                DrawOp op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.PushLayer)
+                {
+                    PushLayerCmd layer = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(pos));
+                    if (layer.Kind == (int)LayerKind.Blur) return (BlurCachePolicy)layer.BlurCachePolicy;
+                }
+                pos += DrawPayloadSize(op);
+            }
+            return (BlurCachePolicy)255;
         }
     }
 

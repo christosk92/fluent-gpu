@@ -1152,16 +1152,44 @@ public sealed class AppHost : IDisposable
     /// <summary>The loop's wait, folded across this host and every detached child (so a playing pop-out keeps the loop at
     /// display rate even while the main window is idle/minimized). Calls <see cref="RecommendedWaitMs"/> (preserving its
     /// LastWaitKind/Ms side effects for logging), then combines each child's recommended wait.</summary>
-    public int WaitMsWithDetached()
+    public int WaitMsWithDetached() => WaitRequestWithDetached().TimeoutMs;
+
+    /// <summary>The loop's typed wait folded across this host and every detached child. Display-paced finite waits ask
+    /// the platform to absorb pointer-motion wake storms up to the already-selected deadline; idle, ambient and urgent
+    /// paths keep ordinary immediate input wake behavior.</summary>
+    public PlatformWaitRequest WaitRequestWithDetached()
     {
         int w = RecommendedWaitMs();
+        var request = WaitRequest(w, _lastWaitKind);
         for (int i = 0; i < _detachedHosts.Count; i++)
-            w = CombineWait(w, _detachedHosts[i].RecommendedWaitMs());
-        return w;
+        {
+            var child = _detachedHosts[i];
+            int childWait = child.RecommendedWaitMs();
+            request = CombineWait(request, WaitRequest(childWait, child._lastWaitKind));
+        }
+        return request;
     }
 
-    // -1 = "block until a message" (no preference); any finite wait wins; min of two finite waits.
-    private static int CombineWait(int a, int b) => a < 0 ? b : b < 0 ? a : Math.Min(a, b);
+    private static PlatformWaitRequest WaitRequest(int timeoutMs, HostWaitKind kind) => new(
+        timeoutMs,
+        timeoutMs > 0 && IsDisplayRateWait(kind, timeoutMs)
+            ? PlatformInputWakePolicy.CoalescePointerMotion
+            : PlatformInputWakePolicy.Immediate);
+
+    // -1 = "block until a message" (no preference); any finite wait wins; min of two finite waits. At an equal
+    // deadline the stricter motion-coalescing request wins, since both hosts are due at the same instant.
+    internal static PlatformWaitRequest CombineWait(PlatformWaitRequest a, PlatformWaitRequest b)
+    {
+        if (a.TimeoutMs < 0) return b;
+        if (b.TimeoutMs < 0) return a;
+        if (a.TimeoutMs < b.TimeoutMs) return a;
+        if (b.TimeoutMs < a.TimeoutMs) return b;
+        return new PlatformWaitRequest(a.TimeoutMs,
+            a.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion
+                || b.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion
+                    ? PlatformInputWakePolicy.CoalescePointerMotion
+                    : PlatformInputWakePolicy.Immediate);
+    }
 
     /// <summary>Probe/diagnostic: count of live detached video windows.</summary>
     public int DetachedWindowCount => _detachedHosts.Count;
@@ -2158,6 +2186,16 @@ public sealed class AppHost : IDisposable
     /// <summary>Events pumped into the ring this frame — recorded by the <see cref="FluentGpu.Foundation.ScrollTrace"/>
     /// frame marker (diagnostic only; written every frame, read only when the trace is on).</summary>
     private int _tracePumpedEvents;
+    private uint _traceInputKindMask;
+
+    private const uint WarmCadenceInputMask =
+        (1u << (int)InputKind.PointerDown) | (1u << (int)InputKind.PointerUp)
+        | (1u << (int)InputKind.PointerCancel) | (1u << (int)InputKind.Key)
+        | (1u << (int)InputKind.KeyUp) | (1u << (int)InputKind.Char)
+        | (1u << (int)InputKind.Wheel) | (1u << (int)InputKind.ScrollBegin)
+        | (1u << (int)InputKind.ScrollUpdate) | (1u << (int)InputKind.ScrollEnd)
+        | (1u << (int)InputKind.MomentumBegin) | (1u << (int)InputKind.MomentumUpdate)
+        | (1u << (int)InputKind.MomentumEnd);
 
     /// <summary>Run one full frame: pump + input, then paint (the reactive flush + layout + record happen in Paint).</summary>
     public FrameStats RunFrame()
@@ -2189,11 +2227,16 @@ public sealed class AppHost : IDisposable
             return LastStats;
         }
 
-        int clicks = _dispatcher.Dispatch(_ring.Drain(), _ring.DrainVelocitySamples());  // 2 input dispatch (handlers write signals → schedule effects)
+        ReadOnlySpan<InputEvent> inputEvents = _ring.Drain();
+        uint inputKindMask = 0;
+        for (int i = 0; i < inputEvents.Length; i++) inputKindMask |= 1u << (int)inputEvents[i].Kind;
+        _traceInputKindMask = inputKindMask;
+        int clicks = _dispatcher.Dispatch(inputEvents, _ring.DrainVelocitySamples());  // 2 input dispatch (handlers write signals → schedule effects)
         if (s_allocDiag) { db = Probe(SegDispatch, db, dt); dt = Stopwatch.GetTimestamp(); }
-        // Post-input warm-cadence hold: any input this frame (a pumped event or a handled click) keeps the loop rendering
-        // for WarmCadenceHoldMs so a follow-up interaction pays no cold-start ramp (see field). Real window only by default.
-        if (_warmCadenceEnabled && WarmCadenceHoldMs > 0f && (clicks > 0 || _tracePumpedEvents > 0))
+        // Passive hover/motion must not pin the host at display rate. Only interaction-semantic input (press/release,
+        // keyboard, wheel or a scroll phase) and an actual handled click arm the post-input cadence hold.
+        if (_warmCadenceEnabled && WarmCadenceHoldMs > 0f
+            && (clicks > 0 || (inputKindMask & WarmCadenceInputMask) != 0))
             _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
 
         // Step 4 fault injection (FG_FORCE_DEVICE_LOST=<frameN>): force a controlled DEVICE_REMOVED so the next submit
@@ -2714,7 +2757,8 @@ public sealed class AppHost : IDisposable
             // seeded at reconcile); the separate per-frame AdvanceBrushAnims ticker is deleted.
             // (TickTouchpad is gone — scroll phase events apply 1:1 at dispatch; design §6/§12.)
             if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-                FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _scrollAnim.HasActive || _dispatcher.GestureActive);
+                FluentGpu.Foundation.ScrollTrace.Frame(dtMs, _tracePumpedEvents, _traceInputKindMask,
+                    _scrollAnim.HasActive || _dispatcher.GestureActive);
             // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − ScrollTuning.ResampleLatencyMs
             // (12ms as shipped, NOT the 5ms of the original design — four comments drifted on that and are now fixed).
             // NOTE the sampled instant is thereby BEHIND frame start, not ahead to the frame's expected PRESENT time; the
@@ -2846,7 +2890,7 @@ public sealed class AppHost : IDisposable
             _imageCrossfadeWasActive = imageFadeActive;
             if (++_damageEpoch == 0) _damageEpoch = 1;   // nonzero (0 = "no carve-out info" sentinel for the compositor)
             var recordStats = SceneRecorder.Record(_scene, _drawList, _images, in focus, Tok.ScrollThumb, Tok.AcrylicFlyout.Fallback, in textEdit,
-                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: scrollActive || _scrollAnim.AnyOffsetWroteThisFrame,
+                CollectionsMarshal.AsSpan(_popupSkipRoots), holdSelfBlurForAnyUserScroll: holdSelfBlurForScroll,
                 spans: _spanTable, spanReuseDisabled: spanDisable,
                 // Damage the band any structural-track cancel (drag-suppression snap @ ApplyProjections, resize snap @
                 // CancelStructuralAll above) vacated this frame — else the ghost rail persists. AsSpan is alloc-free.

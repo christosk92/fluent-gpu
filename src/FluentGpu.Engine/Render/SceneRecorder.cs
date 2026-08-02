@@ -148,7 +148,7 @@ public static class SceneRecorder
         public float PendingElevateOpacity;
         public int PendingElevateDepth;
         public float PendingElevateScaleX, PendingElevateScaleY;
-        public bool PendingElevateInMotion, PendingElevateScrollInMotion;
+        public bool PendingElevateInMotion, PendingElevateScrollInMotion, PendingElevateUserScrollActive;
         public InheritedState PendingElevateState;
 
         // Union a changed node's device bounds into the frame damage region (region-aware acrylic invalidation).
@@ -348,7 +348,7 @@ public static class SceneRecorder
             BlockSpecials(scene, spans, spanFrame, skipRoots, overlayCount, reuseBlockRoots, ref stats);
 
         Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-            1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
+            1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
 
         // Defensive rootless-orphan fallback. Normal exits replay inside their former parent's Walk (preserving ancestor
         // clips/layers, painter order, and popup-window routing); only nodes that genuinely had no visual parent land here.
@@ -358,7 +358,7 @@ public static class SceneRecorder
             var o = scene.OrphanAt(i, out float px, out float py);
             if ((scene.Flags(o) & NodeFlags.ConnectedOverlay) != 0) continue;   // an overlay-flagged orphan draws in the top band, not here
             Walk(scene, dl, images, o, Affine2D.Translation(px, py), 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-                1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
+                1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
         // E5 drop-spotlight SCRIM band. One explicit band — a flat DragVisualTok.ScrimColor rect with a rounded CUTOUT
@@ -422,7 +422,7 @@ public static class SceneRecorder
             Walk(scene, dl, images, ghost,
                  Affine2D.Translation(abs.X - gb.X - gp.LocalTransform.Dx, abs.Y - gb.Y - gp.LocalTransform.Dy),
                  1f, 1 << 16, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
         // Connected-animation overlay band: flying shared-element (Hero) visuals. Each overlay draws in a top band ABOVE
@@ -441,7 +441,7 @@ public static class SceneRecorder
             Walk(scene, dl, images, ov,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
                  1f, (1 << 16) | 1, overlayClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, default, null, 0, true, false, ref stats);
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, default, null, 0, true, false, ref stats);
         }
         // E5 drag-OVERLAY top band (the chip): same hoist as the ghost band above, at band depth (1<<16)|2 and emitted
         // AFTER the connected-animation overlays, so the drag chip is the topmost thing in the frame. Unclipped, at
@@ -454,7 +454,7 @@ public static class SceneRecorder
             Walk(scene, dl, images, dragOverlay,
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
                  1f, (1 << 16) | 2, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
-                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, default, skipRoots, null, 0, true, false, ref stats);
+                 1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skipRoots, null, 0, true, false, ref stats);
         }
 
         // E9 own-subtree carve-out: now that every entry + every cached-acrylic own-subtree range is known, bake each
@@ -527,7 +527,7 @@ public static class SceneRecorder
         }
         var stats = new RecordAccumulator { HasActiveVirtualDisclosures = scene.HasActiveVirtualDisclosures };
         Walk(scene, dl, images, root, Affine2D.Translation(pax - originDip.X, pay - originDip.Y), 1f, 0, RectF.Infinite,
-             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, false, default, default, null, 0, true, false, ref stats);
+             in focus, in textEdit, scrollThumb, scrollTrack, 1f, 1f, false, false, false, false, default, default, null, 0, true, false, ref stats);
         return stats.ToStats();
     }
 
@@ -653,7 +653,7 @@ public static class SceneRecorder
     private static SpanRecordResult Walk(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
                                          int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
                                          float parentScaleX, float parentScaleY, bool parentInMotion, bool globalBlurHold,
-                                         bool parentScrollInMotion, InheritedState inherited,
+                                         bool parentScrollInMotion, bool parentUserScrollActive, InheritedState inherited,
                                          ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
                                          ref RecordAccumulator stats)
     {
@@ -704,21 +704,26 @@ public static class SceneRecorder
         // whole panel's DoF visibly vanished for one frame on every line change. The content-node TransformDirty guard
         // confirms the content actually translated this frame (only ScrollIntegrator/Input write that), not scale/blur.
         bool scrollInMotion = parentScrollInMotion;
-        if (!scrollInMotion && (flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
+        bool userScrollActive = parentUserScrollActive;
+        if ((flags & NodeFlags.Scrollable) != 0 && scene.HasScroll(node))
         {
             ref var scrollState = ref scene.ScrollRef(node);
-            var scrollContent = scrollState.ContentNode;
-            if (!scrollContent.IsNull && scene.IsLive(scrollContent)
-                && (scene.Flags(scrollContent) & NodeFlags.TransformDirty) != 0)
+            userScrollActive |= scrollState.UserScrollActive;
+            if (!scrollInMotion)
             {
-                // Content translated this frame — descendants must re-record. UserScrollActive still gates blur-hold
-                // (holdBlur below); span reuse is blocked for ANY offset write (wheel, fling, programmatic bring-into-view).
-                scrollInMotion = true;
-            }
-            else if (scrollState.UserScrollActive)
-            {
-                // Offset unchanged but still coasting — keep blur-hold without forcing a full re-record.
-                scrollInMotion = true;
+                var scrollContent = scrollState.ContentNode;
+                if (!scrollContent.IsNull && scene.IsLive(scrollContent)
+                    && (scene.Flags(scrollContent) & NodeFlags.TransformDirty) != 0)
+                {
+                    // Content translated this frame — descendants must re-record. Span reuse is blocked for ANY offset
+                    // write (wheel, fling, programmatic bring-into-view); only userScrollActive may defer a blur below.
+                    scrollInMotion = true;
+                }
+                else if (scrollState.UserScrollActive)
+                {
+                    // Offset unchanged but still coasting — keep blur-hold without forcing a full re-record.
+                    scrollInMotion = true;
+                }
             }
         }
 
@@ -942,7 +947,7 @@ public static class SceneRecorder
         // policy blurs Normally (builds the pin cache, no glow dropout). NB: this must pass the ACTUAL policy through —
         // collapsing HoldOrSkipOnMiss to Normal here silently downgraded the lyrics glow to a full per-frame Gaussian
         // during scroll (the skip-on-miss path went dead), reintroducing the UMA-bound cost this whole change removes.
-        bool holdBlur = isBlurCandidate && (globalBlurHold || scrollInMotion) &&
+        bool holdBlur = isBlurCandidate && (globalBlurHold || userScrollActive) &&
                         p.BlurCachePolicy != BlurCachePolicy.Normal;
         if (holdBlur) stats.BlurHoldCandidateCount++;
         bool isBlurGroup = isBlurCandidate;
@@ -1461,7 +1466,7 @@ public static class SceneRecorder
                 if (!scene.IsLive(exiting)) continue;
                 var exitResult = Walk(scene, dl, images, exiting, childWorld, opacity, depth + 1,
                     hasItemBand ? itemBandClip : childClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                    childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                    childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(exitResult);
             }
             if (itemBandClipChanged && !itemBandClip.IsEmpty) dl.PopClip(key);
@@ -1491,7 +1496,7 @@ public static class SceneRecorder
                     {
                         var prefixElevated = Walk(scene, dl, images, deferElevate, deferElevateWorld, opacity, depth + 1,
                             deferElevateClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                            childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots,
+                            childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots,
                             spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                         result.Include(prefixElevated);
                         deferElevate = NodeHandle.Null;
@@ -1551,7 +1556,7 @@ public static class SceneRecorder
                             // then defer this one so the most-hovered card ends up on top.
                             var flushed = Walk(scene, dl, images, deferElevate, deferElevateWorld, opacity, depth + 1,
                                 deferElevateClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                                childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                                childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                             result.Include(flushed);
                             deferElevate = c; deferElevateT = ht;
                             deferElevateWorld = activeChildWorld; deferElevateClip = activeChildClip;
@@ -1562,7 +1567,7 @@ public static class SceneRecorder
                 }
                 var childResult = Walk(scene, dl, images, c, activeChildWorld, opacity, depth + 1,
                     activeChildClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                    childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                    childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                 result.Include(childResult);
             }
             // The elevated (hovered) card paints after its non-elevated siblings, but before any sticky-pinned chrome.
@@ -1582,6 +1587,7 @@ public static class SceneRecorder
                     stats.PendingElevateScaleY = childScaleY;
                     stats.PendingElevateInMotion = inMotion;
                     stats.PendingElevateScrollInMotion = scrollInMotion;
+                    stats.PendingElevateUserScrollActive = userScrollActive;
                     // Strip the under-root tag: the hoisted subtree records OUTSIDE the root, and a flagged child
                     // inside it (the card wrapper in the cell) must defer in place, not re-park into a dead slot.
                     stats.PendingElevateState = childState.WithoutUnderElevateRoot();
@@ -1590,7 +1596,7 @@ public static class SceneRecorder
                 {
                     var elevResult = Walk(scene, dl, images, deferElevate, deferElevateWorld, opacity, depth + 1,
                         deferElevateClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                        childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                        childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                     result.Include(elevResult);
                 }
             }
@@ -1624,7 +1630,7 @@ public static class SceneRecorder
                         if (pinnedClip.IsEmpty) continue;
                         var childResult = Walk(scene, dl, images, c, pinnedWorld, opacity, depth + 1,
                             pinnedClip, in focus, in textEdit, scrollThumb, scrollTrack,
-                            childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
+                            childScaleX, childScaleY, inMotion, globalBlurHold, scrollInMotion, userScrollActive, childState, skipRoots, spans, spanFrame, spanReuseDisabled, spanStoreEnabled, ref stats);
                         result.Include(childResult);
                     }
                 if (pinnedBandPushed) dl.PopClip(key);
@@ -1740,7 +1746,7 @@ public static class SceneRecorder
                 var hoistResult = Walk(scene, dl, images, hoist, stats.PendingElevateWorld, stats.PendingElevateOpacity,
                     stats.PendingElevateDepth, hoistClip, in focus, in textEdit, scrollThumb, scrollTrack,
                     stats.PendingElevateScaleX, stats.PendingElevateScaleY, stats.PendingElevateInMotion,
-                    globalBlurHold, stats.PendingElevateScrollInMotion, stats.PendingElevateState, skipRoots, spans, spanFrame,
+                    globalBlurHold, stats.PendingElevateScrollInMotion, stats.PendingElevateUserScrollActive, stats.PendingElevateState, skipRoots, spans, spanFrame,
                     spanReuseDisabled: true, spanStoreEnabled: false, ref stats);
                 result.Include(hoistResult);
             }
