@@ -1293,9 +1293,14 @@ sealed class NowPlayingOverlay : Component
         var vis = UseSignal((active: false, playingHere: false));
         UseSignalEffect(() =>
         {
-            var identity = b?.Identity.Value ?? default;
+            // Read the COARSE HasActiveContext bool FIRST and bail before touching the hot Identity signal — the same
+            // cold-path decoupling LazyNowPlayingOverlay's memo above documents. While nothing is playing no overlay
+            // can match (Matches is false against an empty context+track), so an idle overlay must not join Identity's
+            // fanout. The effect re-links its sources on every run, so Identity re-attaches when the bool flips true.
+            if (b is not { } bridge || !bridge.HasActiveContext.Value) { vis.Value = (false, false); return; }
+            var identity = bridge.Identity.Value;
             bool a = Matches(_uri, identity.ContextUri, identity.Track);
-            vis.Value = (a, a && (b?.IsPlaying.Value ?? false));   // short-circuit: a non-active card never subscribes to IsPlaying
+            vis.Value = (a, a && bridge.IsPlaying.Value);   // short-circuit: a non-active card never subscribes to IsPlaying
         });
         var (active, playingHere) = vis.Value;
         bool playing = playingHere;   // the equalizer animates iff this card's context is the one actively playing
