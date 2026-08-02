@@ -736,6 +736,95 @@ The same defect in wall-clock form applies to `AmbientFrameWaitMs`, which now an
 last present and quantizes to whole refresh periods — a 60 cap on a 120 Hz panel means "every 2nd vblank",
 not a 16.67 ms timer beating against 8.33 ms.
 
+#### 11.1.1 Arm-at-publish — closing the producing-frame hole (LANDED)
+
+The gate above is polled at the **top** of a frame. A cycle that actually produced content therefore ran its
+whole record → layout → PUBLISH with the gate **disarmed**, and `OnRenderPresentAck` elides its wake whenever
+the gate is unarmed (it must — a 120 Hz present cadence otherwise posts 120 wakes/s at a loop that is not
+waiting; video playback presents continuously with nothing parked on it). So on exactly the frames that
+produced content, the ack delivered nothing and the loop fell back to the wall-clock cap. Measured
+(`ops/diag/sessions/live-20260802-094300`, 36 min): ~7.9 ms production against an 8.333 ms grid, ~4% of slots
+slipped, **115 fps on a 120 Hz panel**.
+
+`DisplayPhaseGate.ArmAtPublish(publishSeq, nowTicks)` arms for the frame just handed over, and is called in
+`Paint` immediately after `SceneFramePublisher.Publish` and **before** `RenderThread.WakeAsync` — the ordering
+is load-bearing, since an ack landing in that gap would find the gate unarmed. It uses the **same fenced
+arm-then-recheck handshake** as `Blocks()` (arming without the recheck loses the wake to a present that lands
+between the two operations; `Interlocked.Exchange`, not a release store, because StoreLoad is unordered on x86
+and ARM alike).
+
+Two invariants:
+
+- **It never counts a gated frame.** `GatedFrames` is the census of frames *declined* — the evidence that the
+  gate drops exactly what DropOldest would have discarded. A publish is a frame that was produced.
+- **It shares one stretch with `Blocks()`,** so a later poll measures the stall ceiling from the **publish**
+  stamp. The present is owed from the moment the frame was handed over, not from whenever the next poll comes
+  round. Only `Blocks()` may open the gate on the ceiling; publishing never does.
+
+`Blocks()` is unchanged, so its existing test contract stands verbatim.
+
+#### 11.1.2 The display clock and the wake seam (LANDED)
+
+The gate restores phase for frames that are **owed a present**. Frames that are not — an elided submit (no
+present, so no ack) and an unarmed async pace wait — still had nothing but a wall-clock timer. Two PAL seam
+members close that:
+
+| Seam member | Contract |
+|---|---|
+| `PlatformWaitRequest.WakeOnDisplayClock` | A **request**, not a contract: end this wait on the display's clock as well as its usual sources. A backend without one (headless, a remote session where the probe fails) ignores it and the wall-clock timeout remains the pacer. |
+| `IPlatformWindow.WakePresent()` | The **phase-critical** wake: the render thread has presented a published frame. Defaults to `Wake()`, so a backend that draws no distinction is unchanged. |
+
+`WakePresent` exists because `Wake()` is the general-purpose cross-thread nudge — every `AppHost.Post`, every
+background producer reaches it — and it is an **auto-reset** signal: any of those producers firing just before
+an ack consumes the very signal the loop was going to be woken by. Win32 gives `WakePresent` its own event and
+posts no `WM_NULL` for it (at panel rate that would be 120 pointless messages a second through the WndProc);
+`OnRenderPresentAck` calls it instead of `Wake`.
+
+The Win32 display clock is `Win32CompositorClock`: one background thread (`fgpu-vblank`) parked in
+`DCompositionWaitForCompositorClock`, republishing each tick as an auto-reset event the message-loop wait
+includes in its handle set. Chosen over `IDXGIOutput::WaitForVBlank` because it is a **flat dcomp export** — no
+`ComPtr` crosses a thread, so it stays clear of the render thread's COM confinement (§1.1); no output
+enumeration and no re-enumeration when the window moves monitors (DWM tracks that); and it takes a timeout, so
+the waiter is cancellable instead of blocking forever on a stalled display. The export **forbids concurrent
+callers**, hence exactly one owned waiter thread and no public wait entry point.
+
+Three properties keep it honest:
+
+- **Capability probe, not a flag.** The first wait failure (or a missing export) marks the clock permanently
+  unavailable and parks the thread; the host keeps its wall-clock timeout, which is the pre-existing behavior.
+  Remote sessions are the known case. There is no environment switch — new behavior is the unconditional
+  default.
+- **Power.** The clock is armed only for the *duration* of a display-paced wait and parks on an event
+  otherwise, so idle, minimized (`Idle(-1)`) and non-paced loops spawn no compositor wait at all.
+- **Who asks.** `PaceSkipSubmit` (no present ⇒ no ack) and **unarmed** async pace waits set
+  `WakeOnDisplayClock`. An **armed** phase-gate wait deliberately does not: the ack *is* its phase reference,
+  and a per-tick wake would re-enter the loop while the gate is still armed and immediately gate again — the
+  same busywork the ceiling wait exists to avoid.
+
+#### 11.1.3 Pacing constants are refresh-derived (LANDED)
+
+`AsyncDisplayPaceMs` was a hardcoded `7`, which is the 120 Hz answer and the wrong number everywhere else: at
+60 Hz it wakes the loop twice per refresh, at 240 Hz it is a whole refresh late. It is now
+
+> `AppHost.DeriveAsyncPaceMs(refreshMs) = clamp(floor(refreshMs) − 1, 3, 32)`
+
+— just under one refresh, so the loop is ready *before* each vblank without free-spinning between them:
+7 @ 120 Hz, 15 @ 60, 5 @ 144, 3 @ 240. Public and pure, so `gate.wake.paceDerivedFromRefresh` locks the
+arithmetic and the clamp without a live panel; the clamp is what a bogus or missing refresh period lands on.
+`PhaseGateCeilingMs` was already derived (two measured refresh periods, clamped 8–34 ms).
+
+A **varying** wait value is safe here only because `IsDisplayRateWait` classifies by **branch**
+(`HostWaitKind`), never by timeout value. Were it value-based, a refresh change would make a wait that *is*
+display-rate stop matching, every animating async frame would resync the frame clock, `NextDeltaMs()` would
+return 0, and one-shot enter transitions would freeze at their initial state. That is a known breakage class,
+not a style point.
+
+The same fix applies to the other hardcoded 7, `DmManualUpdatePacer.IntervalMs`. Its absolute deadline
+**clamps every host wait** while a touchpad gesture is live, so a fixed interval silently re-paces the whole UI
+loop at the wrong rate on any display that is not 120 Hz. It now carries a per-instance interval fed
+`1000 / CurrentRefreshHz()` at DirectManipulation enable and on `WM_DISPLAYCHANGE` / `WM_DPICHANGED`, clamped
+to [3, 17] ms; an unknown rate leaves the default in force.
+
 ---
 
 ## 12. Interruptible reconcile on the UI thread — slice, carry-forward, AND discard-and-restart
