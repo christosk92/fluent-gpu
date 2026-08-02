@@ -251,7 +251,10 @@ sealed class SidebarPaneSlot : Component
         bool reordering = _o.TryBandOf(index, out _);
         var (playing, animated) = PlayState(entry.Uri);
         float height = SidebarPaneMetrics.RowHeight(section);
-        bool treeNode = section.Kind == SidebarSectionKind.PlaylistTree;
+        // TreeLeading's disclosure-lane reserve only earns its keep where a folder actually needs a leaf's art to
+        // align against it (SectionHasFolder); a folder-free PlaylistTree section (V3's common case) renders its
+        // rows through StandardLeading instead, flush with a StaticLinks row like Liked Songs above it.
+        bool treeNode = section.Kind == SidebarSectionKind.PlaylistTree && _o.SectionHasFolder(row.SectionId);
         int treeDepth = treeNode ? entry.Depth : 0;
         int baseDepth = treeNode ? Math.Max(0, row.Depth - treeDepth) : row.Depth;
 

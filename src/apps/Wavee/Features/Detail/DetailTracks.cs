@@ -55,6 +55,7 @@ sealed class TrackList : Component
     IReadOnlyList<Track> _tracks = Array.Empty<Track>();
     readonly Signal<Route> _route;                             // read reactively → cfg re-derived so ONE list serves successive detail routes
     DetailConfig _cfg = DetailConfig.Album;                     // derived from route kind + loaded ReleaseKind at the top of Render
+    DetailKind _kind = DetailKind.Album;                        // the ROUTE's kind, kept beside _cfg (which erases it)
     readonly PlaybackBridge? _bridge;
     readonly DetailHandlers _initialH;                         // first-frame fallback before DetailShell publishes live handlers
     DetailHandlers _h;                                         // refreshed from _liveHandlers at the top of every render
@@ -550,6 +551,9 @@ sealed class TrackList : Component
         _model = model; _tracks = model.Tracks; _hasDate = model.HasDateAdded; _hasBy = model.HasAddedBy;
         if (_h.PlayAllOverride is { Length: > 0 } playAllCell) playAllCell[0] = () => StartVisible(0);   // rail "Play" → visible (sorted) order from the top
         _cfg = rowState.Config;
+        // DetailConfig deliberately erases the route kind (an album and a compilation share one config), but the drop
+        // cue has to know whether this surface is a PLAYLIST at all before it may say "Can't edit this playlist".
+        _kind = DetailPage.ParseDetail(_route.Value).Kind;
         // Embedded in a compact pane (Library): drop the album trailing so the rows are the scroller (the pane owns the
         // hero + actions above). Everything else — the cell, hover transport, now-playing, heart, tier columns — is identical.
         // Reused slot: a detail-route swap changes the track set under a stable (sort,query,flags) view key, so the cached
@@ -935,6 +939,13 @@ sealed class TrackList : Component
     {
         AcceptKinds = [WaveeDragKinds.Resource],
         CanAccept = CanDropResource,
+        // Sit the gesture out entirely on a surface that is not a playlist and never will be — an ALBUM page's track
+        // table, the embedded library album pane. CanAccept would also turn the drop away there, but a refusal owes a
+        // reason and the only one the table has is "Can't edit this playlist", which is about a thing the user is not
+        // looking at: the accusation wears a not-allowed glyph across the whole pane for a drag that was only ever
+        // passing through. Transparent lets discovery continue instead (B2's latent cousin). A read-only PLAYLIST is
+        // deliberately NOT included — "Can't edit this playlist" is the literal truth there, and it is useful.
+        Transparent = _ => _kind is DetailKind.Album or DetailKind.Show && !DropEditable,
         IsSameList = IsSameListDrop,
         // Scrim policy (A14): a SAME-LIST reorder must never dim the app. The user is aiming inside the very list they
         // are looking at — darkening everything but that list adds a full-window veil to a gesture whose destination is

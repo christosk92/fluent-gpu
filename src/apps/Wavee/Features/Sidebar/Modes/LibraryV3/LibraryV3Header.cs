@@ -50,7 +50,16 @@ sealed class LibraryV3Header : Component
 
         var kids = new List<Element>(6)
         {
-            Icon(Icons.List, 16f, Tok.TextSecondary),
+            // A dedicated box (not a bare glyph) so the library mark gets breathing room off the row's own inset and
+            // the title's gap, instead of sitting flush against both. Segoe MDL2 Assets  (not Icons.List/Theme's
+            // Segoe Fluent Icons face) is this glyph's own font, so it must be named explicitly (Icon's `family` param)
+            // — reading only a codepoint against the wrong face is how an icon renders as tofu.
+            new BoxEl
+            {
+                Width = 20f, Height = 20f, Shrink = 0f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Children = [Icon("", 16f, Tok.TextSecondary, "Segoe MDL2 Assets")],
+            },
             new TextEl(Loc.Get(Strings.Sidebar.V3.Title))
             {
                 Size = 15f, Weight = 600, Color = Tok.TextPrimary,

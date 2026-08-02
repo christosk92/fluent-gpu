@@ -443,7 +443,7 @@ sealed class DetailShell : Component
             Element verticalContent = new BoxEl
             {
                 Direction = 1, Grow = 1f, ClipToBounds = true,
-                DropTarget = PageDropTarget(m, acts),
+                DropTarget = PageDropTarget(m, acts, kind),
                 Children = verticalTracks ? [right] : [DetailRail.BuildHeader(m, _cfg, handlers, _model, acts: acts), right],
             };
             // The pinned chrome bar now lives INSIDE TrackList's ZStack overlay so it floats over the list AND the album
@@ -506,7 +506,7 @@ sealed class DetailShell : Component
             Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f, MaxWidth = 1600f,
             // The hero/rail column is a SIBLING of the track list, so a drag released over the cover, the title or the
             // actions used to reach no destination at all — the dead zone this closes.
-            DropTarget = PageDropTarget(m, acts),
+            DropTarget = PageDropTarget(m, acts, kind),
             Children = RowChildren(m, handlers, railW, titleSize, descLines, right,
                 resizableRail, railCollapsed, railWidthSignal, railCollapsedSignal, kind, settings),
         };
@@ -543,16 +543,26 @@ sealed class DetailShell : Component
     /// is the whole hero/rail column (cover, title, description, actions), which was previously a dead zone where a
     /// drag released and simply did nothing.</para>
     /// <para>It is mounted for every TRACKS page with a context, not only editable ones, so a read-only playlist can
-    /// explain itself there too instead of staying silent.</para></summary>
-    DropTargetSpec? PageDropTarget(DetailModel m, ActionServices? acts)
+    /// explain itself there too instead of staying silent.</para>
+    /// <para>It is also TRANSPARENT (<see cref="DropTargetSpec.Transparent"/>) for the two gestures it has no business
+    /// judging — see <c>Transparent</c> below.</para></summary>
+    DropTargetSpec? PageDropTarget(DetailModel m, ActionServices? acts, DetailKind kind)
     {
         if (_cfg.Content != DetailContent.Tracks || acts is null) return null;
         if (m.ContextUri is not { Length: > 0 } uri) return null;
         string name = m.Title;
         bool editable = m.Capabilities.CanEditItems && acts.Library is not null;
+        // An ALBUM or SHOW page is not a playlist and never will be. Its body target has nothing to offer a resource
+        // drag, and "Can't edit this playlist" is not an explanation there — it is an accusation about a thing the
+        // user is not even looking at. Stay out of that gesture entirely (B2's latent cousin).
+        bool foreignSurface = kind is DetailKind.Album or DetailKind.Show && !editable;
 
         // A page-body drop can only ever APPEND, so a same-playlist row drag has nothing to do here — and treating it
-        // as a copy would duplicate the user's own rows into their own playlist. Refuse it, and say where to aim.
+        // as a copy would duplicate the user's own rows into their own playlist. It is not a REFUSAL though: the
+        // destination the user wants is the track list a few DIP away, and the hero/cover/actions column is scenery
+        // the drag merely crosses on the way there. A hard not-allowed glyph over that transit (with the scrim
+        // already suppressed for a same-list reorder) is an accusation with no direction — so this target sits the
+        // gesture out and lets the list own it (B2).
         // The same-list case is kept OUT of the shared decision table: that table answers "may this list take this
         // payload at a slot", and a body drop has no slot to speak of.
         bool SameList(WaveeResourceDragPayload p)
@@ -563,20 +573,21 @@ sealed class DetailShell : Component
 
         return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
             accepts: p => !SameList(p) && Verdict(p) == PlaylistDropRefusal.None,
+            transparent: p => SameList(p) || foreignSurface,
             onDrop: (p, _) => WaveeResourceDrop.DepositTracks(acts, uri, name, p, insertionIndex: null),
             caption: _ => Strings.Drag.AddTo(name),
-            refusalCaption: p => SameList(p)
-                ? Loc.Get(Strings.Drag.DropOnListToReorder)
-                : Verdict(p) switch
-                {
-                    PlaylistDropRefusal.NotEditable => Loc.Get(Strings.Drag.CantEditPlaylist),
-                    // Locked decision: an artist has no single obvious track set — refuse rather than guess. Future
-                    // work is to let the USER pick what to deposit (top tracks / a release), not to choose for them.
-                    PlaylistDropRefusal.NoTracks => p.Kind == WaveeResourceKind.Artist
-                        ? Loc.Get(Strings.Drag.CantAddArtist)
-                        : Loc.Get(Strings.Drag.NothingToAdd),
-                    _ => null,
-                });
+            // The same-list arm is gone with the transparency above: this target never sees that gesture now, and a
+            // dead branch here would look like a second, disagreeing opinion about it.
+            refusalCaption: p => Verdict(p) switch
+            {
+                PlaylistDropRefusal.NotEditable => Loc.Get(Strings.Drag.CantEditPlaylist),
+                // Locked decision: an artist has no single obvious track set — refuse rather than guess. Future
+                // work is to let the USER pick what to deposit (top tracks / a release), not to choose for them.
+                PlaylistDropRefusal.NoTracks => p.Kind == WaveeResourceKind.Artist
+                    ? Loc.Get(Strings.Drag.CantAddArtist)
+                    : Loc.Get(Strings.Drag.NothingToAdd),
+                _ => null,
+            });
     }
 
     // The two-column row's children. Collapsed keeps a compact identity strip — `[compact, grip, right]` — so the rail

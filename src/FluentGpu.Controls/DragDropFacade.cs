@@ -75,6 +75,10 @@ public static class Drag
 /// A transparent target is invisible to the user, so any <c>accepts</c> test that can turn away a payload the surface
 /// LOOKS like it should take ought to pass <c>refusalCaption</c> too — see <see cref="DropTargetSpec.RefusalCaption"/>.
 ///
+/// <c>transparent</c> is the OTHER kind of "no": <c>accepts</c> returning false is a refusal (the surface owes a
+/// reason), while a transparent target sits out the gesture entirely — no acceptance, no refusal cue, discovery walks
+/// straight past it. See <see cref="DropTargetSpec.Transparent"/>.
+///
 /// <para><c>springLoadMs</c>/<c>onSpringLoad</c> add the Finder dwell-to-open behaviour (see
 /// <see cref="DropTargetSpec.SpringLoadDelayMs"/>); <c>springLoadOnly</c> declares a surface that ONLY does that — it
 /// takes no drop and raises no refusal cue, the tab-bar shape.</para>
@@ -95,9 +99,10 @@ public static class Drop
                                            Func<T, string?>? refusalCaption = null,
                                            float springLoadMs = 0f,
                                            Action<T, DragSession>? onSpringLoad = null,
-                                           bool springLoadOnly = false)
+                                           bool springLoadOnly = false,
+                                           Func<T, bool>? transparent = null)
         => Target(new[] { kind }, accepts, onDrop, caption, onEnter, onOver, onLeave, settleOnDrop, visualPolicy,
-                  spotlightWhen, refusalCaption, springLoadMs, onSpringLoad, springLoadOnly);
+                  spotlightWhen, refusalCaption, springLoadMs, onSpringLoad, springLoadOnly, transparent);
 
     /// <summary>Typed target over several kinds (e.g. an in-app resource AND <see cref="DropKinds.Files"/>).</summary>
     public static DropTargetSpec Target<T>(string[] kinds,
@@ -113,7 +118,8 @@ public static class Drop
                                            Func<T, string?>? refusalCaption = null,
                                            float springLoadMs = 0f,
                                            Action<T, DragSession>? onSpringLoad = null,
-                                           bool springLoadOnly = false)
+                                           bool springLoadOnly = false,
+                                           Func<T, bool>? transparent = null)
     {
         // The caption is applied on BOTH Enter and Over: the engine clears session.Caption on every target change, and
         // an Over-only refresh keeps it correct when a target's caption depends on the pointer (an insertion slot).
@@ -148,6 +154,12 @@ public static class Drop
                 ? s => { if (TryUnwrap<T>(s.Payload, out var v)) onSpringLoad(v, s); }
                 : null,
             SpringLoadOnly = springLoadOnly,
+            // "None of my business" (see DropTargetSpec.Transparent) — distinct from `accepts` returning false, which
+            // is a REFUSAL and owes the user a caption. A payload of another type was never this target's business
+            // either, but that case is already covered by the unwrap gate above.
+            Transparent = transparent is not null
+                ? s => TryUnwrap<T>(s.Payload, out var v) && transparent(v)
+                : null,
         };
     }
 

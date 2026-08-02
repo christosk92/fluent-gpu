@@ -85,9 +85,15 @@ public static class SidebarBuiltInDocuments
             new SidebarSectionSpec(ToolsId, SidebarSectionKind.StaticLinks,
                 Title: null, TitleLocKey: null,
                 Hidden: false, Collapsed: false,
+                // ShowInRail off: the 56-DIP rail is a shortcut strip for places you NAVIGATE to, and a bare
+                // Icons.Code glyph reads there as a stray "{}" tile with no label to rescue it. The planner drops the
+                // preceding rail divider with it (a pending divider only materialises once a tile follows), and the
+                // EXPANDED sidebar keeps the API Console row untouched. Doc-authored default: SidebarLayoutDoc
+                // serialises display options as a DIFF against it, so a user who never touched this option simply
+                // picks up the new default, and one who did keeps their override.
                 Display: SidebarDisplayOptions.Shortcuts with
                 {
-                    Density = SidebarDensity.Comfortable, CountBadges = false,
+                    Density = SidebarDensity.Comfortable, CountBadges = false, ShowInRail = false,
                 },
                 Items: [Route(ToolsId + ":devtools", DevToolsRoute, "Code")]),
         ]);

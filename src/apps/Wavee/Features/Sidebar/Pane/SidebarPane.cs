@@ -871,6 +871,25 @@ sealed class SidebarPane : Component
     internal SidebarSectionSpec? SectionOf(string sectionId)
         => _sections.TryGetValue(sectionId, out var s) ? s : null;
 
+    // Memoized per (section, plan revision): a PlaylistTree section reserves TreeLeading's disclosure lane only
+    // where it actually has a folder to align a leaf's art against — a folder-free library (V3's common case) reads
+    // flush instead of carrying a dead chevron-width indent that visibly misaligns it against a StaticLinks row like
+    // Liked Songs sitting right above it. Cached rather than scanned per realized row: `EntryRow` runs once per
+    // recycle, and a naive per-row scan of the whole plan would cost O(realized rows × plan rows) every scroll frame.
+    readonly Dictionary<string, (int Revision, bool HasFolder)> _sectionHasFolder = new();
+    internal bool SectionHasFolder(string sectionId)
+    {
+        if (_sectionHasFolder.TryGetValue(sectionId, out var cached) && cached.Revision == Plan.Revision)
+            return cached.HasFolder;
+        var rows = Plan.Rows;
+        bool has = false;
+        for (int i = 0; i < rows.Count; i++)
+            if (rows[i].Kind == SidebarRowKind.FolderHeader && string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal))
+            { has = true; break; }
+        _sectionHasFolder[sectionId] = (Plan.Revision, has);
+        return has;
+    }
+
     internal bool TryBandOf(int planIndex, out SidebarPaneBand band)
     {
         for (int i = 0; i < _bands.Count; i++)

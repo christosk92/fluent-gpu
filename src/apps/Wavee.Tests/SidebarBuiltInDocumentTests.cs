@@ -91,6 +91,9 @@ public sealed class SidebarBuiltInDocumentTests
         Assert.Null(tools.Title);
         Assert.Null(tools.TitleLocKey);
         Assert.False(tools.Opts.CountBadges);
+        // …and it is EXPANDED-ONLY: the 56-DIP rail would show a bare Icons.Code glyph ("{}") with no label, plus the
+        // divider that precedes it. The planner drops both once the section opts out.
+        Assert.False(tools.Opts.ShowInRail);
         Assert.Single(tools.ItemList);
         Assert.Equal(SidebarBuiltInDocuments.DevToolsRoute, tools.ItemList[0].Key);
     }

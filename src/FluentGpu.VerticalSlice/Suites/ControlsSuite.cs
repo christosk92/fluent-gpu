@@ -3280,6 +3280,81 @@ static class ControlsSuite
                 $"cued={cued} silent={silentOverNothing} accept={acceptUnaffected} swap={swapped} cleared={clearedAtEnd} glyph=({glyphOnRefusal},{noGlyphOverNothing},{noGlyphOverTarget})");
         }
 
+        // e5dragdrop.transparent — the OTHER kind of "no" (B2). CanAccept=false is a REFUSAL: the user aimed at this
+        // surface and it owes them a reason, which is what the gate above publishes. DropTargetSpec.Transparent is
+        // "this gesture is none of my business": a page body while the user reorders INSIDE its own list, a track
+        // table on an album page that could never take a playlist edit. Refusing those wears a hard not-allowed glyph
+        // over scenery the drag is merely PASSING OVER — an accusation with no direction. A transparent target must
+        // therefore publish NEITHER acceptance NOR refusal, and the walk must continue to its ancestors exactly as if
+        // it declared no target at all — including to an ancestor that refuses (whose reason IS the truthful one).
+        {
+            var scene = new SceneStore();
+            bool transparentNow = true;
+            int innerEnters = 0, outerEnters = 0;
+            var innerAccepting = Drop.Target<string>("k",
+                caption: static _ => "inner",
+                onEnter: (_, _) => innerEnters++,
+                transparent: _ => transparentNow);
+            // The strongest form: a target that WOULD refuse (and has a reason ready) must stay silent while transparent.
+            var innerRefusing = Drop.Target<string>("k",
+                accepts: static _ => false,
+                refusalCaption: static _ => "inner refuses",
+                transparent: _ => transparentNow);
+            var outerAccepting = Drop.Target<string>("k",
+                caption: static _ => "outer accepts",
+                onEnter: (_, _) => outerEnters++);
+            var outerRefusing = Drop.Target<string>("k",
+                accepts: static _ => false,
+                refusalCaption: static _ => "outer refuses");
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 300, Height = 300,
+                Children =
+                [
+                    new BoxEl { Key = "a", Width = 300, Height = 100, DropTarget = outerAccepting,
+                        Children = [new BoxEl { Key = "ai", Width = 300, Height = 100, DropTarget = innerAccepting }] },
+                    new BoxEl { Key = "r", Width = 300, Height = 100, DropTarget = outerRefusing,
+                        Children = [new BoxEl { Key = "ri", Width = 300, Height = 100, DropTarget = innerAccepting }] },
+                    new BoxEl { Key = "s", Width = 300, Height = 100, DropTarget = innerRefusing },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var session = disp.DragDrop.Session;
+            var accInner = Child(scene, Child(scene, scene.Root, 0), 0);
+            var accOuter = Child(scene, scene.Root, 0);
+            var refInner = Child(scene, Child(scene, scene.Root, 1), 0);
+            var refOuter = Child(scene, scene.Root, 1);
+            var lone = Child(scene, scene.Root, 2);
+
+            disp.DragDrop.ExternalBegin("k", "payload", new Point2(10, 10), KeyModifiers.None);
+            // 1. Transparent inner over an ACCEPTING outer: the outer takes the drop, the inner never enters.
+            disp.DragDrop.Move(accInner, new Point2(10, 50), 0f, 0f, KeyModifiers.None);
+            bool passedToAcceptor = session.OverTarget == accOuter && outerEnters == 1 && innerEnters == 0
+                                    && session.RefusedTarget.IsNull && session.Caption == "outer accepts";
+            // 2. Transparent inner over a REFUSING outer: the refusal published is the OUTER's — the transparent
+            //    target neither shadows it nor adds one of its own.
+            disp.DragDrop.Move(refInner, new Point2(10, 150), 0f, 0f, KeyModifiers.None);
+            bool passedToRefuser = session.OverTarget.IsNull && session.RefusedTarget == refOuter
+                                   && session.Caption == "outer refuses" && innerEnters == 0;
+            // 3. Transparent with NOTHING above it: silent, exactly like empty space — even though this spec carries a
+            //    CanAccept that refuses and a RefusalCaption that would otherwise fire.
+            disp.DragDrop.Move(lone, new Point2(10, 250), 0f, 0f, KeyModifiers.None);
+            bool silent = session.OverTarget.IsNull && session.RefusedTarget.IsNull && session.Caption is null;
+            // 4. Transparent=false is the pre-seam behaviour, unchanged: the inner accepts, the lone one refuses aloud.
+            transparentNow = false;
+            disp.DragDrop.Move(accInner, new Point2(10, 50), 0f, 0f, KeyModifiers.None);
+            bool opaqueAccepts = session.OverTarget == accInner && innerEnters == 1 && session.Caption == "inner";
+            disp.DragDrop.Move(lone, new Point2(10, 250), 0f, 0f, KeyModifiers.None);
+            bool opaqueRefuses = session.OverTarget.IsNull && session.RefusedTarget == lone
+                                 && session.Caption == "inner refuses";
+            disp.DragDrop.Cancel();
+
+            Check("e5dragdrop.transparent a target whose DropTargetSpec.Transparent holds for the live session is skipped ENTIRELY — it publishes neither acceptance nor its own RefusalCaption, and discovery continues to an accepting ancestor (which enters and captions) or to a REFUSING ancestor (whose reason is the one published); with no ancestor at all the surface is as silent as empty space, and a Transparent that returns false behaves exactly as before",
+                passedToAcceptor && passedToRefuser && silent && opaqueAccepts && opaqueRefuses,
+                $"toAcceptor={passedToAcceptor} toRefuser={passedToRefuser} silent={silent} opaqueAccept={opaqueAccepts} opaqueRefuse={opaqueRefuses} enters=({innerEnters},{outerEnters})");
+        }
+
         // e5dragdrop.springload — the Finder/WinUI "hold a drag over a closed container and it opens itself" dwell.
         // Three shapes have to work, and the reason they are ONE gate is that they share one dwell host: an ACCEPTING
         // target (a sidebar folder you can also drop into), a target that REFUSES this payload (a folder that cannot
@@ -3582,6 +3657,48 @@ static class ControlsSuite
             disp.DragDrop.Cancel();
             Check("e5dragdrop.scrim.policy a DropTargetSpec.SpotlightWhen that refuses the live session drops that target from the spotlight set — and with no compatible destination left the recorder emits NO scrim band at all (a same-list reorder never dims the app)",
                 noScrim, $"active={scene.DropSpotlightActive} scrimFill={ScrimFillIndex(dev)} holes={dev.LastErases.Count} noGroup={noGroup}");
+        }
+
+        // e5dragdrop.scrim.reachable — B3. A spotlight target must be a target the pointer can actually REACH. The
+        // always-mounted-but-hidden layer is the shape that breaks it: a pane keeps both its layouts mounted and turns
+        // the inactive one off with Opacity 0 + HitTestVisible false, but its virtualized rows keep writing live
+        // DropTargetSpecs. The hit-test prunes that whole subtree, so those targets can never be entered — yet the
+        // spotlight collector filtered only on policy/kind/IsLive/Disabled/CanAccept, so the veil punched cutouts at
+        // the HIDDEN layer's geometry: bright empty plates over the visible layer's dividers and gaps, while the real
+        // rows stayed dimmed. Reachability is now part of "compatible": one cutout, over the reachable target only.
+        {
+            var scene = new SceneStore();
+            var spot = new DropTargetSpec(["resource"]) { VisualPolicy = DropTargetVisualPolicy.Spotlight };
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Width = 300, Height = 200,
+                Children =
+                [
+                    // The parked layer: not itself a target, but hosting one — the ancestor is what makes it unreachable.
+                    new BoxEl
+                    {
+                        Key = "parked", Width = 150, Height = 200, HitTestVisible = false,
+                        Children = [new BoxEl { Key = "unreachable", Width = 100, Height = 60, DropTarget = spot }],
+                    },
+                    new BoxEl { Key = "reachable", Width = 100, Height = 60, DropTarget = spot },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var unreachable = Child(scene, Child(scene, scene.Root, 0), 0);
+            var reachable = Child(scene, scene.Root, 1);
+            disp.DragDrop.ExternalBegin("resource", "payload", new Point2(200, 30), KeyModifiers.None);
+            int roots = scene.DropSpotlightRootCount;
+            bool onlyReachable = scene.DropSpotlightActive && roots == 1
+                                 && scene.IsDropSpotlightRoot(reachable) && !scene.IsDropSpotlightRoot(unreachable);
+            var dev = RecordTo(scene);
+            RectF hit = scene.AbsoluteRect(reachable);
+            bool oneHoleOnTheLiveOne = dev.LastErases.Count == 1
+                && Near(dev.LastErases[0].Transform.Dx, hit.X) && Near(dev.LastErases[0].Transform.Dy, hit.Y);
+            disp.DragDrop.Cancel();
+            Check("e5dragdrop.scrim.reachable a Spotlight target whose ANCESTOR chain has HitTestVisible cleared is dropped from the spotlight set — the hit-test prunes that subtree, so it can never become the destination and must not advertise as one; the reachable sibling still gets its single cutout (the parked-sidebar-layer veil punching bright plates over rows that render nothing)",
+                onlyReachable && oneHoleOnTheLiveOne,
+                $"onlyReachable={onlyReachable} roots={roots} holes={dev.LastErases.Count}");
         }
 
         // e5dragdrop.scrim.clip — SceneStore.SpotlightScrimClip scopes the band (Wavee: the content region, so the title

@@ -165,8 +165,13 @@ sealed partial class ArtistPage : Component
                 copy,
             ],
         };
+        // Invisible at scroll offset 0 in the real page (its ScrollBind ramps Opacity 0→1 only past the collapse
+        // threshold) — but SkeletonDeriver strips ScrollBinds from container nodes (they'd otherwise become dead
+        // parallax/pin math on a static tree), so without this the derived shimmer falls back to the default Opacity=1
+        // and paints a phantom avatar/name/button row above the hero on every artist page load. Off keeps its slot
+        // (an empty spacer, harmless inside this ZStack) without shimmering content nobody sees yet.
         Element compactPresentation = ArtistCompactBar.Build(a, uri, width, metrics.Tier, collapseDistance,
-            _accent, play, compactCanHit);
+            _accent, play, compactCanHit).Skeletonized(false);
 
         return new BoxEl
         {

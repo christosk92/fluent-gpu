@@ -197,7 +197,12 @@ sealed partial class ArtistPage : Component
         // asking "what's new from this artist" looks first. A band of its own would be a FIFTH copy of one fact, and it
         // would push Top tracks, the thing most visitors came for, down by ~90px on every artist with something coming.
         if (popular.Count > 0)
-            sections.Add(TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.HeaderImage, a.Name, a.LatestRelease, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
+            sections.Add(TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.HeaderImage, a.Name, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
+        // The "just dropped" banner earns full-band prominence directly above Albums — not a narrow rail card
+        // sharing a column with Artist Pick/Upcoming (see ArtistPage.TopTracks.LatestReleaseBanner).
+        if (a.LatestRelease is { Name.Length: > 0, Uri.Length: > 0 } latestRelease)
+            sections.Add(Section(Loc.Get(Strings.Artist.LatestRelease), LatestReleaseBanner(latestRelease, go, PlayContext, accent))
+                with { Key = "sec:latest-release" });
         // Owned discography stays inline as full virtualized facets; dedicated pages remain deep-link compatible only.
         if (albums.Length > 0 || a.AlbumsTotal > 0) sections.Add(Embed.Comp(
             new DiscographySection.Props(albums),

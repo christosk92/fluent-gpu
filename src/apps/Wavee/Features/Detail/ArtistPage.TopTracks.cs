@@ -27,10 +27,12 @@ sealed partial class ArtistPage : Component
         => _topBandWide = _topBandWide ? w >= TopBandWideW - TopBandHysteresis : w >= TopBandWideW;
 
     // Top tracks retain the native two-column PagedShelf. The supporting rail now carries artist-authored and
-    // time-sensitive objects only: Artist Pick, upcoming, and latest release.
+    // time-sensitive objects only: Artist Pick and upcoming. Latest release moved out to its own wide banner
+    // section, pinned directly above Albums (see ArtistPage.cs Body) — a "just dropped" record earns full-band
+    // prominence, not a narrow rail card competing with Artist Pick for the same column.
     Element TopBand(IReadOnlyList<Track> popular, string uri, PlaybackBridge? bridge, Services svc,
                     PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName,
-                    Album? latest, ArtistPreRelease? upcoming,
+                    ArtistPreRelease? upcoming,
                     Action<string, string?> go, Action<string> play, Func<ColorF> accent) =>
         Responsive.Of(w =>
         {
@@ -38,9 +40,8 @@ sealed partial class ArtistPage : Component
             string popTitle = Loc.Get(Strings.Artist.TopTracks);
             Element tracks = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
-            Element featured = FeaturedColumn(pinned, artistImage, artistBackground, artistName, latest, upcoming, go, play, accent);
-            bool hasFeatured = pinned is not null || latest is { Name.Length: > 0, Uri.Length: > 0 }
-                               || upcoming is { IsUpcoming: true };
+            Element featured = FeaturedColumn(pinned, artistImage, artistBackground, artistName, upcoming, go, play, accent);
+            bool hasFeatured = pinned is not null || upcoming is { IsUpcoming: true };
 
             if (!hasFeatured)
                 return new BoxEl { Direction = 1, Children = [tracks] };
@@ -65,11 +66,11 @@ sealed partial class ArtistPage : Component
             };
         }, fallback: 900f);
 
-    Element FeaturedColumn(PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName, Album? latest,
+    Element FeaturedColumn(PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName,
                            ArtistPreRelease? upcoming, Action<string, string?> go,
                            Action<string> play, Func<ColorF> accent)
     {
-        var groups = new List<Element>(3);
+        var groups = new List<Element>(2);
         if (pinned is { } pick)
         {
             string target = RichText.RouteForUri(pick.TargetUri) ?? ("album:" + pick.TargetUri);
@@ -85,10 +86,6 @@ sealed partial class ArtistPage : Component
         if (upcoming is { IsUpcoming: true } next)
             groups.Add(Section(Loc.Get(Strings.Artist.Upcoming), UpcomingMasthead(next, go, accent))
                 with { Key = "featured:upcoming" });
-        if (latest is { Name.Length: > 0, Uri.Length: > 0 } release)
-            groups.Add(Section(Loc.Get(Strings.Artist.LatestRelease),
-                ReleaseMasthead(release, Loc.Get(Strings.Artist.LatestRelease), go, play))
-                with { Key = "featured:latest" });
 
         return new BoxEl { Direction = 1, Gap = Spacing.XL, Children = groups.ToArray() };
     }
@@ -179,28 +176,77 @@ sealed partial class ArtistPage : Component
         };
     }
 
-    // Instance (was static) so the latest-release card can reach the page's `_acts` for its drag payload — the same
-    // reason CardMenu is an instance method.
-    Element ReleaseMasthead(Album al, string eyebrow, Action<string, string?> go, Action<string> play)
+    // The "just dropped" wide banner — own top-level section pinned above Albums (see ArtistPage.cs Body), not a
+    // narrow rail card sharing a column with Artist Pick. Cover + eyebrow (type · date · track count) + title read
+    // left-to-right at full band width, with Play/View as an explicit trailing action pair (never a whole-card
+    // onClick — a nested Play target inside a clickable card is the recurring source of accidental navigations
+    // elsewhere in this file, so this follows UpcomingMasthead's leaf-buttons-only idiom instead of MediaCard.Compact's).
+    // Instance (not static) so it can reach the page's `_acts` for its drag payload — the same reason CardMenu is.
+    Element LatestReleaseBanner(Album al, Action<string, string?> go, Action<string> play, Func<ColorF> accent)
     {
-        string meta = ReleaseMeta(al);
-        string subtitle = meta.Length == 0 ? eyebrow : eyebrow + " · " + meta;
-        return MediaCard.Compact(al.Cover, al.Name, subtitle, al.Uri, HomeCardKind.Album,
-            onClick: () => go("album:" + al.Uri, al.Name),
-            onPlay: () => play(al.Uri), art: 96f, cardH: 116f,
-            menu: null,
-            drag: CardDrag(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover));
+        var metaParts = new List<string>(3) { KindLabel(al.Kind).ToUpperInvariant() };
+        string date = ReleaseDateLabel(al);
+        if (date.Length > 0) metaParts.Add(date);
+        if (al.TrackCount > 0) metaParts.Add(Strings.Artist.TrackCount(al.TrackCount));
+        string eyebrow = string.Join(" · ", metaParts);
+
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = Edges4.All(Spacing.M), Corners = CornerRadius4.All(Radii.Card),
+            Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Draggable = CardDrag(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 72f, Height = 72f, Shrink = 0f, ClipToBounds = true,
+                    Corners = CornerRadius4.All(Radii.Control),
+                    Children = [Surfaces.Artwork(al.Cover, al.Uri.GetHashCode() & 0x7fffffff, 72f, 72f, Radii.Control, decodePx: 144)],
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
+                    Children =
+                    [
+                        new TextEl(eyebrow)
+                        {
+                            Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
+                        },
+                        new TextEl(al.Name)
+                        {
+                            Size = 17f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1,
+                            Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                        },
+                    ],
+                },
+                new BoxEl
+                {
+                    Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Shrink = 0f,
+                    Children =
+                    [
+                        WaveeCta.Play(accent(), () => play(al.Uri), Loc.Get(Strings.Artist.Play)),
+                        Button.Create(Loc.Get(Strings.Artist.View), () => go("album:" + al.Uri, al.Name),
+                            ButtonAppearance.Outline, ControlSize.Small),
+                    ],
+                }.Skeletonized(false),
+            ],
+        };
     }
 
-    static string ReleaseMeta(Album al)
+    static string ReleaseDateLabel(Album al)
     {
-        var parts = new List<string>(3);
-        parts.Add(KindLabel(al.Kind));
-        if (al.Year > 0) parts.Add(al.Year.ToString());
-        else if (al.ReleaseDate is { Length: >= 4 } rd) parts.Add(rd[..4]);
-        if (al.TrackCount > 0)
-            parts.Add(al.TrackCount == 1 ? "1 track" : al.TrackCount + " tracks");
-        return string.Join(" · ", parts);
+        if (al.ReleaseDate is { Length: > 0 } iso &&
+            DateTime.TryParse(iso, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var date))
+        {
+            return (al.ReleaseDatePrecision ?? "").ToUpperInvariant() switch
+            {
+                "YEAR" => date.ToString("yyyy", CultureInfo.InvariantCulture),
+                "MONTH" => date.ToString("MMM yyyy", CultureInfo.InvariantCulture),
+                _ => date.ToString("MMM d, yyyy", CultureInfo.InvariantCulture),
+            };
+        }
+        return al.Year > 0 ? al.Year.ToString(CultureInfo.InvariantCulture) : "";
     }
 
     internal static string KindLabel(AlbumKind k) => k switch

@@ -372,6 +372,11 @@ public sealed class DragDropContext
                 springHost = n;
                 springSpec = spec;
             }
+            // Per-session transparency (DropTargetSpec.Transparent): "this gesture is none of my business". Tested
+            // BEFORE acceptance AND before the refusal candidate is recorded, so the walk passes through as though the
+            // node declared no target at all — the page body under a same-list reorder stops accusing the user with a
+            // not-allowed glyph while the drag merely crosses it on the way to the list (B2).
+            if (spec.Transparent is { } transparent && transparent(_session)) continue;
             if (spec.SpringLoadOnly) continue;   // a waypoint: never a destination, never a refusal
             if (spec.CanAccept is { } canAccept && !canAccept(_session))
             {

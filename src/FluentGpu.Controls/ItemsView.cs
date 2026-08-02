@@ -1690,6 +1690,7 @@ internal sealed class ItemsViewInsertion
             CanAccept = s => Accepts(s.Payload),
             VisualPolicy = options.VisualPolicy,
             SpotlightWhen = options.SpotlightWhen,
+            Transparent = options.Transparent is { } skip ? s => skip(s.Payload) : null,
             RefusalCaption = options.RefusalCaption is { } why ? s => why(s.Payload) : null,
         };
     }
@@ -2012,7 +2013,14 @@ internal sealed class ItemsViewInsertion
 
 /// <summary>The in-gap preview host: the framework owns the gap's SIZE and POSITION; the app's
 /// <see cref="InsertionOptions.GapPreview"/> owns the cards drawn in it. The idle branch keeps the SAME key as the
-/// active one — an unkeyed idle box against a keyed active one remounts the subtree on every open and close (A13).</summary>
+/// active one — an unkeyed idle box against a keyed active one remounts the subtree on every open and close (A13).
+/// <para>BOTH branches declare the SAME BOUND <c>Transform</c>, and that is load-bearing, not tidiness: bind wiring is
+/// MOUNT-ONLY (<c>Reconciler.BindNode</c>), and the shared key makes this node's reuse permanent — so an idle branch
+/// that omitted the binding left it never wired, <c>LocalTransform</c> stuck at identity, and the gap-sized card
+/// arranged at the ZStack's top-left (viewport y = 0) while the line and the gap sat at the real slot (B1; the
+/// engine's own DEBUG <c>[bindcontract]</c> tripwire names this defect class). For the same reason the thunk is a
+/// MOUNT-SURVIVING method group that reads <c>Horizontal</c> and the slot LIVE: a render-time local captured in a
+/// lambda would freeze at first mount once the binding actually persists.</para></summary>
 internal sealed class ItemsViewInsertionPreview : Component
 {
     private readonly ItemsViewInsertion _owner;
@@ -2025,7 +2033,11 @@ internal sealed class ItemsViewInsertionPreview : Component
         var payload = _owner.PayloadPeek;
         var template = _owner.Options.GapPreview;
         if (!plan.IsActive || payload is null || template is null)
-            return new BoxEl { Key = "fg-insertion-preview", Height = 0f, Shrink = 0f, HitTestVisible = false };
+            return new BoxEl
+            {
+                Key = "fg-insertion-preview", Height = 0f, Shrink = 0f, HitTestVisible = false,
+                Transform = Prop.Of(PreviewTransform),
+            };
 
         bool horizontal = _owner.Horizontal;
         float gap = plan.GapExtent;
@@ -2036,13 +2048,19 @@ internal sealed class ItemsViewInsertionPreview : Component
             Width = horizontal ? gap : float.NaN,
             Height = horizontal ? float.NaN : gap,
             Shrink = 0f, HitTestVisible = false, ClipToBounds = true,
-            Transform = Prop.Of(() =>
-            {
-                float at = _owner.Offset.Value;
-                return horizontal ? Affine2D.Translation(at, 0f) : Affine2D.Translation(0f, at);
-            }),
+            Transform = Prop.Of(PreviewTransform),
             Children = [template(payload, plan.Slot)],
         };
+    }
+
+    /// <summary>The gap's leading edge in VIEWPORT space — the same <c>Offset</c> the accent line rides, so the card
+    /// and the line can never disagree. Identity while no slot is open: a gesture torn down mid-flight must not leave
+    /// the (zero-extent) idle box parked at a stale translation.</summary>
+    private Affine2D PreviewTransform()
+    {
+        if (_owner.SlotSignal.Value < 0) return Affine2D.Identity;
+        float at = _owner.Offset.Value;
+        return _owner.Horizontal ? Affine2D.Translation(at, 0f) : Affine2D.Translation(0f, at);
     }
 }
 

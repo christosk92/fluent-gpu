@@ -397,6 +397,21 @@ public sealed record DropTargetSpec(
     /// reused instance — copy what you keep. Null ⇒ no spring-load regardless of the delay.</summary>
     public Action<DragSession>? OnSpringLoad { get; init; }
 
+    /// <summary>PER-SESSION transparency: when set and it returns true for the live session, this target is skipped
+    /// ENTIRELY for that gesture — it can neither accept nor raise the <see cref="RefusalCaption"/> cue, and discovery
+    /// continues to its ancestors exactly as if it declared no <c>DropTarget</c> at all. Null (default) = always
+    /// participates. Evaluated per pointer move on the hit chain, so keep it cheap and allocation-free.
+    /// <para>The distinction from <see cref="CanAccept"/> is the CUE. A target that refuses through
+    /// <see cref="CanAccept"/> is saying "you aimed at me and the answer is no", and it owes the user a reason; a
+    /// TRANSPARENT target is saying "this gesture is none of my business" — a page body under a same-list reorder, a
+    /// list that could never take this payload on this surface at all. Refusing those wears a not-allowed glyph over
+    /// scenery the drag is merely PASSING OVER, which is an accusation with no direction (B2). It is also skipped for
+    /// the drop spotlight, so it cannot advertise a destination it will not honour.</para>
+    /// <para>Spring-loading is deliberately UNAFFECTED (same rule as <see cref="SpringLoadOnly"/>): the dwell host is
+    /// resolved before this test, so a surface that opens itself on hold keeps doing so while staying transparent to
+    /// the drop.</para></summary>
+    public Func<DragSession, bool>? Transparent { get; init; }
+
     /// <summary>This surface is a spring-load WAYPOINT, never a drop destination: it is skipped for acceptance AND for
     /// the refusal cue, so hovering it neither accepts nor accuses — only its <see cref="OnSpringLoad"/> can fire.
     /// <para>The Finder tab-bar shape. Without it a "hold to navigate" surface has to pretend: either accept and

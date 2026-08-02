@@ -3449,8 +3449,25 @@ static class ScrollSuite
             bool reflow = Near(dy[2], 0f, 0.5f) && Near(dy[3], 40f, 0.5f)
                 && Near(dy[4], 40f, 0.5f) && Near(dy[5], 0f, 0.5f);
             bool hidden = op[2] < 0.05f && op[4] < 0.05f && op[3] > 0.95f && op[5] > 0.95f;
-            bool previewMounted = !FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill).IsNull;
+            var previewCard = FindFillNode(scene, scene.Root, InsertionProbe.PreviewFill);
+            bool previewMounted = !previewCard.IsNull;
             bool effect = host.Input.DragDrop.Session.Effect == DropEffect.Move;
+
+            // e11virt.insertion.previewpos (B1) — the preview must be POSITIONED in the gap, not merely mounted.
+            // The preview host is a ZStack sibling of the list, so its transform carries a VIEWPORT-space Y:
+            //   PreviewY = leading + (slot − removedAboveSlot)·extent − scrollOffset = 80 + (1−1)·40 − 0 = 80.
+            // (leading = the MEASURED content offset of item First=2 = 2·40; sources [0,2] → absolute [2,4], and one of
+            // them sits above SlotItem=3.) The gap's own leading edge is item 3's presented top minus the one removal
+            // that vacated above it — identical arithmetic, which is the point: line, gap and preview share one plan.
+            // A bind-shape flip on the reused preview node (idle branch static, active branch bound — wiring is
+            // mount-only) leaves LocalTransform at identity and parks the card at the viewport's top-left instead.
+            var previewBox = scene.Parent(previewCard);
+            float previewDy = previewMounted ? scene.Paint(previewBox).LocalTransform.Dy : float.NaN;
+            float previewTop = previewMounted ? scene.AbsoluteRect(previewBox).Y - rect.Y : float.NaN;
+            bool previewPlaced = previewMounted && Near(previewDy, 80f, 0.5f) && Near(previewTop, 80f, 0.5f);
+            Check("e11virt.insertion.previewpos the in-gap preview is POSITIONED by its bound transform at the plan's viewport-space gap edge (not merely mounted): its presented rect sits exactly at PreviewY, so the card cannot render at the list's top while the line and the gap are elsewhere (B1 — the bound/static flip on the reused preview node)",
+                previewPlaced,
+                $"mounted={previewMounted} dy={previewDy:0.##} top={previewTop:0.##} expected=80");
 
             // Steady-state Over: a pointer move INSIDE the current slot re-runs the whole geometry (viewport rect,
             // measured band lookup, plan, the bound line/preview offset) and must allocate nothing — the gap projection

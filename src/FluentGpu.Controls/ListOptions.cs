@@ -132,6 +132,12 @@ public sealed record InsertionOptions
     public DropTargetVisualPolicy VisualPolicy { get; init; } = DropTargetVisualPolicy.Spotlight;
     /// <summary>Per-session spotlight policy — return false for a same-list reorder so the app never dims for it.</summary>
     public Func<DragSession, bool>? SpotlightWhen { get; init; }
+    /// <summary>Sit this gesture out entirely (<see cref="DropTargetSpec.Transparent"/>): no acceptance, no refusal
+    /// cue, no spotlight — discovery walks past to the ancestors. Use it where the list could never take the payload
+    /// ON THIS SURFACE, so <see cref="RefusalCaption"/> would be an accusation rather than an explanation (an album
+    /// page's track table saying "Can't edit this playlist"). A list that CAN take drops and is turning this one away
+    /// wants <see cref="CanAccept"/> + <see cref="RefusalCaption"/> instead.</summary>
+    public Func<object?, bool>? Transparent { get; init; }
 }
 
 /// <summary>

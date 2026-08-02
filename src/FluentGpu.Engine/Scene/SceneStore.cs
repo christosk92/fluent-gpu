@@ -1554,7 +1554,17 @@ public sealed class SceneStore : ISceneBackend
             if (spec.VisualPolicy != DropTargetVisualPolicy.Spotlight || !spec.Accepts(session.Kind)) continue;
             var node = new NodeHandle(new Handle((uint)idx, _gen[idx]));
             if (!IsLive(node) || (_flags[idx] & NodeFlags.Disabled) != 0) continue;
+            // Reachability: the hit-test PRUNES any subtree whose root has HitTestVisible cleared (InputDispatcher), so
+            // a target beneath one can never become the destination — advertising it punches a scrim cutout at geometry
+            // the pointer provably cannot reach. That is the always-mounted-but-hidden layer shape: the sidebar keeps
+            // its expanded pane mounted at Opacity 0 / HitTestVisible false while collapsed, and its virtualized rows
+            // still write live specs, so the veil used to erase 56-DIP holes over the RAIL's dividers and gaps — bright
+            // empty plates on rows that render nothing (B3). O(depth), allocation-free.
+            if (!IsHitReachable(node)) continue;
             if (spec.CanAccept is { } canAccept && !canAccept(session)) continue;
+            // A target that is TRANSPARENT for this session accepts nothing and refuses nothing, so it must not
+            // advertise itself as a destination either (DropTargetSpec.Transparent).
+            if (spec.Transparent is { } transparent && transparent(session)) continue;
             // Per-SESSION policy (DropTargetSpec.SpotlightWhen): a target may opt into the dim in general and still
             // refuse it for THIS gesture — a same-list reorder must not scrim the app it is reordering inside (A14).
             // Evaluated here, on the cold refresh edge, so record stays free of policy delegates.
@@ -1564,6 +1574,20 @@ public sealed class SceneStore : ISceneBackend
         _dropSpotlightActive = _dropSpotlightRoots.Count != 0;
         if (!_dropSpotlightActive || !_dropSpotlightRoots.Contains((int)_dropSpotlightOver.Raw.Index))
             _dropSpotlightOver = NodeHandle.Null;
+    }
+
+    /// <summary>Can the hit-test reach <paramref name="h"/> at all? Mirrors the dispatcher's subtree prune: one cleared
+    /// <see cref="NodeFlags.HitTestVisible"/> anywhere on the ancestor chain (or on the node itself) makes every node
+    /// below it unhittable, and therefore an impossible drop destination. Allocation-free; the chain is short.</summary>
+    private bool IsHitReachable(NodeHandle h)
+    {
+        for (var n = h; !n.IsNull; n = Parent(n))
+        {
+            int idx = LiveIndex(n);
+            if (idx < 0) return false;
+            if ((_flags[idx] & NodeFlags.HitTestVisible) == 0) return false;
+        }
+        return true;
     }
 
     public void SetDropSpotlightOver(NodeHandle node)
