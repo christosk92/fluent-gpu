@@ -147,6 +147,8 @@ app/commandbar-*.png
 # Local scratchpads / throwaway captures (not design canon, not product code).
 ops/scratch/
 docs/prototypes/
+# Repo-root web prototype lab (node_modules, dev-server logs, throwaway pages).
+prototypes/
 docs/plans/*.html
 tmp/
 tmp_*/
