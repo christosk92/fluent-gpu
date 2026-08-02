@@ -320,8 +320,12 @@ static class SidebarEntityRow
             // Stationary lift at the standard 0.4 source dim. This is the RESOURCE drag only: a row inside a
             // reorderable band carries no Drag payload at all (Reorderable.Item installs its own source and position
             // track — a second one is a documented stomp), so the vacated-slot case never reaches this line.
+            // ...and the CLICK-PRIMARY mouse drag box (×2, WinUI's list-item multiplier): navigating to the row is the
+            // constant intent, dragging it out the exception, so a click landed while the pointer is still travelling
+            // must not be eaten by a promotion. Reorder is unaffected — a row in a reorderable band has no spec.Drag.
             Draggable = enabled && spec.Drag is { } payload
-                ? Drag.Source(WaveeDragKinds.Resource, () => payload)
+                ? Drag.Source(WaveeDragKinds.Resource, () => payload,
+                              thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier)
                 : null,
             DropTarget = spec.DropTarget,
             Children = kids,

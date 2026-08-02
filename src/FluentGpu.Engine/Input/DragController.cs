@@ -24,7 +24,11 @@ namespace FluentGpu.Input;
 /// Threshold: the Windows drag box is <c>SM_CXDRAG</c>/<c>SM_CYDRAG</c> (4px default), tested per-axis
 /// (<c>dx &gt; maxDx || dy &gt; maxDy</c> — microsoft-ui-xaml dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:1864-1878).
 /// WinUI's list items double it (LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER = 2.0, same file :54); this engine
-/// uses the 4px base box per plan E5, matching <see cref="InputDispatcher.ClickSlopPx"/>.
+/// keeps the 4px base box per plan E5 (matching <see cref="InputDispatcher.ClickSlopPx"/>) as the DEFAULT, and lets a
+/// click-primary source opt into WinUI's ×2 per-source through <see cref="DragVisualStyle.ThresholdMultiplier"/> —
+/// resolved once at ARM time (<see cref="TryArm"/>) from the armed node's own <c>DragSource.Style</c>. The multiplier is
+/// MOUSE-only, as the WinUI constant's name says: an <c>arenaGoverned</c> (touch) promotion has already been arbitrated
+/// against the arena's own 8px <see cref="InputDispatcher.TouchSlopPx"/> and is never re-scaled here.
 ///
 /// Axis-aware arena-lite (promotion-time arbitration): the item's reorder axis is its PARENT container's main axis
 /// (row → horizontal item-drag). A gesture whose dominant axis is PERPENDICULAR to that, with a scrollable ancestor
@@ -60,8 +64,9 @@ namespace FluentGpu.Input;
 /// </summary>
 public sealed class DragController
 {
-    /// <summary>The drag box half-extent, tested per-axis (Win32 SM_CXDRAG/SM_CYDRAG default = 4;
-    /// ListViewBaseItem_Partial.cpp:1871-1877. WinUI list items apply a ×2 multiplier — see class remarks).</summary>
+    /// <summary>The BASE drag box half-extent, tested per-axis (Win32 SM_CXDRAG/SM_CYDRAG default = 4;
+    /// ListViewBaseItem_Partial.cpp:1871-1877). A source can scale it through
+    /// <see cref="DragVisualStyle.ThresholdMultiplier"/> the way WinUI list items apply their ×2 — see class remarks.</summary>
     public const float DragThresholdPx = 4f;
 
     /// <summary>Dragged-visual opacity — WinUI <c>ListViewItemDragThemeOpacity</c> = 0.80
@@ -90,6 +95,7 @@ public sealed class DragController
     private float _vx, _vy;            // smoothed pointer velocity (px/s)
     private KeyModifiers _mods;
     private PointerKind _kind;
+    private float _armThresholdMul = 1f;   // the armed source's DragVisualStyle.ThresholdMultiplier (mouse box scale)
 
     // Resting visual state captured at promotion, restored on settle/cancel.
     private Affine2D _restingTransform;
@@ -184,7 +190,10 @@ public sealed class DragController
     /// <para>A node carrying <see cref="InteractionInfo.BlocksDragArmBit"/> (<c>Element.BlocksDragArm</c>) STOPS the
     /// walk at itself: a card's play FAB or "…" button is its own affordance, not a handle for dragging the card. It
     /// blocks only the ANCESTOR search — a barrier that is itself draggable still arms (its own DragBit is tested
-    /// first), which is what lets a draggable row host a non-dragging child of its own.</para></summary>
+    /// first), which is what lets a draggable row host a non-dragging child of its own.</para>
+    /// <para>Arming also resolves the source's mouse drag-box scale (<see cref="DragVisualStyle.ThresholdMultiplier"/>)
+    /// HERE, because the box is tested in <see cref="Move"/> BEFORE <c>Promote</c> captures the full style — a
+    /// click-primary source (a tab) needs the widened box on the very first move, not after promotion.</para></summary>
     public bool TryArm(NodeHandle pressTarget, Point2 abs, PointerKind kind, KeyModifiers mods, uint timestampMs)
     {
         if (_active || !_node.IsNull) return false;
@@ -204,6 +213,8 @@ public sealed class DragController
             _vx = _vy = 0f;
             _kind = kind;
             _mods = mods;
+            float mul = _scene.TryGetDragSource(n, out var src) && src?.Style is { } st ? st.ThresholdMultiplier : 1f;
+            _armThresholdMul = mul > 0f ? mul : 1f;   // ≤0 is meaningless (it would promote on the press) → the base box
             return true;
         }
         return false;
@@ -241,8 +252,12 @@ public sealed class DragController
         float tx = abs.X - _pressAbs.X, ty = abs.Y - _pressAbs.Y;
         if (!_active)
         {
-            // Per-axis drag box (dx > maxDx || dy > maxDy — ListViewBaseItem_Partial.cpp:1877).
-            if (MathF.Abs(tx) <= DragThresholdPx && MathF.Abs(ty) <= DragThresholdPx) return false;
+            // Per-axis drag box (dx > maxDx || dy > maxDy — ListViewBaseItem_Partial.cpp:1877), scaled by the armed
+            // source's ThresholdMultiplier on the MOUSE path only (ListViewBaseItem_Partial.cpp:1873-1874 does the same
+            // ×2 for list items). An arena-governed touch promotion already cleared the arena's own 8px TouchSlopPx and
+            // must not be re-gated on a widened mouse box — that would strand a won arena in a dead zone.
+            float box = arenaGoverned ? DragThresholdPx : DragThresholdPx * _armThresholdMul;
+            if (MathF.Abs(tx) <= box && MathF.Abs(ty) <= box) return false;
             // Arena-governed touch (§7A): the DragReorder member already WON its arena over the Pan member on the
             // axis-locked vote, so a yield here would double-arbitrate (and contradict the arena). The mouse path keeps
             // the per-axis heuristic until its own arena lands.
@@ -631,6 +646,7 @@ public sealed class DragController
         _scene.DragSourceOpacityOverride = null;
         _node = NodeHandle.Null;
         _active = false;
+        _armThresholdMul = 1f;   // TryArm re-resolves it per gesture; back to the base box while idle
         _sprung = false;
         _springVx = _springVy = 0f;
         // _dragStyle is deliberately NOT reset here: Cancel() resets BEFORE it restores the node's visuals, and the

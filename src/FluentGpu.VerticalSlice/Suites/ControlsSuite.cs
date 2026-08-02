@@ -2294,6 +2294,52 @@ static class ControlsSuite
                 styledGhost, $"active={disp.Drag.IsActive} ghostOpacity={ghostOpacity:0.00}");
         }
 
+        // e5dragdrop.threshold — DragVisualStyle.ThresholdMultiplier widens the MOUSE drag box per source (WinUI
+        // LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER = 2.0, ListViewBaseItem_Partial.cpp:54, applied :1873-1874).
+        // The reported bug: a tab is a Drag.Source, so clicking one while the mouse is still travelling crosses the 4px
+        // box, promotes, and has its click SUPPRESSED — the tab silently fails to select. At ×2 a 6px travel is still a
+        // click; 10px still drags; and a multiplier-1 source is byte-identical to before (promotes at 5-6px).
+        {
+            static (int clicks, int starts, bool active) Gesture(StringTable st, HeadlessFontSystem f, float mul, float travel)
+            {
+                var scene = new SceneStore();
+                int clicks = 0, starts = 0;
+                new TreeReconciler(scene, st).ReconcileRoot(new BoxEl
+                {
+                    Width = 200, Height = 60, CanDrag = true,
+                    OnClick = () => clicks++,
+                    OnDragStarted = _ => starts++,
+                    Draggable = new DragSource("tab", () => "p")
+                    {
+                        Style = new DragVisualStyle { Lift = DragLift.Stationary, ThresholdMultiplier = mul },
+                    },
+                }, null);
+                new FlexLayout(scene, f).Run(scene.Root);
+                var disp = new InputDispatcher(scene);
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 30), 0, 0) });
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(100 + travel, 30), 0, 0) });
+                bool active = disp.Drag.IsActive;
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(100 + travel, 30), 0, 0) });
+                return (clicks, starts, active);
+            }
+
+            var wide6 = Gesture(strings, fonts, 2f, 6f);     // ×2 box = 8px → 6px is INSIDE it: a click, not a drag
+            var wide10 = Gesture(strings, fonts, 2f, 10f);   // ×2 box = 8px → 10px still promotes
+            var base5 = Gesture(strings, fonts, 1f, 5f);     // unscaled: the historical 4px box still promotes at 5px
+            var base6 = Gesture(strings, fonts, 1f, 6f);
+            var zero6 = Gesture(strings, fonts, 0f, 6f);     // a meaningless ≤0 multiplier degrades to the base box
+
+            bool clickKept = wide6.clicks == 1 && wide6.starts == 0 && !wide6.active;
+            bool stillDrags = wide10.clicks == 0 && wide10.starts == 1 && wide10.active;
+            bool defaultUnchanged = base5.clicks == 0 && base5.starts == 1 && base5.active
+                                    && base6.clicks == 0 && base6.starts == 1 && base6.active;
+            bool zeroIsBase = zero6.clicks == 0 && zero6.starts == 1;
+
+            Check("e5dragdrop.threshold DragVisualStyle.ThresholdMultiplier scales the per-axis MOUSE drag box per source: at ×2 (WinUI's list-item multiplier) a 6px press-move-release still CLICKS the source instead of being eaten by a drag promotion, while 10px still drags; a multiplier-1 source is unchanged (promotes at 5px and 6px) and a ≤0 multiplier degrades to the base 4px box",
+                clickKept && stillDrags && defaultUnchanged && zeroIsBase,
+                $"wide6(clicks={wide6.clicks} starts={wide6.starts} active={wide6.active}) wide10(clicks={wide10.clicks} starts={wide10.starts}) base5(clicks={base5.clicks} starts={base5.starts}) base6(clicks={base6.clicks} starts={base6.starts}) zero6(clicks={zero6.clicks} starts={zero6.starts})");
+        }
+
         // e5dragdrop.2/.2b — crossing the drag box on a press that began on a CHILD of the CanDrag row promotes the
         // ROW (TryArm walks up like WinUI's item container): OnDragStarted fires once BEFORE the first OnDragDelta,
         // the transient pressed visuals are cleared, and the row carries the drag visuals — opacity 0.80

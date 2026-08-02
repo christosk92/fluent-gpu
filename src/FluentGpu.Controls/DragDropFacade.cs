@@ -23,16 +23,27 @@ public static class Drag
     /// the user keeps their place, rather than disappearing).</summary>
     public const float SourceDimOpacity = 0.4f;
 
+    /// <summary>The mouse drag-box scale for a CLICK-PRIMARY draggable — a tab, a small nav row — where selecting is the
+    /// common intent and dragging the exception. WinUI applies exactly this to list items
+    /// (LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER = 2.0, microsoft-ui-xaml
+    /// dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:54) because "accidentally triggering a drag was deemed too
+    /// easy". Pass it as <c>thresholdMultiplier</c>; see <see cref="DragVisualStyle.ThresholdMultiplier"/>.</summary>
+    public const float ClickPrimaryThresholdMultiplier = 2f;
+
     /// <summary>Make a node draggable. <paramref name="kind"/> is the string discriminator target accept-tests match on;
     /// <paramref name="payload"/> resolves the typed payload ONCE at promotion (never per move).
     /// <paramref name="opacity"/> dims the source; <paramref name="lift"/> selects stationary (default) vs the lifted
-    /// ghost; <paramref name="backplate"/>/<paramref name="shadow"/>/<paramref name="scale"/> tune the GHOST lift only.</summary>
+    /// ghost; <paramref name="backplate"/>/<paramref name="shadow"/>/<paramref name="scale"/> tune the GHOST lift only.
+    /// <paramref name="thresholdMultiplier"/> widens the MOUSE drag box for a CLICK-PRIMARY source (pass
+    /// <see cref="ClickPrimaryThresholdMultiplier"/> on a tab or a small nav row, so a click landed while the mouse is
+    /// still travelling is not eaten by a drag promotion — see <see cref="DragVisualStyle.ThresholdMultiplier"/>).</summary>
     public static DragSource Source(string kind, Func<object?> payload,
                                     float opacity = SourceDimOpacity,
                                     DragLift lift = DragLift.Stationary,
                                     ColorF? backplate = null,
                                     ShadowSpec? shadow = null,
-                                    float scale = 1f)
+                                    float scale = 1f,
+                                    float thresholdMultiplier = 1f)
         => new(kind, payload)
         {
             Style = new DragVisualStyle
@@ -42,6 +53,7 @@ public static class Drag
                 Backplate = backplate,
                 Shadow = shadow,
                 Scale = scale,
+                ThresholdMultiplier = thresholdMultiplier,
             },
         };
 

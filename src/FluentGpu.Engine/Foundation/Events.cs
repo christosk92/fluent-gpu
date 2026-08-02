@@ -287,7 +287,17 @@ public readonly record struct DragVisualStyle
     /// under the ghost read straight THROUGH its text — the S3 "both texts fully legible → garbage" failure. Null (the
     /// default) = no plate.</summary>
     public ColorF? Backplate { get; init; } = null;
-    /// <summary>The engine default (opacity 0.80, default shadow, no scale, Ghost lift, no backplate).</summary>
+    /// <summary>Per-source scale of the MOUSE drag box (<c>DragController.DragThresholdPx</c>, the SM_CXDRAG/SM_CYDRAG
+    /// 4px default). 1 = the base box. Raise it on a CLICK-PRIMARY target that also happens to be draggable — a tab, a
+    /// small nav row — where the click is the common intent and a mouse that is still travelling when the button goes
+    /// down would otherwise cross the box and have its click eaten by a promotion. WinUI does exactly this for list
+    /// items: <c>LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER</c> = 2.0
+    /// (microsoft-ui-xaml dxaml\xcp\dxaml\lib\ListViewBaseItem_Partial.cpp:54, applied at :1873-1874) because
+    /// "accidentally triggering a drag was deemed too easy". MOUSE only, exactly as the WinUI constant's name says: the
+    /// touch path promotes through the gesture arena's own <c>InputDispatcher.TouchSlopPx</c> (8px radial), a different
+    /// constant this never scales. Values ≤ 0 are treated as 1.</summary>
+    public float ThresholdMultiplier { get; init; } = 1f;
+    /// <summary>The engine default (opacity 0.80, default shadow, no scale, Ghost lift, no backplate, base drag box).</summary>
     public static readonly DragVisualStyle Default = new();
 }
 

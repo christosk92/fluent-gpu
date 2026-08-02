@@ -858,9 +858,14 @@ sealed class WaveeShell : Component
                 Icon = tab.Glyph,
                 IsClosable = _open.Count > 1,
                 ContextMenu = destination is null ? null : () => TabMenu(tab),
+                // A tab is CLICK-PRIMARY: switching tabs is the constant intent, dragging one out the rare one. At the
+                // base 4px box a click landed while the mouse is still travelling promotes to a drag and its click is
+                // suppressed — the tab silently fails to select. WinUI widens the mouse box ×2 on list items for exactly
+                // this reason (LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER).
                 Drag = destination is { } d
                     ? Drag.Source(WaveeDragKinds.Resource,
-                        () => WaveeResourceDragPayload.FromDestination(d, _actions))
+                        () => WaveeResourceDragPayload.FromDestination(d, _actions),
+                        thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier)
                     : null,
                 // Spring-load NAVIGATION on every tab. Holding a drag over a tab switches to it, so the destination the
                 // user actually wants can be reached mid-gesture instead of forcing them to cancel, navigate and start
