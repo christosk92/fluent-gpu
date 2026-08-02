@@ -959,6 +959,12 @@ with a scoped ancestor-chain block, so an open flyout / in-flight fly / exit no 
 The mechanism + the containment/not-store-while-blocked safety argument are owned by **scene-memory.md §4.3a**;
 `FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global.
 
+**Translated (rebased) copies.** A span whose subtree only MOVED is copied and patched per payload rather than
+re-recorded — including glyph runs, clips and non-acrylic layers, with `InMotion` raised on rebased glyph/self-blur
+commands so moving text keeps riding sub-pixel (§7 owns the field). ACRYLIC vetoes the copy (its pixels depend on
+where it sits). The per-opcode coverage, the veto, the clip-offset soundness argument and the settle re-snap rule
+are owned by **scene-memory.md §4.3b**.
+
 ---
 
 ## 12. AA quality — corpus-gated regression net (NOT a "validated property")

@@ -28,6 +28,9 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     public int EdgeFadeGroupCount { get; init; }
     public int SpansReused { get; init; }
     public int SpansRebased { get; init; }
+    /// <summary>Spans the key/clip tests accepted for a TRANSLATED copy but whose per-payload walk refused (an acrylic
+    /// layer, or an unknown opcode) — the copy was rolled back and the node re-recorded. A/B attribution only.</summary>
+    public int SpansRebaseRejected { get; init; }
     public int SpansReRecorded { get; init; }
     public int SpanBytesCopied { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
@@ -131,6 +134,7 @@ public static class SceneRecorder
         public int EdgeFadeGroupCount;
         public int SpansReused;
         public int SpansRebased;
+        public int SpansRebaseRejected;
         public int SpansReRecorded;
         public int SpanBytesCopied;
         public int ScopedBlocks;
@@ -174,6 +178,7 @@ public static class SceneRecorder
             EdgeFadeGroupCount = this.EdgeFadeGroupCount,
             SpansReused = this.SpansReused,
             SpansRebased = this.SpansRebased,
+            SpansRebaseRejected = this.SpansRebaseRejected,
             SpansReRecorded = this.SpansReRecorded,
             SpanBytesCopied = this.SpanBytesCopied,
             ScopedBlocks = this.ScopedBlocks,
@@ -879,27 +884,40 @@ public static class SceneRecorder
                 var copiedStats = span.OpcodeStats;
                 int copiedByteStart = dl.BytePosition;
                 int copiedSortStart = dl.SortPosition;
+                // A ZERO delta is not a translation — it is the exact-copy case, and exact-copy is keyed on the INPUT
+                // signature (which carries inMotion and the full affine) precisely so it can refuse. Accepting a
+                // zero-delta translated copy meant "reuse bytes recorded under a DIFFERENT inMotion", because the MOVE
+                // signature deliberately omits both translation and inMotion — which is exactly how a settled scroll
+                // resurrected its last motion frame's unsnapped (InMotion = 1) glyph runs and never re-snapped them.
+                // Requiring real movement here is what makes the settle re-record happen; it costs nothing (a span that
+                // did not move and whose input key still matches takes branch A one gate earlier).
                 if (TryTranslationDelta(in priorWorld, in world, out float dx, out float dy)
+                    && (dx != 0f || dy != 0f)
                     && span.ClipComplete
-                    && IsClipComplete(TranslateBounds(span.SubtreeBounds, dx, dy), in clip)
-                    && dl.CopySpanFromPriorTranslated(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount,
-                        span.CommandCount, in copiedStats, dx, dy))
+                    && IsClipComplete(TranslateBounds(span.SubtreeBounds, dx, dy), in clip))
                 {
-                    RectF translatedBounds = TranslateBounds(span.SubtreeBounds, dx, dy);
-                    var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world, SubtreeBounds = translatedBounds, ClipComplete = true };
-                    spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
-                    if ((flags & NodeFlags.TransformDirty) != 0)
+                    if (dl.CopySpanFromPriorTranslated(span.ByteStart, span.ByteLength, span.SortStart, span.SortCount,
+                            span.CommandCount, in copiedStats, dx, dy))
                     {
-                        var dmgParent = scene.Parent(node);
-                        if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
-                            stats.AddDamage(visualBounds);
+                        RectF translatedBounds = TranslateBounds(span.SubtreeBounds, dx, dy);
+                        var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world, SubtreeBounds = translatedBounds, ClipComplete = true };
+                        spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
+                        if ((flags & NodeFlags.TransformDirty) != 0)
+                        {
+                            var dmgParent = scene.Parent(node);
+                            if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
+                                stats.AddDamage(visualBounds);
+                        }
+                        stats.SpansReused++;
+                        stats.SpansRebased++;
+                        stats.SpanBytesCopied += span.ByteLength;
+                        var translatedResult = new SpanRecordResult();
+                        translatedResult.Include(translatedBounds);
+                        return translatedResult;
                     }
-                    stats.SpansReused++;
-                    stats.SpansRebased++;
-                    stats.SpanBytesCopied += span.ByteLength;
-                    var translatedResult = new SpanRecordResult();
-                    translatedResult.Include(translatedBounds);
-                    return translatedResult;
+                    // Key + clip said yes but the per-payload walk refused (an ACRYLIC layer, or an opcode the
+                    // translator does not know): the partial copy was rolled back, so fall through and re-record.
+                    stats.SpansRebaseRejected++;
                 }
             }
 

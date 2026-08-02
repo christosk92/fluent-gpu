@@ -29,6 +29,8 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int EdgeFadeGroupCount { get; init; }
     public int SpansReused { get; init; }
     public int SpansRebased { get; init; }
+    /// <summary>Translated-copy attempts the per-payload walk refused (acrylic layer / unknown opcode) ⇒ re-recorded.</summary>
+    public int SpansRebaseRejected { get; init; }
     public int SpansReRecorded { get; init; }
     public int SpanBytesCopied { get; init; }
     public int NodesCulled { get; init; }
@@ -3118,6 +3120,7 @@ public sealed class AppHost : IDisposable
                 EdgeFadeGroupCount = recordStats.EdgeFadeGroupCount,
                 SpansReused = recordStats.SpansReused,
                 SpansRebased = recordStats.SpansRebased,
+                SpansRebaseRejected = recordStats.SpansRebaseRejected,
                 SpansReRecorded = recordStats.SpansReRecorded,
                 SpanBytesCopied = recordStats.SpanBytesCopied,
                 SpanReuseDisabledReasons = recordStats.SpanReuseDisabledReasons,

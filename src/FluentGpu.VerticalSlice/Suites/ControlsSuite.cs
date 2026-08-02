@@ -7504,7 +7504,9 @@ static class ControlsSuite
 
         // gate.video.op.translate — the hole PARTICIPATES in clean-span reuse: a copied span containing it translates
         // (Dx/Dy rebased, exactly like FillRoundRect — pure geometry, and the presenter drives the video visual's own
-        // rect independently, so a rebased span cannot desync). Control: a span carrying a glyph run still refuses.
+        // rect independently, so a rebased span cannot desync). Control: a span carrying an ACRYLIC layer still refuses
+        // and rolls back (the one position-DEPENDENT payload — its recipe blurs whatever the canvas holds under the
+        // layer rect). Glyph/clip/non-acrylic-layer spans DO translate now; gate.span.textRowScrollRebase owns that.
         {
             var dl = new DrawList();
             var xf = new Affine2D(1f, 0f, 0f, 1f, 40f, 60f);
@@ -7514,7 +7516,6 @@ static class ControlsSuite
             dl.DrawVideo(dst, radii, 5, 1f, xf, 1f, 2UL);
             int byteLen = dl.BytePosition, sortLen = dl.SortPosition, cmds = dl.CommandCount;
             var stats = dl.OpcodeStats;
-            bool eligible = stats.CanTranslateCopiedSpan;
 
             const float dx = -17.5f, dy = 23.25f;
             dl.SwapAndReset();
@@ -7540,22 +7541,21 @@ static class ControlsSuite
                 && movedHole.Dst == dst && movedHole.Radii == radii && movedHole.SurfaceId == 5 && movedHole.VideoReady == 1f
                 && dl.CommandCount == 2 && dl.OpcodeStats.DrawVideo == 1;
 
-            // Control: a glyph run is shaping-dependent, so its span is ineligible — the copy must refuse and leave the
-            // destination list untouched (no half-written span).
+            // Control: an ACRYLIC layer's pixels depend on WHERE it sits (it blurs the canvas beneath DeviceRect), so its
+            // span must refuse and leave the destination list untouched (no half-written span — the rollback).
             var dg = new DrawList();
-            var fam = strings.Intern("Segoe UI");
-            var txt = strings.Intern("hole translate control");
             dg.FillRoundRect(dst, radii, ColorF.FromRgba(0x20, 0x20, 0x20), xf, 1f, 1UL);
-            dg.DrawGlyphRun(dst, new ColorF(1f, 1f, 1f, 1f), txt, fam, 14f, 400, 0, 0, 1, 0f, 18f, 0, 0, xf, 1f, 2UL);
+            dg.PushLayer(dst, radii, ColorF.FromRgba(0x30, 0x30, 0x30), ColorF.FromRgba(0x20, 0x20, 0x20), 0.6f, 30f, 0.02f, 0.8f, 2UL);
+            dg.PopLayer(dst, 3UL);
             int gBytes = dg.BytePosition, gSort = dg.SortPosition, gCmds = dg.CommandCount;
             var gStats = dg.OpcodeStats;
             dg.SwapAndReset();
             bool refused = !dg.CopySpanFromPriorTranslated(0, gBytes, 0, gSort, gCmds, in gStats, dx, dy)
                 && dg.BytePosition == 0 && dg.CommandCount == 0;
 
-            Check("gate.video.op.translate", eligible && copied && rebased && refused,
-                $"eligible={eligible} copied={copied} ops={seen} dx={movedHole.Transform.Dx:0.##} dy={movedHole.Transform.Dy:0.##} "
-                + $"(want {40f + dx:0.##}/{60f + dy:0.##}) rebased={rebased} glyphRefused={refused}");
+            Check("gate.video.op.translate", copied && rebased && refused,
+                $"copied={copied} ops={seen} dx={movedHole.Transform.Dx:0.##} dy={movedHole.Transform.Dy:0.##} "
+                + $"(want {40f + dx:0.##}/{60f + dy:0.##}) rebased={rebased} acrylicRefused={refused}");
         }
 
         // gate.video.op.headless — the full reconcile → record → RHI-decode path: a BoxEl{VideoHole} inside a rounded

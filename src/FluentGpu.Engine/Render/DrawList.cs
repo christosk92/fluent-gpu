@@ -95,11 +95,6 @@ public struct DrawListOpcodeStats
         EraseRoundRect += other.EraseRoundRect;
     }
 
-    public readonly bool CanTranslateCopiedSpan
-        => DrawGlyphRun == 0 && DrawGlyphRunGradient == 0
-           && PushClip == 0 && PopClip == 0
-           && PushLayer == 0 && PopLayer == 0;
-
     public readonly DrawListOpcodeStats Minus(in DrawListOpcodeStats other) => new()
     {
         FillRoundRect = FillRoundRect - other.FillRoundRect,
@@ -372,7 +367,12 @@ public sealed class DrawList
                                             int commandCount, in DrawListOpcodeStats opcodeStats,
                                             float dx, float dy)
     {
-        if (!opcodeStats.CanTranslateCopiedSpan || !CanCopyPriorSpan(byteStart, byteLength, sortStart, sortCount))
+        // No opcode PRE-check: the per-payload walk in TranslateCopiedSpan is the sole authority on what can be rebased
+        // (it is the thing that actually has to patch every command), and its `default: return false` fails safe for any
+        // opcode it does not know. A veto that needs the payload — an ACRYLIC PushLayer, whose blurred backdrop depends
+        // on where the layer sits — is only decidable there, and the rollback below discards the partial copy so the
+        // caller re-records exactly as if the span had never been eligible.
+        if (!CanCopyPriorSpan(byteStart, byteLength, sortStart, sortCount))
             return false;
 
         int byteDst = _len;
@@ -771,11 +771,74 @@ public sealed class DrawList
                     // Exact under translation, like FillRoundRect: an erase is pure geometry.
                     if (!TranslatePayload<EraseRoundRectCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y) })) return false;
                     break;
+                case DrawOp.DrawGlyphRun:
+                    // Patch the world transform AND raise InMotion, which is exactly what a FRESH record during the same
+                    // motion emits (the recorder's inMotion is set for any subtree whose transform was written this
+                    // frame): the renderer then skips the device-grid baseline snap so the run rides sub-pixel WITH its
+                    // plate instead of shearing 1px at half-pixel crossings (see DrawGlyphRunCmd's InMotion note).
+                    // Re-snapping crisp on settle is automatic and needs no bookkeeping here — the recorder mixes its
+                    // inMotion into the span INPUT signature, so the first at-rest frame misses exact-copy once and
+                    // re-records the run with InMotion = 0.
+                    if (!TranslatePayload<DrawGlyphRunCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y), InMotion = 1 })) return false;
+                    break;
+                case DrawOp.DrawGlyphRunGradient:
+                    if (!TranslatePayload<DrawGlyphRunGradientCmd>(ref p, end, dx, dy, static (c, x, y) => c with { Transform = Translate(c.Transform, x, y), InMotion = 1 })) return false;
+                    break;
+                case DrawOp.PushClip:
+                    // Both clip rects are DEVICE space, so a translation is an exact offset. Soundness rests on the
+                    // rebase eligibility test, not on this patch: SceneRecorder requires ClipComplete at BOTH ends (the
+                    // stored span's own flag AND the translated subtree bounds inside the current clip), so an interior
+                    // clip was never clamped by the enclosing one and a row straddling a viewport edge fails eligibility
+                    // and re-records instead.
+                    if (!TranslatePayload<ClipCmd>(ref p, end, dx, dy, static (c, x, y) => c with
+                    {
+                        DeviceRect = OffsetRect(c.DeviceRect, x, y),
+                        RoundedRect = c.CornerRadius > 0f ? OffsetRect(c.RoundedRect, x, y) : c.RoundedRect,
+                    })) return false;
+                    break;
+                case DrawOp.PopClip:
+                    break;   // zero payload — nothing to advance, nothing to patch
+                case DrawOp.PushLayer:
+                    if (!TranslatePushLayer(ref p, end, dx, dy)) return false;
+                    break;
+                case DrawOp.PopLayer:
+                    if (!TranslatePayload<PopLayerCmd>(ref p, end, dx, dy, static (c, x, y) => c with { DeviceRect = OffsetRect(c.DeviceRect, x, y) })) return false;
+                    break;
                 default:
                     return false;
             }
         }
         return p == end;
+    }
+
+    /// <summary>Translate a <see cref="PushLayerCmd"/> in place, or REJECT the whole span (false) when the layer's pixels
+    /// are position-dependent. ACRYLIC is the one rejection: its recipe blurs whatever the canvas holds UNDER DeviceRect,
+    /// so the same bytes at a new position would composite last position's backdrop. Every other kind renders its own
+    /// subtree into an offscreen RT (Opacity/Blur/EdgeFade), which the same translation moves consistently.
+    /// <para>Deliberately untouched: OwnDmg*/DamageEpoch. A span-copied layer keeping a STALE epoch is the DOCUMENTED
+    /// safe path (see <see cref="PushLayerCmd"/>) — the epoch mismatches FrameInfo.FrameEpoch and the compositor falls
+    /// back to the whole-frame damage union rather than trusting a carve-out computed at the old position.</para></summary>
+    private bool TranslatePushLayer(ref int p, int end, float dx, float dy)
+    {
+        int size = Unsafe.SizeOf<PushLayerCmd>();
+        if (p + size > end) return false;
+        var span = _buf.AsSpan(p, size);
+        var cmd = MemoryMarshal.Read<PushLayerCmd>(span);
+        if (cmd.Kind == (int)LayerKind.Acrylic) return false;
+        cmd = cmd with
+        {
+            DeviceRect = OffsetRect(cmd.DeviceRect, dx, dy),
+            // Self-blur/EdgeFade: the inherited device clip bounding what the offscreen result may reach. Plain opacity
+            // groups reuse the field for the back-patched drawn extent (PatchOpacityLayerExtent) — same device space,
+            // same offset. The empty default means "unset/unknown" in both readings, so leave it alone.
+            CompositeClip = cmd.CompositeClip == default ? cmd.CompositeClip : OffsetRect(cmd.CompositeClip, dx, dy),
+            // Self-blur InMotion, the layer twin of the glyph patch: a rebased blur layer IS moving this frame, so mark
+            // it moving and let the compositor's at-rest exact re-mint happen on the settle frame (which re-records).
+            InMotion = cmd.Kind == (int)LayerKind.Blur ? 1 : cmd.InMotion,
+        };
+        MemoryMarshal.Write(span, in cmd);
+        p += size;
+        return true;
     }
 
     private delegate T TranslatePayloadFunc<T>(T value, float dx, float dy) where T : unmanaged;
@@ -794,4 +857,8 @@ public sealed class DrawList
 
     private static Affine2D Translate(in Affine2D t, float dx, float dy)
         => new(t.M11, t.M12, t.M21, t.M22, t.Dx + dx, t.Dy + dy);
+
+    /// <summary>Offset a DEVICE-space rect carried directly in a payload (clip/layer geometry, which has no Transform of
+    /// its own) by the span's translation delta.</summary>
+    private static RectF OffsetRect(in RectF r, float dx, float dy) => new(r.X + dx, r.Y + dy, r.W, r.H);
 }

@@ -381,7 +381,7 @@ public static class FluentApp
                         $" | hitch comps={s.ComponentsRendered} nodes={s.NodesVisited}/{s.DrawNodeCount} " +
                         $"pump={s.ImagePumpMs:0.0}ms apply={s.ImageApplyCount}/{s.ImageApplyBytes / 1024}KB realize={s.RealizeCatchupMs:0.0}ms " +
                         $"escapes={s.RootRelayoutEscapes} escLoc={s.LocalRelayoutResolves} " +
-                        $"spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded} " +
+                        $"spans={s.SpansReused}/{s.SpansRebased}/{s.SpansReRecorded}(rej{s.SpansRebaseRejected}) " +
                         $"reasons=0x{((uint)s.SpanReuseDisabledReasons):X} gc0=+{s.Gc0Delta} gc1=+{s.Gc1Delta} gc2=+{s.Gc2Delta}";
                     string scrollTok = scrollPerf
                         ? $" | scroll clipE={s.StickyClipEvals} clipD={s.StickyClipDirties} fullHide={s.StickyClipFullyHidden} " +

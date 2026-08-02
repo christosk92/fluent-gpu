@@ -210,6 +210,7 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | **Quarantine constant** = `RenderInFlightDepth + 1` (belt-and-suspenders, compile-asserted; =0 single-thread step 1) | threading-render-seam.md |
 | **Canonical 13-phase loop** (…6 layout, 6.5 layout-effects, 7 animation, PUBLISH(13a), 8 record, 9 batch, 10 submit, 11 present, 12 passive-effects, 13 arena-swap) | threading-render-seam.md / `../hardened-v1-plan.md` §2.2 |
 | Clean-span reuse rule (IsLive ∧ realization ContentEpoch ∧ baked-geom hash) | scene-memory.md (rule) / gpu-renderer.md (DrawList application) / reconciler-hooks.md (Mutate() chokepoint) / validation.md (witness/fault-injection) |
+| TRANSLATED (rebased) span copies — per-opcode patch coverage, the ACRYLIC veto, the `InMotion` raise + settle re-snap, non-zero-delta rule | scene-memory.md §4.3b (mechanism + soundness) / gpu-renderer.md §7 (the `InMotion` payload fields) + §11.1 (pointer) / validation.md §3.6b (gates) |
 | Color contract (UNORM buffer / _UNORM_SRGB RTV / linear blend / premul output / text-gamma exception) | gpu-renderer.md |
 | ComPtr render-thread confinement + Move-only-across-seam | com-interop.md + threading-render-seam.md |
 | Footprint ratchet budgets (.mstat / sizoscope) | dsl-aot.md (budgets) / validation.md (CI gate) |

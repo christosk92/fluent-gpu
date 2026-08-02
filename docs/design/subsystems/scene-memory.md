@@ -775,6 +775,56 @@ stats for diagnostics (plus a `ScopedBlocks` count) but no longer force the glob
 `validation.md` gates `span.popupOpenKeepsMainReuse` / `span.orphanBlocksOnlyChain` / `span.blockedNodeNeverStores`
 / `span.detachedFlyScoped`.
 
+### 4.3b Translated (REBASED) copies — per-opcode coverage, the acrylic veto, the settle re-snap
+
+A span whose subtree only **moved** is copied and then **patched in place** (`DrawList.CopySpanFromPriorTranslated`
+→ `TranslateCopiedSpan`) instead of re-recorded: every command's baked device geometry is offset by the world
+translation delta. Eligibility is upstream of the patch and unchanged — no descendant dirty, not the direct moving
+scroll content, `ClipComplete` at **both** ends (the stored span's own flag AND the translated subtree bounds inside
+the *current* clip), and a **non-zero** delta.
+
+**Coverage is decided per payload, not per opcode-count.** There is no "does this span contain a forbidden opcode"
+pre-check: the walk that has to patch each command IS the authority, and its `default` arm returns false, so an
+opcode nobody taught it about fails safe (the partial copy is rolled back and the node re-records). Three classes:
+
+- **Transform-carrying primitives** (fills, images, strokes, shadows, gradients, arcs, polylines, tab shapes, icon
+  masks, the video hole, erases) — patch `Transform.Dx/Dy`. Exact.
+- **Glyph runs** (`DrawGlyphRun`, `DrawGlyphRunGradient`) — patch the transform **and raise `InMotion`** (the field
+  is `gpu-renderer.md` §7's; a set flag means the renderer skips the device-grid baseline snap so moving text rides
+  sub-pixel with its plate). That is exactly what a *fresh* record during the same motion emits, because the
+  recorder's `inMotion` is true for any subtree whose transform was written this frame.
+- **Clip and layer geometry** (`PushClip`/`PopClip`, `PushLayer`/`PopLayer`) — these carry DEVICE rects directly
+  rather than a transform, so the rects are offset: `ClipCmd.DeviceRect` (+ `RoundedRect` when rounded),
+  `PushLayerCmd.DeviceRect`, `PopLayerCmd.DeviceRect`, and `PushLayerCmd.CompositeClip` when set (the self-blur /
+  edge-fade composite bound, and the back-patched drawn extent a plain opacity group parks in the same field).
+  A `Blur` layer also gets `InMotion = 1`, the layer twin of the glyph patch. `OwnDmg*`/`DamageEpoch` are
+  deliberately **left stale** — the mismatched epoch is what makes the compositor fall back to the whole-frame
+  damage union instead of trusting a carve-out computed at the old position.
+
+**ACRYLIC is the one veto.** An acrylic layer's pixels are a function of *where it sits* (it blurs whatever the
+canvas holds under `DeviceRect`), so the same bytes at a new position would composite the previous position's
+backdrop. `LayerKind.Acrylic` refuses the whole span; the rollback restores the destination list and the caller
+re-records. Non-acrylic layers render their own subtree into an offscreen RT, which the same translation moves
+consistently, so they translate.
+
+**Why offsetting a clip rect is sound.** `ClipComplete` at both ends means the stored subtree was inside the clip
+in force when it was recorded, and the translated subtree is inside the current clip. Both properties together give
+`translatedSubtree ⊆ originalClip + delta`, so a rebased scissor/composite bound still contains every pixel the
+span draws while nothing outside it is drawn — pixel-identical to a fresh record. An interior clip was therefore
+never clamped by the enclosing one, and a row straddling a viewport edge simply fails eligibility and re-records
+(the correct residual).
+
+**Settle re-snap.** `InMotion = 1` is a motion-only state, so it must not outlive the motion. The recorder mixes
+its `inMotion` into the span **input** signature (exact-copy key) but deliberately not into the **move** signature
+(which also omits translation — that is the point of a move key). A zero-delta translated copy would therefore mean
+"reuse bytes recorded under a *different* `inMotion`", which is exactly how a settled scroll used to resurrect its
+last motion frame's unsnapped glyph runs; requiring a real delta closes it. The at-rest frame then misses both
+gates once, re-records crisp, and exact-copies from the frame after. Residual, honestly: an ancestor whose own key
+is genuinely unchanged may exact-copy the motion frame wholesale and defer that re-snap — in practice a settling
+viewport is still walked (its `ScrollState.FadeT` decays for the scrollbar fade and is part of its span key).
+
+Gates: `span.textRowScrollRebase`, `span.rebaseSettleResnap`, `span.acrylicNeverTranslates` (`validation.md`).
+
 ### 4.4 `Mutate()` epoch chokepoint + DEBUG `CleanSpanWitness`
 
 **MADE: every write that changes the pixels or geometry of an in-place-mutated realization goes through a single

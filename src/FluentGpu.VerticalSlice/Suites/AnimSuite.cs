@@ -61,6 +61,7 @@ static class AnimSuite
         CompositorChecks(strings);
         CleanSpanReuseChecks();
         SpanReuseScopingChecks();
+        SpanTranslateRebaseChecks(strings);
         AnimEngineChecks(strings);
         AnimHookChecks(strings);
         MarqueeChecks(strings);
@@ -3457,6 +3458,238 @@ static class AnimSuite
                 pos += DrawPayloadSize(op);
             }
             return (BlurCachePolicy)255;
+        }
+    }
+
+    // ── Translated (REBASED) spans that CARRY glyph runs, clips and non-acrylic layers ───────────────────────────────
+    // A span holding any of those opcodes used to be refused outright, so a steady scroll re-recorded ~every real row
+    // (every real row has text). TranslateCopiedSpan now patches them per payload instead. These gates pin the
+    // byte-level contract (what moved, and the InMotion flags that make moving text ride sub-pixel), the ACRYLIC veto —
+    // the one position-DEPENDENT payload, which must roll the whole copy back — and the stationary-neighbour exact-copy
+    // that dropping `!scrollInMotion` from the exact-copy branch buys.
+    static void SpanTranslateRebaseChecks(StringTable strings)
+    {
+        const float Shift = -20f;
+        const float InteriorClipW = 150f;
+
+        // gate.span.textRowScrollRebase — three text rows (Box → interior ClipsToBounds child → Text leaf) plus one
+        // self-blur row, all fully inside a scrolling viewport. One content translation ⇒ every row REBASES, and the
+        // copied bytes decode to the shifted geometry a fresh record would have emitted: glyph transform + InMotion,
+        // the interior clip rect, and the blur layer's rect + InMotion.
+        {
+            var s = BuildRows(strings, LayerKind.Blur, out var content, out _, out _);
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+
+            bool g0 = FirstGlyph(dl.Bytes, out var glyph0);
+            bool c0 = ClipOfWidth(dl.Bytes, InteriorClipW, out var clip0);
+            bool b0 = LayerOfKind(dl.Bytes, LayerKind.Blur, out var blur0);
+            bool have0 = g0 && c0 && b0;
+            bool rest0 = glyph0.InMotion == 0 && blur0.InMotion == 0;
+
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
+            s.Mark(content, NodeFlags.TransformDirty);
+            var moved = SceneRecorder.Record(s, dl, spans: spans);
+
+            bool g1 = FirstGlyph(dl.Bytes, out var glyph1);
+            bool c1 = ClipOfWidth(dl.Bytes, InteriorClipW, out var clip1);
+            bool b1 = LayerOfKind(dl.Bytes, LayerKind.Blur, out var blur1);
+            bool have1 = g1 && c1 && b1;
+            bool glyphShifted = Near(glyph1.Transform.Dy, glyph0.Transform.Dy + Shift)
+                                && Near(glyph1.Transform.Dx, glyph0.Transform.Dx) && glyph1.InMotion == 1;
+            bool clipShifted = Near(clip1.DeviceRect.Y, clip0.DeviceRect.Y + Shift)
+                               && Near(clip1.DeviceRect.X, clip0.DeviceRect.X)
+                               && Near(clip1.DeviceRect.H, clip0.DeviceRect.H);
+            bool blurShifted = Near(blur1.DeviceRect.Y, blur0.DeviceRect.Y + Shift)
+                               && Near(blur1.DeviceRect.X, blur0.DeviceRect.X) && blur1.InMotion == 1;
+
+            Check("gate.span.textRowScrollRebase",
+                have0 && rest0 && have1 && moved.SpansRebased >= 4 && glyphShifted && clipShifted && blurShifted,
+                $"rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} rejected={moved.SpansRebaseRejected} "
+                + $"glyphDy={glyph0.Transform.Dy:0.##}->{glyph1.Transform.Dy:0.##}/im{glyph1.InMotion} "
+                + $"clipY={clip0.DeviceRect.Y:0.##}->{clip1.DeviceRect.Y:0.##} "
+                + $"blurY={blur0.DeviceRect.Y:0.##}->{blur1.DeviceRect.Y:0.##}/im{blur1.InMotion} decoded={have0}/{have1}");
+        }
+
+        // gate.span.rebaseSettleResnap — the rebased InMotion=1 bytes are a MOTION-only state. The recorder mixes its
+        // own inMotion into the span INPUT signature, so the first at-rest frame that walks a rebased row misses
+        // exact-copy once and re-records it crisp (InMotion == 0); the frame after that exact-copies again.
+        // NB the settle frame must actually REACH the row: an ancestor whose own key is unchanged legitimately
+        // exact-copies the motion frame wholesale. The scrollbar fade tick is what walks it in the real engine (FadeT
+        // decays for ~450 ms after a gesture and is part of every viewport's span key), so the gate ticks it too.
+        {
+            var s = BuildRows(strings, LayerKind.Blur, out var content, out var firstRow, out var viewport);
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
+            s.Mark(content, NodeFlags.TransformDirty);
+            var moved = SceneRecorder.Record(s, dl, spans: spans);
+            bool movedInMotion = FirstGlyph(dl.Bytes, out var glyphM) && glyphM.InMotion == 1 && moved.SpansRebased >= 1;
+
+            // settle: the transform write is over (the host clears the bits right after record) and the scrollbar fades.
+            s.ClearTransformDirty();
+            s.ClearRecordDirty();
+            s.ScrollRef(viewport).FadeT = 0.5f;
+            var settle = SceneRecorder.Record(s, dl, spans: spans);
+            uint settleFrame = spans.CurrentFrameId;
+            bool resnapped = FirstGlyph(dl.Bytes, out var glyphS) && glyphS.InMotion == 0
+                             && Near(glyphS.Transform.Dy, glyphM.Transform.Dy)
+                             && spans.StoredAtFrame((int)firstRow.Raw.Index, settleFrame);
+
+            // and once crisp it settles into plain exact-copy — no per-frame re-record tail.
+            s.ClearRecordDirty();
+            var atRest = SceneRecorder.Record(s, dl, spans: spans);
+            bool steady = atRest.SpansReused >= 1 && atRest.SpansRebased == 0
+                          && FirstGlyph(dl.Bytes, out var glyphR) && glyphR.InMotion == 0;
+
+            Check("gate.span.rebaseSettleResnap",
+                movedInMotion && resnapped && steady,
+                $"movedIm={glyphM.InMotion} rebased={moved.SpansRebased} settleIm={glyphS.InMotion} "
+                + $"settleRec={settle.SpansReRecorded} rowStored={spans.StoredAtFrame((int)firstRow.Raw.Index, settleFrame)} "
+                + $"restReused={atRest.SpansReused} restRebased={atRest.SpansRebased}");
+        }
+
+        // gate.span.acrylicNeverTranslates — an ACRYLIC layer blurs whatever the canvas holds UNDER its rect, so the same
+        // bytes at a new position would composite the OLD backdrop. Its span must be refused by the per-payload walk (the
+        // partial copy rolled back) and re-recorded, while its plain siblings keep rebasing in the same frame.
+        {
+            var s = BuildRows(strings, LayerKind.Acrylic, out var content, out _, out _);
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+
+            bool hadAcrylic = LayerOfKind(dl.Bytes, LayerKind.Acrylic, out var acr0);
+
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
+            s.Mark(content, NodeFlags.TransformDirty);
+            var moved = SceneRecorder.Record(s, dl, spans: spans);
+            // The acrylic is still emitted — FRESHLY, at the new position (a re-record, not a copy).
+            bool freshAcrylic = LayerOfKind(dl.Bytes, LayerKind.Acrylic, out var acr1)
+                                && Near(acr1.DeviceRect.Y, acr0.DeviceRect.Y + Shift);
+
+            Check("gate.span.acrylicNeverTranslates",
+                hadAcrylic && freshAcrylic && moved.SpansRebaseRejected >= 1 && moved.SpansRebased >= 3,
+                $"rejected={moved.SpansRebaseRejected} rebased={moved.SpansRebased} recorded={moved.SpansReRecorded} "
+                + $"acrylicY={acr0.DeviceRect.Y:0.##}->{acr1.DeviceRect.Y:0.##}");
+        }
+
+        // A scrolling viewport of text rows: Box row → interior ClipsToBounds child (an emitted PushClip/PopClip pair)
+        // → Text leaf, plus one row carrying `special` as a layer. Every row sits well inside the viewport clip at both
+        // ends of the shift, so span rebase eligibility (ClipComplete at both ends) is never the thing under test.
+        static SceneStore BuildRows(StringTable strings, LayerKind special,
+                                    out NodeHandle content, out NodeHandle firstRow, out NodeHandle viewport)
+        {
+            var s = new SceneStore();
+            viewport = s.CreateNode(1);
+            content = s.CreateNode(1);
+            s.Root = viewport;
+            s.AppendChild(viewport, content);
+            s.Flags(viewport) |= NodeFlags.ClipsToBounds;
+            s.ScrollRef(viewport).ContentNode = content;
+            s.Bounds(viewport) = new RectF(0, 0, 200, 400);
+            s.Bounds(content) = new RectF(0, 0, 200, 800);
+
+            firstRow = NodeHandle.Null;
+            for (int i = 0; i < 3; i++)
+            {
+                var row = s.CreateNode(1);
+                s.AppendChild(content, row);
+                s.Bounds(row) = new RectF(0, 40 + i * 60, 200, 50);
+                Paint(s, row, VisualKind.Box, ColorF.FromRgba((byte)(0x20 + i * 0x10), 0x80, 0xE0));
+                var clipChild = s.CreateNode(1);
+                s.AppendChild(row, clipChild);
+                s.Bounds(clipChild) = new RectF(10, 5, InteriorClipW, 40);
+                s.Flags(clipChild) |= NodeFlags.ClipsToBounds;
+                s.Paint(clipChild) = NodePaint.Default;
+                AddText(s, strings, clipChild, new RectF(0, 0, 140, 20), "row text");
+                if (i == 0) firstRow = row;
+            }
+
+            var layerRow = s.CreateNode(1);
+            s.AppendChild(content, layerRow);
+            s.Bounds(layerRow) = new RectF(30, 240, 140, 40);
+            Paint(s, layerRow, VisualKind.Box, ColorF.FromRgba(0x90, 0x30, 0x30));
+            if (special == LayerKind.Acrylic)
+                s.SetAcrylic(layerRow, AcrylicSpec.InAppDefault);
+            else
+                s.Paint(layerRow).BlurSigma = 4f;
+            return s;
+        }
+
+        static void Paint(SceneStore s, NodeHandle n, VisualKind kind, ColorF fill)
+        {
+            ref var p = ref s.Paint(n);
+            p = NodePaint.Default;
+            p.VisualKind = kind;
+            p.Fill = fill;
+        }
+
+        static NodeHandle AddText(SceneStore s, StringTable strings, NodeHandle parent, RectF bounds, string text)
+        {
+            var n = s.CreateNode(1);
+            s.AppendChild(parent, n);
+            s.Bounds(n) = bounds;
+            ref var p = ref s.Paint(n);
+            p = NodePaint.Default;
+            p.VisualKind = VisualKind.Text;
+            p.Text = strings.Intern(text);
+            return n;
+        }
+
+        static bool FirstGlyph(ReadOnlySpan<byte> bytes, out DrawGlyphRunCmd cmd)
+        {
+            cmd = default;
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.DrawGlyphRun) { cmd = MemoryMarshal.Read<DrawGlyphRunCmd>(bytes.Slice(pos)); return true; }
+                pos += DrawPayloadSize(op);
+            }
+            return false;
+        }
+
+        static bool ClipOfWidth(ReadOnlySpan<byte> bytes, float width, out ClipCmd cmd)
+        {
+            cmd = default;
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.PushClip)
+                {
+                    var c = MemoryMarshal.Read<ClipCmd>(bytes.Slice(pos));
+                    if (Near(c.DeviceRect.W, width)) { cmd = c; return true; }
+                }
+                pos += DrawPayloadSize(op);
+            }
+            return false;
+        }
+
+        static bool LayerOfKind(ReadOnlySpan<byte> bytes, LayerKind kind, out PushLayerCmd cmd)
+        {
+            cmd = default;
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.PushLayer)
+                {
+                    var l = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(pos));
+                    if (l.Kind == (int)kind) { cmd = l; return true; }
+                }
+                pos += DrawPayloadSize(op);
+            }
+            return false;
         }
     }
 }

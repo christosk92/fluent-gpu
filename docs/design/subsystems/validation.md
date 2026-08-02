@@ -480,10 +480,21 @@ replaces the old whole-tree reuse kill for popup/overlay/orphan/fly with a per-c
 | `span.detachedFlyScoped` | a live connected-anim fly anchor (via `CollectReuseBlockRoots` → the recorder's `reuseBlockRoots` seam) ⇒ an unrelated subtree still reuses; the anchor's chain blocks + stores nothing (`Detached` in reasons) |
 
 `FirstRecord`/`Resize`/`ModalPaint`/`DragGhost` stay global (whole-canvas), verified by the existing `P6.clean-span`
-family + `RZ-SETTLE`. The viewport-edge translated-reuse extension (E3) was evaluated and **dropped** — the
-translated copy path forbids spans containing clip commands (`DrawListOpcodeStats.CanTranslateCopiedSpan` requires
-`PushClip == 0`) and the D3D12 raster does not re-intersect a pushed clip with the enclosing stack (it trusts the
-recorder's record-time intersection), so the rounded-clip pixel-correctness precondition does not hold.
+family + `RZ-SETTLE`.
+
+### 3.6b Translated (rebased) span gates (`FluentGpu.VerticalSlice` — `SpanTranslateRebaseChecks`)
+
+A moved span is copied and patched per payload rather than re-recorded, now including glyph runs, clips and
+non-acrylic layers ([scene-memory.md §4.3b](./scene-memory.md)). The D3D12 raster does not re-intersect a pushed
+clip with the enclosing stack — it trusts the recorder's record-time intersection — so the correctness of an
+OFFSET clip rests entirely on the `ClipComplete`-at-both-ends eligibility test, which is what these gates pin
+alongside the acrylic veto and the motion/settle flag contract:
+
+| Gate | Assert |
+|---|---|
+| `span.textRowScrollRebase` | text rows (`Box` → interior `ClipsToBounds` child → `Text` leaf) plus a self-blur row inside a scrolling viewport all REBASE on one content translation, and the copied bytes decode to the shifted geometry: glyph `Transform.Dy` offset by the delta with `InMotion == 1`, `ClipCmd.DeviceRect` offset, blur `PushLayerCmd.DeviceRect` offset with `InMotion == 1` |
+| `span.rebaseSettleResnap` | the motion-only `InMotion` does not outlive the motion — the first at-rest frame that walks a rebased row re-records it with `InMotion == 0` (and stores it), and the frame after exact-copies (`SpansRebased == 0`) |
+| `span.acrylicNeverTranslates` | an acrylic row under the same translation is REFUSED by the per-payload walk (`SpansRebaseRejected ≥ 1`, the partial copy rolled back) and re-emitted freshly at the new position, while its plain siblings still rebase in the same frame |
 
 ### 3.7 Data-race gate
 
