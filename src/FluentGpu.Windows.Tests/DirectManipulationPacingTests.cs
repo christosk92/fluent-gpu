@@ -56,6 +56,60 @@ public sealed class DirectManipulationPacingTests
         Assert.InRange(pacer.ClampWait(-1, afterGap), 1, DmManualUpdatePacer.IntervalMs);
     }
 
+    /// <summary>The pump's interval FOLLOWS the panel. Its deadline clamps every host wait while a gesture is live, so a
+    /// fixed 7 ms (the 120 Hz answer) truncates the loop's wait twice per refresh on a 60 Hz display and lands a whole
+    /// refresh late at 240 — the same "one hardcoded rate" defect as the async pace cap. The default is unchanged, which
+    /// is what keeps the tests above meaningful.</summary>
+    [Fact]
+    public void PacerInterval_FollowsConfiguredRefresh()
+    {
+        var pacer = new DmManualUpdatePacer();
+        Assert.Equal(DmManualUpdatePacer.IntervalMs, pacer.IntervalMsInForce);   // default = the 120 Hz answer
+
+        pacer.SetIntervalMs(1000.0 / 60);
+        Assert.Equal(17, pacer.IntervalMsInForce);
+        pacer.SetIntervalMs(1000.0 / 144);
+        Assert.Equal(7, pacer.IntervalMsInForce);
+
+        // ...and the cadence actually changes: at ~16.7 ms a second's worth of wakes yields ~60 updates, not ~143.
+        var slow = new DmManualUpdatePacer();
+        slow.SetIntervalMs(1000.0 / 60);
+        slow.ArmImmediate(0);
+        int updates = 0;
+        const int wakesPerSecond = 20_000;
+        for (int i = 0; i <= wakesPerSecond; i++)
+        {
+            long now = (long)(i * (Stopwatch.Frequency / (double)wakesPerSecond));
+            if (slow.TryConsume(now)) updates++;
+        }
+        Assert.InRange(updates, 58, 61);
+    }
+
+    /// <summary>The clamp is the part that must not drift: it is what an absurd or unknown refresh lands on. Below the
+    /// floor the pump would poll; above the ceiling it would truncate host waits it has no business truncating. A
+    /// non-positive value is "unknown" and must leave the current interval alone rather than resolve to a clamp bound.</summary>
+    [Fact]
+    public void PacerInterval_ClampsToFloorAndCeiling()
+    {
+        var pacer = new DmManualUpdatePacer();
+
+        pacer.SetIntervalMs(1000.0 / 480);   // 2.08 ms ⇒ floored
+        Assert.Equal(3, pacer.IntervalMsInForce);
+        pacer.SetIntervalMs(0.5);
+        Assert.Equal(3, pacer.IntervalMsInForce);
+
+        pacer.SetIntervalMs(1000.0 / 24);    // 41.7 ms ⇒ ceilinged
+        Assert.Equal(17, pacer.IntervalMsInForce);
+        pacer.SetIntervalMs(1000.0);
+        Assert.Equal(17, pacer.IntervalMsInForce);
+
+        // Unknown refresh: keep whatever is in force (here the 17 ms ceiling from above), never reset to a bound.
+        pacer.SetIntervalMs(0.0);
+        Assert.Equal(17, pacer.IntervalMsInForce);
+        pacer.SetIntervalMs(-1.0);
+        Assert.Equal(17, pacer.IntervalMsInForce);
+    }
+
     [Fact]
     public void StalledLiveGesture_TripsTheInertiaWatchdog_ButIdleAndProgressingOnesDoNot()
     {

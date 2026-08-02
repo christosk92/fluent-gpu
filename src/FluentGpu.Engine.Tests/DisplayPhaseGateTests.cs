@@ -315,7 +315,8 @@ public sealed class HostWaitKindClassificationTests
     /// ceiling. Numeric classification cannot tell them apart; structural classification must.</summary>
     [Theory]
     [InlineData(17)]   // == PhaseGateCeilingMs() on a 120 Hz panel: the exact aliasing value
-    [InlineData(7)]    // == AsyncDisplayPaceMs
+    [InlineData(7)]    // == DeriveAsyncPaceMs at 120 Hz
+    [InlineData(15)]   // == DeriveAsyncPaceMs at 60 Hz — the pace cap is refresh-derived, so it aliases at MORE values now
     [InlineData(16)]
     [InlineData(1)]
     public void Ambient_IsNeverDisplayRate_EvenWhenItsTimeoutCollides(int ms)
@@ -328,9 +329,11 @@ public sealed class HostWaitKindClassificationTests
     /// <summary>The three display-rate branches, at every value they can actually return.</summary>
     [Theory]
     [InlineData(HostWaitKind.DisplayRate, 0)]
-    [InlineData(HostWaitKind.PaceAsync, 7)]
+    [InlineData(HostWaitKind.PaceAsync, 7)]      // DeriveAsyncPaceMs at 120 Hz
+    [InlineData(HostWaitKind.PaceAsync, 15)]     // ...and at 60 Hz: the cap is derived, so the VALUE varies with the panel
     [InlineData(HostWaitKind.PaceAsync, 34)]     // clamped ceiling upper bound
     [InlineData(HostWaitKind.PaceSkipSubmit, 7)]
+    [InlineData(HostWaitKind.PaceSkipSubmit, 15)]
     public void DisplayRateBranches_AreDisplayRate(HostWaitKind kind, int ms)
         => Assert.True(IsDisplayRateWait(kind, ms));
 

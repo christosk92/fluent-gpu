@@ -179,6 +179,14 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     internal int DelayUntilNextUpdateMs(long nowQpc)
         => NeedsClockTick ? _updatePacer.ClampWait(-1, nowQpc) : -1;
 
+    /// <summary>Point the manual-update pacer at the live panel's refresh period (ms). The pump's deadline truncates
+    /// every host wait during a gesture, so a fixed interval re-paces the whole loop at the wrong rate on any display
+    /// that is not 120 Hz. Fed at enable and on a display/DPI change; ignored when the value is unknown.</summary>
+    internal void SetRefreshIntervalMs(double ms) => _updatePacer.SetIntervalMs(ms);
+
+    /// <summary>The manual-update interval currently in force, in whole ms (test/diagnostic seam).</summary>
+    internal int UpdateIntervalMs => _updatePacer.IntervalMsInForce;
+
     private bool SetUp()
     {
         // DManip needs an initialized apartment. The window already OleInitialize'd (Win32DropTarget) on the STA UI
@@ -580,9 +588,36 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 /// <see cref="ClampWait"/> does mutate, and must be called on the live pacer, never on a copy.</summary>
 internal struct DmManualUpdatePacer
 {
+    /// <summary>The default manual-update interval (ms) — the 120 Hz answer, used until the platform reports the panel's
+    /// real refresh through <see cref="SetIntervalMs"/> (and kept forever on a display that reports nothing).</summary>
     internal const int IntervalMs = 7;
-    private static readonly long s_intervalTicks = Math.Max(1L,
+    /// <summary>Clamp for a platform-fed interval. 3 ms is short of a spin at 240 Hz+, 17 ms is one 60 Hz refresh — past
+    /// that the pump would truncate host waits it has no business truncating.</summary>
+    private const double MinIntervalMs = 3.0, MaxIntervalMs = 17.0;
+
+    private static readonly long s_defaultIntervalTicks = Math.Max(1L,
         (long)Math.Ceiling(Stopwatch.Frequency * (IntervalMs / 1000d)));
+
+    // Per-instance so the pump follows the panel: a 7 ms deadline truncates every host wait on a 60 Hz display (which
+    // is what made a touchpad gesture re-pace the whole loop at 142 Hz there) and is a whole refresh late at 240.
+    // 0 = never configured ⇒ the default above; the struct's default value must stay a valid pacer.
+    private long _intervalTicks;
+    private readonly long IntervalTicks => _intervalTicks > 0 ? _intervalTicks : s_defaultIntervalTicks;
+
+    /// <summary>Adopt the live display's refresh period (ms), clamped. Called at DM enable and whenever the panel or the
+    /// monitor changes; a non-positive/unknown value leaves the current interval alone. Does not move the pending
+    /// deadline — the next <see cref="TryConsume"/> picks the new cadence up, so a rate change mid-gesture cannot
+    /// retro-date a deadline the host is already waiting on.</summary>
+    internal void SetIntervalMs(double ms)
+    {
+        if (!(ms > 0.0)) return;
+        double clamped = ms < MinIntervalMs ? MinIntervalMs : ms > MaxIntervalMs ? MaxIntervalMs : ms;
+        _intervalTicks = Math.Max(1L, (long)Math.Ceiling(Stopwatch.Frequency * (clamped / 1000d)));
+    }
+
+    /// <summary>The interval currently in force, in whole ms (test/diagnostic seam).</summary>
+    internal readonly int IntervalMsInForce =>
+        (int)Math.Round(IntervalTicks * 1000d / Stopwatch.Frequency);
 
     private long _nextDueQpc;
     private int _zeroWaitRun;                  // consecutive due-now (0 ms) clamps with no intervening consume
@@ -617,9 +652,10 @@ internal struct DmManualUpdatePacer
     internal bool TryConsume(long nowQpc)
     {
         if (!Armed || nowQpc < _nextDueQpc) return false;
+        long ticks = IntervalTicks;
         long late = nowQpc - _nextDueQpc;
-        long slots = late / s_intervalTicks + 1;
-        _nextDueQpc += slots * s_intervalTicks;
+        long slots = late / ticks + 1;
+        _nextDueQpc += slots * ticks;
         _zeroWaitRun = 0;   // the due slot was taken and the deadline moved — the next clamp is a real wait again
         return true;
     }

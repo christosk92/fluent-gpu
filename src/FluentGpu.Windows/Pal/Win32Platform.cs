@@ -379,6 +379,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     /// <summary>Vertical refresh (Hz) of the display this window is currently on, via <c>GetDeviceCaps(VREFRESH)</c> on the
     /// window DC. Returns 0 when unknown (the driver reports 0/1 = "device default"). Diagnostic-only; call sparingly
     /// (once per size change), not per frame.</summary>
+    /// <summary>Re-point the DirectManipulation manual-update pump at the display this window is currently on. Its
+    /// deadline CLAMPS every host wait while a touchpad gesture is live, so a fixed interval silently re-paces the whole
+    /// UI loop at the wrong rate on a 60 or 240 Hz panel. Cheap and rare (window creation, monitor/DPI change, mode
+    /// change); a driver that reports no rate leaves the pacer on its default.</summary>
+    private void RefreshDmPacerInterval()
+    {
+        if (_dm is null) return;
+        int hz = CurrentRefreshHz();
+        if (hz > 0) _dm.SetRefreshIntervalMs(1000.0 / hz);
+    }
+
     public int CurrentRefreshHz()
     {
         nint hdc = GetDC((nint)_hwnd);
@@ -708,6 +719,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         // PT_TOUCHPAD contacts + OS-curved momentum. Created AFTER the drop target so COM is already STA-init'd. Null on
         // failure ⇒ the always-compiled §3.3 wheel-fallback classifier owns the touchpad (no regression).
         _dm = Win32DirectManipulation.TryCreate(this, _hwnd);
+        RefreshDmPacerInterval();   // point the manual-update pump at THIS panel's refresh, not a hardcoded 120 Hz
 
         // A minimal UIA root provider for the window (served via WM_GETOBJECT) + the live-region announcer the app reaches
         // through InputHooks.Announce. Best-effort a11y: a null/failed provider just means no screen-reader announcements.
@@ -1531,9 +1543,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                     suggested->right - suggested->left, suggested->bottom - suggested->top,
                     SWP_NOZORDER | SWP_NOACTIVATE);
                 RefreshClientSize();
+                RefreshDmPacerInterval();   // a DPI change is usually a MONITOR change — re-read the panel's refresh
                 PaintRequested?.Invoke();
                 return true;
             }
+            case 0x007E:   // WM_DISPLAYCHANGE (WinUser.h — not surfaced by the TerraFX static-import set)
+                // Resolution / colour-depth / REFRESH-RATE change. Nothing else here depends on the mode, but the
+                // DirectManipulation pump's interval does: it clamps every host wait during a gesture, so leaving it on
+                // the old panel's period re-paces the loop at the wrong rate. Don't consume it — DefWindowProc runs too.
+                RefreshDmPacerInterval();
+                return false;
             case WM_PAINT:
                 PaintRequested?.Invoke();
                 ValidateRect(hWnd, null);

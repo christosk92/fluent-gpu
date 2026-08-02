@@ -190,8 +190,8 @@ public enum HostWaitKind : byte
     Hud,             // 100: DynamicText-only readout throttle
     Baked,           // baked-blur queue cadence
     Ambient,         // AmbientFrameWaitMs — the software fps cap (the maximize-lock suspect)
-    PaceSkipSubmit,  // AsyncDisplayPaceMs after an elided submit (sync path)
-    PaceAsync,       // AsyncDisplayPaceMs — async present pace cap
+    PaceSkipSubmit,  // AppHost.DeriveAsyncPaceMs after an elided submit (sync path)
+    PaceAsync,       // AppHost.DeriveAsyncPaceMs — async present pace cap (or the phase-gate ceiling while armed)
     DisplayRate,     // 0: latency-sensitive / one-shot motion — sync present-throttled (panel rate)
 }
 
@@ -1228,16 +1228,32 @@ public sealed class AppHost : IDisposable
     public FrameStats LastStats { get; private set; }
     public bool HasActiveWork => ComputeWakeReasons() != WakeReasons.None;
 
-    // Async UI-loop pace cap (~142fps). In the SYNC path, latency-sensitive frames returned a 0 wait and Present blocked
-    // the UI thread at vsync — THAT is what paced the loop. Under async Present is off the UI thread, so a 0 wait
-    // free-spins the loop (100k+ fps, pegging a core → thermal/scheduling contention that makes the render thread's
-    // presents irregular = judder). This cap replaces the lost vsync throttle; WaitForWork still returns EARLY on input
-    // (latency unchanged), and the render coalesces (DropOldest) any over-production on a panel slower than ~142Hz.
-    //
-    // SUPERSEDED as the primary pacer by the display-phase gate below, and kept only as the backstop for when no
-    // present-ack is available (no render thread, a stalled/occluded swapchain). A wall-clock cap can bound HOW OFTEN
-    // the loop produces but never WHEN, and it turned out that "when" is the whole problem — see PhaseGate.
-    private const int AsyncDisplayPaceMs = 7;
+    /// <summary>The async UI-loop pace cap, DERIVED from the panel's refresh period: just under one refresh, so the loop
+    /// is ready before each vblank without free-spinning between them. <c>floor(refreshMs) − 1</c> = 7 ms at 120 Hz,
+    /// 15 at 60, 5 at 144, 3 at 240.
+    ///
+    /// <b>Why a cap at all.</b> In the SYNC path, latency-sensitive frames returned a 0 wait and <c>Present</c> blocked
+    /// the UI thread at vsync — THAT is what paced the loop. Under async, Present is off the UI thread, so a 0 wait
+    /// free-spins (100k+ fps, pegging a core → thermal/scheduling contention that makes the render thread's presents
+    /// irregular = judder). <c>WaitForWork</c> still returns EARLY on input, so latency is unchanged.
+    ///
+    /// <b>Why derived.</b> It was a hardcoded 7, which is the 120 Hz answer and the wrong number everywhere else: at
+    /// 60 Hz it wakes the loop twice per refresh, and at 240 Hz it is a whole refresh late. The cap is SUPERSEDED as the
+    /// primary pacer by the display-phase gate and the compositor clock, and survives as the backstop for when neither
+    /// is available (no render thread, a stalled/occluded swapchain, a remote session with no compositor clock) — a
+    /// wall-clock cap can bound HOW OFTEN the loop produces but never WHEN, and "when" is the whole problem.
+    ///
+    /// Pure and public so the gate can lock the arithmetic without a host. The clamp bounds a bogus or missing refresh
+    /// period: 3 ms floors it short of a spin at any plausible panel rate, 32 ms is a two-refresh 60 Hz ceiling.
+    ///
+    /// A VARYING value here is safe, and that is not accidental: <see cref="IsDisplayRateWait"/> classifies by BRANCH,
+    /// not by timeout value, so a refresh change cannot make a display-rate wait stop being recognised as one and
+    /// spuriously trip the frame-clock step-up Resync (the frozen one-shot-anim bug class).</summary>
+    public static int DeriveAsyncPaceMs(double refreshMs) => Math.Clamp((int)Math.Floor(refreshMs) - 1, 3, 32);
+
+    /// <summary>The live pace cap for THIS host: <see cref="DeriveAsyncPaceMs"/> over the measured refresh period (which
+    /// falls back to 60 Hz when the backend reports none — headless always does).</summary>
+    private int AsyncDisplayPaceMs() => DeriveAsyncPaceMs(RefreshPeriodQpcOrDefault() * 1000.0 / Stopwatch.Frequency);
 
     // ── Display-phase gate ───────────────────────────────────────────────────────────────────────────────────────────
     // Measured 2026-07-25 (ops/diag bundle 20260725-080953, 29,867 latency rows, operator-scored): the engine missed
@@ -1482,11 +1498,12 @@ public sealed class AppHost : IDisposable
         // Skip-submit pacing floor: an elided submit skips Present — the sync path's ONLY pacer — so a scroll-armed-
         // but-unchanged stretch (a held/stuck band, a spring tail, the 2s scrollbar idle-hide dwell) would otherwise
         // free-run the loop at CPU speed re-recording a byte-identical scene (measured on-device: ~785 fps, a full
-        // core, for the whole armed window). Pace those frames at AsyncDisplayPaceMs — the same constant the async
-        // path returns, deliberately: it is exempt from the NextDeltaMs Resync guard, so the animation clock stays
-        // monotonic (a novel wait value here would zero-dt every animating frame — the frozen one-shot-anim bug
-        // class). Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency;
-        // the first frame that actually changes pixels submits, and the next wait returns to 0 (present-throttled).
+        // core, for the whole armed window). Pace those frames at DeriveAsyncPaceMs — the same value the async path
+        // returns, deliberately: BOTH branches are display-rate KINDS, so both are exempt from the NextDeltaMs Resync
+        // guard and the animation clock stays monotonic across a switch between them (a wait that read as a throttle
+        // gap here would zero-dt every animating frame — the frozen one-shot-anim bug class). Input still ends the wait
+        // immediately (WaitForWork is MsgWait-based), so nothing gains latency; the first frame that actually changes
+        // pixels submits, and the next wait returns to 0 (present-throttled).
         // The display clock IS this branch's pacer, not a supplement: an elided submit produces no present, so there is
         // no ack to wake on and the wall-clock value below is a pure fallback for when the compositor clock is
         // unavailable. Waking on the tick puts even these frames on the panel's phase.
@@ -1494,7 +1511,7 @@ public sealed class AppHost : IDisposable
         {
             _lastWaitKind = HostWaitKind.PaceSkipSubmit;
             _lastWaitWantsDisplayClock = true;
-            return AsyncDisplayPaceMs;
+            return AsyncDisplayPaceMs();
         }
         // Parked on the display-phase gate: sleep until the render thread's present-ack wake, with the stall ceiling as
         // the backstop. Returning the pace cap here instead would wake the loop mid-flight only to gate again — busywork
@@ -1512,7 +1529,7 @@ public sealed class AppHost : IDisposable
         // source at all.
         _lastWaitKind = _asyncActive ? HostWaitKind.PaceAsync : HostWaitKind.DisplayRate;
         _lastWaitWantsDisplayClock = _asyncActive;
-        return _asyncActive ? AsyncDisplayPaceMs : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
+        return _asyncActive ? AsyncDisplayPaceMs() : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
     }
 
     /// <summary>Was the wait that paced INTO the current frame a display-rate one? Latched in

@@ -1569,7 +1569,8 @@ static class ScrollSuite
         // gate.wake.scrollHoldSuppressesAmbientCap (W2-P2.1): the RecommendedWaitMs ambient-FPS cap must defer through
         // the 0.45s post-scroll hold, not just the display-rate grace — otherwise slow wheel-notch scrolling over an
         // ambient loop (skeleton shimmer) oscillates 30Hz↔display-rate per notch (the step-up Resync cadence lurch).
-        // AmbientAnimationFps=1 makes the branches unambiguous: ambient wait ≈ 1000ms, display-rate pacing is 0/7ms.
+        // AmbientAnimationFps=1 makes the branches unambiguous: ambient wait ≈ 1000ms, display-rate pacing is 0 or the
+        // refresh-derived pace floor (15ms off the headless 60Hz fallback).
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("scrollhold-cap", new Size2(360, 460), 1f)); window.Show();
@@ -1587,7 +1588,10 @@ static class ScrollSuite
             host.MainScrollHoldUntilForTest = now + System.Diagnostics.Stopwatch.Frequency;   // hold LIVE (~1s)
             host.SetScrollGraceForTest(0);                                                    // grace EXPIRED — isolates the hold term
             int wHold = host.RecommendedWaitMs();
-            bool holdSuppresses = wHold <= 7;                     // display-rate pacing (0 sync / 7 pace floor), NOT AmbientFrameWaitMs
+            // Display-rate pacing (0 sync / the derived pace floor), NOT AmbientFrameWaitMs. The floor is refresh-
+            // derived now, and the headless device reports no refresh period ⇒ the 60 Hz fallback ⇒ 15 ms.
+            int paceFloor = AppHost.DeriveAsyncPaceMs(1000.0 / 60);
+            bool holdSuppresses = wHold <= paceFloor;
 
             host.MainScrollHoldUntilForTest = 0;                  // hold EXPIRED
             host.SetScrollGraceForTest(0);
@@ -1601,7 +1605,7 @@ static class ScrollSuite
             bool holdArmed = host.MainScrollHoldUntilForTest > System.Diagnostics.Stopwatch.GetTimestamp();
             Check("gate.wake.scrollHoldSuppressesAmbientCap the ambient FPS cap defers through the post-scroll hold: loop-only motion paces at the cap; hold live (grace expired) ⇒ display-rate pacing, NOT AmbientFrameWaitMs; hold expired ⇒ the cap returns; a real wheel notch arms the hold",
                 ambientBaseline && holdSuppresses && capReturns && holdArmed,
-                $"wIdle={wIdle} (want >300) wHold={wHold} (want <=7) wAfter={wAfter} (want >300) holdArmed={holdArmed}");
+                $"wIdle={wIdle} (want >300) wHold={wHold} (want <={paceFloor}) wAfter={wAfter} (want >300) holdArmed={holdArmed}");
         }
 
         // gate.host.ambientRateMode: the ambient cap's RATE selection. HalfRefresh must be panel-DERIVED (a whole-vblank
@@ -1623,7 +1627,8 @@ static class ScrollSuite
                          && AppHost.DeriveAmbientFps(AmbientRateMode.Uncapped, 0, 0.0) == 0;
 
             // Engagement (live host) — the headless device reports no refresh period, so HalfRefresh resolves to the
-            // 30 fps fallback: an ambient wait in (7, 34]. Uncapped must fall through to display-rate pacing (0/7).
+            // 30 fps fallback: an ambient wait in (pace, 34]. Uncapped must fall through to display-rate pacing
+            // (0 sync / the derived floor), which off the same 60 Hz fallback is 15 ms.
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("ambient-mode", new Size2(360, 460), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new TouchFlingSettleProbe());
@@ -1637,12 +1642,45 @@ static class ScrollSuite
             int wUncapped = host.RecommendedWaitMs();
             host.AmbientAnimationFps = 1;                       // the legacy int setter must still mean ExplicitFps
             int wExplicit = host.RecommendedWaitMs();
-            bool engagement = wHalf > 7 && wHalf <= 34 && wUncapped <= 7 && wExplicit > 300
+            int paceFloor = AppHost.DeriveAsyncPaceMs(1000.0 / 60);
+            bool engagement = wHalf > paceFloor && wHalf <= 34 && wUncapped <= paceFloor && wExplicit > 300
                            && host.AmbientRate == AmbientRateMode.ExplicitFps;
 
             Check("gate.host.ambientRateMode HalfRefresh derives 60@120Hz / 45@90Hz / 30@60Hz (30 when the refresh is unknown); ExplicitFps + Uncapped are refresh-independent; the ambient branch engages under HalfRefresh, falls through under Uncapped, and the int setter still means ExplicitFps",
                 half && explicitFps && uncapped && engagement,
-                $"half={half} explicit={explicitFps} uncapped={uncapped} wHalf={wHalf} (want 8..34) wUncapped={wUncapped} (want <=7) wExplicit={wExplicit} (want >300)");
+                $"half={half} explicit={explicitFps} uncapped={uncapped} wHalf={wHalf} (want {paceFloor + 1}..34) wUncapped={wUncapped} (want <={paceFloor}) wExplicit={wExplicit} (want >300)");
+        }
+
+        // gate.wake.paceDerivedFromRefresh: the async pace cap is REFRESH-DERIVED, not the hardcoded 7 it used to be —
+        // 7 is the 120 Hz answer and the wrong number everywhere else (at 60 Hz it wakes the loop twice per refresh; at
+        // 240 it is a whole refresh late). Just under one refresh is the target: ready before each vblank, no free-spin
+        // between them. Pure arithmetic, so it is locked here rather than needing a live panel — the clamp is the part
+        // that must not drift, because it is what a bogus or missing refresh period lands on.
+        {
+            bool panels = AppHost.DeriveAsyncPaceMs(1000.0 / 120) == 7      // 8.333 ⇒ 7
+                       && AppHost.DeriveAsyncPaceMs(1000.0 / 144) == 5      // 6.944 ⇒ 5
+                       && AppHost.DeriveAsyncPaceMs(1000.0 / 240) == 3      // 4.166 ⇒ 3
+                       && AppHost.DeriveAsyncPaceMs(1000.0 / 60) == 15      // 16.667 ⇒ 15 (the headless fallback)
+                       && AppHost.DeriveAsyncPaceMs(1000.0 / 90) == 10;     // 11.111 ⇒ 10
+            // Unknown / bogus refresh: the clamp, at both ends. A 0 or negative period must not produce a spin, and an
+            // absurdly slow one must not produce a visible freeze.
+            bool clamped = AppHost.DeriveAsyncPaceMs(0.0) == 3
+                        && AppHost.DeriveAsyncPaceMs(-1.0) == 3
+                        && AppHost.DeriveAsyncPaceMs(1000.0 / 480) == 3     // 2.08 ⇒ floor 2 − 1 = 1 ⇒ floored to 3
+                        && AppHost.DeriveAsyncPaceMs(1000.0) == 32          // 1 Hz ⇒ ceilinged to 32
+                        && AppHost.DeriveAsyncPaceMs(1000.0 / 24) == 32;    // 41.7 ⇒ ceilinged to 32
+            // Monotone in the refresh period: a slower panel never paces the loop FASTER.
+            bool monotone = true;
+            int prev = 0;
+            for (int hz = 240; hz >= 24; hz--)
+            {
+                int ms = AppHost.DeriveAsyncPaceMs(1000.0 / hz);
+                if (ms < prev) { monotone = false; break; }
+                prev = ms;
+            }
+            Check("gate.wake.paceDerivedFromRefresh the async pace cap derives from the panel: 7@120Hz, 5@144, 3@240, 15@60, 10@90; clamped to [3,32] for an unknown/bogus refresh; monotone in the refresh period",
+                panels && clamped && monotone,
+                $"panels={panels} clamped={clamped} monotone={monotone} (120⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 120)} 144⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 144)} 240⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 240)} 60⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 60)} unknown⇒{AppHost.DeriveAsyncPaceMs(0.0)})");
         }
 
         // gate.motion.scrollSuppressionSnapsFlip (W2-P2.2): a reconcile landing on the frame right after a scroll
