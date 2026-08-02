@@ -513,6 +513,17 @@ sealed class WaveeShell : Component
                                 {
                                     Direction = 1, Grow = 1f,
                                     Opacity = Prop.Of(() => _sidebarFade.Value),
+                                    // LAYOUT FIREWALL for the whole sidebar. Every realized row wraps its content in a
+                                    // ToolTip, so a sidebar publish marks dozens of layout-dirty nodes that each escape
+                                    // to a full-tree relayout from the scene root — the dominant escape source in the
+                                    // app. This box is the right level: it is INSIDE the pane, which owns the chrome
+                                    // fill and the animated collapse reveal (a boundary must never sit on a box whose
+                                    // own size animates), and it fills that pane exactly, so the clip Boundary() implies
+                                    // is redundant with the pane's existing ClipToBounds and changes nothing. Its width
+                                    // cross-stretches from the pane and its height is Grow=1 in the pane's column, so
+                                    // neither axis can be content-sized by a descendant. Sidebar flyouts, context menus
+                                    // and drag ghosts are not in this subtree (overlay host / hoisted bands).
+                                    IsolateLayout = true, ClipToBounds = true,
                                     Children = [ Embed.Comp(() => new SidebarHost(_route, GoNav, presentedCompact, _sidebarWidth)) ],
                                 },
                             ],
@@ -693,6 +704,13 @@ sealed class WaveeShell : Component
                                         // yield or the invisible retained 340-DIP strip covers the page scrollbar.
                                         Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true, HitTestPassThrough = true,
                                         Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                        // LAYOUT FIREWALL for the rail panel (lyrics, queue, friends): a re-render in
+                                        // there must not re-solve the whole window. This INNER host is the right level —
+                                        // the overlay above owns the reveal and the floating backing band — and on the
+                                        // projected (default) path that overlay holds a CONSTANT RailWidth while
+                                        // RightRail translates its retained subtree, so this box's width is stable
+                                        // rather than animating. It already clips, so Boundary() adds only IsolateLayout.
+                                        IsolateLayout = true,
                                         Children = [ Embed.Comp(() => new RightRail()) ],
                                     },
                                 ],

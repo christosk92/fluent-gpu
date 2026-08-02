@@ -583,6 +583,13 @@ sealed class PlayerBarContent : Component
             // live re-theme (RethemeAll) and cross-fades with the rest of the shell.
             Direction = 1, Height = WaveeSize.PlayerBarH, Fill = Prop.Of(() => WaveeColors.PlayerBar), ClipToBounds = true,
             Shadow = Elevation.DockTop,
+            // LAYOUT FIREWALL. The dock is a fixed-height slot whose width cross-stretches from the shell column, so it
+            // can never be content-sized by a descendant — the boundary contract. Without it every re-render in here
+            // (the track title, the position text, a tooltip) marks a layout-dirty node that escapes to a full-tree
+            // relayout from the scene root. Placed on the box that ALREADY clips, so Boundary() contributes only
+            // IsolateLayout and cannot change a pixel; the DockTop shadow is the node's own paint, not a child's, and
+            // is unaffected by the clip that is already here.
+            IsolateLayout = true,
             Children = [topEdge, row],
         };
     }
