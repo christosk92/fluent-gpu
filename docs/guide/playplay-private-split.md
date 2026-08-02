@@ -30,6 +30,70 @@ Use the (gitignored) helper to junction the private package in/out:
 
 Default state is **unlinked/absent** — the clean state agents and CI see.
 
+## Local playback in a NEW worktree or scratchpad
+
+`git worktree add` (and any Claude scratchpad checkout) materializes **tracked files only**. The
+`src/apps/Wavee.PlayPlay` junction is gitignored, so it does not come along, `WAVEE_PLAYPLAY_LOCAL`
+stays undefined, and the app falls back to `NullPlayPlayProvisioner` — which is exactly the
+"local playback needs a one-time setup" dialog people hit and misread as a missing runtime download.
+
+The fix is one command, run **from that worktree's own root**:
+
+```powershell
+./link-playplay.ps1 -Mode link      # then rebuild
+./link-playplay.ps1 -Mode status    # junction + symbol + canonical-store state, in one call
+```
+
+Two things that are easy to get wrong:
+
+- **Never point the helper at the main checkout's path.** The junction is created relative to the
+  script's own `$PSScriptRoot`, so running the main checkout's copy by absolute path links the MAIN
+  checkout, not the worktree you are standing in. Copy `link-playplay.ps1` into the new root (it is
+  gitignored, so it is never inherited) and run it there.
+- **No re-download is needed.** The provisioned runtime lives in the per-user canonical store at
+  `%LOCALAPPDATA%\Wavee\playplay\runtimes\<appVersion>\<arch>\` — outside every checkout, so every
+  worktree on the machine already shares it. `<appVersion>` is the *pack's own* `appVersion` pin —
+  Spotify's numeric app version (`129300667` = 1.2.93.667) — **not** Wavee's `<InformationalVersion>`,
+  so bumping the Wavee version does not invalidate it. The junction is the only per-checkout gap.
+
+**The zero-setup escape hatch:** in the setup dialog, **Advanced options → Use installed Spotify**
+points the app at the Spotify build already installed on the PC. No junction, no download, no
+manifest authoring — the store recognizes a supported build by the DLL's hash and synthesizes the
+rest. Use it when you just want *some* local playback rather than a reproducible dev setup.
+
+When the dialog still refuses, **View diagnostics** (on its Failed footer, and on the
+Settings → Playback problem banner) opens the `playback-diagnostics` page: whether local-playback
+support is compiled into this build at all, every directory that was searched with dll/manifest
+presence, the locate outcome + reason, and the verify result. That page is the first thing to read
+before guessing.
+
+## `playplay-runtime.json` field schema
+
+The manifest sits beside a bare `Spotify.dll` and pins one build/arch. It is **never committed** —
+`**/playplay-runtime.json` is gitignored and `no-drm-material.yml` fails the build if one is ever
+tracked — which is why this is a prose table and not a template file. The authoritative shape is the
+public record `PlayPlayRuntimeManifest` in
+`src/apps/Wavee/Backend/Audio/Contracts/PlayPlayRuntimeManifest.cs`; property names serialize
+camelCase.
+
+| Field | Type | Notes |
+|---|---|---|
+| `schemaVersion` | int | Must be `1`. |
+| `packId` | string | Pack identity; must end with `-<arch>` (`-arm64` / `-x64`). |
+| `spotifyVersion` | string | The Spotify build the pins were derived from. |
+| `clientVersion` | string? | Optional client-version string. |
+| `appVersion` | string | Spotify's numeric app version for that build (`129300667` = 1.2.93.667). This is the `<appVersion>` folder in the canonical store — nothing to do with Wavee's own version. |
+| `playPlayRequestVersion` | int | Wire request version. |
+| `arch` | string | `Arm64` / `X64` (parsed case-insensitively into `Architecture`). |
+| `algorithmVersion` | string | Which derivation algorithm the pins target; the selector owns the supported list. |
+| `dllSha256` | string | 64 hex chars — the hard integrity gate over the *decompressed* DLL. |
+| `playPlayTokenHex` | string | Hex token. |
+| `config` | object | The per-build pin block (`PlayPlayRuntimeManifestConfig`): hex virtual addresses, the AES-key extraction descriptor, and the fixed buffer sizes. Its exact members are version-specific and are documented by that record, not here. |
+
+The remote catalog (`PlayPlayRuntimeCatalogEntry`) is a **superset** of this: the same pins plus
+`urls`, `compression` (`br` / `none`) and `downloadSize`. The app synthesizes the local manifest from
+the chosen catalog entry *after* verifying the downloaded DLL — it never trusts the wire.
+
 ## Guardrails (do not commit out-of-scope material here)
 
 - `.gitignore` ignores the whole out-of-scope surface (`src/apps/.native/`, `src/apps/Wavee.PlayPlay/`, `src/apps/tmp_*`,

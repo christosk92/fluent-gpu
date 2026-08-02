@@ -76,6 +76,15 @@ Do not tell the user to run `./link-playplay.ps1` inside a scratchpad unless tha
 normally it is absent. Running the helper by absolute path from the main checkout also does not fix a scratchpad,
 because the helper intentionally creates its junction relative to its own `$PSScriptRoot`.
 
+The provisioned runtime itself needs no such treatment: `%LOCALAPPDATA%\Wavee\playplay\runtimes\<appVersion>\<arch>\`
+is a **per-machine store outside every checkout**, so every worktree/scratchpad on the box already shares it
+(`<appVersion>` is the pack's Spotify app version — `129300667` = 1.2.93.667 — **not** Wavee's
+`<InformationalVersion>`, so a Wavee version bump does not invalidate it). The junction above is the only
+per-checkout gap — there is no in-repo runtime/pack directory to provision, and no re-download to trigger. Run
+`./link-playplay.ps1 -Mode status` from a checkout's own root to see junction state, symbol state and
+canonical-store state together; when the app itself is what's complaining, its `playback-diagnostics` page (setup
+dialog → **View diagnostics**) reports every path that was searched and why.
+
 The canon gate fails if a known-stale/superseded token reappears anywhere in the **live** `docs/design/` tree (`docs/design/archive/` is excluded). To intentionally mention a superseded form in live prose, put `<!-- canon-allow: reason -->` on that line. The canonical values it protects are in `docs/design/SPEC-INDEX.md`; superseding a value means adding a rule to `check-canon.ps1` **and** moving the old doc to `docs/design/archive/`.
 
 The build/GC baseline lives in `src/Directory.Build.props` (per `docs/design/dotnet10-csharp14-zero-alloc.md` §1: target `net10.0`, `LangVersion 14`, `PublishAot`, `TrimMode full`, Workstation+Concurrent GC, `GCSettings.SustainedLowLatency`). The full gate regime — alloc tripwire, golden-image diff, headless seams, COM-leak gate, the seam race gate — is specified in `docs/design/subsystems/validation.md`.
