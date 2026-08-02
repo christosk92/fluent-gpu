@@ -779,8 +779,13 @@ coordinates. The facade is modelled on SwiftUI `draggable`/`dropDestination`, dn
   "it's in the chip" dim — sources stay VISIBLE so the user keeps their place). `lift: DragLift.Ghost` or an explicit
   `DragVisualStyle` overload opts back into the lifted ghost; `Drag.SourceHidden` is the opacity-0 variant for a
   reorder list whose vacated slot IS the gap (a dimmed ghost row there would read as a duplicate).
+  **`thresholdMultiplier`** is the last parameter and the one a CLICK-PRIMARY surface needs: it scales the mouse drag
+  box per source, and `Drag.ClickPrimaryThresholdMultiplier = 2f` is WinUI's own list-item value. Pass it on a tab
+  header or a small nav/entity row — anything where selecting is the intent and dragging the exception — so a click
+  landed while the mouse is still travelling is not eaten by a promotion. Semantics (arm-time resolution, mouse-only,
+  the separate touch arena constant) are `input-a11y.md` §12's; the facade only forwards it.
 - **`Drop.Target<T>(kind|kinds, accepts, onDrop, caption, onEnter/onOver/onLeave, settleOnDrop, visualPolicy,
-  spotlightWhen, refusalCaption, springLoadMs, onSpringLoad, springLoadOnly)`** — a typed wrapper over
+  spotlightWhen, refusalCaption, springLoadMs, onSpringLoad, springLoadOnly, transparent)`** — a typed wrapper over
   `DropTargetSpec` whose handlers take the app's own type instead of `object?` casts. **The unwrap rule
   (`Drop.TryUnwrap<T>`, public so hand-written targets share it):** the payload is `T` itself **or** the
   `ReorderPayload.Item` of a sortable list's own gesture — so one target serves both a foreign drop and a same-list
@@ -789,6 +794,13 @@ coordinates. The facade is modelled on SwiftUI `draggable`/`dropDestination`, dn
   user, any `accepts` test that can turn away a payload the surface LOOKS like it should take should pass
   `refusalCaption` too. `caption` is applied on BOTH `OnEnter` and `OnOver` (the engine clears `session.Caption` on
   every target change, so an Enter-only caption vanishes when the pointer re-enters from a sibling).
+  **`transparent` is the OTHER kind of "no"** (`DropTargetSpec.Transparent`, `input-a11y.md` §12): `accepts` returning
+  false is a REFUSAL — the surface was aimed at and owes a reason — while `transparent` says "this gesture is none of
+  my business", so the target neither accepts nor raises the cue and discovery walks straight past it. Use it where a
+  refusal would be an accusation over scenery the drag is merely crossing: a page body under a same-list reorder, a
+  track table on a surface that could never take this payload at all. It is forwarded typed (the payload must still
+  unwrap), and a transparent target is dropped from the spotlight set too, so it cannot advertise a destination it
+  will not honour.
 - **The standard chip — `DragChipSpec` + `DragChip.Resolve` (`DragChip.cs`).** Apps supply chip **data**, never
   elements and never positions: `DragChipSpec(Art | ArtSource, Title, Subtitle, Count, Glyph)`, wrapped by
   `DragChip.Resolve(state => spec)` into the `Func<DragState, Element?>` a `DragPreviewLayer` consumes
@@ -827,7 +839,8 @@ dot, the in-gap preview lifecycle, the source-row hide and the optimistic-member
 | `Caption` / `RefusalCaption` | per-move drop caption; the reason a kind-matched payload was turned away |
 | `OnLanded(slot, count)` | the post-drop edge an app renders its own flash from (the framework ships no app visual beyond line + gap) |
 | `Range` | the INSERTABLE sub-range; default `(PersistentPrefixCount, count − prefix)`. A list that appends rows the insertion does not address (a "Recommended" header + rows) must bound it or they ride the gap down |
-| `VisualPolicy` / `SpotlightWhen` | drag-dim participation; return false for a same-list reorder so the app never dims for it |
+| `VisualPolicy` / `SpotlightWhen` | drag-dim participation (defaults to `Spotlight`); return false for a same-list reorder so the app never dims for it |
+| `Transparent` | sit this gesture out entirely — no acceptance, no refusal cue, no spotlight. The list that COULD take drops and is turning this one away wants `CanAccept` + `RefusalCaption`; `Transparent` is for the surface that could never take it *here* (an album page's track table), where a caption would accuse rather than explain |
 
 Like every other option record it is unpacked and **frozen at mount** (the component-props contract), so its delegates
 must read live app state rather than close over a snapshot.
@@ -840,7 +853,8 @@ sorted source span. The `InsertionPlan` record is the single answer the view and
 exact-N gap for a 500-track copy would blow the viewport; `DisplacementFor(item)` = `extent · (N·[item ≥ slot] −
 removedBefore(item))`, whose Σ over the list is zero, so content height never changes and the gap is exact rather than
 one row too big; `PreviewOffset`/`PreviewY` give the line and the preview ONE position derived from the same extent
-(the preview must read `GapExtent`, never recompute one). Gate: `SortableMathTests` + `e11virt.insertion`.
+(the preview must read `GapExtent`, never recompute one). Gates: `sortable.{slot,gap,empty,normalize}` (the pure math,
+in `ControlsSuite`) + `e11virt.insertion` / `.previewpos` / `.empty` (the live destination, in `ScrollSuite`).
 
 **Prefix-corrected displacement (C1).** The `ItemsView` displacement seed maps a realized ORDINAL to an item index with
 the canonical `FlexLayout.VirtualIndex` rule — `item = ord < prefix ? ord : firstRealized + ord − prefix` — instead of

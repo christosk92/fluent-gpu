@@ -1361,6 +1361,7 @@ sealed class ListOptProbe : Component
     public int Overscan = 2;
     public bool Bound = true;
     public bool CaptureSig0;
+    public bool ConstantBoundText;
     public ListOptions? Options;
     public RepeatLayout? ExplicitLayout;      // null ⇒ Stack(Extent)
     public Func<int, float>? RowHeightOf;     // per-index content height (measured layouts); null ⇒ Extent
@@ -1380,7 +1381,8 @@ sealed class ListOptProbe : Component
                   return new BoxEl
                   {
                       MinHeight = Extent,
-                      Children = [new TextEl("") { Size = 12f, Text = Prop.Of(() => "row " + idx.Value) }],
+                       Children = [new TextEl("") { Size = 12f,
+                           Text = ConstantBoundText ? "row" : Prop.Of(() => "row " + idx.Value) }],
                   };
               }, layout, opts)
             : ItemsView.Create(Count, i =>

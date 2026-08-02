@@ -131,4 +131,41 @@ public sealed class DirectManipulationPacingTests
         Assert.Equal(DmWheelRoute.ExistingClassifier,
             DmWheelArbitration.Decide(dmLive: false, DmWheelSourceEvidence.Unknown));
     }
+
+    [Fact]
+    public void DisplayPacedWait_DefersOnlyPointerMotionCompanions()
+    {
+        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmPointerUpdate));
+        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmNcPointerUpdate));
+        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmMouseMove));
+        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmNcMouseMove));
+        Assert.True(PacedInputWaitClassifier.IsDeferrable(PacedInputWaitClassifier.WmSetCursor));
+
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(0x0246)); // WM_POINTERDOWN
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(0x0247)); // WM_POINTERUP
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(0x024E)); // WM_POINTERWHEEL
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(0x0100)); // WM_KEYDOWN
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(0x0113)); // WM_TIMER
+        Assert.False(PacedInputWaitClassifier.IsDeferrable(0x0000)); // WM_NULL / explicit Wake
+    }
+
+    [Fact]
+    public void DisplayPacedWait_MotionStormCannotSlideAbsoluteDeadline()
+    {
+        long start = Stopwatch.Frequency * 10L;
+        long deadline = start + (long)Math.Ceiling(8.0 * Stopwatch.Frequency / 1000.0);
+        int previous = int.MaxValue;
+
+        // Four thousand early motion wakes all consult the same deadline. Remaining time can only decrease and reaches
+        // zero at the original 8 ms boundary; no wake restarts an 8 ms relative timeout.
+        for (int i = 0; i < 4_000; i++)
+        {
+            long now = start + (deadline - start) * i / 4_000;
+            int remaining = PacedInputWaitClassifier.RemainingMilliseconds(deadline, now);
+            Assert.InRange(remaining, 1, previous);
+            previous = remaining;
+        }
+        Assert.Equal(0, PacedInputWaitClassifier.RemainingMilliseconds(deadline, deadline));
+        Assert.Equal(0, PacedInputWaitClassifier.RemainingMilliseconds(deadline, deadline + Stopwatch.Frequency));
+    }
 }

@@ -163,6 +163,9 @@ public sealed class InputEventRing
     private readonly bool[] _idUsed = new bool[IdSlots];     // slot occupied this frame
     private readonly int[] _lastMove = new int[IdSlots];     // index in _buf of that id's pending move (-1 = none)
 
+    /// <summary>Number of events currently retained after coalescing.</summary>
+    public int Count => _count;
+
     public void Write(in InputEvent e)
     {
         if (e.Kind == InputKind.PointerMove)
@@ -182,6 +185,11 @@ public sealed class InputEventRing
             if (slot >= 0) _lastMove[slot] = idx;
             return;
         }
+
+        // A non-move event is an ordering barrier. A later move must never overwrite a move that precedes a
+        // Down/Up/Cancel/key/window event in the same pump (Move A, Up, Move B must drain in that order). Keep the
+        // fixed id map, but invalidate every pending-move index so the next move appends after the barrier.
+        for (int i = 0; i < IdSlots; i++) _lastMove[i] = -1;
 
         if (e.Kind == InputKind.Wheel && _count > 0)
         {
@@ -252,6 +260,17 @@ public sealed class InputEventRing
     public ReadOnlySpan<PointerVelSample> DrainVelocitySamples() => _vel.AsSpan(0, _velCount);
 
     public ReadOnlySpan<InputEvent> Drain() => _buf.AsSpan(0, _count);
+
+    /// <summary>Move all retained samples/events into <paramref name="destination"/> in chronological order, then
+    /// clear this ring. Used by platform backends to coalesce high-rate native input before the host's frame pump.</summary>
+    public int MoveTo(InputEventRing destination)
+    {
+        int n = _count;
+        for (int i = 0; i < _velCount; i++) destination.PushVelocitySample(in _vel[i]);
+        for (int i = 0; i < _count; i++) destination.Write(in _buf[i]);
+        Clear();
+        return n;
+    }
 
     public void Clear()
     {
@@ -421,6 +440,21 @@ public readonly record struct WindowDesc(
     bool CustomFrame = false,
     Size2 MinClientSizeDip = default);
 
+/// <summary>How native input should affect a bounded platform wait.</summary>
+public enum PlatformInputWakePolicy : byte
+{
+    /// <summary>Return as soon as any platform message arrives.</summary>
+    Immediate = 0,
+    /// <summary>Consume/coalesce pointer-motion messages until the existing absolute wait deadline; all other input
+    /// remains urgent and breaks the wait immediately.</summary>
+    CoalescePointerMotion = 1,
+}
+
+/// <summary>One host-to-platform wait request. Negative timeout means wait indefinitely.</summary>
+public readonly record struct PlatformWaitRequest(
+    int TimeoutMs,
+    PlatformInputWakePolicy InputWakePolicy = PlatformInputWakePolicy.Immediate);
+
 public interface IPlatformWindow : IDisposable
 {
     NativeHandle Handle { get; }
@@ -446,6 +480,10 @@ public interface IPlatformWindow : IDisposable
     /// Real windows use this for event-driven idle; headless implementations may return immediately.
     /// </summary>
     void WaitForWork(int timeoutMs);
+
+    /// <summary>Typed wait request used by display-paced hosts. Backends that do not support input-aware pacing retain
+    /// the ordinary <see cref="WaitForWork(int)"/> behavior through this default implementation.</summary>
+    void WaitForWork(in PlatformWaitRequest request) => WaitForWork(request.TimeoutMs);
 
     /// <summary>
     /// Break an in-progress <see cref="WaitForWork"/> from ANY thread so the loop runs another frame promptly — the

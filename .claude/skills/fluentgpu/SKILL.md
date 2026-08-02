@@ -137,60 +137,30 @@ AOT-clean Win32/WinRT interop behind a small managed surface — **no** WindowsA
 - Others: **Credentials** (locker), **Packaging** (identity), **Activation** (protocol/redirect), **Dialogs** (file pickers, owner HWND), **Shell** (taskbar progress/jump list), **Network** (NLM connectivity + change events).
 - **OS file/folder drop is engine-level, not a pillar:** a `BoxEl.DropTarget = new DropTargetSpec(new[]{ DropKinds.Files }, OnEnter, OnLeave, OnDrop: s => { var d = (FileDropData)s.Payload!; … })` receives an Explorer drag. The Windows backend auto-registers the top-level window with a hand-vtable OLE `IDropTarget` (`Win32DropTarget` → `InputHooks.ExternalDrag*` → `InputDispatcher` → `DragDropContext`), so the zone gets **live hover** (DragEnter/Over/Leave) + the OS "+Copy" cursor; the file list is read once, at drop. Handlers fire on the UI thread. Gates: `e5dragdrop.ext` + smoke `6c.1`.
 
-## Drag & drop (`FluentGpu.Controls` — declare intent, never coordinates)
+## Drag & drop → the **`dnd` skill** (`.claude/skills/dnd/`)
 
-**Four one-liners cover the whole system.** App code says *what* is draggable, *what* a surface takes, *what* the chip
-shows, and *what* a list does on deposit — the framework owns every coordinate. Canon: `docs/design/subsystems/input-a11y.md` §12
-(contract) + `controls.md` §7.4 (this surface).
+**Read `.claude/skills/dnd/SKILL.md` before touching anything drag-related** — sources, drop targets, the chip,
+reorder/sortable lists, insertion, spring-load, captions/refusals, the spotlight scrim, thresholds, OS file drop. It
+carries the architecture map, the recipes, the shipped-bug pitfalls, the gate map and the file map. The 30-second
+version:
 
 ```csharp
-// 1. Make anything draggable. Defaults: DragLift.Stationary (the row STAYS in its slot, dimmed to 0.4) + the chip.
-row with { Draggable = Drag.Source(MyKinds.Resource, () => payload) }
-//    Drag.SourceHidden(...) → opacity 0 (a reorder list whose vacated slot IS the gap)
-//    Drag.Source(..., lift: DragLift.Ghost, backplate: …, shadow: …) → the legacy lifted-row ghost
-
-// 2. Declare the chip ONCE per app as DATA. The framework renders the card (opaque ≤280px, art + title + subtitle,
-//    corner count badge + stacked backdrop for N≥2, pickup tilt flash, caption row, not-allowed glyph, cursor
-//    offset, window clamp). Mount the layer at the app ROOT (top of the root ZStack).
-DragPreviewLayer.Of(DragChip.Resolve(state => state.Payload switch {
-    TrackPayload p => new DragChipSpec(ArtSource: p.Art, Title: p.Name, Subtitle: p.Artist, Count: p.Tracks.Count),
-    _              => DragChipSpec.None,
-}))
-
-// 3. Typed drop targets — payload unwrap, caption, spotlight policy, spring-load are PARAMETERS.
-DropTarget = Drop.Target<TrackPayload>(MyKinds.Resource,
-    accepts: p => p.CanCopy,
-    onDrop:  (p, s) => Deposit(p),
-    caption: p => $"Add {p.Count} tracks to {name}",       // the WinUI DragUIOverride caption
-    refusalCaption: p => "Clear sorting to reorder",        // WHY a refusal — else it reads as "DnD is broken"
-    springLoadMs: 500, onSpringLoad: (p, s) => Expand())    // Finder dwell-to-open; springLoadOnly: true = waypoint
-
-// 4. Sortable / insertable lists — ItemsView owns slot, gap, line, preview, source-hide, membership handoff.
-Insertion = new InsertionOptions {
-    AcceptKinds = [MyKinds.Resource],
-    IsSameList  = p => …,                 // move vs copy semantics
-    SourceIndices = p => …,               // dragged DISPLAY rows → virtual removal + hide (may be non-contiguous)
-    OnDeposit   = (p, slot) => CommitAsync(p, slot),   // Task<bool> = "a mutation was issued"
-    GapPreview  = (p, slot) => PreviewCards(p),
-}
+row with { Draggable = Drag.Source(MyKinds.Resource, () => payload) }        // Stationary lift + the chip, by default
+DragPreviewLayer.Of(DragChip.Resolve(state => …spec…))                       // ONCE, at the app root
+DropTarget = Drop.Target<T>(kind, accepts:, onDrop:, caption:, refusalCaption:, transparent:, springLoadMs:)
+Insertion  = new InsertionOptions { AcceptKinds, IsSameList, SourceIndices, OnDeposit, GapPreview }   // ItemsView owns every coordinate
 ```
 
-Rules and gotchas:
-- **Never position a preview yourself.** The chip follows the pointer through a BOUND transform over the engine's
-  `UseDragPosition()` signals — a move costs one composited write, no render/reconcile/layout/alloc. `UseDragState()`'s
-  epoch is EDGE-triggered (begin/end, target, effect, refusal, caption, settle), so `Preview` runs only when the chip's
-  *content* could differ. Don't re-render on move; don't reach for `state.Position` to place things.
-- **A refusing target is transparent** (discovery continues to an accepting ancestor) — so any `accepts` gate that can
-  turn away a payload the surface *looks* like it should take must pass `refusalCaption`, or the user gets nothing.
-- **Refusal vs empty space:** `DragState.Effect == None` covers both; only `DragState.Refused` means "a compatible
-  surface said no". That is what the not-allowed glyph reads.
-- **`BoxEl.BlocksDragArm`** on a child (a card's play FAB, its "…" corner) stops the drag-arm walk so pressing it isn't
-  a handle for dragging the card.
-- **`SpotlightWhen = s => !IsSameList(s.Payload)`** on a list target — never dim the app the user is reordering inside.
+The four rules that prevent most of the bugs: **never position a preview yourself** (the chip follows a BOUND
+transform — a move is compositor-only, and `UseDragState()`'s epoch is edge-triggered); **a refusing target is
+invisible** unless you give it a `refusalCaption` (and use `transparent:` when the surface owes no explanation at all);
+**`DragState.Refused`, not `Effect == None`,** is what a not-allowed cue reads; **`BoxEl.BlocksDragArm`** on a child
+(a play FAB, a "…" corner) stops the drag-arm walk. Canon: `input-a11y.md` §12 + `controls.md` §7.4 +
+`gpu-renderer.md` §7.4.
+
+Adjacent, not covered there:
 - **Drop zone (Vercel "Drop to Deploy" feel):** `DropZone.Create(accept: new[]{ DropKinds.Files }, onDrop: s => …, content: body)` (or `DropZone.Window(…)` for whole-window). It restyles ITSELF — a cross-faded dashed accent ring + accent glow that fades in while a COMPATIBLE drag is live ("you can drop here") and brightens on hover. Works for in-app AND OS file drags; for an OS file drag the OS owns the drag image, so prefer this over a chip.
 - **Dashed borders anywhere:** `BoxEl.BorderDashOn`/`BorderDashOff` (0 = solid) → `SceneRecorder.StrokeRoundRectDashed`.
-- **Accessibility is outcome-equivalent, not a simulated drag:** ship a menu command / Alt+Arrow that reaches the same
-  mutation seam (`ReorderList.BlockLength` moves a multi-selection as one unit).
 
 Interop posture is binding (the three allowed modes + the strict NOs): see `docs/plans/wasdk-migration-survey.md`. The live demo of every pillar is `src/FluentGpu.WindowsApp/WindowsApiPage.cs` (one card each).
 
@@ -231,6 +201,10 @@ Design corpus (architecture authority, canon-gated) is `docs/design/`; as-built 
 (must exit 0). Usage docs go in `docs/guide/`, not `docs/design/`.
 
 ## Deeper docs (read for the relevant task)
+- **`dnd` skill** (`.claude/skills/dnd/`) — **drag & drop end to end**: the L1 gesture / L2 session architecture, the
+  `Drag`/`Drop`/`DragChip`/`DragPreviewLayer`/`InsertionOptions`/`Reorderable` recipes, the shipped-and-fixed pitfalls
+  (bind-shape flip, parked-tab reachability, `DropTargetsVersion` staleness, per-frame alloc in drag delegates, the
+  L1/L2 pairing rule), the `e5dragdrop.*` gate map and the file map. Read before any DnD change.
 - `theming.md` (this skill dir) — **how theming + LIVE theme switching work end-to-end**: tokens, the `Epoch`/`RethemeAll`/transition-window mechanism, the OS-follow + persistence wiring, what updates vs what's frozen, and the gotchas (frozen constructor-arg literals, `Flow.For`/bound colors, control `ColorF` props, app-local color constants, Mica/DWM). **Read before any theme work or "X won't change theme" debugging.**
 - `docs/guide/reactivity.md` — signals, hooks, the one `Component` model (run-once inferred), bindings, context (the core).
 - `docs/guide/components-elements-layout.md` — element zoo, layout, controls, navigation, virtualization, theming.

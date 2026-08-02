@@ -9,7 +9,7 @@ namespace FluentGpu.Foundation;
 /// <summary>Record kinds for <see cref="ScrollTrace"/>. Column meanings per kind are documented on the emit methods.</summary>
 public enum ScrollTraceKind : byte
 {
-    Frame = 0,       // frame boundary (phase 7): f0=dtMs, i0=pumped events, i1=scrollActive
+    Frame = 0,       // frame boundary (phase 7): f0=dtMs, f1=input-kind mask, i0=pumped events, i1=scrollActive
     RawWheel = 1,    // producer: WM_POINTERWHEEL/HWHEEL arrival + classifier verdict
     FbLift = 2,      // producer: hi-res silence lift → synthesized ScrollEnd
     Coalesce = 3,    // ring: an Update folded into the frame's pending event
@@ -260,11 +260,12 @@ public static class ScrollTrace
 
     private static int s_spinSuppressed;   // suppressed no-input micro-frames since the last recorded Frame row
 
-    /// <summary>Frame marker (call once per frame, at the scroll tick): f0=dtMs, i0=events pumped this frame,
+    /// <summary>Frame marker (call once per frame, at the scroll tick): f0=dtMs, f1=input-kind bit mask,
+    /// i0=events pumped this frame,
     /// i1=1 when any gesture/scroll animation is live, i2=no-input micro-frames (dt&lt;1ms, 0 events) suppressed since
     /// the previous Frame row — a busy-spinning loop shows as rows ~64 spins apart with i2=63, so the spin RATE is
     /// still measurable without the spin exhausting the ring and forcing mid-gesture flushes. Drives the idle flush.</summary>
-    public static void Frame(float dtMs, int pumped, bool scrollActive)
+    public static void Frame(float dtMs, int pumped, uint inputKindMask, bool scrollActive)
     {
         if (!CompiledIn || !Enabled) return;
         s_frame++;
@@ -273,7 +274,8 @@ public static class ScrollTrace
         // Only record frames near activity (a marker per idle frame would swamp the file); the idle counter still runs.
         if (scrollActive || pumped > 0 || s_idleFrames < IdleFlushFrames)
         {
-            Add(new Rec { K = ScrollTraceKind.Frame, F0 = dtMs, I0 = pumped, I1 = scrollActive ? 1 : 0, I2 = s_spinSuppressed });
+            Add(new Rec { K = ScrollTraceKind.Frame, F0 = dtMs, F1 = inputKindMask,
+                I0 = pumped, I1 = scrollActive ? 1 : 0, I2 = s_spinSuppressed });
             s_spinSuppressed = 0;
         }
         if (scrollActive) { s_idleFrames = 0; return; }

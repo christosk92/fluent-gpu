@@ -396,6 +396,19 @@ static class TouchSuite
             Check("gate.touch.coalesce-flood.ring 500 unconsumed moves for one contact coalesce to exactly 1 surviving move (Down/Up preserved, the survivor is the latest)",
                 ringOk, $"moves={moves} downs={downs} ups={ups} survivorY={lastMovePos.Y:0} drained={span.Length}");
 
+            // A non-move is an ordering barrier: the move after Up must append, never overwrite the move before Up.
+            ring.Clear();
+            ring.Write(Touch(InputKind.PointerMove, new Point2(10, 30), 2000, 7));
+            ring.Write(Touch(InputKind.PointerUp, new Point2(10, 20), 2001, 7));
+            ring.Write(Touch(InputKind.PointerMove, new Point2(10, 10), 2002, 7));
+            span = ring.Drain();
+            bool barrierOk = span.Length == 3
+                && span[0].Kind == InputKind.PointerMove && Near(span[0].PositionPx.Y, 30)
+                && span[1].Kind == InputKind.PointerUp
+                && span[2].Kind == InputKind.PointerMove && Near(span[2].PositionPx.Y, 10);
+            Check("gate.touch.coalesce-order-barrier a non-move event splits pointer-move coalescing so Move/Up/Move drains in exact chronological order",
+                barrierOk, $"drained={span.Length} kinds={(span.Length > 0 ? span[0].Kind : 0)}/{(span.Length > 1 ? span[1].Kind : 0)}/{(span.Length > 2 ? span[2].Kind : 0)}");
+
             // (B) end-to-end: pump a 500-move flood in ONE frame → the ring keeps 1 move → the pump/coalesce/dispatch path
             // allocates 0 managed bytes on the hot half and the pan lands at the FINAL move only. Kept SUB-BOUNDARY (30px,
             // from offset 0) so the flood frame stays transform-only — isolating the coalescing 0-alloc from the separate

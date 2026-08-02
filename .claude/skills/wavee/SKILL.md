@@ -27,4 +27,9 @@ Read [wiring-discipline.md](wiring-discipline.md) before any seam/composition-ro
   over ONE `SidebarPane` renderer, the layout document/reducer/persistence, the projection→binder→planner
   pipeline, the customizer, and the extension registries. Read it before touching `Features/Sidebar/**`,
   `Wavee.Core/Sidebar/**` or `Actions/Extensibility/**`.
+- **`dnd` skill** (`.claude/skills/dnd/`) — **drag & drop**, engine and app. Read it before touching
+  `Features/DragDrop/**` (`WaveeResourceDrag` payloads/commit seams, the engine-free `WaveeDragRules` /
+  `TabDropRules` decision tables, the chip model, the insertion preview) or any surface that declares a
+  `Drag.Source` / `Drop.Target` / `InsertionOptions` / `Reorderable` — the detail track list, the tab strip, the
+  player bar, the queue panel and the sidebar rows all do.
 - `wavee-playlist-mutations/` — Spotify playlist editing (when present)

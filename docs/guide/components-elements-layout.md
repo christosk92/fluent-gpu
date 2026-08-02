@@ -449,12 +449,13 @@ DragPreviewLayer.Of(DragChip.Resolve(state => state.Payload switch {
     _              => DragChipSpec.None,
 }))
 
-// 3. A typed drop target — unwrap, caption, refusal, spotlight policy and spring-load are parameters.
+// 3. A typed drop target — unwrap, caption, refusal, spotlight policy, spring-load and transparency are parameters.
 DropTarget = Drop.Target<TrackPayload>(MyKinds.Resource,
     accepts: p => p.CanCopy, onDrop: (p, s) => Deposit(p),
     caption: p => $"Add {p.Count} tracks to {name}",
     refusalCaption: p => "Clear sorting to reorder",
-    springLoadMs: 500, onSpringLoad: (p, s) => Expand())
+    springLoadMs: 500, onSpringLoad: (p, s) => Expand(),
+    transparent: p => IsSameList(p))            // "none of my business" — no accept, no refusal cue
 
 // 4. A sortable list — see ListOptions.Insertion above.
 ```
@@ -467,7 +468,17 @@ DropTarget = Drop.Target<TrackPayload>(MyKinds.Resource,
   effect, refusal, caption, settle). Never place a preview from `state.Position` yourself.
 - **A refusing target is transparent** — discovery continues to an accepting ancestor — so it is invisible unless you
   give it a `refusalCaption`. `DragState.Refused` (not `Effect == None`, which also means "over nothing") is what the
-  not-allowed cue reads.
+  not-allowed cue reads. Write the caption as the *reason and the fix* ("Clear sorting to reorder", "Can't edit this
+  playlist"), never as a restatement of the failure — it is the only thing the user gets.
+- **`refusalCaption` vs `transparent` — pick by whether the surface owes an explanation.** `accepts` returning false
+  means "you aimed at me and the answer is no", and it must be paired with a `refusalCaption`. `transparent:` means
+  "this gesture is none of my business": no acceptance, no cue, no spotlight, discovery walks past. Use it where a
+  refusal would accuse scenery the drag is only crossing (a page body under a same-list reorder, a read-only album
+  page's track table). The same choice exists on a list as `InsertionOptions.RefusalCaption` vs `.Transparent`.
+- **Click-primary sources need a wider drag box.** A tab or a small nav row is clicked far more than it is dragged, and
+  a mouse still travelling at button-down easily crosses the 4px box — promoting a drag and swallowing the click. Pass
+  `Drag.Source(..., thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier)` (×2, WinUI's own list-item value). It
+  scales the MOUSE box only; touch keeps the gesture arena's separate 8px slop.
 - `BoxEl.BlocksDragArm` on a child (a card's play FAB, its "…" corner) stops the drag-arm walk, so pressing it is not
   a handle for dragging the card.
 - Accessibility is outcome-equivalent, not a simulated keyboard drag: ship a menu command / Alt+Arrow that reaches the

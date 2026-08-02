@@ -171,6 +171,29 @@ internal static class MinTrackSizing
         => dip <= 0f ? 0 : (int)MathF.Ceiling(dip * (dpi == 0 ? 96u : dpi) / 96f);
 }
 
+/// <summary>Pure classification/deadline math for display-paced native input waits.</summary>
+internal static class PacedInputWaitClassifier
+{
+    internal const uint WmSetCursor = 0x0020;
+    internal const uint WmNcMouseMove = 0x00A0;
+    internal const uint WmMouseMove = 0x0200;
+    internal const uint WmNcPointerUpdate = 0x0241;
+    internal const uint WmPointerUpdate = 0x0245;
+
+    internal static bool IsDeferrable(uint message) => message is
+        WmSetCursor or WmNcMouseMove or WmMouseMove or WmNcPointerUpdate or WmPointerUpdate;
+
+    internal static bool IsMotion(uint message) => message is
+        WmNcMouseMove or WmMouseMove or WmNcPointerUpdate or WmPointerUpdate;
+
+    internal static int RemainingMilliseconds(long deadlineQpc, long nowQpc)
+    {
+        long ticks = deadlineQpc - nowQpc;
+        if (ticks <= 0) return 0;
+        return Math.Max(1, (int)Math.Ceiling(ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency));
+    }
+}
+
 public sealed unsafe partial class Win32Window : IPlatformWindow
 {
     // Win32 ABI constants (stable; defined locally to avoid TerraFX's per-prefix constant classes).
@@ -297,13 +320,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private const int SW_MAXIMIZE = 3;
     private const int CW_USEDEFAULT = unchecked((int)0x80000000);
     private const int SW_SHOW = 5;
-    private const uint PM_REMOVE = 0x0001;
+    private const uint PM_NOREMOVE = 0x0000, PM_REMOVE = 0x0001;
     private const uint QS_ALLINPUT = 0x04FF;
     private const uint MWMO_INPUTAVAILABLE = 0x0004;
     private const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x00000002; // Windows 10 1803+
     private const uint TIMER_MODIFY_STATE = 0x0002;
     private const uint SYNCHRONIZE = 0x00100000;
-    private const uint WAIT_FAILED = 0xFFFFFFFF;
+    private const uint WAIT_OBJECT_0 = 0x00000000, WAIT_TIMEOUT = 0x00000102, WAIT_FAILED = 0xFFFFFFFF;
     private const int GWLP_USERDATA = -21;
     private const int IDC_ARROW = 32512;
     private const uint SWP_NOMOVE = 0x0002, SWP_NOZORDER = 0x0004, SWP_NOACTIVATE = 0x0010;
@@ -513,7 +536,34 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
     private readonly Dictionary<nint, bool> _touchpadDeviceCache = new();   // source HANDLE -> POINTER_DEVICE_TYPE_TOUCH_PAD
     private readonly GCHandle _self;
-    private readonly Queue<InputEvent> _queue = new();
+    private sealed class PendingInputQueue
+    {
+        private readonly InputEventRing _ring = new();
+        internal long MoveEvents;
+        internal long CoalescedMoveEvents;
+
+        internal void Enqueue(InputEvent input)
+        {
+            int before = _ring.Count;
+            _ring.Write(in input);
+            if (input.Kind == InputKind.PointerMove)
+            {
+                MoveEvents++;
+                if (_ring.Count == before) CoalescedMoveEvents++;
+            }
+        }
+
+        internal int MoveTo(InputEventRing destination) => _ring.MoveTo(destination);
+    }
+
+    internal readonly record struct InputPacingDiagnostics(
+        long MotionMessages, long MoveEvents, long CoalescedMoveEvents, long DeadlineWakes, long UrgentBreaks);
+
+    private readonly PendingInputQueue _queue = new();
+    private long _pacedMotionMessages, _pacedDeadlineWakes, _pacedUrgentBreaks;
+
+    internal InputPacingDiagnostics InputPacingSnapshot => new(
+        _pacedMotionMessages, _queue.MoveEvents, _queue.CoalescedMoveEvents, _pacedDeadlineWakes, _pacedUrgentBreaks);
     private Win32TextInput _textInput = null!;   // created right after the HWND exists (WndProc IME cases route to it)
     private UiaProviderCcw* _uiaProvider;        // the window's minimal UIA root provider (the live-region announcer)
     private int _w, _h;
@@ -1013,22 +1063,22 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     {
         MSG msg;
         while (PeekMessageW(&msg, HWND.NULL, 0, 0, PM_REMOVE))
-        {
-            // DirectManipulation (§7): feed every message to ProcessInput BEFORE dispatch. When DM owns an active
-            // touchpad contact it CONSUMES the packet (returns true) so it never reaches the WndProc wheel-fallback —
-            // the "never two owners for one packet" rule. Everything else falls through to normal dispatch.
-            if (_dm is { Enabled: true } dm && dm.ProcessInput(&msg)) continue;
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
+            DispatchQueuedMessage(&msg);
         _dm?.UpdateIfDue();      // absolute-deadline manual-update tick; self-posted DM messages cannot spin the UI loop
         TryEmitFallbackLift();   // hi-res silence lift (also fires off the LiftTimer when the loop is idle — see below)
         // Live-DM wheel defense: a held ±120 notch that survived WheelBurstMaxGapMs without a fast follow-up was a
         // genuine mouse notch (synthesis bursts arrive at packet cadence) — deliver it now, ≤50ms late.
         if (_dmHeldNotch != 0 && Now() - _dmHeldMs >= WheelBurstMaxGapMs) FlushHeldWheelNotch();
-        int n = 0;
-        while (_queue.Count > 0) { ring.Write(_queue.Dequeue()); n++; }
-        return n;
+        return _queue.MoveTo(ring);
+    }
+
+    private void DispatchQueuedMessage(MSG* msg)
+    {
+        // DirectManipulation (§7): feed every message to ProcessInput BEFORE dispatch. When DM owns an active touchpad
+        // contact it consumes the packet so it never reaches the WndProc wheel fallback.
+        if (_dm is { Enabled: true } dm && dm.ProcessInput(msg)) return;
+        TranslateMessage(msg);
+        DispatchMessageW(msg);
     }
 
     /// <summary>Deliver a ±120-multiple wheel notch that was HELD by the live-DM wheel defense (see the
@@ -1146,7 +1196,11 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     }
 
     public void WaitForWork(int timeoutMs)
+        => WaitForWork(new PlatformWaitRequest(timeoutMs));
+
+    public void WaitForWork(in PlatformWaitRequest request)
     {
+        int timeoutMs = request.TimeoutMs;
         // Manual-update DirectManipulation shares this UI/STA pump. Clamp to its ABSOLUTE remaining deadline; queued
         // messages may wake us early, but never re-arm or postpone that deadline.
         if (_dm is { Enabled: true } dm)
@@ -1155,25 +1209,24 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             if (dmWaitMs >= 0 && (timeoutMs < 0 || dmWaitMs < timeoutMs)) timeoutMs = dmWaitMs;
         }
 
-        // Present-ack / cross-thread Wake signal: waited atomically with input (and the HR timer when armed). A
-        // message-only wake lost presents under queue pressure; SetEvent is observed by MsgWait without depending on
-        // the message queue draining WM_NULL first. Retained vsync + one-frame latency are unchanged — this only makes
-        // the phase-gate's ack wake reliable.
-        HANDLE ack = _presentAckEvent;
+        if (request.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion && timeoutMs > 0)
+        {
+            WaitForPacedWork(timeoutMs);
+            return;
+        }
+        WaitForImmediateWork(timeoutMs);
+    }
 
-        // MsgWaitForMultipleObjectsEx's millisecond timeout is quantized by the system timer. On this 120-Hz device a
-        // requested 7 ms display-rate wait repeatedly took ~12-13 ms, limiting an otherwise 0.3 ms scroll frame to
-        // ~80 fps. A high-resolution waitable timer preserves the same "message OR deadline" contract without
-        // timeBeginPeriod's process-wide interrupt-rate/battery cost. Infinite/zero and long idle waits keep the plain
-        // path; only short animation/pacing waits need sub-tick precision.
+    private void WaitForImmediateWork(int timeoutMs)
+    {
+        HANDLE ack = _presentAckEvent;
         if (s_preciseWait && timeoutMs > 0 && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
         {
             LARGE_INTEGER due;
-            due.QuadPart = -(long)timeoutMs * 10_000L; // relative deadline in 100 ns units; one-shot (period = 0)
+            due.QuadPart = -(long)timeoutMs * 10_000L;
             HANDLE timer = _preciseWaitTimer;
             if (SetWaitableTimer(timer, &due, 0, null, null, false))
             {
-                // handles[0]=present-ack, handles[1]=timer; +1 = queued message. Coarse timeout is a fault backstop.
                 HANDLE* handles = stackalloc HANDLE[2];
                 handles[0] = ack;
                 handles[1] = timer;
@@ -1183,8 +1236,6 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                         n, waitBase, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
                     return;
             }
-            // A wait/set failure is not recoverable by retrying the same handle every animation frame. Retire it once,
-            // then preserve correctness through the ordinary message-aware timeout path below.
             DisablePreciseWait();
         }
 
@@ -1195,6 +1246,73 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             return;
         }
         MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+    }
+
+    private void WaitForPacedWork(int timeoutMs)
+    {
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        long deadline = start + (long)Math.Ceiling(timeoutMs * (System.Diagnostics.Stopwatch.Frequency / 1000.0));
+        HANDLE ack = _presentAckEvent;
+        HANDLE timer = HANDLE.NULL;
+        bool precise = false;
+
+        if (s_preciseWait && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
+        {
+            LARGE_INTEGER due;
+            due.QuadPart = -(long)timeoutMs * 10_000L;
+            timer = _preciseWaitTimer;
+            precise = SetWaitableTimer(timer, &due, 0, null, null, false);
+            if (!precise) DisablePreciseWait();
+        }
+
+        HANDLE* handles = stackalloc HANDLE[2];
+        uint handleCount = 0;
+        int ackIndex = -1, timerIndex = -1;
+        if (ack != HANDLE.NULL) { ackIndex = (int)handleCount; handles[handleCount++] = ack; }
+        if (precise) { timerIndex = (int)handleCount; handles[handleCount++] = timer; }
+
+        while (true)
+        {
+            long now = System.Diagnostics.Stopwatch.GetTimestamp();
+            int remainingMs = PacedInputWaitClassifier.RemainingMilliseconds(deadline, now);
+            if (remainingMs == 0) { _pacedDeadlineWakes++; return; }
+            uint coarseTimeout = precise ? (uint)(remainingMs + 16) : (uint)remainingMs;
+            uint result = MsgWaitForMultipleObjectsEx(
+                handleCount, handleCount == 0 ? null : handles, coarseTimeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+            if (result == WAIT_FAILED) return;
+            if (result == WAIT_TIMEOUT) { _pacedDeadlineWakes++; return; }
+            if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + handleCount)
+            {
+                int signaled = (int)(result - WAIT_OBJECT_0);
+                if (signaled == timerIndex) _pacedDeadlineWakes++;
+                return; // present ack and the deadline are both frame-worthy
+            }
+            if (result != WAIT_OBJECT_0 + handleCount) return;
+
+            bool removed = false;
+            MSG msg;
+            while (PeekMessageW(&msg, HWND.NULL, 0, 0, PM_NOREMOVE))
+            {
+                if (!PacedInputWaitClassifier.IsDeferrable(msg.message))
+                {
+                    _pacedUrgentBreaks++;
+                    return; // leave urgent input queued for the ordinary frame pump
+                }
+                if (!PeekMessageW(&msg, HWND.NULL, 0, 0, PM_REMOVE)) break;
+                removed = true;
+                if (PacedInputWaitClassifier.IsMotion(msg.message)) _pacedMotionMessages++;
+                DispatchQueuedMessage(&msg);
+
+                // Present acknowledgement remains urgent even while a continuous motion stream keeps the queue nonempty.
+                if (ackIndex >= 0 && WaitForSingleObject(ack, 0) == WAIT_OBJECT_0) return;
+                if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                {
+                    _pacedDeadlineWakes++;
+                    return;
+                }
+            }
+            if (!removed) return; // spurious message wake: avoid a zero-time spin
+        }
     }
 
     private bool TryEnsurePreciseWaitTimer()

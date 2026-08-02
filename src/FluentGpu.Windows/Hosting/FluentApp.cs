@@ -272,6 +272,8 @@ public static class FluentApp
         // question a cadence investigation asks is always "how many since the last line".
         ulong prevPresentSeq = 0, prevPublishSeq = 0;
         long prevSkipped = 0, prevGated = 0;
+        long prevFpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        var prevInputPacing = window.InputPacingSnapshot;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         int spFrames = 0, spClipE = 0, spClipD = 0, spFullHide = 0, spPinD = 0, spMorphD = 0, spContD = 0, spBindsMax = 0;
         static string WaitTok(FluentGpu.Hosting.HostWaitKind k) => k switch
@@ -402,18 +404,31 @@ public static class FluentApp
                     // frames that coal was counting as discarded. A large gateD with a large coal means the gate is
                     // being bypassed (ceiling hit, or a non-async path).
                     long gated = host.PhaseGatedFrames;
+                    long fpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+                    double fpsLineSec = Math.Max(0.000001,
+                        (fpsLineQpc - prevFpsLineQpc) / (double)System.Diagnostics.Stopwatch.Frequency);
+                    ulong presentDelta = Behind(presentSeq, prevPresentSeq);
+                    double presentNow = presentDelta / fpsLineSec;
+                    var inputPacing = window.InputPacingSnapshot;
                     string seamTok =
-                        $" presentD={Behind(presentSeq, prevPresentSeq)} pubD={Behind(publishSeq, prevPublishSeq)} " +
+                        $" presentD={presentDelta} pubD={Behind(publishSeq, prevPublishSeq)} " +
                         $"coal={Behind(publishSeq, presentSeq)} lag={Behind(publishSeq, consumedSeq)} " +
                         $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} gateD={gated - prevGated}";
+                    string inputPaceTok =
+                        $" | motion msgD={inputPacing.MotionMessages - prevInputPacing.MotionMessages}" +
+                        $" moveD={inputPacing.MoveEvents - prevInputPacing.MoveEvents}" +
+                        $" coalD={inputPacing.CoalescedMoveEvents - prevInputPacing.CoalescedMoveEvents}" +
+                        $" deadlineD={inputPacing.DeadlineWakes - prevInputPacing.DeadlineWakes}" +
+                        $" urgentD={inputPacing.UrgentBreaks - prevInputPacing.UrgentBreaks}";
                     prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevGated = gated;
+                    prevFpsLineQpc = fpsLineQpc; prevInputPacing = inputPacing;
                     Console.Error.WriteLine(
                         $"[fps] tMs={FluentGpu.Foundation.ScrollTrace.NowMs:0.000}{(spike ? " SPIKE" : "")}{clusterTok}" +
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
-                        $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | present {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
+                        $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
                         $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
-                        $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}");
+                        $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}{inputPaceTok}");
                 }
             }
             if (h.Frames > 0 && n >= h.Frames) break;
@@ -425,7 +440,8 @@ public static class FluentApp
                 // ~10 Hz; real animation/scroll/decode paces at the display rate. WaitForWork returns early on input,
                 // so responsiveness is identical at every timeout. (See AppHost.RecommendedWaitMs.) Folded across any
                 // detached video windows, so a playing pop-out keeps the loop live even while the main window is idle.
-                int waitMs = host.WaitMsWithDetached();
+                PlatformWaitRequest wait = host.WaitRequestWithDetached();
+                int waitMs = wait.TimeoutMs;
                 // About to sleep: persist any buffered scroll-trace records first. ScrollTrace's own idle flush counts
                 // IDLE FRAMES, but a loop that has nothing to do stops running frames at all — so an app that simply
                 // goes quiet after a gesture never reaches the threshold, and everything since the last flush is lost
@@ -434,7 +450,7 @@ public static class FluentApp
                 // never taken on a display-rate frame, and a no-op (one uncontended lock, then an early return) both
                 // when nothing is pending and in any build without FLUENTGPU_DIAG.
                 if (waitMs < 0 || waitMs >= 100) FluentGpu.Foundation.ScrollTrace.Flush();
-                window.WaitForWork(waitMs);
+                window.WaitForWork(in wait);
             }
         }
 

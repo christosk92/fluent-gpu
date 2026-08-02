@@ -4289,6 +4289,7 @@ static class ScrollSuite
             var probe = new ListOptProbe
             {
                 Count = 400, Extent = 40f, Vh = 200f, Overscan = 0, Bound = true,
+                ConstantBoundText = true,
                 Options = new ListOptions { ContentType = i => i % 2, Overscan = 0, Grow = 1f },
             };
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
@@ -4305,9 +4306,28 @@ static class ScrollSuite
             int b1 = probe.Builds;
             ScrollTo(host, window, vp, 43 * 40f);
             int crossTypeBuilds = probe.Builds - b1;
+
+            // Repeated parity-preserving two-row shifts are the steady content-type hot path: retained roots rotate and
+            // bind without allocating scratch arrays/lists at each boundary.
+            long worstSteadyAlloc = 0;
+            for (int step = 0; step < 8; step++)
+            {
+                float y = (45 + step * 2) * 40f;
+                ref ScrollState st = ref host.Scene.ScrollRef(vp);
+                st.OffsetY = y; st.TargetY = y;
+                var cn = st.ContentNode;
+                if (!cn.IsNull && host.Scene.IsLive(cn))
+                {
+                    host.Scene.Paint(cn).LocalTransform = Affine2D.Translation(0f, -y);
+                    host.Scene.Mark(cn, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                }
+                host.Scene.Mark(vp, NodeFlags.VirtualRangeDirty);
+                var frame = host.RunFrame();
+                if (frame.HotPhaseAllocBytes > worstSteadyAlloc) worstSteadyAlloc = frame.HotPhaseAllocBytes;
+            }
             Check("gate.list.contenttype-pools overlap rows retain their logical roots; a type-preserving shift rebuilds 0 rows and a type-incompatible entering row rebuilds exactly once",
-                sameTypeBuilds == 0 && crossTypeBuilds == 1,
-                $"sameTypeBuilds={sameTypeBuilds} crossTypeBuilds={crossTypeBuilds}");
+                sameTypeBuilds == 0 && crossTypeBuilds == 1 && worstSteadyAlloc == 0,
+                $"sameTypeBuilds={sameTypeBuilds} crossTypeBuilds={crossTypeBuilds} worstSteadyAlloc={worstSteadyAlloc}B");
         }
 
         // ── gate.list.cache-extent: CacheExtentPx realizes rows beyond the viewport per the PIXEL margin (overriding

@@ -1254,7 +1254,7 @@ static class HooksSuite
                 worst == 0, $"worst={worst} bytes (armed timers={host.TimersForTest.Count})");
         }
 
-        // ── gate.timer.warm-cadence: frames continue for the hold window after a synthetic input, then quiesce ──
+        // ── gate.timer.warm-cadence: passive motion stays cold; semantic input holds cadence, then quiesces ──
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("timer-warm", new Size2(200, 120), 1f)); window.Show();
@@ -1264,16 +1264,20 @@ static class HooksSuite
             for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
             bool idleBefore = !host.HasActiveWork;
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(10f, 10f), 0, 0));
-            host.RunFrame();                          // dispatch → warm-cadence armed for ~1 s
+            host.RunFrame();
+            bool passiveStayedCold = (host.CurrentWakeReasons & WakeReasons.WarmCadence) == 0;
+            window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(10f, 10f), 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(10f, 10f), 0, 0));
+            host.RunFrame();                          // semantic interaction → warm-cadence armed for ~1 s
             bool warmLit = (host.CurrentWakeReasons & WakeReasons.WarmCadence) != 0;
             int warmFrames = 0;
             for (int i = 0; i < 200; i++) { if ((host.CurrentWakeReasons & WakeReasons.WarmCadence) == 0) break; host.RunFrame(); warmFrames++; }
             bool held = warmFrames >= 50 && warmFrames <= 75;   // ~1000 ms / 16 ms ≈ 62 frames
             for (int i = 0; i < 8 && host.HasActiveWork; i++) host.RunFrame();
             bool quiescedAfter = !host.HasActiveWork;
-            Check("gate.timer.warm-cadence frames continue for the ~1s hold after input, then quiesce",
-                idleBefore && warmLit && held && quiescedAfter,
-                $"idleBefore={idleBefore} warmLit={warmLit} warmFrames={warmFrames} quiescedAfter={quiescedAfter}");
+            Check("gate.timer.warm-cadence passive pointer motion does not pin display cadence; semantic input holds it for ~1s, then quiesces",
+                idleBefore && passiveStayedCold && warmLit && held && quiescedAfter,
+                $"idleBefore={idleBefore} passiveStayedCold={passiveStayedCold} warmLit={warmLit} warmFrames={warmFrames} quiescedAfter={quiescedAfter}");
         }
     }
 

@@ -2410,8 +2410,8 @@ public sealed class TreeReconciler
     /// the type its frozen subtree was built for; a cross-type reuse REBUILDS the slot (fresh subtree) instead. Homogeneous
     /// lists (all one type) rebind exactly as the default path does.</item>
     /// </list>
-    /// Allocation here is acceptable (opt-in, never a zero-alloc-gated list); content children are re-ordered to logical
-    /// window order at the end (the arrange pass positions the ord-th child at item <c>first+ord</c>).
+    /// Scratch storage is retained at the viewport high-water mark. Equal-size contiguous content-type windows rotate
+    /// roots in place; cold grow/shrink and keep-alive repair use the retained slow-path scratch.
     /// </summary>
     private void RealizeBoundWindowExtended(NodeHandle node, NodeHandle content, VirtualEntry entry,
                                             VirtualListEl ve, int first, int last, int w, int visibleSlots, bool stayDirty)
@@ -2420,15 +2420,35 @@ public sealed class TreeReconciler
         var keepAlive = ve.KeepAlive;
         var contentTypeOf = ve.ContentType;
         var slots = entry.Slots ??= new List<BoundSlot>(Math.Max(4, w));
-        var kept = entry.Kept ??= new Dictionary<int, KeptSlot>();
         int epoch = FrameEpoch;
         bool structural = false;
         int oldFirst = entry.PrevFirst, oldLast = entry.PrevFirst + entry.PrevLen;
 
         int TypeOf(int idx) => contentTypeOf?.Invoke(idx) ?? 0;
 
+        // Content-type-only lists have the same hot scroll shape as the default recycler. Preserve overlapping roots,
+        // rotate only the leaving edge, and rebind only entering slots when every mapped root has the required shape.
+        if (keepAlive is null && contentTypeOf is not null && slots.Count == w && entry.PrevLen == w
+            && TryRealizeBoundWindowExtendedFast(content, slots, ve, entry.PrevFirst, first))
+        {
+            if (first != entry.PrevFirst) _scene.Mark(content, NodeFlags.LayoutDirty);
+            ref ScrollState fastScroll = ref _scene.ScrollRef(node);
+            fastScroll.FirstRealized = first; fastScroll.LastRealized = first + w;
+            if (stayDirty) _scene.Mark(node, NodeFlags.VirtualRangeDirty);
+            else _scene.Unmark(node, NodeFlags.VirtualRangeDirty);
+            entry.PrevFirst = first; entry.PrevLen = w;
+            FireWindowLifecycle(ve, oldFirst, oldLast, first, first + w);
+            return;
+        }
+
+        var kept = entry.Kept ??= new Dictionary<int, KeptSlot>();
+
         int n0 = slots.Count;
-        var consumed = n0 > 0 ? new bool[n0] : Array.Empty<bool>();
+        bool[] consumed = entry.SlotUsed ?? Array.Empty<bool>();
+        if (consumed.Length < n0)
+            entry.SlotUsed = consumed = new bool[Math.Max(4, n0)];
+        else
+            Array.Clear(consumed, 0, n0);
 
         // PHASE 1 — park keep-alive slots leaving the window. They remain bound to their logical item and are excluded
         // from the leaving-slot recycle pool.
@@ -2454,7 +2474,8 @@ public sealed class TreeReconciler
 
         // PHASE 2 — reserve exact active overlaps first. A one-row shift must not let the entering gap consume a slot
         // that already represents a later survivor.
-        var newSlots = new List<BoundSlot>(Math.Max(4, w));
+        var newSlots = entry.SlotScratch ??= new List<BoundSlot>(Math.Max(4, w));
+        newSlots.Clear();
         for (int ord = 0; ord < w; ord++) newSlots.Add(default);
         for (int ord = 0; ord < w; ord++)
         {
@@ -2539,6 +2560,7 @@ public sealed class TreeReconciler
             }
 
         entry.Slots = newSlots;
+        entry.SlotScratch = slots;
 
         // Re-order active children to window order (ord-th child ⇒ item first+ord — the arrange contract).
         for (int ord = 0; ord < newSlots.Count; ord++)
@@ -2573,6 +2595,66 @@ public sealed class TreeReconciler
         entry.PrevFirst = first; entry.PrevLen = w;
 
         FireWindowLifecycle(ve, oldFirst, oldLast, first, first + w);
+    }
+
+    private bool TryRealizeBoundWindowExtendedFast(NodeHandle content, List<BoundSlot> slots, VirtualListEl ve,
+                                                   int oldFirst, int first)
+    {
+        int count = slots.Count;
+        if (!BoundSlotsAreContiguous(content, slots, oldFirst)) return false;
+        int shift = first - oldFirst;
+        var contentTypeOf = ve.ContentType!;
+
+        if (shift == 0)
+        {
+            for (int i = 0; i < count; i++)
+                if (slots[i].ContentType != contentTypeOf(first + i)) return false;
+            return true;
+        }
+
+        if (Math.Abs(shift) >= count)
+        {
+            for (int i = 0; i < count; i++)
+                if (slots[i].ContentType != contentTypeOf(first + i)) return false;
+            var span = CollectionsMarshal.AsSpan(slots);
+            for (int i = 0; i < count; i++) RebindBoundSlot(ref span[i], first + i, ve);
+            return true;
+        }
+
+        int normalized = shift > 0 ? shift : count + shift;
+        for (int ord = 0; ord < count; ord++)
+        {
+            int oldOrd = ord + normalized;
+            if (oldOrd >= count) oldOrd -= count;
+            if (slots[oldOrd].ContentType != contentTypeOf(first + ord)) return false;
+        }
+
+        if (shift > 0)
+        {
+            for (int i = 0; i < shift; i++)
+            {
+                var root = slots[i].Root;
+                _scene.Detach(root);
+                _scene.AppendChild(content, root);
+            }
+            RotateSlotsLeft(slots, count, shift);
+            var span = CollectionsMarshal.AsSpan(slots);
+            for (int i = count - shift; i < count; i++) RebindBoundSlot(ref span[i], first + i, ve);
+        }
+        else
+        {
+            int entering = -shift;
+            for (int i = count - 1; i >= count - entering; i--)
+            {
+                var root = slots[i].Root;
+                _scene.Detach(root);
+                _scene.PrependChild(content, root);
+            }
+            RotateSlotsRight(slots, count, entering);
+            var span = CollectionsMarshal.AsSpan(slots);
+            for (int i = 0; i < entering; i++) RebindBoundSlot(ref span[i], first + i, ve);
+        }
+        return true;
     }
 
     /// <summary>
