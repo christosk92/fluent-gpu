@@ -302,6 +302,10 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
     {
         _lastEventRaw = (int)ev;
         _trace.Enqueue(((MF_MEDIA_ENGINE_EVENT)ev).ToString().Replace("MF_MEDIA_ENGINE_EVENT_", ""));
+        // Windowless Media Foundation owns presentation of decoded frames through its DComp swap chain.  Do not
+        // turn its high-frequency progress/frame notifications into UI-thread RepaintCurrentFrame calls.  The
+        // session only needs a pump when the transport or video surface state itself changes.
+        bool affectsPresentation = true;
         switch ((MF_MEDIA_ENGINE_EVENT)ev)
         {
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_LOADEDMETADATA: _metadataLoaded = true; break;
@@ -313,10 +317,14 @@ public sealed unsafe class VideoMediaEngine : IDisposable, IVideoEngine
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_SEEKED: _seeking = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ENDED: _ended = true; _playing = false; break;
             case MF_MEDIA_ENGINE_EVENT.MF_MEDIA_ENGINE_EVENT_ERROR: _error = true; _errorCode = (uint)p1; _errorHr = (int)p2; break;
+            default: affectsPresentation = false; break;
         }
-        // EventNotify runs on an MF worker. Consumers only post/coalesce a UI-thread pump; never let a subscriber
-        // exception cross the COM boundary or interfere with the native engine callback.
-        try { StateChanged?.Invoke(); } catch { }
+        if (affectsPresentation)
+        {
+            // EventNotify runs on an MF worker. Consumers only post/coalesce a UI-thread pump; never let a
+            // subscriber exception cross the COM boundary or interfere with the native engine callback.
+            try { StateChanged?.Invoke(); } catch { }
+        }
     }
 
     // Marshal a func onto the engine thread and wait (the engine's COM is single-thread-affine to that MTA thread).

@@ -13,8 +13,9 @@ namespace FluentGpu.Media.Windows;
 /// </summary>
 internal interface IVideoEngine : IDisposable
 {
-    /// <summary>Raised when a native media-engine event changes state, time, or frame availability. May run on an MF
-    /// worker thread; consumers must marshal UI work.</summary>
+    /// <summary>Raised when a native media-engine event changes transport or surface state. High-frequency progress and
+    /// frame notifications are intentionally excluded: windowless DirectComposition presents decoded frames without a
+    /// UI-thread repaint. May run on an MF worker thread; consumers must marshal UI work.</summary>
     event Action? StateChanged;
 
     /// <summary>Stand up the engine and set the source (blocking until the engine thread has created it). S_OK (&gt;=0) on
