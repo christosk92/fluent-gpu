@@ -823,7 +823,12 @@ gates once, re-records crisp, and exact-copies from the frame after. Residual, h
 is genuinely unchanged may exact-copy the motion frame wholesale and defer that re-snap — in practice a settling
 viewport is still walked (its `ScrollState.FadeT` decays for the scrollbar fade and is part of its span key).
 
-Gates: `span.textRowScrollRebase`, `span.rebaseSettleResnap`, `span.acrylicNeverTranslates` (`validation.md`).
+**Exact-copy is not gated on scroll motion.** The exact-copy branch requires the node's **aggregate** record-dirty
+bits (self ∪ descendants, which `MarkRecordDirty` propagates up every ancestor chain) to be zero, and the input
+signature carries the full world affine, `inMotion` and `userScrollActive` — so a span that moved cannot match its
+stored key. Stationary sticky/pinned chrome beside a scrolling viewport therefore exact-copies for the whole
+gesture instead of re-recording every frame. Gates: `span.textRowScrollRebase`, `span.rebaseSettleResnap`,
+`span.acrylicNeverTranslates`, `span.stationaryReusesDuringScroll` (`validation.md`).
 
 ### 4.4 `Mutate()` epoch chokepoint + DEBUG `CleanSpanWitness`
 

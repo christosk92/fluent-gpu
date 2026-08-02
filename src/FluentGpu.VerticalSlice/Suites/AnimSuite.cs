@@ -3579,6 +3579,59 @@ static class AnimSuite
                 + $"acrylicY={acr0.DeviceRect.Y:0.##}->{acr1.DeviceRect.Y:0.##}");
         }
 
+        // gate.span.stationaryReusesDuringScroll — sticky/pinned chrome that lives beside the moving content does not
+        // move, so it must EXACT-copy (branch A) even while its viewport is mid-gesture. The exact-copy branch used to
+        // carry `!scrollInMotion`, which killed reuse for the viewport's whole subtree — every pinned header re-recorded
+        // for the duration of every scroll — despite the world transform, inMotion and userScrollActive all being in the
+        // span key already, which is what actually stops a MOVED span from matching.
+        {
+            var s = new SceneStore();
+            var viewport = s.CreateNode(1);
+            var pinned = s.CreateNode(1);
+            var content = s.CreateNode(1);
+            var row = s.CreateNode(1);
+            s.Root = viewport;
+            s.AppendChild(viewport, pinned);
+            s.AppendChild(viewport, content);
+            s.AppendChild(content, row);
+            s.Flags(viewport) |= NodeFlags.ClipsToBounds;
+            s.ScrollRef(viewport).ContentNode = content;
+            s.Bounds(viewport) = new RectF(0, 0, 200, 400);
+            s.Bounds(pinned) = new RectF(0, 0, 200, 30);
+            s.Bounds(content) = new RectF(0, 40, 200, 800);
+            s.Bounds(row) = new RectF(0, 40, 200, 50);
+            Paint(s, pinned, VisualKind.Box, ColorF.FromRgba(0x11, 0x22, 0x33));
+            Paint(s, row, VisualKind.Box, ColorF.FromRgba(0x44, 0x55, 0x66));
+            AddText(s, strings, pinned, new RectF(8, 6, 120, 18), "pinned header");
+            AddText(s, strings, row, new RectF(8, 6, 120, 18), "scrolling row");
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+
+            // f2 — the gesture starts: userScrollActive flips, which legitimately re-keys the whole viewport subtree once.
+            s.ScrollRef(viewport).UserScrollActive = true;
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, Shift);
+            s.Mark(content, NodeFlags.TransformDirty);
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+
+            // f3 — steady scroll: nothing about the pinned header changed. Only the viewport (descendant transform) and
+            // the content node itself (the direct moving scroll content) may re-record; the row rebases and the pinned
+            // header — with its own text child, never walked — exact-copies.
+            s.ClearTransformDirty();
+            s.ClearRecordDirty();
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, 2f * Shift);
+            s.Mark(content, NodeFlags.TransformDirty);
+            var scrolling = SceneRecorder.Record(s, dl, spans: spans);
+            int exactCopies = scrolling.SpansReused - scrolling.SpansRebased;
+
+            Check("gate.span.stationaryReusesDuringScroll",
+                scrolling.SpansRebased == 1 && exactCopies == 1 && scrolling.SpansReRecorded == 2,
+                $"reused={scrolling.SpansReused} rebased={scrolling.SpansRebased} exact={exactCopies} "
+                + $"recorded={scrolling.SpansReRecorded} reasons={scrolling.SpanReuseDisabledReasons}");
+        }
+
         // A scrolling viewport of text rows: Box row → interior ClipsToBounds child (an emitted PushClip/PopClip pair)
         // → Text leaf, plus one row carrying `special` as a layer. Every row sits well inside the viewport clip at both
         // ends of the shift, so span rebase eligibility (ClipComplete at both ends) is never the thing under test.

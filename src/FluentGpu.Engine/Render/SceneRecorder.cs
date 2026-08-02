@@ -855,7 +855,13 @@ public static class SceneRecorder
             // Span reuse copies a prior frame's recorded subtree byte-for-byte. Exact copy needs a fully clean subtree.
             // Translated copy is allowed only when no descendant is dirty and the old/current clip both contain the
             // whole span, so a moving scroll-content boundary re-walks edge/entering rows instead of freezing them.
-            if (!spanReuseDisabled && !blocked && !scrollInMotion && recordDirtyBits == 0
+            // NOT gated on scrollInMotion. `recordDirtyBits` is the AGGREGATE (self | descendants) that MarkRecordDirty
+            // propagates up every ancestor chain, so a viewport whose content translated is already dirty here, and the
+            // world transform (Dx/Dy included, MixAffine) plus the recorder's inMotion and userScrollActive flags are all
+            // mixed into spanInputSig — a span that MOVED cannot match its stored key. What the extra gate did kill was
+            // the STATIONARY neighbourhood of a scroll: sticky/pinned chrome and every sibling on the viewport's chain
+            // re-recorded for the whole gesture despite being byte-identical.
+            if (!spanReuseDisabled && !blocked && recordDirtyBits == 0
                 && spans.TryGet((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, out var span)
                 && span.ClipComplete
                 && IsClipComplete(span.SubtreeBounds, in clip)
