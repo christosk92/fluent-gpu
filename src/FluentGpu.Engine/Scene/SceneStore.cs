@@ -1560,7 +1560,17 @@ public sealed class SceneStore : ISceneBackend
             // its expanded pane mounted at Opacity 0 / HitTestVisible false while collapsed, and its virtualized rows
             // still write live specs, so the veil used to erase 56-DIP holes over the RAIL's dividers and gaps — bright
             // empty plates on rows that render nothing (B3). O(depth), allocation-free.
-            if (!IsHitReachable(node)) continue;
+            if (!IsHitReachable(node))
+            {
+                // Fork-closing trace (compiled out of Release, runtime-gated by FG_DIAG). A target that vanishes from
+                // the spotlight is otherwise indistinguishable from one that was never registered, which is exactly how
+                // a whole PAGE of dead targets reads as "drag is broken" rather than as "these are unreachable".
+                // The Enabled gate is hoisted so the int→object box in Set() cannot land on a drag frame's alloc budget
+                // when diagnostics are compiled in but switched off (the default Debug shape the alloc tripwire runs in).
+                Diag.Count("input.dragdrop", "spotlight.unreachable");
+                if (Diag.CompiledIn && Diag.Enabled) Diag.Set("input.dragdrop", "spotlight.unreachable.last", idx);
+                continue;
+            }
             if (spec.CanAccept is { } canAccept && !canAccept(session)) continue;
             // A target that is TRANSPARENT for this session accepts nothing and refuses nothing, so it must not
             // advertise itself as a destination either (DropTargetSpec.Transparent).
@@ -1578,16 +1588,30 @@ public sealed class SceneStore : ISceneBackend
 
     /// <summary>Can the hit-test reach <paramref name="h"/> at all? Mirrors the dispatcher's subtree prune: one cleared
     /// <see cref="NodeFlags.HitTestVisible"/> anywhere on the ancestor chain (or on the node itself) makes every node
-    /// below it unhittable, and therefore an impossible drop destination. Allocation-free; the chain is short.</summary>
+    /// below it unhittable, and therefore an impossible drop destination.
+    /// <para>Reachability is proved by TERMINATION AT <see cref="Root"/>, not by running out of ancestors. The hit test
+    /// descends from <c>Root</c> and nowhere else (<c>InputDispatcher.HitTest</c>), so a subtree that is live but no
+    /// longer linked to it is unhittable no matter how healthy its flags look. Two shapes reach here and both used to
+    /// pass by terminating on a Null parent: a KeepAlive-PARKED page — an inactive tab, which <c>Reconciler</c> parks
+    /// with <c>SetSubtreeParked</c> + <c>Detach</c> while deliberately RETAINING <c>HitTestVisible</c>, and whose drop
+    /// targets stay registered (the registry is only cleared on node free) — and an exit ORPHAN. Both would otherwise
+    /// advertise destinations, punching scrim cutouts at stale last-arranged rects over geometry the pointer provably
+    /// cannot reach. Re-attaching (tab reactivation) restores reachability by itself: the filter is recomputed per
+    /// refresh and keeps no per-node exclusion state.</para>
+    /// Allocation-free; the chain is short.</summary>
     private bool IsHitReachable(NodeHandle h)
     {
+        var last = NodeHandle.Null;
         for (var n = h; !n.IsNull; n = Parent(n))
         {
-            int idx = LiveIndex(n);
-            if (idx < 0) return false;
-            if ((_flags[idx] & NodeFlags.HitTestVisible) == 0) return false;
+            // Liveness FIRST. LiveIndex THROWS on a dead handle (it never returns a negative — the `idx < 0` guard this
+            // replaces was unreachable code), and a throw here escapes RefreshDropSpotlight into DragDropContext.Move,
+            // killing the whole gesture instead of filtering one target. Dead ⇒ unreachable, which is what we return.
+            if (!IsLive(n)) return false;
+            if ((_flags[n.Raw.Index] & NodeFlags.HitTestVisible) == 0) return false;
+            last = n;
         }
-        return true;
+        return last == Root;
     }
 
     public void SetDropSpotlightOver(NodeHandle node)

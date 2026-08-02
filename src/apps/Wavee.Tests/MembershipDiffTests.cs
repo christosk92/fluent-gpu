@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Wavee;
@@ -105,5 +105,74 @@ public class MembershipDiffTests
         Assert.Equal("spotify:track:dup#1", Assert.Single(d.Removes).Key);
         Assert.Empty(d.Adds);
         Assert.Single(d.Moves);                    // b shifted 2→1
+    }
+
+    // ── per-ROW identity (RowKey / RowKeyMatches) ────────────────────────────────────────────────────────────────
+    // The same rule the diff keys on, reachable for one row at a time. It exists because per-row UI STATE (the
+    // versions drawer) used to be keyed by TRACK URI: a playlist that legitimately holds the same song twice then
+    // expanded EVERY row carrying that uri at once, and minted duplicate reconciler keys for their drawers.
+
+    [Fact]
+    public void RowKey_PrefersContextUid_SoDuplicateUrisAreDistinctRows()
+    {
+        var first = T("dup", "uid-1");
+        var second = T("dup", "uid-2");   // same track uri, a second membership row
+        Assert.Equal("uid-1", MembershipDiff.RowKey(first, 0));
+        Assert.Equal("uid-2", MembershipDiff.RowKey(second, 7));
+        Assert.NotEqual(MembershipDiff.RowKey(first, 0), MembershipDiff.RowKey(second, 7));
+
+        // …and each key names ONLY its own row.
+        Assert.True(MembershipDiff.RowKeyMatches("uid-1", first, 0));
+        Assert.False(MembershipDiff.RowKeyMatches("uid-1", second, 7));
+    }
+
+    [Fact]
+    public void RowKey_WithUid_IsIndependentOfDisplayPosition()
+    {
+        // A sort or filter reorders the list; a real playlist keeps its drawer attached to the ROW across it.
+        var t = T("a", "uid-a");
+        Assert.Equal(MembershipDiff.RowKey(t, 0), MembershipDiff.RowKey(t, 41));
+        Assert.True(MembershipDiff.RowKeyMatches(MembershipDiff.RowKey(t, 0), t, 41));
+    }
+
+    [Fact]
+    public void RowKey_WithoutUid_FallsBackToUriQualifiedByPosition()
+    {
+        // No membership row behind it (an album tracklist, a chart) — position is the only thing left that can tell
+        // two identical uris apart. It is the FALLBACK, never the primary: a re-sort closes the drawer rather than
+        // opening a different song.
+        var t = T("a");
+        Assert.Equal("spotify:track:a#@3", MembershipDiff.RowKey(t, 3));
+        Assert.True(MembershipDiff.RowKeyMatches("spotify:track:a#@3", t, 3));
+        Assert.False(MembershipDiff.RowKeyMatches("spotify:track:a#@3", t, 4));
+        Assert.NotEqual(MembershipDiff.RowKey(t, 3), MembershipDiff.RowKey(t, 4));
+    }
+
+    [Fact]
+    public void RowKeyMatches_IsFalseForEmptyKeys_AndForAForeignKeyShape()
+    {
+        var withUid = T("a", "uid-a");
+        var withoutUid = T("a");
+        Assert.False(MembershipDiff.RowKeyMatches("", withUid, 0));
+        Assert.False(MembershipDiff.RowKeyMatches(null, withUid, 0));
+        // A uid-shaped key never matches a uid-less row, and a position-shaped key never matches a uid row.
+        Assert.False(MembershipDiff.RowKeyMatches("uid-a", withoutUid, 0));
+        Assert.False(MembershipDiff.RowKeyMatches("spotify:track:a#@0", withUid, 0));
+        // A prefix of the uri with no position suffix is not a match either.
+        Assert.False(MembershipDiff.RowKeyMatches("spotify:track:a", withoutUid, 0));
+    }
+
+    [Fact]
+    public void RowKeyMatches_AgreesWithRowKey_AcrossUidPresenceAndPositions()
+    {
+        foreach (var uid in new string?[] { null, "", "uid-a" })
+            for (int i = 0; i < 5; i++)
+            {
+                var t = T("a", uid);
+                string key = MembershipDiff.RowKey(t, i);
+                Assert.True(MembershipDiff.RowKeyMatches(key, t, i));
+                for (int j = 0; j < 5; j++)
+                    Assert.Equal(MembershipDiff.RowKey(t, j) == key, MembershipDiff.RowKeyMatches(key, t, j));
+            }
     }
 }

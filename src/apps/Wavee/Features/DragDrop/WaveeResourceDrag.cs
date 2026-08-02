@@ -158,6 +158,22 @@ static class WaveeRootlist
             if (string.Equals(playlists[i].Uri, uri, StringComparison.Ordinal)) return true;
         return false;
     }
+
+    /// <summary>Is this playlist one the user can WRITE to? The same linear scan of the loaded rootlist summaries as
+    /// <see cref="IsMember"/>, reading the <c>CanEdit</c> the sidebar/menus already gate on
+    /// (<c>Menus.SidebarPlaylistRows</c>, <c>PlaylistPicker</c>). Callers that hold a full <c>DetailModel</c> should use
+    /// its <c>Capabilities.CanEditItems</c> instead — this exists for the surfaces that hold nothing but a uri (a TAB).
+    /// <para>Not loaded ⇒ false, the same honest reading <see cref="IsMember"/> takes: "not known to be editable" must
+    /// not present as "is". The cost of that is a tab that refuses a deposit until the rootlist has arrived, which is
+    /// strictly better than one that accepts a drop the server will reject.</para></summary>
+    public static bool CanEditPlaylist(ActionServices? acts, string? uri)
+    {
+        if (!TabDropRules.IsDepositablePlaylistUri(uri) || acts?.Store is not { } store) return false;
+        var playlists = store.Playlists.Value.Peek();
+        for (int i = 0; i < playlists.Count; i++)
+            if (string.Equals(playlists[i].Uri, uri, StringComparison.Ordinal)) return playlists[i].CanEdit;
+        return false;
+    }
 }
 
 static class WaveeResourceDrag

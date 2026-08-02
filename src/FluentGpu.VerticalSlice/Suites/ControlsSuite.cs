@@ -2212,6 +2212,65 @@ static class ControlsSuite
                 $"began={began} filtered={filtered} activeAfterCancel={scene.DropSpotlightActive}");
         }
 
+        // e5dragdrop.parked — a KeepAlive-PARKED page (an INACTIVE TAB) must not publish drop targets, and a drag over a
+        // still-attached target must keep working. Reconciler.DeactivateKeepAliveEntry parks a page with SetSubtreeParked
+        // + Detach and deliberately RETAINS HitTestVisible; the drop-target registry is only cleared when a node is FREED,
+        // so a parked page keeps every target row it registered. Reachability used to be proved by running out of
+        // ancestors, which a detached subtree root does IMMEDIATELY (its parent is Null) — so the parked page's targets
+        // were advertised as destinations and punched scrim cutouts at their stale last-arranged rects. Reachability is
+        // now proved by TERMINATING AT Root, the only node the hit test descends from.
+        {
+            var scene = new SceneStore();
+            int liveEnter = 0, parkedEnter = 0;
+            Element Target(string key, Action<DragSession> onEnter) => new BoxEl
+            {
+                Key = key, Width = 200, Height = 100,
+                DropTarget = new DropTargetSpec(["resource"], OnEnter: onEnter)
+                {
+                    VisualPolicy = DropTargetVisualPolicy.Spotlight,
+                },
+            };
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 0, Width = 400, Height = 100,
+                Children =
+                [
+                    Target("live", _ => liveEnter++),
+                    new BoxEl { Key = "page", Width = 200, Height = 100, Children = [Target("parked", _ => parkedEnter++)] },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var liveTarget = scene.FirstChild(scene.Root);
+            var page = scene.NextSibling(liveTarget);
+            var parkedTarget = scene.FirstChild(page);
+
+            scene.Detach(page);   // the park: still LIVE, still HitTestVisible, still holding its DropTargetSpec rows
+
+            var disp = new InputDispatcher(scene);
+            var p = new Point2(100, 50);
+            string moveFault = "none";
+            bool began = disp.DragDrop.ExternalBegin("resource", "payload", p, KeyModifiers.None);
+            try { disp.DragDrop.Move(disp.DiagHitTest(p), p, 0f, 0f, KeyModifiers.None); }
+            catch (Exception ex) { moveFault = ex.GetType().Name; }
+
+            bool parkedExcluded = !scene.IsDropSpotlightRoot(parkedTarget) && parkedEnter == 0;
+            bool parkedWasRoot = scene.IsDropSpotlightRoot(parkedTarget);
+            var over = disp.DragDrop.OverTarget;
+            bool reachableWorks = scene.IsDropSpotlightRoot(liveTarget) && over == liveTarget && liveEnter == 1;
+            disp.DragDrop.Cancel();
+
+            // …and REACTIVATION restores it. The filter keeps no per-node exclusion state — re-linking the page to Root
+            // is the whole repair, which is what makes a tab that is switched back to droppable again.
+            scene.AppendChild(scene.Root, page);
+            bool reBegan = disp.DragDrop.ExternalBegin("resource", "payload", p, KeyModifiers.None);
+            bool reattachedPublishes = reBegan && scene.IsDropSpotlightRoot(parkedTarget);
+            disp.DragDrop.Cancel();
+
+            Check("e5dragdrop.parked a KeepAlive-parked (detached) page publishes NO drop targets while a still-attached target keeps taking the drag, Move never faults, and re-attaching the page restores its targets",
+                began && moveFault == "none" && parkedExcluded && reachableWorks && reattachedPublishes,
+                $"began={began} moveFault={moveFault} parkedRoot={parkedWasRoot} parkedEnter={parkedEnter} liveOk={reachableWorks} liveEnter={liveEnter} over={over.Raw.Index} live={liveTarget.Raw.Index} reattached={reattachedPublishes}");
+        }
+
         // e5dragdrop.style — DragSource.Style overrides the lifted ghost's opacity (the default 0.80 → a custom value).
         // A drag promotes on a Draggable carrying Style{Opacity=0.5}; after promotion the node's painted opacity is 0.5.
         {

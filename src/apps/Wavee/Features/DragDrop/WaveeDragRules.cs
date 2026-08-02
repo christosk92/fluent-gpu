@@ -124,3 +124,33 @@ static class PlaylistDropRefusalRules
                                bool sameList, bool naturalOrder, bool filtered)
         => Evaluate(editable, loading, payloadHasTracks, sameList, naturalOrder, filtered) == PlaylistDropRefusal.None;
 }
+
+/// <summary>Whether a TAB in the strip is a deposit destination for a resource drag, and whether the payload may land
+/// on it. A tab stands for the page behind it, so a tab whose destination is an editable playlist can take tracks the
+/// same way that playlist's page body can — that is what makes a cross-tab deposit possible without navigating away
+/// mid-gesture. Every other tab stays the pure spring-load waypoint it already was.
+/// <para>Engine-free on purpose (the same split as the tables above): "is this tab a destination" is a DECISION, the
+/// <c>DropTargetSpec</c> it configures is not.</para></summary>
+static class TabDropRules
+{
+    /// <summary>Only a REAL, writable Spotify playlist is a deposit destination. Mirrors <c>PlaylistPicker</c>'s
+    /// <c>IsRealPlaylist</c> and the add-to-playlist menu (<c>Menus</c>): pseudo-playlists (Liked Songs, an editorial
+    /// daylist) navigate like playlists but are not membership lists this app writes to.</summary>
+    public static bool IsDepositablePlaylistUri(string? uri)
+        => uri is { Length: > 0 } && uri.StartsWith("spotify:playlist:", System.StringComparison.Ordinal);
+
+    /// <summary>May this payload be deposited on the tab standing for <paramref name="targetUri"/>?
+    /// <para>The SAME-playlist exclusions are the point of this rule rather than a nicety. A tab drop can only ever
+    /// APPEND (there is no slot in a tab), so <c>DepositTracksAsync</c>'s same-list MOVE arm — which needs an insertion
+    /// index — cannot engage: a row dragged out of playlist P onto P's own tab would fall through to the copy arm and
+    /// duplicate the user's rows into their own playlist. Its container-on-itself guard covers the playlist-onto-itself
+    /// case, but only as a SILENT no-op. Refusing here instead means the tab never lights up for a gesture that has
+    /// nothing to do, which is the honest cue.</para></summary>
+    public static bool AcceptsDeposit(string targetUri, bool targetEditable, bool payloadHasTracks,
+                                      string? payloadSourcePlaylistUri, string? payloadUri)
+    {
+        if (!targetEditable || !payloadHasTracks || !IsDepositablePlaylistUri(targetUri)) return false;
+        if (string.Equals(payloadSourcePlaylistUri, targetUri, System.StringComparison.Ordinal)) return false;
+        return !string.Equals(payloadUri, targetUri, System.StringComparison.Ordinal);
+    }
+}

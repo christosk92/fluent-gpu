@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -151,10 +151,13 @@ sealed class TrackList : Component
     readonly HashSet<string> _recShown = new(StringComparer.Ordinal);   // every id ever shown → the accumulated skip set (non-repeating batches)
     readonly System.Threading.CancellationTokenSource _recCts = new();
     readonly Signal<int> _listCount = new(0);                  // ItemsView TOTAL (track rows + rec rows); _visibleCount stays the track count for §4.6
-    // The expanded row, by TRACK URI (not display index): a sort or filter reorders the list, and an index-keyed
-    // expansion would then open a different song than the one the user clicked. "" = nothing expanded.
-    // ONE row at a time — several open drawers would push the list around unpredictably while scrolling.
-    readonly Signal<string> _expandedUri = new("");
+    // The expanded row, by MEMBERSHIP ROW identity (MembershipDiff.RowKey — the playlist4 per-row uid where the read
+    // model has one, else uri#@displayIndex). NOT by track uri: a playlist may legitimately hold the same song twice,
+    // and a uri-keyed expansion opened EVERY row carrying that uri at once (and minted duplicate element keys for their
+    // drawers). NOT by display index either — that is the fallback and never the primary, because a sort or filter
+    // reorders the list and a purely index-keyed expansion would open a different song than the one clicked.
+    // "" = nothing expanded. ONE row at a time — several open drawers push the list around unpredictably while scrolling.
+    readonly Signal<string> _expandedRow = new("");
     bool _recsLive;                                            // the DATA half of the recs gate (see Render): refreshed each render, read by
                                                                // RowOrRecContent so an appended index can never render a header/rec row while the
                                                                // gate is off — the count signal is the primary gate, this is the belt-and-braces one
@@ -2349,7 +2352,7 @@ sealed class TrackList : Component
                 case DetailVerticalItemRole.ExpandableTrack:
                     // The vertical viewport has two persistent prefix slots, but its track suffix must use the SAME
                     // expandable slot as the flat/recommendations lists. Building BoundRow directly made the chevron
-                    // toggle _expandedUri while no drawer host existed — the glyph flipped and the row stayed one line.
+                    // toggle _expandedRow while no drawer host existed — the glyph flipped and the row stayed one line.
                     child = _o.ExpandableSlot(_scope, _item, _rowH, _entrance, VerticalTrackStart)
                         with { Key = "vitem:row" };
                     break;
@@ -2648,8 +2651,8 @@ sealed class TrackList : Component
 
     /// <summary>Open this row's drawer, closing any other. One at a time, because two open drawers make the list jump
     /// unpredictably under the cursor while scrolling — and the measured layout re-anchors on every extent change.</summary>
-    void ToggleExpanded(string uri)
-        => _expandedUri.Value = _expandedUri.Peek() == uri ? "" : uri;
+    void ToggleExpanded(string rowKey)
+        => _expandedRow.Value = _expandedRow.Peek() == rowKey ? "" : rowKey;
 
     /// <summary>The expandable list slot. A Component (not a plain element) so it re-renders on ITS OWN
     /// subscriptions: the expanded-uri signal and the slot's bound item. That keeps expansion off the parent's render
@@ -2692,14 +2695,20 @@ sealed class TrackList : Component
             var svc = UseContext(Services.Slot);
 
             var track = _item.Value;                       // subscribe → recycle rebinds this slot
-            string expanded = _o._expandedUri.Value;       // subscribe → open/close re-renders only the two slots involved
+            string expanded = _o._expandedRow.Value;       // subscribe → open/close re-renders only the two slots involved
+            // Subscribe to the slot's own index too: it is half the row identity whenever the read model carries no
+            // per-row uid, so a recycle must be able to move the drawer off this slot.
+            int displayIndex = _scope.Index.Value - _trackStart;
             var row = _o.WrapRowSwipe(_scope,
                 _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, _trackStart),
                     _rowH, _narrate, _trackStart),
                 _trackStart, _item);
 
             bool hasTrack = track is { Uri.Length: > 0 };
-            bool open = hasTrack && expanded == track!.Uri;
+            bool open = hasTrack && MembershipDiff.RowKeyMatches(expanded, track!, displayIndex);
+            // The drawer's element keys carry the ROW identity for the same reason the state does: two rows holding the
+            // same song used to mint two IDENTICAL keys under the list, which is a keyed-reconcile collision.
+            string rowKey = open ? MembershipDiff.RowKey(track!, displayIndex) : "";
 
             Element? drawer = null;
             if (open)
@@ -2730,7 +2739,7 @@ sealed class TrackList : Component
                     Indent: Math.Max(0f, ArtCentreIndent(shape.Set) - TrackVersionsPanel.RailOffset));
                 drawer = new BoxEl
                 {
-                    Key = "drawer:" + track!.Uri,
+                    Key = "drawer:" + rowKey,
                     Direction = 1,
                     MinWidth = 0f,
                     ClipToBounds = true,
@@ -2744,7 +2753,7 @@ sealed class TrackList : Component
                     Children =
                     [
                         Ctx.Provide(TrackVersionsPanel.Props, model,
-                            Embed.Comp(() => new TrackVersionsPanel()) with { Key = "drawer-body:" + track!.Uri }),
+                            Embed.Comp(() => new TrackVersionsPanel()) with { Key = "drawer-body:" + rowKey }),
                     ],
                 };
             }
@@ -2811,8 +2820,11 @@ sealed class TrackList : Component
                          // When Video is on, More lives in the Video lane (set.Actions false) → no trailing button.
                          // The ultra-compact tier also drops the "…" lane → no button built.
                          actionsCell: set.Actions ? TrackRow.MoreButton(more) : null,
+                         // Keyed by the ROW, not the track: two rows holding the same song are two independent drawers.
                          expandCell: set.Expand && t.Uri.Length > 0
-                             ? TrackRow.ExpandChevron(_expandedUri.Value == t.Uri, () => ToggleExpanded(t.Uri))
+                             ? TrackRow.ExpandChevron(
+                                 MembershipDiff.RowKeyMatches(_expandedRow.Value, t, displayIndex),
+                                 () => ToggleExpanded(MembershipDiff.RowKey(t, displayIndex)))
                              : null,
                          showAlbumInMeta: showListMetadata && !set.Album,
                          showListBadges: showListMetadata,
@@ -2880,7 +2892,7 @@ sealed class TrackList : Component
             Corners = plainRows
                 ? Prop.Of(() => CornerRadius4.All(0f))
                 : Prop.Of(() => DisplayTrack(index.Value, trackStart) is { Uri.Length: > 0 } dt
-                                && _expandedUri.Value == dt.Uri
+                                && MembershipDiff.RowKeyMatches(_expandedRow.Value, dt, index.Value - trackStart)
                     ? new CornerRadius4(6f, 6f, 0f, 0f)
                     : CornerRadius4.All(6f)),
             // Reveal on slot MOUNT for navigation cold load + curated re-cut (reset epoch). Tier/density/filter remounts

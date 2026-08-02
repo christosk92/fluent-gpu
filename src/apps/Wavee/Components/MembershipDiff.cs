@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using Wavee.Core;
 
 namespace Wavee;
@@ -84,5 +85,35 @@ public static class  MembershipDiff
         int n = occ.TryGetValue(t.Uri, out var c) ? c + 1 : 0;
         occ[t.Uri] = n;
         return t.Uri + "#" + n;
+    }
+
+    /// <summary>The identity of ONE row, for per-row UI STATE that must not be shared between two rows carrying the same
+    /// track (a playlist may legitimately hold a song twice, and a track uri then names two different rows). Same rule as
+    /// the diff above, reachable without a whole snapshot: the <c>ContextUid</c> where the read model has one — the
+    /// stable playlist4 ItemId that <c>StoreLibrarySource</c> stamps onto every membership-joined copy, and the same
+    /// identity the reorder machinery moves rows by — else the uri qualified by the row's DISPLAY POSITION, which is the
+    /// only thing distinguishing duplicates when no membership row exists behind them.
+    /// <para>Position is the FALLBACK and never the primary. A sort or a filter reorders the list, so a purely
+    /// index-keyed expansion would open a different song than the one that was clicked; with the uid leading, a real
+    /// playlist keeps its drawer attached to the row across any re-sort, and only a uid-less list (an album, a chart —
+    /// where duplicate uris do not occur) closes its drawer when the order changes.</para></summary>
+    public static string RowKey(Track t, int displayIndex)
+        => t.ContextUid is { Length: > 0 } uid ? uid
+            : t.Uri.Length == 0 ? "" : t.Uri + "#@" + displayIndex.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Does <paramref name="key"/> (a <see cref="RowKey"/>) name THIS row? Compared in place rather than by
+    /// building the key and throwing it away: the callers are bound re-skin closures that re-evaluate on every slot
+    /// recycle, i.e. per row per scroll step.</summary>
+    public static bool RowKeyMatches(string? key, Track t, int displayIndex)
+    {
+        if (string.IsNullOrEmpty(key)) return false;
+        if (t.ContextUid is { Length: > 0 } uid) return string.Equals(key, uid, StringComparison.Ordinal);
+        if (t.Uri.Length == 0) return false;
+        var span = key.AsSpan();
+        if (!span.StartsWith(t.Uri, StringComparison.Ordinal)) return false;
+        var tail = span[t.Uri.Length..];
+        return tail.Length > 2 && tail[0] == '#' && tail[1] == '@'
+            && int.TryParse(tail[2..], NumberStyles.None, CultureInfo.InvariantCulture, out int i)
+            && i == displayIndex;
     }
 }

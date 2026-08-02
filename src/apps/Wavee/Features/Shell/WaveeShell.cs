@@ -862,18 +862,47 @@ sealed class WaveeShell : Component
                     ? Drag.Source(WaveeDragKinds.Resource,
                         () => WaveeResourceDragPayload.FromDestination(d, _actions))
                     : null,
-                // Spring-load NAVIGATION (locked decision: no deposit-on-tab). Holding a drag over a tab switches to it,
-                // so the destination the user actually wants can be reached mid-gesture instead of forcing them to
-                // cancel, navigate and start over. SpringLoadOnly is what keeps that honest: the tab never accepts a
-                // drop and is never published as a refusal either, so merely travelling ACROSS the strip on the way to
-                // the sidebar leaves the chip silent rather than flashing a not-allowed glyph at every tab it passes.
-                DropTarget = Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
-                    springLoadMs: WaveeResourceDrag.SpringLoadMs,
-                    onSpringLoad: (_, _) => ActivateTab(index),
-                    springLoadOnly: true),
+                // Spring-load NAVIGATION on every tab. Holding a drag over a tab switches to it, so the destination the
+                // user actually wants can be reached mid-gesture instead of forcing them to cancel, navigate and start
+                // over. On a tab that is NOT a deposit destination, SpringLoadOnly is what keeps that honest: the tab
+                // never accepts a drop and is never published as a refusal either, so merely travelling ACROSS the strip
+                // on the way to the sidebar leaves the chip silent rather than flashing a not-allowed glyph at each tab.
+                //
+                // A tab standing for an EDITABLE PLAYLIST is also a real destination — dropping tracks on it appends
+                // them to that playlist without ever leaving the page you are on, the cross-tab deposit. The two
+                // coexist by construction: FindTarget resolves the spring host BEFORE acceptance, so the same spec both
+                // opens the tab on a dwell and takes the drop on a release.
+                DropTarget = TabDropTarget(destination, index),
             };
         }
         return items;
+    }
+
+    /// <summary>One tab's drop target: always the spring-load waypoint, plus a track deposit when the tab stands for a
+    /// playlist this user can write to (see <see cref="TabDropRules"/> for the decision and why the same-playlist cases
+    /// are REFUSED rather than left to no-op inside the deposit).</summary>
+    DropTargetSpec TabDropTarget(SidebarDestination? destination, int index)
+    {
+        var acts = _actions;
+        if (destination is { Kind: SidebarPinKind.Playlist } d && WaveeRootlist.CanEditPlaylist(acts, d.Uri))
+        {
+            string uri = d.Uri, name = d.Name;
+            return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+                accepts: p => TabDropRules.AcceptsDeposit(uri, targetEditable: true, p.CanCopyTracks,
+                                                          p.SourcePlaylistUri, p.Uri),
+                caption: _ => Strings.Drag.AddTo(name),
+                // insertionIndex null = APPEND: a tab has no slot to speak of, exactly like the page-body target.
+                // DepositTracksAsync owns the toast and the error path.
+                onDrop: (p, _) => WaveeResourceDrop.DepositTracks(acts, uri, name, p, insertionIndex: null),
+                // The deposited feel: the lifted visual snaps home rather than gliding into a list it never joined.
+                settleOnDrop: false,
+                springLoadMs: WaveeResourceDrag.SpringLoadMs,
+                onSpringLoad: (_, _) => ActivateTab(index));
+        }
+        return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
+            springLoadMs: WaveeResourceDrag.SpringLoadMs,
+            onSpringLoad: (_, _) => ActivateTab(index),
+            springLoadOnly: true);
     }
 
     SidebarDestination? CurrentSidebarDestination()

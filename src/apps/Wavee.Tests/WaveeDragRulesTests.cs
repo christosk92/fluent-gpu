@@ -1,4 +1,4 @@
-using Wavee;
+﻿using Wavee;
 using Wavee.Core;
 using Xunit;
 
@@ -151,5 +151,50 @@ public class WaveeDragRulesTests
             bool accepts = PlaylistDropRefusalRules.Accepts(editable, loading, hasTracks, sameList, natural, filtered);
             Assert.Equal(verdict == PlaylistDropRefusal.None, accepts);
         }
+    }
+
+    // ── tab deposit (TabDropRules) ──────────────────────────────────────────────────────────────────────────────
+    // A tab stands for the page behind it, so a tab whose destination is an editable playlist takes tracks the same
+    // way that playlist's page body does — the cross-tab deposit, without navigating away mid-gesture. These are the
+    // gates that decide whether a tab lights up at all.
+
+    static bool Tab(string target = "spotify:playlist:p1", bool editable = true, bool hasTracks = true,
+                    string? sourcePlaylist = null, string payloadUri = "spotify:track:t1")
+        => TabDropRules.AcceptsDeposit(target, editable, hasTracks, sourcePlaylist, payloadUri);
+
+    [Fact]
+    public void TabAcceptsDeposit_OnlyForAnEditableRealPlaylistWithTracksInHand()
+    {
+        Assert.True(Tab());
+        Assert.False(Tab(editable: false));     // someone else's playlist / not loaded yet
+        Assert.False(Tab(hasTracks: false));    // an artist, a route, a show — nothing to deposit
+    }
+
+    [Fact]
+    public void TabAcceptsDeposit_RejectsPseudoPlaylistsAndNonPlaylistDestinations()
+    {
+        // Liked Songs and the editorial pseudo-playlists navigate like playlists but are not membership lists this
+        // app writes to — the same guard PlaylistPicker.IsRealPlaylist and the add-to-playlist menu already apply.
+        Assert.False(Tab(target: "spotify:collection:tracks"));
+        Assert.False(Tab(target: "spotify:album:a1"));
+        Assert.False(Tab(target: ""));
+        Assert.False(TabDropRules.IsDepositablePlaylistUri(null));
+        Assert.True(TabDropRules.IsDepositablePlaylistUri("spotify:playlist:p1"));
+    }
+
+    [Fact]
+    public void TabRefusesTheSamePlaylistItCameFrom()
+    {
+        // A tab drop can only APPEND (there is no slot in a tab), so the deposit's same-list MOVE arm — which needs an
+        // insertion index — cannot engage. Rows dragged out of P onto P's own tab would fall through to the COPY arm
+        // and duplicate the user's rows into their own playlist. Refusing keeps the tab dark for a gesture with
+        // nothing to do, instead of lighting up and silently doing the wrong thing.
+        Assert.False(Tab(sourcePlaylist: "spotify:playlist:p1"));
+        Assert.True(Tab(sourcePlaylist: "spotify:playlist:other"));
+
+        // …and the container-on-itself case (the playlist itself dragged onto its own tab), which the deposit only
+        // ever treated as a SILENT no-op.
+        Assert.False(Tab(payloadUri: "spotify:playlist:p1"));
+        Assert.True(Tab(payloadUri: "spotify:playlist:p2"));
     }
 }
