@@ -1160,24 +1160,26 @@ public sealed class AppHost : IDisposable
     public PlatformWaitRequest WaitRequestWithDetached()
     {
         int w = RecommendedWaitMs();
-        var request = WaitRequest(w, _lastWaitKind);
+        var request = WaitRequest(w, _lastWaitKind, _lastWaitWantsDisplayClock);
         for (int i = 0; i < _detachedHosts.Count; i++)
         {
             var child = _detachedHosts[i];
             int childWait = child.RecommendedWaitMs();
-            request = CombineWait(request, WaitRequest(childWait, child._lastWaitKind));
+            request = CombineWait(request, WaitRequest(childWait, child._lastWaitKind, child._lastWaitWantsDisplayClock));
         }
         return request;
     }
 
-    private static PlatformWaitRequest WaitRequest(int timeoutMs, HostWaitKind kind) => new(
+    private static PlatformWaitRequest WaitRequest(int timeoutMs, HostWaitKind kind, bool wakeOnDisplayClock) => new(
         timeoutMs,
         timeoutMs > 0 && IsDisplayRateWait(kind, timeoutMs)
             ? PlatformInputWakePolicy.CoalescePointerMotion
-            : PlatformInputWakePolicy.Immediate);
+            : PlatformInputWakePolicy.Immediate,
+        wakeOnDisplayClock && timeoutMs > 0);
 
     // -1 = "block until a message" (no preference); any finite wait wins; min of two finite waits. At an equal
-    // deadline the stricter motion-coalescing request wins, since both hosts are due at the same instant.
+    // deadline the stricter motion-coalescing request wins, since both hosts are due at the same instant — and either
+    // host asking for the display clock arms it, since both are due on the same vblank.
     internal static PlatformWaitRequest CombineWait(PlatformWaitRequest a, PlatformWaitRequest b)
     {
         if (a.TimeoutMs < 0) return b;
@@ -1188,7 +1190,8 @@ public sealed class AppHost : IDisposable
             a.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion
                 || b.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion
                     ? PlatformInputWakePolicy.CoalescePointerMotion
-                    : PlatformInputWakePolicy.Immediate);
+                    : PlatformInputWakePolicy.Immediate,
+            a.WakeOnDisplayClock || b.WakeOnDisplayClock);
     }
 
     /// <summary>Probe/diagnostic: count of live detached video windows.</summary>
@@ -1302,11 +1305,14 @@ public sealed class AppHost : IDisposable
     /// "not armed" for a UI thread that has already armed and gone to sleep, which is precisely the lost wake the
     /// handshake exists to close. <see cref="IPlatformWindow.Wake"/> signals a waitable the UI
     /// <see cref="IPlatformWindow.WaitForWork"/> waits on atomically with input (and the HR timer), not message-only.
+    /// <see cref="IPlatformWindow.WakePresent"/> rather than <see cref="IPlatformWindow.Wake"/>: this is the
+    /// phase-critical signal, and it gets its own waitable so no other producer can consume the auto-reset wake this
+    /// loop is parked on (and so it posts no message — at panel rate that would be 120 WM_NULLs a second).
     /// </summary>
     private void OnRenderPresentAck()
     {
         Thread.MemoryBarrier();
-        if (_phaseGate is { IsArmed: true }) _window.Wake();
+        if (_phaseGate is { IsArmed: true }) _window.WakePresent();
     }
 
     /// <summary>Monotonic successful main-swapchain present count in inline, force-sync, and async modes. Unlike a
@@ -1409,8 +1415,17 @@ public sealed class AppHost : IDisposable
         return w < 0 ? dueIn : Math.Min(w, dueIn);
     }
 
+    /// <summary>Did the branch that produced the last wait want the DISPLAY clock as a wake source? Latched here, next
+    /// to the branch, for the same reason <see cref="_lastWaitWasDisplayRate"/> is: re-deriving it later from the
+    /// timeout value cannot distinguish an armed phase-gate wait from an unarmed pace wait — they are the same kind and
+    /// can be the same integer, and they want OPPOSITE answers (see the two branches below).</summary>
+    private bool _lastWaitWantsDisplayClock;
+
     private int RecommendedWaitMsCore()
     {
+        // Default off: every branch that has a better phase reference, or none at all (idle, HUD, baked, ambient),
+        // leaves the vblank waiter parked. Only the two branches below opt in.
+        _lastWaitWantsDisplayClock = false;
         // Feed the FG_ADAPTIVE_FPS governor: smooth the true on-GPU raster time so a sustained over-budget stretch (a
         // maximized fill-bound frame) is detected without one-frame jitter flipping the pacing. Cheap; only when armed.
         // NOT the fence wait: that conflates raster with PACING — vblank/latency-waitable and buffer-release
@@ -1472,17 +1487,31 @@ public sealed class AppHost : IDisposable
         // monotonic (a novel wait value here would zero-dt every animating frame — the frozen one-shot-anim bug
         // class). Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency;
         // the first frame that actually changes pixels submits, and the next wait returns to 0 (present-throttled).
-        if (!_asyncActive && _lastFrameSkippedSubmit) { _lastWaitKind = HostWaitKind.PaceSkipSubmit; return AsyncDisplayPaceMs; }
+        // The display clock IS this branch's pacer, not a supplement: an elided submit produces no present, so there is
+        // no ack to wake on and the wall-clock value below is a pure fallback for when the compositor clock is
+        // unavailable. Waking on the tick puts even these frames on the panel's phase.
+        if (!_asyncActive && _lastFrameSkippedSubmit)
+        {
+            _lastWaitKind = HostWaitKind.PaceSkipSubmit;
+            _lastWaitWantsDisplayClock = true;
+            return AsyncDisplayPaceMs;
+        }
         // Parked on the display-phase gate: sleep until the render thread's present-ack wake, with the stall ceiling as
-        // the backstop. Returning the 7 ms cap here instead would wake the loop mid-flight only to gate again — busywork
+        // the backstop. Returning the pace cap here instead would wake the loop mid-flight only to gate again — busywork
         // that also re-samples the DirectManipulation pump deadline and drags production off the display's phase, which
         // is the behaviour being fixed. Input still ends this wait immediately (WaitForWork is MsgWait-based).
+        // For the same reason this branch does NOT ask for the display clock: the ack IS its phase reference, and a
+        // per-tick wake would re-enter the loop while the gate is still armed and gate again — the exact busywork above.
         if (_asyncActive && _phaseGate is { IsArmed: true })
         {
             _lastWaitKind = HostWaitKind.PaceAsync;
             return PhaseGateCeilingMs();
         }
+        // Unarmed async: nothing is owed a present, so there is no ack to sleep on and the wall-clock cap is the only
+        // pacer — precisely the case the display clock exists to replace. Sync (DisplayRate) returns 0 and needs no wake
+        // source at all.
         _lastWaitKind = _asyncActive ? HostWaitKind.PaceAsync : HostWaitKind.DisplayRate;
+        _lastWaitWantsDisplayClock = _asyncActive;
         return _asyncActive ? AsyncDisplayPaceMs : 0;   // latency-sensitive / one-shot motion: sync = present-throttled (0); async = pace cap (present is off-thread — 0 would free-spin)
     }
 

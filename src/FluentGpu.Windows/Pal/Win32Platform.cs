@@ -600,7 +600,15 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private RECT _windowedRect;
     private HANDLE _preciseWaitTimer;       // lazy one-shot timer for display-rate waits
     private bool _preciseWaitUnavailable;   // sticky creation failure => plain timeout forever
-    private HANDLE _presentAckEvent;        // auto-reset: present-ack / Wake signal waited with messages (not message-only)
+    private HANDLE _presentAckEvent;        // auto-reset: general cross-thread Wake signal waited with messages (not message-only)
+    // The PHASE-CRITICAL wake gets its OWN auto-reset event. _presentAckEvent is the general-purpose nudge — every
+    // AppHost.Post, every background producer, every WakeFrame reaches it — so a present-ack sharing it is indistinguishable
+    // from four other wake sources, and one of those firing just before the ack consumes the auto-reset signal the loop
+    // was going to be woken by. Splitting them makes the display's ack its own handle in the wait set.
+    private HANDLE _displayWakeEvent;
+    // The display clock (DCompositionWaitForCompositorClock republished as an event). Created on the FIRST wait that asks
+    // for it — an app that never display-paces never spawns the thread — and armed only for the duration of such a wait.
+    private Win32CompositorClock? _compositorClock;
     private bool _wasZoomed;      // WM_SIZE edge-detect → InputKind.WindowStateChanged
     private bool _inMoveSizeLoop; // WM_ENTERSIZEMOVE..WM_EXITSIZEMOVE modal loop
     private bool _sizedInMoveSizeLoop; // true once this modal loop has delivered WM_SIZE (edge resize, not pure titlebar move)
@@ -672,6 +680,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         // Create this before the window is handed to AppHost: Wake may be called from the render thread, so lazy
         // creation in Wake/WaitForWork would race and could leave the waiter observing a different handle.
         _presentAckEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
+        _displayWakeEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
 
         // Re-run WM_NCCALCSIZE under the custom-frame policy (it already ran during creation with _customFrame set,
         // but a frame-changed pass is the documented way to make the new client geometry stick).
@@ -1211,108 +1220,146 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
 
         if (request.InputWakePolicy is PlatformInputWakePolicy.CoalescePointerMotion && timeoutMs > 0)
         {
-            WaitForPacedWork(timeoutMs);
+            WaitForPacedWork(timeoutMs, request.WakeOnDisplayClock);
             return;
         }
-        WaitForImmediateWork(timeoutMs);
+        WaitForImmediateWork(timeoutMs, request.WakeOnDisplayClock);
     }
 
-    private void WaitForImmediateWork(int timeoutMs)
+    /// <summary>The display clock for this window, created on first use. Null when the host never asked for one, or once
+    /// the runtime probe has ruled it out (remote session / missing export) — the caller then keeps its wall-clock
+    /// timeout, which is the pre-existing behavior.</summary>
+    private Win32CompositorClock? DisplayClockOrNull(bool wanted)
     {
-        HANDLE ack = _presentAckEvent;
-        if (s_preciseWait && timeoutMs > 0 && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
-        {
-            LARGE_INTEGER due;
-            due.QuadPart = -(long)timeoutMs * 10_000L;
-            HANDLE timer = _preciseWaitTimer;
-            if (SetWaitableTimer(timer, &due, 0, null, null, false))
-            {
-                HANDLE* handles = stackalloc HANDLE[2];
-                handles[0] = ack;
-                handles[1] = timer;
-                uint n = ack != HANDLE.NULL ? 2u : 1u;
-                HANDLE* waitBase = ack != HANDLE.NULL ? handles : &timer;
-                if (MsgWaitForMultipleObjectsEx(
-                        n, waitBase, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
-                    return;
-            }
-            DisablePreciseWait();
-        }
-
-        uint timeout = timeoutMs < 0 ? 0xFFFFFFFF : (uint)timeoutMs;
-        if (timeoutMs != 0 && ack != HANDLE.NULL)
-        {
-            MsgWaitForMultipleObjectsEx(1, &ack, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-            return;
-        }
-        MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (!wanted || _closed) return null;
+        _compositorClock ??= new Win32CompositorClock();
+        return _compositorClock.IsAvailable ? _compositorClock : null;
     }
 
-    private void WaitForPacedWork(int timeoutMs)
+    /// <summary>The always-present half of the wait handle set: the general cross-thread wake, the phase-critical
+    /// present-ack wake, and (when the caller asked and the probe holds) the compositor tick. Returns the count written.
+    /// Writes at most 3 of the caller's 4 slots — the 4th is reserved for the precise timer.</summary>
+    private uint FillWakeHandles(HANDLE* handles, Win32CompositorClock? clock)
+    {
+        uint n = 0;
+        if (_presentAckEvent != HANDLE.NULL) handles[n++] = _presentAckEvent;
+        if (_displayWakeEvent != HANDLE.NULL) handles[n++] = _displayWakeEvent;
+        if (clock is not null) handles[n++] = clock.TickEvent;
+        return n;
+    }
+
+    private void WaitForImmediateWork(int timeoutMs, bool wakeOnDisplayClock)
+    {
+        Win32CompositorClock? clock = DisplayClockOrNull(wakeOnDisplayClock);
+        clock?.Arm();
+        try
+        {
+            HANDLE* handles = stackalloc HANDLE[4];
+            uint n = FillWakeHandles(handles, clock);
+
+            if (s_preciseWait && timeoutMs > 0 && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
+            {
+                LARGE_INTEGER due;
+                due.QuadPart = -(long)timeoutMs * 10_000L;
+                HANDLE timer = _preciseWaitTimer;
+                if (SetWaitableTimer(timer, &due, 0, null, null, false))
+                {
+                    handles[n] = timer;
+                    if (MsgWaitForMultipleObjectsEx(
+                            n + 1, handles, (uint)(timeoutMs + 16), QS_ALLINPUT, MWMO_INPUTAVAILABLE) != WAIT_FAILED)
+                        return;
+                }
+                DisablePreciseWait();
+            }
+
+            uint timeout = timeoutMs < 0 ? 0xFFFFFFFF : (uint)timeoutMs;
+            if (timeoutMs != 0 && n > 0)
+            {
+                MsgWaitForMultipleObjectsEx(n, handles, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                return;
+            }
+            MsgWaitForMultipleObjectsEx(0, null, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        }
+        finally { clock?.Disarm(); }
+    }
+
+    private void WaitForPacedWork(int timeoutMs, bool wakeOnDisplayClock)
     {
         long start = System.Diagnostics.Stopwatch.GetTimestamp();
         long deadline = start + (long)Math.Ceiling(timeoutMs * (System.Diagnostics.Stopwatch.Frequency / 1000.0));
-        HANDLE ack = _presentAckEvent;
-        HANDLE timer = HANDLE.NULL;
-        bool precise = false;
-
-        if (s_preciseWait && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
+        Win32CompositorClock? clock = DisplayClockOrNull(wakeOnDisplayClock);
+        clock?.Arm();
+        try
         {
-            LARGE_INTEGER due;
-            due.QuadPart = -(long)timeoutMs * 10_000L;
-            timer = _preciseWaitTimer;
-            precise = SetWaitableTimer(timer, &due, 0, null, null, false);
-            if (!precise) DisablePreciseWait();
-        }
+            HANDLE timer = HANDLE.NULL;
+            bool precise = false;
 
-        HANDLE* handles = stackalloc HANDLE[2];
-        uint handleCount = 0;
-        int ackIndex = -1, timerIndex = -1;
-        if (ack != HANDLE.NULL) { ackIndex = (int)handleCount; handles[handleCount++] = ack; }
-        if (precise) { timerIndex = (int)handleCount; handles[handleCount++] = timer; }
-
-        while (true)
-        {
-            long now = System.Diagnostics.Stopwatch.GetTimestamp();
-            int remainingMs = PacedInputWaitClassifier.RemainingMilliseconds(deadline, now);
-            if (remainingMs == 0) { _pacedDeadlineWakes++; return; }
-            uint coarseTimeout = precise ? (uint)(remainingMs + 16) : (uint)remainingMs;
-            uint result = MsgWaitForMultipleObjectsEx(
-                handleCount, handleCount == 0 ? null : handles, coarseTimeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
-            if (result == WAIT_FAILED) return;
-            if (result == WAIT_TIMEOUT) { _pacedDeadlineWakes++; return; }
-            if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + handleCount)
+            if (s_preciseWait && timeoutMs <= 50 && TryEnsurePreciseWaitTimer())
             {
-                int signaled = (int)(result - WAIT_OBJECT_0);
-                if (signaled == timerIndex) _pacedDeadlineWakes++;
-                return; // present ack and the deadline are both frame-worthy
+                LARGE_INTEGER due;
+                due.QuadPart = -(long)timeoutMs * 10_000L;
+                timer = _preciseWaitTimer;
+                precise = SetWaitableTimer(timer, &due, 0, null, null, false);
+                if (!precise) DisablePreciseWait();
             }
-            if (result != WAIT_OBJECT_0 + handleCount) return;
 
-            bool removed = false;
-            MSG msg;
-            while (PeekMessageW(&msg, HWND.NULL, 0, 0, PM_NOREMOVE))
+            HANDLE* handles = stackalloc HANDLE[4];
+            uint handleCount = FillWakeHandles(handles, clock);
+            // The wake handles were written in FillWakeHandles' fixed order; recover the indices from the same
+            // conditions so the signalled-handle bookkeeping below stays in step with the set that was actually built.
+            int ackIndex = _presentAckEvent != HANDLE.NULL ? 0 : -1;
+            int displayIndex = _displayWakeEvent != HANDLE.NULL ? (ackIndex + 1) : -1;
+            int tickIndex = clock is not null ? (displayIndex >= 0 ? displayIndex + 1 : ackIndex + 1) : -1;
+            int timerIndex = -1;
+            if (precise) { timerIndex = (int)handleCount; handles[handleCount++] = timer; }
+
+            while (true)
             {
-                if (!PacedInputWaitClassifier.IsDeferrable(msg.message))
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                int remainingMs = PacedInputWaitClassifier.RemainingMilliseconds(deadline, now);
+                if (remainingMs == 0) { _pacedDeadlineWakes++; return; }
+                uint coarseTimeout = precise ? (uint)(remainingMs + 16) : (uint)remainingMs;
+                uint result = MsgWaitForMultipleObjectsEx(
+                    handleCount, handleCount == 0 ? null : handles, coarseTimeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+                if (result == WAIT_FAILED) return;
+                if (result == WAIT_TIMEOUT) { _pacedDeadlineWakes++; return; }
+                if (result >= WAIT_OBJECT_0 && result < WAIT_OBJECT_0 + handleCount)
                 {
-                    _pacedUrgentBreaks++;
-                    return; // leave urgent input queued for the ordinary frame pump
+                    int signaled = (int)(result - WAIT_OBJECT_0);
+                    if (signaled == timerIndex) _pacedDeadlineWakes++;
+                    return; // wake, present ack, compositor tick and the deadline are all frame-worthy
                 }
-                if (!PeekMessageW(&msg, HWND.NULL, 0, 0, PM_REMOVE)) break;
-                removed = true;
-                if (PacedInputWaitClassifier.IsMotion(msg.message)) _pacedMotionMessages++;
-                DispatchQueuedMessage(&msg);
+                if (result != WAIT_OBJECT_0 + handleCount) return;
 
-                // Present acknowledgement remains urgent even while a continuous motion stream keeps the queue nonempty.
-                if (ackIndex >= 0 && WaitForSingleObject(ack, 0) == WAIT_OBJECT_0) return;
-                if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                bool removed = false;
+                MSG msg;
+                while (PeekMessageW(&msg, HWND.NULL, 0, 0, PM_NOREMOVE))
                 {
-                    _pacedDeadlineWakes++;
-                    return;
+                    if (!PacedInputWaitClassifier.IsDeferrable(msg.message))
+                    {
+                        _pacedUrgentBreaks++;
+                        return; // leave urgent input queued for the ordinary frame pump
+                    }
+                    if (!PeekMessageW(&msg, HWND.NULL, 0, 0, PM_REMOVE)) break;
+                    removed = true;
+                    if (PacedInputWaitClassifier.IsMotion(msg.message)) _pacedMotionMessages++;
+                    DispatchQueuedMessage(&msg);
+
+                    // The phase signals stay urgent even while a continuous motion stream keeps the queue nonempty:
+                    // deferring a present-ack or a compositor tick behind motion is exactly the phase drift being fixed.
+                    if (ackIndex >= 0 && WaitForSingleObject(_presentAckEvent, 0) == WAIT_OBJECT_0) return;
+                    if (displayIndex >= 0 && WaitForSingleObject(_displayWakeEvent, 0) == WAIT_OBJECT_0) return;
+                    if (tickIndex >= 0 && WaitForSingleObject(clock!.TickEvent, 0) == WAIT_OBJECT_0) return;
+                    if (System.Diagnostics.Stopwatch.GetTimestamp() >= deadline)
+                    {
+                        _pacedDeadlineWakes++;
+                        return;
+                    }
                 }
+                if (!removed) return; // spurious message wake: avoid a zero-time spin
             }
-            if (!removed) return; // spurious message wake: avoid a zero-time spin
         }
+        finally { clock?.Disarm(); }
     }
 
     private bool TryEnsurePreciseWaitTimer()
@@ -1349,6 +1396,16 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         PostMessageW(_hwnd, 0u /* WM_NULL */, 0, 0);
     }
 
+    /// <summary>The phase-critical wake (IPlatformWindow.WakePresent): the render thread has presented a published frame,
+    /// so a UI loop parked on the display-phase gate may produce the next one. Signals its OWN auto-reset event and posts
+    /// NOTHING — this fires at the panel's rate, so the WM_NULL <see cref="Wake"/> posts for message-only pumps would be
+    /// 120 pointless messages a second through the WndProc, and sharing the general wake event would let any of the four
+    /// other producers consume the auto-reset signal this loop is waiting for. SetEvent is thread-safe.</summary>
+    public void WakePresent()
+    {
+        if (_displayWakeEvent != HANDLE.NULL) SetEvent(_displayWakeEvent);
+    }
+
     /// <summary>Raise a screen-reader announcement (UIA live region) on this window's provider — wired onto
     /// <see cref="FluentGpu.Hooks.InputHooks"/>.Announce. Best-effort; a no-op when no assistive tech is listening.</summary>
     internal void AnnounceUia(string text, bool assertive) => Win32Uia.Announce(_uiaProvider, text, assertive);
@@ -1361,8 +1418,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         _dm = null;
         _textInput?.DisposeSip();   // release the WinRT InputPane refs + SIP event subscriptions before the HWND dies
         if (_hwnd != HWND.NULL) { KillTimer(_hwnd, MoveLoopTimerId); KillTimer(_hwnd, LiftTimerId); DestroyWindow(_hwnd); }
+        // Stop the vblank waiter BEFORE the events it and the render thread signal are closed.
+        _compositorClock?.Dispose();
+        _compositorClock = null;
         if (_preciseWaitTimer != HANDLE.NULL) { CloseHandle(_preciseWaitTimer); _preciseWaitTimer = HANDLE.NULL; }
         if (_presentAckEvent != HANDLE.NULL) { CloseHandle(_presentAckEvent); _presentAckEvent = HANDLE.NULL; }
+        if (_displayWakeEvent != HANDLE.NULL) { CloseHandle(_displayWakeEvent); _displayWakeEvent = HANDLE.NULL; }
         // The UIA provider CCW is intentionally LEAKED (not freed): UIA may still hold a ref after the HWND dies and a
         // synchronous free would risk a use-after-free. A few bytes, one per window, reclaimed at process exit.
         if (_uiaProvider != null) { _uiaProvider = null; FluentGpu.Hooks.InputHooks.Current.Default.Announce = null; }

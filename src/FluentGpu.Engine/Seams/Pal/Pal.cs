@@ -450,10 +450,19 @@ public enum PlatformInputWakePolicy : byte
     CoalescePointerMotion = 1,
 }
 
-/// <summary>One host-to-platform wait request. Negative timeout means wait indefinitely.</summary>
+/// <summary>One host-to-platform wait request. Negative timeout means wait indefinitely.
+///
+/// <paramref name="WakeOnDisplayClock"/> asks the backend to end the wait on the DISPLAY's clock as well as on its usual
+/// sources — the vblank reference the async flip removed from the UI thread (moving <c>Present()</c> to the render thread
+/// left the loop with nothing but a wall-clock timer, which can bound how OFTEN it produces but never WHEN). It is a
+/// REQUEST, not a contract: a backend without a compositor clock (headless, a remote session where the probe fails)
+/// ignores it and the wall-clock timeout remains the pacer. Set it only on waits that have no better phase reference —
+/// a wait already parked on the render thread's present-ack must NOT set it, because a per-tick wake would re-enter the
+/// loop while the display-phase gate is still armed and immediately gate again.</summary>
 public readonly record struct PlatformWaitRequest(
     int TimeoutMs,
-    PlatformInputWakePolicy InputWakePolicy = PlatformInputWakePolicy.Immediate);
+    PlatformInputWakePolicy InputWakePolicy = PlatformInputWakePolicy.Immediate,
+    bool WakeOnDisplayClock = false);
 
 public interface IPlatformWindow : IDisposable
 {
@@ -496,6 +505,17 @@ public interface IPlatformWindow : IDisposable
     /// anyway).
     /// </summary>
     void Wake() { }
+
+    /// <summary>
+    /// The PHASE-CRITICAL wake: the render thread signalling that a published frame has been presented, so the UI loop
+    /// parked on the display-phase gate may produce the next one. Separated from <see cref="Wake"/> because the two have
+    /// opposite requirements — <see cref="Wake"/> is the general-purpose cross-thread nudge (it also posts a message so
+    /// message-only pumps see it), while this one fires at the display's rate and must be as close to a bare event
+    /// signal as the backend can make it. Win32 gives it its OWN auto-reset event rather than sharing the five-way
+    /// general wake, and posts no message.
+    /// <para>Default: <see cref="Wake"/>, so a backend that draws no distinction keeps today's behavior verbatim.</para>
+    /// </summary>
+    void WakePresent() => Wake();
 
     /// <summary>
     /// Invoked by the platform when the OS demands an immediate repaint *outside* the app's frame loop —
