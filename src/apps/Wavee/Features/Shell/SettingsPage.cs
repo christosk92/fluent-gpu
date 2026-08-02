@@ -25,6 +25,9 @@ sealed partial class SettingsPage : Component
 
     IOverlayService? _overlay;
     Action<Action>? _voPost;   // the UI-thread post, kept for the video-override flyout's deferred deep-link open
+    // The app-wide nav action, captured UNCONDITIONALLY in Render (hooks may not sit behind the tab switch) and read
+    // back from the per-tab builders — today the Playback tab's runtime-problem banner ("View diagnostics").
+    Action<string, string?>? _nav;
 
     void Bump() => _uiEpoch.Value = _uiEpoch.Peek() + 1;
 
@@ -55,6 +58,7 @@ sealed partial class SettingsPage : Component
         var post = UsePost();
         var seeded = UseRef(false);
         _overlay = UseContext(Overlay.Service);
+        _nav = UseContext(HistoryStore.NavCtx);
         _voPost = post;
 
         UseEffect(() =>

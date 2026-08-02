@@ -43,6 +43,10 @@ static class ShellNav
             "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
             "settings" => ("Settings", Icons.Settings),
             "api-console" => ("API Console", Icons.Code),
+            // The local-playback ("Spotify.dll") locate/verify report. Spelled as a LITERAL for the same reason as
+            // "sidebar-customize" below: this file is source-included by src/apps/Wavee.Tests, which cannot see the
+            // engine-bound page class that owns the route constant.
+            "playback-diagnostics" => ("Playback runtime", Icons.MusicNote),
             // The full-page sidebar customizer (§C4.1) — a real destination, so the tab strip / breadcrumb need its label
             // and glyph here like any other page. The key is `SidebarLayoutMenu.CustomizeRoute`, spelled as a LITERAL
             // because this file is source-included by src/apps/Wavee.Tests and that engine-bound file is not.

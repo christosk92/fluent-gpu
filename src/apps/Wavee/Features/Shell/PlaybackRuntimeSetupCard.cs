@@ -120,7 +120,7 @@ sealed class PlaybackRuntimeSetupModel
 
     public void StartDownload()
     {
-        if (_provisioner is null) { Fail("Local audio is not active."); return; }
+        if (_provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
         Log(WaveeLogLevel.Info, "runtime.setup.download.start", "Runtime setup download flow started");
         Error.Value = null;
         SetPhase(Phase.FetchingCatalog, "start-download");
@@ -167,7 +167,7 @@ sealed class PlaybackRuntimeSetupModel
 
     public void InstallSelected()
     {
-        if (_provisioner is null) { Fail("Local audio is not active."); return; }
+        if (_provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
         int idx = SelectedPackIndex.Value;
         if (idx < 0 || idx >= SupportedPacks.Count) return;
         var entry = SupportedPacks[idx];
@@ -216,7 +216,7 @@ sealed class PlaybackRuntimeSetupModel
             return;
         }
         if (verify.Ok) { Succeed(); return; }
-        Error.Value = AudioFailureText.ToUserMessage(verify.Outcome);
+        Error.Value = AudioFailureText.ToUserMessage(verify.Outcome, verify.Detail);
         SetPhase(Phase.Failed, "verify-failed");
     }
 
@@ -292,12 +292,22 @@ sealed class PlaybackRuntimeSetupModel
             {
                 _bridge.UpdateRuntimeStatus(snap);
                 if (ok) Succeed();
-                else { Error.Value = AudioFailureText.ToUserMessage(snap.Outcome); SetPhase(Phase.Failed, "confirm-untrusted-failed"); }
+                else { Error.Value = AudioFailureText.ToUserMessage(snap.Outcome, snap.Detail); SetPhase(Phase.Failed, "confirm-untrusted-failed"); }
             });
         });
     }
 
     public void CancelUntrusted() => SetPhase(Phase.Offer, "cancel-untrusted");
+
+    /// <summary>"View diagnostics": close the modal and land on the full locate/verify report. Reachable in one click
+    /// from the Failed phase, which is exactly where someone is looking at a sentence that doesn't explain itself.</summary>
+    public void OpenDiagnostics(Action<string, string?> go)
+    {
+        Log(WaveeLogLevel.Info, "runtime.setup.diagnostics", "Playback runtime diagnostics opened from setup",
+            WaveeLogField.Of("phase", PhaseSig.Peek().ToString()));
+        Close();
+        go(PlaybackRuntimeDiagnosticsPage.Route, null);
+    }
 
     // ── Advanced: folder pick / installed Spotify (offline fallbacks) ────────────────────────────
 
@@ -319,17 +329,17 @@ sealed class PlaybackRuntimeSetupModel
     {
 #if WAVEE_PLAYPLAY_LOCAL
         var dll = PlayPlayRuntimePaths.InstalledSpotifyDll;
-        if (!File.Exists(dll)) { Fail("Installed Spotify.dll not found."); return; }
+        if (!File.Exists(dll)) { Fail(Loc.Get(Strings.Playback.Runtime.InstalledNotFound)); return; }
         // No sibling manifest required — the store recognizes a supported build by the DLL's hash and synthesizes it.
         RegisterDir(Path.GetDirectoryName(dll)!, allowUntrusted: false);
 #else
-        Fail("Local audio is not active.");
+        Fail(Loc.Get(Strings.Playback.Runtime.NotActive));
 #endif
     }
 
     void RegisterDir(string dir, bool allowUntrusted)
     {
-        if (_provisioner is null) { Fail("Local audio is not active."); return; }
+        if (_provisioner is null) { Fail(Loc.Get(Strings.Playback.Runtime.NotActive)); return; }
         Log(WaveeLogLevel.Info, "runtime.setup.register_dir", "Registering selected PlayPlay runtime directory",
             WaveeLogField.Of("dir", dir),
             WaveeLogField.Of("allowUntrusted", allowUntrusted));
@@ -339,7 +349,7 @@ sealed class PlaybackRuntimeSetupModel
         var snap = _provisioner.GetSnapshot();
         _bridge.UpdateRuntimeStatus(snap);
         if (!ok && snap.NeedsUntrustedConfirmation) { _untrustedDir = dir; SetPhase(Phase.Untrusted, "register-needs-untrusted"); return; }
-        if (!ok) { Error.Value = AudioFailureText.ToUserMessage(snap.Outcome); SetPhase(Phase.Failed, "register-failed"); return; }
+        if (!ok) { Error.Value = AudioFailureText.ToUserMessage(snap.Outcome, snap.Detail); SetPhase(Phase.Failed, "register-failed"); return; }
         Succeed();
     }
 
@@ -398,8 +408,9 @@ sealed class PlaybackRuntimeSetupModel
 
     void PostFail(ProvisioningOutcome outcome) => _post(() =>
     {
-        _bridge.UpdateRuntimeStatus(_provisioner!.GetSnapshot());
-        Error.Value = AudioFailureText.ToUserMessage(outcome);
+        var snap = _provisioner!.GetSnapshot();
+        _bridge.UpdateRuntimeStatus(snap);
+        Error.Value = AudioFailureText.ToUserMessage(outcome, snap.Detail);
         Log(WaveeLogLevel.Warning, "runtime.setup.failed_outcome", "Playback runtime setup failed",
             WaveeLogField.Of("outcome", outcome.ToString()),
             WaveeLogField.Of("detail", Error.Value ?? ""));
@@ -770,6 +781,7 @@ sealed class SetupFooter : Component
     public override Element Render()
     {
         var catalogState = _m.CatalogSig.Value;   // Install enablement in Advanced
+        var go = UseContext(HistoryStore.NavCtx); // the Failed phase's "View diagnostics" destination
         return _m.PhaseSig.Value switch
         {
             PlaybackRuntimeSetupModel.Phase.Offer => Row(
@@ -794,8 +806,13 @@ sealed class SetupFooter : Component
                 Link(Loc.Get(Strings.Playback.Runtime.CheckUpdate), _m.CheckForUpdate),
                 AccentBtn(Loc.Get(Strings.Playback.Runtime.Done), _m.Close)),
 
+            // The one phase that owes an explanation, so it gets the escape hatch: the full locate/verify report sits
+            // beside "Advanced options" rather than behind a Settings tab the confused user would have to discover.
             PlaybackRuntimeSetupModel.Phase.Failed => Row(
-                Link(Loc.Get(Strings.Playback.Runtime.Advanced), _m.ShowAdvanced),
+                LeftLinks(
+                    Link(Loc.Get(Strings.Playback.Runtime.Advanced), _m.ShowAdvanced),
+                    HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.ViewDiagnostics),
+                        () => { if (go is not null) _m.OpenDiagnostics(go); })),
                 Btn(Loc.Get(Strings.Playback.Runtime.NotNow), _m.NotNow),
                 AccentBtn(Loc.Get(Strings.Playback.Runtime.TryAgain), _m.Retry)),
 
@@ -822,6 +839,13 @@ sealed class SetupFooter : Component
     // 11px inner padding — same trick as InfoBar's HyperlinkActionMarginLeft).
     static Element Link(string text, Action onClick) =>
         HyperlinkButton.Create(text, onClick) with { Margin = new Edges4(-11f, 0, 0, 0) };
+
+    // Two secondary paths in the left slot. Only the FIRST carries Link's flush-left negative margin; the rest keep
+    // their own 11px padding, which is exactly the separation the row wants between them.
+    static Element LeftLinks(params Element[] links) => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Children = links,
+    };
 
     static Element Row(Element? left, params Element[] right)
     {

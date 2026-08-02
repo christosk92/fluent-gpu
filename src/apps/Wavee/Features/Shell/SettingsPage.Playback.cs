@@ -131,11 +131,23 @@ sealed partial class SettingsPage
                 actionButton: Button.Accent(Loc.Get(Strings.Playback.Runtime.SetUp), OpenSetup));
         }
 
-        string detail = status.Outcome.ToUserMessage() ?? Loc.Get(Strings.Settings.Playback.RuntimeUnavailable);
+        // The typed outcome PLUS the provisioner's own detail line — the banner used to show one static sentence and
+        // drop every reason the provisioner had already computed.
+        string detail = status.Outcome.ToUserMessage(status.Detail);
+        var nav = _nav;
         return InfoBar.Create(InfoBarSeverity.Error,
             Loc.Get(Strings.Settings.Common.Problem), detail,
             isClosable: false,
-            actionButton: Button.Accent(Loc.Get(Strings.Settings.Common.RetrySetup), OpenSetup));
+            actionButton: new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+                Children =
+                [
+                    HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.ViewDiagnostics),
+                        () => nav?.Invoke(PlaybackRuntimeDiagnosticsPage.Route, null)),
+                    Button.Accent(Loc.Get(Strings.Settings.Common.RetrySetup), OpenSetup),
+                ],
+            });
     }
 
     Element EqualizerGroup(Services? svc, IAppSettings? settings, bool eqOn, float[] gains, int preset)

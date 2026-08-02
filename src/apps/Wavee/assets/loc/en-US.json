@@ -953,7 +953,13 @@
       "detailSignature": "Signature",
       "viewSignature": "View signature",
       "viewSignatureFailed": "Windows couldn't open the digital signature details.",
-      "detailLocation": "Location"
+      "detailLocation": "Location",
+      "notFound": "Couldn’t find a supported local Spotify.dll.",
+      "downloadFailed": "Couldn’t download playback support.",
+      "notActive": "Local audio is not active.",
+      "installedNotFound": "Installed Spotify.dll not found.",
+      "viewDiagnostics": "View diagnostics",
+      "diagnosticsTitle": "Playback runtime diagnostics"
     }
   },
   "nav": {

@@ -21,7 +21,12 @@ public readonly record struct DigitalSignatureInfo(
     SignatureTrust Trust,
     string Reason);
 
-/// <summary>UI-facing projection of runtime provisioning — derives copy from <see cref="ProvisioningOutcome"/> via <see cref="AudioFailureText"/>.</summary>
+/// <summary>UI-facing projection of runtime provisioning — derives copy from <see cref="ProvisioningOutcome"/> via <see cref="AudioFailureText"/>.
+///
+/// <para><see cref="Detail"/> is the technical second line: WHY this outcome happened, in the provisioner's own words
+/// (a locate reason, a verify detail, or "this build has no local-playback support at all"). It rides on the snapshot —
+/// not on <c>AudioRuntimeStatusService</c> — so a provisioner with no status-service reference (the null one) can still
+/// say something specific, and every consumer of a snapshot gets the same detail without a second lookup.</para></summary>
 public readonly record struct PlaybackRuntimeStatus(
     ProvisioningOutcome Outcome,
     string? PackId = null,
@@ -31,7 +36,8 @@ public readonly record struct PlaybackRuntimeStatus(
     SignatureTrust SignatureTrust = SignatureTrust.Unknown,
     bool NeedsUntrustedConfirmation = false,
     DigitalSignatureInfo? SignatureInfo = null,
-    bool TrustedByPinnedFingerprint = false)
+    bool TrustedByPinnedFingerprint = false,
+    string? Detail = null)
 {
     public static PlaybackRuntimeStatus NotApplicable { get; } = new(ProvisioningOutcome.NeverAttempted);
 

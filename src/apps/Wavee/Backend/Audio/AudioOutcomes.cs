@@ -1,3 +1,5 @@
+using FluentGpu.Localization;
+
 namespace Wavee.Backend.Audio;
 
 public enum AudioKeyFailureReason
@@ -78,13 +80,21 @@ public static class AudioFailureText
         _ => "Couldn't play this track.",
     };
 
-    public static string ToUserMessage(this ProvisioningOutcome o) => o switch
+    /// <summary>The friendly primary sentence for a provisioning outcome, optionally followed by the technical
+    /// <paramref name="detail"/> as a SECOND line. The primary sentence never changes — detail is appended, never
+    /// substituted — so the copy stays honest while the exact cause stops being discarded (a generic
+    /// "couldn't find a supported local Spotify.dll" with no reason is the bug this parameter exists to fix).</summary>
+    public static string ToUserMessage(this ProvisioningOutcome o, string? detail = null)
     {
-        ProvisioningOutcome.RuntimeUnavailable => "Couldn't find a supported local Spotify.dll.",
-        ProvisioningOutcome.NoSupportedPack => "Playback support isn't available for your Spotify version yet.",
-        ProvisioningOutcome.PackDownloadFailed => "Couldn't download playback support.",
-        ProvisioningOutcome.HashMismatch or ProvisioningOutcome.SignatureInvalid => "Playback support failed verification.",
-        ProvisioningOutcome.ArchUnsupported => "Playback support isn't available for this device.",
-        _ => "Playback support isn't ready.",
-    };
+        string primary = o switch
+        {
+            ProvisioningOutcome.RuntimeUnavailable => Loc.Get(Strings.Playback.Runtime.NotFound),
+            ProvisioningOutcome.NoSupportedPack => Loc.Get(Strings.Playback.Runtime.NoPack),
+            ProvisioningOutcome.PackDownloadFailed => Loc.Get(Strings.Playback.Runtime.DownloadFailed),
+            ProvisioningOutcome.HashMismatch or ProvisioningOutcome.SignatureInvalid => "Playback support failed verification.",
+            ProvisioningOutcome.ArchUnsupported => "Playback support isn't available for this device.",
+            _ => "Playback support isn't ready.",
+        };
+        return string.IsNullOrWhiteSpace(detail) ? primary : primary + "\n" + detail;
+    }
 }

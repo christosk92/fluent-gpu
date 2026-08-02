@@ -121,6 +121,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:api-console", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new ApiConsolePage()) ] };
 
+        if (r.Name == PlaybackRuntimeDiagnosticsPage.Route)
+            return new BoxEl { Key = "page:" + PlaybackRuntimeDiagnosticsPage.Route, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new PlaybackRuntimeDiagnosticsPage()) ] };
+
         // The full-page sidebar customizer (§C4.1). An ordinary destination — tabs, back/forward, history and KeepAlive
         // all behave — because it edits the LIVE preference document instead of owning any state of its own.
         if (r.Name == SidebarLayoutMenu.CustomizeRoute)

@@ -13,6 +13,10 @@ namespace Wavee.SpotifyLive.Audio;
 public interface IPlayPlayProvisioner
 {
     PlaybackRuntimeStatus GetSnapshot();
+    /// <summary>The full locate/verify report behind <see cref="GetSnapshot"/> — every place a runtime was looked for,
+    /// why the search ended where it did, and the verification result if one was reached. Cheap and side-effect-free:
+    /// it exposes what the last provisioning pass already computed, so the diagnostics page can call it on render.</summary>
+    PlaybackRuntimeDiagnostics GetDiagnostics();
     RuntimeAsset? CurrentAsset { get; }
     Task<RuntimeAsset?> EnsureRuntimeAsync(CancellationToken ct = default, bool allowUntrustedSignature = false);
     bool TryRegisterRuntime(string sourceDir, bool allowUntrustedSignature = false);
@@ -33,9 +37,18 @@ public sealed class NullPlayPlayProvisioner : IPlayPlayProvisioner
 {
     public static readonly NullPlayPlayProvisioner Instance = new();
 
+    /// <summary>The one honest thing this provisioner knows, and the exact case the generic "couldn't find a supported
+    /// local Spotify.dll" message used to hide: there is no local-playback code in this binary to probe with. Shared by
+    /// the snapshot detail and the diagnostics report so both say the same sentence.</summary>
+    public const string NotCompiledInDetail =
+        "This build doesn't include local-playback support (WAVEE_PLAYPLAY_LOCAL was not compiled in), so no Spotify.dll was looked for.";
+
     NullPlayPlayProvisioner() { }
 
-    public PlaybackRuntimeStatus GetSnapshot() => new(ProvisioningOutcome.RuntimeUnavailable);
+    public PlaybackRuntimeStatus GetSnapshot() =>
+        new(ProvisioningOutcome.RuntimeUnavailable, Detail: NotCompiledInDetail);
+    public PlaybackRuntimeDiagnostics GetDiagnostics() =>
+        PlaybackRuntimeDiagnostics.NotCompiledIn(NotCompiledInDetail);
     public RuntimeAsset? CurrentAsset => null;
     public Task<RuntimeAsset?> EnsureRuntimeAsync(CancellationToken ct = default, bool allowUntrustedSignature = false)
         => Task.FromResult<RuntimeAsset?>(null);
