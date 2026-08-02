@@ -87,6 +87,26 @@ sealed class SidebarPane : Component
     /// displacement / FLIP / fade tracks over the recycling window.</summary>
     readonly Signal<int> _dispVersion = new(0);
     readonly Signal<int> _disclosureVersion = new(0);
+
+    // -- per-row epochs -----------------------------------------------------------------------------------------------
+    /// <summary>One epoch signal per PLAN ROW INDEX. A bound slot is a frozen child, so it must subscribe to something to
+    /// re-render at all; subscribing every slot to the pane-wide <see cref="_planVersion"/> meant every publish (a library
+    /// refresh, a pin mutation, a projection tick) re-rendered every realized row even when its own content had not
+    /// moved. Each slot now reads only its own index, and <see cref="PublishStage"/> bumps only the indices whose row
+    /// record or backing entry actually changed (<see cref="SidebarRowDiff"/>).
+    ///
+    /// <para>GROW-ONLY: a slot may address an index for a frame or two after the plan shrank, and a Signal that vanished
+    /// underneath it would silently unsubscribe it forever. The array only ever grows; surplus entries idle.</para></summary>
+    Signal<int>[] _rowEpochs = Array.Empty<Signal<int>>();
+
+    /// <summary>Per-row packed now-playing state (bit 0 = this row's entity is the current one, bit 1 = it is actively
+    /// playing), maintained by ONE pane-level signal effect. A PLAIN array, not signals: a change bumps the row's epoch,
+    /// which is the subscription the slot already holds. Reading the playback signals per realized row instead put every
+    /// row on the hot Identity fanout, so one track change re-rendered the whole realized window.</summary>
+    byte[] _rowPlay = Array.Empty<byte>();
+    /// <summary>The row indices currently carrying a nonzero <see cref="_rowPlay"/> byte, so clearing them is O(matches)
+    /// rather than a second full sweep.</summary>
+    readonly List<int> _rowPlaySet = new();
     static readonly bool DisclosureTraceEnabled =
         string.Equals(Environment.GetEnvironmentVariable("WAVEE_SIDEBAR_DISCLOSURE_TRACE"), "1", StringComparison.Ordinal);
     Action<ItemDisclosureDiagnostic>? _disclosureTrace;
@@ -209,6 +229,10 @@ sealed class SidebarPane : Component
         // This also SUBSCRIBES the pane to the route, so a navigation re-renders it (and therefore re-renders the row
         // indicators, which read these fields) without re-planning — PlanDep deliberately excludes the route.
         TrackSelection(_route.Value.Name);
+        // The pane's ONE read of the hot playback signals, on behalf of every row (the MediaCard rule). It writes the
+        // per-row now-playing bytes and bumps only the rows that flipped, so a track change re-renders the two rows it
+        // concerns instead of the whole realized window.
+        UseSignalEffect(RefreshPlayState);
         int selectionEpoch = _selEpoch;
         UseLayoutEffect(RunSelectionTransaction, selectionEpoch);
         int rows = Plan.Rows.Count;
@@ -444,6 +468,17 @@ sealed class SidebarPane : Component
 
     void PublishStage(PlanStage stage, bool notify)
     {
+        // Captured BEFORE the swap: the outgoing plan is what the realized rows are still drawing. The A/B plan buffers
+        // are what make holding these safe, since the incoming plan was built into the other buffer set and cannot have
+        // overwritten them underneath the diff.
+        var oldRows = Plan.Rows;
+        var oldEntries = Plan.Entries;
+        // A new document or a new effective query changes what a row draws without necessarily changing the row record
+        // (section titles, empty-state copy and inline controls all hang off them), so those edges bump wholesale.
+        bool wholesale = !_planPublished
+                         || !ReferenceEquals(stage.Document, Doc)
+                         || !string.Equals(stage.EffectiveSearch, _effectiveSearch, StringComparison.Ordinal);
+
         Doc = stage.Document;
         Plan = stage.Pane;
         _railPlan = stage.Rail;
@@ -452,12 +487,15 @@ sealed class SidebarPane : Component
         _planPublished = true;
         RebuildIndex(Plan);
         ConfigureReorder();
+        EnsureRowSlots(Plan.Rows.Count);
         if (!notify) return;
 
         void PublishSignals()
         {
             _rowCount.Value = Plan.Rows.Count;
             _planVersion.Value = _planVersion.Peek() + 1;
+            if (wholesale) BumpAllRowEpochs();
+            else BumpChangedRowEpochs(oldRows, oldEntries);
         }
         if (Context.Runtime is { } runtime) runtime.Batch(PublishSignals);
         else PublishSignals();
@@ -702,6 +740,7 @@ sealed class SidebarPane : Component
             if (folder) _pendingExpandFolder = id; else _pendingExpandSection = id;
             commit();
             _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
+            BumpAllRowEpochs();   // a disclosure edge re-skins the chevron plus the whole revealed/hidden range
             return;
         }
         if (!hasRange)
@@ -718,6 +757,7 @@ sealed class SidebarPane : Component
             collapseCommit: open ? null : commit,
             settled: () => DisclosureSettled(key));
         _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
+        BumpAllRowEpochs();
     }
 
     void DisclosureSettled(string key)
@@ -728,6 +768,7 @@ sealed class SidebarPane : Component
         _pendingExpandSection = null;
         _pendingExpandFolder = null;
         _disclosureVersion.Value = _disclosureVersion.Peek() + 1;
+        BumpAllRowEpochs();
     }
 
     static void TraceDisclosure(ItemDisclosureDiagnostic d)
@@ -775,6 +816,147 @@ sealed class SidebarPane : Component
             int h = _planVersion.Value;
             h = h * 31 + _disclosureVersion.Value;
             return h;
+        }
+    }
+
+    /// <summary>The per-row form of <see cref="SubscribeEpoch"/>, and what every bound slot actually reads: it subscribes
+    /// the caller to ONE row's epoch instead of to the pane-wide plan version, so a publish re-renders only the rows the
+    /// diff found changed.
+    ///
+    /// <para>Out-of-range falls back to the pane-wide version. That is the safety valve for the transient window where a
+    /// slot addresses an index the epoch array has not grown to cover yet: it subscribes to something guaranteed to be
+    /// bumped by the publish which grows the array, so the slot cannot be stranded unsubscribed.</para></summary>
+    internal int SubscribeRowEpoch(int index)
+    {
+        var epochs = _rowEpochs;
+        return (uint)index < (uint)epochs.Length ? epochs[index].Value : _planVersion.Value;
+    }
+
+    /// <summary>This row's now-playing pair, maintained by <see cref="RefreshPlayState"/>. No signal read: a change to it
+    /// bumped the row's epoch, which is the subscription the calling slot already holds.</summary>
+    internal (bool Playing, bool Animated) RowPlayState(int index)
+    {
+        var play = _rowPlay;
+        byte packed = (uint)index < (uint)play.Length ? play[index] : (byte)0;
+        return ((packed & 1) != 0, (packed & 2) != 0);
+    }
+
+    /// <summary>Grow the per-row side tables to cover <paramref name="count"/> rows. Grow-only, doubling.</summary>
+    void EnsureRowSlots(int count)
+    {
+        if (count <= _rowEpochs.Length) return;
+        int cap = Math.Max(32, _rowEpochs.Length);
+        while (cap < count) cap *= 2;
+        var epochs = new Signal<int>[cap];
+        Array.Copy(_rowEpochs, epochs, _rowEpochs.Length);
+        for (int i = _rowEpochs.Length; i < cap; i++) epochs[i] = new Signal<int>(0);
+        var play = new byte[cap];
+        Array.Copy(_rowPlay, play, _rowPlay.Length);
+        _rowEpochs = epochs;
+        _rowPlay = play;
+    }
+
+    void BumpRowEpoch(int index)
+    {
+        var epochs = _rowEpochs;
+        if ((uint)index < (uint)epochs.Length) epochs[index].Value = epochs[index].Peek() + 1;
+    }
+
+    /// <summary>Bump every row epoch. The escape hatch for edges whose blast radius is not a clean index range: a new
+    /// document, a changed effective search, or a disclosure edge. All three are discrete user gestures or mode switches
+    /// rather than the per-publish traffic this mechanism exists to cut, so paying the old whole-window re-render there
+    /// keeps the change honest instead of risking a stale row for a win nobody can feel.</summary>
+    void BumpAllRowEpochs()
+    {
+        var epochs = _rowEpochs;
+        for (int i = 0; i < epochs.Length; i++) epochs[i].Value = epochs[i].Peek() + 1;
+    }
+
+    /// <summary>Bump only the rows whose record or backing entry changed between the outgoing and incoming plans.</summary>
+    void BumpChangedRowEpochs(IReadOnlyList<SidebarRow> oldRows, IReadOnlyList<SidebarLibraryEntry> oldEntries)
+    {
+        var rows = Plan.Rows;
+        var entries = Plan.Entries;
+        for (int i = 0; i < rows.Count; i++)
+            if (SidebarRowDiff.RowChanged(oldRows, oldEntries, rows, entries, i))
+                BumpRowEpoch(i);
+    }
+
+    /// <summary>The ONE place the hot playback signals are read for the whole pane (the MediaCard rule). Runs as a
+    /// pane-level signal effect: the coarse <c>HasActiveContext</c> bool is read first so an idle app never joins the
+    /// <c>Identity</c> fanout at all, and a change writes the packed per-row byte and bumps only that row's epoch. Before
+    /// this, every realized row read those signals itself, so one track change re-rendered the whole realized window.</summary>
+    void RefreshPlayState()
+    {
+        _ = _planVersion.Value;   // a republish re-plans which index holds which entity, so re-resolve
+        var bridge = Playback;
+        bool active = bridge is not null && bridge.HasActiveContext.Value;
+        PlaybackIdentity identity = default;
+        bool playing = false;
+        if (active)
+        {
+            identity = bridge!.Identity.Value;
+            playing = bridge.IsPlaying.Value;
+        }
+
+        // Clear the previous matches first: at most a couple of rows are ever lit, so this is O(matches) and the sweep
+        // below only has to SET. A row that stays the playing one is re-set to the same byte and never bumps.
+        var play = _rowPlay;
+        for (int i = 0; i < _rowPlaySet.Count; i++)
+        {
+            int idx = _rowPlaySet[i];
+            if ((uint)idx >= (uint)play.Length || play[idx] == 0) continue;
+            play[idx] = 0;
+            BumpRowEpoch(idx);
+        }
+        _rowPlaySet.Clear();
+        if (!active) return;
+
+        byte packed = playing ? (byte)3 : (byte)1;
+        var rows = Plan.Rows;
+        int n = Math.Min(rows.Count, play.Length);
+        for (int i = 0; i < n; i++)
+        {
+            string uri = RowPlayUri(i);
+            if (uri.Length == 0 || !NowPlayingOverlay.Matches(uri, identity.ContextUri, identity.Track)) continue;
+            _rowPlaySet.Add(i);
+            if (play[i] == packed) continue;
+            play[i] = packed;
+            BumpRowEpoch(i);
+        }
+    }
+
+    /// <summary>The entity uri row <paramref name="index"/> would play, resolved EXACTLY as the slot resolves it. Single
+    /// owner on purpose: the slot reads <see cref="RowPlayState"/> rather than deriving a uri of its own, so the effect's
+    /// view of which row is playing cannot drift from what the row draws.</summary>
+    string RowPlayUri(int index)
+    {
+        var rows = Plan.Rows;
+        if ((uint)index >= (uint)rows.Count) return "";
+        var row = rows[index];
+        var entries = Plan.Entries;
+        bool resolved = row.EntryIndex >= 0 && row.EntryIndex < entries.Count;
+        switch (row.Kind)
+        {
+            // A card draws its entity's play affordance only when the projection resolved it (SidebarPaneSlot.Card).
+            case SidebarRowKind.EntityCard:
+                return resolved ? entries[row.EntryIndex].Uri : "";
+            // SidebarPaneSlot.ItemOrEntity's order: an ACTION item is an action row (no play state) whatever kind the
+            // planner chose; then the projected entry; then a hand-placed TRACK plays from its own spec. The section
+            // lookup only exists to spot that Action item, and an Action item never reaches the entry branch, so the
+            // resolved (overwhelmingly common) case skips it entirely.
+            case SidebarRowKind.IconRow:
+            case SidebarRowKind.EntityRow:
+            case SidebarRowKind.Placeholder:
+            {
+                if (resolved) return entries[row.EntryIndex].Uri;
+                var section = SectionOf(row.SectionId);
+                if (section is null) return "";
+                var item = SidebarPaneText.ItemOf(section, row.Key);
+                return item is { Target: SidebarItemTarget.Track } ? item.Key : "";
+            }
+            default:
+                return "";
         }
     }
 

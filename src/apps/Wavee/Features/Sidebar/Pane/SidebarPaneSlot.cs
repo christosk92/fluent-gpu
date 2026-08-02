@@ -46,7 +46,7 @@ sealed class SidebarPaneSlot : Component
     public override Element Render()
     {
         int index = _scope.Index.Value;        // a recycle writes this → exactly this row re-renders
-        _ = _o.SubscribeEpoch();              // document + projection + pin + folder + mode epochs
+        _ = _o.SubscribeRowEpoch(index);      // THIS row's epoch only (see SidebarPane.SubscribeRowEpoch)
         string sel = _o.SelectedRoute;        // pane selection is the live ROUTE, never a list index
 
         var plan = _o.Plan;
@@ -73,7 +73,7 @@ sealed class SidebarPaneSlot : Component
                 heightOverride: SidebarPaneMetrics.RowHeight(section),
                 artOverride: SidebarPaneMetrics.ArtSize(section)),
             SidebarRowKind.CreateAction => CreateRow(section),
-            SidebarRowKind.EntityCard => Card(section, row, sel),
+            SidebarRowKind.EntityCard => Card(section, row, sel, index),
             SidebarRowKind.PromptRow => Prompt(section),
             _ => Blank,
         };
@@ -181,7 +181,7 @@ sealed class SidebarPaneSlot : Component
     bool HeaderOpenLive()
     {
         int index = _scope.Index.Value;
-        _ = _o.SubscribeEpoch();
+        _ = _o.SubscribeRowEpoch(index);
         var rows = _o.Plan.Rows;
         if ((uint)index >= (uint)rows.Count) return true;
         var section = _o.SectionOf(rows[index].SectionId);
@@ -192,7 +192,7 @@ sealed class SidebarPaneSlot : Component
     bool FolderOpenLive()
     {
         int index = _scope.Index.Value;
-        _ = _o.SubscribeEpoch();
+        _ = _o.SubscribeRowEpoch(index);
         var rows = _o.Plan.Rows;
         if ((uint)index >= (uint)rows.Count) return true;
         var row = rows[index];
@@ -249,7 +249,9 @@ sealed class SidebarPaneSlot : Component
         string? route = entry.RouteKey;
         bool selected = route is { Length: > 0 } && string.Equals(route, sel, StringComparison.Ordinal);
         bool reordering = _o.TryBandOf(index, out _);
-        var (playing, animated) = PlayState(entry.Uri);
+        // Resolved pane-side by ONE signal effect over the playback bridge (SidebarPane.RefreshPlayState), so this row
+        // never joins the hot Identity fanout: a change to it bumped this row's epoch, which is what re-rendered us.
+        var (playing, animated) = _o.RowPlayState(index);
         float height = SidebarPaneMetrics.RowHeight(section);
         // TreeLeading's disclosure-lane reserve only earns its keep where a folder actually needs a leaf's art to
         // align against it (SectionHasFolder); a folder-free PlaylistTree section (V3's common case) renders its
@@ -480,9 +482,8 @@ sealed class SidebarPaneSlot : Component
     /// chevron affordance so the behaviour is legible before the click. Tracks are never pin sources.</summary>
     Element TrackItemRow(SidebarSectionSpec section, SidebarItemSpec item, int index)
     {
-        _ = index;
         string uri = item.Key;
-        var (playing, animated) = PlayState(uri);
+        var (playing, animated) = _o.RowPlayState(index);
         float height = SidebarPaneMetrics.RowHeight(section);
         string label = item.LabelOverride is { Length: > 0 } alias ? alias
             : item.FallbackTitle is { Length: > 0 } cached ? cached
@@ -619,7 +620,7 @@ sealed class SidebarPaneSlot : Component
     /// <c>Display.PlayButton</c> — a circular play button revealed on hover/focus that plays the entity AS A CONTEXT
     /// through the same player verb the detail-page CTA uses. Clicking anywhere else navigates. A missing entity is still
     /// a card: dimmed, from the item's cached title/art, with the play affordance hidden.</summary>
-    Element Card(SidebarSectionSpec section, in SidebarRow row, string sel)
+    Element Card(SidebarSectionSpec section, in SidebarRow row, string sel, int index)
     {
         var item = SidebarPaneText.ItemOf(section, row.Key);
         var entries = _o.Plan.Entries;
@@ -645,7 +646,7 @@ sealed class SidebarPaneSlot : Component
         bool track = resolved && entry.IsTrack;
         string? route = resolved ? entry.RouteKey : SidebarPinId.FromUri(uri);
         bool selected = route is { Length: > 0 } && string.Equals(route, sel, StringComparison.Ordinal);
-        var (playing, animated) = PlayState(uri);
+        var (playing, animated) = _o.RowPlayState(index);
         bool canPlay = resolved && section.Opts.PlayButton && uri.Length > 0 && entry.IsPlayable;
         var snapshot = entry;
 
@@ -1024,8 +1025,8 @@ sealed class SidebarPaneSlot : Component
 
     SidebarPillState PillState()
     {
-        _ = _scope.Index.Value;
-        _ = _o.SubscribeEpoch();
+        int index = _scope.Index.Value;
+        _ = _o.SubscribeRowEpoch(index);
         string selectedRoute = _o.SelectedRoute;
         var state = _pillState;
         bool selected = state.Route is { Length: > 0 }
@@ -1052,15 +1053,4 @@ sealed class SidebarPaneSlot : Component
         => _o.TryBandOf(index, out var band) && string.Equals(band.SectionId, sectionId, StringComparison.Ordinal)
             ? index - band.Start : -1;
 
-    /// <summary>Is THIS row's entity the one playing? Gated on the coarse <c>HasActiveContext</c> bool first, so an idle
-    /// app never joins the hot <c>Identity</c> fan-out (the MediaCard rule).</summary>
-    (bool Playing, bool Animated) PlayState(string uri)
-    {
-        var bridge = _o.Playback;
-        if (bridge is null || uri.Length == 0) return (false, false);
-        if (!bridge.HasActiveContext.Value) return (false, false);
-        var identity = bridge.Identity.Value;
-        bool now = NowPlayingOverlay.Matches(uri, identity.ContextUri, identity.Track);
-        return (now, now && bridge.IsPlaying.Value);
-    }
 }
