@@ -824,11 +824,11 @@ public static class SceneRecorder
 
             spanInputSig = ComputeSpanInputSig(scene, node, flags, depth, in clip, in world, opacity,
                 parentScaleX, parentScaleY, childScaleX, childScaleY, pw, ph,
-                inMotion, scrollInMotion,
+                inMotion, userScrollActive,
                 inherited, in focus, in textEdit, scrollThumb, scrollTrack);
             spanMoveSig = ComputeSpanMoveSig(scene, node, flags, depth, in clip, in world, opacity,
                 parentScaleX, parentScaleY, childScaleX, childScaleY, pw, ph,
-                scrollInMotion, inherited, in focus, in textEdit, scrollThumb, scrollTrack);
+                userScrollActive, inherited, in focus, in textEdit, scrollThumb, scrollTrack);
             // Span reuse copies a prior frame's recorded subtree byte-for-byte. Exact copy needs a fully clean subtree.
             // Translated copy is allowed only when no descendant is dirty and the old/current clip both contain the
             // whole span, so a moving scroll-content boundary re-walks edge/entering rows instead of freezing them.
@@ -1773,7 +1773,7 @@ public static class SceneRecorder
 
     private static ulong ComputeSpanInputSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                              float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
-                                             float pw, float ph, bool inMotion, bool scrollInMotion, in InheritedState inherited,
+                                             float pw, float ph, bool inMotion, bool userScrollActive, in InheritedState inherited,
                                              in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
     {
         ulong h = 14695981039346656037UL;
@@ -1790,7 +1790,11 @@ public static class SceneRecorder
         MixFloat(ref h, pw);
         MixFloat(ref h, ph);
         Mix(ref h, inMotion ? 1u : 0u);
-        Mix(ref h, scrollInMotion ? 1u : 0u);
+        // userScrollActive, NOT scrollInMotion: only the former reaches emitted bytes (it defers a DoF blur to
+        // HoldIfCached at the blur-hold decision), and scrollInMotion already kills exact reuse outright at its
+        // own gate. Keying on scrollInMotion instead both missed the blur flip and needlessly re-keyed the whole
+        // scroller subtree on programmatic offset writes (lyric follow, bring-into-view).
+        Mix(ref h, userScrollActive ? 1u : 0u);
         MixScrollViewport(scene, node, flags, ref h);
         MixVirtualItemBand(scene, node, ref h);
         MixPaintReveal(scene, node, ref h);
@@ -1812,7 +1816,7 @@ public static class SceneRecorder
 
     private static ulong ComputeSpanMoveSig(SceneStore scene, NodeHandle node, NodeFlags flags, int depth, in RectF clip, in Affine2D world,
                                             float opacity, float parentScaleX, float parentScaleY, float childScaleX, float childScaleY,
-                                            float pw, float ph, bool scrollInMotion, in InheritedState inherited,
+                                            float pw, float ph, bool userScrollActive, in InheritedState inherited,
                                             in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack)
     {
         ulong h = 14695981039346656037UL;
@@ -1828,7 +1832,7 @@ public static class SceneRecorder
         MixFloat(ref h, childScaleY);
         MixFloat(ref h, pw);
         MixFloat(ref h, ph);
-        Mix(ref h, scrollInMotion ? 1u : 0u);
+        Mix(ref h, userScrollActive ? 1u : 0u);   // see ComputeSpanInputSig — the blur-hold flip is the emitted-byte dependency
         MixScrollViewport(scene, node, flags, ref h);
         MixVirtualItemBand(scene, node, ref h);
         MixPaintReveal(scene, node, ref h);

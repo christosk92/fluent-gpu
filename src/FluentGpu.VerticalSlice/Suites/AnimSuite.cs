@@ -3330,6 +3330,69 @@ static class AnimSuite
                 $"reused={steady.SpansReused} blocks={steady.ScopedBlocks} reasons={steady.SpanReuseDisabledReasons}");
         }
 
+        // gate.span.userScrollBlurKeyed — UserScrollActive defers a self-blur to its hold policy, so it reaches emitted
+        // bytes and MUST be part of the span keys. It is not implied by scrollInMotion (a programmatic offset write sets
+        // that without it), and the translated-copy path is not gated on scrollInMotion at all — so keying the sigs on
+        // scrollInMotion let a scroll that merely turned direct rebase the stale full-blur span forever.
+        {
+            var s = new SceneStore();
+            var viewport = s.CreateNode(1);
+            var content = s.CreateNode(1);
+            var blurRow = s.CreateNode(1);
+            s.Root = viewport;
+            s.AppendChild(viewport, content);
+            s.AppendChild(content, blurRow);
+            s.Flags(viewport) |= NodeFlags.ClipsToBounds;
+            s.ScrollRef(viewport).ContentNode = content;
+            s.Bounds(viewport) = new RectF(0, 0, 100, 100);
+            s.Bounds(content) = new RectF(0, 0, 100, 180);
+            s.Bounds(blurRow) = new RectF(30, 40, 40, 20);
+            ref var rowPaint = ref s.Paint(blurRow);
+            rowPaint = NodePaint.Default;
+            rowPaint.VisualKind = VisualKind.Box;
+            rowPaint.Fill = ColorF.FromRgba(0x30, 0x70, 0xB0);
+            rowPaint.BlurSigma = 4f;
+            rowPaint.BlurCachePolicy = BlurCachePolicy.HoldIfCached;
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);           // f1: fresh record, stores the blur span
+
+            // f2 — a programmatic offset write (UserScrollActive still false). scrollInMotion is set for the whole
+            // subtree, so nothing under the scroller reuses this frame; every descendant re-records and re-stores.
+            s.ClearTransformDirty();
+            s.ClearRecordDirty();
+            s.Paint(content).LocalTransform = Affine2D.Translation(0f, -6f);
+            s.Mark(content, NodeFlags.TransformDirty);
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+
+            // f3 — settle: nothing changed at all. The keys stored during f2 must still match, so the subtree exact-
+            // copies. Keying on scrollInMotion instead re-keyed the whole scroller subtree for the duration of any
+            // programmatic scroll and forced this settle frame to re-record from scratch.
+            s.ClearTransformDirty();
+            s.ClearRecordDirty();
+            var f3 = SceneRecorder.Record(s, dl, spans: spans);
+            BlurCachePolicy f3Policy = FirstBlurLayerPolicy(dl.Bytes);
+
+            // f4 — the scroll turns direct with no other change: the blur defers to its hold policy...
+            s.ScrollRef(viewport).UserScrollActive = true;
+            var f4 = SceneRecorder.Record(s, dl, spans: spans);
+            BlurCachePolicy f4Policy = FirstBlurLayerPolicy(dl.Bytes);
+
+            // f5 — ...and the moment it stops being direct the blur must go back to recording Normally. Nothing else
+            // changed, so the node is exact-copy eligible again: only the flag's presence in the span key stops f4's
+            // held bytes from being resurrected verbatim at rest.
+            s.ScrollRef(viewport).UserScrollActive = false;
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            BlurCachePolicy f5Policy = FirstBlurLayerPolicy(dl.Bytes);
+
+            Check("gate.span.userScrollBlurKeyed",
+                f3.SpansReused >= 1 && f3Policy == BlurCachePolicy.Normal
+                && f4Policy == BlurCachePolicy.HoldIfCached && f4.BlurHoldCandidateCount == 1
+                && f5Policy == BlurCachePolicy.Normal,
+                $"f3reused={f3.SpansReused} f3policy={f3Policy} f4policy={f4Policy} f4hold={f4.BlurHoldCandidateCount} f5policy={f5Policy}");
+        }
+
         static NodeHandle SB(SceneStore s, NodeHandle parent, RectF r, ColorF fill)
         {
             var n = s.CreateNode(1);
@@ -3337,6 +3400,23 @@ static class AnimSuite
             s.Bounds(n) = r;
             ref var p = ref s.Paint(n); p = NodePaint.Default; p.VisualKind = VisualKind.Box; p.Fill = fill;
             return n;
+        }
+
+        static BlurCachePolicy FirstBlurLayerPolicy(ReadOnlySpan<byte> bytes)
+        {
+            int pos = 0;
+            while (pos + sizeof(int) <= bytes.Length)
+            {
+                var op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos, sizeof(int)));
+                pos += sizeof(int);
+                if (op == DrawOp.PushLayer)
+                {
+                    var layer = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(pos));
+                    if (layer.Kind == (int)LayerKind.Blur) return (BlurCachePolicy)layer.BlurCachePolicy;
+                }
+                pos += DrawPayloadSize(op);
+            }
+            return (BlurCachePolicy)255;
         }
     }
 }
