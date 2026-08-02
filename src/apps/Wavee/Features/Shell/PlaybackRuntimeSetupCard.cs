@@ -62,6 +62,9 @@ sealed class PlaybackRuntimeSetupModel
     public readonly Signal<long> Total = new(0);            // 0 = indeterminate
     public readonly Signal<string?> DownloadLabel = new(null);   // "Spotify 1.2.93.667 · Arm64" during download
     public readonly Signal<int> SelectedPackIndex = new(0);
+    /// <summary>True while the Ready phase is showing because a check/install found the ALREADY-active pack rather
+    /// than a fresh success — distinct wording, and distinct from a genuine install (no post-success runtime refresh).</summary>
+    public readonly Signal<bool> UpToDate = new(false);
     public IReadOnlyList<PlayPlayRuntimeCatalogEntry> SupportedPacks = [];
     public bool AnyForOtherArch;
 
@@ -107,7 +110,11 @@ sealed class PlaybackRuntimeSetupModel
         Close();
     }
 
-    public void Back() => SetPhase(Status.IsReady ? Phase.Ready : Phase.Offer, "back");
+    public void Back()
+    {
+        UpToDate.Value = false;
+        SetPhase(Status.IsReady ? Phase.Ready : Phase.Offer, "back");
+    }
 
     CancellationTokenSource NewCts()
     {
@@ -151,6 +158,14 @@ sealed class PlaybackRuntimeSetupModel
                     PostFail(anyOther ? ProvisioningOutcome.ArchUnsupported : ProvisioningOutcome.NoSupportedPack);
                     return;
                 }
+                // The newest catalog entry is often the one already installed (no genuinely newer pack exists yet).
+                // Downloading it anyway would try to overwrite the runtime DLL this very process has loaded, which
+                // Windows refuses — a self-inflicted, always-reproducible "download failed". Skip it.
+                if (Status.IsReady && string.Equals(Status.PackId, best.PackId, StringComparison.Ordinal))
+                {
+                    _post(AlreadyUpToDate);
+                    return;
+                }
                 await DownloadEntryAsync(best, cts, allowUntrusted: false).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
@@ -176,6 +191,13 @@ sealed class PlaybackRuntimeSetupModel
             WaveeLogField.Of("pack", entry.PackId),
             WaveeLogField.Of("version", entry.SpotifyVersion),
             WaveeLogField.Of("arch", entry.Arch));
+        // Same self-overwrite hazard as StartDownload: the explicitly picked pack can still be the one
+        // already active (e.g. re-confirming from the version list), and reinstalling it in place fails.
+        if (Status.IsReady && string.Equals(Status.PackId, entry.PackId, StringComparison.Ordinal))
+        {
+            AlreadyUpToDate();
+            return;
+        }
         var cts = NewCts();
         _ = Task.Run(async () =>
         {
@@ -369,8 +391,19 @@ sealed class PlaybackRuntimeSetupModel
             WaveeLogField.Of("issuer", signature.Issuer),
             WaveeLogField.Of("trust", signature.Trust.ToString()));
 
+    /// <summary>The selected/best catalog pack matches what's already installed and verified — skip the redundant
+    /// download+reinstall (which would try to overwrite the currently loaded runtime DLL and fail) and just confirm.
+    /// Deliberately NOT <see cref="Succeed"/>: nothing was reinstalled, so there is nothing to refresh/resume.</summary>
+    void AlreadyUpToDate()
+    {
+        UpToDate.Value = true;
+        Log(WaveeLogLevel.Info, "runtime.setup.already_current", "Selected pack matches the installed runtime; skipped reinstall");
+        SetPhase(Phase.Ready, "already-up-to-date");
+    }
+
     void Succeed()
     {
+        UpToDate.Value = false;
         SetPhase(Phase.Ready, "success");
         bool hadPlaybackError = _bridge.Error.Peek() is { Length: > 0 };
         _ = Task.Run(async () =>
@@ -553,7 +586,8 @@ sealed class SetupBody : Component
                 new TextEl(value ?? "—") { Size = 12f, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f },
             ],
         };
-        return Column(
+        var kids = new List<Element>
+        {
             new BoxEl
             {
                 Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
@@ -563,28 +597,32 @@ sealed class SetupBody : Component
                     new TextEl(Loc.Get(Strings.Playback.Runtime.Ready)) { Size = 14f, Weight = 600, Color = Tok.TextPrimary },
                 ],
             },
-            new BoxEl
-            {
-                Direction = 1, Gap = 6f, Padding = Edges4.All(12f),
-                Fill = Tok.FillLayerAlt, Corners = CornerRadius4.All(Radii.Control),
-                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Children =
-                [
-                    DetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), status.SpotifyVersion),
-                    DetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()),
-                    SignatureRow(status, overlay),
-                    DetailRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath),
-                ],
-            },
-            new BoxEl
-            {
-                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-                Children =
-                [
-                    HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Replace), _m.ShowAdvanced),
-                    HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Remove), _m.Remove),
-                ],
-            });
+        };
+        if (_m.UpToDate.Value)
+            kids.Add(Body(Loc.Get(Strings.Playback.Runtime.UpToDate)));
+        kids.Add(new BoxEl
+        {
+            Direction = 1, Gap = 6f, Padding = Edges4.All(12f),
+            Fill = Tok.FillLayerAlt, Corners = CornerRadius4.All(Radii.Control),
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Children =
+            [
+                DetailRow(Loc.Get(Strings.Playback.Runtime.DetailVersion), status.SpotifyVersion),
+                DetailRow(Loc.Get(Strings.Playback.Runtime.DetailArch), status.Arch?.ToString()),
+                SignatureRow(status, overlay),
+                DetailRow(Loc.Get(Strings.Playback.Runtime.DetailLocation), status.RuntimePath),
+            ],
+        });
+        kids.Add(new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Replace), _m.ShowAdvanced),
+                HyperlinkButton.Create(Loc.Get(Strings.Playback.Runtime.Remove), _m.Remove),
+            ],
+        });
+        return new BoxEl { Direction = 1, Gap = Spacing.M, Children = kids.ToArray() };
     }
 
     Element Failed() => Status(
