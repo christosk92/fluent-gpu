@@ -88,10 +88,6 @@ ops/build/signing/metadata.json
 **/playplay-runtime.json
 private-runtimes/
 
-# Legacy audio-runtime pack dir (superseded by manifest-driven bare DLL layout).
-app/audio-runtime/
-src/apps/audio-runtime/
-
 # Local PlayPlay native-derivation package. This contains version/arch-specific
 # reverse-engineering glue and is intentionally kept out of source control.
 app/Wavee.PlayPlay/
