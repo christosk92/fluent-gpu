@@ -321,10 +321,13 @@ public static class SceneRecorder
             SpanReuseDisabledReason.Resize | SpanReuseDisabledReason.ModalPaint | SpanReuseDisabledReason.DragGhost |
             SpanReuseDisabledReason.ImageContent | SpanReuseDisabledReason.DragSpotlight;
         bool spanReuseOff = spans is null || (disabledReasons & GlobalReuseKill) != 0;
-        // The span STORE stays alive under every scoped reason (blocked nodes self-gate via IsBlocked, so the off-screen
-        // cull survives for the unblocked rest of the tree); only DragGhost (still global) suppresses the store wholesale.
-        bool spanStoreOn = spans is not null
-            && (disabledReasons & (SpanReuseDisabledReason.DragGhost | SpanReuseDisabledReason.DragSpotlight)) == 0;
+        // The span STORE stays alive under EVERY reason, global ones included (blocked nodes self-gate via IsBlocked, so
+        // the off-screen cull survives for the unblocked rest of the tree). A frame that stores nothing leaves the whole
+        // table one frame stale, and SpanTable's `_frame[i] != frameId - 1` recency test then rejects every entry on the
+        // NEXT frame too — one drag-ghost or drop-spotlight frame cost a full-table re-record afterwards (the 1907-of-1908
+        // spike). Reuse is still killed globally on those frames via GlobalReuseKill; only the store survives, and the
+        // chains that could store a span missing a hoisted visual are stamped by BlockSpecials below.
+        bool spanStoreOn = spans is not null;
         stats.SpanReuseDisabledReasons = disabledReasons;
         Span<NodeHandle> skips = stackalloc NodeHandle[skipRoots.Length + 2 + overlayCount];
         skipRoots.CopyTo(skips);
@@ -342,10 +345,20 @@ public static class SceneRecorder
 
         // Spatial reuse-blocking (scene-memory.md): stamp the ancestor chains whose stored spans could go stale because a
         // special-cased visual lives (or lived last frame) inside them — each popup skipRoot, each live overlay, each exit
-        // orphan's visual parent, and each connected-anim fly anchor (reuseBlockRoots). Only meaningful while span reuse is
-        // globally alive (a global kill already re-records everything). O(specials × depth), alloc-free.
-        if (spans is not null && !spanReuseOff && spanStoreOn)
-            BlockSpecials(scene, spans, spanFrame, skipRoots, overlayCount, reuseBlockRoots, ref stats);
+        // orphan's visual parent, each connected-anim fly anchor (reuseBlockRoots), and the hoisted drag visuals. This runs
+        // whenever the store runs, NOT only while reuse is globally alive: a global kill re-records everything, but those
+        // re-recorded chains omit the hoisted visual, so storing them unblocked is exactly how a stale span is minted.
+        // O(specials × depth), alloc-free.
+        //
+        // The drag chip's chain is stamped only while a drag visual is actually in flight. The overlay registers once for
+        // the preview layer's whole lifetime (DragPreviewLayer's mount effect) and is in `skips` on every one of those
+        // frames, so no ancestor span can go stale from it at rest — stamping it unconditionally would instead block the
+        // app root's chain from storing forever.
+        if (spanStoreOn)
+            BlockSpecials(scene, spans!, spanFrame, skipRoots, overlayCount, reuseBlockRoots,
+                hasGhost ? ghost : NodeHandle.Null,
+                hasDragOverlay && (hasGhost || scene.DropSpotlightActive) ? dragOverlay : NodeHandle.Null,
+                ref stats);
 
         Walk(scene, dl, images, scene.Root, Affine2D.Identity, 1f, 0, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
             1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skips[..skipCount], spans, spanFrame, spanReuseOff, spanStoreOn, ref stats);
@@ -554,9 +567,14 @@ public static class SceneRecorder
     /// change without a record-dirty mark) + each exit orphan's visual parent (orphans replay INSIDE that parent's Walk)
     /// + each connected-anim fly anchor (source/dest nodes pinned/hidden by <see cref="FluentGpu.Animation.ConnectedAnimation"/>).</summary>
     private static void BlockSpecials(SceneStore scene, SpanTable spans, uint frame,
-        ReadOnlySpan<NodeHandle> skipRoots, int overlayCount, ReadOnlySpan<NodeHandle> reuseBlockRoots, ref RecordAccumulator stats)
+        ReadOnlySpan<NodeHandle> skipRoots, int overlayCount, ReadOnlySpan<NodeHandle> reuseBlockRoots,
+        NodeHandle ghost, NodeHandle dragOverlay, ref RecordAccumulator stats)
     {
         for (int i = 0; i < skipRoots.Length; i++) BlockChain(scene, spans, frame, skipRoots[i], ref stats);
+        // The hoisted drag visuals are excluded from the main pass and re-walked in their own top bands, so an ancestor
+        // that stores while one of them is lifted stores a subtree with the dragged row missing.
+        BlockChain(scene, spans, frame, ghost, ref stats);
+        BlockChain(scene, spans, frame, dragOverlay, ref stats);
         for (int i = 0; i < overlayCount; i++)
         {
             var ov = scene.OverlayAt(i);

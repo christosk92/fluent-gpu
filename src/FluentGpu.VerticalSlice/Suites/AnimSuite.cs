@@ -3393,6 +3393,46 @@ static class AnimSuite
                 $"f3reused={f3.SpansReused} f3policy={f3Policy} f4policy={f4Policy} f4hold={f4.BlurHoldCandidateCount} f5policy={f5Policy}");
         }
 
+        // gate.span.storeGapHealed — a drag-ghost frame kills span REUSE globally, but it must not also skip the span
+        // STORE: SpanTable only accepts an entry recorded on the immediately preceding frame, so one store-less frame
+        // rejected the whole table on the frame after it too (a full-canvas re-record for a single ghost frame). The
+        // ghost's own ancestor chain is the one thing that must still not store — it records without the lifted row.
+        {
+            var s = new SceneStore();
+            var root = s.CreateNode(1); s.Root = root;
+            s.Bounds(root) = new RectF(0, 0, 240, 120);
+            var list = SB(s, root, new RectF(0, 0, 120, 120), ColorF.FromRgba(0x10, 0x30, 0x50));
+            var other = SB(s, root, new RectF(120, 0, 120, 120), ColorF.FromRgba(0x50, 0x30, 0x10));
+            var row = SB(s, list, new RectF(10, 10, 80, 20), ColorF.FromRgba(0x90, 0x90, 0x90));
+            _ = SB(s, other, new RectF(10, 10, 80, 20), ColorF.FromRgba(0x30, 0x30, 0x30));
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            _ = SceneRecorder.Record(s, dl, spans: spans);
+            s.ClearRecordDirty();
+            var steady = SceneRecorder.Record(s, dl, spans: spans);   // baseline: reuse is live before the ghost
+
+            // The ghost frame: reuse dies canvas-wide (GlobalReuseKill), but every unblocked node still stores.
+            s.Flags(row) |= NodeFlags.DragGhost;
+            s.DragGhost = row;
+            var ghostFrame = SceneRecorder.Record(s, dl, spans: spans);
+            uint gf = spans.CurrentFrameId;
+            bool ghostChainWithheld = !spans.StoredAtFrame((int)list.Raw.Index, gf)
+                                      && !spans.StoredAtFrame((int)root.Raw.Index, gf);
+            bool bystanderStored = spans.StoredAtFrame((int)other.Raw.Index, gf);
+
+            // Drop the ghost. The bystander subtree stored on the ghost frame, so it is still recent enough to reuse;
+            // only the ghost's own chain (which withheld its store) has to re-record.
+            s.Flags(row) &= ~NodeFlags.DragGhost;
+            s.DragGhost = NodeHandle.Null;
+            var afterGhost = SceneRecorder.Record(s, dl, spans: spans);
+
+            Check("gate.span.storeGapHealed",
+                steady.SpansReused > 0 && ghostFrame.SpansReused == 0
+                && ghostChainWithheld && bystanderStored && afterGhost.SpansReused > 0,
+                $"steady={steady.SpansReused} ghostReused={ghostFrame.SpansReused} chainWithheld={ghostChainWithheld} bystanderStored={bystanderStored} after={afterGhost.SpansReused} reasons={ghostFrame.SpanReuseDisabledReasons}");
+        }
+
         static NodeHandle SB(SceneStore s, NodeHandle parent, RectF r, ColorF fill)
         {
             var n = s.CreateNode(1);
