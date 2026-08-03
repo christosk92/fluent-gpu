@@ -12,6 +12,14 @@ Three load-bearing facts were independently re-verified against source after gen
 
 **Status:** decision-ready. **Authority for engine facts:** the adversarial verdicts in the brief, cross-checked here against live `src/` and `app/` source. Where a verdict refutes a convenience assumption, this plan treats the corrected behavior as binding.
 
+> **SUPERSEDE NOTE — char pop removed 2026-08-03 — refuted by frame-verified Apple Music footage.** There is **no glyph
+> magnification** in the reference animation, so the syllable/per-word scale-pop is no longer a Wavee target and the
+> engine's forced coupling of `GlyphWipe.Lift > 0` to a ≈1.12× per-glyph pop (`GlyphRenderer.LayoutRunGradient`) is
+> deleted. `Lift` is now **dy-only**: an unsung glyph sits `Lift` DIP below its baseline and rises smoothly to it as the
+> feather band sweeps it; a sung glyph never moves. BetterLyrics' own `1.0→1.15→1.0` pop, inventoried in §2.3, is still
+> an accurate description of *BetterLyrics*. Every "scale-pop" row below is superseded on that point only. Authority:
+> the frame-verified Apple-Music behavioral spec (2026-08-03 lyrics-parity campaign) + the `FluentGpu.Foundation.GlyphWipe` XML contract.
+
 ---
 
 ## 1. Executive summary & overall parity verdict
@@ -62,7 +70,7 @@ Driven by `LyricsAnimator.UpdateLines` (`LyricsAnimator.cs:17-383`) which maps `
 - **Karaoke fill** (`LyricsLineRendererBase.cs:79-272`): per text region a **4-stop horizontal gradient** with a moving split = `playedWidth/regionWidth`, played→sharp edge→**soft fade**→unplayed; fade width `=(1/charCount)*0.5*firstCharProgress`. Continuous, clock-driven.
 - **Per-char float** `0→peak→0`, fires once on syllable start, `LyricsFloatAnimationDuration=450ms`, per-char begin delay; amount `lineHeight*0.1` (auto).
 - **Per-char/long-syllable glow** `0→glowPx`, cropped to the played portion, GaussianBlur additive; gated to syllables ≥`700ms`; amount `lineHeight*0.2` (auto).
-- **Syllable scale-pop** `1.0→1.15→1.0`, ~350ms, pivot = syllable center; gated to syllables ≥700ms.
+- **Syllable scale-pop** `1.0→1.15→1.0`, ~350ms, pivot = syllable center; gated to syllables ≥700ms. *(Accurate for BetterLyrics; **NOT a Wavee target** — char pop removed 2026-08-03, refuted.)*
 - **Char timing** is *synthesized uniformly* inside a syllable (`avgCharDuration = syllable.DurationMs/length`) even for real word-by-word data (`RenderLyricsChar.cs:11-58`).
 
 ### 2.4 Effects surface (`LyricsEffectSettings.cs:7-115`)
@@ -141,7 +149,7 @@ Effort S/M/L/XL; Status folds the verdicts; Rating = full/close/approximate/bloc
 | Karaoke fill — discrete recolor | per-syllable `SpanTextEl`, re-mint on boundary | M | med | supported; re-shapes line per boundary (verdict #14) | **approximate** (flat flip) |
 | Karaoke fill — **soft gradient** wipe | gradient-on-glyph / per-instance clock color | L | high | blocked today (verdicts #6/#14) | **blocked** → Engine |
 | Per-char float (0→peak→0, delay) | `Keyframes(TranslateY, CompositeOp.Add)` on per-glyph node | L | med | supported small-scale; un-budgeted at line scale (verdict #3) | **approximate** (per-word full; per-letter Engine) |
-| Syllable scale-pop 1→1.15 | `UseSpring(Scale, ExpressiveSpring)` overshoot, per-word node | M | low | supported | **close** (per-word) |
+| ~~Syllable scale-pop 1→1.15~~ **(superseded 2026-08-03 — refuted, removed)** | `UseSpring(Scale, ExpressiveSpring)` overshoot, per-word node | M | low | supported | **not a target** |
 | Per-char glow (cropped, additive) | blurred duplicate + `BlurSigma` + `ClipR` | L | med | supported as halo, not additive bloom (verdict #7) | **approximate** |
 | Char timing synthesis (avgCharDuration), NaN guard | component logic | S | low | ports verbatim | **full** |
 
@@ -269,7 +277,7 @@ LyricsTicker : ReactiveComponent               // 0×0, never re-renders; gated 
 | 4× fill/stroke `ColorTransition` | `TextEl.Color` literal + `BrushTransitionMs=300f` (fill); **E2** for continuous; stroke = **E4** | re-render with new literal color | 300ms linear |
 | Karaoke fill split | `ClipR` `Drive(mediaClockRef, lineStart, lineEnd)` on played copy (hard); **E1** for soft | continuous (clock) | time-independent |
 | Per-char `FloatTransition` 0→peak→0 | `Keyframes(TranslateY,[(0,0),(0.5,-a),(1,0)],450ms, CompositeOp.Add)` per word/glyph node | syllable-start edge | 450ms, per-row `delayMs` |
-| Per-syllable scale-pop | `UseSpring(Scale, ExpressiveSpring)` from 1.15 | syllable-start edge | ~350ms overshoot |
+| ~~Per-syllable scale-pop~~ **(superseded 2026-08-03 — refuted, removed)** | `UseSpring(Scale, ExpressiveSpring)` from 1.15 | syllable-start edge | ~350ms overshoot |
 | Per-char `GlowTransition` | blurred duplicate `BlurSigma`+`ClipR` (approx); **E4** for true | long-syllable (≥700ms) | 350ms |
 | `*XOffsetTransition` (marquee) | shipped `Marquee`, shared `CycleMs` | overflow detected | looping wall-clock |
 
@@ -278,7 +286,7 @@ LyricsTicker : ReactiveComponent               // 0×0, never re-renders; gated 
 ### 6.4 Render / draw approach
 - **Line column:** `BoxEl` per `LineVm` in a flex column; the column is translated by the scroll spring. Each line wraps up to 3 stacked `TextEl` (layer order Tertiary/Primary/Secondary). For non-karaoke lines, one flat-tinted `TextEl`.
 - **Karaoke (Phase 2 default):** two stacked color copies (unplayed beneath, played on top). The **played copy node carries the `ClipRect`**; animate `AnimChannel.ClipR` via `Drive` so the recorder sweeps a rectangular scissor across that node's own glyphs (verified: clip pushed before the node's own glyph emit). Build `ClipR` keyframes from `GetRangeRects` (node-local px, 0→lineWidth). **Hard edge** — honest compromise vs BetterLyrics' soft fade until E1.
-- **Per-word motion (Phase 3a):** one `BoxEl`+`TextEl` per word in a flex row; animate `ScaleX/Y` (pop), `TranslateY` (`CompositeOp.Add` float). Cheap for visible lines. Per-letter only with E3.
+- **Per-word motion (Phase 3a):** one `BoxEl`+`TextEl` per word in a flex row; animate ~~`ScaleX/Y` (pop)~~ *(char pop removed 2026-08-03 — refuted)*, `TranslateY` (`CompositeOp.Add` float). Cheap for visible lines. Per-letter only with E3.
 - **Glow:** colored blurred duplicate behind the crisp copy, `BlurSigma 0→glow` + `Opacity`, cropped by `ClipR`. Recommend per-word or single active-line glow (cost — verdict #7).
 - **Edge-fade vignette:** `EdgeFadeSpec.Vertical(band)` on the lyrics viewport (first-class, `EdgeFade` layer).
 - **Backdrop:** album art as full-bleed `ImageEl` behind an Acrylic node (blurs the canvas, verdict #9) or a cheap heavy wash via the **BlurHash LQIP** tile; slow `Rotation` loop; track-change `DrawImage` crossfade. Heavy ~100 blur is clamped to ~60px effective (verdict #9) — accept, or raise the acrylic downsample clamp.
@@ -341,8 +349,8 @@ Each phase is independently shippable. Engine gaps that unblock multiple feature
 
 ### Phase 2 — Word-level karaoke (hard-edge) + per-word motion (ZERO engine work)
 - Two-stacked-copies + `ClipR` `Drive(mediaClockRef, lineStart, lineEnd)` on the played copy (register the clock **once**, reuse `drivenRef` — R11). Region x from `GetRangeRects`.
-- Per-word scale-pop (`UseSpring` overshoot) + float (`Keyframes` `TranslateY`, `CompositeOp.Add`), long-syllable (≥700ms) gating; per-word halo glow (active line only).
-- **Acceptance:** build clean; karaoke wipe sweeps in sync across seek/pause/buffer (hard edge, honestly noted); words pop/float on syllable onset; VerticalSlice green (no phase 6–13 alloc; per-syllable seeds at the reconcile edge only).
+- ~~Per-word scale-pop (`UseSpring` overshoot)~~ *(superseded 2026-08-03 — refuted, removed)* + float (`Keyframes` `TranslateY`, `CompositeOp.Add`), long-syllable (≥700ms) gating; per-word halo glow (active line only).
+- **Acceptance:** build clean; karaoke wipe sweeps in sync across seek/pause/buffer (hard edge, honestly noted); words ~~pop~~/float on syllable onset *(pop removed 2026-08-03 — refuted; float only)*; VerticalSlice green (no phase 6–13 alloc; per-syllable seeds at the reconcile edge only).
 
 ### Phase 3 — Engine accelerators (unlock the signature; each independently shippable)
 - **3a — E1 (soft gradient glyph wipe):** `DrawGlyphRunGradient` op + PS. **Acceptance:** new VerticalSlice gate asserts the op/gradient stops headlessly + a `--screenshot` soft-edge diff; Phase-2 karaoke swaps hard→soft with no control rewrite.

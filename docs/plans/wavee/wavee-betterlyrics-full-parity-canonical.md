@@ -26,7 +26,16 @@ file:line anchor below was re-verified against live src/ and app/ this session (
 
 # Wavee × BetterLyrics — FULL Effect Parity (Canonical Design)
 
-**Lead architect's brief, restated.** The bar is the **full BetterLyrics look**, not the tamed WaveeMusic panel: procedural shader backdrops (fluid / fog / rain / snow), the soft sweeping gradient karaoke wipe, per-character float + glow + scale-pop, continuous per-syllable color, the 2D and 3D fan, the spectrum visualizer, vertical CJK. **Everything is in scope.** The only acceptable cuts are *true* engine or physical limits — and each such cut is named in §6 with its verified verdict.
+> **SUPERSEDE NOTE — char pop removed 2026-08-03.** Refuted by frame-verified Apple Music footage: there is **no glyph
+> magnification** anywhere in the reference animation. The engine's `LayoutRunGradient` used to couple `GlyphWipe.Lift > 0`
+> to a ≈1.12× per-glyph scale pop; that coupling is deleted, and `Lift` is now **dy-only** (an unsung glyph sits `Lift` DIP
+> below its baseline and rises to it as the feather band sweeps it; a sung glyph never moves). BetterLyrics' own
+> `1.0→1.15→1.0` syllable pop, inventoried in §2.2 below, remains an accurate description of *BetterLyrics* — it is simply
+> no longer a Wavee target. Every "scale-pop" mention below is superseded on that point only; the float/glow/wipe
+> descriptions stand. Authority: the frame-verified Apple-Music behavioral spec (2026-08-03 lyrics-parity campaign) +
+> the `FluentGpu.Foundation.GlyphWipe` XML contract.
+
+**Lead architect's brief, restated.** The bar is the **full BetterLyrics look**, not the tamed WaveeMusic panel: procedural shader backdrops (fluid / fog / rain / snow), the soft sweeping gradient karaoke wipe, per-character float + glow + scale-pop *(pop superseded — see the note above)*, continuous per-syllable color, the 2D and 3D fan, the spectrum visualizer, vertical CJK. **Everything is in scope.** The only acceptable cuts are *true* engine or physical limits — and each such cut is named in §6 with its verified verdict.
 
 This document is decision-ready. It is the new canonical design for the lyrics feature's *maximalist* tier; the right-rail product doc remains canonical for the rail shell it owns.
 
@@ -40,7 +49,7 @@ The full BetterLyrics effect set **cannot** all live in a 300px right rail. A ra
 
 | Surface | What it is | Host (verified) | Effects it carries |
 |---|---|---|---|
-| **Rail** (compact) | The Spotify-style right sidebar lyrics tab — the calm, readable, always-available view. | `RightRail`→`LyricsView`, third child of `WaveeShell.cs:195-294`'s sidebar+content row (docs/wavee-lyrics-canonical-design.md §2). | Line-level scale/opacity/2D-fan, scroll-follow, **word karaoke (soft wipe)**, **per-character float/glow/scale-pop**, continuous per-syllable color, neighbour fade/scale, edge-fade vignette, multi-layer (translation/phonetic). |
+| **Rail** (compact) | The Spotify-style right sidebar lyrics tab — the calm, readable, always-available view. | `RightRail`→`LyricsView`, third child of `WaveeShell.cs:195-294`'s sidebar+content row (docs/wavee-lyrics-canonical-design.md §2). | Line-level scale/opacity/2D-fan, scroll-follow, **word karaoke (soft wipe)**, **per-character float/glow/~~scale-pop~~** *(pop superseded 2026-08-03 — refuted)*, continuous per-syllable color, neighbour fade/scale, edge-fade vignette, multi-layer (translation/phonetic). |
 | **Fullscreen "Expanded"** (maximalist) | The immersive full-now-playing takeover, lyrics replacing the hero column. The full BetterLyrics canvas. | `NowPlayingView` via `NowPlayingLayer`, a top ZStack layer in `WaveeShell.cs:317` gated on `PlaybackBridge.Expanded` (`Signal<bool>`, `PlaybackBridge.cs:60`; layer `NowPlayingView.cs:21-30`). | **Everything the rail has, PLUS** procedural backdrops (fluid/fog/rain/snow), blurred rotating album cover, the spectrum visualizer, the 3D perspective fan, bass-reactive breathing, the full edge-feather + compositor stack, vertical CJK. |
 
 **The effect→surface map, explicitly:**
@@ -49,6 +58,7 @@ The full BetterLyrics effect set **cannot** all live in a 300px right rail. A ra
 RAIL  = line-level (scale/opacity/2D-fan/scroll)          [shipped channels, zero engine work]
       + word karaoke soft wipe                            [E1]
       + per-character float / glow / scale-pop            [E3 per-glyph transform; glow via E1+blur]
+        (scale-pop SUPERSEDED 2026-08-03 — refuted; float = GlyphWipe.Lift, dy-only)
       + continuous per-syllable color                     [E2]
       + neighbour fade/scale + edge-fade vignette         [shipped]
       + multi-layer (primary/translation/phonetic)        [control composition, zero engine work]
@@ -97,7 +107,7 @@ Driven by `LyricsAnimator.UpdateLines` (`LyricsAnimator.cs:17-383`), which recom
 - **Karaoke fill — the soft sweeping gradient wipe** (`LyricsLineRendererBase.cs:173-204`): per text region, a **4-stop horizontal gradient** masked through the white glyph fill, with a moving split = `playedWidth/regionWidth`. Stops: `stop0@0=played, stop1@progress=played, stop2@progress+fade·firstCharProg=unplayed, stop3@1+fade=unplayed`, `fade=0.5/charCount` (the soft leading edge = half one char's share). Continuous, clock-driven. A **parallel** 4-stop gradient runs through the stroke mask sharing the same split (`:185-197`).
 - **Continuous per-syllable color**: played≠unplayed fill/stroke colors on the active line; the ~6 `*ColorTransition` channels (AppColor, 0.3s, `LyricsAnimator.cs:191-205`). Off-lines are a single grayed color.
 - **Per-char float** `0→peak→0`, fires once on syllable start; `LyricsFloatAnimationDuration=450ms`, per-char begin delay; amount `lineHeight·0.1` (`:286-292`).
-- **Syllable scale-pop** `1.0→1.15→1.0`, Sine, ~350ms, pivot = syllable center; gated to syllables ≥700ms (`:316-329`).
+- **Syllable scale-pop** `1.0→1.15→1.0`, Sine, ~350ms, pivot = syllable center; gated to syllables ≥700ms (`:316-329`). *(Accurate for BetterLyrics; **NOT a Wavee target** — char pop removed 2026-08-03, refuted by frame-verified Apple Music footage.)*
 - **Per-char glow / bloom** `0→glowPx`, a Gaussian blur of the **played sub-region** of the char drawn enlarged beneath the crisp glyph (additive-style bloom via over-draw), cropped to `progressPlayed`; gated to syllables ≥700ms; amount `lineHeight·0.2` (`LyricsLineRendererBase.cs:261-269`, `RenderLyricsChar.cs:42-43`).
 - **Char timing** is synthesized uniformly inside a syllable (`avgCharDuration = syllable.DurationMs/length`), even for real word-by-word data (`RenderLyricsChar.cs:11-58`).
 
@@ -209,6 +219,11 @@ This keeps the hot slab scalar (no row bloat), reuses 100% of the dynamics, adds
 **Acceptance:** VerticalSlice exercises a Color row under the alloc tripwire (0 phase 6-13 bytes) and asserts premultiplied-linear midpoint correctness (a 50% lerp opaque-red→transparent-blue matches the `BrushFade` midpoint — same helper); `--screenshot` of a continuous line-color ramp.
 
 #### A4 — Per-glyph transform (per-LETTER float / scale-pop) — **L** (VM-bake) / **XL** (per-glyph springs) — *no GPU change; non-uniform `Replay` feed*
+
+> **Superseded in part (2026-08-03): the SCALE half is gone.** Char pop removed — refuted by frame-verified Apple Music
+> footage; `GlyphWipe.Lift` is now dy-only. The per-letter FLOAT this section specifies shipped as exactly that: the
+> wipe's own per-glyph `Dy` (`GlyphRenderer.LayoutRunGradient` → `ReplayGradient`), no `Sx/Sy` and no `GlyphXform`
+> side-table. The general per-glyph-transform design below stands as a *future* primitive, not as lyrics work.
 **Status:** `GlyphInstance` carries a full per-instance 2×3 affine, applied per-instance in the VS (`:23,192-198`); `Replay` stamps one uniform `world` (`:577`). The capacity exists; the feed does not. *(Verdict `text-glyph/glyph-instance-per-color-xform`, `line-anim-compositor/glyph-per-instance` — both SUPPORTED.)*
 
 **Implementation — per-glyph transform array fed to `Replay`** (the symmetric twin of A2 on the transform fields):
@@ -330,7 +345,7 @@ The FFT runs on the audio thread into a lock-guarded double-buffer; the UI reads
 The master rule (BetterLyrics per-frame `UpdateLines` → FluentGpu seed-on-deps): FluentGpu forbids per-frame `Animate`/`Keyframes`/`Drive` seeding (each allocs a `Keyframe[]` / grows a dict — trips the gate). Map BetterLyrics' three shapes:
 1. **"Set target each frame on an edge-gated value"** (scroll/scale/blur/fan/opacity/color) → **deps-keyed seed** (`UseSpring(channel, target, deps:[activeLine, paletteEpoch, layoutEpoch])`). A spring retargets velocity-continuously (`Spring()` rebases x0/v0 from the live value, `AnimScheduler.cs:277-283`), so deps-seeded == per-frame-seeded visually. Seed at the reconcile edge (excluded from the gate); **0** in phases 6-13. (BetterLyrics' own 5-flag gate, `LyricsAnimator.cs:110`, already fires these only on change.)
 2. **"Continuous clock-driven progress"** (karaoke split, marquee) → the **`Drive` path** (value-gated, time-independent across seek/pause). Seed once per line; **0** in phases 6-13.
-3. **"One-shot pulse on a rising/falling edge"** (per-char float, syllable pop, glow) → **edge-detected seed in the value-gated `OnFrame`** (detect the `IsPlayingLastFrame` edge, seed `Keyframes`/`Spring` once on the few syllables crossing onset this tick — at the effect boundary, never the steady hot path).
+3. **"One-shot pulse on a rising/falling edge"** (per-char float, ~~syllable pop~~ *(removed 2026-08-03 — refuted)*, glow) → **edge-detected seed in the value-gated `OnFrame`** (detect the `IsPlayingLastFrame` edge, seed `Keyframes`/`Spring` once on the few syllables crossing onset this tick — at the effect boundary, never the steady hot path).
 
 *(Verdict `line-anim-compositor/edgefade-blur-drive` — SUPPORTED: `Drive` is value-gated by `Clocks.Sample` with no dt term; `SeedEased`/`Get`-retarget reuse the existing slot 0-alloc. Honest nuance: a one-shot `Drive` seed with a fresh `Keyframe[]` allocates that array at the *call site* (seed time), not in the advance loop — `Drive` once with a stable/reused keyframe array.)*
 
@@ -394,7 +409,7 @@ The compositor **order itself is free** — sibling Z-order + a few layer groups
 | **A1** | `DrawGlyphRunGradient` op + glyph-gradient PS | The soft sweeping karaoke wipe (the signature) | Engine (op/payload/recorder/`WipeSplit` side-table channel) + Windows (PSO + per-draw stops) | **L** | SUPPORTED — gradient PS × R8 coverage; new op genuinely required |
 | **A2** | per-glyph color override in `Replay` | Continuous per-syllable color | Engine (recorder + `GlyphColorRamp` side-table); **no GPU change** | **M** | SUPPORTED — per-glyph color seam already proven |
 | **A3** | `AnimChannel.Color` (side-store + Compose fold) | Node-level animated/spring color | Engine only (channel + `_colorBySlot` + `Accum.Col` + Compose + `SeedColor`/hook) | **L** | SUPPORTED — single-float substrate; side-store progress pattern required |
-| **A4** | per-glyph transform in `Replay` | Per-letter float / scale-pop; vertical-CJK Tier 1 substrate | Engine (recorder + `GlyphXform` side-table); **no GPU change** | **L** / XL (springs) | SUPPORTED — per-instance affine already applied in VS |
+| **A4** | per-glyph transform in `Replay` | Per-letter float / ~~scale-pop~~; vertical-CJK Tier 1 substrate | Engine (recorder + `GlyphXform` side-table); **no GPU change** | **L** / XL (springs) | SUPPORTED — per-instance affine already applied in VS. **Pop superseded 2026-08-03** (refuted); the float shipped as `GlyphWipe.Lift`, dy-only |
 | **A5** | offset-stroke R8 mask atlas + stroke flag | Glyph stroke/outline | Windows (atlas bake + stroke PSO) + Engine (flag on A1's cmd) | **XL** / **M** (faux) | gap confirmed; default-off in BL |
 | **A6** | blurred-duplicate run (composes A1+blur+clip) | Per-char glow / bloom | none beyond A1 (Engine: twice-emit active line) / XL (additive) | **M** / XL | gap confirmed; composition bloom = visually BL's |
 | **A7** | control composition | Multi-layer primary/translation/phonetic | none | **S** | — |
@@ -442,9 +457,9 @@ Each phase is independently shippable and gated by: `dotnet build src/FluentGpu.
 ### Phase 2 — The karaoke SIGNATURE + per-character motion (the fancy effects, early)
 - **A1 — soft sweeping gradient karaoke wipe:** the `DrawGlyphRunGradient` op + `PSMainGradient` PSO + `WipeSplit` side-table channel, driven by the `Drive` media clock (register once, reuse `drivenRef`). On both surfaces.
 - **A2 — continuous per-syllable color:** per-glyph color override fed to `Replay` (no GPU change).
-- **A4 — per-character float / scale-pop:** per-glyph transform fed to `Replay` (VM-bake, L path).
+- **A4 — per-character float / ~~scale-pop~~:** per-glyph transform fed to `Replay` (VM-bake, L path). *(Char pop removed 2026-08-03 — refuted by frame-verified Apple Music footage; the float shipped as `GlyphWipe.Lift`'s per-glyph `Dy`, dy-only.)*
 - **A6 — glow/bloom:** the blurred-duplicate active-line run (composes A1 + `BlurSigma` + `ClipR`).
-- **Acceptance:** the wipe sweeps softly in sync across seek/pause; syllables ramp color; letters float/pop on onset; the active line glows growing with the wipe; new VerticalSlice gates assert the `DrawGlyphRunGradient` op + stops + per-glyph arrays headlessly under the alloc tripwire (0 phase 6-13 bytes); `--screenshot` soft-edge + per-glyph diffs.
+- **Acceptance:** the wipe sweeps softly in sync across seek/pause; syllables ramp color; letters float on onset *(rise into the baseline — no pop)*; the active line glows growing with the wipe; new VerticalSlice gates assert the `DrawGlyphRunGradient` op + stops + per-glyph arrays headlessly under the alloc tripwire (0 phase 6-13 bytes); `--screenshot` soft-edge + per-glyph diffs.
 
 ### Phase 3 — Procedural backdrops + spectrum (fullscreen maximalist)
 - **B1+B2 — the `LayerKind.ProceduralBg` primitive + `FrameInfo.TimeSec` + record-time CB bake.**
@@ -529,4 +544,4 @@ Every per-frame write across both surfaces is a **mutation of a pre-allocated/po
 
 ---
 
-**Bottom line.** The full BetterLyrics look is reachable, and the surface split is what makes it honest: the rail carries the readable line+karaoke+per-char tier, the fullscreen Expanded surface carries the maximalist backdrops + spectrum + 3D. The line-level view ships first with zero engine work; the **signature** (soft gradient karaoke wipe, continuous per-syllable color, per-letter float/glow/pop) lands in **Phase 2**, not deferred — because the GPU is already per-instance-capable and the wipe is the gradient PS masked by the R8 coverage that already exists. Procedural backdrops + spectrum land in **Phase 3** behind one `LayerKind.ProceduralBg` primitive and hand-authored HLSL (the transpiler is **not** vendored). The two genuinely hard items — the 3D perspective fan and vertical CJK — are bounded new-primitive work in clean seams, default-off in BetterLyrics, and land last; they are named, not hand-waved. The two true data limits (the real lyrics feed and the audio FFT) are blockers behind their respective seams, named honestly. Total full-parity engine cost: **L–XL, concentrated and well-scoped**, with **zero per-frame managed allocation in render phases 6-13** held throughout.
+**Bottom line.** The full BetterLyrics look is reachable, and the surface split is what makes it honest: the rail carries the readable line+karaoke+per-char tier, the fullscreen Expanded surface carries the maximalist backdrops + spectrum + 3D. The line-level view ships first with zero engine work; the **signature** (soft gradient karaoke wipe, continuous per-syllable color, per-letter float/glow, ~~pop~~ — char pop removed 2026-08-03, refuted by frame-verified Apple Music footage) lands in **Phase 2**, not deferred — because the GPU is already per-instance-capable and the wipe is the gradient PS masked by the R8 coverage that already exists. Procedural backdrops + spectrum land in **Phase 3** behind one `LayerKind.ProceduralBg` primitive and hand-authored HLSL (the transpiler is **not** vendored). The two genuinely hard items — the 3D perspective fan and vertical CJK — are bounded new-primitive work in clean seams, default-off in BetterLyrics, and land last; they are named, not hand-waved. The two true data limits (the real lyrics feed and the audio FFT) are blockers behind their respective seams, named honestly. Total full-parity engine cost: **L–XL, concentrated and well-scoped**, with **zero per-frame managed allocation in render phases 6-13** held throughout.

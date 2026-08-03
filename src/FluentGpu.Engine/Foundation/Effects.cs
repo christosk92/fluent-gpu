@@ -76,12 +76,19 @@ public readonly record struct GradientSpec(GradientShape Shape, float AngleDeg, 
 /// <summary>A left→right WIPE fill for a glyph run — a general text-reveal effect (the lyrics karaoke uses it, but it is
 /// app-neutral: progress text, sweep reveals, …). <see cref="Split"/> (0..1) is a fraction of the run's content IN
 /// READING ORDER: the replay lays a wrapped run's visual lines END-TO-END (line 1 left→right, then line 2, …) over glyph
-/// EDGES (first glyph's left edge → last glyph's right edge), so a glyph before <see cref="Split"/> in reading order is
-/// painted <see cref="Before"/> and one after it <see cref="After"/>, with a <see cref="Softness"/>-wide soft boundary the
-/// replay remaps so <see cref="Split"/>==1 fully clears the run's trailing edge (and ==0 leaves it wholly unsung);
-/// <see cref="Lift"/> floats a just-passed glyph up by Lift DIP (settling behind the boundary). Carried in a sparse scene
-/// side-table and emitted as <c>DrawGlyphRunGradient</c> (reuses the glyph PSO via per-instance color/offset — no new
-/// shader). Advancing <see cref="Split"/> per frame is reshape-free.</summary>
+/// EDGES (first glyph's left edge → last glyph's right edge). The boundary is PER-PIXEL, not per-glyph: the fill mixes
+/// <see cref="Before"/> (behind the boundary) → <see cref="After"/> (ahead of it) across a <see cref="Softness"/>-wide
+/// feather band, so a glyph straddling the boundary renders half sung / half unsung, and the replay remaps the band's
+/// endpoints so <see cref="Split"/>==1 fully clears the run's trailing edge (and ==0 leaves it wholly unsung).
+/// <para><see cref="Lift"/> is a pure vertical DIP offset with NO scale component (verified frame-by-frame against Apple
+/// Music, 2026-08-03): a glyph the boundary has not reached yet sits <see cref="Lift"/> DIP BELOW its baseline and rises
+/// smoothly to it as the feather band sweeps across it (the rise spans exactly the <see cref="Softness"/> window); once
+/// swept, a glyph is rock-solid and never moves again. Glyphs do NOT magnify at the boundary — the ≈1.12× per-glyph
+/// "char pop" the replay used to couple to <c>Lift &gt; 0</c> was refuted by that footage and removed.</para>
+/// Carried in a sparse scene side-table and emitted as <c>DrawGlyphRunGradient</c>. A run whose wipe has SETTLED
+/// (<see cref="Split"/> ≤ 0 or ≥ 1) is a constant fill and the backend replays it through the plain single-color glyph
+/// path instead, pixel-identically — so only the run actually mid-wipe pays gradient cost. Advancing
+/// <see cref="Split"/> per frame is reshape-free.</summary>
 public readonly record struct GlyphWipe(ColorF Before, ColorF After, float Split, float Softness = 0.06f, float Lift = 0f);
 
 /// <summary>

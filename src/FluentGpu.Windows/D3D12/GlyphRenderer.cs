@@ -216,6 +216,12 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     private readonly GradGlyphInstance*[] _mappedGrad = new GradGlyphInstance*[FrameCount];
     private int _gradCursor;
     private ulong _activeGradGva;
+    // Gradient-budget visibility. Overflow used to be SILENT: RecordGradient clamped to MaxGradGlyphs and folded the
+    // remainder into the SHARED _dropped total, so a truncated wipe (the tail of a lyric line simply not painted) was
+    // indistinguishable from every other pipeline's drop. These two are cheap (a few int ops per RECORD, not per glyph)
+    // so they stay compiled in like _dropped; the loud reporting on top of them is [Conditional]-erased on Release.
+    private int _gradDropped;    // gradient instances dropped THIS frame (0 = healthy)
+    private int _gradPeak;       // session high-water of gradient instances used in ONE frame, vs MaxGradGlyphs
 
     private const string Hlsl = """
 struct G { float2 dst; float2 size; float2 uv0; float2 uv1; float4 color; float4 m; float2 t; float opacity; float pad; };
@@ -291,6 +297,14 @@ float4 PSMain(VSOutG i) : SV_Target
     public int RunsShaped => _runsShaped;
     public int DroppedInstances => _dropped;
     public long AtlasNonZero => _atlasNonZero;
+    /// <summary>Sub-glyph WIPE instances dropped this frame because the <c>MaxGradGlyphs</c> budget was exhausted.
+    /// Non-zero = a karaoke line rendered TRUNCATED; the budget (or the settled-split fast path) needs attention.</summary>
+    public int GradInstancesDropped => _gradDropped;
+    /// <summary>Session high-water mark of sub-glyph WIPE instances used in one frame, against the fixed
+    /// <c>MaxGradGlyphs</c> budget — the headroom probe for the lyrics surfaces.</summary>
+    public int GradInstancePeak => _gradPeak;
+    /// <summary>The fixed per-frame sub-glyph WIPE instance budget (the denominator for <see cref="GradInstancePeak"/>).</summary>
+    public static int GradInstanceBudget => MaxGradGlyphs;
 
     // ── MemCensus accessors (O(1), or a tiny fixed-bucket sum) ────────────────────────────────────
     /// <summary>Cached rasterized glyph entries (the glyph atlas cache) — O(1) census.</summary>
@@ -612,19 +626,32 @@ float4 PSMain(VSOutG i) : SV_Target
     }
 
     private float[] _gradDy = Array.Empty<float>();
-    private float[] _gradScale = Array.Empty<float>();   // per-glyph scale pop at the wipe front (BetterLyrics char pop)
     private float[] _gradRo0 = Array.Empty<float>();     // per-glyph reading-order LEFT  (continuous across wrapped visual lines)
     private float[] _gradRo1 = Array.Empty<float>();     // per-glyph reading-order RIGHT
 
+    /// <summary>A SETTLED wipe whose effective fill alpha (color.A × opacity) lands below this contributes nothing
+    /// through the premultiplied blend (SRC=ONE, DEST=INV_SRC_ALPHA: dest scales by 1−α and gains α·rgb), i.e. under
+    /// 0.03/255 of an 8-bit channel — far below one quantization step. Skipping the draw is therefore pixel-identical,
+    /// and it drops the lyrics GLOW layer's fully-unsung lines (its <c>After</c> is A==0) entirely instead of pushing
+    /// invisible instances through the shaper and the instance budget.</summary>
+    private const float SettledAlphaEpsilon = 1e-4f;
+
     /// <summary>Glyph-WIPE variant of <see cref="LayoutRun"/> (the <c>GlyphWipe</c> primitive): shapes/caches the run
-    /// under the SAME <see cref="RunKey"/> (so re-using it costs no reshape), then computes a PER-GLYPH color + Y offset
-    /// from the wipe <paramref name="split"/> (0..1 along the run's x-extent) — left of the split is
-    /// <paramref name="before"/>, right is <paramref name="after"/>, with a <paramref name="softness"/>-wide soft
-    /// boundary and a <paramref name="lift"/>-DIP per-glyph float trailing it — and replays through the EXISTING
-    /// per-instance color/transform path (no new shader/PSO). The split advancing per frame only changes the computed
-    /// per-glyph values, never the cache key, so there is no per-frame reshape.</summary>
+    /// under the SAME <see cref="RunKey"/> (so re-using it costs no reshape), then computes a PER-GLYPH Y offset from the
+    /// wipe <paramref name="split"/> (0..1 along the run's READING-ORDER extent) and feeds every glyph its own
+    /// reading-order extent, so the gradient PS mixes <paramref name="before"/> (sung) → <paramref name="after"/>
+    /// (unsung) PER PIXEL across a <paramref name="softness"/>-wide feather band — the boundary cuts THROUGH a glyph,
+    /// half sung / half unsung. Unsung glyphs sit <paramref name="lift"/> DIP BELOW the baseline and rise smoothly to it
+    /// as the band sweeps them; sung glyphs never move. Advancing the split per frame only changes the computed per-glyph
+    /// values, never the cache key, so there is no per-frame reshape.
+    /// <para>SETTLED-SPLIT FAST PATH: a run whose wipe is fully sung (split ≥ 1) or fully unsung (split ≤ 0) has a
+    /// CONSTANT fill and a constant per-glyph dy, so it is emitted into <paramref name="plainList"/> — the lean
+    /// single-color glyph batch — instead of the gradient batch (proof of pixel-equivalence in the body). In the steady
+    /// state every visible lyric line except the one actually being sung is settled, so this is what keeps the gradient
+    /// path at ~one line per frame.</para></summary>
     public void LayoutRunGradient(StringId textId, StringId familyId, string text, string family, float size, int weight, float originX, float topY, float maxWidth, int wrap, int trim, int maxLines,
-        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF before, ColorF after, float split, float softness, float lift, float dpiScale, Affine2D world, float opacity, List<GradGlyphInstance> outList,
+        float charSpacing, float lineHeight, int lineStacking, int lineBounds, ColorF before, ColorF after, float split, float softness, float lift, float dpiScale, Affine2D world, float opacity,
+        List<GradGlyphInstance> outList, List<GlyphInstance> plainList,
         int spanRunId = 0, bool inMotion = false)
     {
         var key = MakeRunKey(textId, familyId, size, weight, maxWidth, wrap, trim, maxLines, originX, topY, dpiScale, charSpacing, lineHeight, lineStacking, lineBounds, spanRunId);
@@ -650,8 +677,47 @@ float4 PSMain(VSOutG i) : SV_Target
 
         var quads = quadsArr.AsSpan(0, count);
         if (count == 0) return;
+
+        // ── SETTLED-SPLIT FAST PATH ────────────────────────────────────────────────────────────────────────────────
+        // A settled wipe is a plain single-color run, so pay the plain path's cost, not the gradient path's. Steady
+        // state: every visible lyric line is settled except the ~one being sung, and the gradient batch's budget
+        // (MaxGradGlyphs) plus its second PSO only has to cover that one line. PIXEL-EQUIVALENCE (both endpoints, from
+        // the shader's own band `a = saturate((splitShader - gt)/fade + 0.5)` and the endpoint remap
+        // `splitShader = split*(1+fade) - 0.5*fade`; every glyph's reading-order extent gt lies in [0,1] by
+        // construction, since ro0 >= 0 and ro1 <= total):
+        //   split >= 1 ⇒ splitShader = 1 + fade/2 ⇒ (splitShader - gt)/fade + 0.5 >= 1 for ALL gt <= 1 ⇒ a == 1
+        //                everywhere ⇒ colour == `before` at every pixel AND per-glyph dy == lift*(1-a) == 0. So the
+        //                plain path with force-colour `before` and the normal snap dy is EXACT.
+        //   split <= 0 ⇒ splitShader = -fade/2 ⇒ (splitShader - gt)/fade + 0.5 <= 0 for ALL gt >= 0 ⇒ a == 0
+        //                everywhere ⇒ colour == `after` AND per-glyph dy == lift UNIFORMLY. So the plain path with
+        //                force-colour `after` and a per-glyph dy span filled with `lift` is EXACT — the span (not a
+        //                folded `snapDy + lift`) keeps the float addition in the SAME order as the gradient path, so
+        //                the emitted DstY is bit-identical at the boundary frame.
+        // Colours: the gradient path never consults a run's per-span colours, so the fast path force-colours to match.
+        // Z-ORDER: the plain batch records before the gradient batch, so a settled run now draws UNDER a same-segment
+        // mid-wipe run (they are different lyric lines — disjoint boxes) and, unlike before, in stream order relative
+        // to ordinary text (strictly closer to painter order than routing everything through the gradient batch).
+        if (split >= 1f || split <= 0f)
+        {
+            bool sung = split >= 1f;
+            ColorF settled = sung ? before : after;
+            if (settled.A * opacity <= SettledAlphaEpsilon) return;   // invisible (e.g. the glow layer's unsung pass)
+            float settledSnap = inMotion ? 0f : SnapDy(quads, world, dpiScale);
+            if (sung)
+            {
+                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, plainList);
+            }
+            else
+            {
+                if (_gradDy.Length < count) _gradDy = new float[count];
+                var dy = _gradDy.AsSpan(0, count);
+                dy.Fill(lift);   // a == 0 everywhere ⇒ lift*(1-a) == lift; Span.Fill is intrinsic, no allocation
+                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, plainList, dy);
+            }
+            return;
+        }
+
         if (_gradDy.Length < count) _gradDy = new float[count];
-        if (_gradScale.Length < count) _gradScale = new float[count];
         if (_gradRo0.Length < count) _gradRo0 = new float[count];
         if (_gradRo1.Length < count) _gradRo1 = new float[count];
 
@@ -695,23 +761,24 @@ float4 PSMain(VSOutG i) : SV_Target
         // the last glyph's right edge at gt==1, so this remap is what COMPLETES it. s = split*(1+fade) - fade/2 is the
         // exact closed-form inverse of the PS band: monotonic, pivoting at 0.5 (mid-line wipe timing unchanged), endpoint-exact.
         float splitShader = split * (1f + fade) - 0.5f * fade;
-        // BetterLyrics per-char motion at the karaoke front (LyricsAnimator.cs): the SUNG run sits at the baseline while the
-        // unsung run is sunk by `lift` (≈10% line-height), each glyph rising into place as the wipe sweeps it; and the glyph
-        // AT the split magnifies (scale pop ≈1.12), settling to 1.0 within `popWindow` of the front. The colour wipe itself
-        // is per-PIXEL in the gradient PS (ReplayGradient feeds each glyph its reading-order extent), so the boundary cuts
-        // THROUGH a glyph — half sung / half unsung — not glyph-by-glyph.
-        const float popWindow = 0.12f;
-        float popPeak = lift > 0f ? 0.12f : 0f;
+        // Per-glyph motion at the karaoke front, VERIFIED frame-by-frame against real Apple Music footage (2026-08-03):
+        //   • an UNSUNG glyph sits `lift` DIP BELOW its baseline and rises smoothly to it (dy = lift·(1−a)) as the
+        //     feather band sweeps across it — `a` is the band's own coverage at the glyph centre, so the rise happens
+        //     over exactly the softness window and settles to 0 the moment the glyph is fully sung;
+        //   • a SUNG glyph is rock-solid — it never moves again;
+        //   • there is NO scale change. Glyphs do not magnify at the front. (Removed 2026-08-03: the code here used to
+        //     couple `lift > 0` to a ≈1.12× per-glyph "char pop" borrowed from BetterLyrics' LyricsAnimator; pixel
+        //     evidence shows no glyph magnification anywhere in Apple's animation, so the pop is refuted and gone.)
+        // The colour wipe itself is per-PIXEL in the gradient PS (ReplayGradient feeds each glyph its reading-order
+        // extent), so the boundary cuts THROUGH a glyph — half sung / half unsung — not glyph-by-glyph.
         for (int i = 0; i < count; i++)
         {
-            float gtc = (_gradRo0[i] + _gradRo1[i]) * 0.5f / total;   // glyph-centre reading-order position (drives float/scale)
+            float gtc = (_gradRo0[i] + _gradRo1[i]) * 0.5f / total;   // glyph-centre reading-order position (drives the rise)
             float a = Math.Clamp((splitShader - gtc) / fade + 0.5f, 0f, 1f);
             _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept (settles to 0 at split==1)
-            float d = MathF.Abs(splitShader - gtc);
-            _gradScale[i] = popPeak > 0f && d < popWindow ? 1f + popPeak * (1f - d / popWindow) : 1f;
         }
         ReplayGradient(quads, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), before, after, splitShader, fade, total,
-            _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), _gradScale.AsSpan(0, count), outList);
+            _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), outList);
     }
 
     /// <summary>Wire the interner so the run cache can drop runs whose text id was reclaimed (resolves empty).</summary>
@@ -770,19 +837,17 @@ float4 PSMain(VSOutG i) : SV_Target
     /// the steady-state path for unchanged text.
     /// <paramref name="colors"/> (span runs): the per-quad span tint — A==0 inherits <paramref name="color"/>;
     /// <paramref name="forceColor"/> repaints every quad in <paramref name="color"/> regardless (the recorder's
-    /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default, ReadOnlySpan<float> perGlyphScale = default)
+    /// selected-text recolor re-emit, which must override span colors like WinUI's selection repaint).
+    /// <paramref name="perGlyphDy"/> (optional, parallel to <paramref name="glyphs"/>): an extra per-glyph local-DIP Y
+    /// offset added on top of <paramref name="snapDy"/> — how <see cref="LayoutRunGradient"/>'s settled-split fast path
+    /// reproduces the wipe's uniform unsung `Lift` through this lean single-color path.</summary>
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
             float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
-            float sc = i < perGlyphScale.Length ? perGlyphScale[i] : 1f;
-            if (sc != 1f)   // scale the glyph quad about its own centre (UV unchanged → the cached bitmap magnifies)
-            {
-                dx += dw * (1f - sc) * 0.5f; dy += dh * (1f - sc) * 0.5f; dw *= sc; dh *= sc;
-            }
             outList.Add(new GlyphInstance
             {
                 DstX = dx, DstY = dy, DstW = dw, DstH = dh,
@@ -793,21 +858,20 @@ float4 PSMain(VSOutG i) : SV_Target
         }
     }
 
-    /// <summary>Emit gradient-glyph instances for the sub-glyph wipe: per glyph, apply the per-glyph float (Dy) + scale pop
-    /// to the quad and record its run-local-x extent [gt0,gt1] plus before/after/split/fade — the PS does the per-PIXEL
-    /// colour mix, so the wipe boundary cuts THROUGH glyphs (half sung / half unsung), not glyph-by-glyph.</summary>
+    /// <summary>Emit gradient-glyph instances for the sub-glyph wipe: per glyph, apply the per-glyph rise (Dy) to the quad
+    /// and record its run-local-x extent [gt0,gt1] plus before/after/split/fade — the PS does the per-PIXEL colour mix, so
+    /// the wipe boundary cuts THROUGH glyphs (half sung / half unsung), not glyph-by-glyph. The quad's SIZE is never
+    /// touched: glyphs do not magnify at the front (the refuted char pop — see LayoutRunGradient).</summary>
     private static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float snapDy,
         ColorF before, ColorF after, float split, float fade, float total,
         ReadOnlySpan<float> ro0, ReadOnlySpan<float> ro1,
-        ReadOnlySpan<float> perGlyphDy, ReadOnlySpan<float> perGlyphScale, List<GradGlyphInstance> outList)
+        ReadOnlySpan<float> perGlyphDy, List<GradGlyphInstance> outList)
     {
         float inv = 1f / total;
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
             float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
-            float sc = i < perGlyphScale.Length ? perGlyphScale[i] : 1f;
-            if (sc != 1f) { dx += dw * (1f - sc) * 0.5f; dy += dh * (1f - sc) * 0.5f; dw *= sc; dh *= sc; }
             outList.Add(new GradGlyphInstance
             {
                 DstX = dx, DstY = dy, DstW = dw, DstH = dh,
@@ -1167,6 +1231,7 @@ float4 PSMain(VSOutG i) : SV_Target
         _cursor = 0;
         _gradCursor = 0;
         _dropped = 0;
+        _gradDropped = 0;
         _frame++;
         _runsCached = 0;
         _runsShaped = 0;
@@ -1214,10 +1279,11 @@ float4 PSMain(VSOutG i) : SV_Target
     {
         int start = _gradCursor;
         int count = Math.Min(instances.Count, MaxGradGlyphs - start);
-        if (count <= 0) { _dropped += instances.Count; return false; }
+        if (count <= 0) { _dropped += instances.Count; NoteGradBudget(instances.Count, start); return false; }
         _dropped += instances.Count - count;
         for (int i = 0; i < count; i++) _mappedGrad[_active][start + i] = instances[i];
         _gradCursor += count;
+        NoteGradBudget(instances.Count - count, _gradCursor);
 
         if (rebind)
         {
@@ -1236,6 +1302,22 @@ float4 PSMain(VSOutG i) : SV_Target
         cmd->SetGraphicsRootShaderResourceView(2, _activeGradGva + (ulong)(start * sizeof(GradGlyphInstance)));
         cmd->DrawInstanced(4, (uint)count, 0, 0);
         return true;
+    }
+
+    /// <summary>Account the sub-glyph WIPE instance budget for one <see cref="RecordGradient"/> call: the drop count and
+    /// the session high-water mark (both cheap enough to stay compiled in — once per record, not per glyph), plus the
+    /// LOUD report, which is <c>[Conditional]</c>-erased on Release along with its argument formatting. Before this, a
+    /// budget overflow only nudged the shared <see cref="DroppedInstances"/> total and the karaoke line silently lost
+    /// its tail; now it names itself. The settled-split fast path in <see cref="LayoutRunGradient"/> is what keeps the
+    /// peak at ~one line, so this counter is also the headroom evidence for the lyrics surfaces.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void NoteGradBudget(int dropped, int used)
+    {
+        if (used > _gradPeak) _gradPeak = used;
+        if (dropped <= 0) return;
+        _gradDropped += dropped;
+        Diag.Count("text.grad", "dropped", dropped);
+        Diag.Event("text.grad", $"gradient-glyph budget exhausted: dropped {dropped} instance(s) (budget {MaxGradGlyphs}) — the karaoke wipe is TRUNCATED this frame");
     }
 
     private static ID3D12Resource* CreateUpload(ID3D12Device* device, uint bytes, string name)

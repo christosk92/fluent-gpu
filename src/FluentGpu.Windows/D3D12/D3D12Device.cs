@@ -1057,6 +1057,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "instancesDropped", DroppedInstanceCount());        // instance-buffer overflow visibility
         Diag.Set("d3d12", "rects", _frameRectCount);
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
+        // Sub-glyph WIPE (karaoke) budget: only the ACTIVELY wiping run reaches the gradient batch — a settled split
+        // routes to the plain glyph batch (GlyphRenderer.LayoutRunGradient). >0 dropped ⇒ a truncated wipe; the peak is
+        // the headroom evidence against the fixed budget.
+        Diag.Set("d3d12", "gradGlyphDropped", _glyphs?.GradInstancesDropped ?? 0);
+        Diag.Set("d3d12", "gradGlyphPeak", _glyphs?.GradInstancePeak ?? 0);
+        Diag.Set("d3d12", "gradGlyphBudget", GlyphRenderer.GradInstanceBudget);
         Diag.Set("d3d12", "images", _frameImageCount);
         Diag.Set("d3d12", "imagesSkipped", _frameImageSkipped);   // >0 ⇒ a recorded image had no live texture this frame
         Diag.Set("d3d12", "imageAtlas", _imageTextures!.AtlasImages);   // thumbnails (<=128) packed into shared atlas pages
@@ -1170,13 +1176,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
                     {
-                        int before = _gradGlyphInsts.Count;
+                        int beforeGrad = _gradGlyphInsts.Count, beforePlain = _glyphInsts.Count;
                         // Karaoke wipe: a per-PIXEL sub-glyph gradient (before→after over a soft band at the split) via a
                         // SEPARATE gradient PSO/batch (_gradGlyphInsts) — normal text keeps its lean single-color path.
+                        // A SETTLED wipe (split ≤ 0 or ≥ 1) has a constant fill, so LayoutRunGradient routes it into the
+                        // plain batch instead (pixel-identical — see its settled-split fast path); hence both lists here.
                         _glyphs!.LayoutRunGradient(g.Text, g.Family, s, _strings.Resolve(g.Family), g.FontSize, g.Weight, g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Wrap, g.Trim, g.MaxLines,
-                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity, _gradGlyphInsts,
+                            g.CharSpacing, g.LineHeight, g.LineStacking, g.LineBounds, g.Before, g.After, g.Split, g.Softness, g.Lift, _frameScale, g.Transform, g.Opacity,
+                            _gradGlyphInsts, _glyphInsts,
                             g.SpanRunId, g.InMotion != 0);
-                        _frameGlyphInstanceCount += _gradGlyphInsts.Count - before;
+                        _frameGlyphInstanceCount += (_gradGlyphInsts.Count - beforeGrad) + (_glyphInsts.Count - beforePlain);
                     }
                     break;
                 }
