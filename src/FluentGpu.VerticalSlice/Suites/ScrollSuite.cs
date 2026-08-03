@@ -1812,6 +1812,41 @@ static class ScrollSuite
                 $"vp800 step={stepTall:0.#} (expect 80) vp200 step={stepShort:0.#} (expect 48)");
         }
 
+        // gate.scroll.empty-show-overlay-yields: a Flow.Show overlay layer that is CLOSED must not eat the wheel.
+        // The boundary node stays live with no child, ArrangeZStack stretches an auto-sized child to the whole slot, and
+        // CreateNode hands every node HitTestVisible — so without MirrorParticipation's pass-through the empty anchor is
+        // a full-bleed hittable node above the scroller. `Hit` (handler-gated) walks past it, so CLICKS keep working;
+        // `HitTestAny` (handler-less — wheel targets, drop targets, middle-click) returns it for every point and the
+        // wheel finds no Scrollable ancestor. Shape taken verbatim from the app shell's overlay ZStack.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("empty-show-overlay", new Size2(300, 300), 1f)); window.Show();
+            var probe = new EmptyShowOverlayScrollProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            for (int i = 0; i < 4 && host.HasActiveWork; i++) host.RunFrame();
+
+            var viewport = FindScrollable(host.Scene, host.Scene.Root);
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100, 100), 0, 0, 120f));
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            host.Scene.TryGetScroll(viewport, out var scClosed);
+            float closedOffset = scClosed.TargetY;
+
+            // Control: with the overlay OPEN the layer is a real full-bleed box and legitimately owns the point, so the
+            // same wheel must NOT reach the scroller — proving the fix yields the hit rather than disabling the layer.
+            probe.OverlayOpen.Value = true;
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            host.Scene.ScrollRef(viewport).OffsetY = 0f; host.Scene.ScrollRef(viewport).TargetY = 0f;
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100, 100), 0, 0, 120f));
+            for (int i = 0; i < 12; i++) host.RunFrame();
+            host.Scene.TryGetScroll(viewport, out var scOpen);
+            float openOffset = scOpen.TargetY;
+
+            Check("gate.scroll.empty-show-overlay-yields a CLOSED Flow.Show overlay layer in a ZStack keeps its live child-less anchor out of the handler-less hit walk, so a wheel over it still reaches the scroller beneath; the same layer OPEN owns the point and blocks it",
+                !viewport.IsNull && closedOffset > 1f && openOffset <= 0.01f,
+                $"viewport={(viewport.IsNull ? "null" : "ok")} closedOffsetY={closedOffset:0.##} (expect >0) openOffsetY={openOffset:0.##} (expect 0)");
+        }
+
         // gate.touch.flick-velocity-windowed: the windowed least-squares velocity sampler reads a fast constant-velocity
         // flick's TRUE terminal speed (the 50ms EMA under-read it — gain dt/(dt+50) lags before convergence), AND a finger
         // that moves fast then HOLDS STILL before lift decays to ~0 (the old EMA's stationary up-sample bias kept stale

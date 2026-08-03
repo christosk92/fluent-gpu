@@ -942,12 +942,6 @@ public sealed class TreeReconciler
     /// </summary>
     private void MirrorParticipation(NodeHandle anchor, NodeHandle child)
     {
-        if (child.IsNull) return;
-        ref LayoutInput a = ref _scene.Layout(anchor);
-        ref LayoutInput c = ref _scene.Layout(child);
-        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
-        a.Width = c.Width; a.Height = c.Height;
-        a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
         // Transparent boundaries are NEVER input targets of their own. Keep the anchor traversable and make it yield
         // when none of its rendered descendants hit: a child with HitTestVisible=false is then skipped naturally and
         // input reaches the sibling behind it (closed retained rail), while a later live child is immediately reachable
@@ -955,8 +949,23 @@ public sealed class TreeReconciler
         // boundary. Copying the child's bit here was racy: DetailPage → SkelRegion → DetailShell could temporarily copy
         // false during a branch swap and leave an outer component anchor permanently blocking descent even after the
         // inner branch became hit-testable. Child hits still win because pass-through is consulted only after descent.
+        //
+        // Set BEFORE the empty-boundary return, because an EMPTY boundary is the case that bites hardest. A `Show`
+        // whose branch is false (and has no `else`) keeps a live anchor with NO child and therefore nothing to mirror —
+        // and a bare anchor is not inert: CreateNode gives every node HitTestVisible, and an auto-sized child of a
+        // ZStack is STRETCHED to the whole slot (ArrangeZStack: NaN width/height ⇒ fill), so the anchor becomes a
+        // full-bleed hittable node above everything below it in the stack. `Hit` (the interaction-gated walk) still
+        // falls through it because it carries no handler, but `HitTestAny` — the handler-less walk that resolves wheel
+        // targets, drop targets and middle-click — returns it for EVERY point, and the wheel then finds no Scrollable
+        // ancestor on its chain. Symptom: clicks keep working while scrolling silently dies everywhere under the stack.
         _scene.Mark(anchor, NodeFlags.HitTestVisible);
         _scene.SetHitTestPassThrough(anchor, anchor);
+        if (child.IsNull) return;
+        ref LayoutInput a = ref _scene.Layout(anchor);
+        ref LayoutInput c = ref _scene.Layout(child);
+        a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
+        a.Width = c.Width; a.Height = c.Height;
+        a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
     }
 
     private void ReplaceComponent(NodeHandle node, ComponentEl ce)

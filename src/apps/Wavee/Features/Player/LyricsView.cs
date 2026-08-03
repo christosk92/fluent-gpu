@@ -48,8 +48,8 @@ sealed class LyricsView : Component
 
     // ── Probe seam (WAVEE_LYRICS_ADVANCE_PROBE) ──────────────────────────────────────────────────────────────────────
     // The lyrics-advance probe drives the media clock SYNCHRONOUSLY (ProbeStep → OnFrame) so a line advance and the
-    // RunFrame that records it are the SAME frame; the async ticker is silenced by ProbeSyncMode (the LyricsTicker
-    // UseInterval stays disabled). ProbeForceSnapped skips the one-time first-landing instant jump so every measured
+    // RunFrame that records it are the SAME frame; the autonomous stepper is silenced by ProbeSyncMode (LyricsTicker
+    // leaves LyricsFrameStepper unmounted). ProbeForceSnapped skips the one-time first-landing instant jump so every measured
     // advance takes the STEADY-STATE follow path — which since Wave D is the latch + per-line cascade, not a spring.
     // ProbeStep with an UNCHANGED clock still runs the whole core lane (DriveCascade included), so the probe can step
     // the cascade frame by frame on real wall dt while holding one handoff in isolation.
@@ -72,9 +72,9 @@ sealed class LyricsView : Component
     internal bool ProbeScrollSnapped => _scrollSnapped;
     internal LyricsFollowMode ProbeFollowMode => _followMode.Peek();
 
-    // The karaoke wipe advances on this cadence (the ticker period + the OnFrame throttle gate). 16 ms ≈ 60 Hz (was 33 =
-    // 30 Hz). The wipe is AMBIENT motion, so the host ambient cap (Program.cs ambientFps / FG_ANIM_FPS) must ALSO allow
-    // ≥60 or RecommendedWaitMs throttles the sweep back down — both were raised together once per-frame cost got cheap.
+    // NOT a cadence any more — the dt SEED for the first step of the two integrators (DriveDofRamp, DriveCascade),
+    // which have no previous stamp to difference on the frame a document lands. See LyricsMotionCadence below for what
+    // actually paces the motion now (the host frame clock) and why a wall-clock period was the wrong driver.
     internal const long KaraokeWipeIntervalMs = 16;
 
     // Eye-leads-voice anticipation: emphasis + scroll resolve this many ms AHEAD of the true clock so the line is rising
@@ -141,13 +141,18 @@ sealed class LyricsView : Component
     float[] _lineRunLen = Array.Empty<float>();
     float _runLenWrapW = float.NaN;   // the wrap width every cached entry was measured at; a ≥0.5 DIP move invalidates ALL
 
-    // The lyrics ticker cadence. It used to be the KARAOKE cadence — 16 ms (~60 Hz) for word-by-word docs, 33 ms
-    // (~30 Hz) for line-synced ones, whose only per-frame work was the glow fade. Since the handoff became a per-line
-    // compensating cascade driven from OnFrame's core lane (DriveCascade), this is the MOTION rate for EVERY doc kind:
-    // a 30 Hz cascade visibly steps across a 0.48 s travel. So both kinds tick at 16 ms. A line-synced doc's extra ticks
-    // cost a handful of scalar ops — its rows carry no GlyphWipe, so the wipe block still no-ops for them, and both the
-    // σ ramp and the cascade self-quiesce when nothing is in flight.
-    internal long WipeIntervalMs => KaraokeWipeIntervalMs;
+    // ── LyricsMotionCadence ──────────────────────────────────────────────────────────────────────────────────────────
+    // The lyrics motion is driven from the HOST FRAME CLOCK (LyricsFrameStepper), not from a wall-clock interval.
+    //
+    // It used to be a 16 ms UseInterval — the KARAOKE cadence, back when the only per-frame work was the glow fade.
+    // Since the handoff became a per-line compensating cascade driven from OnFrame's core lane (DriveCascade), OnFrame
+    // is the MOTION step for every doc kind, and a timer is the wrong driver for motion twice over: HostTimerQueue
+    // re-arms from the FIRE stamp (16 ms + this frame's work + wake slack, so the period drifts past one refresh and
+    // never divides the panel's), and it produces no latency-sensitive wake reason of its own, so it says nothing about
+    // the rate the host should be producing at. Subscribing FrameClock.Tick instead steps the cascade, the σ ramp and
+    // the wipe EXACTLY once per produced frame, at the panel's rate, in the same pre-flush phase window the timer drain
+    // used (AppHost.Paint publishes the tick right after the timer drain), and asks the host for panel-rate frames
+    // (WakeReasons.FrameClockPoller — which is latency-sensitive, so the ambient cap never paces the surface either).
 
     NodeHandle _viewportNode = NodeHandle.Null;
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
@@ -1545,9 +1550,14 @@ sealed class LyricsView : Component
             // both (it is skipped at 0, and Clamp caps at exactly 1), so the endpoints really are exact here.
             float runW = scene.AbsoluteRect(mainNode).W;
             if (runW > 1f && split > 0f && split < 1f) split = MathF.Round(split * runW) / runW;
-            bool forceWipe = forceVisual || voiceLine != _lastWipeLine || _lastWipeWallMs == 0L;
-            if (!forceWipe && wallMs - _lastWipeWallMs < KaraokeWipeIntervalMs) return;
-
+            // NO wall-clock rate gate here. There used to be one — `wallMs - _lastWipeWallMs < KaraokeWipeIntervalMs`
+            // — from when an over-eager timer could call OnFrame faster than the wipe needed. It was measuring a 16 ms
+            // threshold on Environment.TickCount64, whose granularity IS the system timer tick (~15.6 ms by default):
+            // consecutive OnFrame calls one refresh apart read a delta of 15, which is < 16, so roughly every other
+            // call returned here without advancing the fill. The wipe therefore stepped at ~20-30 Hz however fast the
+            // host was producing — the karaoke reveal reading as a slideshow on a 120 Hz panel. The frame IS the rate
+            // limiter now (one OnFrame per produced frame), and both writes below are already VALUE-gated and
+            // pixel-quantized, so a frame that moves the split by less than a device pixel still writes nothing.
             _lastWipeWallMs = wallMs;
             _lastWipeLine = voiceLine;
 
@@ -2414,16 +2424,46 @@ sealed class LyricsTicker : Component
             }
         });
 
-        // Playing: advance the karaoke wipe every WipeIntervalMs on the frame clock — AUTO-PAUSES while parked/minimized
-        // (idle quiesce), while the wall-clock throttle inside OnFrame still governs the real wipe cadence. ProbeSyncMode
-        // drives OnFrame synchronously (ProbeStep), so the interval stays disabled under the probe. Replaces the old
-        // System.Threading.Timer + generation guard + UsePost marshal.
+        // While anything is in motion, mount the per-frame stepper (the SeekTicker idiom) so OnFrame runs ONCE PER
+        // PRODUCED FRAME at the panel's rate. It replaces a 16 ms UseInterval, which paced the motion off a wall clock
+        // that neither divides the refresh nor tells the host to keep producing — see LyricsView.WipeIntervalMs.
+        // Mounting it CONDITIONALLY (rather than gating inside it) is what lets the loop idle again: an unmounted
+        // stepper is not a FrameClock.Tick subscriber, so it contributes no wake reason at all.
         // Detached/resync work must continue while playback is paused (countdown + programmatic settle), and so must an
         // in-flight handoff cascade — a pause landing inside the ~0.48 s flight would otherwise freeze every line at its
         // compensated position. Following + paused + settled remains completely quiescent and still wakes only for
-        // PositionMs changes through the effect above.
+        // PositionMs changes through the effect above. ProbeSyncMode drives OnFrame synchronously (ProbeStep), so the
+        // stepper stays unmounted under the probe.
         bool needsTicks = playing || cascading || followMode != LyricsFollowMode.Following;
-        UseInterval(() => Owner.OnFrame(), Owner.WipeIntervalMs, enabled: needsTicks && !LyricsView.ProbeSyncMode);
+        Element? stepper = needsTicks && !LyricsView.ProbeSyncMode
+            ? Embed.Comp(() => new LyricsFrameStepper { Owner = Owner })
+            : null;
+        return new BoxEl
+        {
+            HitTestVisible = false, Width = 0f, Height = 0f,
+            Children = stepper is null ? [] : [stepper],
+        };
+    }
+}
+
+/// <summary>Per-frame stepper for <see cref="LyricsView"/> (the <c>SeekTicker</c> idiom): mounted only while the
+/// surface actually has motion in flight, it subscribes to the host frame clock and runs one <c>OnFrame</c> per
+/// produced frame, so the karaoke wipe, the σ ramp and the handoff cascade all advance at the panel's rate instead of
+/// at a wall-clock interval's. Its subscription is also the request FOR those frames
+/// (<c>WakeReasons.FrameClockPoller</c>); unmounting it lets the loop idle again. It NEVER re-renders the owner — the
+/// step writes scene side-tables and a handful of signals the rows bind.</summary>
+sealed class LyricsFrameStepper : Component
+{
+    public required LyricsView Owner;
+
+    public override Element Render()
+    {
+        var tick = UseContextSignal(FrameClock.Tick);
+        UseSignalEffect(() =>
+        {
+            _ = tick.Value;
+            Owner.OnFrame();
+        });
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
     }
 }

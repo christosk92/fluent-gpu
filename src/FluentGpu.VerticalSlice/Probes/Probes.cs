@@ -671,6 +671,32 @@ sealed class ScrollProbe : Component
     }
 }
 
+// The shell-overlay shape: a ZStack whose LOWER layer scrolls and whose UPPER layer is a Flow.Show that is currently
+// FALSE (a full-bleed overlay that is not open). The Show boundary stays live with NO child, and a ZStack STRETCHES an
+// auto-sized child to the whole slot, so that empty anchor covers the scroller. It must not become an input target:
+// HitTestAny (the handler-less walk that resolves wheel/drop targets) would otherwise return it for every point and the
+// wheel would find no Scrollable on its chain — clicks would keep working (Hit is handler-gated) while scrolling died.
+// gate.scroll.empty-show-overlay-yields.
+sealed class EmptyShowOverlayScrollProbe : Component
+{
+    public readonly Signal<bool> OverlayOpen = new(false);
+
+    public override Element Render()
+    {
+        var items = new Element[20];
+        for (int i = 0; i < items.Length; i++)
+            items[i] = new BoxEl { Width = 180, Height = 40, Fill = ColorF.FromRgba(40, 40, 40) };
+        return Ui.ZStack(
+            new ScrollEl
+            {
+                Width = 200, Height = 200, Fill = ColorF.FromRgba(20, 20, 20),
+                Content = new BoxEl { Direction = 1, Children = items },
+            },
+            Flow.Show(() => OverlayOpen.Value, new BoxEl { Grow = 1f, Fill = ColorF.FromRgba(10, 10, 10) })) with
+        { Width = 200, Height = 200 };
+    }
+}
+
 // A vertical scroller of CLICKABLE rows (OnClick ⇒ ClickBit ⇒ handler-gated HitTest returns the row + it carries
 // NodeFlags.Hovered): a wheel-scroll under a STATIONARY pointer must move Hovered from the old row to the new row that
 // slid under the cursor (gate.scroll.hover-follows-content). 20 × 40px rows in a 200px viewport (matches ScrollProbe).
