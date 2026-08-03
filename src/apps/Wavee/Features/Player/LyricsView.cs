@@ -1015,7 +1015,6 @@ sealed class LyricsView : Component
         float rowPad = _large ? 9f : 7f;            // vertical padding per row; inter-line gap = 2*rowPad
         float sidePad = RowSidePad;
         float rowEst = lineHt + 2f * rowPad;        // measured-layout seed = a single-line row's height
-        float wipeLift = LyricLineView.WipeLiftFor(_large);
         _band = FocalBand;   // publish the one definition into the copy the measured layout is built against
 
         if (_layout is null || MathF.Abs(_layout.Band - _band) > 0.001f || MathF.Abs(_layout.Estimate - rowEst) > 0.5f)
@@ -1035,7 +1034,7 @@ sealed class LyricsView : Component
                     // The SIGNAL, not its value: the row reads it every render, so a toggle reaches rows that mounted
                     // long before it (component props freeze at mount — see the _secondary field block).
                     _secondary,
-                    fontSz, lineHt, rowPad, sidePad, wipeLift, _large,
+                    fontSz, lineHt, rowPad, sidePad, _large,
                     ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
@@ -1365,6 +1364,21 @@ sealed class LyricsView : Component
     const float CascadeLandVel = 20f;     // …but only while it is genuinely settling — never mid-flight through zero
     const float CascadeWriteEps = 0.1f;   // transform write gate (the LANDING write is exempt: it must be exact)
     const float CascadeDtMaxMs = 100f;    // ticker-gap clamp: a minimized/parked window resumes without a teleport
+    // WRITE BAND. The cascade used to arm — and therefore write + Mark — EVERY line in the document, so a 150-line
+    // lyric cost 150 transform writes and 150 dirty marks on every frame of a 0.48 s settle, for a viewport that shows
+    // at most ~15 lines. Only lines within this many rows of the new active line take part; everything further out is
+    // RETIRED at arm time (comp/vel/delay zeroed and one identity write, itself a no-op unless the node was actually
+    // displaced), which is exactly where it belongs — a line 25+ rows away is at its true scroll position, hundreds of
+    // DIP off-screen, and its whole travel would be invisible. Retiring rather than "integrate but skip the write" is
+    // what keeps it CORRECT: a line that leaves the band mid-flight would otherwise keep a stale non-zero transform
+    // forever (the document is realized whole, so ReportDofNode never re-fires to re-seed it), and it makes
+    // DriveCascade's existing settled test (comp == 0 && delay <= 0 ⇒ continue) skip out-of-band lines for free.
+    // SIZING, honestly: 24 single-line rows is ~1130 DIP in the rail (47 DIP/row) and ~1540 in the immersive surface
+    // (64), and the active line sits at FocalBand (38-40 % down), so the band covers the whole viewport for any lyrics
+    // surface up to ~1800 DIP tall — every real window, and taller still as soon as one lyric wraps. Past that the
+    // bottom-most rows would SNAP with the latch instead of easing, which is exactly what a skip-the-write band would
+    // do there too; it is a bound on the effect, not a correctness cliff.
+    const int CascadeWriteBand = 24;
 
     // Arm one handoff. `delta` is the viewport jump that just happened (newOffset − oldOffset); `newActive` is the line
     // that just took focus. See the INVARIANT on the _casComp field block for the sign.
@@ -1380,8 +1394,23 @@ sealed class LyricsView : Component
         // delay at 0, the rate below resolves to the same CascadeSettleY/CascadeTotalS for every line, so the whole
         // document performs one rigid, critically-damped, zero-overshoot translate over the same 0.48 s.
         bool reduce = Motion.ReducedMotion;
+        // The band this handoff owns (see CascadeWriteBand). Everything outside it is retired to its true position in
+        // the same pass, so the per-frame cost of the settle is bounded by the band and not by the document length.
+        int lo = Math.Max(0, newActive - CascadeWriteBand);
+        int hi = Math.Min(comp.Length - 1, newActive + CascadeWriteBand);
         for (int i = 0; i < comp.Length; i++)
         {
+            if (i < lo || i > hi)
+            {
+                // Out of band. Drop any compensation it still carries and put it back on its true scroll position —
+                // the identity write is skipped inside WriteCascade unless the node really is displaced.
+                if (comp[i] != 0f || vel[i] != 0f || delay[i] != 0f)
+                {
+                    comp[i] = 0f; vel[i] = 0f; delay[i] = 0f;
+                    WriteCascade(scene, i, 0f, landed: true);
+                }
+                continue;
+            }
             float c = comp[i] + delta;   // ADD, never assign: a mid-cascade re-target folds into the in-flight comp
             // Re-arm the stagger for EVERY line on every handoff: a re-target restarts the wave from the NEW active
             // line, so a line that was already flying can be asked to hold again — that is the new wave passing it.
@@ -1403,7 +1432,9 @@ sealed class LyricsView : Component
 
     // Step every in-flight line. Core lane of OnFrame, right beside DriveDofRamp and under the same clamped-dt
     // discipline: the wall stamp is refreshed on EVERY call (even when nothing is pending) so a long ticker gap can
-    // never be spent as one giant integration step.
+    // never be spent as one giant integration step. "In-flight" is now at most the CascadeWriteBand window around the
+    // active line: ArmCascade retires everything outside it, so the settled test below skips those lines for free and
+    // the per-frame write count is bounded by the band rather than by the document length.
     void DriveCascade(SceneStore scene)
     {
         var comp = _casComp;
@@ -1484,6 +1515,9 @@ sealed class LyricsView : Component
     // handoff, so the cascade always finishes instead of freezing the document off its focal band.
     internal bool CascadeRunningValue => _cascadeRunning.Value;
 
+    // The non-zero-comp gate below is still exactly right under the write band: a line only ever holds a written,
+    // non-zero transform while its comp is non-zero. In band, WriteCascade's landing write is exact (0.0005 DIP) so
+    // comp == 0 and the node's identity transform become true together; out of band, ArmCascade already zeroed both.
     void ZeroCascade(SceneStore? scene)
     {
         var comp = _casComp;
@@ -1504,8 +1538,10 @@ sealed class LyricsView : Component
         _followMode.Value = next;
         // Leaving Following (detach or resync) retires the cascade: the follow no longer owns the lines' positions, so a
         // lingering compensating translate would fight the user's scroll / the resync glide. This is the ONE chokepoint
-        // every mode transition goes through, so detach + resync are both covered here.
-        if (next != LyricsFollowMode.Following) ZeroCascade(scene);
+        // every mode transition goes through, so detach + resync are both covered here. The interlude dots go with it
+        // and for the same reason — they are a follow-owned overlay — retired HERE so the ShowEl exit animation runs at
+        // the detach EDGE rather than one frame later in OnFrame's gate.
+        if (next != LyricsFollowMode.Following) { ZeroCascade(scene); HideInterludeDots(); }
         if (wasSuppressed != nowSuppressed) ApplyDofSuppression(scene);
     }
 
@@ -1702,7 +1738,11 @@ sealed class LyricsView : Component
             ScrollActiveIntoView(scene, active, FollowScrollIntent.Normal);
         // The dots are mounted for the break MINUS its last second, so they are gone before the next line's first
         // syllable lands and that handoff stays the clean one it always was. Outside a break this is one bool Peek.
-        if (inInterlude && nowMs < gapEnd - InterludeDotsExitMs)
+        // FOLLOW-GATED like every other follow-owned visual: once the user has scrolled away, the dots would be a
+        // filling, pulsing overlay floating over whatever lyrics they are reading, next to the resync pill. They come
+        // back with the follow (SetFollowMode runs the exit at the detach edge so the retirement is animated, not a
+        // frame-boundary disappearance).
+        if (_followMode.Peek() == LyricsFollowMode.Following && inInterlude && nowMs < gapEnd - InterludeDotsExitMs)
         {
             _dotsShown.Value = true;
             DriveInterludeDots(scene, nowMs, gapStart, gapEnd);
@@ -2157,7 +2197,10 @@ sealed class LyricLineView : Component
     readonly float _lineHt;
     readonly float _rowPad;
     readonly float _sidePad;
-    readonly float _wipeLift;   // per-word rise in DIP (GlyphWipe.Lift) — surface-scaled by LyricsView, see WipeLiftFor
+    // NOTE — there is deliberately no _wipeLift field. The per-word rise depends on Motion.ReducedMotion, a mutable
+    // global the OS can flip mid-session, and component props FREEZE at mount: rows are mounted once for the whole
+    // document (overscan 400) and never remount, so a frozen lift would have kept the pre-flip value until the next
+    // track change. Render calls WipeLiftFor(_large) at each GlyphWipe instead — see WipeLiftFor.
     // WHICH SURFACE this row belongs to (immersive fullscreen vs the 340 DIP rail). It is NOT a "centered" flag any
     // more: the frame evidence refutes centred/NoWrap/ellipsised fullscreen lyrics — BOTH surfaces are left-aligned,
     // wrapped and untrimmed, and BOTH anchor their emphasis scale at the left margin (TransformOriginX 0). All that is
@@ -2177,13 +2220,13 @@ sealed class LyricLineView : Component
 
     public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs, Signal<LyricsFollowMode> followMode,
         FloatSignal? glowFade, Signal<int> secondary,
-        float fontSz, float lineHt, float rowPad, float sidePad, float wipeLift, bool large, Action<int, NodeHandle> reportNode,
+        float fontSz, float lineHt, float rowPad, float sidePad, bool large, Action<int, NodeHandle> reportNode,
         Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf,
         Func<int, float> dofSigmaOf, Action onSeek)
     {
         _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
         _followMode = followMode; _glowFade = glowFade; _secondary = secondary;
-        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _wipeLift = wipeLift; _large = large;
+        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _large = large;
         _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf;
         _dofSigmaOf = dofSigmaOf; _onSeek = onSeek;
     }
@@ -2276,7 +2319,7 @@ sealed class LyricLineView : Component
             Element main = LineText(_line.Text, Tok.TextPrimary) with
             {
                 Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = UnsungAlpha },
-                    Split: split, Softness: softness, Lift: _wipeLift),
+                    Split: split, Softness: softness, Lift: WipeLiftFor(_large)),
                 OnRealized = h => _reportNode(_index, h),
             };
             // GLOW = a soft blurred bloom UNDER the main, on the SUNG glyphs only (After.A = 0 ⇒ unsung glyphs fully
@@ -2290,7 +2333,7 @@ sealed class LyricLineView : Component
                 ? LineText(_line.Text, Tok.TextPrimary) with
                   {
                       Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f },
-                          Split: split, Softness: softness, Lift: _wipeLift),
+                          Split: split, Softness: softness, Lift: WipeLiftFor(_large)),
                   }
                 : LineText("", Tok.TextPrimary)) with { OnRealized = h => _reportGlow(_index, h) };
             // The wrapper's bound opacity is the per-line glow-fade signal: OnFrame ramps it in over ~240 ms as this line
@@ -2495,11 +2538,13 @@ sealed class LyricLineView : Component
     // Reference: unsung words sit ~2 source px low at cap-height 30 px ⇒ ≈0.048 em ⇒ 1.25 DIP at font 26.
     internal const float WipeLiftDip = 1.25f;
     internal const float WipeLiftDipLarge = 1.75f;
-    // Reduced motion zeroes the lift at the ONE place both wipe layers read it (LyricsView.LyricsContent passes the
-    // result to the row, which seeds it into the main AND the glow GlyphWipe — they must agree or the bloom floats out
-    // from under the text). The per-word rise is pure decoration: the sung/unsung colour split alone says which words
-    // have been sung. Read as a VALUE, never an early-return — see the Reduced motion block in LyricsView. A flip
-    // mid-session is picked up by the next row realization/render, which normal playback produces within a line or two.
+    // Reduced motion zeroes the lift. Render calls this at BOTH GlyphWipe construction sites (main + glow) rather than
+    // freezing one value into the row: they are two reads of the same static bool in one straight-line block, so they
+    // cannot disagree (and they must not, or the bloom floats out from under the text), while a row that mounted before
+    // the OS flipped the preference still picks the new value up on its next render. Freezing it as a ctor prop was the
+    // bug — rows mount once per document and never remount, so the flip could not reach them until a track change.
+    // The per-word rise is pure decoration: the sung/unsung colour split alone says which words have been sung. Read as
+    // a VALUE, never an early-return — see the Reduced motion block in LyricsView.
     internal static float WipeLiftFor(bool large) => Motion.ReducedMotion ? 0f : large ? WipeLiftDipLarge : WipeLiftDip;
 
     internal static float ComputeSplit(LyricLine line, long now)

@@ -25,6 +25,16 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     // track played in an earlier session resolves with no network at all.
     readonly LyricsDiskCache? _disk;
     readonly Dictionary<string, LyricsDocument> _cache = new();
+    // ONE shared fetch per track id. The rail lyrics panel and the immersive surface each mount their own doc host, so
+    // opening the immersive surface asks for the SAME track twice, concurrently — which used to mean two full
+    // seven-source fan-outs plus two racing disk writes. Entered under _gate before _resolve, removed in the runner's
+    // finally. See GetLyricsAsync for the cancellation contract.
+    readonly Dictionary<string, Task<LyricsDocument?>> _inFlight = new(StringComparer.Ordinal);
+    // What the DISK is known to hold for a track, as the same monotone Grade the promotion ladder uses. Seeded by a
+    // read-through hit and updated by every write we issue, so a Save can never DOWNGRADE a better persisted document
+    // (SaveToDiskIfBetter). Pruned with the LRU below; the only way an entry can outlive its cache entry is an eviction
+    // landing between a winner write and a still-running continuation, which costs one stale long.
+    readonly Dictionary<string, long> _diskGrade = new(StringComparer.Ordinal);
     readonly SimpleEvent<LyricsDocument> _upgrades = new();
     readonly object _gate = new();
     // Bound the winner cache: a long session touches thousands of distinct tracks and each LyricsDocument is tens of KB
@@ -32,7 +42,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     const int CacheCap = 64;
     readonly List<string> _lru = new();
     void TouchLru(string id) { _lru.Remove(id); _lru.Add(id); }
-    void EvictLru() { while (_lru.Count > CacheCap) { var oldest = _lru[0]; _lru.RemoveAt(0); _cache.Remove(oldest); } }
+    void EvictLru() { while (_lru.Count > CacheCap) { var oldest = _lru[0]; _lru.RemoveAt(0); _cache.Remove(oldest); _diskGrade.Remove(oldest); } }
     public IObservable<LyricsDocument> LyricsUpgraded => _upgrades;
 
     public AggregatingLyricsProvider(
@@ -61,18 +71,66 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     public async Task<LyricsDocument?> GetLyricsAsync(string trackId, CancellationToken ct = default)
     {
         if (string.IsNullOrEmpty(trackId)) return null;
-        lock (_gate) if (_cache.TryGetValue(trackId, out var cached)) { TouchLru(trackId); return cached; }
 
+        // CANCELLATION CONTRACT of the shared fetch: the work itself runs on CancellationToken.None and is never
+        // cancelled by any caller. It exists to POPULATE the caches, so the first caller walking away (a rail panel
+        // unmounting the instant the immersive surface takes over) must not cancel the second caller's lyrics, and a
+        // finished-but-unobserved fan-out is still worth persisting. Each caller observes its OWN token through
+        // WaitAsync instead: it stops awaiting immediately and throws OperationCanceledException exactly as before,
+        // while the shared fetch runs to completion in the background. Same contract as SwitchableLyrics one layer up.
+        Task<LyricsDocument?> shared;
+        TaskCompletionSource<LyricsDocument?>? owner = null;
+        lock (_gate)
+        {
+            if (_cache.TryGetValue(trackId, out var cached)) { TouchLru(trackId); return cached; }
+            if (_inFlight.TryGetValue(trackId, out var running)) shared = running;
+            else
+            {
+                owner = new TaskCompletionSource<LyricsDocument?>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _inFlight[trackId] = shared = owner.Task;
+            }
+        }
+        // Started OUTSIDE the lock so a fan-out that happens to complete synchronously cannot run under _gate.
+        if (owner is not null) _ = RunSharedAsync(trackId, owner);
+        return await shared.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Runs the one shared fetch for a track id and retires its in-flight slot. Never cancelled by a caller.</summary>
+    async Task RunSharedAsync(string trackId, TaskCompletionSource<LyricsDocument?> tcs)
+    {
+        try { tcs.TrySetResult(await FetchAndCacheAsync(trackId).ConfigureAwait(false)); }
+        catch (Exception e)
+        {
+            tcs.TrySetException(e);
+            _ = tcs.Task.Exception;   // observe it: every caller may already have walked away on its own token
+        }
+        finally { lock (_gate) _inFlight.Remove(trackId); }
+    }
+
+    async Task<LyricsDocument?> FetchAndCacheAsync(string trackId)
+    {
         // Read-through, BEFORE _resolve and before the fan-out: resolving can itself hit the network (a thin cluster
         // track re-resolves through the metadata resolver), so a disk hit must short-circuit both. This is the whole
         // point of the disk cache — lyrics for a previously-played track with no network at all.
         if (_disk is { } disk)
         {
-            var entry = await disk.TryLoadAsync(trackId, ct).ConfigureAwait(false);
+            var entry = await disk.TryLoadAsync(trackId, CancellationToken.None).ConfigureAwait(false);
             if (entry.Outcome == LyricsCacheOutcome.Hit && entry.Document is { } fromDisk)
             {
-                lock (_gate) { _cache[trackId] = fromDisk; TouchLru(trackId); EvictLru(); }
+                lock (_gate)
+                {
+                    _cache[trackId] = fromDisk; TouchLru(trackId);
+                    _diskGrade[trackId] = Grade(fromDisk);   // what the file already holds — no Save may go below it
+                    EvictLru();
+                }
                 PublishDiskReport(trackId, fromDisk, entry.SavedAtUnixMs);
+                // A POSITIVE entry has no TTL by design, so without this a low-richness document cached in an earlier
+                // session would be PERMANENT: the read-through short-circuits resolve + fan-out + upgrade forever and
+                // the track could never reach syllable lyrics. Serve the cached document immediately (the offline
+                // promise is untouched) and, when it is not already at the top of the ladder, run the ordinary
+                // resolve + fan-out + upgrade in the BACKGROUND — a richer winner promotes, publishes on
+                // LyricsUpgraded and re-persists exactly like a live upgrade does.
+                if (Richness(fromDisk) < 3) _ = UpgradeDiskHitAsync(trackId, fromDisk);
                 return fromDisk;
             }
             if (entry.Outcome == LyricsCacheOutcome.KnownMissing)
@@ -83,7 +141,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         }
 
         LyricsRequest? req;
-        try { req = await _resolve(trackId, ct).ConfigureAwait(false); }
+        try { req = await _resolve(trackId, CancellationToken.None).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         catch { req = null; }
         if (req is null)
@@ -101,7 +159,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         // Fan out in parallel. The UI waits only for the short first-hit grace window; slower sources keep running in the
         // background and can publish a richer replacement without delaying the initial lyric.
         long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
-        var srcCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var srcCts = new CancellationTokenSource();
         var started = _sources.Select(s => (Source: s, Task: FetchOne(s, req, probe, srcCts.Token))).ToList();
         var collected = new Dictionary<string, Probed>(StringComparer.Ordinal);
 
@@ -111,7 +169,6 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         bool goldCollected = false;
         while (pending.Count > 0)
         {
-            ct.ThrowIfCancellationRequested();   // real caller cancel → propagate (sources return Skipped, not throw)
             var waiters = new List<Task>(pending.Count + 1);
             foreach (var p in pending) waiters.Add(p.Task);
             if (grace is not null) waiters.Add(grace);
@@ -180,22 +237,75 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
         var winner = ranked.Winner;
         if (winner is not null) lock (_gate) { _cache[trackId] = winner; TouchLru(trackId); EvictLru(); }
+        // ONE writer per request. Both Saves are fire-and-forget, so issuing the winner write here AND the upgrade
+        // write from the continuation left two unordered file writes racing — the worse document could land last. When
+        // a continuation is going to run it therefore OWNS the write and persists once, with the best document it ends
+        // up holding (its finally writes even on a cancel, so a skipped winner Save can never be lost).
+        bool willContinue = continueInBackground && winner is not null && Richness(winner) < 3;
         if (_disk is { } wdisk)
         {
-            if (winner is not null) wdisk.Save(trackId, winner);
+            if (winner is not null && !willContinue) SaveToDiskIfBetter(trackId, winner);
             // The negative marker is written ONLY when every source actually ran and none produced a candidate — never
             // when the grace window cut a still-running fan-out short, and never when the reranker merely rejected what
             // it was given.
-            else if (candidates.Count == 0 && collected.Count > 0 && !continueInBackground) wdisk.SaveMissing(trackId);
+            else if (winner is null && candidates.Count == 0 && collected.Count > 0 && !continueInBackground)
+                wdisk.SaveMissing(trackId);
         }
-        if (continueInBackground && winner is not null && Richness(winner) < 3)
-            _ = ContinueForUpgradeAsync(trackId, req, srcCts, pending, collected, winner, startedAt);
+        if (willContinue)
+            _ = ContinueForUpgradeAsync(trackId, req, srcCts, pending, collected, winner!, startedAt);
         else
         {
             srcCts.Cancel();
             srcCts.Dispose();
         }
         return winner;
+    }
+
+    /// <summary>Background half of a LOW-RICHNESS disk hit (see the read-through): resolve and fan out exactly like a
+    /// cold request, then hand the still-running sources to the SAME continuation the live path uses, with the cached
+    /// document as the incumbent. A richer winner promotes, publishes and re-persists; anything else changes nothing.
+    /// Offline (no resolution) it is a no-op — the cached document simply stays what it is.</summary>
+    async Task UpgradeDiskHitAsync(string trackId, LyricsDocument fromDisk)
+    {
+        CancellationTokenSource? owned = null;
+        try
+        {
+            LyricsRequest? req;
+            try { req = await _resolve(trackId, CancellationToken.None).ConfigureAwait(false); }
+            catch { req = null; }
+            if (req is null) return;
+
+            var probe = new LyricsProbe();
+            LyricsProbe.Current.Value = probe;
+            long startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            owned = new CancellationTokenSource();
+            var pending = _sources.Select(s => (Source: s, Task: FetchOne(s, req, probe, owned.Token))).ToList();
+            var srcCts = owned;
+            owned = null;   // handed over: ContinueForUpgradeAsync cancels and disposes it in its finally
+            await ContinueForUpgradeAsync(trackId, req, srcCts, pending,
+                new Dictionary<string, Probed>(StringComparer.Ordinal), fromDisk, startedAt).ConfigureAwait(false);
+        }
+        catch (Exception e)
+        {
+            _log.Info($"background upgrade of the cached lyrics for {trackId} failed: {e.GetType().Name}");
+        }
+        finally { owned?.Dispose(); }
+    }
+
+    /// <summary>The ONE place a document reaches the disk cache. A Save never DOWNGRADES: the grade of what the file
+    /// holds is tracked per track (seeded by the read-through, updated by every write we issue) and a write whose
+    /// document is not strictly better is dropped. Without it a later line-only winner could overwrite the syllable
+    /// document an earlier session had already persisted.</summary>
+    void SaveToDiskIfBetter(string trackId, LyricsDocument doc)
+    {
+        if (_disk is not { } disk) return;
+        long grade = Grade(doc);
+        lock (_gate)
+        {
+            if (_diskGrade.TryGetValue(trackId, out long known) && known >= grade) return;
+            _diskGrade[trackId] = grade;
+        }
+        disk.Save(trackId, doc);
     }
 
     int InitialGraceMs(LyricsCandidate candidate)
@@ -215,6 +325,10 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         LyricsDocument initialWinner,
         long startedAt)
     {
+        // The document this track must END UP persisted with. The caller deliberately skips its own winner Save when it
+        // spawns us, so the single write in the finally below is the only one — and it has to happen even when the
+        // continuation is cancelled or finds nothing better, or a skipped winner Save would simply be lost.
+        LyricsDocument bestDoc = initialWinner;
         try
         {
             long elapsed = (long)System.Diagnostics.Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
@@ -254,6 +368,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
             var winner = ranked.Winner;
             if (winner is null || !IsRicher(winner, initialWinner)) return;
+            bestDoc = winner;
 
             bool promoted = false;
             lock (_gate)
@@ -267,11 +382,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
                 }
             }
 
-            if (promoted)
-            {
-                _disk?.Save(trackId, winner);   // write-through on every upgrade publication, so disk holds the BEST doc
-                _upgrades.OnNext(winner);
-            }
+            if (promoted) _upgrades.OnNext(winner);
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
@@ -280,6 +391,8 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         }
         finally
         {
+            // Write-through, once, with the best document — so disk holds the BEST doc and never a downgrade of it.
+            SaveToDiskIfBetter(trackId, bestDoc);
             srcCts.Cancel();
             srcCts.Dispose();
         }
@@ -370,12 +483,17 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
                 $"timing={b.TimingScore:F2} offset={b.AppliedOffsetMs}ms candidates=[{string.Join(",", candidates.Select(c => c.ProviderId))}] ({b.Reason})");
     }
 
-    static bool IsRicher(LyricsDocument next, LyricsDocument current)
+    static bool IsRicher(LyricsDocument next, LyricsDocument current) => Grade(next) > Grade(current);
+
+    // ONE monotone "how good is this document" key: richness tier first, then — inside the syllable tier only —
+    // syllable count. Promotion (IsRicher) and the never-downgrade disk-write guard (SaveToDiskIfBetter) both order by
+    // it, so the two can never disagree about which of two documents is better.
+    const long GradeTier = 1_000_000L;
+
+    static long Grade(LyricsDocument doc)
     {
-        int nr = Richness(next), cr = Richness(current);
-        if (nr != cr) return nr > cr;
-        if (nr < 3) return false;
-        return SyllableCount(next) > SyllableCount(current);
+        int r = Richness(doc);
+        return r * GradeTier + (r >= 3 ? Math.Min((long)SyllableCount(doc), GradeTier - 1) : 0L);
     }
 
     static int Richness(LyricsDocument doc)
@@ -431,7 +549,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     /// make a post-logout request keep serving the pre-logout answer forever.</summary>
     public void ClearCache()
     {
-        lock (_gate) { _cache.Clear(); _lru.Clear(); }
+        lock (_gate) { _cache.Clear(); _lru.Clear(); _diskGrade.Clear(); }   // the files go too ⇒ so does what we knew about them
         _disk?.Clear();
     }
 }

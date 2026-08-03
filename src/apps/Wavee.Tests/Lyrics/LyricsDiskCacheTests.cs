@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend;
 using Wavee.Backend.Lyrics;
 using Wavee.Core;
 using Xunit;
@@ -38,6 +39,26 @@ public class LyricsDiskCacheTests : IDisposable
                 EndMs: 5800, IsWordByWord: true),
         },
         LyricsSyncKind.Syllable, "amll", OffsetMsApplied: -500);
+
+    // The same two lines as WordDoc, LINE-synced (richness 2) — the "an earlier session cached the poor version" seed.
+    static LyricsDocument LineDoc(string provider = "seed", string trackId = "t1") => new(
+        trackId, true,
+        new List<LyricLine>
+        {
+            new(1000, "line one here", Array.Empty<LyricSyllable>(), EndMs: 2200),
+            new(5000, "line two there", Array.Empty<LyricSyllable>(), EndMs: 5800),
+        },
+        LyricsSyncKind.Line, provider);
+
+    // Richness 1 — strictly WORSE than LineDoc, so a background upgrade that finds it must change nothing.
+    static LyricsDocument UnsyncedDoc(string provider = "lrclib", string trackId = "t1") => new(
+        trackId, false,
+        new List<LyricLine>
+        {
+            new(0, "line one here", Array.Empty<LyricSyllable>()),
+            new(0, "line two there", Array.Empty<LyricSyllable>()),
+        },
+        LyricsSyncKind.Unsynced, provider);
 
     static void AssertSameDocument(LyricsDocument expected, LyricsDocument actual)
     {
@@ -322,5 +343,150 @@ public class LyricsDiskCacheTests : IDisposable
         Assert.False(File.Exists(Cache().PathFor("t1")));
         Assert.NotNull(await provider.GetLyricsAsync("t1"));
         Assert.Equal(2, src.Calls);   // memory AND disk were cleared, so the source ran again
+    }
+
+    // ── a cached document is never a DEAD END ─────────────────────────────────────────────────────────────────────
+    // Positive entries have no TTL by design, so before the background upgrade below a LOW-RICHNESS document cached in
+    // an earlier session was permanent: the read-through short-circuited resolve + fan-out + upgrade forever and the
+    // track could never reach syllable lyrics.
+
+    // A source whose answer the test releases, so "two callers, one fan-out" and "the winner write waits for the
+    // upgrade" are pinned by construction rather than by a sleep.
+    sealed class GatedSource : ILyricCandidateSource
+    {
+        readonly LyricsCandidate? _result;
+        readonly Task _gate;
+        public int Calls;
+        public GatedSource(string id, LyricsCandidate? result, Task gate) { Id = id; _result = result; _gate = gate; }
+        public string Id { get; }
+        public bool Enabled => true;
+        public double Prior => 0.9;
+        public async Task<LyricsCandidate?> FetchAsync(LyricsRequest req, CancellationToken ct)
+        {
+            Interlocked.Increment(ref Calls);
+            await _gate.ConfigureAwait(false);
+            return _result;
+        }
+    }
+
+    static async Task WaitUntil(Func<Task<bool>> condition, string what)
+    {
+        for (int i = 0; i < 300; i++)
+        {
+            if (await condition()) return;
+            await Task.Delay(10);
+        }
+        Assert.Fail("timed out waiting for " + what);
+    }
+
+    async Task<LyricsDocument?> OnDisk() => (await Cache().TryLoadAsync("t1")).Document;
+
+    [Fact]
+    public async Task Provider_LineSyncedDiskHit_ServesItThenUpgradesInTheBackground_AndTheSyllableDocOverwritesDisk()
+    {
+        await Cache().SaveAsync("t1", LineDoc());
+
+        var src = new CountingSource("amll", new LyricsCandidate("amll", 0.9, MatchBasis.Identity, WordDoc()));
+        var provider = new AggregatingLyricsProvider(new ILyricCandidateSource[] { src },
+            (_, _) => Task.FromResult<LyricsRequest?>(Req()), diskCache: Cache());
+        var upgrades = new List<LyricsDocument>();
+        provider.LyricsUpgraded.Subscribe(Observers.From<LyricsDocument>(d => { lock (upgrades) upgrades.Add(d); }));
+
+        var served = await provider.GetLyricsAsync("t1");
+
+        Assert.Equal(LyricsSyncKind.Line, served!.Sync);   // instant, from disk — the offline promise is untouched
+        // …and the fan-out still ran behind it, promoted the richer document and re-persisted it.
+        await WaitUntil(async () => (await OnDisk())?.Sync == LyricsSyncKind.Syllable, "the promoted document on disk");
+        Assert.Equal(1, src.Calls);
+        lock (upgrades) Assert.Single(upgrades);
+        lock (upgrades) Assert.Equal(LyricsSyncKind.Syllable, upgrades[0].Sync);
+        Assert.Equal(LyricsSyncKind.Syllable, (await provider.GetLyricsAsync("t1"))!.Sync);   // memory promoted too
+    }
+
+    [Fact]
+    public async Task Provider_BackgroundUpgradeThatFindsSomethingWorse_NeverDowngradesTheDisk()
+    {
+        await Cache().SaveAsync("t1", LineDoc());
+
+        var worse = new CountingSource("lrclib", new LyricsCandidate("lrclib", 0.4, MatchBasis.MetadataSearch, UnsyncedDoc()));
+        var provider = new AggregatingLyricsProvider(new ILyricCandidateSource[] { worse },
+            (_, _) => Task.FromResult<LyricsRequest?>(Req()), diskCache: Cache());
+
+        var served = await provider.GetLyricsAsync("t1");
+
+        Assert.Equal(LyricsSyncKind.Line, served!.Sync);
+        await WaitUntil(() => Task.FromResult(worse.Calls == 1), "the background fan-out to run");
+        // A Save never downgrades: the unsynced winner is worse than what the file already holds, so nothing is
+        // written — for the whole window in which a stray write could have landed.
+        for (int i = 0; i < 25; i++)
+        {
+            var doc = await OnDisk();
+            Assert.Equal(LyricsSyncKind.Line, doc!.Sync);
+            Assert.Equal("seed", doc.Provider);
+            await Task.Delay(10);
+        }
+        Assert.Equal(LyricsSyncKind.Line, (await provider.GetLyricsAsync("t1"))!.Sync);   // nor is memory downgraded
+    }
+
+    [Fact]
+    public async Task Provider_SyllableDiskHit_ShortCircuitsCompletely_NoResolveAndNoSourceCall()
+    {
+        await Cache().SaveAsync("t1", WordDoc());
+
+        int resolves = 0;
+        var src = new CountingSource("amll", new LyricsCandidate("amll", 0.9, MatchBasis.Identity, WordDoc()));
+        var provider = new AggregatingLyricsProvider(new ILyricCandidateSource[] { src },
+            (_, _) => { Interlocked.Increment(ref resolves); return Task.FromResult<LyricsRequest?>(Req()); },
+            diskCache: Cache());
+
+        var served = await provider.GetLyricsAsync("t1");
+
+        Assert.Equal(LyricsSyncKind.Syllable, served!.Sync);
+        await Task.Delay(200);          // a background upgrade would have resolved + fanned out well inside this
+        Assert.Equal(0, src.Calls);     // already at the top of the ladder ⇒ nothing to upgrade to
+        Assert.Equal(0, resolves);      // and the resolve (which can itself hit the network) never happens either
+    }
+
+    [Fact]
+    public async Task Provider_ContinuationOwnsTheDiskWrite_SoTheLineWinnerNeverRacesTheSyllableUpgrade()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fast = new CountingSource("lrclib", new LyricsCandidate("lrclib", 0.4, MatchBasis.MetadataSearch, LineDoc("lrclib")));
+        var slow = new GatedSource("amll", new LyricsCandidate("amll", 0.9, MatchBasis.Identity, WordDoc()), gate.Task);
+        var provider = new AggregatingLyricsProvider(new ILyricCandidateSource[] { fast, slow },
+            (_, _) => Task.FromResult<LyricsRequest?>(Req()), new LyricsOptions(FirstHitGraceMs: 0), diskCache: Cache());
+
+        var first = await provider.GetLyricsAsync("t1");
+
+        Assert.Equal(LyricsSyncKind.Line, first!.Sync);         // served on the grace window
+        Assert.False(File.Exists(Cache().PathFor("t1")));       // …but NOT written: the continuation owns the write,
+                                                                // so the two fire-and-forget saves cannot race.
+        gate.SetResult();
+        await WaitUntil(async () => (await OnDisk())?.Sync == LyricsSyncKind.Syllable, "the upgraded document on disk");
+    }
+
+    [Fact]
+    public async Task Provider_TwoConcurrentCallsForOneTrack_ShareASingleFanOut()
+    {
+        // The rail lyrics panel and the immersive surface each mount their own doc host: same track, two concurrent
+        // requests, which used to be two full fan-outs racing each other to the same file.
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var src = new GatedSource("amll", new LyricsCandidate("amll", 0.9, MatchBasis.Identity, WordDoc()), gate.Task);
+        int resolves = 0;
+        var provider = new AggregatingLyricsProvider(new ILyricCandidateSource[] { src },
+            (_, _) => { Interlocked.Increment(ref resolves); return Task.FromResult<LyricsRequest?>(Req()); },
+            diskCache: Cache());
+
+        var rail = provider.GetLyricsAsync("t1");
+        var immersive = provider.GetLyricsAsync("t1");
+        gate.SetResult();
+        var railDoc = await rail;
+        var immersiveDoc = await immersive;
+
+        Assert.NotNull(railDoc);
+        Assert.Same(railDoc, immersiveDoc);   // one shared task ⇒ literally the same document instance
+        Assert.Equal(1, src.Calls);
+        Assert.Equal(1, resolves);
+        await WaitForFile(Cache().PathFor("t1"), shouldExist: true);   // and exactly one writer reached the file
     }
 }
