@@ -20,6 +20,10 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     readonly LyricsOptions _opt;
     readonly string _referenceSourceId;
     readonly WaveeLogger _log;
+    // The PERSISTENT half of the winner cache (null = memory only, which is what every unit test uses so no test can
+    // touch the real %LOCALAPPDATA%). Read-through happens before the fan-out — before even resolving the request — so a
+    // track played in an earlier session resolves with no network at all.
+    readonly LyricsDiskCache? _disk;
     readonly Dictionary<string, LyricsDocument> _cache = new();
     readonly SimpleEvent<LyricsDocument> _upgrades = new();
     readonly object _gate = new();
@@ -36,13 +40,15 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         Func<string, CancellationToken, Task<LyricsRequest?>> resolveRequest,
         LyricsOptions? options = null,
         string referenceSourceId = "spotify",
-        WaveeLogger log = default)
+        WaveeLogger log = default,
+        LyricsDiskCache? diskCache = null)
     {
         _sources = sources.Where(s => s.Enabled).ToList();
         _resolve = resolveRequest;
         _opt = options ?? LyricsOptions.Default;
         _referenceSourceId = referenceSourceId;
         _log = log;
+        _disk = diskCache;
     }
 
     readonly record struct Probed(LyricsCandidate? Cand, LyricsOutcome Outcome, long Ms, string Detail);
@@ -56,6 +62,25 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
     {
         if (string.IsNullOrEmpty(trackId)) return null;
         lock (_gate) if (_cache.TryGetValue(trackId, out var cached)) { TouchLru(trackId); return cached; }
+
+        // Read-through, BEFORE _resolve and before the fan-out: resolving can itself hit the network (a thin cluster
+        // track re-resolves through the metadata resolver), so a disk hit must short-circuit both. This is the whole
+        // point of the disk cache — lyrics for a previously-played track with no network at all.
+        if (_disk is { } disk)
+        {
+            var entry = await disk.TryLoadAsync(trackId, ct).ConfigureAwait(false);
+            if (entry.Outcome == LyricsCacheOutcome.Hit && entry.Document is { } fromDisk)
+            {
+                lock (_gate) { _cache[trackId] = fromDisk; TouchLru(trackId); EvictLru(); }
+                PublishDiskReport(trackId, fromDisk, entry.SavedAtUnixMs);
+                return fromDisk;
+            }
+            if (entry.Outcome == LyricsCacheOutcome.KnownMissing)
+            {
+                PublishDiskReport(trackId, null, entry.SavedAtUnixMs);
+                return null;   // TTL-bounded: after it expires the very same call fans out again
+            }
+        }
 
         LyricsRequest? req;
         try { req = await _resolve(trackId, ct).ConfigureAwait(false); }
@@ -155,6 +180,14 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
 
         var winner = ranked.Winner;
         if (winner is not null) lock (_gate) { _cache[trackId] = winner; TouchLru(trackId); EvictLru(); }
+        if (_disk is { } wdisk)
+        {
+            if (winner is not null) wdisk.Save(trackId, winner);
+            // The negative marker is written ONLY when every source actually ran and none produced a candidate — never
+            // when the grace window cut a still-running fan-out short, and never when the reranker merely rejected what
+            // it was given.
+            else if (candidates.Count == 0 && collected.Count > 0 && !continueInBackground) wdisk.SaveMissing(trackId);
+        }
         if (continueInBackground && winner is not null && Richness(winner) < 3)
             _ = ContinueForUpgradeAsync(trackId, req, srcCts, pending, collected, winner, startedAt);
         else
@@ -234,7 +267,11 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
                 }
             }
 
-            if (promoted) _upgrades.OnNext(winner);
+            if (promoted)
+            {
+                _disk?.Save(trackId, winner);   // write-through on every upgrade publication, so disk holds the BEST doc
+                _upgrades.OnNext(winner);
+            }
         }
         catch (OperationCanceledException) { }
         catch (Exception e)
@@ -283,6 +320,29 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             trackId, req.Title, req.ArtistsJoined, req.Album, req.DurationMs, req.Isrc,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
         LogReport(trackId, req, summary, traces);
+    }
+
+    /// <summary>Keep the "why did this song get these lyrics" debug surface honest on a disk hit: without a report the
+    /// panel would show nothing (or the previous session's stale entry) for a track that resolved instantly. The request
+    /// metadata is empty by construction — a disk hit deliberately never resolves the track.</summary>
+    void PublishDiskReport(string trackId, LyricsDocument? doc, long savedAtUnixMs)
+    {
+        string when = savedAtUnixMs > 0
+            ? DateTimeOffset.FromUnixTimeMilliseconds(savedAtUnixMs).UtcDateTime.ToString("u")
+            : "unknown";
+        string detail = doc is not null
+            ? "not queried — served from the local lyrics cache"
+            : "not queried — the local lyrics cache remembers this track has no lyrics";
+        var traces = new List<LyricsSourceTrace>(_sources.Count);
+        foreach (var s in _sources)
+            traces.Add(new LyricsSourceTrace(s.Id, LyricsOutcome.Skipped, 0L, detail, LyricsSyncKind.None, 0, 0d, false, ""));
+
+        string summary = doc is not null
+            ? $"served from the on-disk cache (saved {when}); winner={doc.Provider ?? "?"} ({doc.Sync}, {doc.Lines.Count} lines)"
+            : $"no lyrics anywhere — cached negative result from {when}";
+        LyricsDiagnostics.Publish(new LyricsSearchReport(trackId, "", "", "", 0L, null,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
+        _log.Debug($"track={trackId} {summary}");
     }
 
     void LogReport(string trackId, LyricsRequest req, string summary, IReadOnlyList<LyricsSourceTrace> traces)
@@ -366,6 +426,12 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         }
     }
 
-    /// <summary>Clear the winner cache (e.g. on logout / provider-config change).</summary>
-    public void ClearCache() { lock (_gate) { _cache.Clear(); _lru.Clear(); } }
+    /// <summary>Clear the winner cache (e.g. on logout / provider-config change) — BOTH halves. "Clear" has to mean the
+    /// next request re-fetches, so the persistent entries (including the negative markers) go too; leaving them would
+    /// make a post-logout request keep serving the pre-logout answer forever.</summary>
+    public void ClearCache()
+    {
+        lock (_gate) { _cache.Clear(); _lru.Clear(); }
+        _disk?.Clear();
+    }
 }

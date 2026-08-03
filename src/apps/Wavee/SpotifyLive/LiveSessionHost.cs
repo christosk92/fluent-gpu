@@ -1054,9 +1054,13 @@ public sealed class LiveSessionHost : IAsyncDisposable
                 Isrc: t.Isrc, Market: "from_token", HasSpotifyLyrics: null);
         }
 
+        var lyricsLog = new WaveeLogger(WaveeLog.Instance, "lyrics");
         return new Wavee.Backend.Lyrics.AggregatingLyricsProvider(
             sources, Resolve, opt, referenceSourceId: "spotify",
-            log: new WaveeLogger(WaveeLog.Instance, "lyrics"));
+            log: lyricsLog,
+            // %LOCALAPPDATA%\Wavee\lyrics — read-through before the fan-out, so a track played in an earlier session
+            // has its words with no network at all.
+            diskCache: new Wavee.Backend.Lyrics.LyricsDiskCache(log: lyricsLog));
     }
 
     // The signed-in user's profile (display name + avatar) via spclient user-profile-view — the cluster/login only give
