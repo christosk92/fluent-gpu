@@ -103,6 +103,13 @@ sealed class LyricsView : Component
     // at least this duration is being sung — a whole-line wash reads as noise; a swell on the held note reads as voice.
     const float HeldGlowMinMs = 700f;       // WaveeMusic LyricsGlowEffectLongSyllableDuration default
     const float HeldGlowRampMaxMs = 500f;   // swell-in cap; short-ish holds swell across half the note instead
+    // Peak amplitude of the held-note bloom, as a fraction of the fully-swelled envelope. Strict-parity trim (campaign
+    // 2026-08-03, -25%): the reference clip shows NO glow, but it contains no ≥HeldGlowMinMs syllable, so it can only
+    // argue the bloom down, never refute it. Applied ONCE, at the single consumption point (ApplyVoiceGlowEnvelope), to
+    // the finished envelope — so it scales the whole curve uniformly and leaves every TIMING (the 700 ms threshold, the
+    // swell cap, GlowFadeMs/GlowOutMs) exactly where it was. The out-cross-fade inherits it for free: BeginGlowFades
+    // starts from the LIVE alpha.
+    const float HeldGlowPeakScale = 0.75f;
     const long ResyncIdleMs = 4000L;
     const int ResyncProgressSteps = 120;       // 30 Hz-equivalent ring updates across the four-second idle window
     FloatSignal[] _glowAlpha = Array.Empty<FloatSignal>();
@@ -1015,6 +1022,24 @@ sealed class LyricsView : Component
         return SuppressesDof(_followMode.Peek()) ? 0f : DofForLine(index);
     }
 
+    // ── Reduced motion ───────────────────────────────────────────────────────────────────────────────────────────────
+    // The engine exposes the OS preference as a VALUE — `FluentGpu.Dsl.Motion.ReducedMotion`, a plain static bool the
+    // Win32 PAL publishes from SPI_GETCLIENTAREAANIMATION at startup and re-reads on WM_SETTINGCHANGE
+    // (Win32Platform.ReadReducedMotion). It is NOT a signal, so there is no subscription to get wrong: read it where the
+    // affected constant is CONSUMED, exactly like the engine does at AnimScheduler.Structural.cs:99-102 and like the rest
+    // of the app (MediaCard, ContentFilterChips, WaveeShell). Never an early-return in a render/hook path — the flag is a
+    // mutable global a resize grip can flip mid-life, and a conditional return would shift hook slots.
+    //
+    // The three consumption points, and what each does when the preference is on:
+    //   • ArmCascade            — every stagger delay drops to 0, so every line shares the one rate: the document makes
+    //                             ONE rigid, gently-settling translate instead of a top-first waterfall.
+    //   • LyricLineView.WipeLiftFor — Lift = 0 on BOTH wipe layers (main + glow): no per-word rise.
+    //   • LyricLineView.Render  — scale flat 1.0 (no 0.98/0.97 breathing), folded into the emphasis spring's DepKey so
+    //                             the first re-render after a settings flip retargets instead of holding the old scale.
+    // What deliberately STAYS: the karaoke wipe, the opacity ladder and the DoF blur ladder. Those are INFORMATION — they
+    // say which words have been sung and which line is live — not decoration, and dropping them would break the view.
+    // (Wave F hook: the immersive surface's drifting cover backdrop must read this too and hold still.)
+
     // ── Staggered handoff cascade: tuning ────────────────────────────────────────────────────────────────────────────
     // Measured off the reference capture: ~50-70 ms of onset lag per successive line BELOW the outgoing one. Rank 0 is
     // the outgoing line and everything above it — those move IMMEDIATELY. The rank cap keeps the tail bounded: past ~4
@@ -1040,12 +1065,18 @@ sealed class LyricsView : Component
         if (comp.Length == 0 || delta == 0f) return;
         var vel = _casVel; var delay = _casDelayLeftMs; var rate = _casRate;
         int outgoing = newActive - 1;   // rank 0 — the line that just lost focus, and everything above it
+        // Reduced motion, read ONCE as a value and hoisted out of the loop (see the Reduced motion block above). The
+        // cascade still RUNS — the lines have to end up where the latched viewport put them, and a compensation that
+        // never decays would leave the document permanently off its focal band — but the WATERFALL goes: with every
+        // delay at 0, the rate below resolves to the same CascadeSettleY/CascadeTotalS for every line, so the whole
+        // document performs one rigid, critically-damped, zero-overshoot translate over the same 0.48 s.
+        bool reduce = Motion.ReducedMotion;
         for (int i = 0; i < comp.Length; i++)
         {
             float c = comp[i] + delta;   // ADD, never assign: a mid-cascade re-target folds into the in-flight comp
             // Re-arm the stagger for EVERY line on every handoff: a re-target restarts the wave from the NEW active
             // line, so a line that was already flying can be asked to hold again — that is the new wave passing it.
-            float delayMs = CascadeStaggerMs * Math.Clamp(i - outgoing, 0, CascadeMaxRank);
+            float delayMs = reduce ? 0f : CascadeStaggerMs * Math.Clamp(i - outgoing, 0, CascadeMaxRank);
             float y = CascadeSettleY / MathF.Max(0.05f, CascadeTotalS - delayMs * 0.001f);
             // ZERO OVERSHOOT, by construction. x(t) = e^(−y·t)·(c + j1·t) with j1 = v + c·y crosses zero iff j1 has the
             // OPPOSITE sign to c. A same-direction re-arm provably cannot (while decaying, |v| < y·|c|, and the added
@@ -1453,7 +1484,11 @@ sealed class LyricsView : Component
                 bool glowSettled = (split >= 1f && w.Split >= 1f) || (split <= 0f && w.Split <= 0f);
                 bool glowDirty = !glowSettled && (MathF.Abs(split - w.Split) > 0.0008f || MathF.Abs(softness - w.Softness) > 0.002f);
                 if (glowDirty) scene.SetGlyphWipe(glowNode, w with { Split = split, Softness = softness });
-                float baseSigma = _large ? 6f : 4f;
+                // Held-note bloom σ, TRIMMED for strict parity (was 6 large / 4 rail — campaign 2026-08-03): the
+                // reference capture shows no glow anywhere, but it also contains no ≥HeldGlowMinMs held syllable, so it
+                // can only argue the bloom smaller, never away. Apple genuinely blooms held notes, so the MECHANISM
+                // stays and only its amplitude comes down — here and at HeldGlowPeakScale.
+                float baseSigma = _large ? 4.5f : 3f;
                 float glowA = GlowAlphaOf(voiceLine);
                 float sigma = baseSigma * glowA;
                 ref var gp = ref scene.Paint(glowNode);
@@ -1506,7 +1541,9 @@ sealed class LyricsView : Component
             // WaveeMusic/BetterLyrics rule (LyricsAnimator "辉光（长音节）", scope = LongDurationSyllable): the halo
             // blooms ONLY while a ≥ HeldGlowMinMs syllable is being HELD — swell in across the hold, melt out into its
             // end. Short syllables get no glow at all; the old whole-line wash is gone.
-            alpha = MathF.Min(HeldSyllableGlow(line, nowMs), alphaOut);
+            // HeldGlowPeakScale is the strict-parity amplitude trim, applied HERE (once, to the finished monotone
+            // envelope) so the shape/timing of the swell and the melt are untouched — only how bright it ever gets.
+            alpha = HeldGlowPeakScale * MathF.Min(HeldSyllableGlow(line, nowMs), alphaOut);
         }
         else
         {
@@ -1855,7 +1892,14 @@ sealed class LyricLineView : Component
         // shrink is LEFT-anchored (TransformOriginX 0 in the non-centered branch below), so rows stay flush to the
         // margin instead of breathing about their middle. Voice only drives the karaoke wipe and glow during the lead
         // split, so depth never disagrees with emphasis.
-        float scale = interlude ? 0.97f : isActive ? 1f : 0.98f;
+        //
+        // Reduced motion flattens scale to 1.0 on every row (read as a VALUE — see the Reduced motion block in
+        // LyricsView): the 0.98/0.97 breathing is the one purely decorative channel here, since opacity + DoF carry the
+        // whole distance hierarchy on their own, and a scale change on every visible row at every handoff is exactly the
+        // field-wide motion the preference asks us to drop. `reduce` is folded into `key` below so the spring RETARGETS
+        // on the first re-render after an OS-settings flip rather than holding the pre-flip target.
+        bool reduce = Motion.ReducedMotion;
+        float scale = reduce ? 1f : interlude ? 0.97f : isActive ? 1f : 0.98f;
         // Row emphasis follows ACTIVE only — voice keeps the karaoke wipe/glow but must not hold full brightness once
         // focus moves (the lead window used to leave the previous line white for its entire sung tail).
         float opacity = OpacityOf(e);
@@ -1865,7 +1909,7 @@ sealed class LyricLineView : Component
 
         // AMLL scale in BOTH directions; opacity is critical/no-bounce and DIRECTIONAL.
         // Cold mounts still begin at the element rest targets below, so the soft inactive spring cannot flash a new row.
-        var key = DepKey.From(dist, (interlude ? 1 : 0) | (isActive ? 2 : 0) | (past ? 4 : 0));
+        var key = DepKey.From(dist, (interlude ? 1 : 0) | (isActive ? 2 : 0) | (past ? 4 : 0) | (reduce ? 8 : 0));
         var scaleSpring = new SpringParams(100f, 25f, 2f);             // AMLL m=2,d=25,k=100
         // Front-loaded outgoing dim: measured, the exiting line falls 252 → 180 luma inside the first ~100 ms of its
         // flight, while the incoming line brightens across the WHOLE handoff. So the opacity spring is ~3× faster when
@@ -1948,10 +1992,13 @@ sealed class LyricLineView : Component
             Element glow = new BoxEl
             {
                 // Constant σ halo while NEAR the focus (dist ≤ 2); its VISIBILITY is the bound glow-fade signal, ramped by
-                // OnFrame at the voice handoff — the halo cross-fades instead of the old one-frame σ 0↔9 + text swap pop.
-                // Glyphs + the blur layer mount/step while the row is still dim + blurred (never on the focal row), and a
-                // peripheral line pays neither a second glyph run nor a blur layer.
-                Blur = near ? (_centered ? 13f : 9f) : 0f,
+                // OnFrame at the voice handoff — the halo cross-fades instead of the old one-frame σ 0↔halo + text swap
+                // pop. Glyphs + the blur layer mount/step while the row is still dim + blurred (never on the focal row),
+                // and a peripheral line pays neither a second glyph run nor a blur layer.
+                // TRIMMED for strict parity with the word-by-word bloom above (was 13 large / 9 rail): a line-synced doc
+                // has no held-note signal, so this whole-line wash is the softest claim of the two — it comes down by the
+                // same ~25% spirit as HeldGlowPeakScale + the retuned baseSigma.
+                Blur = near ? (_centered ? 10f : 7f) : 0f,
                 // Scroll motion translates this stationary glyph subtree every frame. Reuse its retained blur when it
                 // exists; otherwise render crisp for the moving frame and rebuild the full halo after settling.
                 BlurCachePolicy = BlurCachePolicy.HoldIfCached,
@@ -2048,10 +2095,15 @@ sealed class LyricLineView : Component
     // Every constant below is measured off the frame-by-frame Apple Music reference capture (lyrics-parity campaign,
     // 2026-08-03; the video is 480 px wide at cap-height ≈30 px, so source px × 0.62 ⇒ rail DIP at font 26).
 
-    // Small POSITIVE wipe lead: nudge the bright boundary a few % ahead of the strictly-played fraction so the edge reads
+    // Small POSITIVE wipe lead: nudge the bright boundary a hair ahead of the strictly-played fraction so the edge reads
     // as anticipating the voice. Shared by the element seed (LyricLineView.Render) and the per-frame driver (OnFrame) so
     // the reconcile re-render and the OnFrame writer agree on the boundary (no snap-back — S3-4).
-    internal const float WipeLeadFrac = 0.04f;
+    //
+    // 2%, HALVED from the 0.04 that shipped alongside the old Softness-0.14 wash. A 4-9x too-wide feather HID a 4% lead
+    // inside its own gradient; against the narrow 5 DIP band the reference actually shows, the same 4% put the bright
+    // edge visibly ahead of the syllable being sung — eager, whereas in the capture the boundary TRACKS the voice. The
+    // TIME-domain anticipation is a separate knob and is deliberately untouched: LeadMs = 140 (emphasis + scroll only).
+    internal const float WipeLeadFrac = 0.02f;
 
     // Unsung glyph alpha (GlyphWipe.After). Reference: crossed text holds 250-255 luma while unsung sits at 183-192 over
     // a ~90 background ⇒ α ≈ 0.59 of the sung white. The 0.45 shipped before read a whole step too dim/too far away.
@@ -2073,7 +2125,12 @@ sealed class LyricLineView : Component
     // Reference: unsung words sit ~2 source px low at cap-height 30 px ⇒ ≈0.048 em ⇒ 1.25 DIP at font 26.
     internal const float WipeLiftDip = 1.25f;
     internal const float WipeLiftDipLarge = 1.75f;
-    internal static float WipeLiftFor(bool large) => large ? WipeLiftDipLarge : WipeLiftDip;
+    // Reduced motion zeroes the lift at the ONE place both wipe layers read it (LyricsView.LyricsContent passes the
+    // result to the row, which seeds it into the main AND the glow GlyphWipe — they must agree or the bloom floats out
+    // from under the text). The per-word rise is pure decoration: the sung/unsung colour split alone says which words
+    // have been sung. Read as a VALUE, never an early-return — see the Reduced motion block in LyricsView. A flip
+    // mid-session is picked up by the next row realization/render, which normal playback produces within a line or two.
+    internal static float WipeLiftFor(bool large) => Motion.ReducedMotion ? 0f : large ? WipeLiftDipLarge : WipeLiftDip;
 
     internal static float ComputeSplit(LyricLine line, long now)
     {
