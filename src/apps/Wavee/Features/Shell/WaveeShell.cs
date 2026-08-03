@@ -816,7 +816,23 @@ sealed class WaveeShell : Component
                 },
             ],
         };
-        var shellWithOverlays = Ui.ZStack(tinted, runtimeBannerLayer, fileDropLayer,
+        // The IMMERSIVE LYRICS surface — a full-bleed layer directly above the chrome column (so it covers the content
+        // card, the sidebar and the rail) and below every layer after it here, which is where the persistent banner,
+        // the drop cue and the engine's auto-mounted toast / teaching-tip lane live. Flow.Show, not a `.Value` read in
+        // this render body: the boundary mounts/unmounts the surface reactively without re-rendering the whole shell,
+        // and its anchor is hit-test-transparent (MirrorParticipation), so the surface's own pass-through caption and
+        // player-bar bands still reach the chrome underneath. Enter/Exit terminals come from the surface itself (they
+        // read the reduced-motion VALUE at access time).
+        var immersiveLyricsLayer = Flow.Show(
+            () => _shellUi.ImmersiveLyrics.Value,
+            new BoxEl
+            {
+                Grow = 1f, HitTestPassThrough = true,
+                Enter = ImmersiveLyricsSurface.EnterTerminal,
+                Exit = ImmersiveLyricsSurface.ExitTerminal,
+                Children = [Embed.Comp(() => new ImmersiveLyricsSurface())],
+            });
+        var shellWithOverlays = Ui.ZStack(tinted, immersiveLyricsLayer, runtimeBannerLayer, fileDropLayer,
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
             // Zero-size chrome INSIDE the OverlayHost subtree (so UseContext(Overlay.Service) resolves the real service —
             // the same reason ActionServicesOverlayBinder lives here): opens the one-time design chooser once per install,

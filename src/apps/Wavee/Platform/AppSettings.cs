@@ -64,6 +64,13 @@ static class WaveeSettings
     // window-level option here (mica:false is the engine's no-Mica path, not a user choice). Seeds AppOptions.MicaAlt at
     // startup and is applied LIVE on change via FluentApp.SetWindowMaterialAlt — deliberately a setting, not an env var.
     public static readonly SettingKey<bool> WindowMaterialBaseMica = new("appearance.windowMaterial.baseMica", false);
+    // The immersive lyrics surface's slowly-drifting blurred-cover backdrop. TRUE (the default) = the baked-blur cover
+    // wanders on two incommensurate sinusoids; FALSE = the same cover, held perfectly still (and no ticker at all).
+    // Deliberately a SETTING, not an env var — the WindowMaterialBaseMica precedent: it is a taste/comfort choice a
+    // normal user makes about a surface they look at for whole songs, not a developer escape hatch, and it must apply
+    // LIVE (the writer bumps AppearancePrefs.Epoch, which the surface reads). The OS reduced-motion preference
+    // independently holds the drift still whatever this says — a value read, never a hook branch.
+    public static readonly SettingKey<bool> LyricsAnimatedBackdrop = new("lyrics.backdrop.animated", true);
     // Wide two-column detail pages: user-resizable left metadata rail. Album-like and playlist-like surfaces keep
     // separate widths because their authored defaults differ (280 vs 240 DIP). Responsive mid/narrow modes ignore these
     // values and retain their breakpoint widths; the saved width returns when the page is wide again.

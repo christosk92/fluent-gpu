@@ -695,7 +695,9 @@ sealed class LyricsView : Component
     // measured run length disagree with the rendered wrap.
     float RowFontSize => _large ? 36f : 26f;
     float RowLineHeight => _large ? 46f : 33f;   // ~1.27x (was 1.4x) — denser block
-    float RowSidePad => _large ? 48f : 22f;      // keep text off the rail edges without making the narrow panel cramped
+    // Immersive gets a generous 64 DIP gutter inside its ~700 DIP measured column (ImmersiveLyricsSurface); the rail
+    // keeps 22 so the narrow panel never reads cramped.
+    float RowSidePad => _large ? 64f : 22f;
 
     Element LyricsContent(LyricsDocument doc)
     {
@@ -709,9 +711,10 @@ sealed class LyricsView : Component
         float rowPad = _large ? 9f : 7f;            // vertical padding per row; inter-line gap = 2*rowPad
         float sidePad = RowSidePad;
         float rowEst = lineHt + 2f * rowPad;        // measured-layout seed = a single-line row's height
-        bool centered = _large;
         float wipeLift = LyricLineView.WipeLiftFor(_large);
-        _band = _large ? 0.42f : 0.40f;
+        // Focal band: the immersive surface sits its active line slightly HIGHER in the taller viewport (0.38 vs the
+        // rail's 0.40) so more of the upcoming document is visible below it — the reference framing.
+        _band = _large ? 0.38f : 0.40f;
 
         if (_layout is null || MathF.Abs(_layout.Band - _band) > 0.001f || MathF.Abs(_layout.Estimate - rowEst) > 0.5f)
             _layout = new LyricsMeasuredLayout(rowEst, _band);
@@ -727,7 +730,7 @@ sealed class LyricsView : Component
                     idx, lines[idx],
                     (uint)idx < (uint)_lineEmphasis.Length ? _lineEmphasis[idx] : _emphasisFallback, _nowMs, _followMode,
                     idx < _glowAlpha.Length ? _glowAlpha[idx] : null,
-                    fontSz, lineHt, rowPad, sidePad, wipeLift, centered,
+                    fontSz, lineHt, rowPad, sidePad, wipeLift, _large,
                     ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
@@ -753,11 +756,13 @@ sealed class LyricsView : Component
 
     Element UnsyncedLyricsContent(LyricsDocument doc)
     {
-        float fontSz = _large ? 34f : 24f;
-        float lineHt = _large ? 44f : 32f;
+        // Same LEFT-ALIGNED, WRAPPED treatment as the timed path, at the timed path's metrics: an unsynced document is
+        // the same reading surface minus the wipe, and the immersive surface must not switch typographic systems just
+        // because the lyric happens to be untimed.
+        float fontSz = _large ? RowFontSize : 24f;
+        float lineHt = _large ? RowLineHeight : 32f;
         float rowPad = _large ? 8f : 6f;
-        float sidePad = _large ? 48f : 22f;
-        bool centered = _large;
+        float sidePad = RowSidePad;
         var rows = new Element[doc.Lines.Count];
 
         for (int i = 0; i < rows.Length; i++)
@@ -767,18 +772,18 @@ sealed class LyricsView : Component
                 Direction = 1,
                 Shrink = 0f,
                 Padding = new Edges4(sidePad, rowPad, sidePad, rowPad),
-                AlignItems = centered ? FlexAlign.Center : FlexAlign.Stretch,
+                AlignItems = FlexAlign.Stretch,
                 Children =
                 [
                     new TextEl(doc.Lines[i].Text)
                     {
                         Size = fontSz,
                         Weight = 700,
-                        Wrap = centered ? TextWrap.NoWrap : TextWrap.Wrap,
+                        Wrap = TextWrap.Wrap,
                         LineHeight = lineHt,
                         Color = Tok.TextPrimary with { A = 0.88f },
-                        MaxLines = centered ? 1 : 0,
-                        Trim = centered ? TextTrim.CharacterEllipsis : TextTrim.None,
+                        MaxLines = 0,
+                        Trim = TextTrim.None,
                     },
                 ],
             };
@@ -802,7 +807,7 @@ sealed class LyricsView : Component
 
     static Element LyricsShimmer(bool large)
     {
-        float padX = large ? 48f : 22f;
+        float padX = large ? 64f : 22f;   // matches RowSidePad so the bars sit exactly where the first lines will land
         float padTop = large ? 150f : 110f;
         float rowH = large ? 32f : 22f;
         float gap = large ? 24f : 18f;
@@ -817,7 +822,7 @@ sealed class LyricsView : Component
                 Height = rowH,
                 Corners = CornerRadius4.All(6f),
                 Fill = Tok.FillSubtleSecondary,
-                AlignSelf = large ? FlexAlign.Center : FlexAlign.Start,
+                AlignSelf = FlexAlign.Start,   // both surfaces are left-aligned now (the centered fullscreen was refuted)
             };
         }
 
@@ -919,11 +924,10 @@ sealed class LyricsView : Component
         string text = doc.Lines[index].Text;
         if (text.Length == 0 || TextSeam.Default is not { } fonts) return wrapWidth;
 
-        bool centered = _large;
+        // MUST mirror LyricLineView.LineText EXACTLY (both surfaces: wrapped, untrimmed, unbounded line count) — the
+        // feather is a fraction of the extent measured here, so any disagreement re-scales every wipe boundary.
         var style = new TextStyle(default, RowFontSize, 700,
-            centered ? TextWrap.NoWrap : TextWrap.Wrap,
-            centered ? TextTrim.CharacterEllipsis : TextTrim.None,
-            centered ? 1 : 0,
+            TextWrap.Wrap, TextTrim.None, 0,
             CharSpacing: 0f, LineHeight: RowLineHeight);
         // A wrapped lyric line is 1-3 visual lines; 8 is generous headroom and the seam DROPS the excess rather than
         // failing, so a pathological line would under-sum. Treat a full span as possibly truncated and fall back to the
@@ -1843,7 +1847,11 @@ sealed class LyricLineView : Component
     readonly float _rowPad;
     readonly float _sidePad;
     readonly float _wipeLift;   // per-word rise in DIP (GlyphWipe.Lift) — surface-scaled by LyricsView, see WipeLiftFor
-    readonly bool _centered;
+    // WHICH SURFACE this row belongs to (immersive fullscreen vs the 340 DIP rail). It is NOT a "centered" flag any
+    // more: the frame evidence refutes centred/NoWrap/ellipsised fullscreen lyrics — BOTH surfaces are left-aligned,
+    // wrapped and untrimmed, and BOTH anchor their emphasis scale at the left margin (TransformOriginX 0). All that is
+    // left of the old distinction is the line-synced halo σ, which scales with the type size.
+    readonly bool _large;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action<int, NodeHandle> _reportGlow;
     readonly Action<int, NodeHandle> _reportDof;
@@ -1858,13 +1866,13 @@ sealed class LyricLineView : Component
 
     public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs, Signal<LyricsFollowMode> followMode,
         FloatSignal? glowFade,
-        float fontSz, float lineHt, float rowPad, float sidePad, float wipeLift, bool centered, Action<int, NodeHandle> reportNode,
+        float fontSz, float lineHt, float rowPad, float sidePad, float wipeLift, bool large, Action<int, NodeHandle> reportNode,
         Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf,
         Func<int, float> dofSigmaOf, Action onSeek)
     {
         _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
         _followMode = followMode; _glowFade = glowFade;
-        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _wipeLift = wipeLift; _centered = centered;
+        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _wipeLift = wipeLift; _large = large;
         _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf;
         _dofSigmaOf = dofSigmaOf; _onSeek = onSeek;
     }
@@ -1889,7 +1897,7 @@ sealed class LyricLineView : Component
         // still-active sung-out line recedes to a calm look instead of sitting frozen-fully-lit. In the reference the
         // DISTANCE hierarchy is carried almost entirely by OPACITY + DoF BLUR: scale is a flat, barely-there 0.98 on
         // every inactive row (the old 1 - 0.25*f ramp shrank far rows to 0.75, which the frame evidence refutes). The
-        // shrink is LEFT-anchored (TransformOriginX 0 in the non-centered branch below), so rows stay flush to the
+        // shrink is LEFT-anchored (TransformOriginX 0 below, on BOTH surfaces), so rows stay flush to the
         // margin instead of breathing about their middle. Voice only drives the karaoke wipe and glow during the lead
         // split, so depth never disagrees with emphasis.
         //
@@ -1926,8 +1934,6 @@ sealed class LyricLineView : Component
         UseSpring(AnimChannel.ScaleX, scale, scaleSpring, key);
         UseSpring(AnimChannel.ScaleY, scale, scaleSpring, key);
 
-        var wrap = _centered ? TextWrap.NoWrap : TextWrap.Wrap;
-        int maxLines = _centered ? 1 : 0;
         Element textEl;
 
         // The karaoke wipe sub-tree renders on the active line AND the voice line — during the ~140 ms lead the voice line
@@ -1998,7 +2004,7 @@ sealed class LyricLineView : Component
                 // TRIMMED for strict parity with the word-by-word bloom above (was 13 large / 9 rail): a line-synced doc
                 // has no held-note signal, so this whole-line wash is the softest claim of the two — it comes down by the
                 // same ~25% spirit as HeldGlowPeakScale + the retuned baseSigma.
-                Blur = near ? (_centered ? 10f : 7f) : 0f,
+                Blur = near ? (_large ? 10f : 7f) : 0f,
                 // Scroll motion translates this stationary glyph subtree every frame. Reuse its retained blur when it
                 // exists; otherwise render crisp for the moving frame and rebuild the full halo after settling.
                 BlurCachePolicy = BlurCachePolicy.HoldIfCached,
@@ -2046,8 +2052,10 @@ sealed class LyricLineView : Component
             Shrink = 0f,
             Padding = new Edges4(_sidePad, _rowPad, _sidePad, _rowPad),
             Justify = FlexJustify.Center,
-            AlignItems = _centered ? FlexAlign.Center : FlexAlign.Stretch,
-            TransformOriginX = _centered ? 0.5f : 0f,
+            AlignItems = FlexAlign.Stretch,
+            // LEFT-anchored emphasis scale on BOTH surfaces: rows breathe about their leading margin instead of their
+            // middle, so the left edge of the column is rock-solid as the active line grows (the reference behaviour).
+            TransformOriginX = 0f,
             TransformOriginY = 0.5f,
             Cursor = CursorId.Hand,
             OnClick = _onSeek,
@@ -2057,17 +2065,19 @@ sealed class LyricLineView : Component
             Children = [dofContent],
         };
 
+        // BOTH surfaces: wrapped, unbounded line count, no ellipsis. A lyric line is never allowed to be truncated —
+        // "lif.." is unreadable — and the fullscreen single-line/ellipsis arm the old `_centered` flag selected is
+        // exactly what the reference capture refutes (its wrapped rows fill row-by-row with a vertical boundary).
+        // LyricsView.MeasureRunLength rebuilds this style verbatim; the two must be changed together.
         TextEl LineText(string text, ColorF color) => new(text)
         {
             Size = _fontSz,
             Weight = 700,
-            Wrap = wrap,
+            Wrap = TextWrap.Wrap,
             LineHeight = _lineHt,
             Color = color,
-            MaxLines = maxLines,
-            // Rail: no ellipsis — a long line wraps cleanly (up to MaxLines) instead of the confusing mid-word "lif.."
-            // trim. Fullscreen stays single-line (NoWrap) so it keeps the ellipsis.
-            Trim = _centered ? TextTrim.CharacterEllipsis : TextTrim.None,
+            MaxLines = 0,
+            Trim = TextTrim.None,
         };
     }
 

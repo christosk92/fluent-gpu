@@ -59,24 +59,31 @@ sealed class RightRail : Component
 
         Element surface = new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.FileArea), Corners = corners, ClipToBounds = true };
 
+        // Lyrics only: promote the panel to the fullscreen immersive surface (WaveeShell mounts it off this signal).
+        // The rail is left exactly as it is underneath — the surface covers the shell rather than replacing the panel.
+        Element[] headerKids = mode == RailMode.Lyrics
+            ?
+            [
+                TitleText(mode),
+                HeaderButton(Icons.FullScreen, Loc.Get(Strings.Player.ExpandLyrics), () => ui.ImmersiveLyrics.Value = true),
+                CloseButton(() => ui.RailOpen.Value = false),
+            ]
+            : [TitleText(mode), CloseButton(() => ui.RailOpen.Value = false)];
+
         var header = new BoxEl
         {
             Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = 4f,
             Padding = new Edges4(Spacing.M, 0f, Spacing.S, 0f),
-            Children =
-            [
-                new TextEl(Title(mode))
-                {
-                    Size = 14f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f,
-                    Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
-                },
-                CloseButton(() => ui.RailOpen.Value = false),
-            ],
+            Children = headerKids,
         };
 
         Element body = mode switch
         {
-            RailMode.Lyrics => Embed.Comp(() => new LyricsView()),
+            // PARK the rail's lyrics engine while the immersive surface is up: it is fully occluded, and two live
+            // LyricsView documents would each run a 16 ms ticker, a DoF ramp and a handoff cascade for nothing. The
+            // visibility gate is the same one the immersive surface uses, so exactly one of them is ever ticking.
+            RailMode.Lyrics => Embed.Comp(() => new LyricsView(
+                visible: () => ui.RailOpen.Value && !ui.ImmersiveLyrics.Value)),
             RailMode.Queue => Embed.Comp(() => new QueuePanel()),
             RailMode.Friends => Embed.Comp(() => new FriendsPanel()),
             _ => Embed.Comp(() => new NowPlayingPanel()),
@@ -118,6 +125,22 @@ sealed class RightRail : Component
             ],
         };
     }
+
+    static Element TitleText(RailMode mode) => new TextEl(Title(mode))
+    {
+        Size = 14f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f,
+        Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
+    };
+
+    // A glyph button in the panel header — the CloseButton shape, with a tooltip because its glyph is not universal.
+    static Element HeaderButton(string glyph, string tip, Action onClick) => ToolTip.Wrap(new BoxEl
+    {
+        Width = 32f, Height = 32f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(Radii.Control),
+        Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+        Cursor = CursorId.Hand, OnClick = onClick,
+        Children = [new TextEl(glyph) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
+    }.Interactive(Interaction.Subtle), tip);
 
     static string Title(RailMode m) => m switch
     {

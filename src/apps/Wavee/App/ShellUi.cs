@@ -30,6 +30,12 @@ public sealed class ShellUi
     /// </summary>
     public Signal<bool> RailFits { get; } = new(true);
 
+    /// <summary>The immersive fullscreen lyrics surface is open. <c>WaveeShell</c> mounts
+    /// <c>ImmersiveLyricsSurface</c> as a full-bleed overlay while this is true; the rail's lyrics header expand button
+    /// sets it, and the surface's own close button / Escape clears it. Deliberately NOT a <see cref="RailMode"/>: the
+    /// surface covers the whole shell rather than replacing the rail's panel, so the rail's own state is untouched.</summary>
+    public Signal<bool> ImmersiveLyrics { get; } = new(false);
+
     // NOTE: there is deliberately no layout-defer lock here any more. It existed to stop the OLD reflow-spring rail
     // (which animated REAL width) from churning a breakpoint remount on every intermediate width. The shipping path
     // commits the reserved width in ONE frame (the spacer snaps; the content card eases only a clip window), so there

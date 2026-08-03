@@ -121,6 +121,10 @@ sealed partial class SettingsPage
                 AppearanceToggle(WaveeSettings.DisableColorWashes), Icons.Brush),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.WindowMaterial), Loc.Get(Strings.Settings.Appearance.WindowMaterialSub),
                 WindowMaterialToggle(), Icons.Brush),
+            // The immersive-lyrics cover drift. A plain AppearanceToggle: its Bump() raises AppearancePrefs.Epoch, which
+            // ImmersiveLyricsSurface reads, so flipping it starts/stops the drift on an OPEN surface — no restart.
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.LyricsBackdrop), Loc.Get(Strings.Settings.Appearance.LyricsBackdropSub),
+                AppearanceToggle(WaveeSettings.LyricsAnimatedBackdrop), Icons.Brush),
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
                 PageLayoutCards(pageLayout, SetPageLayout), Icons.List),
