@@ -122,10 +122,9 @@ sealed class LyricsView : Component
     bool _scrollSnapped;
     readonly Signal<int> _activeLine = new(-1);   // emphasis + scroll target (lead-shifted)
     readonly Signal<int> _voiceLine = new(-1);    // line currently being sung (true time) — owns the karaoke wipe/glow
-    readonly Signal<bool> _interlude = new(false);// active line sung out into a long instrumental gap — recede it
     readonly FloatSignal _nowMs = new(0f);
 
-    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, interlude flag in bit 3, PAST flag in bit 4). One VALUE-GATED Signal per line: the
+    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, bit 3 UNUSED, PAST flag in bit 4). One VALUE-GATED Signal per line: the
     // reactive core propagates staleness eagerly (a Memo does NOT gate downstream re-renders by value), so the ONLY way a
     // line re-renders solely on ITS OWN emphasis change is a per-line signal whose setter no-ops when the packed value is
     // unchanged. As `_activeLine` sweeps, PushEmphasis rewrites all lines but only the ~dozen crossing a bucket boundary
@@ -235,6 +234,12 @@ sealed class LyricsView : Component
 
     readonly bool _large;
     readonly Func<bool>? _visible;
+    // The focal band as a fraction of the lyrics viewport height, and its ONE owner. The immersive surface sits its
+    // active line slightly HIGHER in the taller viewport (0.38 vs the rail's 0.40) so more of the upcoming document is
+    // visible below it — the reference framing. `_band` is the copy the measured layout is built against (published by
+    // LyricsContent); the interlude-dots overlay is built in Render, BEFORE LyricsContent has run on the first pass, so
+    // it anchors off the PROPERTY. Two readers, one definition.
+    float FocalBand => _large ? 0.38f : 0.40f;
     float _band = 0.40f;
 
     // Opt-in lyrics-search debug surface (a corner button → a per-source "why no/which lyric" panel). Env-gated like the
@@ -341,10 +346,11 @@ sealed class LyricsView : Component
             ? Embed.Comp(() => new LyricsTicker { Owner = this }) with { Key = "lyrics-ticker:" + trackId }
             : null;
         Element resync = ResyncOverlay();
+        Element dots = InterludeDots();
         var stack = new BoxEl
         {
             Grow = 1f, MinHeight = 0f, ClipToBounds = true, ZStack = true,
-            Children = ticker is null ? [body, resync] : [body, ticker, resync],
+            Children = ticker is null ? [body, dots, resync] : [body, ticker, dots, resync],
         };
 
         if (!_lyricsDebug) return stack;
@@ -396,6 +402,207 @@ sealed class LyricsView : Component
                     }),
             ],
         };
+    }
+
+    // ── The interlude: the finished line RETIRES, three dots keep time ───────────────────────────────────────────────
+    // When a line is sung out and the next one is a real instrumental break away, the reference does NOT leave the
+    // finished line sitting half-lit on the focal band (the old `_interlude` recede — scale 0.97 / opacity 0.55 / σ1 —
+    // which read as a still-selected line that had broken). It RETIRES it: the line takes the ORDINARY past treatment
+    // (past bit, its rung of the past opacity/σ ladder), focus moves on to the upcoming line, and the silence is marked
+    // by three breathing dots just above it. There is therefore no "interlude look" for a lyric row at all any more —
+    // the whole feature is (a) an early active-line advance and (b) an overlay. Bit 3 of the packed emphasis, which
+    // carried the recede, is now unused.
+    //
+    // WHY THE ADVANCE ALONE DOES THE JOB. AdvancePastInterlude runs on the RESOLVED line (N), never on its own output,
+    // so it is a pure function of the clock: it answers N+1 on every frame of the break and stops answering the moment
+    // ResolveLine itself reaches N+1 (at nextStart − LeadMs). No sticky state, no release edge — and the value it
+    // produces at that boundary is exactly the value the plain lead-shifted resolve produces, so the advance ends
+    // without a second handoff. Because it lands in `active` BEFORE `activeChanged` is computed, the ONSET is a normal
+    // handoff: PushEmphasis retires line N onto the past ladder, ScrollActiveIntoView latches the viewport and
+    // ArmCascade flies the document, so line N+1 sits at the focal band in its unsung-gray-sharp state (dist 0, wipe
+    // split 0 — nothing special needed, that is simply what a line that has not started looks like) for the whole
+    // break. When the break ends, nothing moves at all: the line just starts filling.
+    //
+    // WHY THE DOTS ARE AN OVERLAY AND NOT A ROW. A pseudo-row would have to exist in the measured layout, which means
+    // the virtual window, the ExtentTable, the per-line emphasis/σ/glow/cascade arrays and every `index → line` mapping
+    // in this file would grow a conditional off-by-one for the duration of a gap — a large blast radius bought for
+    // something that carries no reading-order meaning and is never scrolled to. Instead the dots are a sibling of the
+    // scroll viewport in the ZStack, anchored at the SAME band fraction the follow targets. The scroll, virtualization
+    // and cascade machinery is untouched; the only thing the two paths share is `FocalBand`.
+    //
+    // A11Y. The engine's element surface exposes a semantic Role but no automation NAME (names come from text
+    // content), and the dots have no text to name them with. So rather than mint a role that would announce nothing,
+    // the row is `HitTestVisible = false` — excluded from hit-testing and focus for its whole subtree, i.e. explicitly
+    // decorative. Nothing is lost: the information it carries (a break is elapsing) is already implied by the lyric
+    // rows themselves, which remain the focusable, seekable, readable surface throughout.
+
+    // The gap that must open between a line's sung-out point and the next line's start before the break counts as an
+    // interlude at all. ONE constant — it replaced the inline `gap >= 4000` recede test. Below it the handoff stays the
+    // ordinary 140 ms-lead one and nothing appears.
+    const long InterludeGapMs = 5000L;
+    // The dots retire this long before the next line starts, so their exit never collides with its first syllable. It
+    // is also the fill's finish line (DriveInterludeDots): the meter reads FULL exactly as the row leaves.
+    const long InterludeDotsExitMs = 1000L;
+    const float InterludeBreathMs = 2600f;      // one full breath — slow enough to read as breathing, not as blinking
+    const float InterludeBreathScale = 0.06f;   // trough depth of the scale pulse (the peak is always exactly 1)
+    const float InterludeBreathAlpha = 0.10f;   // …and of the alpha pulse, so a FULLY filled dot still peaks at exactly 1
+    const float InterludeDotWriteEps = 0.004f;  // ≈1/255: below this an alpha write cannot change a pixel
+
+    // Whether the dots are mounted. Flipped exactly TWICE per interlude (Signal<T> coalesces the equal writes), so the
+    // ShowEl re-renders twice per break and never per frame; the per-frame lane writes only the scene + the dot alphas.
+    readonly Signal<bool> _dotsShown = new(false);
+    // Per-dot alpha, bound as each dot's Opacity. Allocated ONCE for the life of the view (there are always three), so
+    // the per-frame path only ever writes them — the per-line glow-alpha idiom, at fixed size.
+    readonly FloatSignal[] _dotAlpha = [new FloatSignal(0f), new FloatSignal(0f), new FloatSignal(0f)];
+    NodeHandle _dotsRowNode = NodeHandle.Null;   // the breath-scale target (see InterludeDots)
+
+    Element InterludeDots()
+    {
+        float d = _large ? 12f : 9f;
+        float gap = _large ? 10f : 8f;
+        // How far the dots' BOTTOM edge sits above the focal band. The band centres the upcoming row, whose single-line
+        // height is RowLineHeight + 2·rowPad (47 rail / 64 immersive), so half of that is where the row's TOP edge is:
+        // 36 and 48 leave ~12 and ~16 DIP of air above it — clear of the lyric, and nowhere near the line that just
+        // retired one row further up.
+        float lift = _large ? 48f : 36f;
+        float band = FocalBand;
+        // The anchor, in pure flex and with no geometry read at all: two EMPTY Grow spacers (basis 0) split the panel's
+        // free space at exactly `band`, and the dots row's own bottom MARGIN buys back the difference. Solving
+        // `dotsBottom = band·H − lift` for that margin gives m = (d + lift)/band − d — in which H cancels, so one
+        // build-time constant holds the anchor exact at every viewport size (a translate would have to re-read
+        // ViewportH every frame, and would then have to fight the row's own enter/exit for the transform channel).
+        float m = (d + lift) / band - d;
+        return new BoxEl
+        {
+            // Full-bleed positioner. HitTestVisible = false excludes the WHOLE subtree, which is what a decorative
+            // meter wants: the lyrics underneath stay scrollable and clickable straight through it. (The resync pill
+            // next door needs HitTestPassThrough instead precisely because its own child IS hittable.)
+            Grow = 1f, MinHeight = 0f, HitTestVisible = false,
+            Direction = 1, AlignItems = FlexAlign.Start,
+            Children =
+            [
+                new BoxEl { Grow = band, MinHeight = 0f },
+                Flow.Show(() => _dotsShown.Value, new BoxEl
+                {
+                    // Enter/exit owner. The structural animation owns this node's transform + opacity channels, so the
+                    // breath MUST live on a child (one transform owner per node). Reduced motion is the engine's call
+                    // here and it already makes it: a non-Exempt token snaps the scale terminal and keeps the fade.
+                    // RowSidePad, not a second copy of the literal: the dots line up with the lyric column's leading
+                    // margin on both surfaces, and stay lined up if that gutter is ever retuned.
+                    Direction = 0, Shrink = 0f,
+                    Margin = new Edges4(RowSidePad, 0f, 0f, m),
+                    Enter = new EnterExit(Sx: 0.72f, Sy: 0.72f, Opacity: 0f, Active: true),
+                    Exit = new EnterExit(Sx: 0.72f, Sy: 0.72f, Opacity: 0f, Active: true),
+                    Layout = LayoutTransition.Fade,
+                    Children =
+                    [
+                        new BoxEl
+                        {
+                            // Breath owner. Declares no static transform and owns no animation channel, so
+                            // DriveInterludeDots' direct LocalTransform write is the only thing that ever touches it —
+                            // the WriteCascade rationale, verbatim. The transform origin defaults to the centre, so
+                            // the pulse scales the trio about its middle.
+                            Direction = 0, Shrink = 0f, Gap = gap, AlignItems = FlexAlign.Center,
+                            OnRealized = h => _dotsRowNode = h,
+                            Children = [Dot(0, d), Dot(1, d), Dot(2, d)],
+                        },
+                    ],
+                }),
+                new BoxEl { Grow = 1f - band, MinHeight = 0f },
+            ],
+        };
+
+        // One dot: a flat Tok.TextPrimary disc whose ALPHA is the bound per-dot signal, so the gap meter and the breath
+        // are the same single number per dot — and no glow, no fill swap, nothing else to keep in sync. Driving the
+        // node's OPACITY (rather than a colour) is what ties the two ends to the wipe's own vocabulary: a filled dot is
+        // exactly Tok.TextPrimary, the colour of a SUNG glyph, and an unfilled one is that colour at UnsungAlpha, the
+        // fraction the wipe dims an unsung glyph by. (In the light theme the token is itself 0.894 rather than opaque,
+        // so the dim end lands a few percent under the unsung glyph; the lit end, which is the one the eye reads, is
+        // exact in both themes.)
+        Element Dot(int k, float size) => new BoxEl
+        {
+            Width = size, Height = size, Shrink = 0f,
+            Corners = CornerRadius4.All(size * 0.5f),
+            Fill = Tok.TextPrimary,
+            Opacity = (Prop<float>)_dotAlpha[k],
+        };
+    }
+
+    // The point a line stops being SUNG: the last syllable's end for a word-by-word line, else the authored end — and,
+    // absent that, the next line's start, which by construction leaves no gap. ONE definition, shared by OnFrame's
+    // voice clear and the interlude test below.
+    static long SungOutMs(LyricsDocument doc, int index)
+    {
+        var l = doc.Lines[index];
+        if (l.IsWordByWord && l.Syllables.Count > 0) return l.Syllables[^1].EndMs;
+        return l.EndMs ?? (index + 1 < doc.Lines.Count ? doc.Lines[index + 1].StartMs : long.MaxValue);
+    }
+
+    // The interlude advance: an already-resolved (lead-shifted) `active` steps ON to the next line for the whole of a
+    // real instrumental break, and gapStart/gapEnd come back as that break's bounds (equal ⇒ not in one).
+    //
+    // Word-by-word ONLY — the same gate the old recede test used, and for a sharper reason now. A line-synced document
+    // has no syllable timing, so its sung-out point is an authored guess; retiring a line early off a guess would light
+    // the NEXT line fully white (a line-synced row has no wipe with which to look "unsung") seconds before it is sung.
+    // The last line is likewise never advanced past: there is nothing to move focus to, so it simply stays lit.
+    static int AdvancePastInterlude(LyricsDocument doc, int active, long nowMs, out long gapStart, out long gapEnd)
+    {
+        gapStart = 0L; gapEnd = 0L;
+        if (active < 0 || active + 1 >= doc.Lines.Count) return active;
+        var l = doc.Lines[active];
+        if (!l.IsWordByWord || l.Syllables.Count == 0) return active;
+        long sungOut = SungOutMs(doc, active);
+        long nextStart = doc.Lines[active + 1].StartMs;
+        if (nowMs < sungOut || nextStart - sungOut < InterludeGapMs) return active;
+        gapStart = sungOut; gapEnd = nextStart;
+        return active + 1;
+    }
+
+    // The dots' per-frame lane: pure scalar math plus at most three value-gated signal writes and one transform write,
+    // all against preallocated state — zero managed allocation, in the file's established idioms (.Peek() gates, direct
+    // node paint writes, never a RequestRerender). BOTH channels are driven off the MEDIA clock rather than the wall
+    // clock: the meter is information about the song, and reading `nowMs` makes it dt-deterministic, monotone, frozen
+    // across a pause and correct after a scrub, for free.
+    void DriveInterludeDots(SceneStore scene, long nowMs, long gapStart, long gapEnd)
+    {
+        // FILL — the karaoke gesture at gap scale: dot k brightens from the unsung alpha to full white across its third
+        // of the break. The span ends at the dots' EXIT, not at the next line, so the meter reads full exactly as the
+        // row leaves instead of being cut off two-thirds lit.
+        float span = MathF.Max(1f, (gapEnd - InterludeDotsExitMs) - gapStart);
+        float p = Math.Clamp((nowMs - gapStart) / span, 0f, 1f);
+
+        // BREATH — the one decorative channel here, and so the one reduced motion drops; the fill keeps running because
+        // it is information. Read as a VALUE at the point of consumption, never as an early return (see the Reduced
+        // motion block). Both pulses are shaped to PEAK at exactly 1 so a fully filled dot is exactly white.
+        float pulse = Motion.ReducedMotion
+            ? 1f
+            : 0.5f + 0.5f * MathF.Sin((nowMs - gapStart) / InterludeBreathMs * MathF.Tau);
+        float breathA = 1f - InterludeBreathAlpha * (1f - pulse);
+        float breathS = 1f - InterludeBreathScale * (1f - pulse);
+
+        var alpha = _dotAlpha;
+        for (int k = 0; k < alpha.Length; k++)
+        {
+            float fill = Math.Clamp(p * alpha.Length - k, 0f, 1f);
+            float a = (LyricLineView.UnsungAlpha + (1f - LyricLineView.UnsungAlpha) * fill) * breathA;
+            if (MathF.Abs(alpha[k].Peek() - a) >= InterludeDotWriteEps) alpha[k].Value = a;
+        }
+
+        var h = _dotsRowNode;
+        if (h.IsNull || !scene.IsLive(h)) return;
+        ref NodePaint paint = ref scene.Paint(h);
+        if (MathF.Abs(paint.LocalTransform.M11 - breathS) < 0.002f) return;
+        paint.LocalTransform = breathS >= 1f ? Affine2D.Identity : Affine2D.Scale(breathS, breathS);
+        scene.Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    // Retire the dots. The ShowEl unmount runs the Exit terminal; dropping the handle guarantees the per-frame lane can
+    // never write to a node on its way out (the generation in the handle would catch a recycled index, but not writing
+    // at all is both cheaper and clearer). After this the whole feature costs one bool Peek per frame.
+    void HideInterludeDots()
+    {
+        _dotsShown.Value = false;
+        _dotsRowNode = NodeHandle.Null;
     }
 
     sealed class LyricsDocHost(LyricsView owner, string trackId, string artist, long initialPositionMs) : Component
@@ -544,6 +751,9 @@ sealed class LyricsView : Component
         // rows (which survive a same-shape upgrade) would keep a stale compensating translate forever, with no handle
         // left to clear it through.
         ZeroCascade(Context.Scene);
+        // Same reasoning for the dots: the overlay's node handle is about to be meaningless. The next OnFrame re-mounts
+        // it from the new document's own timings if the position still lands inside a break.
+        HideInterludeDots();
 
         var previous = _doc;
         if (previous is null || !SameLineShape(previous, doc)) _layout = null;
@@ -580,10 +790,11 @@ sealed class LyricsView : Component
         // once on each new doc. Seeded with the computed value, PushEmphasis has nothing left to change and the write
         // pass is silent. The steady sweep is untouched — it still goes through PushEmphasis, the one chokepoint.
         bool timed = IsTimed(doc);
-        int seedActive = timed ? ResolveLine(doc.Lines, posMs) : -1;
-        bool seedInterlude = timed && _interlude.Peek();   // the timed branch below leaves _interlude as-is; the other clears it
+        // Seeded through the SAME interlude advance OnFrame applies, so a document that lands mid-break seeds the focal
+        // line the first frame will resolve to — and PushEmphasis below stays the silent no-op it is designed to be.
+        int seedActive = timed ? AdvancePastInterlude(doc, ResolveLine(doc.Lines, posMs), posMs, out _, out _) : -1;
         _lineEmphasis = new Signal<int>[doc.Lines.Count];
-        for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive, seedInterlude));
+        for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive));
         _glowInLine = -1; _glowOutLine = -1;
         if (timed)
         {
@@ -593,7 +804,6 @@ sealed class LyricsView : Component
         {
             _activeLine.Value = -1;
             _voiceLine.Value = -1;
-            _interlude.Value = false;
         }
         PushEmphasis();   // per-line emphasis for the freshly loaded doc (before OnFrame drives it) — a no-op after the seed above
         _nowMs.Value = posMs;
@@ -642,8 +852,10 @@ sealed class LyricsView : Component
         return true;
     }
 
-    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, interlude flag in bit 3, PAST
-    // flag in bit 4. Clamp 6 is exact for the look — the DoF ladder saturates at ring 5 and the glyph-mount `near`
+    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, bit 3 UNUSED (it carried the
+    // deleted interlude recede — see the interlude block; the past bit deliberately stays at bit 4 so the ladder's
+    // `& 16` test and every packed value above bucket 6 are unchanged), PAST flag in bit 4. Clamp 6 is exact for the
+    // look — the DoF ladder saturates at ring 5 and the glyph-mount `near`
     // threshold is dist ≤ 2, so any line ≥6 away is visually identical; clamping lets far lines share bucket 6 and skip
     // the re-render as active sweeps.
     //
@@ -652,16 +864,15 @@ sealed class LyricsView : Component
     // ladders (LyricLineView.OpacityOf). It is deliberately NOT set at the saturated bucket 6: both ladders bottom out at
     // the same 0.10/σ 6.5 there, so tagging far lines would be visually identical while breaking the far-line no-op —
     // every line above the active one would re-render on a seek instead of sitting silent at bucket 6.
-    static int PackEmphasis(int index, int active, bool interlude)
+    static int PackEmphasis(int index, int active)
     {
         int bucket = active < 0 ? 6 : Math.Min(Math.Abs(index - active), 6);
         int e = bucket;
-        if (interlude && index == active) e |= 8;              // interlude recede applies only to the active line itself
         if (active >= 0 && index < active && bucket < 6) e |= 16;   // already sung ⇒ the dimmer of the two ladders
         return e;
     }
 
-    // Rewrite every line's emphasis signal from the current active/interlude. Value-gated: only lines whose PACKED value
+    // Rewrite every line's emphasis signal from the current active line. Value-gated: only lines whose PACKED value
     // actually changes notify their subscriber, so a boundary re-renders ~a dozen rows instead of the whole realized
     // document. The past bit rides along for free: the one line that crosses future→past at a handoff is already a
     // bucket-crosser (dist 0 → 1), so it re-renders exactly once — and takes the past ladder as it does.
@@ -670,8 +881,7 @@ sealed class LyricsView : Component
         var em = _lineEmphasis;
         if (em.Length == 0) return;
         int active = _activeLine.Peek();
-        bool interlude = _interlude.Peek();
-        for (int i = 0; i < em.Length; i++) em[i].Value = PackEmphasis(i, active, interlude);
+        for (int i = 0; i < em.Length; i++) em[i].Value = PackEmphasis(i, active);
     }
 
     void ClearDocument()
@@ -712,7 +922,7 @@ sealed class LyricsView : Component
         _glowInLine = -1; _glowOutLine = -1;
         _activeLine.Value = -1;
         _voiceLine.Value = -1;
-        _interlude.Value = false;
+        HideInterludeDots();
         _nowMs.Value = 0f;
         _scrollSnapped = false;
         ResetWipeThrottle();
@@ -806,9 +1016,7 @@ sealed class LyricsView : Component
         float sidePad = RowSidePad;
         float rowEst = lineHt + 2f * rowPad;        // measured-layout seed = a single-line row's height
         float wipeLift = LyricLineView.WipeLiftFor(_large);
-        // Focal band: the immersive surface sits its active line slightly HIGHER in the taller viewport (0.38 vs the
-        // rail's 0.40) so more of the upcoming document is visible below it — the reference framing.
-        _band = _large ? 0.38f : 0.40f;
+        _band = FocalBand;   // publish the one definition into the copy the measured layout is built against
 
         if (_layout is null || MathF.Abs(_layout.Band - _band) > 0.001f || MathF.Abs(_layout.Estimate - rowEst) > 0.5f)
             _layout = new LyricsMeasuredLayout(rowEst, _band);
@@ -1041,14 +1249,13 @@ sealed class LyricsView : Component
 
     static bool SuppressesDof(LyricsFollowMode mode) => mode != LyricsFollowMode.Following;
 
-    float DofForLine(int index) => DofSigmaFor(index, _activeLine.Peek(), _interlude.Peek());
+    float DofForLine(int index) => DofSigmaFor(index, _activeLine.Peek());
 
-    // The σ ladder rung for one line against a given active/interlude. Split out so the per-frame ramp can hoist the two
-    // signal Peeks out of its whole-document loop without forking the ladder into a second definition.
-    static float DofSigmaFor(int index, int active, bool interlude)
+    // The σ ladder rung for one line against a given active line. Split out so the per-frame ramp can hoist the signal
+    // Peek out of its whole-document loop without forking the ladder into a second definition.
+    static float DofSigmaFor(int index, int active)
     {
         if (active < 0) return LyricsFx.DofSigma(6);
-        if (interlude && index == active) return LyricsFx.DofSigma(1);
         return LyricsFx.DofSigma(Math.Min(Math.Abs(index - active), 6));
     }
 
@@ -1082,12 +1289,11 @@ sealed class LyricsView : Component
 
         bool suppress = SuppressesDof(_followMode.Peek());
         int active = _activeLine.Peek();
-        bool interlude = _interlude.Peek();
         float k = 1f - MathF.Exp(-dt / DofRampTauMs);
         bool moving = false;
         for (int i = 0; i < cur.Length; i++)
         {
-            float target = suppress ? 0f : DofSigmaFor(i, active, interlude);
+            float target = suppress ? 0f : DofSigmaFor(i, active);
             float c = cur[i];
             bool landed = true;
             if (float.IsNaN(c) || target >= c)
@@ -1131,14 +1337,16 @@ sealed class LyricsView : Component
     // of the app (MediaCard, ContentFilterChips, WaveeShell). Never an early-return in a render/hook path — the flag is a
     // mutable global a resize grip can flip mid-life, and a conditional return would shift hook slots.
     //
-    // The three consumption points, and what each does when the preference is on:
+    // The four consumption points, and what each does when the preference is on:
     //   • ArmCascade            — every stagger delay drops to 0, so every line shares the one rate: the document makes
     //                             ONE rigid, gently-settling translate instead of a top-first waterfall.
     //   • LyricLineView.WipeLiftFor — Lift = 0 on BOTH wipe layers (main + glow): no per-word rise.
-    //   • LyricLineView.Render  — scale flat 1.0 (no 0.98/0.97 breathing), folded into the emphasis spring's DepKey so
-    //                             the first re-render after a settings flip retargets instead of holding the old scale.
-    // What deliberately STAYS: the karaoke wipe, the opacity ladder and the DoF blur ladder. Those are INFORMATION — they
-    // say which words have been sung and which line is live — not decoration, and dropping them would break the view.
+    //   • LyricLineView.Render  — scale flat 1.0 (no 0.98 breathing), folded into the emphasis spring's DepKey so the
+    //                             first re-render after a settings flip retargets instead of holding the old scale.
+    //   • DriveInterludeDots    — the dots hold still (pulse pinned to its peak) but keep FILLING across the gap.
+    // What deliberately STAYS: the karaoke wipe, the opacity ladder, the DoF blur ladder and the interlude dots' fill.
+    // Those are INFORMATION — they say which words have been sung, which line is live and how much of the instrumental
+    // break is left — not decoration, and dropping them would break the view.
     // (Wave F hook: the immersive surface's drifting cover backdrop must read this too and hold still.)
 
     // ── Staggered handoff cascade: tuning ────────────────────────────────────────────────────────────────────────────
@@ -1459,16 +1667,15 @@ sealed class LyricsView : Component
         // returning the previous line through the whole inter-line gap, which left it fully lit + glowing NEXT TO the
         // already-risen (lead) new active line — the "previous line is still fully active on the next line" double
         // emphasis. Between sung-out and the next start nothing is being sung ⇒ no voice.
-        if (voiceLine >= 0)
-        {
-            var vl = doc.Lines[voiceLine];
-            long vEnd = vl.IsWordByWord && vl.Syllables.Count > 0 ? vl.Syllables[^1].EndMs
-                : vl.EndMs ?? (voiceLine + 1 < doc.Lines.Count ? doc.Lines[voiceLine + 1].StartMs : long.MaxValue);
-            if (nowMs >= vEnd) voiceLine = -1;
-        }
+        if (voiceLine >= 0 && nowMs >= SungOutMs(doc, voiceLine)) voiceLine = -1;
+        // …and once a line IS sung out, a real instrumental break RETIRES it rather than parking focus on it: the active
+        // index steps to the upcoming line for the whole gap (see the interlude block), so the finished line takes the
+        // ordinary past treatment and the dots overlay marks the silence. Applied HERE, before `activeChanged` is
+        // computed, so the onset rides the normal handoff — emphasis rewrite, viewport latch and cascade.
+        active = AdvancePastInterlude(doc, active, nowMs, out long gapStart, out long gapEnd);
+        bool inInterlude = gapEnd > gapStart;
         bool activeChanged = active != _activeLine.Peek();
         if (activeChanged) _activeLine.Value = active;
-        bool emphasisChanged = activeChanged;
         int prevVoiceLine = _voiceLine.Peek();
         bool voiceChanged = voiceLine != prevVoiceLine;
         if (voiceChanged) _voiceLine.Value = voiceLine;
@@ -1490,20 +1697,18 @@ sealed class LyricsView : Component
         if (scene is null) return;
         TickFollowState(scene, wallMs);
 
-        // ── Core lane (always): interlude + programmatic scroll follow ──
-        if (active >= 0 && (uint)active < (uint)doc.Lines.Count)
+        // ── Core lane (always): programmatic scroll follow + the interlude dots ──
+        if (active >= 0 && (uint)active < (uint)doc.Lines.Count && (!_scrollSnapped || activeChanged || forceVisual))
+            ScrollActiveIntoView(scene, active, FollowScrollIntent.Normal);
+        // The dots are mounted for the break MINUS its last second, so they are gone before the next line's first
+        // syllable lands and that handoff stays the clean one it always was. Outside a break this is one bool Peek.
+        if (inInterlude && nowMs < gapEnd - InterludeDotsExitMs)
         {
-            var al = doc.Lines[active];
-            bool wordTimed = al.IsWordByWord && al.Syllables.Count > 0;
-            long sungOutPoint = wordTimed ? al.Syllables[^1].EndMs : 0L;
-            long nextStartMs = active + 1 < doc.Lines.Count ? doc.Lines[active + 1].StartMs : long.MaxValue;
-            bool interlude = wordTimed && nowMs >= sungOutPoint && (nextStartMs - sungOutPoint) >= 4000;
-            if (interlude != _interlude.Peek()) { _interlude.Value = interlude; emphasisChanged = true; }
-
-            if (!_scrollSnapped || activeChanged || forceVisual)
-                ScrollActiveIntoView(scene, active, FollowScrollIntent.Normal);
+            _dotsShown.Value = true;
+            DriveInterludeDots(scene, nowMs, gapStart, gapEnd);
         }
-        if (emphasisChanged) { PushEmphasis(); _dofRampPending = true; }
+        else if (_dotsShown.Peek()) HideInterludeDots();
+        if (activeChanged) { PushEmphasis(); _dofRampPending = true; }
         // Directional DoF ramp — core lane, never budget-deferred: it is bounded (it self-quiesces the pass after every
         // line lands) and the ladder is INFORMATION, not decoration. It must run AFTER PushEmphasis so the rows that are
         // about to re-render this frame read a σ model that already reflects the new active line.
@@ -1940,7 +2145,7 @@ sealed class LyricLineView : Component
 {
     readonly int _index;
     readonly LyricLine _line;
-    readonly Signal<int> _emphasis;   // packed per-line emphasis (bucket + interlude bit + past bit) — value-gated by LyricsView
+    readonly Signal<int> _emphasis;   // packed per-line emphasis (bucket + past bit) — value-gated by LyricsView
     readonly FloatSignal _nowMs;
     readonly Signal<LyricsFollowMode> _followMode; // stable parent signal; Peek only so a mode flip never fans out row renders
     readonly FloatSignal? _glowFade;   // per-line halo alpha (owned + ramped by LyricsView); bound as the glow wrapper's Opacity
@@ -1991,29 +2196,30 @@ sealed class LyricLineView : Component
     public override Element Render()
     {
         // Read ONLY this line's packed emphasis — a value-gated signal LyricsView rewrites as the active line moves, so
-        // reading `.Value` here re-renders the row solely when ITS OWN bucket/interlude/past class changes (not on every
+        // reading `.Value` here re-renders the row solely when ITS OWN bucket/past class changes (not on every
         // boundary).
         int e = _emphasis.Value;
         int dist = e & 7;                        // bucket 0..6 (clamped distance from the active line)
-        bool interlude = (e & 8) != 0;           // active line sung out into a long instrumental gap — recede it
         bool past = (e & 16) != 0;               // already sung — rides the dimmer of the two opacity ladders
         bool isActive = dist == 0;               // bucket 0 ⇔ this is the active line
 
-        // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). During an instrumental interlude the
-        // still-active sung-out line recedes to a calm look instead of sitting frozen-fully-lit. In the reference the
-        // DISTANCE hierarchy is carried almost entirely by OPACITY + DoF BLUR: scale is a flat, barely-there 0.98 on
+        // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). A row has NO interlude state of its
+        // own any more — an instrumental break retires the finished line onto the past ladder and advances focus (see
+        // the interlude block in LyricsView), so every row is only ever "active", "past" or "upcoming". In the
+        // reference the DISTANCE hierarchy is carried almost entirely by OPACITY + DoF BLUR: scale is a flat,
+        // barely-there 0.98 on
         // every inactive row (the old 1 - 0.25*f ramp shrank far rows to 0.75, which the frame evidence refutes). The
         // shrink is LEFT-anchored (TransformOriginX 0 below, on BOTH surfaces), so rows stay flush to the
         // margin instead of breathing about their middle. Voice only drives the karaoke wipe and glow during the lead
         // split, so depth never disagrees with emphasis.
         //
         // Reduced motion flattens scale to 1.0 on every row (read as a VALUE — see the Reduced motion block in
-        // LyricsView): the 0.98/0.97 breathing is the one purely decorative channel here, since opacity + DoF carry the
+        // LyricsView): the 0.98 breathing is the one purely decorative channel here, since opacity + DoF carry the
         // whole distance hierarchy on their own, and a scale change on every visible row at every handoff is exactly the
         // field-wide motion the preference asks us to drop. `reduce` is folded into `key` below so the spring RETARGETS
         // on the first re-render after an OS-settings flip rather than holding the pre-flip target.
         bool reduce = Motion.ReducedMotion;
-        float scale = reduce ? 1f : interlude ? 0.97f : isActive ? 1f : 0.98f;
+        float scale = reduce || isActive ? 1f : 0.98f;
         // Row emphasis follows ACTIVE only — voice keeps the karaoke wipe/glow but must not hold full brightness once
         // focus moves (the lead window used to leave the previous line white for its entire sung tail).
         float opacity = OpacityOf(e);
@@ -2023,7 +2229,7 @@ sealed class LyricLineView : Component
 
         // AMLL scale in BOTH directions; opacity is critical/no-bounce and DIRECTIONAL.
         // Cold mounts still begin at the element rest targets below, so the soft inactive spring cannot flash a new row.
-        var key = DepKey.From(dist, (interlude ? 1 : 0) | (isActive ? 2 : 0) | (past ? 4 : 0) | (reduce ? 8 : 0));
+        var key = DepKey.From(dist, (isActive ? 2 : 0) | (past ? 4 : 0) | (reduce ? 8 : 0));
         var scaleSpring = new SpringParams(100f, 25f, 2f);             // AMLL m=2,d=25,k=100
         // Front-loaded outgoing dim: measured, the exiting line falls 252 → 180 luma inside the first ~100 ms of its
         // flight, while the incoming line brightens across the WHOLE handoff. So the opacity spring is ~3× faster when
@@ -2242,10 +2448,12 @@ sealed class LyricLineView : Component
     // asymmetry the old single `max(0.16, 0.55*(1-f))` ramp could not express. The past rows sit far lower in ALPHA than
     // that luma gap suggests because their TEXT is the sung white (Primary at full alpha behind a settled wipe) where an
     // upcoming row's is the unsung gray: the same row alpha would read markedly brighter on a past line.
-    internal const float InterludeOpacity = 0.55f;
+    //
+    // Bit 3 of the packed value is unused (it carried the deleted interlude recede — a flat 0.55 that was neither
+    // ladder's rung and read as a half-lit, still-selected line). A sung-out line in an instrumental break is now just
+    // a PAST line here, on the past ladder, exactly like every other line the song has gone by.
     internal static float OpacityOf(int packed)
     {
-        if ((packed & 8) != 0) return InterludeOpacity;   // interlude recede — its own value, not a rung of either ladder
         int dist = packed & 7;
         if (dist == 0) return 1f;                         // active line: full focus
         return (packed & 16) != 0
