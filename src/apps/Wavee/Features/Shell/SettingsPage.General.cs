@@ -50,12 +50,22 @@ sealed partial class SettingsPage
         Loc.Get(Strings.Settings.Choice.Hero),
     ];
 
+    // The lyrics SECOND line. Ordered to match WaveeSettings.LyricsSecondaryLine (0 none · 1 translation · 2
+    // romanization) so the SelectorBar index IS the stored value — the ThemeMode/RowDensity convention.
+    static string[] LyricsSecondaryLabels() =>
+    [
+        Loc.Get(Strings.Settings.Choice.Off),
+        Loc.Get(Strings.Settings.Choice.Translation),
+        Loc.Get(Strings.Settings.Choice.Romanization),
+    ];
+
     Element GeneralTab(Services? svc, Action<float>? requestTheme)
     {
         var settings = svc?.Settings;
         int themeMode = settings?.Get(WaveeSettings.ThemeMode) ?? 0;
         int density = Math.Clamp(_density.Value, 0, DensityLabels().Length - 1);
         int pageLayout = Math.Clamp(settings?.Get(WaveeSettings.DetailPageLayout) ?? 0, 0, PageLayoutLabels().Length - 1);
+        int lyricsSecondary = Math.Clamp(settings?.Get(WaveeSettings.LyricsSecondaryLine) ?? 0, 0, LyricsSecondaryLabels().Length - 1);
         var languageOptions = LanguageOptions();
         int language = Math.Clamp(_language.Value, 0, languageOptions.Codes.Length - 1);
 
@@ -101,6 +111,15 @@ sealed partial class SettingsPage
             Bump();
         }
 
+        // Its own writer rather than an AppearanceToggle: the lyrics surfaces re-read this one under LyricsPrefs.Epoch
+        // (which the rail/immersive header toggles also bump), not under AppearancePrefs — one setting, one epoch, so a
+        // change from either place reaches both mounted surfaces on the same frame.
+        void SetLyricsSecondary(int i)
+        {
+            LyricsPrefs.Set(settings, i);
+            Bump();
+        }
+
         void SetLanguage(int i)
         {
             if (settings is null || (uint)i >= (uint)languageOptions.Codes.Length) return;
@@ -125,6 +144,12 @@ sealed partial class SettingsPage
             // ImmersiveLyricsSurface reads, so flipping it starts/stops the drift on an OPEN surface — no restart.
             SettingsRow(Loc.Get(Strings.Settings.Appearance.LyricsBackdrop), Loc.Get(Strings.Settings.Appearance.LyricsBackdropSub),
                 AppearanceToggle(WaveeSettings.LyricsAnimatedBackdrop), Icons.Brush),
+            // …and the lyrics SECOND line, beside it: both are choices about the lyrics reading surface. The rail and
+            // immersive headers offer the same three states as a cycling toggle when the document has the data; this row
+            // is where the preference lives when it does not (and where a user goes looking for it).
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.LyricsSecondary), Loc.Get(Strings.Settings.Appearance.LyricsSecondarySub),
+                SelectorBar.Create(LyricsSecondaryLabels(), new Signal<int>(lyricsSecondary), onChange: SetLyricsSecondary),
+                Icons.Globe),
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
                 PageLayoutCards(pageLayout, SetPageLayout), Icons.List),

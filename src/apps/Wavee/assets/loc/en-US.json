@@ -496,6 +496,8 @@
       "windowMaterialSub": "Window material: base Mica (more wallpaper-tinted) instead of Mica Alt, the flatter File Explorer tint",
       "lyricsBackdrop": "Animated lyrics backdrop",
       "lyricsBackdropSub": "Let the blurred cover art drift slowly behind fullscreen lyrics instead of holding still",
+      "lyricsSecondary": "Lyrics second line",
+      "lyricsSecondarySub": "Show a translation or a romanization under each lyric line, when the lyric source provides one",
       "paletteWarm": "Warm",
       "paletteSlate": "Slate",
       "paletteNeutral": "Neutral",
@@ -510,7 +512,10 @@
       "cozy": "Cozy",
       "comfortable": "Comfortable",
       "automatic": "Automatic",
-      "hero": "Hero"
+      "hero": "Hero",
+      "off": "Off",
+      "translation": "Translation",
+      "romanization": "Romanization"
     },
     "playback": {
       "runtimeTitle": "Playback runtime",
@@ -871,6 +876,9 @@
     "resyncLyrics": "Resync",
     "expandLyrics": "Expand lyrics",
     "closeLyrics": "Close lyrics",
+    "lyricsSecondaryOff": "Second line: off",
+    "lyricsSecondaryTranslation": "Second line: translation",
+    "lyricsSecondaryRomanization": "Second line: romanization",
     "queue": "Queue",
     "nextInQueue": "Next in queue",
     "nextUp": "Next up",

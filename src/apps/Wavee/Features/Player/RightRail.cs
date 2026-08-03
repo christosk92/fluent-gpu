@@ -20,6 +20,9 @@ sealed class RightRail : Component
     public override Element Render()
     {
         var ui = UseContext(ShellUi.Slot);
+        // Unconditional (before the null-guard below): a hook taken after an early return would shift the hook order the
+        // frame the shell context arrives. Only the lyrics header reads it.
+        var svc = UseContext(Services.Slot);
         if (ui is null) return new BoxEl();
         bool open = ui.RailOpen.Value;
         float railWidth = ui.RailWidth.Value;
@@ -62,12 +65,7 @@ sealed class RightRail : Component
         // Lyrics only: promote the panel to the fullscreen immersive surface (WaveeShell mounts it off this signal).
         // The rail is left exactly as it is underneath — the surface covers the shell rather than replacing the panel.
         Element[] headerKids = mode == RailMode.Lyrics
-            ?
-            [
-                TitleText(mode),
-                HeaderButton(Icons.FullScreen, Loc.Get(Strings.Player.ExpandLyrics), () => ui.ImmersiveLyrics.Value = true),
-                CloseButton(() => ui.RailOpen.Value = false),
-            ]
+            ? LyricsHeaderKids(ui, svc?.Settings)
             : [TitleText(mode), CloseButton(() => ui.RailOpen.Value = false)];
 
         var header = new BoxEl
@@ -126,6 +124,38 @@ sealed class RightRail : Component
         };
     }
 
+    // The lyrics header: title · (secondary-line toggle) · expand · close.
+    //
+    // The secondary-line toggle is rendered ONLY when the document on screen actually carries a translation or a
+    // romanization (LyricsPrefs.Available, published once per doc by LyricsView) — a permanently-present control that
+    // does nothing on nine tracks out of ten is noise. Both signal reads are SUBSCRIPTIONS: Available so the button
+    // appears the moment a document with the data lands, Epoch so the glyph's on/off state re-reads after a write from
+    // here, from the immersive surface, or from the Settings picker.
+    static Element[] LyricsHeaderKids(ShellUi ui, IAppSettings? settings)
+    {
+        int available = LyricsPrefs.Available.Value;
+        _ = LyricsPrefs.Epoch.Value;
+        int secondary = LyricsPrefs.Clamp(settings?.Get(WaveeSettings.LyricsSecondaryLine) ?? LyricsPrefs.None);
+
+        Element expand = HeaderButton(Icons.FullScreen, Loc.Get(Strings.Player.ExpandLyrics),
+            () => ui.ImmersiveLyrics.Value = true);
+        Element close = CloseButton(() => ui.RailOpen.Value = false);
+        if (available == 0) return [TitleText(RailMode.Lyrics), expand, close];
+
+        return
+        [
+            TitleText(RailMode.Lyrics),
+            // `active` is "a second line is actually on screen", not merely "the mode is non-zero": a persisted
+            // romanization preference over a document that only carries a translation renders nothing, and an accented
+            // glyph claiming otherwise would be the misleading half of the state.
+            HeaderButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
+                () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, available)),
+                active: (available & LyricsPrefs.BitFor(secondary)) != 0),
+            expand,
+            close,
+        ];
+    }
+
     static Element TitleText(RailMode mode) => new TextEl(Title(mode))
     {
         Size = 14f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f,
@@ -133,13 +163,23 @@ sealed class RightRail : Component
     };
 
     // A glyph button in the panel header — the CloseButton shape, with a tooltip because its glyph is not universal.
-    static Element HeaderButton(string glyph, string tip, Action onClick) => ToolTip.Wrap(new BoxEl
+    // `active` is the STATEFUL variant (the secondary-line toggle): the accent tint is the only affordance a 32 DIP
+    // glyph has to say "this is currently on", and the tooltip carries which layer it is.
+    static Element HeaderButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
     {
         Width = 32f, Height = 32f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
         Cursor = CursorId.Hand, OnClick = onClick,
-        Children = [new TextEl(glyph) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
+        Children =
+        [
+            new TextEl(glyph)
+            {
+                Size = 12f, FontFamily = Theme.IconFont,
+                Color = active ? Tok.AccentTextPrimary : Tok.TextSecondary,
+                HoverColor = active ? Tok.AccentTextPrimary : Tok.TextPrimary,
+            },
+        ],
     }.Interactive(Interaction.Subtle), tip);
 
     static string Title(RailMode m) => m switch

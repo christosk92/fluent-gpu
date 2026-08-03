@@ -71,6 +71,14 @@ static class WaveeSettings
     // LIVE (the writer bumps AppearancePrefs.Epoch, which the surface reads). The OS reduced-motion preference
     // independently holds the drift still whatever this says — a value read, never a hook branch.
     public static readonly SettingKey<bool> LyricsAnimatedBackdrop = new("lyrics.backdrop.animated", true);
+    // The lyrics SECOND line: 0 = none · 1 = translation · 2 = romanization. An int-enum (the ThemeMode / RowDensity /
+    // DetailPageLayout convention — AppDataSettings has no enum arm), deliberately NOT two independent bools: the two
+    // layers are mutually exclusive ON SCREEN (stacking both would add two lines to every row, blow the row heights out
+    // and push the focal band off), and a tri-state int is the one value both writers agree on — the Settings picker and
+    // the cycling toggle in the lyrics headers (rail + immersive). Default 0: most listeners read the original, and the
+    // layers exist at all only when the winning lyric source happened to carry them (TTML ruby / ttm:role), which is
+    // also why the header toggle is hidden unless the document on screen actually has one.
+    public static readonly SettingKey<int> LyricsSecondaryLine = new("lyrics.secondary", 0);
     // Wide two-column detail pages: user-resizable left metadata rail. Album-like and playlist-like surfaces keep
     // separate widths because their authored defaults differ (280 vs 240 DIP). Responsive mid/narrow modes ignore these
     // values and retain their breakpoint widths; the saved width returns when the page is wide again.

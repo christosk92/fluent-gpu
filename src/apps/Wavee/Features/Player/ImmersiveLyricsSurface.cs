@@ -102,6 +102,13 @@ sealed class ImmersiveLyricsSurface : Component
         // LyricsView's three consumption points. It vetoes the drift independently of the app setting.
         bool drift = animated && !Motion.ReducedMotion;
 
+        // The secondary-line toggle's state. Both reads are SUBSCRIPTIONS, for the same reasons the rail header
+        // documents: Available so the button appears when a document with a translation/romanization lands, Epoch so a
+        // write from here, from the rail, or from the Settings picker re-reads the mode on the same frame.
+        int secondaryAvailable = LyricsPrefs.Available.Value;
+        _ = LyricsPrefs.Epoch.Value;
+        int secondary = LyricsPrefs.Clamp(svc?.Settings.Get(WaveeSettings.LyricsSecondaryLine) ?? LyricsPrefs.None);
+
         var track = b?.CurrentTrack.Value;
         string art = track?.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) ?? "" : "";
         string? blurHash = track?.Image?.BlurHash;
@@ -149,7 +156,11 @@ sealed class ImmersiveLyricsSurface : Component
                         new BoxEl
                         {
                             Grow = 1f, Direction = 1, MinHeight = 0f,
-                            Children = [TopBar(track, ui), LyricsBand(vpSig, ui)],
+                            Children =
+                            [
+                                TopBar(track, ui, svc?.Settings, secondary, secondaryAvailable),
+                                LyricsBand(vpSig, ui),
+                            ],
                         },
                     ],
                 },
@@ -190,35 +201,52 @@ sealed class ImmersiveLyricsSurface : Component
     };
 
     // ── minimal top chrome: what is playing + the way out ────────────────────────────────────────────────────────────
-    static Element TopBar(Track? track, ShellUi? ui) => new BoxEl
+    // The secondary-line toggle sits immediately left of the close button — the same relative position it takes in the
+    // rail header (left of expand/close), so the one control the two surfaces share does not move when the user
+    // promotes the panel to fullscreen. Hidden entirely when the document carries neither layer.
+    static Element TopBar(Track? track, ShellUi? ui, IAppSettings? settings, int secondary, int secondaryAvailable) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Shrink = 0f,
         Padding = new Edges4(Spacing.L, Spacing.M, Spacing.M, Spacing.M),
+        Children = secondaryAvailable == 0
+            ?
+            [
+                TrackIdentity(track),
+                CloseButton(() => Close(ui)),
+            ]
+            :
+            [
+                TrackIdentity(track),
+                // `active` = a second line is actually on screen (not merely "the mode is non-zero") — see the same
+                // note in RightRail.LyricsHeaderKids.
+                GlyphButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
+                    () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, secondaryAvailable)),
+                    active: (secondaryAvailable & LyricsPrefs.BitFor(secondary)) != 0),
+                CloseButton(() => Close(ui)),
+            ],
+    };
+
+    static Element TrackIdentity(Track? track) => new BoxEl
+    {
+        Grow = 1f, Shrink = 1f, MinWidth = 0f, Direction = 1, Gap = 2f, ClipToBounds = true,
         Children =
         [
-            new BoxEl
+            new TextEl(track?.Title ?? Loc.Get(Strings.Player.NothingPlaying))
             {
-                Grow = 1f, Shrink = 1f, MinWidth = 0f, Direction = 1, Gap = 2f, ClipToBounds = true,
-                Children =
-                [
-                    new TextEl(track?.Title ?? Loc.Get(Strings.Player.NothingPlaying))
-                    {
-                        Size = 13f, Weight = 700, Color = Tok.TextSecondary,
-                        Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                    },
-                    new TextEl(track is { Artists.Count: > 0 } t ? DetailFormat.ArtistNames(t.Artists) : "")
-                    {
-                        Size = 12f, Color = Tok.TextTertiary,
-                        Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                    },
-                ],
+                Size = 13f, Weight = 700, Color = Tok.TextSecondary,
+                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
-            CloseButton(() => Close(ui)),
+            new TextEl(track is { Artists.Count: > 0 } t ? DetailFormat.ArtistNames(t.Artists) : "")
+            {
+                Size = 12f, Color = Tok.TextTertiary,
+                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            },
         ],
     };
 
-    // The "leave fullscreen" glyph — the deliberate counterpart of the rail header's Icons.FullScreen expand button.
-    static Element CloseButton(Action onClick) => ToolTip.Wrap(new BoxEl
+    // One shape for every glyph button in this top bar, so the secondary-line toggle and the close button read as a
+    // pair. `active` is the toggle's on-state affordance (accent tint) — the same treatment the rail header uses.
+    static Element GlyphButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
     {
         Width = 36f, Height = 36f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(Radii.Control),
@@ -226,12 +254,18 @@ sealed class ImmersiveLyricsSurface : Component
         Cursor = CursorId.Hand, OnClick = onClick,
         Children =
         [
-            new TextEl(Icons.BackToWindow)
+            new TextEl(glyph)
             {
-                Size = 14f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary,
+                Size = 14f, FontFamily = Theme.IconFont,
+                Color = active ? Tok.AccentTextPrimary : Tok.TextSecondary,
+                HoverColor = active ? Tok.AccentTextPrimary : Tok.TextPrimary,
             },
         ],
-    }.Interactive(Interaction.Subtle), Loc.Get(Strings.Player.CloseLyrics));
+    }.Interactive(Interaction.Subtle), tip);
+
+    // The "leave fullscreen" glyph — the deliberate counterpart of the rail header's Icons.FullScreen expand button.
+    static Element CloseButton(Action onClick) =>
+        GlyphButton(Icons.BackToWindow, Loc.Get(Strings.Player.CloseLyrics), onClick);
 
     // ── the backdrop stack ───────────────────────────────────────────────────────────────────────────────────────────
     // The backdrop fills the BODY band, not the whole window — the caption strip and the player bar are left to the

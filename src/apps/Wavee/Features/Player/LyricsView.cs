@@ -204,6 +204,23 @@ sealed class LyricsView : Component
     // watching. A σ ramp behind a 0.1 write gate survives that; a per-line travel does not.
     long _casQpc;
 
+    // ── The secondary line (translation / romanization) ──────────────────────────────────────────────────────────────
+    // The MODE lives in WaveeSettings.LyricsSecondaryLine and is read ONCE per view, in Render, under the
+    // LyricsPrefs.Epoch subscription (the PlayerBarPrefs idiom). It is republished into THIS signal, which is what every
+    // row subscribes to, for two reasons:
+    //   • Component props FREEZE at mount (component-props-contract.md), so an `int secondaryMode` ctor arg would never
+    //     reach an already-mounted LyricLineView — a toggle would silently do nothing until the doc remounted.
+    //   • A shared signal read straight from LyricLineView.Render re-renders the WHOLE realized document exactly once
+    //     per toggle. That fan-out is deliberate and correct here: the mode changes only on a user action (never per
+    //     frame, never as the active line sweeps), and EVERY row's height changes when it flips, so there is nothing a
+    //     per-row value gate could save — unlike _lineEmphasis, whose whole point is that a boundary moves only a dozen
+    //     of a few hundred rows.
+    readonly Signal<int> _secondary = new(LyricsPrefs.None);
+    // Whether the CURRENT document carries either layer on ANY line — scanned once per doc in PrepareDocument (never per
+    // frame) and published to LyricsPrefs.Available for the rail/immersive headers.
+    internal bool HasTranslation { get; private set; }
+    internal bool HasRomanization { get; private set; }
+
     LyricsDocument? _doc;
     LyricsDocument? _pendingUpgrade;
     Loadable<LyricsDocument?>? _docLoadable;
@@ -236,6 +253,40 @@ sealed class LyricsView : Component
         {
             if (!open) ResetFollowState(Context.Scene);
         }, DepKey.From(open));
+
+        // ── Secondary line: ONE settings read per view, republished to the rows ──────────────────────────────────────
+        // Subscribing the epoch (not the setting — there is nothing to subscribe to in a registry) is what makes both
+        // the Settings picker and the two header toggles apply LIVE to an already-mounted surface. The write below is
+        // value-gated by Signal<T>, so it is a no-op on every render except the ones that follow an actual toggle.
+        _ = LyricsPrefs.Epoch.Value;
+        int secondary = LyricsPrefs.Clamp(svc?.Settings.Get(WaveeSettings.LyricsSecondaryLine) ?? LyricsPrefs.None);
+        _secondary.Value = secondary;
+        // A mode flip changes EVERY row's height, which invalidates two things the measured layout owns: the extent
+        // table and the follow target derived from it. Route the recovery through the SAME mechanics a document
+        // hot-swap uses — re-arrange (the engine's measured pass 1 re-measures every realized row and feeds SetMeasured,
+        // so the ExtentTable self-corrects; the whole doc is realized here, so that is ONE arrange, not a rolling
+        // correction) and then re-latch.
+        //
+        // ResetScrollSnap is the whole recovery: it clears _scrollSnapped so the next OnFrame takes the first-landing
+        // branch and HARD-LATCHES the active line onto the focal band from the freshly measured geometry, and it
+        // ZeroCascades on the way. The cascade zeroing is REQUIRED, not incidental: (a) the first-landing latch's
+        // contract is that every comp is already 0 (it does not compensate), and (b) any in-flight comp is a
+        // compensation measured against the row heights that just changed, so decaying it to 0 would land the document
+        // somewhere that no longer exists. Nothing else is disturbed — _lineEmphasis, _dofCurrent and the four cascade
+        // ARRAYS all survive (same doc, same line count: PrepareDocument is not re-entered), so the DoF ladder and the
+        // per-line emphasis buckets carry straight across the toggle.
+        //
+        // _lineRunLen is deliberately NOT invalidated. It is the reading-order extent of the MAIN text only, measured
+        // at RowFontSize/RowLineHeight against the wrap width — none of which the secondary line touches (it is a
+        // sibling INSIDE the same stretch column, so the main text's wrap box is unchanged). MeasureRunLength's
+        // TextStyle therefore stays exactly the main-text style; if that ever stops being true, this comment is the
+        // first thing to revisit.
+        UseEffect(() =>
+        {
+            if (Context.Scene is { } sc && !_viewportNode.IsNull && sc.IsLive(_viewportNode))
+                sc.Mark(_viewportNode, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+            ResetScrollSnap();
+        }, DepKey.From(secondary));
         // Subscribe only to the bridge's atomic match identity. Metadata-only CurrentTrack refreshes no longer rebuild
         // this chrome host, and track/context cannot be observed in a transient mismatched pair.
         var live = b?.Identity.Value.Track;
@@ -492,6 +543,7 @@ sealed class LyricsView : Component
         var previous = _doc;
         if (previous is null || !SameLineShape(previous, doc)) _layout = null;
         _doc = doc;
+        ScanSecondaryLayers(doc);
         _lineNodes = new NodeHandle[doc.Lines.Count];
         _glowNodes = new NodeHandle[doc.Lines.Count];
         _dofNodes = new NodeHandle[doc.Lines.Count];
@@ -545,6 +597,38 @@ sealed class LyricsView : Component
         RebaseClock(posMs);   // seed the dejittered clock anchor for the freshly loaded doc
     }
 
+    // Which secondary layers this document carries, scanned ONCE per document (PrepareDocument) — never per frame and
+    // never per row. LyricLine.Translation/Romanization are populated per line by the TTML parser (ruby / ttm:role), and
+    // a partially-translated document is normal, so "has any line with data" is the right question for the toggle: the
+    // lines without it simply render no second line.
+    void ScanSecondaryLayers(LyricsDocument doc)
+    {
+        bool t = false, r = false;
+        var lines = doc.Lines;
+        for (int i = 0; i < lines.Count; i++)
+        {
+            var l = lines[i];
+            if (!t && l.Translation is { Length: > 0 }) t = true;
+            if (!r && l.Romanization is { Length: > 0 }) r = true;
+            if (t && r) break;
+        }
+        HasTranslation = t;
+        HasRomanization = r;
+        PublishSecondaryAvailability();
+    }
+
+    // Gated on a TIMED document, deliberately. The secondary line is rendered by LyricLineView, which only the timed
+    // reading surface (LyricsContent) composes — UnsyncedLyricsContent is a plain scrolled block with no rows. Offering
+    // the header toggle over an unsynced document would therefore be a control that visibly does nothing. In practice
+    // the combination does not arise (the sources that carry ruby / ttm:role translations are all timed TTML), so this
+    // is a guard, not a feature gate: HasTranslation/HasRomanization stay the honest answer about the document itself.
+    void PublishSecondaryAvailability()
+    {
+        bool timed = _doc is { } d && IsTimed(d);
+        LyricsPrefs.Available.Value = !timed ? 0
+            : (HasTranslation ? LyricsPrefs.HasTranslation : 0) | (HasRomanization ? LyricsPrefs.HasRomanization : 0);
+    }
+
     static bool SameLineShape(LyricsDocument a, LyricsDocument b)
     {
         if (!StringComparer.Ordinal.Equals(a.TrackId, b.TrackId) || a.Lines.Count != b.Lines.Count) return false;
@@ -588,6 +672,11 @@ sealed class LyricsView : Component
     void ClearDocument()
     {
         ResetFollowState(Context.Scene);
+        // Retire the secondary-layer capability BEFORE the early-out below: with no document there is nothing to
+        // translate, so the header toggle must go away rather than linger over the next track's lyrics-less state.
+        HasTranslation = false;
+        HasRomanization = false;
+        PublishSecondaryAvailability();
         _layout = null;
         _viewportNode = NodeHandle.Null;
         if (_doc is null && _lineNodes.Length == 0)
@@ -730,6 +819,9 @@ sealed class LyricsView : Component
                     idx, lines[idx],
                     (uint)idx < (uint)_lineEmphasis.Length ? _lineEmphasis[idx] : _emphasisFallback, _nowMs, _followMode,
                     idx < _glowAlpha.Length ? _glowAlpha[idx] : null,
+                    // The SIGNAL, not its value: the row reads it every render, so a toggle reaches rows that mounted
+                    // long before it (component props freeze at mount — see the _secondary field block).
+                    _secondary,
                     fontSz, lineHt, rowPad, sidePad, wipeLift, _large,
                     ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
@@ -1842,6 +1934,10 @@ sealed class LyricLineView : Component
     readonly FloatSignal _nowMs;
     readonly Signal<LyricsFollowMode> _followMode; // stable parent signal; Peek only so a mode flip never fans out row renders
     readonly FloatSignal? _glowFade;   // per-line halo alpha (owned + ramped by LyricsView); bound as the glow wrapper's Opacity
+    // The secondary-line mode (LyricsPrefs.None/Translation/Romanization), owned by LyricsView and READ (not frozen)
+    // here — see the _secondary field block on LyricsView for why it is a signal and why a whole-document re-render on
+    // a toggle is the right fan-out.
+    readonly Signal<int> _secondary;
     readonly float _fontSz;
     readonly float _lineHt;
     readonly float _rowPad;
@@ -1865,13 +1961,13 @@ sealed class LyricLineView : Component
     int _prevEmphasis = -1;
 
     public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs, Signal<LyricsFollowMode> followMode,
-        FloatSignal? glowFade,
+        FloatSignal? glowFade, Signal<int> secondary,
         float fontSz, float lineHt, float rowPad, float sidePad, float wipeLift, bool large, Action<int, NodeHandle> reportNode,
         Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf,
         Func<int, float> dofSigmaOf, Action onSeek)
     {
         _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
-        _followMode = followMode; _glowFade = glowFade;
+        _followMode = followMode; _glowFade = glowFade; _secondary = secondary;
         _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _wipeLift = wipeLift; _large = large;
         _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf;
         _dofSigmaOf = dofSigmaOf; _onSeek = onSeek;
@@ -2021,6 +2117,17 @@ sealed class LyricLineView : Component
             textEl = new BoxEl { ZStack = true, Children = [glow, main] };
         }
 
+        // ── The SECONDARY line (translation / romanization) ──────────────────────────────────────────────────────────
+        // Read from the shared mode signal — never a frozen ctor int (component props freeze at mount, so a toggle would
+        // never reach a mounted row). A line the source did not translate/romanize simply renders none, which is why a
+        // partially-covered document is fine and why the mode is not gated on per-line data.
+        string? secondaryText = _secondary.Value switch
+        {
+            LyricsPrefs.Translation => NonEmpty(_line.Translation),
+            LyricsPrefs.Romanization => NonEmpty(_line.Romanization),
+            _ => null,
+        };
+
         // Own DoF on a persistent INNER content wrapper, separate from the outer scale/opacity track owner. Ancestor
         // scale still composes normally (the text should scale); this separation removes the row-padding blur layer and
         // lets LyricsView suppress/restore static σ by direct node write without touching the line component.
@@ -2036,7 +2143,11 @@ sealed class LyricLineView : Component
             // settles, when the normal recorder path refreshes it.
             BlurCachePolicy = BlurCachePolicy.HoldIfCached,
             OnRealized = h => _reportDof(_index, h),
-            Children = [textEl],
+            // INSIDE dofContent, deliberately: the secondary line must inherit EVERYTHING the lyric it belongs to gets —
+            // this wrapper's depth-of-field σ, the cascade's compensating translate (LyricsView.WriteCascade targets this
+            // very node), and, through the row host above, the emphasis opacity + left-anchored scale springs. A sibling
+            // of dofContent would sit crisp and unmoved beside a blurred, travelling lyric.
+            Children = secondaryText is null ? [textEl] : [textEl, SecondaryText(secondaryText)],
         };
 
         return new BoxEl
@@ -2079,7 +2190,38 @@ sealed class LyricLineView : Component
             MaxLines = 0,
             Trim = TextTrim.None,
         };
+
+        // The secondary layer, as Apple renders it: a smaller, lighter, DIMMER line directly under the lyric, sharing
+        // its left margin and its wrap box. Deliberately plain —
+        //   • NO GlyphWipe: the karaoke reveal is the record of what is being SUNG, and a translation is not sung. A
+        //     wiped second line would also double the gradient-run count on the one line that is mid-sweep, which is
+        //     exactly the budget Wave A's settled-split fast path exists to protect.
+        //   • NO glow layer and NO Lift: both are per-word texture belonging to the sung glyphs.
+        // Everything else it needs (blur, opacity, scale, cascade) it inherits from dofContent and the row host, so this
+        // is a leaf TextEl and nothing more.
+        TextEl SecondaryText(string text) => new(text)
+        {
+            Size = _fontSz * SecondaryFontRatio,
+            Weight = 600,
+            Wrap = TextWrap.Wrap,
+            LineHeight = _lineHt * SecondaryFontRatio,
+            Color = Tok.TextSecondary,
+            MaxLines = 0,
+            Trim = TextTrim.None,
+            // The one piece of spacing: a hair of air under the lyric so the two read as a pair, not as one run-on
+            // block. Top margin only — the row's own _rowPad still owns the gap to the NEXT line.
+            Margin = new Edges4(0f, SecondaryGapDip, 0f, 0f),
+        };
     }
+
+    // ── Secondary line (translation / romanization) ──────────────────────────────────────────────────────────────────
+    // 0.62x the lyric type — the same source-px→DIP ratio the rest of this campaign's constants are measured at, and it
+    // lands on ≈16 DIP under the rail's 26 and ≈22 under the immersive 36: clearly subordinate, still comfortably
+    // readable at the focal band. The line height rides the same ratio so the pair keeps the lyric's 1.27x rhythm.
+    internal const float SecondaryFontRatio = 0.62f;
+    internal const float SecondaryGapDip = 3f;
+
+    static string? NonEmpty(string? s) => s is { Length: > 0 } ? s : null;
 
     // ── Emphasis ladder ──────────────────────────────────────────────────────────────────────────────────────────────
     // The row-group opacity for a PACKED emphasis value — the one place the ladder lives, so the direction test above can
@@ -2160,6 +2302,72 @@ sealed class LyricLineView : Component
         return Math.Clamp(played / total, 0f, 1f);
     }
 
+}
+
+/// <summary>Cross-surface LYRICS preferences: the epoch every lyrics surface re-reads its persisted flags under (the
+/// <c>PlayerBarPrefs</c> / <c>PlaybackPrefs</c> idiom — three writers, one signal), plus the secondary-line CAPABILITY
+/// of the document currently on screen.
+///
+/// <para>The mode itself is NOT cached here: it lives in <see cref="WaveeSettings.LyricsSecondaryLine"/> and every
+/// consumer reads it under <see cref="Epoch"/>, exactly like <c>PlayerBarShowRemaining</c>. <see cref="LyricsView"/>
+/// then republishes that one read into a single per-view signal its rows subscribe to — a per-ROW settings read would
+/// be one registry hit per line per render.</para>
+///
+/// <para><see cref="Available"/> is published by <see cref="LyricsView"/> (once per document, in
+/// <c>PrepareDocument</c>) and read by the rail header + the immersive top bar: the toggle is not rendered at all for a
+/// document with neither layer, and it CYCLES only through the layers that document actually has.</para></summary>
+static class LyricsPrefs
+{
+    public static readonly Signal<int> Epoch = new(0);
+    public static void Bump() => Epoch.Value = Epoch.Peek() + 1;
+
+    // The three states of WaveeSettings.LyricsSecondaryLine.
+    public const int None = 0;
+    public const int Translation = 1;
+    public const int Romanization = 2;
+
+    // …and the two capability bits of Available (deliberately 1 << (mode - 1), so BitFor below is arithmetic, not a map).
+    public const int HasTranslation = 1;
+    public const int HasRomanization = 2;
+
+    /// <summary>Which secondary layers the document on screen carries (bit set of <see cref="HasTranslation"/> /
+    /// <see cref="HasRomanization"/>). 0 ⇒ no toggle is offered. Both lyrics surfaces prepare the SAME document, so
+    /// their writes agree and <c>Signal&lt;T&gt;</c> coalesces the second one.</summary>
+    public static readonly Signal<int> Available = new(0);
+
+    /// <summary>Coerce a persisted/hand-edited value into a real mode — a stray 7 must show the original, not nothing.</summary>
+    public static int Clamp(int mode) => (uint)mode <= Romanization ? mode : None;
+
+    public static int BitFor(int mode) => mode is Translation or Romanization ? 1 << (mode - 1) : 0;
+
+    /// <summary>The next state of the cycling header toggle: none → translation → romanization → none, SKIPPING any
+    /// layer this document does not have. "None" is always reachable, so the cycle can never trap the user in a layer.</summary>
+    public static int Next(int mode, int available)
+    {
+        for (int step = 1; step <= 3; step++)
+        {
+            int next = (Clamp(mode) + step) % 3;
+            if (next == None || (available & BitFor(next)) != 0) return next;
+        }
+        return None;
+    }
+
+    /// <summary>The toggle's tooltip: it names the state the view is in NOW (a cycling control whose tooltip named its
+    /// next state would read as a lie the moment the user hovered it after clicking).</summary>
+    public static string Tooltip(int mode) => Clamp(mode) switch
+    {
+        Translation => Loc.Get(Strings.Player.LyricsSecondaryTranslation),
+        Romanization => Loc.Get(Strings.Player.LyricsSecondaryRomanization),
+        _ => Loc.Get(Strings.Player.LyricsSecondaryOff),
+    };
+
+    /// <summary>The ONE writer both the Settings picker and the two header toggles go through: persist, then bump so
+    /// every mounted lyrics surface re-reads it on the same frame.</summary>
+    public static void Set(IAppSettings? settings, int mode)
+    {
+        settings?.Set(WaveeSettings.LyricsSecondaryLine, Clamp(mode));
+        Bump();
+    }
 }
 
 sealed class LyricsUpgradeObserver(Action<LyricsDocument> onNext) : IObserver<LyricsDocument>
