@@ -10,6 +10,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
+using FluentGpu.Text;
 using Wavee.Backend.Lyrics;
 using Wavee.Core;
 
@@ -103,6 +104,14 @@ sealed class LyricsView : Component
     // actually notify — the rest (already at bucket 6) are no-op writes. Sized in PrepareDocument alongside `_glowAlpha`.
     Signal<int>[] _lineEmphasis = Array.Empty<Signal<int>>();
     readonly Signal<int> _emphasisFallback = new(6);   // bucket 6 (fully dim) — only used during a transient array-resize gap
+
+    // Per-line READING-ORDER run length in DIP: the sum of the widths of the wrapped visual-line fragments, laid
+    // end-to-end over inked glyph edges — which is EXACTLY the extent GlyphWipe.Split/Softness are fractions of. The
+    // node width (AbsoluteRect.W) is NOT that extent: it is the wrap box, so a half-full last line would make the same
+    // DIP feather resolve to two different fractions. Filled LAZILY (once per line per width epoch, never per frame)
+    // by RunLengthOf through the text seam; NaN = unmeasured. Sized in PrepareDocument alongside `_glowAlpha`.
+    float[] _lineRunLen = Array.Empty<float>();
+    float _runLenWrapW = float.NaN;   // the wrap width every cached entry was measured at; a ≥0.5 DIP move invalidates ALL
 
     bool _docWordByWord;   // any line word-timed with syllables ⇒ the karaoke wipe needs 60 Hz; line-synced docs pace at 30 Hz
     // The lyrics ticker cadence: word-by-word karaoke needs the 16 ms (~60 Hz) sweep; line-synced docs (no per-frame wipe)
@@ -402,6 +411,12 @@ sealed class LyricsView : Component
         _dofNodes = new NodeHandle[doc.Lines.Count];
         _glowAlpha = new FloatSignal[doc.Lines.Count];
         for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
+        // Run lengths start unmeasured (NaN) and the width epoch starts unknown: the first RunLengthOf per line pays
+        // one seam layout, every later call is an array read. A new doc for the SAME width still re-measures — the
+        // strings changed, so the cached fragment sums are meaningless.
+        _lineRunLen = new float[doc.Lines.Count];
+        Array.Fill(_lineRunLen, float.NaN);
+        _runLenWrapW = float.NaN;
         // Seed each line at its REAL bucket for the doc's opening active line — NOT a constant. PrepareDocument runs
         // inside Render (LyricsDocHost), so the PushEmphasis below is a signal write during a render pass: seeding
         // "fully dim" made that write move every line whose true bucket wasn't 6, fanning the whole document out at
@@ -486,6 +501,8 @@ sealed class LyricsView : Component
         _dofNodes = Array.Empty<NodeHandle>();
         _glowAlpha = Array.Empty<FloatSignal>();
         _lineEmphasis = Array.Empty<Signal<int>>();
+        _lineRunLen = Array.Empty<float>();
+        _runLenWrapW = float.NaN;
         _glowInLine = -1; _glowOutLine = -1;
         _activeLine.Value = -1;
         _voiceLine.Value = -1;
@@ -560,6 +577,14 @@ sealed class LyricsView : Component
         _lastDisplay = pos;
     }
 
+    // The TIMED-row type metrics, as properties rather than LyricsContent locals: RunLengthOf has to rebuild the exact
+    // TextStyle a row's TextEl renders with (and SoftnessOfLine has to know the side padding to derive the wrap width),
+    // and it runs outside the content pass — a second copy of the ladder here is precisely the drift that would make the
+    // measured run length disagree with the rendered wrap.
+    float RowFontSize => _large ? 36f : 26f;
+    float RowLineHeight => _large ? 46f : 33f;   // ~1.27x (was 1.4x) — denser block
+    float RowSidePad => _large ? 48f : 22f;      // keep text off the rail edges without making the narrow panel cramped
+
     Element LyricsContent(LyricsDocument doc)
     {
         if (!IsTimed(doc)) return UnsyncedLyricsContent(doc);
@@ -567,12 +592,13 @@ sealed class LyricsView : Component
         var lines = doc.Lines;
         // Bigger type (rail 20 -> 26) and a tighter rhythm. Rows are CONTENT-FIT (variable height) via the measured
         // layout below, so a one-line lyric is short and a two-line lyric is tall — no dead space, no mid-word clipping.
-        float fontSz = _large ? 36f : 26f;
-        float lineHt = _large ? 46f : 33f;          // ~1.27x (was 1.4x) — denser block
+        float fontSz = RowFontSize;
+        float lineHt = RowLineHeight;
         float rowPad = _large ? 9f : 7f;            // vertical padding per row; inter-line gap = 2*rowPad
-        float sidePad = _large ? 48f : 22f;         // keep text off the rail edges without making the narrow panel cramped
+        float sidePad = RowSidePad;
         float rowEst = lineHt + 2f * rowPad;        // measured-layout seed = a single-line row's height
         bool centered = _large;
+        float wipeLift = LyricLineView.WipeLiftFor(_large);
         _band = _large ? 0.42f : 0.40f;
 
         if (_layout is null || MathF.Abs(_layout.Band - _band) > 0.001f || MathF.Abs(_layout.Estimate - rowEst) > 0.5f)
@@ -589,8 +615,8 @@ sealed class LyricsView : Component
                     idx, lines[idx],
                     (uint)idx < (uint)_lineEmphasis.Length ? _lineEmphasis[idx] : _emphasisFallback, _nowMs, _followMode,
                     idx < _glowAlpha.Length ? _glowAlpha[idx] : null,
-                    fontSz, lineHt, rowPad, sidePad, centered,
-                    ReportLineNode, ReportGlowNode, ReportDofNode, () => SeekToLine(idx))) with { Key = "ll" + idx };
+                    fontSz, lineHt, rowPad, sidePad, wipeLift, centered,
+                    ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
             // Realize the WHOLE document (a lyrics doc is at most a few hundred cheap rows): with a 4-5 row overscan,
@@ -707,6 +733,88 @@ sealed class LyricsView : Component
     void ReportDofNode(int index, NodeHandle h)
     {
         if ((uint)index < (uint)_dofNodes.Length) _dofNodes[index] = h;
+    }
+
+    // ── Wipe feather geometry (DIP → the engine's reading-order fraction) ─────────────────────────────────────────────
+    // GlyphWipe.Softness is a FRACTION of the run's reading-order length, but the feather is a fixed on-screen band, so
+    // the DIP constant has to be divided by that length PER LINE. Everything below serves that one conversion.
+
+    // The width every timed row's text lays out into: the scroll viewport less the row's own side padding (rows are
+    // Stretch-aligned, so this IS the wrap box the seam must be queried with). One width for the whole document ⇒ one
+    // epoch. NaN until the viewport exists (first frames / rail closed) — RunLengthOf treats that as "not measurable yet"
+    // and returns a conservative estimate; OnFrame's self-heal replaces the resulting seed once geometry lands.
+    float CurrentWrapWidth()
+    {
+        var scene = Context.Scene;
+        var viewport = _viewportNode;
+        if (scene is null || viewport.IsNull || !scene.IsLive(viewport) || !scene.HasScroll(viewport)) return float.NaN;
+        float w = scene.ScrollRef(viewport).ViewportW - 2f * RowSidePad;
+        return w > 1f ? w : float.NaN;
+    }
+
+    // The seeded/self-healed Softness for one line. Clamped: under 0.01 the band collapses to a hard per-pixel cut on a
+    // long line, over 0.10 a very short line returns to the mushy full-word wash the frame evidence refuted.
+    float SoftnessOfLine(int index)
+    {
+        float runLen = RunLengthOf(index, CurrentWrapWidth());
+        return Math.Clamp(LyricLineView.WipeSoftnessDipFor(_large) / runLen,
+            LyricLineView.WipeSoftnessMin, LyricLineView.WipeSoftnessMax);
+    }
+
+    // Lazily measured reading-order run length for one line, cached per line per width epoch. The lazy fill costs one
+    // text-seam layout per line per resize and NOTHING thereafter, so the per-frame callers (OnFrame's self-heal) only
+    // ever read the array. A wrap-width move of ≥0.5 DIP retires every entry at once — the rail is fixed-width, but the
+    // fullscreen surface resizes with the window.
+    float RunLengthOf(int index, float wrapWidth)
+    {
+        var runLen = _lineRunLen;
+        if (float.IsNaN(wrapWidth))
+        {
+            // No trustworthy wrap width yet (pre-layout, or the rail is closed): answer from the last live epoch, else a
+            // plausible ~12-em line. Deliberately does NOT poison the cache — the seed this produces is exactly what
+            // OnFrame's self-heal replaces the moment real geometry lands.
+            float last = _runLenWrapW;
+            return last > 1f ? last : RowFontSize * 12f;
+        }
+        if (float.IsNaN(_runLenWrapW) || MathF.Abs(_runLenWrapW - wrapWidth) >= 0.5f)
+        {
+            _runLenWrapW = wrapWidth;
+            Array.Fill(runLen, float.NaN);
+        }
+        if ((uint)index >= (uint)runLen.Length) return wrapWidth;
+        float cached = runLen[index];
+        if (!float.IsNaN(cached)) return cached;
+        float measured = MeasureRunLength(index, wrapWidth);
+        runLen[index] = measured;
+        return measured;
+    }
+
+    // One seam query per line per epoch: GetRangeRects over the WHOLE string returns one rect per wrapped visual-line
+    // fragment, and the sum of their widths is the reading-order extent the wipe sweeps (the replay lays those same
+    // fragments end-to-end). Queried under the TextStyle LyricLineView.LineText builds, through the SAME layout pipeline
+    // that renders it, so the fragments are the rendered wrap — not an approximation of it.
+    float MeasureRunLength(int index, float wrapWidth)
+    {
+        var doc = _doc;
+        if (doc is null || (uint)index >= (uint)doc.Lines.Count) return wrapWidth;
+        string text = doc.Lines[index].Text;
+        if (text.Length == 0 || TextSeam.Default is not { } fonts) return wrapWidth;
+
+        bool centered = _large;
+        var style = new TextStyle(default, RowFontSize, 700,
+            centered ? TextWrap.NoWrap : TextWrap.Wrap,
+            centered ? TextTrim.CharacterEllipsis : TextTrim.None,
+            centered ? 1 : 0,
+            CharSpacing: 0f, LineHeight: RowLineHeight);
+        // A wrapped lyric line is 1-3 visual lines; 8 is generous headroom and the seam DROPS the excess rather than
+        // failing, so a pathological line would under-sum. Treat a full span as possibly truncated and fall back to the
+        // wrap-box estimate for those fragments — an over-long run only tightens the feather, never widens it.
+        Span<RectF> fragments = stackalloc RectF[8];
+        int n = fonts.GetRangeRects(text, in style, wrapWidth, 0, text.Length, fragments);
+        float sum = 0f;
+        for (int i = 0; i < n; i++) sum += fragments[i].W;
+        if (n == fragments.Length) sum = MathF.Max(sum, n * wrapWidth);
+        return sum > 1f ? sum : wrapWidth;
     }
 
     internal LyricsFollowMode FollowModeValue => _followMode.Value;   // LyricsTicker-only subscription; parent Render never reads it
@@ -976,19 +1084,36 @@ sealed class LyricsView : Component
             float split = LyricLineView.ComputeSplit(doc.Lines[voiceLine], nowMs);
             if (split > 0f && split < 1f) split = Math.Clamp(split + LyricLineView.WipeLeadFrac, 0f, 1f);
             // Pixel-quantize the boundary so sub-pixel ticks produce byte-identical gradient bytes ⇒ the host skip-submit hash
-            // elides them (and the blur pin-cache HITS). main and glow share this run width (same text/size/wrap).
+            // elides them (and the blur pin-cache HITS). main and glow share this run width (same text/size/wrap). The
+            // SETTLED endpoints are exempt: they must stay EXACTLY 0/1, because that is the condition the replay's
+            // settled-split fast path tests to drop the run into the cheap plain glyph batch — and a fractional runW
+            // would land a rounded 1 at 1.0017 (Round(295.5)/295.5) instead. ComputeSplit already returns exact 1 on a
+            // sung-out line (played == total) and exact 0 before the first syllable, and the lead-clamp above preserves
+            // both (it is skipped at 0, and Clamp caps at exactly 1), so the endpoints really are exact here.
             float runW = scene.AbsoluteRect(mainNode).W;
-            if (runW > 1f) split = MathF.Round(split * runW) / runW;
+            if (runW > 1f && split > 0f && split < 1f) split = MathF.Round(split * runW) / runW;
             bool forceWipe = forceVisual || voiceLine != _lastWipeLine || _lastWipeWallMs == 0L;
             if (!forceWipe && wallMs - _lastWipeWallMs < KaraokeWipeIntervalMs) return;
 
             _lastWipeWallMs = wallMs;
             _lastWipeLine = voiceLine;
 
+            // The feather the seed baked in can be STALE — the seed for a line realized before the viewport had geometry
+            // (or before a fullscreen resize) resolved against a fallback run length. Self-heal it into the same write
+            // instead of a second one: at the ≥0.002 fraction gate this fires at most once per line per width epoch.
+            float softness = SoftnessOfLine(voiceLine);
+
+            // SETTLED ⇒ STOP WRITING. The wipe's Split/Softness/Lift fold verbatim into the recorder's BlurPinKey, so
+            // re-writing a line that is ALREADY fully sung misses the blur pin on exactly the frames the outgoing line is
+            // being blurred+dimmed away (it stays the voice line for the whole ~LeadMs window after focus has moved, and
+            // WipeLeadFrac drives Split to 1 a few % before that). Freezing the byte-identical value keeps the pin
+            // cache hitting AND keeps the run in the replay's cheap plain glyph batch instead of the gradient batch.
+            bool settled = (split >= 1f && mw.Split >= 1f) || (split <= 0f && mw.Split <= 0f);
+
             // Readable main wipe — the karaoke reveal the user sees (S2).
-            if (MathF.Abs(split - mw.Split) > 0.0008f)
+            if (!settled && (MathF.Abs(split - mw.Split) > 0.0008f || MathF.Abs(softness - mw.Softness) > 0.002f))
             {
-                scene.SetGlyphWipe(mainNode, mw with { Split = split });
+                scene.SetGlyphWipe(mainNode, mw with { Split = split, Softness = softness });
                 scene.Mark(mainNode, NodeFlags.PaintDirty);
             }
 
@@ -997,8 +1122,11 @@ sealed class LyricsView : Component
             // the scroll blur-pin every frame — the halo holds its last frame instead (barely visible under the fill).
             if (runGlow && !glowNode.IsNull && scene.IsLive(glowNode) && scene.TryGetGlyphWipe(glowNode, out var w))
             {
-                bool glowDirty = MathF.Abs(split - w.Split) > 0.0008f;
-                if (glowDirty) scene.SetGlyphWipe(glowNode, w with { Split = split });
+                // The halo must track the main layer's geometry EXACTLY (same split, same feather, same lift) or the
+                // bloom drifts out from under the crisp text; it gets the same settled write-stop for the same reason.
+                bool glowSettled = (split >= 1f && w.Split >= 1f) || (split <= 0f && w.Split <= 0f);
+                bool glowDirty = !glowSettled && (MathF.Abs(split - w.Split) > 0.0008f || MathF.Abs(softness - w.Softness) > 0.002f);
+                if (glowDirty) scene.SetGlyphWipe(glowNode, w with { Split = split, Softness = softness });
                 float baseSigma = _large ? 6f : 4f;
                 float glowA = GlowAlphaOf(voiceLine);
                 float sigma = baseSigma * glowA;
@@ -1319,21 +1447,23 @@ sealed class LyricLineView : Component
     readonly float _lineHt;
     readonly float _rowPad;
     readonly float _sidePad;
+    readonly float _wipeLift;   // per-word rise in DIP (GlyphWipe.Lift) — surface-scaled by LyricsView, see WipeLiftFor
     readonly bool _centered;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action<int, NodeHandle> _reportGlow;
     readonly Action<int, NodeHandle> _reportDof;
+    readonly Func<int, float> _softnessOf;   // DIP feather → this line's reading-order fraction (LyricsView.SoftnessOfLine)
     readonly Action _onSeek;
 
     public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs, Signal<LyricsFollowMode> followMode,
         FloatSignal? glowFade,
-        float fontSz, float lineHt, float rowPad, float sidePad, bool centered, Action<int, NodeHandle> reportNode,
-        Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Action onSeek)
+        float fontSz, float lineHt, float rowPad, float sidePad, float wipeLift, bool centered, Action<int, NodeHandle> reportNode,
+        Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf, Action onSeek)
     {
         _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
         _followMode = followMode; _glowFade = glowFade;
-        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _centered = centered;
-        _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _onSeek = onSeek;
+        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _wipeLift = wipeLift; _centered = centered;
+        _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf; _onSeek = onSeek;
     }
 
     // The halo wrapper's opacity: BOUND to the per-line fade signal so a row re-render re-asserts the live fade value
@@ -1392,23 +1522,32 @@ sealed class LyricLineView : Component
             // per-frame writer (kills the ~4% boundary snap-back on the handoff frame — S3-4).
             float split = ComputeSplit(_line, (long)_nowMs.Peek());
             if (split > 0f && split < 1f) split = Math.Clamp(split + WipeLeadFrac, 0f, 1f);
+            // The feather is authored in DIP but the engine takes it as a fraction of THIS line's reading-order length,
+            // so LyricsView converts per line (and OnFrame re-heals the value if the line was seeded before the viewport
+            // had geometry). main and glow MUST share it — see the glow comment below.
+            float softness = _softnessOf(_index);
             // MAIN = the readable foreground, and it CARRIES THE WIPE — this is the progressive reveal the user SEES:
-            // sung glyphs full-bright Primary (Before), unsung glyphs dim-but-readable (After = Primary @ 0.45). The row
-            // group opacity spring (active-only emphasis) dims the whole row once focus moves; this wipe does sung/unsung.
+            // sung glyphs full-bright Primary (Before), unsung glyphs dim-but-readable (After = Primary @ UnsungAlpha),
+            // sitting _wipeLift DIP low and rising as the feather sweeps them. The row group opacity spring (active-only
+            // emphasis) dims the whole row once focus moves; this wipe does sung/unsung.
             Element main = LineText(_line.Text, Tok.TextPrimary) with
             {
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0.45f }, Split: split, Softness: 0.14f),
+                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = UnsungAlpha },
+                    Split: split, Softness: softness, Lift: _wipeLift),
                 OnRealized = h => _reportNode(_index, h),
             };
             // GLOW = a soft blurred bloom UNDER the main, on the SUNG glyphs only (After.A = 0 ⇒ unsung glyphs fully
             // transparent). Its glyphs mount once the row is NEAR the focus (dist ≤ 2 — still dim + blurred, so the
             // content swap itself can never pop on the focal row); a peripheral line pays no second glyph run. OnFrame
             // drives its split (same value as main) + its constant σ; its VISIBILITY is the cross-fade wrapper below.
+            // Softness AND Lift match the main layer exactly: the halo is the same glyphs at the same geometry, so any
+            // disagreement would let the bloom float out from under the crisp text at the boundary.
             bool near = dist <= 2;
             Element glowText = (near
                 ? LineText(_line.Text, Tok.TextPrimary) with
                   {
-                      Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f }, Split: split, Softness: 0.14f),
+                      Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f },
+                          Split: split, Softness: softness, Lift: _wipeLift),
                   }
                 : LineText("", Tok.TextPrimary)) with { OnRealized = h => _reportGlow(_index, h) };
             // The wrapper's bound opacity is the per-line glow-fade signal: OnFrame ramps it in over ~240 ms as this line
@@ -1501,10 +1640,36 @@ sealed class LyricLineView : Component
         };
     }
 
+    // ── Wipe texture ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // Every constant below is measured off the frame-by-frame Apple Music reference capture (lyrics-parity campaign,
+    // 2026-08-03; the video is 480 px wide at cap-height ≈30 px, so source px × 0.62 ⇒ rail DIP at font 26).
+
     // Small POSITIVE wipe lead: nudge the bright boundary a few % ahead of the strictly-played fraction so the edge reads
     // as anticipating the voice. Shared by the element seed (LyricLineView.Render) and the per-frame driver (OnFrame) so
     // the reconcile re-render and the OnFrame writer agree on the boundary (no snap-back — S3-4).
     internal const float WipeLeadFrac = 0.04f;
+
+    // Unsung glyph alpha (GlyphWipe.After). Reference: crossed text holds 250-255 luma while unsung sits at 183-192 over
+    // a ~90 background ⇒ α ≈ 0.59 of the sung white. The 0.45 shipped before read a whole step too dim/too far away.
+    internal const float UnsungAlpha = 0.58f;
+
+    // Feather width of the sung/unsung boundary, IN DIP. Reference: a narrow 5-12 source-px band ≈ 2-3% of the run width
+    // — the fixed Softness 0.14 shipped before was 4-9× too wide (a mushy word-sized wash, not a defined edge). DIP is
+    // the authored unit because GlyphWipe.Softness is a FRACTION of the run's READING-ORDER length, so the same on-screen
+    // band is a different fraction on every line; LyricsView.SoftnessOfLine does the per-line division.
+    internal const float WipeSoftnessDip = 5f;
+    internal const float WipeSoftnessDipLarge = 7f;
+    internal static float WipeSoftnessDipFor(bool large) => large ? WipeSoftnessDipLarge : WipeSoftnessDip;
+    // Clamps on the converted fraction: below 0.01 the band collapses to a hard per-pixel cut on a long line; above 0.10
+    // a very short line would be back in the refuted wash.
+    internal const float WipeSoftnessMin = 0.01f;
+    internal const float WipeSoftnessMax = 0.10f;
+
+    // Per-word vertical rise (GlyphWipe.Lift — dy only, no scale, since the engine's char pop was refuted and removed).
+    // Reference: unsung words sit ~2 source px low at cap-height 30 px ⇒ ≈0.048 em ⇒ 1.25 DIP at font 26.
+    internal const float WipeLiftDip = 1.25f;
+    internal const float WipeLiftDipLarge = 1.75f;
+    internal static float WipeLiftFor(bool large) => large ? WipeLiftDipLarge : WipeLiftDip;
 
     internal static float ComputeSplit(LyricLine line, long now)
     {
