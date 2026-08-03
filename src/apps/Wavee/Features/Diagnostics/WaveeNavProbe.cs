@@ -1784,6 +1784,7 @@ internal static class WaveeNavProbe
         sb.AppendLine();
         foreach (var line in routeReports) sb.AppendLine(line);
         sb.AppendLine("CSV columns include playback, LyricsView active/voice line diagnostics, recorder blur counts, D3D blur cache counts, and main/lyrics scroll state per frame.");
+        sb.AppendLine("Note: the lyrics follow is an instant viewport LATCH plus a per-line compensating cascade (Wave D), not a programmatic spring — a lyrics 'moved' offset range is expected to be one-frame jumps and lyricsMode stays 0 (Idle) through a handoff. Cascade correctness is asserted by WAVEE_LYRICS_ADVANCE_PROBE, not here.");
 
         string report = sb.ToString();
         Log.Info(report);
@@ -1796,8 +1797,13 @@ internal static class WaveeNavProbe
     // records the resulting scroll SETTLE are the SAME frame — killing the timer-decoupling artifact that made the prior
     // probe's "blur-drop ≠ line-change" claim meaningless. Reads the DoF-defer inputs (ScrollMode / UserScrollActive /
     // content-TransformDirty) captured at RECORD time (before ClearTransformDirty), plus the whole-frame blur counters.
-    //   P1 stationary-advance : the real BUG1 scenario — advance lyrics while NOTHING else scrolls. On the fixed engine,
-    //                           blur is NEVER suppressed (assert). On the old engine it spiked on every settle frame.
+    //   P1 handoff cascade    : the Wave D model. The follow no longer runs the engine's programmatic spring — a handoff
+    //                           is ONE instant viewport latch plus per-line compensating translates springing to 0 on a
+    //                           60 ms-per-rank stagger. P1 asserts (a) the offset lands in exactly ONE frame, (b) every
+    //                           line's comp decays monotonically without ever crossing zero (zero overshoot), (c) the
+    //                           settle is ≤0.55 s of wall time, (d) onset order is top-first, (e) steady-state
+    //                           HotPhaseAllocBytes == 0. It also keeps the original BUG1 check (the lyric DoF must
+    //                           never go absent on a content-advance frame).
     //   P2 sibling-isolation  : wheel-scroll the MAIN page while lyrics sit still — the lyrics viewport must stay
     //                           mode 0 / not-user-scrolling / not-content-dirty (a sibling scroll can't cascade its DoF).
     //   P3 skip-submit (BUG3) : stationary, no input — count frames force-PRESENTED despite a static scene (a loop anim
@@ -1851,37 +1857,137 @@ internal static class WaveeNavProbe
         host.ProbeMainViewport = mainVp;
         Log.Info($"[lyrics-advance] track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; sync-driving (ticker silenced)");
 
-        // Pre-settle onto line 0 so the ONE-TIME instant-jump latch fires there, then force snapped so every measured
-        // advance takes the ProgrammaticMode spring (whose SETTLE frame is where BUG1 dropped the blur).
+        // Pre-settle onto line 0 so the ONE-TIME first-landing instant jump fires there, then force snapped so every
+        // MEASURED advance takes the steady-state follow path — the latch + cascade, not the first-landing hard jump.
         view.ProbeStep(view.ProbeLineStartMs(0));
         for (int i = 0; i < 10 && !window.IsClosed; i++) Paced();
         view.ProbeForceSnapped();
 
-        int settleFrames = EnvInt("WAVEE_PROBE_SETTLE_FRAMES", 26, 6, 240);
+        // Frames per handoff window. The cascade settles in ~0.48 s (≈30 frames at 16 ms); the tail beyond that is the
+        // quiescent stretch phase (e) samples, so keep a comfortable margin over the 0.55 s assertion.
+        int cascadeFrames = EnvInt("WAVEE_PROBE_CASCADE_FRAMES", 56, 16, 600);
         int startLine = Math.Min(1, lineCount - 1);
         int endLine = Math.Min(lineCount - 1, startLine + EnvInt("WAVEE_PROBE_ADVANCES", 20, 1, 4096));
 
-        // ── P1: stationary line-advance ────────────────────────────────────────────────────────────────────────────
-        int p1Frames = 0, p1BlurAbsentFrames = 0, p1SettleFrames = 0;
+        float LyricsOffsetY() => host.Scene.TryGetScroll(lyricsVp, out var lsc) ? lsc.OffsetY : 0f;
+
+        // ── P1: the handoff cascade ────────────────────────────────────────────────────────────────────────────────
+        // Each handoff FREEZES the media clock at lineStart(li) − LeadMs, so `active` resolves to li and STAYS there
+        // while the frame loop keeps stepping on real wall dt. The cascade is wall-driven and the active line is not,
+        // so freezing isolates exactly one handoff per window — no re-arm halfway through a measurement.
+        int p1Frames = 0, p1BlurAbsentFrames = 0, p1Handoffs = 0;
+        int p1SpringFrames = 0;      // lyrics viewport in a programmatic chase — must be 0, the follow is a latch now
+        int p1LateOffsetFrames = 0;  // (a) offset moved on a frame AFTER the latch frame ⇒ not a one-frame land
+        int p1SignFlips = 0;         // (b) a comp crossed zero ⇒ overshoot
+        int p1NonMonotone = 0;       // (b) |comp| GREW mid-flight ⇒ not a decay
+        int p1OrderViolations = 0;   // (d) a lower rank started moving BEFORE the rank above it
+        int p1AllocFrames = 0;       // (e) steady-state HotPhaseAllocBytes != 0
+        long p1MaxAllocBytes = 0;
+        double p1MaxSettleMs = 0, p1SumSettleMs = 0; int p1SettledHandoffs = 0, p1UnsettledHandoffs = 0;
+        int p1MaxOnsetSpreadFrames = 0;
+        var casPrev = new float[lineCount];
+        var casSign = new float[lineCount];
+        var casOnset = new int[lineCount];
         int prevLyMode = 0;
+        float offPrev = LyricsOffsetY();
         for (int li = startLine; li <= endLine && !window.IsClosed; li++)
         {
-            view.ProbeStep(view.ProbeLineStartMs(li));   // advance emphasis onto line li → arms a programmatic bring-into-view
-            for (int f = 0; f < settleFrames && !window.IsClosed; f++)
+            long freezeMs = view.ProbeLineStartMs(li) - LyricsView.LeadMs;
+
+            // ── the LATCH frame: one ProbeStep moves `active` to li, latches the viewport and arms the cascade ──
+            view.ProbeStep(freezeMs);
+            long armQpc = Stopwatch.GetTimestamp();   // t=0 is the ArmCascade INSIDE that step, not the frame around it
+            var sArm = host.RunFrame();
+            window.WaitForWork(16);
+            p1Frames++;
+            float offArm = LyricsOffsetY();
+            bool handoff = MathF.Abs(offArm - offPrev) > 0.5f;
+            if (handoff) p1Handoffs++;
+            if (sArm.LyricsScrollMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating) p1SpringFrames++;
+            if (!sArm.LyricsUserScrollActive && sArm.LyricsContentDirtyAtRecord && sArm.BlurCandidateCount == 0) p1BlurAbsentFrames++;
+            AppendAdvanceRow(csv, "P1-cascade", li, 0, handoff ? "latch" : "no-move", sArm, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
+            prevLyMode = sArm.LyricsScrollMode;
+            for (int i = 0; i < lineCount; i++)
             {
+                float c = view.ProbeCascadeComp(i);
+                casPrev[i] = c;
+                casSign[i] = c > 0f ? 1f : c < 0f ? -1f : 0f;
+                casOnset[i] = -1;
+            }
+
+            // ── the settle window: the clock stays frozen, only wall time advances ──
+            double settleMs = -1;
+            for (int f = 1; f < cascadeFrames && !window.IsClosed; f++)
+            {
+                view.ProbeStep(freezeMs);
+                // (c) the settle is over when the cascade self-quiesces (every line landed exactly on 0). Sampled HERE,
+                // straight after the step that ran DriveCascade, so neither the frame nor the pacing wait is counted in.
+                if (settleMs < 0 && !view.ProbeCascadeActive)
+                    settleMs = (Stopwatch.GetTimestamp() - armQpc) * 1000.0 / Stopwatch.Frequency;
                 var s = host.RunFrame();
                 window.WaitForWork(16);
                 p1Frames++;
-                bool settleEdge = prevLyMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating && s.LyricsScrollMode == 0;
-                if (settleEdge) p1SettleFrames++;
+
+                // (a) the offset LANDED on the latch frame: nothing may move it again for the rest of the handoff.
+                if (MathF.Abs(LyricsOffsetY() - offArm) > 0.5f) p1LateOffsetFrames++;
+                if (s.LyricsScrollMode == FluentGpu.Animation.ScrollIntegrator.WheelAnimating) p1SpringFrames++;
+
+                // (b) + (d): every line's comp must decay monotonically to 0 without crossing zero, and a line must not
+                // start moving before the line above it (the onset frame is the first CHANGE, not the first non-zero —
+                // a staggered line holds a non-zero comp for its whole delay).
+                for (int i = 0; i < lineCount; i++)
+                {
+                    float c = view.ProbeCascadeComp(i);
+                    float p = casPrev[i], sgn = casSign[i];
+                    if (sgn != 0f)
+                    {
+                        if (c * sgn < -0.01f) p1SignFlips++;
+                        if (MathF.Abs(c) > MathF.Abs(p) + 0.05f) p1NonMonotone++;
+                    }
+                    if (casOnset[i] < 0 && MathF.Abs(c - p) > 0.02f) casOnset[i] = f;
+                    casPrev[i] = c;
+                }
+
+                // (e) steady state = the quiescent tail after the settle, clock frozen, nothing animating.
+                if (settleMs >= 0 && f >= cascadeFrames - 8)
+                {
+                    if (s.HotPhaseAllocBytes != 0) p1AllocFrames++;
+                    if (s.HotPhaseAllocBytes > p1MaxAllocBytes) p1MaxAllocBytes = s.HotPhaseAllocBytes;
+                }
+
                 // BUG1 signature under the pin-cache pipeline: the recorder no longer DROPS a stationary blur (the retired
                 // BlurSuppressedByScrollCount is always 0), so the observable regression is the DoF VANISHING — a
                 // content-advance frame (content transform written, NOT a user scroll) that records zero blur candidates
                 // means the lyric depth-of-field went absent instead of being served by its pin.
                 if (!s.LyricsUserScrollActive && s.LyricsContentDirtyAtRecord && s.BlurCandidateCount == 0) p1BlurAbsentFrames++;
-                AppendAdvanceRow(csv, "P1-stationary", li, f, settleEdge ? "settle" : "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
+                AppendAdvanceRow(csv, "P1-cascade", li, f, settleMs >= 0 ? "settled" : "", s, prevLyMode, host.Scene, lyricsVp, mainVp, gpu);
                 prevLyMode = s.LyricsScrollMode;
             }
+
+            if (handoff)
+            {
+                if (settleMs < 0) p1UnsettledHandoffs++;
+                else
+                {
+                    p1SettledHandoffs++;
+                    p1SumSettleMs += settleMs;
+                    if (settleMs > p1MaxSettleMs) p1MaxSettleMs = settleMs;
+                }
+                // (d) top-first onset: rank 0 is the OUTGOING line (li-1) and everything above it; each rank below must
+                // start no EARLIER than the rank above. Ranks beyond the stagger cap share one onset — equal is legal.
+                int prevOnset = -1;
+                for (int k = 0; k <= 6; k++)
+                {
+                    int idx = li - 1 + k;
+                    if (idx < 0 || idx >= lineCount) continue;
+                    int onset = casOnset[idx];
+                    if (onset < 0) continue;
+                    if (prevOnset >= 0 && onset < prevOnset) p1OrderViolations++;
+                    if (prevOnset >= 0 && onset - prevOnset > p1MaxOnsetSpreadFrames) p1MaxOnsetSpreadFrames = onset - prevOnset;
+                    prevOnset = Math.Max(prevOnset, onset);
+                }
+            }
+            offPrev = offArm;
         }
 
         // ── P2: wheel the MAIN page while lyrics sit still (sibling isolation) ──────────────────────────────────────
@@ -1972,14 +2078,27 @@ internal static class WaveeNavProbe
 
         // ── report ─────────────────────────────────────────────────────────────────────────────────────────────────
         bool bug1Fixed = p1BlurAbsentFrames == 0;
+        bool oneFrameLand = p1LateOffsetFrames == 0 && p1SpringFrames == 0;
+        bool zeroOvershoot = p1SignFlips == 0 && p1NonMonotone == 0;
+        bool settleOk = p1UnsettledHandoffs == 0 && p1MaxSettleMs <= 550.0;
+        bool topFirst = p1OrderViolations == 0;
+        bool allocClean = p1AllocFrames == 0;
+        bool cascadeOk = oneFrameLand && zeroOvershoot && settleOk && topFirst && allocClean;
         var sb = new StringBuilder(2048);
         sb.AppendLine();
         sb.AppendLine("=== WAVEE LYRICS ADVANCE PROBE — synchronous, timer-decoupling-free ===");
-        sb.AppendLine($"track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; advances={Math.Max(0, endLine - startLine + 1)}; settleFrames/advance={settleFrames}");
+        sb.AppendLine($"track: {TrackLabel(WaveeApp.ProbePlayback)}; lines={lineCount}; advances={Math.Max(0, endLine - startLine + 1)}; frames/handoff={cascadeFrames}");
         sb.AppendLine();
-        sb.AppendLine("P1 stationary line-advance (the BUG1 scenario):");
-        sb.AppendLine($"  frames={p1Frames}; programmatic-settle frames seen={p1SettleFrames}; DoF-absent frames (contentDirty & !userScroll & zero blur candidates)={p1BlurAbsentFrames}");
-        sb.AppendLine($"  >>> BUG1 {(bug1Fixed ? "FIXED" : "PRESENT")} — lyric DoF was {(bug1Fixed ? "NEVER" : "STILL")} dropped while stationary-advancing (expect a settle edge each advance with lyMode 2->0, lyContentDirty=1, lyUserScroll=0, and a live blur candidate every content frame).");
+        sb.AppendLine("P1 handoff cascade (Wave D: instant viewport latch + staggered per-line compensating springs):");
+        sb.AppendLine($"  frames={p1Frames}; handoffs measured={p1Handoffs}");
+        sb.AppendLine($"  (a) one-frame land : offset moves after the latch frame={p1LateOffsetFrames} (expect 0); frames the lyrics viewport was in a programmatic chase={p1SpringFrames} (expect 0 — the engine spring is no longer the follow) >>> {(oneFrameLand ? "PASS" : "FAIL")}");
+        sb.AppendLine($"  (b) zero overshoot : comp sign flips={p1SignFlips} (expect 0); non-monotone |comp| growths={p1NonMonotone} (expect 0) >>> {(zeroOvershoot ? "PASS" : "FAIL")}");
+        sb.AppendLine($"  (c) settle        : settled handoffs={p1SettledHandoffs}; never-settled={p1UnsettledHandoffs} (expect 0); mean={(p1SettledHandoffs > 0 ? p1SumSettleMs / p1SettledHandoffs : 0):0} ms; max={p1MaxSettleMs:0} ms (budget 550) >>> {(settleOk ? "PASS" : "FAIL")}");
+        sb.AppendLine($"  (d) top-first     : onset-order violations={p1OrderViolations} (expect 0); max onset spread between adjacent ranks={p1MaxOnsetSpreadFrames} frames (60 ms/rank ≈ 4 frames @16 ms) >>> {(topFirst ? "PASS" : "FAIL")}");
+        sb.AppendLine($"  (e) steady alloc  : post-settle frames with HotPhaseAllocBytes != 0={p1AllocFrames} (expect 0); max={p1MaxAllocBytes} B >>> {(allocClean ? "PASS" : "FAIL")}");
+        sb.AppendLine($"  >>> CASCADE {(cascadeOk ? "GREEN" : "RED")}");
+        sb.AppendLine($"  DoF-absent frames (contentDirty & !userScroll & zero blur candidates)={p1BlurAbsentFrames}");
+        sb.AppendLine($"  >>> BUG1 {(bug1Fixed ? "FIXED" : "PRESENT")} — lyric DoF was {(bug1Fixed ? "NEVER" : "STILL")} dropped while advancing (a pure translation of the DoF layer is a blur-pin HIT, so a live blur candidate is expected on every content frame).");
         sb.AppendLine();
         sb.AppendLine("P2 main-scroll sibling isolation:");
         sb.AppendLine($"  frames={p2Frames}; frames where lyrics were user-scrolling/content-dirty during a MAIN scroll={p2LyricsTouched} (expect 0); frames the stationary lyrics DoF was HELD (served by its pin)={p2LyricsHeld} (expect >0 while the main page moves; 0 = the sibling-defer path is dead)");
@@ -1995,6 +2114,7 @@ internal static class WaveeNavProbe
         sb.AppendLine($"  >>> BUG2 remount {(p4Remounts == 0 ? "GONE" : "STILL PRESENT")}; karaoke wipe/glow {(wipeGlowIntact ? "INTACT" : "BROKEN — REGRESSION, revert the LyricLineView restructure")}.");
         sb.AppendLine();
         sb.AppendLine("CSV per-frame columns: lyMode/lyPrevMode/lyUserScroll/lyContentDirty (record-time DoF-defer inputs), blurCandidates/blurGroups/blurSuppressed, presented, per-phase timing.");
+        sb.AppendLine("Note: in Following mode the lyrics viewport no longer runs a programmatic spring — lyOff jumps once per handoff and lyMode stays 0 (Idle). A WheelAnimating lyrics mode now means a RESYNC glide (ζ=1, 110 ms half-life) or a user fling.");
 
         string report = sb.ToString();
         Log.Info(report);

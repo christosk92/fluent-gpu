@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Animation;
@@ -46,10 +47,12 @@ sealed class LyricsView : Component
     internal static FrameDiagnostics LastFrameDiagnostics { get; private set; }
 
     // ── Probe seam (WAVEE_LYRICS_ADVANCE_PROBE) ──────────────────────────────────────────────────────────────────────
-    // The redesigned lyrics-advance probe drives the media clock SYNCHRONOUSLY (one advance == the frame that records its
-    // scroll settle) so the async 16 ms ticker's decoupling can't smear the correlation. ProbeSyncMode silences the ticker
-    // (the LyricsTicker UseInterval stays disabled); ProbeStep injects the clock via OnFrame; ProbeForceSnapped skips the one-time instant-jump latch
-    // so the first measured advance is a real ProgrammaticMode spring (the settle-frame path BUG1 lives on).
+    // The lyrics-advance probe drives the media clock SYNCHRONOUSLY (ProbeStep → OnFrame) so a line advance and the
+    // RunFrame that records it are the SAME frame; the async ticker is silenced by ProbeSyncMode (the LyricsTicker
+    // UseInterval stays disabled). ProbeForceSnapped skips the one-time first-landing instant jump so every measured
+    // advance takes the STEADY-STATE follow path — which since Wave D is the latch + per-line cascade, not a spring.
+    // ProbeStep with an UNCHANGED clock still runs the whole core lane (DriveCascade included), so the probe can step
+    // the cascade frame by frame on real wall dt while holding one handoff in isolation.
     internal static bool ProbeSyncMode;
     internal static LyricsView? ProbeActive;
     internal void ProbeStep(long nowMs) => OnFrame(forceVisual: true, probeNowMs: nowMs);
@@ -60,6 +63,14 @@ sealed class LyricsView : Component
     internal long ProbeLineStartMs(int i) => _doc is { } d && (uint)i < (uint)d.Lines.Count ? d.Lines[i].StartMs : 0L;
     internal NodeHandle ProbeLineNode(int i) => _lineNodes is { } ln && (uint)i < (uint)ln.Length ? ln[i] : default;
     internal NodeHandle ProbeGlowNode(int i) => _glowNodes is { } gn && (uint)i < (uint)gn.Length ? gn[i] : default;
+    internal NodeHandle ProbeDofNode(int i) => _dofNodes is { } dn && (uint)i < (uint)dn.Length ? dn[i] : default;
+    // Cascade internals the reworked advance probe asserts on: the compensating dy per line, its remaining stagger, and
+    // whether ANY line is still in flight (the self-quiesce flag — the settle-wall-time stop condition).
+    internal float ProbeCascadeComp(int i) => (uint)i < (uint)_casComp.Length ? _casComp[i] : 0f;
+    internal float ProbeCascadeDelayMs(int i) => (uint)i < (uint)_casDelayLeftMs.Length ? _casDelayLeftMs[i] : 0f;
+    internal bool ProbeCascadeActive => _cascadePending;
+    internal bool ProbeScrollSnapped => _scrollSnapped;
+    internal LyricsFollowMode ProbeFollowMode => _followMode.Peek();
 
     // The karaoke wipe advances on this cadence (the ticker period + the OnFrame throttle gate). 16 ms ≈ 60 Hz (was 33 =
     // 30 Hz). The wipe is AMBIENT motion, so the host ambient cap (Program.cs ambientFps / FG_ANIM_FPS) must ALSO allow
@@ -123,10 +134,13 @@ sealed class LyricsView : Component
     float[] _lineRunLen = Array.Empty<float>();
     float _runLenWrapW = float.NaN;   // the wrap width every cached entry was measured at; a ≥0.5 DIP move invalidates ALL
 
-    bool _docWordByWord;   // any line word-timed with syllables ⇒ the karaoke wipe needs 60 Hz; line-synced docs pace at 30 Hz
-    // The lyrics ticker cadence: word-by-word karaoke needs the 16 ms (~60 Hz) sweep; line-synced docs (no per-frame wipe)
-    // pace at 33 ms (~30 Hz) — the 240 ms glow fade still gets 7+ steps and the wipe block no-ops for them.
-    internal long WipeIntervalMs => _docWordByWord ? 16 : 33;
+    // The lyrics ticker cadence. It used to be the KARAOKE cadence — 16 ms (~60 Hz) for word-by-word docs, 33 ms
+    // (~30 Hz) for line-synced ones, whose only per-frame work was the glow fade. Since the handoff became a per-line
+    // compensating cascade driven from OnFrame's core lane (DriveCascade), this is the MOTION rate for EVERY doc kind:
+    // a 30 Hz cascade visibly steps across a 0.48 s travel. So both kinds tick at 16 ms. A line-synced doc's extra ticks
+    // cost a handful of scalar ops — its rows carry no GlyphWipe, so the wipe block still no-ops for them, and both the
+    // σ ramp and the cascade self-quiesce when nothing is in flight.
+    internal long WipeIntervalMs => KaraokeWipeIntervalMs;
 
     NodeHandle _viewportNode = NodeHandle.Null;
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
@@ -144,6 +158,44 @@ sealed class LyricsView : Component
     float[] _dofCurrent = Array.Empty<float>();
     bool _dofRampPending = true;   // a target may have moved (emphasis / suppression / realization) — run a ramp pass
     long _dofRampWallMs;           // wall stamp of the last ramp pass (dt source; 0 = none yet)
+
+    // ── Staggered handoff cascade ────────────────────────────────────────────────────────────────────────────────────
+    // A line handoff is NOT a rigid viewport scroll. In the reference the OUTGOING line starts moving first and each
+    // successive line below starts ~50-70 ms later (displacements 44/30/9 px coexist mid-flight), every line travels the
+    // SAME distance, and they CONVERGE to one synchronized settle ≈0.48 s after onset with strictly zero overshoot. That
+    // is not one spring on the viewport — it is N springs on the LINES.
+    //
+    // So while Following, every handoff LATCHES the viewport instantly to the new target (LatchViewport — the mechanics
+    // the first-landing branch already proves out: one offset write + one content transform + one restore latch + one
+    // Mark, and never a RequestRerender) and the felt motion is a per-line COMPENSATING translate springing back to 0.
+    //
+    //   INVARIANT — "latch + comp = no visual motion on the latch frame":
+    //   the scroll content transform is Translation(0, -offset) (ApplyScrollTransform), so raising the offset by `delta`
+    //   moves every line UP the screen by `delta`. Adding +delta to each line's own translate puts it back EXACTLY where
+    //   it was, so the jump itself is invisible. Hence ArmCascade's sign: comp[i] += (newOffset - oldOffset). comp then
+    //   decays to 0, which IS the felt travel.
+    //
+    // ADDING (never assigning) is what makes a mid-cascade re-target velocity-continuous: a second handoff folds its jump
+    // into whatever compensation is still in flight instead of teleporting and restarting.
+    //
+    // Cost note: this is strictly LESS engine work than the per-frame programmatic spring it replaces — ONE latch (one
+    // LayoutDirty|VirtualRangeDirty reflow) per handoff instead of one per frame of the settle, plus a scalar float loop.
+    float[] _casComp = Array.Empty<float>();          // per-line compensating dy in DIP (0 ⇒ settled: no state, no write)
+    float[] _casVel = Array.Empty<float>();           // its velocity (DIP/s) — the ζ=1 closed form is position AND velocity
+    float[] _casDelayLeftMs = Array.Empty<float>();   // stagger remaining before this line starts moving (it HOLDS until 0)
+    float[] _casRate = Array.Empty<float>();          // per-line ζ=1 rate y, picked so every rank lands at the same time
+    bool _cascadePending;                             // self-quiescing pass flag, exactly like _dofRampPending
+    // The same fact as _cascadePending, mirrored into a SIGNAL for the ticker to gate on. The hot path reads the plain
+    // bool (no signal traffic per frame); this is written only at the two transitions per handoff (Signal<T> coalesces
+    // an equal write), so the ticker re-renders twice per line change and never per frame. It exists because a PAUSE
+    // mid-flight would otherwise disable the interval (needsTicks = playing || detached) and freeze every line at its
+    // compensated position — the whole document sitting up to one row off the focal band until playback resumed.
+    readonly Signal<bool> _cascadeRunning = new(false);
+    // QPC stamp of the last cascade pass (dt source; 0 = none yet). Deliberately NOT Environment.TickCount64 like the σ
+    // ramp: GetTickCount64 advances at the SYSTEM TIMER PERIOD (~15.6 ms unless something on the box raised it), so at
+    // 60/120 Hz its per-frame delta alternates 0 / 15.6 ms — which would quantize the one motion the eye is actually
+    // watching. A σ ramp behind a 0.1 write gate survives that; a per-line travel does not.
+    long _casQpc;
 
     LyricsDocument? _doc;
     LyricsDocument? _pendingUpgrade;
@@ -425,6 +477,11 @@ sealed class LyricsView : Component
     {
         if (ReferenceEquals(_doc, doc)) return;
 
+        // A doc change retires the cascade BEFORE the handle/comp arrays are replaced — otherwise the outgoing doc's
+        // rows (which survive a same-shape upgrade) would keep a stale compensating translate forever, with no handle
+        // left to clear it through.
+        ZeroCascade(Context.Scene);
+
         var previous = _doc;
         if (previous is null || !SameLineShape(previous, doc)) _layout = null;
         _doc = doc;
@@ -445,6 +502,14 @@ sealed class LyricsView : Component
         Array.Fill(_dofCurrent, float.NaN);
         _dofRampPending = true;
         _dofRampWallMs = 0L;
+        // Cascade state starts at rest (0 = settled, nothing to write). Sized once per doc so DriveCascade never
+        // allocates: the per-frame path only ever reads/writes these four preallocated float arrays.
+        _casComp = new float[doc.Lines.Count];
+        _casVel = new float[doc.Lines.Count];
+        _casDelayLeftMs = new float[doc.Lines.Count];
+        _casRate = new float[doc.Lines.Count];
+        _cascadePending = false;
+        _casQpc = 0L;
         // Seed each line at its REAL bucket for the doc's opening active line — NOT a constant. PrepareDocument runs
         // inside Render (LyricsDocHost), so the PushEmphasis below is a signal write during a render pass: seeding
         // "fully dim" made that write move every line whose true bucket wasn't 6, fanning the whole document out at
@@ -455,7 +520,6 @@ sealed class LyricsView : Component
         bool seedInterlude = timed && _interlude.Peek();   // the timed branch below leaves _interlude as-is; the other clears it
         _lineEmphasis = new Signal<int>[doc.Lines.Count];
         for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive, seedInterlude));
-        _docWordByWord = IsWordByWordDoc(doc);
         _glowInLine = -1; _glowOutLine = -1;
         if (timed)
         {
@@ -480,14 +544,6 @@ sealed class LyricsView : Component
         for (int i = 0; i < a.Lines.Count; i++)
             if (!StringComparer.Ordinal.Equals(a.Lines[i].Text, b.Lines[i].Text)) return false;
         return true;
-    }
-
-    static bool IsWordByWordDoc(LyricsDocument doc)
-    {
-        foreach (var l in doc.Lines)
-            if (l.IsWordByWord && l.Syllables.Count > 0)
-                return true;
-        return false;
     }
 
     // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, interlude flag in bit 3, PAST
@@ -544,6 +600,14 @@ sealed class LyricsView : Component
         _dofCurrent = Array.Empty<float>();
         _dofRampPending = true;
         _dofRampWallMs = 0L;
+        // ResetFollowState above already zeroed + cleared the cascade through the live handles; drop the arrays with the
+        // rest of the per-doc state.
+        _casComp = Array.Empty<float>();
+        _casVel = Array.Empty<float>();
+        _casDelayLeftMs = Array.Empty<float>();
+        _casRate = Array.Empty<float>();
+        _cascadePending = false;
+        _casQpc = 0L;
         _glowInLine = -1; _glowOutLine = -1;
         _activeLine.Value = -1;
         _voiceLine.Value = -1;
@@ -775,6 +839,12 @@ sealed class LyricsView : Component
     {
         if ((uint)index < (uint)_dofNodes.Length) _dofNodes[index] = h;
         _dofRampPending = true;   // a freshly realized row may still be NaN in the σ model — let one pass adopt its target
+        // REALIZE-MID-CASCADE, fixed at the source: a row that mounts (or re-mounts after leaving the virtual window)
+        // while its compensating translate is still non-zero must NOT render one frame at the un-compensated position —
+        // that is a one-frame pop into place, exactly the artifact the cascade exists to remove. Seed it HERE, at
+        // realization, rather than waiting for the next DriveCascade tick.
+        float c = (uint)index < (uint)_casComp.Length ? _casComp[index] : 0f;
+        if (c != 0f && Context.Scene is { } scene) WriteCascade(scene, index, c, landed: false);
     }
 
     // ── Wipe feather geometry (DIP → the engine's reading-order fraction) ─────────────────────────────────────────────
@@ -945,6 +1015,146 @@ sealed class LyricsView : Component
         return SuppressesDof(_followMode.Peek()) ? 0f : DofForLine(index);
     }
 
+    // ── Staggered handoff cascade: tuning ────────────────────────────────────────────────────────────────────────────
+    // Measured off the reference capture: ~50-70 ms of onset lag per successive line BELOW the outgoing one. Rank 0 is
+    // the outgoing line and everything above it — those move IMMEDIATELY. The rank cap keeps the tail bounded: past ~4
+    // ranks a line is already blurred to nothing, and a longer tail would still be settling when the NEXT line lands.
+    const float CascadeStaggerMs = 60f;
+    const int CascadeMaxRank = 4;
+    // Every rank lands at the SAME wall time — 0.48 s after onset (measured 0.42-0.56 s, converging). A critically
+    // damped (ζ=1) settle is essentially complete once y·t ≈ 7: the closed form's envelope (1+u)·e^(−u) is 0.7 % of the
+    // travel at u = 7, i.e. well inside the 0.5 DIP landing gate for a line-sized step. So a rank that starts `delay`
+    // late simply gets the FASTER rate 7/(0.48 − delay) and catches up exactly at the synchronized settle.
+    const float CascadeTotalS = 0.48f;
+    const float CascadeSettleY = 7f;
+    const float CascadeLandDip = 0.5f;    // land EXACTLY (comp = 0, vel = 0, identity write) inside this residual…
+    const float CascadeLandVel = 20f;     // …but only while it is genuinely settling — never mid-flight through zero
+    const float CascadeWriteEps = 0.1f;   // transform write gate (the LANDING write is exempt: it must be exact)
+    const float CascadeDtMaxMs = 100f;    // ticker-gap clamp: a minimized/parked window resumes without a teleport
+
+    // Arm one handoff. `delta` is the viewport jump that just happened (newOffset − oldOffset); `newActive` is the line
+    // that just took focus. See the INVARIANT on the _casComp field block for the sign.
+    void ArmCascade(SceneStore scene, float delta, int newActive)
+    {
+        var comp = _casComp;
+        if (comp.Length == 0 || delta == 0f) return;
+        var vel = _casVel; var delay = _casDelayLeftMs; var rate = _casRate;
+        int outgoing = newActive - 1;   // rank 0 — the line that just lost focus, and everything above it
+        for (int i = 0; i < comp.Length; i++)
+        {
+            float c = comp[i] + delta;   // ADD, never assign: a mid-cascade re-target folds into the in-flight comp
+            // Re-arm the stagger for EVERY line on every handoff: a re-target restarts the wave from the NEW active
+            // line, so a line that was already flying can be asked to hold again — that is the new wave passing it.
+            float delayMs = CascadeStaggerMs * Math.Clamp(i - outgoing, 0, CascadeMaxRank);
+            float y = CascadeSettleY / MathF.Max(0.05f, CascadeTotalS - delayMs * 0.001f);
+            // ZERO OVERSHOOT, by construction. x(t) = e^(−y·t)·(c + j1·t) with j1 = v + c·y crosses zero iff j1 has the
+            // OPPOSITE sign to c. A same-direction re-arm provably cannot (while decaying, |v| < y·|c|, and the added
+            // delta only grows |c|); a REVERSING one can, so clamp j1 to 0 there. That degrades exactly those lines to
+            // a pure e^(−y·t) decay from their current position — still continuous, still monotone, never an overshoot.
+            float v = vel[i];
+            if ((v + c * y) * c < 0f) v = -c * y;
+            comp[i] = c; vel[i] = v; delay[i] = delayMs; rate[i] = y;
+            // Compensate on the LATCH FRAME ITSELF, not one tick later. DriveCascade runs later in this same OnFrame,
+            // but this keeps the invariant true independently of that ordering (and of a row realized in between).
+            WriteCascade(scene, i, c, landed: false);
+        }
+        SetCascadePending(true);
+    }
+
+    // Step every in-flight line. Core lane of OnFrame, right beside DriveDofRamp and under the same clamped-dt
+    // discipline: the wall stamp is refreshed on EVERY call (even when nothing is pending) so a long ticker gap can
+    // never be spent as one giant integration step.
+    void DriveCascade(SceneStore scene)
+    {
+        var comp = _casComp;
+        long qpc = Stopwatch.GetTimestamp();
+        float dtMs = _casQpc == 0L
+            ? KaraokeWipeIntervalMs
+            : Math.Clamp((float)((qpc - _casQpc) * 1000.0 / Stopwatch.Frequency), 0f, CascadeDtMaxMs);
+        _casQpc = qpc;
+        if (!_cascadePending || comp.Length == 0) return;
+
+        var vel = _casVel; var delay = _casDelayLeftMs; var rate = _casRate;
+        float dtS = dtMs * 0.001f;
+        bool moving = false;
+        for (int i = 0; i < comp.Length; i++)
+        {
+            float c = comp[i], d = delay[i];
+            if (c == 0f && d <= 0f) continue;   // settled — no state to integrate, no write to make
+            if (d > 0f)
+            {
+                delay[i] = d - dtMs;            // HOLD at the old screen position — this IS the stagger
+                moving = true;
+                continue;                       // already written at arm time; nothing has moved
+            }
+            // The exact ζ=1 closed-form step, verbatim from ScrollIntegrator.cs:521-527 (position AND velocity). It is
+            // dt-deterministic, so the cascade lands at the same WALL time whatever the frame rate, and a mid-flight
+            // re-arm stays velocity-continuous.
+            float y = rate[i] > 0f ? rate[i] : CascadeSettleY / CascadeTotalS;
+            float v = vel[i];
+            float j1 = v + c * y;
+            float e = MathF.Exp(-y * dtS);
+            c = e * (c + j1 * dtS);
+            v = e * (v - j1 * y * dtS);
+            bool landed = MathF.Abs(c) < CascadeLandDip && MathF.Abs(v) < CascadeLandVel;
+            if (landed) { c = 0f; v = 0f; }
+            else moving = true;
+            comp[i] = c; vel[i] = v;
+            WriteCascade(scene, i, c, landed);
+        }
+        SetCascadePending(moving);
+    }
+
+    // The ONE place a line's compensating translate reaches the scene.
+    //
+    // `dofContent` is the verified-safe transform target. It declares no static transform and owns no animation channel
+    // (LyricLineView's UseSpring binds ScaleX/ScaleY/Opacity to the ROW's host node — RenderContext.UseSpring targets
+    // HostNode — not this inner wrapper), and Reconciler.cs:3671-3682 writes LocalTransform on a re-render ONLY for the
+    // declared-static → declared-identity transition, which a node that never declares one cannot make. So nothing else
+    // ever stomps this write, and an emphasis re-render mid-cascade leaves the in-flight translate alone.
+    //
+    // A PURE TRANSLATION of a blurred node is a blur-pin cache HIT: BlurPinKey is position-independent by construction
+    // (BlurPinKey.cs:7-16 — σ + integer layer size + every op's position REBASED to the layer origin), so the DoF layer
+    // is not re-Gaussian'd for any frame of the cascade.
+    void WriteCascade(SceneStore scene, int index, float comp, bool landed)
+    {
+        var h = (uint)index < (uint)_dofNodes.Length ? _dofNodes[index] : NodeHandle.Null;
+        // Unrealized / recycled-out line: skip the write, but the comp keeps integrating in the array so the line is at
+        // the RIGHT place whenever it does realize — ReportDofNode seeds the transform at that moment.
+        if (h.IsNull || !scene.IsLive(h)) return;
+        ref NodePaint p = ref scene.Paint(h);
+        if (MathF.Abs(p.LocalTransform.Dy - comp) < (landed ? 0.0005f : CascadeWriteEps)) return;
+        p.LocalTransform = comp == 0f ? Affine2D.Identity : Affine2D.Translation(0f, comp);
+        scene.Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    // Cancel the cascade and put every line back on its true scroll position (identity transform for every line whose
+    // comp is non-zero, then all four arrays zeroed). Called wherever the compensation would otherwise fight something
+    // else for the lines' positions: a USER detach (the transform must never fight the user's own scroll), a seek or a
+    // >250 ms clock snap, a doc change, rail close / ResetFollowState, and any follow-mode transition out of Following.
+    // Keep the plain hot-path flag and its ticker-facing signal in lockstep. Signal<T> coalesces an equal write, so the
+    // per-frame `SetCascadePending(moving)` notifies exactly once — on the frame the last line lands.
+    void SetCascadePending(bool pending)
+    {
+        _cascadePending = pending;
+        _cascadeRunning.Value = pending;
+    }
+
+    // Ticker-only subscription (like FollowModeValue): keeps the 16 ms interval armed across a PAUSE that lands inside a
+    // handoff, so the cascade always finishes instead of freezing the document off its focal band.
+    internal bool CascadeRunningValue => _cascadeRunning.Value;
+
+    void ZeroCascade(SceneStore? scene)
+    {
+        var comp = _casComp;
+        SetCascadePending(false);
+        for (int i = 0; i < comp.Length; i++)
+        {
+            if (comp[i] != 0f && scene is not null) WriteCascade(scene, i, 0f, landed: true);
+            comp[i] = 0f; _casVel[i] = 0f; _casDelayLeftMs[i] = 0f;
+        }
+    }
+
     void SetFollowMode(LyricsFollowMode next, SceneStore? scene)
     {
         var previous = _followMode.Peek();
@@ -952,6 +1162,10 @@ sealed class LyricsView : Component
         bool wasSuppressed = SuppressesDof(previous);
         bool nowSuppressed = SuppressesDof(next);
         _followMode.Value = next;
+        // Leaving Following (detach or resync) retires the cascade: the follow no longer owns the lines' positions, so a
+        // lingering compensating translate would fight the user's scroll / the resync glide. This is the ONE chokepoint
+        // every mode transition goes through, so detach + resync are both covered here.
+        if (next != LyricsFollowMode.Following) ZeroCascade(scene);
         if (wasSuppressed != nowSuppressed) ApplyDofSuppression(scene);
     }
 
@@ -959,6 +1173,7 @@ sealed class LyricsView : Component
     {
         _resyncDeadlineWallMs = 0L;
         _resyncProgress.Value = 1f;
+        ZeroCascade(scene);   // rail close / track change / lyric click: no in-flight compensation survives it
         SetFollowMode(LyricsFollowMode.Following, scene);
     }
 
@@ -968,6 +1183,7 @@ sealed class LyricsView : Component
         {
             _resyncDeadlineWallMs = 0L;
             _resyncProgress.Value = 1f;
+            ZeroCascade(Context.Scene);   // the user owns the viewport now — drop the compensation before it can fight
             SetFollowMode(LyricsFollowMode.DetachedActive, Context.Scene);
             return;
         }
@@ -1033,7 +1249,8 @@ sealed class LyricsView : Component
         b.NoteSeek(ms);     // arm the seek latch: suppress stale pre-seek position ticks (#2)
         b.PositionMs.Value = ms;
         RebaseClock(ms);    // seed all clock fields; _lastAuthMs=ms keeps OnFrame from re-treating our own jump as a seek
-        _scrollSnapped = false;
+        _scrollSnapped = false;   // the next follow is the HARD first-landing jump, with the cascade left at rest
+        ZeroCascade(Context.Scene);
         ResetWipeThrottle();
         _ = b.Player.SeekAsync(ms);
     }
@@ -1090,6 +1307,7 @@ sealed class LyricsView : Component
                     _baseWall = wallMs; _basePos = auth; _offset = 0f;
                     _lastDisplay = auth;        // bypass the monotonic guard for a legitimate (possibly backward) seek
                     _scrollSnapped = false;     // next ScrollActiveIntoView does the INSTANT-jump latch, not an ease across the song
+                    ZeroCascade(Context.Scene); // …and a song-length jump is NOT a handoff: no cascade rides across it
                     ResetWipeThrottle();        // re-evaluate the wipe at the new position
                 }
             }
@@ -1158,6 +1376,10 @@ sealed class LyricsView : Component
         // line lands) and the ladder is INFORMATION, not decoration. It must run AFTER PushEmphasis so the rows that are
         // about to re-render this frame read a σ model that already reflects the new active line.
         DriveDofRamp(scene, wallMs);
+        // Staggered handoff cascade — core lane for the same reasons: it is bounded (it self-quiesces the pass once
+        // every line lands) and it IS the follow motion now, so budget-deferring it would freeze the lyrics mid-flight.
+        // Runs AFTER the ScrollActiveIntoView above so an arm and its first integration step share one frame.
+        DriveCascade(scene);
         LastFrameDiagnostics = new(nowMs, auth, active, voiceLine, activeChanged, voiceChanged, _scrollSnapped, playing, doc.Lines.Count);
 
         // ── Visual lane: glow cross-fade (budget-deferred during a main scroll) + karaoke wipe (never deferred) ──
@@ -1381,43 +1603,46 @@ sealed class LyricsView : Component
 
         if (!_scrollSnapped && intent == FollowScrollIntent.Normal)
         {
+            // FIRST LANDING for this doc/seek: a hard jump with the cascade left at rest (comps are already 0 here — the
+            // paths that clear _scrollSnapped all ZeroCascade). There is nothing to compensate: the user has not seen a
+            // previous position to travel from.
             _scrollSnapped = true;
-            sc.Phase = ScrollIntegrator.Idle;
-            sc.PhaseFlags = 0;
-            sc.FlingVelocity = 0f;
-            sc.FlingRetargeted = false;
-            sc.FlingSnapTarget = float.NaN;
-            sc.PendingTargetY = float.NaN;
-            sc.OffsetY = target;
-            sc.TargetY = target;
-            ApplyScrollTransform(scene, in sc, target);
-            // Instant jump to the active line WITHOUT a LyricsView re-render: latch the offset as a scroll-restore and
-            // mark LAYOUT, so FlexLayout.ArrangeViewport re-asserts the offset + content transform + re-realizes the
-            // virtual window (reuseOverlap — existing rows kept). Context.RequestRerender() would instead re-run the
-            // Skel.Region content delegate, rebuild the VirtualListEl, and remount every line node, re-seeding each
-            // line's springs from default paint (1.0) — the "all lines flash active for a frame" bug (on open / seek).
-            sc.RestoreX = sc.OffsetX;
-            sc.RestoreY = target;
-            sc.RestorePending = true;
-            scene.Mark(viewport, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+            LatchViewport(scene, viewport, ref sc, target);
             return FollowArmResult.AtTarget;
         }
         if (intent == FollowScrollIntent.Resync) _scrollSnapped = true;   // Resync is always a spring, never the open latch
 
+        if (intent == FollowScrollIntent.Normal)
+        {
+            // ── The handoff: ONE instant viewport latch + the per-line compensating cascade ─────────────────────────
+            // Reached only in the steady state (this branch is gated Following by the intent check at the top, and
+            // _scrollSnapped by the first-landing branch above), which is exactly the cascade's arming condition.
+            float delta = target - sc.OffsetY;
+            if (MathF.Abs(delta) <= 0.5f) return FollowArmResult.AtTarget;
+            LatchViewport(scene, viewport, ref sc, target);
+            ArmCascade(scene, delta, active);
+            return FollowArmResult.AtTarget;
+        }
+
+        // ── Resync only, below: the engine's programmatic spring, flying the viewport back after a user scroll ──
         // Velocity-continuous re-target: only zero the carried spring velocity on the FIRST entry into a Programmatic
-        // WheelAnimating chase. A re-target while ALREADY easing (dense lyric sections, lines ~200-300 ms apart) KEEPS the
-        // velocity so the engine spring chains smoothly to the new target instead of restarting a decelerating chase (the
-        // "list trails the song" defect).
+        // WheelAnimating chase. A re-target while ALREADY easing KEEPS the velocity so the engine spring chains smoothly
+        // to the new target instead of restarting a decelerating chase.
         bool alreadyProgrammatic = sc.Phase == ScrollIntegrator.WheelAnimating && (sc.PhaseFlags & ScrollState.PhaseProgrammatic) != 0;
         if (alreadyProgrammatic && !float.IsNaN(sc.PendingTargetY) && MathF.Abs(sc.PendingTargetY - target) <= 0.5f)
             return FollowArmResult.Armed;
         if (!alreadyProgrammatic && MathF.Abs(sc.OffsetY - target) <= 0.5f)
             return FollowArmResult.AtTarget;
 
-        // AMLL posY: m=.9/d=15/k=90 ⇒ ζ≈.833, ω0=10. The per-viewport 4 DIP/s landing gate prevents the global
-        // 16 DIP/s wheel threshold from truncating this soft spring around 450 ms; ordinary line steps land ~.5-.7 s.
-        sc.ProgrammaticZeta = 0.833f;
-        sc.ProgrammaticOmega = 10f;
+        // ZERO OVERSHOOT, here too. The old AMLL tune (ζ=0.833/ω0=10) selected the integrator's UNDERDAMPED closed form,
+        // which by definition crosses the target — the frame evidence refutes any overshoot in this motion. Leaving
+        // ProgrammaticZeta/Omega at 0 selects the ζ=1 halflife branch instead (ScrollIntegrator.cs:495 tests
+        // `Zeta > 0 && Zeta < 0.999 && Omega > 0`; the else arm at :518-528 is the critically-damped closed form driven
+        // by ProgrammaticHalflifeMs — Columns.cs:299-302, "ζ=1 branch only"). 110 ms half-life ⇒ a ~0.5 s settle, the
+        // same felt duration as before, monotone. The half-life is a PER-CHASE latch the integrator clears at every
+        // chase end (ScrollIntegrator.cs:474-479), so it is re-asserted on every arm below. The 4 DIP/s landing gate
+        // keeps the global 16 DIP/s wheel threshold from truncating the soft tail.
+        sc.ProgrammaticHalflifeMs = 110f;
         sc.ProgrammaticSettleVelocity = 4f;
         if (!alreadyProgrammatic)
         {
@@ -1437,6 +1662,32 @@ sealed class LyricsView : Component
         return FollowArmResult.Armed;
     }
 
+    // The INSTANT viewport latch — the one mechanism the follow uses in Following mode, for both the first landing and
+    // every subsequent handoff. Kills any in-flight phase, writes the offset/target, applies the content transform
+    // directly, then latches the offset as a scroll-RESTORE and marks LAYOUT|VIRTUALRANGE so FlexLayout.ArrangeViewport
+    // re-asserts the offset + content transform and re-realizes the virtual window (reuseOverlap — existing rows kept).
+    //
+    // Deliberately NO Context.RequestRerender(): that would re-run the Skel.Region content delegate, rebuild the
+    // VirtualListEl and remount every line node, re-seeding each line's springs from default paint (1.0) — the
+    // "all lines flash active for a frame" bug. This is the proven path; the cascade rides on top of it.
+    static void LatchViewport(SceneStore scene, NodeHandle viewport, ref ScrollState sc, float target)
+    {
+        sc.Phase = ScrollIntegrator.Idle;
+        sc.PhaseFlags = 0;
+        sc.FlingVelocity = 0f;
+        sc.FlingRetargeted = false;
+        sc.FlingSnapTarget = float.NaN;
+        sc.PendingTargetY = float.NaN;
+        sc.ProgrammaticHalflifeMs = 0f;   // per-chase latch: never let a killed glide's half-life leak into the next one
+        sc.OffsetY = target;
+        sc.TargetY = target;
+        ApplyScrollTransform(scene, in sc, target);
+        sc.RestoreX = sc.OffsetX;
+        sc.RestoreY = target;
+        sc.RestorePending = true;
+        scene.Mark(viewport, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+    }
+
     static void ApplyScrollTransform(SceneStore scene, in ScrollState sc, float target)
     {
         var contentNode = sc.ContentNode;
@@ -1449,6 +1700,9 @@ sealed class LyricsView : Component
     internal void ResetScrollSnap()
     {
         _scrollSnapped = false;
+        // Every path that clears _scrollSnapped also retires the cascade — the first-landing branch in
+        // ScrollActiveIntoView relies on that: a hard jump with a non-zero comp left over would displace the document.
+        ZeroCascade(Context.Scene);
         ResetWipeThrottle();
     }
 
@@ -1866,6 +2120,7 @@ sealed class LyricsTicker : Component
         var b = bridge.Value;                                  // subscribe → re-render when the bridge arrives
         bool playing = b is not null && b.IsPlaying.Value;     // subscribe IsPlaying → re-gate the interval on play/pause
         var followMode = Owner.FollowModeValue;                 // isolated subscription: never re-renders LyricsView/rows
+        bool cascading = Owner.CascadeRunningValue;             // ditto — flips twice per handoff, never per frame
 
         // Play-start edge → one immediate advance (matches the old dueTime:0 ticker); paused → subscribe PositionMs so a
         // scrub while paused re-wipes to the new spot. Re-runs on any bridge/IsPlaying change.
@@ -1888,9 +2143,11 @@ sealed class LyricsTicker : Component
         // (idle quiesce), while the wall-clock throttle inside OnFrame still governs the real wipe cadence. ProbeSyncMode
         // drives OnFrame synchronously (ProbeStep), so the interval stays disabled under the probe. Replaces the old
         // System.Threading.Timer + generation guard + UsePost marshal.
-        // Detached/resync work must continue while playback is paused (countdown + programmatic settle); Following at
-        // pause remains completely quiescent and still wakes only for PositionMs changes through the effect above.
-        bool needsTicks = playing || followMode != LyricsFollowMode.Following;
+        // Detached/resync work must continue while playback is paused (countdown + programmatic settle), and so must an
+        // in-flight handoff cascade — a pause landing inside the ~0.48 s flight would otherwise freeze every line at its
+        // compensated position. Following + paused + settled remains completely quiescent and still wakes only for
+        // PositionMs changes through the effect above.
+        bool needsTicks = playing || cascading || followMode != LyricsFollowMode.Following;
         UseInterval(() => Owner.OnFrame(), Owner.WipeIntervalMs, enabled: needsTicks && !LyricsView.ProbeSyncMode);
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
     }
