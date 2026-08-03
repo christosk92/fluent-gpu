@@ -17,11 +17,21 @@ using Wavee.Core;
 namespace Wavee;
 
 // The lyrics depth-of-field: ONE look for everyone, no tiers, no flags. Each dimmed line, by its distance from the active
-// line, gets a soft self-blur — the full BetterLyrics depth-of-field (out to 6 rows, sigma up to 5, matching their
-// `5 * distanceFactor`). 0 ⇒ no blur layer is emitted at all (SceneRecorder drops sigma ≤ 0.01).
+// line, gets a soft self-blur. The ladder is a LOOKUP measured off the Apple Music reference capture (lyrics-parity
+// campaign, 2026-08-03 — edge energy 27 / 3.7 / ~0 across the first three rings: ring 1 is only mildly soft, ring 3 is
+// already dissolved), NOT the old linear `5 * min(dist/5, 1)` ramp, which held ring 1 far too crisp and stopped short at
+// the far end. 0 ⇒ no blur layer is emitted at all (SceneRecorder drops sigma ≤ 0.01).
 static class LyricsFx
 {
-    public static float DofSigma(int dist) => dist <= 0 ? 0f : 5f * MathF.Min(dist / 5f, 1f);
+    public static float DofSigma(int dist) => dist switch
+    {
+        <= 0 => 0f,
+        1 => 1.25f,
+        2 => 2.5f,
+        3 => 4f,
+        4 => 5.5f,
+        _ => 6.5f,
+    };
 }
 
 enum LyricsFollowMode : byte { Following, DetachedActive, DetachedIdle, Resyncing }
@@ -97,7 +107,7 @@ sealed class LyricsView : Component
     readonly Signal<bool> _interlude = new(false);// active line sung out into a long instrumental gap — recede it
     readonly FloatSignal _nowMs = new(0f);
 
-    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, interlude flag in bit 3). One VALUE-GATED Signal per line: the
+    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, interlude flag in bit 3, PAST flag in bit 4). One VALUE-GATED Signal per line: the
     // reactive core propagates staleness eagerly (a Memo does NOT gate downstream re-renders by value), so the ONLY way a
     // line re-renders solely on ITS OWN emphasis change is a per-line signal whose setter no-ops when the packed value is
     // unchanged. As `_activeLine` sweeps, PushEmphasis rewrites all lines but only the ~dozen crossing a bucket boundary
@@ -122,6 +132,18 @@ sealed class LyricsView : Component
     NodeHandle[] _lineNodes = Array.Empty<NodeHandle>();
     NodeHandle[] _glowNodes = Array.Empty<NodeHandle>();
     NodeHandle[] _dofNodes = Array.Empty<NodeHandle>();
+
+    // ── Directional depth-of-field σ model ───────────────────────────────────────────────────────────────────────────
+    // `_dofCurrent[i]` is the σ line i is being DRIVEN to — the single source of truth for that node's BlurSigma. The
+    // TARGET is whatever DofForLine (+ suppression) resolves to, and the two are NOT reached symmetrically: the reference
+    // front-loads the outgoing line's softening (it is essentially fully blurred inside the first ~100 ms of its exit)
+    // while the incoming line sharpens gradually THROUGH the flight. So an INCREASE snaps and a DECREASE eases over
+    // ~200 ms (DriveDofRamp). NaN = never driven ⇒ adopt the target on the first visit (that is what the element mounted
+    // with). Sized in PrepareDocument alongside `_glowAlpha`; the element reads it back through DofDeclaredFor so a
+    // re-render mid-ramp re-asserts the live σ instead of snapping the node to the rest target.
+    float[] _dofCurrent = Array.Empty<float>();
+    bool _dofRampPending = true;   // a target may have moved (emphasis / suppression / realization) — run a ramp pass
+    long _dofRampWallMs;           // wall stamp of the last ramp pass (dt source; 0 = none yet)
 
     LyricsDocument? _doc;
     LyricsDocument? _pendingUpgrade;
@@ -417,6 +439,12 @@ sealed class LyricsView : Component
         _lineRunLen = new float[doc.Lines.Count];
         Array.Fill(_lineRunLen, float.NaN);
         _runLenWrapW = float.NaN;
+        // σ starts undriven (NaN): the first ramp pass adopts each line's target, which is exactly the value the element
+        // declared at mount, so a fresh doc lands on its ladder without a visible settle.
+        _dofCurrent = new float[doc.Lines.Count];
+        Array.Fill(_dofCurrent, float.NaN);
+        _dofRampPending = true;
+        _dofRampWallMs = 0L;
         // Seed each line at its REAL bucket for the doc's opening active line — NOT a constant. PrepareDocument runs
         // inside Render (LyricsDocHost), so the PushEmphasis below is a signal write during a render pass: seeding
         // "fully dim" made that write move every line whose true bucket wasn't 6, fanning the whole document out at
@@ -462,19 +490,29 @@ sealed class LyricsView : Component
         return false;
     }
 
-    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, interlude flag in bit 3. Clamp 6
-    // is exact for the look — the DoF falloff saturates at dist/5 and the glyph-mount `near` threshold is dist ≤ 2, so any
-    // line ≥6 away is visually identical; clamping lets far lines share bucket 6 and skip the re-render as active sweeps.
+    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, interlude flag in bit 3, PAST
+    // flag in bit 4. Clamp 6 is exact for the look — the DoF ladder saturates at ring 5 and the glyph-mount `near`
+    // threshold is dist ≤ 2, so any line ≥6 away is visually identical; clamping lets far lines share bucket 6 and skip
+    // the re-render as active sweeps.
+    //
+    // Bit 4 (past) is the reference's past/future ASYMMETRY: a line the song has already passed settles dimmer than an
+    // upcoming line the same distance away (measured 118 vs 133 luma), so the two directions ride two different opacity
+    // ladders (LyricLineView.OpacityOf). It is deliberately NOT set at the saturated bucket 6: both ladders bottom out at
+    // the same 0.10/σ 6.5 there, so tagging far lines would be visually identical while breaking the far-line no-op —
+    // every line above the active one would re-render on a seek instead of sitting silent at bucket 6.
     static int PackEmphasis(int index, int active, bool interlude)
     {
         int bucket = active < 0 ? 6 : Math.Min(Math.Abs(index - active), 6);
         int e = bucket;
-        if (interlude && index == active) e |= 8;   // interlude recede applies only to the active line itself
+        if (interlude && index == active) e |= 8;              // interlude recede applies only to the active line itself
+        if (active >= 0 && index < active && bucket < 6) e |= 16;   // already sung ⇒ the dimmer of the two ladders
         return e;
     }
 
-    // Rewrite every line's emphasis signal from the current active/interlude. Value-gated: only lines that actually change
-    // bucket notify their subscriber, so a boundary re-renders ~a dozen rows instead of the whole realized document.
+    // Rewrite every line's emphasis signal from the current active/interlude. Value-gated: only lines whose PACKED value
+    // actually changes notify their subscriber, so a boundary re-renders ~a dozen rows instead of the whole realized
+    // document. The past bit rides along for free: the one line that crosses future→past at a handoff is already a
+    // bucket-crosser (dist 0 → 1), so it re-renders exactly once — and takes the past ladder as it does.
     void PushEmphasis()
     {
         var em = _lineEmphasis;
@@ -503,6 +541,9 @@ sealed class LyricsView : Component
         _lineEmphasis = Array.Empty<Signal<int>>();
         _lineRunLen = Array.Empty<float>();
         _runLenWrapW = float.NaN;
+        _dofCurrent = Array.Empty<float>();
+        _dofRampPending = true;
+        _dofRampWallMs = 0L;
         _glowInLine = -1; _glowOutLine = -1;
         _activeLine.Value = -1;
         _voiceLine.Value = -1;
@@ -616,7 +657,7 @@ sealed class LyricsView : Component
                     (uint)idx < (uint)_lineEmphasis.Length ? _lineEmphasis[idx] : _emphasisFallback, _nowMs, _followMode,
                     idx < _glowAlpha.Length ? _glowAlpha[idx] : null,
                     fontSz, lineHt, rowPad, sidePad, wipeLift, centered,
-                    ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, () => SeekToLine(idx))) with { Key = "ll" + idx };
+                    ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
             // Realize the WHOLE document (a lyrics doc is at most a few hundred cheap rows): with a 4-5 row overscan,
@@ -733,6 +774,7 @@ sealed class LyricsView : Component
     void ReportDofNode(int index, NodeHandle h)
     {
         if ((uint)index < (uint)_dofNodes.Length) _dofNodes[index] = h;
+        _dofRampPending = true;   // a freshly realized row may still be NaN in the σ model — let one pass adopt its target
     }
 
     // ── Wipe feather geometry (DIP → the engine's reading-order fraction) ─────────────────────────────────────────────
@@ -821,28 +863,86 @@ sealed class LyricsView : Component
 
     static bool SuppressesDof(LyricsFollowMode mode) => mode != LyricsFollowMode.Following;
 
-    float DofForLine(int index)
+    float DofForLine(int index) => DofSigmaFor(index, _activeLine.Peek(), _interlude.Peek());
+
+    // The σ ladder rung for one line against a given active/interlude. Split out so the per-frame ramp can hoist the two
+    // signal Peeks out of its whole-document loop without forking the ladder into a second definition.
+    static float DofSigmaFor(int index, int active, bool interlude)
     {
-        int active = _activeLine.Peek();
         if (active < 0) return LyricsFx.DofSigma(6);
-        int dist = Math.Min(Math.Abs(index - active), 6);
-        if (_interlude.Peek() && index == active) return LyricsFx.DofSigma(1);
-        return LyricsFx.DofSigma(dist);
+        if (interlude && index == active) return LyricsFx.DofSigma(1);
+        return LyricsFx.DofSigma(Math.Min(Math.Abs(index - active), 6));
     }
 
-    void ApplyDofSuppression(SceneStore? scene, bool suppress)
+    // Suppression is a TARGET move, not a write of its own: DriveDofRamp owns every σ the nodes ever see, so engaging
+    // suppression (FollowMode leaves Following) EASES the ladder out — each line's target drops to 0, a decrease — and
+    // releasing it SNAPS the ladder back (an increase), through the exact directional model the emphasis ladder uses.
+    // The snap-back on release is deliberate and shares the front-loaded-recede rationale; if it reads harsh in the
+    // feel-test, that is a tuning call on DriveDofRamp's direction test, not a special case here.
+    void ApplyDofSuppression(SceneStore? scene)
     {
-        if (scene is null) return;
-        for (int i = 0; i < _dofNodes.Length; i++)
+        _dofRampPending = true;
+        // Resolve it now if a scene is at hand (the mode can flip from a scroll callback, outside the ticker); otherwise
+        // the next OnFrame picks it up — LyricsTicker keeps ticking for the whole detached/resyncing window.
+        if (scene is not null) DriveDofRamp(scene, Environment.TickCount64);
+    }
+
+    // Exponential time constant for a σ DECREASE: ~95% of the way in 200 ms (1 - e^(-200/65) = 0.954), matching the
+    // reference's incoming line, which de-blurs progressively DURING the move and is crisp as it lands.
+    const float DofRampTauMs = 65f;
+    // σ write gate. The recorder buckets σ at 0.5 in the blur pin key, so a finer gate mints no extra pins but still
+    // dirties paint every single frame of the ramp; 0.1 keeps the ramp visually smooth (~15 writes across 200 ms, ≤3 pin
+    // buckets crossed) and bounded. The LANDING write is exempt so the node ends EXACTLY on the target, never a hair off.
+    const float DofWriteEps = 0.1f;
+
+    void DriveDofRamp(SceneStore scene, long wallMs)
+    {
+        var cur = _dofCurrent;
+        float dt = _dofRampWallMs == 0L ? KaraokeWipeIntervalMs : Math.Clamp((float)(wallMs - _dofRampWallMs), 0f, 100f);
+        _dofRampWallMs = wallMs;
+        if (!_dofRampPending || cur.Length == 0) return;
+
+        bool suppress = SuppressesDof(_followMode.Peek());
+        int active = _activeLine.Peek();
+        bool interlude = _interlude.Peek();
+        float k = 1f - MathF.Exp(-dt / DofRampTauMs);
+        bool moving = false;
+        for (int i = 0; i < cur.Length; i++)
         {
-            var h = _dofNodes[i];
+            float target = suppress ? 0f : DofSigmaFor(i, active, interlude);
+            float c = cur[i];
+            bool landed = true;
+            if (float.IsNaN(c) || target >= c)
+            {
+                c = target;                              // first visit, or an INCREASE ⇒ snap (front-loaded recede)
+            }
+            else
+            {
+                c += (target - c) * k;                   // DECREASE ⇒ ease in (incoming line sharpening)
+                if (c - target <= 0.01f) c = target;     // land exactly — no asymptote residue
+                else { landed = false; moving = true; }
+            }
+            cur[i] = c;
+
+            var h = (uint)i < (uint)_dofNodes.Length ? _dofNodes[i] : NodeHandle.Null;
             if (h.IsNull || !scene.IsLive(h)) continue;
-            float blur = suppress ? 0f : DofForLine(i);
             ref NodePaint p = ref scene.Paint(h);
-            if (MathF.Abs(p.BlurSigma - blur) <= 0.001f) continue;
-            p.BlurSigma = blur;
+            if (MathF.Abs(p.BlurSigma - c) < (landed ? 0.001f : DofWriteEps)) continue;
+            p.BlurSigma = c;
             scene.Mark(h, NodeFlags.PaintDirty);
         }
+        _dofRampPending = moving;
+    }
+
+    // The σ the ELEMENT declares for line i (LyricLineView's `Blur`): the ramp model's LIVE value, so a re-render landing
+    // mid-ramp re-asserts the in-flight σ instead of stomping the node back to the rest target — the same element-vs-
+    // driver agreement the scale/opacity springs document at the bottom of LyricLineView.Render. NaN (never driven) falls
+    // back to the rest target, which is what an undriven node should mount at.
+    float DofDeclaredFor(int index)
+    {
+        float cur = (uint)index < (uint)_dofCurrent.Length ? _dofCurrent[index] : float.NaN;
+        if (!float.IsNaN(cur)) return cur;
+        return SuppressesDof(_followMode.Peek()) ? 0f : DofForLine(index);
     }
 
     void SetFollowMode(LyricsFollowMode next, SceneStore? scene)
@@ -852,7 +952,7 @@ sealed class LyricsView : Component
         bool wasSuppressed = SuppressesDof(previous);
         bool nowSuppressed = SuppressesDof(next);
         _followMode.Value = next;
-        if (wasSuppressed != nowSuppressed) ApplyDofSuppression(scene, nowSuppressed);
+        if (wasSuppressed != nowSuppressed) ApplyDofSuppression(scene);
     }
 
     void ResetFollowState(SceneStore? scene)
@@ -1053,7 +1153,11 @@ sealed class LyricsView : Component
             if (!_scrollSnapped || activeChanged || forceVisual)
                 ScrollActiveIntoView(scene, active, FollowScrollIntent.Normal);
         }
-        if (emphasisChanged) PushEmphasis();
+        if (emphasisChanged) { PushEmphasis(); _dofRampPending = true; }
+        // Directional DoF ramp — core lane, never budget-deferred: it is bounded (it self-quiesces the pass after every
+        // line lands) and the ladder is INFORMATION, not decoration. It must run AFTER PushEmphasis so the rows that are
+        // about to re-render this frame read a σ model that already reflects the new active line.
+        DriveDofRamp(scene, wallMs);
         LastFrameDiagnostics = new(nowMs, auth, active, voiceLine, activeChanged, voiceChanged, _scrollSnapped, playing, doc.Lines.Count);
 
         // ── Visual lane: glow cross-fade (budget-deferred during a main scroll) + karaoke wipe (never deferred) ──
@@ -1439,7 +1543,7 @@ sealed class LyricLineView : Component
 {
     readonly int _index;
     readonly LyricLine _line;
-    readonly Signal<int> _emphasis;   // packed per-line emphasis (bucket + interlude bit) — value-gated by LyricsView
+    readonly Signal<int> _emphasis;   // packed per-line emphasis (bucket + interlude bit + past bit) — value-gated by LyricsView
     readonly FloatSignal _nowMs;
     readonly Signal<LyricsFollowMode> _followMode; // stable parent signal; Peek only so a mode flip never fans out row renders
     readonly FloatSignal? _glowFade;   // per-line halo alpha (owned + ramped by LyricsView); bound as the glow wrapper's Opacity
@@ -1453,17 +1557,25 @@ sealed class LyricLineView : Component
     readonly Action<int, NodeHandle> _reportGlow;
     readonly Action<int, NodeHandle> _reportDof;
     readonly Func<int, float> _softnessOf;   // DIP feather → this line's reading-order fraction (LyricsView.SoftnessOfLine)
+    readonly Func<int, float> _dofSigmaOf;   // the σ ramp model's LIVE value for this line (LyricsView.DofDeclaredFor)
     readonly Action _onSeek;
+
+    // The packed emphasis this row last rendered with, -1 before its first render. The ONLY thing it exists for is the
+    // DIRECTION of the opacity spring (see Render): a row re-renders exactly when its packed emphasis changes, so the
+    // previous value is a free, exact proxy for "which way is this row's opacity about to travel?".
+    int _prevEmphasis = -1;
 
     public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs, Signal<LyricsFollowMode> followMode,
         FloatSignal? glowFade,
         float fontSz, float lineHt, float rowPad, float sidePad, float wipeLift, bool centered, Action<int, NodeHandle> reportNode,
-        Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf, Action onSeek)
+        Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf,
+        Func<int, float> dofSigmaOf, Action onSeek)
     {
         _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
         _followMode = followMode; _glowFade = glowFade;
         _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _wipeLift = wipeLift; _centered = centered;
-        _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf; _onSeek = onSeek;
+        _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf;
+        _dofSigmaOf = dofSigmaOf; _onSeek = onSeek;
     }
 
     // The halo wrapper's opacity: BOUND to the per-line fade signal so a row re-render re-asserts the live fade value
@@ -1474,29 +1586,44 @@ sealed class LyricLineView : Component
     public override Element Render()
     {
         // Read ONLY this line's packed emphasis — a value-gated signal LyricsView rewrites as the active line moves, so
-        // reading `.Value` here re-renders the row solely when ITS OWN bucket/interlude changes (not on every boundary).
+        // reading `.Value` here re-renders the row solely when ITS OWN bucket/interlude/past class changes (not on every
+        // boundary).
         int e = _emphasis.Value;
         int dist = e & 7;                        // bucket 0..6 (clamped distance from the active line)
         bool interlude = (e & 8) != 0;           // active line sung out into a long instrumental gap — recede it
+        bool past = (e & 16) != 0;               // already sung — rides the dimmer of the two opacity ladders
         bool isActive = dist == 0;               // bucket 0 ⇔ this is the active line
 
-        float f = MathF.Min(dist / 5f, 1f);
         // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). During an instrumental interlude the
-        // still-active sung-out line recedes to a calm look instead of sitting frozen-fully-lit. Dimmed lines fall off by
-        // distance in opacity, scale AND DoF blur. Voice only drives the karaoke wipe and glow during the lead split, so
-        // depth never disagrees with emphasis.
-        float scale = interlude ? 0.92f : isActive ? 1f : 1f - 0.25f * f;
+        // still-active sung-out line recedes to a calm look instead of sitting frozen-fully-lit. In the reference the
+        // DISTANCE hierarchy is carried almost entirely by OPACITY + DoF BLUR: scale is a flat, barely-there 0.98 on
+        // every inactive row (the old 1 - 0.25*f ramp shrank far rows to 0.75, which the frame evidence refutes). The
+        // shrink is LEFT-anchored (TransformOriginX 0 in the non-centered branch below), so rows stay flush to the
+        // margin instead of breathing about their middle. Voice only drives the karaoke wipe and glow during the lead
+        // split, so depth never disagrees with emphasis.
+        float scale = interlude ? 0.97f : isActive ? 1f : 0.98f;
         // Row emphasis follows ACTIVE only — voice keeps the karaoke wipe/glow but must not hold full brightness once
         // focus moves (the lead window used to leave the previous line white for its entire sung tail).
-        float opacity = interlude ? 0.55f : isActive ? 1f : MathF.Max(0.16f, 0.55f * (1f - f));
-        float dofBlur = interlude ? LyricsFx.DofSigma(1) : isActive ? 0f : LyricsFx.DofSigma(dist);
-        float blur = _followMode.Peek() == LyricsFollowMode.Following ? dofBlur : 0f;
+        float opacity = OpacityOf(e);
+        // DoF σ comes from LyricsView's ramp model, not from `dist` directly: the model owns the in-flight value and
+        // agrees with this ladder at rest (see LyricsView.DofDeclaredFor / DriveDofRamp).
+        float blur = _followMode.Peek() == LyricsFollowMode.Following ? _dofSigmaOf(_index) : 0f;
 
-        // AMLL scale in BOTH directions; opacity is critical/no-bounce but calibrated to the same visible settle window.
+        // AMLL scale in BOTH directions; opacity is critical/no-bounce and DIRECTIONAL.
         // Cold mounts still begin at the element rest targets below, so the soft inactive spring cannot flash a new row.
-        var key = DepKey.From(dist, (interlude ? 1 : 0) | (isActive ? 2 : 0));
+        var key = DepKey.From(dist, (interlude ? 1 : 0) | (isActive ? 2 : 0) | (past ? 4 : 0));
         var scaleSpring = new SpringParams(100f, 25f, 2f);             // AMLL m=2,d=25,k=100
-        var opacitySpring = SpringParams.FromResponse(0.889f, 1.0f);   // AMLL scale's visible settle, critical/no bounce
+        // Front-loaded outgoing dim: measured, the exiting line falls 252 → 180 luma inside the first ~100 ms of its
+        // flight, while the incoming line brightens across the WHOLE handoff. So the opacity spring is ~3× faster when
+        // the row is DIMMING. The component cannot see the slab's live value, so direction is read off the emphasis
+        // TRANSITION — this row re-renders exactly when its packed emphasis changes, so "was the previous packed value's
+        // opacity higher than this one's?" is that same question, asked where the answer is free. (Both the target and
+        // the response are pure functions of `e`, and `key` carries all of `e`, so the retarget and the params change
+        // together in the one UseSpring re-arm.)
+        int prevPacked = _prevEmphasis;
+        _prevEmphasis = e;
+        bool dimming = prevPacked >= 0 && opacity < OpacityOf(prevPacked) - 0.0005f;
+        var opacitySpring = SpringParams.FromResponse(dimming ? 0.30f : 0.889f, 1.0f);
         UseSpring(AnimChannel.Opacity, opacity, opacitySpring, key);
         UseSpring(AnimChannel.ScaleX, scale, scaleSpring, key);
         UseSpring(AnimChannel.ScaleY, scale, scaleSpring, key);
@@ -1593,6 +1720,9 @@ sealed class LyricLineView : Component
         Element dofContent = new BoxEl
         {
             Direction = 1,
+            // The σ ramp model's live value (LyricsView owns the in-flight σ by direct node write): declaring the REST
+            // target here instead would stomp an in-flight incoming de-blur back to crisp on the very re-render that
+            // starts it. At settle the two agree, exactly like the scale/opacity springs' rest targets below.
             Blur = blur,
             // The depth-of-field bands are static at rest but scroll with the lyrics viewport. Holding a compatible
             // cached blur avoids a fresh Gaussian for every scroll submit; a cache miss stays crisp until the viewport
@@ -1638,6 +1768,26 @@ sealed class LyricLineView : Component
             // trim. Fullscreen stays single-line (NoWrap) so it keeps the ellipsis.
             Trim = _centered ? TextTrim.CharacterEllipsis : TextTrim.None,
         };
+    }
+
+    // ── Emphasis ladder ──────────────────────────────────────────────────────────────────────────────────────────────
+    // The row-group opacity for a PACKED emphasis value — the one place the ladder lives, so the direction test above can
+    // ask it the same question about the previous packed value. A switch, not a table: no allocation, no indirection.
+    //
+    // Measured off the reference capture: peak luma per ring is 252 (active) / 133 / 113 / 101 / 89 / 72, and a line the
+    // song has ALREADY passed settles DIMMER than an upcoming line the same distance away (118 vs 133) — the past/future
+    // asymmetry the old single `max(0.16, 0.55*(1-f))` ramp could not express. The past rows sit far lower in ALPHA than
+    // that luma gap suggests because their TEXT is the sung white (Primary at full alpha behind a settled wipe) where an
+    // upcoming row's is the unsung gray: the same row alpha would read markedly brighter on a past line.
+    internal const float InterludeOpacity = 0.55f;
+    internal static float OpacityOf(int packed)
+    {
+        if ((packed & 8) != 0) return InterludeOpacity;   // interlude recede — its own value, not a rung of either ladder
+        int dist = packed & 7;
+        if (dist == 0) return 1f;                         // active line: full focus
+        return (packed & 16) != 0
+            ? dist switch { 1 => 0.19f, 2 => 0.13f, _ => 0.10f }                                 // past (sung, white-base)
+            : dist switch { 1 => 0.45f, 2 => 0.24f, 3 => 0.14f, 4 => 0.11f, _ => 0.10f };        // future (unsung, gray-base)
     }
 
     // ── Wipe texture ─────────────────────────────────────────────────────────────────────────────────────────────────
