@@ -1667,6 +1667,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 if (_dm is { Enabled: true } dmhit)
                 {
                     _lastDmHitTestMs = Now();   // a touchpad manipulation is hit-testing us (mouse wheels never send this)
+                    dmhit.NoteHitTest();        // the silent-owner detector's own TickCount64 stamp + unserved-attempt count
                     uint hitPid = GET_POINTERID_WPARAM(wParam);
                     PointerKind hitKind = PointerKindOf(hitPid);
                     if (hitKind == PointerKind.Touchpad)

@@ -31,16 +31,19 @@ namespace FluentGpu.Pal.Windows;
 /// <para><b>Coexistence with the fallback (§7, "never two owners for one packet").</b> When DM is enabled it owns every
 /// touchpad contact — its <c>ProcessInput</c> consumes those packets before the WndProc sees them, so the §3.3
 /// wheel-fallback path never double-processes them, and any <c>WM_POINTERWHEEL</c> that still reaches the WndProc is
-/// genuinely a mouse (classifier rule 4 becomes exact). If DManip <b>wedges</b> (engaged via <c>SetContact</c> but never
-/// reaches <c>RUNNING</c> within <see cref="DmEngageTimeoutMs"/>) <see cref="DmWedgeCountToDisable"/> times, DM
-/// session-disables itself edge-triggered (<see cref="Teardown"/>) and the always-compiled §3.3 heuristic takes over.
-/// Popups never get a producer, so they keep the fallback unconditionally.</para>
+/// genuinely a mouse (classifier rule 4 becomes exact). Every way DManip can stop serving the touchpad — the engage
+/// wedge (<see cref="DmEngageTimeoutMs"/>), a SUSPENDED read while an engage is pending, the inertia stall
+/// (<see cref="DmInertiaStallTimeoutMs"/>) and the silent-owner case (<see cref="DmSilentOwner"/>: DM holds the
+/// contacts but never engages) — feeds ONE <see cref="DmRecoveryLadder"/>, which escalates Stop → recycle → session
+/// disable (<see cref="Teardown"/>), after which the always-compiled §3.3 heuristic takes over. Popups never get a
+/// producer, so they keep the fallback unconditionally.</para>
 /// </summary>
 internal sealed unsafe class Win32DirectManipulation : IDisposable
 {
     // ── DIRECTMANIPULATION_STATUS (directmanipulation.h) — the viewport lifecycle we map to phase-contract events ──
-    private const int DM_BUILDING = 0, DM_ENABLED = 1, DM_DISABLED = 2, DM_RUNNING = 3, DM_INERTIA = 4, DM_READY = 5,
-                      DM_SUSPENDED = 6;
+    // internal, not private: the pure wedge/stall arbiters below (and their headless tests) decide off these values.
+    internal const int DM_BUILDING = 0, DM_ENABLED = 1, DM_DISABLED = 2, DM_RUNNING = 3, DM_INERTIA = 4, DM_READY = 5,
+                       DM_SUSPENDED = 6;
 
     // ── DIRECTMANIPULATION_CONFIGURATION flags (directmanipulation.h), verified against the dm-probe cell-B PASS ──
     //   INTERACTION|TRANSLATION_X|TRANSLATION_Y|SCALING|TRANSLATION_INERTIA|SCALING_INERTIA. No RAILS_* — the integrator's
@@ -76,8 +79,6 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// enough that a user never sees the poll. Recovery goes through <c>Viewport.Stop()</c> so the ordinary READY
     /// callback runs the ordinary terminal path — this watchdog never fabricates state.</summary>
     internal const long DmInertiaStallTimeoutMs = 250;
-    /// <summary>After this many wedges DM session-disables and the §3.3 fallback owns the touchpad forever (§7).</summary>
-    private const int DmWedgeCountToDisable = 3;
 
     // The fake event-source viewport = the real window client rect, with NO SetContentRect (scroll-feel-v2.1 §A.5). Both
     // browsers (direct_manipulation_helper_win.cc, DirectManipulationOwner.cpp) size the viewport to the window and never
@@ -118,9 +119,21 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     // ── wedge watchdog ──
     private bool _awaitingEngage;           // a SetContact is pending RUNNING
     private long _engageTick;               // Environment.TickCount64 at SetContact
-    private int _wedgeCount;
     // ── inertia stall watchdog ──
     private long _lastProgressMs;           // Environment.TickCount64 at the last content delta / status change
+    // ── silent-owner watchdog (see DmSilentOwner) ──
+    // Deliberately NOT keyed on _lastProgressMs: SetContact and every status change re-stamp it, and those are exactly
+    // the events that DO keep occurring per contact while DM owns the touchpad without ever engaging — keyed on it the
+    // predicate could never fire. These stamps move only on real DM manipulation / real user attempts.
+    private long _lastEngagedMs;            // TickCount64 when DM last actually manipulated (RUNNING/INERTIA, or an owned content delta); 0 = never
+    private long _lastHitTestMs;            // TickCount64 at the last DM_POINTERHITTEST (see NoteHitTest)
+    private int _hitTestsSinceEngage;       // hit-tests observed since DM last engaged — the "unserved attempts" count
+    // ── unified recovery escalation (all four detectors feed it) ──
+    private DmRecoveryLadder _ladder;
+    // A strike raised from inside a COM sink callback, serviced at the next pump. RecordStrike can reach the Disable
+    // rung, and Teardown frees the very IDirectManipulationViewportEventHandler CCW whose thunk is on the stack
+    // (RemoveEventHandler + NativeMemory.Free) while DM still holds a raw pointer to it. Deferring costs one pump.
+    private DmStallDetector _pendingStrike;
 
     // ── pump-time stamping (scroll-jitter §B.1) ──
     private long _pumpQpc;                   // Stopwatch.GetTimestamp() captured once at the top of Update() — the frame instant
@@ -279,25 +292,43 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (!_enabled) return;
         long nowQpc = Stopwatch.GetTimestamp();
         long nowMs = Environment.TickCount64;
+        // A strike raised inside a status callback (see _pendingStrike) — serviced here, out of the COM stack frame.
+        if (_pendingStrike != DmStallDetector.None)
+        {
+            DmStallDetector pending = _pendingStrike;
+            _pendingStrike = DmStallDetector.None;
+            RecordStrike(pending);
+            if (!_enabled) return;   // the ladder may have session-disabled + torn down
+        }
         // Wedge watchdog: a SetContact that never reached RUNNING within the engage window is a wedge (DManip did not
         // engage). Reaching RUNNING clears _awaitingEngage, so a legitimate finger-down-then-pause is NOT a wedge.
         if (_awaitingEngage && nowMs - _engageTick > DmEngageTimeoutMs)
         {
             _awaitingEngage = false;
-            OnWedge();
-            if (!_enabled) return;   // OnWedge may have session-disabled + torn down
+            RecordStrike(DmStallDetector.EngageWedge);
+            if (!_enabled) return;
         }
         // Inertia stall watchdog (see DmInertiaStallTimeoutMs): a live gesture that has produced nothing for the timeout
         // is stuck, and a stuck gesture holds NeedsClockTick true — which pins the host wait at 0 and free-runs the loop.
-        // Stop() is the ONLY intervention: the READY status callback then emits the terminal phase event, disarms the
+        // Rung 1 is still the bare Stop(): the READY status callback then emits the terminal phase event, disarms the
         // pacer and recenters the viewport exactly as a normal gesture end does. Re-stamping progress here bounds the
-        // retry to one Stop per timeout window if DM is wedged badly enough to ignore it.
+        // retry to one strike per timeout window if DM is wedged badly enough to ignore it.
         if (DmInertiaStall.IsStalled(GestureLive, nowMs, _lastProgressMs) && _vp != null)
         {
-            if (ScrollLog.On)
-                ScrollLog.Line($"DM STALL {StatusName(_status)} (no progress >{DmInertiaStallTimeoutMs}ms) — Stop()");
             _lastProgressMs = nowMs;
-            _vp->Stop();
+            RecordStrike(DmStallDetector.InertiaStall);
+            if (!_enabled) return;
+        }
+        // Silent-owner watchdog: DM holds the touchpad with a NON-live status while contacts keep hit-testing us and
+        // none of them engages. Both watchdogs above are structurally inert there (GestureLive false, _awaitingEngage
+        // already cancelled), which is how a 218-second input blackout produced zero detector fires. Re-arming both
+        // inputs bounds the re-fire to one strike per DmSilentOwner.TimeoutMs, mirroring the stall governor above.
+        if (DmSilentOwner.IsSilentOwner(GestureLive, nowMs, _lastHitTestMs, _lastEngagedMs, _hitTestsSinceEngage))
+        {
+            RecordStrike(DmStallDetector.SilentOwner);   // first, so its note still carries the true blackout age
+            if (!_enabled) return;
+            _hitTestsSinceEngage = 0;
+            _lastEngagedMs = nowMs;
         }
         if (!NeedsClockTick)
         {
@@ -346,6 +377,16 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         }
     }
 
+    /// <summary>A DM_POINTERHITTEST reached the window — the user is trying to manipulate us RIGHT NOW. Counted and
+    /// stamped on the <see cref="Environment.TickCount64"/> clock for <see cref="DmSilentOwner"/>; the caller's own
+    /// <c>_lastDmHitTestMs</c> is a different (GetMessageTime) clock base serving the wheel-burst log and stays
+    /// untouched. The counter zeroes when DM engages, so it reads "attempts DM has not served".</summary>
+    internal void NoteHitTest()
+    {
+        _lastHitTestMs = Environment.TickCount64;
+        if (_hitTestsSinceEngage < int.MaxValue) _hitTestsSinceEngage++;
+    }
+
     /// <summary>DM_POINTERHITTEST (0x0250) → claim this contact for DManip. Gated to <c>PT_TOUCHPAD</c> by the caller
     /// (§7). Returns true iff SetContact succeeded (the caller then consumes the message, matching the dm-probe).</summary>
     internal bool SetContact(uint pointerId, Point2 contactDip)
@@ -377,31 +418,68 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
     internal void HandleStatusChanged(int current, int previous)
     {
+        // OUR tracked prior status drives every emit/disarm decision, not DM's `previous` param. They are identical in
+        // normal flow; they diverge exactly when the recovery ladder has already fabricated the terminal event and set
+        // _status = DM_READY itself (rungs >=2), and then a late real READY(previous=RUNNING) must NOT re-emit it.
+        // DM's own account of the transition stays in the log line, where the divergence is the interesting part.
+        int prior = _status;
+        long nowMs = Environment.TickCount64;
         _status = current;
-        _lastProgressMs = Environment.TickCount64;   // a status change IS progress (stall watchdog)
+        // A status change IS progress (stall watchdog). Deliberately NOT debounced to "meaningful" transitions: this
+        // stamp is a load-bearing input to DmInertiaStall, and narrowing it to harden hypothesis B (status chatter
+        // masking a live stall — zero observed instances) would risk manufacturing false stall fires. The recovery
+        // ladder is immune to chatter by construction: it reads the separate _lastEngagedMs stamp.
+        _lastProgressMs = nowMs;
+        Diag.Set("dm", "status", current);
         if (ScrollLog.On) ScrollLog.Line($"DM STATUS {StatusName(previous)}->{StatusName(current)}");
 
         if (current == DM_RUNNING)
         {
             _awaitingEngage = false;   // engaged — not a wedge
-            if (previous == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);   // fingers re-landed mid-coast (stop-on-contact)
+            if (_ladder.Strikes > 0)
+            {
+                // The one row that names WHICH rung revived input on a recurrence — emitted before the reset so it
+                // still carries the strike count and the blackout age.
+                NoteStrike(DmStallDetector.Recovered, DmRecoveryAction.None, nowMs);
+                if (ScrollLog.On) ScrollLog.Line($"DM RECOVERED after {_ladder.Strikes} strike(s)");
+                _ladder.Reset();
+                Diag.Set("dm", "strikes", 0);
+            }
+            _lastEngagedMs = nowMs;
+            _hitTestsSinceEngage = 0;
+            if (prior == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);   // fingers re-landed mid-coast (stop-on-contact)
             Emit(InputKind.ScrollBegin, 0f, 0f);
             _haveBaseline = false;     // the next content update captures the baseline, emits nothing
             _seq = 0;
         }
-        else if (current == DM_INERTIA && previous == DM_RUNNING)
+        else if (current == DM_INERTIA && prior == DM_RUNNING)
         {
+            _lastEngagedMs = nowMs;
             Emit(InputKind.MomentumBegin, 0f, 0f);
             // keep the baseline — inertia continues from the same transform, deltas flow seamlessly as MomentumUpdate
         }
         else if (current == DM_READY)
         {
-            if (previous == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);
-            else if (previous == DM_RUNNING) Emit(InputKind.ScrollEnd, 0f, 0f);   // hold-release, no OS momentum
-            _awaitingEngage = false;
+            if (prior == DM_INERTIA) Emit(InputKind.MomentumEnd, 0f, 0f);
+            else if (prior == DM_RUNNING) Emit(InputKind.ScrollEnd, 0f, 0f);   // hold-release, no OS momentum
+            // Cancel the engage wedge ONLY on a READY that genuinely terminates an engage. A spurious READY (from
+            // ENABLED/BUILDING/SUSPENDED) used to disarm it unconditionally, which is precisely how a DM that owned
+            // the touchpad but never engaged silenced the watchdog. The pacer disarm and the recenter stay
+            // unconditional — NeedsClockTick still includes _awaitingEngage, so UpdateIfDue re-arms the pacer and the
+            // 120ms wedge still fires. A tap-to-click contact DM legitimately declines now wedges; that is harmless,
+            // because rung 1 on a READY viewport is a no-op Stop and the tap safety lives in the ladder's
+            // reset-on-RUNNING plus its 10-second decay, not in this disarm.
+            if (DmEngageWedge.Disarms(current, prior)) _awaitingEngage = false;
             _updatePacer.Disarm();
             ResetViewport();           // §7 "viewport reset" — recenter so the next gesture has fresh runway
             _haveBaseline = false;     // the recenter's content update re-baselines silently (Owns is false now)
+        }
+        else if (DmEngageWedge.WedgesImmediately(current, _awaitingEngage))
+        {
+            // scroll-feel-rework-design §223-224, previously unimplemented: SUSPENDED while a SetContact is pending
+            // RUNNING means DM parked the contact instead of engaging it — there is no timeout left worth waiting out.
+            _awaitingEngage = false;
+            _pendingStrike = DmStallDetector.Suspended;   // out of the COM sink — see the _pendingStrike remarks
         }
     }
 
@@ -450,9 +528,11 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         // The stall watchdog measures DM PRODUCTION, not emitted scroll: a pinch is suppressed downstream but DM is very
         // much alive, so stamp before the suppression returns. Sub-epsilon no-op deltas deliberately do NOT stamp — a
         // manipulation that only ever produces those is exactly the stuck state the watchdog exists to end.
-        if (MathF.Abs(scale - 1f) > DmPinchScaleEpsilon) { _lastProgressMs = Environment.TickCount64; return; }   // pinch: suppress the pan (§7)
+        // Both stamps move together here: we are past the !Owns guard, so DM is genuinely manipulating — which is
+        // exactly what _lastEngagedMs means to the silent-owner detector.
+        if (MathF.Abs(scale - 1f) > DmPinchScaleEpsilon) { _lastProgressMs = _lastEngagedMs = Environment.TickCount64; return; }   // pinch: suppress the pan (§7)
         if (MathF.Abs(dx) < DmMinTransformDelta && MathF.Abs(dy) < DmMinTransformDelta) return;
-        _lastProgressMs = Environment.TickCount64;
+        _lastProgressMs = _lastEngagedMs = Environment.TickCount64;
 
         float wscale = _window.ScaleInternal;
         if (wscale <= 0f) wscale = 1f;
@@ -508,20 +588,84 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         _vp->ZoomToRect(0f, 0f, _vpW, _vpH, false);
     }
 
-    private void OnWedge()
+    /// <summary>ScrollTrace note 107 (registered in ScrollTrace.cs) — the one record that survives a feel session run
+    /// with <c>FG_SCROLL_LOG</c> off, which is how the live 218-second blackout went forensically silent. Scalars only,
+    /// self-gating, allocation-free.</summary>
+    private void NoteStrike(DmStallDetector detector, DmRecoveryAction action, long nowMs)
+        => ScrollTrace.Note(107, (float)(nowMs - _lastEngagedMs),
+            (int)detector | ((int)action << 4) | (_status << 8),
+            _ladder.Strikes, (float)(nowMs - _lastHitTestMs));
+
+    /// <summary>One strike on the unified recovery ladder, whatever detector saw it, and the escalation it earns.
+    /// Rung 1 is the historical behavior (Stop); rung 2 recycles the DM input session; rung 3 is the production-proven
+    /// session disable. Never called from inside a COM sink callback — see <c>_pendingStrike</c>.</summary>
+    private void RecordStrike(DmStallDetector detector)
     {
-        _wedgeCount++;
-        if (ScrollLog.On) ScrollLog.Line($"DM WEDGE #{_wedgeCount} (engage>{DmEngageTimeoutMs}ms, no RUNNING)");
-        if (_wedgeCount >= DmWedgeCountToDisable)
+        long nowMs = Environment.TickCount64;
+        DmRecoveryAction action = _ladder.Record(nowMs);
+        NoteStrike(detector, action, nowMs);
+        Diag.Set("dm", "strikes", _ladder.Strikes);
+        if (ScrollLog.On)
+            ScrollLog.Line($"DM STRIKE #{_ladder.Strikes} {detector} -> {action} (status={StatusName(_status)}, "
+                + $"sinceEngage={nowMs - _lastEngagedMs}ms, sinceHitTest={nowMs - _lastHitTestMs}ms)");
+
+        switch (action)
         {
-            // Session-disable, edge-triggered: tear down so ProcessInput/SetContact are no longer called and the §3.3
-            // fallback owns every subsequent packet. There is never a window with two owners for one packet.
-            if (ScrollLog.On) ScrollLog.Line("DM DISABLED (wedge threshold) — §3.3 heuristic fallback now owns the touchpad");
-            _enabled = false;
-            Teardown();
-            return;
+            case DmRecoveryAction.Stop:
+                if (_vp != null) _vp->Stop();   // abort the stuck manipulation so the next gesture can retry
+                break;
+            case DmRecoveryAction.Recycle:
+                if (TryRecycle()) break;
+                goto case DmRecoveryAction.Disable;   // any FAILED HRESULT escalates to the proven Teardown rung
+            case DmRecoveryAction.Disable:
+                FabricateTerminalIfLive();
+                // Session-disable, edge-triggered: tear down so ProcessInput/SetContact are no longer called and the
+                // §3.3 fallback owns every subsequent packet. There is never a window with two owners for one packet.
+                // The cost is calibrated: the user keeps a working scroll and loses OS-curve momentum fidelity plus
+                // exact device classification until the next launch — bounded, unlike minutes of dead input.
+                if (ScrollLog.On) ScrollLog.Line("DM DISABLED (recovery ladder) — §3.3 heuristic fallback now owns the touchpad");
+                Diag.Set("dm", "enabled", 0);
+                _enabled = false;
+                Teardown();
+                break;
         }
-        if (_vp != null) _vp->Stop();   // abort the stuck manipulation so the next gesture can retry
+    }
+
+    /// <summary>Rung 2 — the code-level alt-tab. Enable/Disable toggle input processing only (the configuration, the
+    /// event-handler cookie and the primary content all survive; <c>RemoveEventHandler</c> exists solely in
+    /// <see cref="Teardown"/>), and Deactivate/Activate is Chromium's <c>DirectManipulationHelper</c> pattern — the
+    /// in-code twin of the activation reset that provably revived the live stall. <c>Abandon</c> is deliberately
+    /// excluded: it is terminal and belongs to Teardown. Returns false on any FAILED HRESULT so the caller escalates
+    /// rather than leaving a half-recycled session. Never hand-sets <c>_status</c> past the fabricated terminal — the
+    /// still-registered sink updates it truthfully.</summary>
+    private bool TryRecycle()
+    {
+        if (_vp == null || _mgr == null || _hwnd == HWND.NULL) return false;
+        FabricateTerminalIfLive();
+        if (_vp->Stop().FAILED) return false;
+        if (_vp->ReleaseAllContacts().FAILED) return false;
+        if (_vp->Disable().FAILED) return false;
+        if (_vp->Enable().FAILED) return false;
+        if (_mgr->Deactivate(_hwnd).FAILED) return false;
+        if (_mgr->Activate(_hwnd).FAILED) return false;
+        _awaitingEngage = false;
+        _haveBaseline = false;
+        _pendingStrike = DmStallDetector.None;   // status chatter from the toggles above is ours, not a fresh wedge
+        _updatePacer.Disarm();
+        return true;
+    }
+
+    /// <summary>Close an open phase contract the integrator would otherwise hold forever. This is a DELIBERATE,
+    /// confined exception to this file's never-fabricate doctrine (see <see cref="DmInertiaStallTimeoutMs"/>: the
+    /// watchdogs Stop and let DM's own READY callback run the terminal path). At ladder rungs >=2 DM has already
+    /// refused to fire that callback and the recovery re-creates the input session underneath it, so nothing else will
+    /// ever end the gesture. Double emission is impossible: <see cref="HandleStatusChanged"/> gates on OUR tracked
+    /// prior status, which this sets to READY, so a late real READY(previous=RUNNING) emits nothing.</summary>
+    private void FabricateTerminalIfLive()
+    {
+        if (!GestureLive) return;
+        Emit(_status == DM_INERTIA ? InputKind.MomentumEnd : InputKind.ScrollEnd, 0f, 0f);
+        _status = DM_READY;
     }
 
     private static string StatusName(int s) => s switch
@@ -705,6 +849,105 @@ internal static class DmInertiaStall
     /// will ever terminate is what pins the host wait at 0.</summary>
     internal static bool IsStalled(bool gestureLive, long nowMs, long lastProgressMs)
         => gestureLive && nowMs - lastProgressMs > Win32DirectManipulation.DmInertiaStallTimeoutMs;
+}
+
+/// <summary>Which watchdog raised a strike. The values are wire-visible: they are the low nibble of ScrollTrace note
+/// 107's i1, so they may be appended to but never renumbered.</summary>
+internal enum DmStallDetector : byte
+{
+    None = 0,
+    EngageWedge = 1,
+    Suspended = 2,
+    InertiaStall = 3,
+    SilentOwner = 4,
+    /// <summary>Not a strike — the row emitted when DM engages again with strikes outstanding, so a capture names the
+    /// rung that actually revived input.</summary>
+    Recovered = 5,
+}
+
+/// <summary>The escalation a strike earns. Also wire-visible (note 107 i1 bits 4-7).</summary>
+internal enum DmRecoveryAction : byte
+{
+    None = 0,
+    Stop = 1,
+    Recycle = 2,
+    Disable = 3,
+}
+
+/// <summary>Pure engage-wedge arbitration — the decision half of the 120ms wedge watchdog, split out like
+/// <see cref="DmInertiaStall"/> so the Windows headless tests can lock it without a real HWND or viewport.</summary>
+internal static class DmEngageWedge
+{
+    /// <summary>True only for a READY that genuinely TERMINATES an engage. A READY arriving from
+    /// ENABLED/BUILDING/SUSPENDED means the engage never ran, and cancelling the wedge on it is how a DM that owned
+    /// the touchpad for 218 seconds produced zero watchdog fires. <paramref name="prior"/> is the integrator's own
+    /// tracked status, not DM's <c>previous</c> callback parameter.</summary>
+    internal static bool Disarms(int current, int prior)
+        => current == Win32DirectManipulation.DM_READY
+        && (prior == Win32DirectManipulation.DM_RUNNING || prior == Win32DirectManipulation.DM_INERTIA);
+
+    /// <summary>SUSPENDED while a SetContact is pending RUNNING is a wedge with no timeout left worth waiting out
+    /// (scroll-feel-rework-design §223-224). Gated on the pending engage so an occlusion-SUSPENDED between gestures
+    /// records nothing.</summary>
+    internal static bool WedgesImmediately(int current, bool awaitingEngage)
+        => current == Win32DirectManipulation.DM_SUSPENDED && awaitingEngage;
+}
+
+/// <summary>Pure silent-owner arbitration: DM holds the touchpad with a NON-live status while contacts keep reaching
+/// the window and none of them engages. Both older watchdogs are structurally inert in that state — the inertia stall
+/// needs a live gesture and the engage wedge needs a pending engage — which is exactly why a stall could run for
+/// minutes undetected. The predicate deliberately reads stamps that only real DM manipulation and real user attempts
+/// move; keying it on the progress stamp would be self-defeating, because SetContact and status chatter re-stamp that
+/// one on every contact of the stall.</summary>
+internal static class DmSilentOwner
+{
+    /// <summary>How long since DM last manipulated before ownership counts as silent, and how recent a hit-test must
+    /// be to prove the user is trying NOW. Do not soften these — they set the worst-case recovery latency.</summary>
+    internal const long TimeoutMs = 1500, RecentHitTestMs = 1500;
+    /// <summary>A single unserved hit-test is an ordinary two-finger tap DM correctly declines; it must never fire.</summary>
+    internal const int MinUnservedHitTests = 2;
+
+    internal static bool IsSilentOwner(bool statusLive, long nowMs, long lastHitTestMs,
+        long lastEngagedMs, int unservedHitTests)
+        => !statusLive && unservedHitTests >= MinUnservedHitTests
+        && nowMs - lastHitTestMs <= RecentHitTestMs      // the user is trying NOW
+        && lastHitTestMs > lastEngagedMs                 // and has been since DM last manipulated
+        && nowMs - lastEngagedMs > TimeoutMs;
+}
+
+/// <summary>The unified recovery escalation: one strike counter fed by all four detectors (engage wedge, SUSPENDED
+/// read, inertia stall, silent owner), so a real episode escalates on its second and third symptom whichever watchdog
+/// happens to see them. Pure and time-parameterised for the headless tests.
+///
+/// <para>Stale strikes decay before the increment: a real episode strikes every 120-1500ms, while isolated tap-wedges
+/// an hour apart must never accumulate into a session disable — which the previous never-reset wedge counter did.</para></summary>
+internal struct DmRecoveryLadder
+{
+    internal const int StrikesToDisable = 3;
+    internal const long StrikeDecayMs = 10_000;
+
+    private int _strikes;
+    private long _lastStrikeMs;
+
+    internal readonly int Strikes => _strikes;
+
+    internal DmRecoveryAction Record(long nowMs)
+    {
+        if (_strikes > 0 && nowMs - _lastStrikeMs > StrikeDecayMs) _strikes = 0;
+        _lastStrikeMs = nowMs;
+        _strikes++;
+        return _strikes >= StrikesToDisable ? DmRecoveryAction.Disable
+             : _strikes == 2 ? DmRecoveryAction.Recycle
+             : DmRecoveryAction.Stop;
+    }
+
+    /// <summary>A healthy engage clears the record. Called on every RUNNING, which is what keeps isolated wedges from
+    /// ever reaching rung 3 across a long session.</summary>
+    internal void Reset()
+    {
+        _strikes = 0;
+        _lastStrikeMs = 0;
+    }
 }
 
 /// <summary>Pure device-evidence arbitration. Only a positively identified physical mouse can preempt live DM.</summary>

@@ -427,13 +427,19 @@ public static class ScrollTrace
     ///       bit5 = the fallback's DispatchWheel was consumed) — Input/InputDispatcher.cs</item>
     /// <item>106 = wheel fallback RE-LATCHED on a later pan packet (f0=anchor, i1=node, i2=horiz, f1=gesture travel px)
     ///       — Input/InputDispatcher.cs. A 105 with no following 106 for the same gesture IS the dead-scroll signature.</item>
+    /// <item>107 = DirectManipulation recovery strike (f0 = ms since DM last engaged, f1 = ms since the last
+    ///       DM_POINTERHITTEST, i2 = strikes on the ladder; i1 = detector | action&lt;&lt;4 | dmStatus&lt;&lt;8, where
+    ///       detector 1 engage-wedge / 2 suspended / 3 inertia-stall / 4 silent-owner / 5 recovered, action 0 none /
+    ///       1 stop / 2 recycle / 3 disable, dmStatus = DIRECTMANIPULATION_STATUS) — Pal/Win32DirectManipulation.cs.
+    ///       This block survives a session run with FG_SCROLL_LOG off, which is what made the 218-second input
+    ///       blackout forensically silent; a detector-5 row names WHICH rung revived input.</item>
     /// <item>110 = extent-table reseed (app: Wavee HomePage)</item>
     /// <item>111 = per-row extent correction — Layout/FlexLayout.cs</item>
     /// <item>113 = hitch slack + GC deltas + last requested wait — Hosting/AppHost.cs</item>
     /// <item>210 / 211 = capture-protocol phase begin / end (i1=phase ordinal, i2=repetition) — ops/diag launcher.
     ///       The 100-block is per-subsystem engine context; the deliberately distant 210-block is capture protocol.</item>
     /// </list>
-    /// Next free engine code: 107 (also 108, 109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
+    /// Next free engine code: 108 (also 109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
     public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
     {
         if (!CompiledIn || !Enabled) return;
