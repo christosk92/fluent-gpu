@@ -102,6 +102,8 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public double GpuSceneMs { get; init; }
     /// <summary>Rect/solid-fill portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
     public double GpuFillMs { get; init; }
+    /// <summary>Drop-shadow portion of <see cref="GpuSceneMs"/>, split out of <see cref="GpuFillMs"/> (0 when disabled).</summary>
+    public double GpuShadowMs { get; init; }
     /// <summary>Image-draw portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
     public double GpuImageMs { get; init; }
     /// <summary>Glyph/text portion of <see cref="GpuSceneMs"/> (0 when timestamp queries are disabled).</summary>
@@ -1424,8 +1426,10 @@ public sealed class AppHost : IDisposable
     /// <summary>Diagnostic (FG_GPU_TIMING=1): the scene-raster portion of <see cref="LastGpuRenderMs"/> (excl. uploads/baked-blur)
     /// — when this dominates and exceeds the refresh budget, the maximize lock is content fill/overdraw. 0 when off.</summary>
     public double LastGpuSceneMs => _device.LastGpuSceneMs;
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): the rect/solid-fill, image, glyph and composite splits of <see cref="LastGpuSceneMs"/> (0 when off).</summary>
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): the rect/solid-fill, shadow, image, glyph and composite splits of <see cref="LastGpuSceneMs"/> (0 when off).</summary>
     public double LastGpuFillMs => _device.LastGpuFillMs;
+    /// <inheritdoc cref="LastGpuFillMs"/>
+    public double LastGpuShadowMs => _device.LastGpuShadowMs;
     /// <inheritdoc cref="LastGpuFillMs"/>
     public double LastGpuImageMs => _device.LastGpuImageMs;
     /// <inheritdoc cref="LastGpuFillMs"/>
@@ -1528,8 +1532,14 @@ public sealed class AppHost : IDisposable
         }
         // A live scroll arms a short display-rate grace so the eased settle + any in-flight art reveal finish at the
         // display rate instead of snapping back to the 30 Hz ambient cadence the instant the fling drops below cutoff.
+        // Gated on REAL MOTION (an offset actually advanced on the last ticked frame), NOT on the ScrollAnim wake bit:
+        // that bit is set by merely-ARMED viewports too (ScrollIntegrator.HasActive counts armed, not moving — a
+        // scrollbar fade timer with zero motion sets it). Re-arming off the bit made the loop free-run at the display
+        // rate for ~2s after EVERY scroll with `rendered 0` (the wakediag `sole: scrollAnim=N` bursts), defeating both
+        // the ambient cap and the adaptive governor. The wake bit itself is untouched — an armed viewport still gets
+        // frames for its fade, but a fade is ambient-class motion and now paces like one.
         long now = Stopwatch.GetTimestamp();
-        if ((r & WakeReasons.ScrollAnim) != 0) _scrollGraceUntil = now + ScrollGraceTicks;
+        if (_scrollAnim.AnyOffsetWroteThisFrame) _scrollGraceUntil = now + ScrollGraceTicks;
         // Ambient-only animation (no latency-sensitive interaction live, and any AnimEngine activity is loop-only — a
         // spinner/shimmer, NOT a one-shot transition mid-flight): pace to AmbientAnimationFps instead of the full
         // display refresh. A real input/post still wakes WaitForWork early, so this paces only the autonomous tick.
@@ -1808,6 +1818,9 @@ public sealed class AppHost : IDisposable
     internal long MainScrollHoldUntilForTest { get => _mainScrollHoldUntil; set => _mainScrollHoldUntil = value; }
     /// <summary>Test-only companion: force the post-scroll display-rate grace expired so the gate isolates the HOLD term.</summary>
     internal void SetScrollGraceForTest(long until) => _scrollGraceUntil = until;
+    /// <summary>Test-only companion read (gate.wake.scrollGraceNeedsMotion): the post-scroll display-rate grace deadline
+    /// as RecommendedWaitMs last left it — the gate asserts an armed-but-motionless frame does not extend it.</summary>
+    internal long ScrollGraceUntilForTest => _scrollGraceUntil;
 
     /// <summary>Test-only (gate.timer.*): the frame-clock timer queue, its deterministic headless clock, and the
     /// post-input warm-cadence enable (off headless by default so existing idle gates are unaffected; the warm-cadence
@@ -3035,13 +3048,15 @@ public sealed class AppHost : IDisposable
             // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
             // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
             bool transformWrote = _scene.AnyTransformWrote;
-            // A bake is already bounded to ONE adaptive, downscaled job per cadence interval. Pause only for work that
-            // represents direct manipulation or a structural commit in THIS frame. Image cross-fades, ordinary entrance
-            // motion and unrelated texture uploads can remain active for hundreds of milliseconds while a page fills;
-            // treating those as a global quiet-frame prerequisite made a visible editorial card stay crisp long after its
-            // source was resident. The queue now gets its first chance on the next non-structural, non-input frame (often
-            // the source-completion frame itself), while scroll/drag remains protected from the one-shot GPU pass.
-            _bakedBlurQueue.Paused = scrollActive || reconciled || layoutNeeded
+            // A bake is already bounded to ONE adaptive, downscaled job per cadence interval (BakedBlurQueue: the 33ms
+            // throttle + adaptive quality + backlog downscale), so its per-frame cost is bounded by construction. Pause
+            // only for DIRECT MANIPULATION — scroll, click, pumped input, drag. Reconcile/layout churn deliberately does
+            // NOT pause it: a page that re-renders tens of times a second (the measured homepage does) never produces the
+            // "quiet frame" the old `reconciled || layoutNeeded` predicate demanded, so the queue starved outright —
+            // bakedBlurPending sat pinned at 96 for whole seconds (live-20260804-095007) while every acrylic/editorial
+            // backdrop stayed at Minimal (0.25x) quality, which is the visible "blurred art stays blocky" complaint.
+            // Image cross-fades, entrance motion and unrelated uploads were already excluded for the same reason.
+            _bakedBlurQueue.Paused = scrollActive
                 || clicks > 0 || _tracePumpedEvents > 0
                 || _dispatcher.Drag.IsActive || _dispatcher.DragDrop.IsActive;
             if (transformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
@@ -3232,6 +3247,7 @@ public sealed class AppHost : IDisposable
                 GpuRenderMs = _device.LastGpuRenderMs,
                 GpuSceneMs = _device.LastGpuSceneMs,
                 GpuFillMs = _device.LastGpuFillMs,
+                GpuShadowMs = _device.LastGpuShadowMs,
                 GpuImageMs = _device.LastGpuImageMs,
                 GpuGlyphMs = _device.LastGpuGlyphMs,
                 GpuCompositeMs = _device.LastGpuCompositeMs,

@@ -366,9 +366,11 @@ public static class FluentApp
                     int opBlur = gpuDev?.LastBlurGroups ?? 0;
                     int opEdge = gpuDev?.LastEdgeFadeGroups ?? 0;
                     int opFull = gpuDev?.LastFullTargetGroups ?? 0;
-                    // grender X(scene Y: rect R img I glyph G comp C) opgrpN(o/bo/bl/ef,full) — all 0 unless FG_GPU_TIMING.
+                    // grender X(scene Y: rect R shad S img I glyph G comp C) opgrpN(o/bo/bl/ef,full) — all 0 unless FG_GPU_TIMING.
+                    // `shad` is split out of `rect`: the two behave differently (a shadow is a big always-blended SDF quad),
+                    // and the merged number could not say which one owned the ~5ms.
                     string gpuRenderTok = gpuRenderMs > 0.0
-                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
+                        ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} shad {s.GpuShadowMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
                         : "";
                     // efS = physical px the PURE-fade STRIP path copied + restored this frame (the offscreen-free edge
                     // fade); efL = pure fades that were strip-eligible by payload yet still had to lease a full-canvas

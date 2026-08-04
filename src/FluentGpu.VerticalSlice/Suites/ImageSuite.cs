@@ -528,10 +528,9 @@ static class ImageSuite
         var bakedDevice = new HeadlessGpuDevice();
         using var bakedHost = new AppHost(bakedApp, bakedWindow, bakedDevice, fonts, strings, new BakedImageProbe());
         bakedHost.RunFrame();
+        // Frame 1: the un-baked SOURCE stands in (never an empty draw) while the blur bake is queued.
         int fallbackId = bakedDevice.LastImages.Count == 1 ? bakedDevice.LastImages[0].ImageId : 0;
-        bakedHost.RunFrame();
-        bool deferredUntilSettled = bakedDevice.LastImages.Count == 1
-            && bakedDevice.LastImages[0].ImageId == fallbackId;
+        bool fallbackFirst = fallbackId != 0;
         int bakeSettleFrames = 0;
         while (bakeSettleFrames++ < 60 && bakedDevice.LastImages.Count == 1
                && bakedDevice.LastImages[0].ImageId == fallbackId)
@@ -542,9 +541,12 @@ static class ImageSuite
             && bakedHost.Images.StateOf(new ImageHandle(bakedCmd.ImageId)) == ImageState.Ready;
         bool styling = Near(bakedCmd.Overlay.A, 0.42f) && bakedCmd.MaskEdges == (int)EdgeMask.Top
             && Near(bakedCmd.MaskTop, 24f) && Near(bakedCmd.MaskIntensity, 1f);
-        Check("46c. Baked ImageEl: source fallback then persistent derived handle; overlay+mask stay in one DrawImage with zero layers",
-            deferredUntilSettled && oneQuad && selectedDerived && styling,
-            $"deferred={deferredUntilSettled} settleFrames={bakeSettleFrames} fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
+        // The bake must land within a couple of frames of the source, NOT wait for a globally quiet frame: a page that
+        // reconciles every frame (the real homepage) never has one, which starved the queue outright (W2.75-B).
+        bool bakesPromptly = bakeSettleFrames <= 3;
+        Check("46c. Baked ImageEl: source fallback then persistent derived handle within a frame or two (no quiet-frame wait); overlay+mask stay in one DrawImage with zero layers",
+            fallbackFirst && bakesPromptly && oneQuad && selectedDerived && styling,
+            $"fallbackFirst={fallbackFirst} settleFrames={bakeSettleFrames} fallback={fallbackId} derived={bakedCmd.ImageId} draws={bakedDevice.LastImages.Count} layers={bakedDevice.LastLayers.Count} mask={bakedCmd.MaskEdges}");
     }
 
     static void ImageCornerClampChecks(StringTable strings)
@@ -752,8 +754,11 @@ static class ImageSuite
                 $"published={published} rest={restApplies} scroll={scrollApplies}");
         }
 
-        // A normal 512x512 BGRA cover is 1 MiB, twice the scrolling byte cap. Defer it until rest without letting it
-        // head-of-line block a small completion behind it; once scrolling settles, merge it back and apply it.
+        // A normal 512x512 BGRA cover is 1 MiB, twice the scrolling byte cap — and it must STILL land during the gesture:
+        // one completion per frame, oldest first, whatever it weighs (W2.75-A). Deferring every oversized completion to
+        // rest meant zero real covers landed for the whole scroll — a BlurHash smear that popped in afterwards. The byte
+        // cap bounds only the applies BEHIND the frame's head. ONE worker ⇒ 301 completes before 302, so this also pins
+        // that the two size lanes preserve completion order rather than reordering by size.
         using (var sched = new DecodeScheduler(new TestCodec(), new TestFetcher(),
                    new DecodeOptions { MaxConcurrency = 1 }))
         {
@@ -762,31 +767,25 @@ static class ImageSuite
             bool published = WaitPublished(sched);
             sched.ScrollThrottled = true;
 
-            int firstId = 0, restId = 0;
+            int firstId = 0, secondId = 0;
             sched.Pump(
                 (id, ok, w, h, failure, attempts) => { if (ok) firstId = id; },
                 (id, px, w, h) => { });
             int firstCount = sched.LastPumpAppliedCount;
             int firstBytes = sched.LastPumpAppliedBytes;
-            bool largePending = sched.HasReadyCompletions;
+            bool followerPending = sched.HasReadyCompletions;
 
             sched.Pump(
-                (id, ok, w, h, failure, attempts) => { },
-                (id, px, w, h) => { });
-            bool strictWhileScrolling = sched.LastPumpAppliedCount == 0 && sched.HasReadyCompletions;
-
-            sched.ScrollThrottled = false;
-            sched.Pump(
-                (id, ok, w, h, failure, attempts) => { if (ok) restId = id; },
+                (id, ok, w, h, failure, attempts) => { if (ok) secondId = id; },
                 (id, px, w, h) => { });
 
-            Check("46d5. DecodeScheduler: oversized cover waits for rest without head-of-line starving a small scroll upload",
-                published && firstId == 302 && firstCount == 1 && firstBytes == 8 * 8 * 4
-                && largePending && strictWhileScrolling
-                && restId == 301 && sched.LastPumpAppliedCount == 1 && sched.LastPumpAppliedBytes == 512 * 512 * 4
+            Check("46d5. DecodeScheduler: an oversized cover lands DURING scroll — one completion per frame, in completion order across both size lanes",
+                published && firstId == 301 && firstCount == 1 && firstBytes == 512 * 512 * 4
+                && followerPending
+                && secondId == 302 && sched.LastPumpAppliedCount == 1 && sched.LastPumpAppliedBytes == 8 * 8 * 4
                 && !sched.HasReadyCompletions,
-                $"published={published} scroll={firstId}/{firstCount}/{firstBytes}B pending={largePending} strict={strictWhileScrolling} " +
-                $"rest={restId}/{sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B left={sched.HasReadyCompletions}");
+                $"published={published} first={firstId}/{firstCount}/{firstBytes}B pending={followerPending} " +
+                $"second={secondId}/{sched.LastPumpAppliedCount}/{sched.LastPumpAppliedBytes}B left={sched.HasReadyCompletions}");
         }
     }
 

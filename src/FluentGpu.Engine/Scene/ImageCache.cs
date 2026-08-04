@@ -130,6 +130,10 @@ public sealed class ImageCache
         public int Attempts;               // fetch attempts the decoder made (>1 ⇒ transient retries occurred)
         public float TextureMs = float.NaN;   // clock (ms) when the FIRST texture (blurhash or full-res) appeared → fade origin
         public ImageTransition Transition;     // the placeholder→image reveal (duration + easing); set at request
+        // Duration of the CURRENT reveal. Normally Transition.DurationMs; halved for a texture that lands mid-scroll
+        // (BeginReveal). Every deadline/progress read uses THIS, so a shortened reveal keeps the wake bookkeeping exact.
+        public float RevealMs;
+        public float RequestedMs = float.NegativeInfinity;   // clock (ms) when the current decode was requested → the cache-adjacent test
         public float LastRestartMs = float.NegativeInfinity;   // backoff gate for visible/transient-failure retries
         public bool Derived;
         public int SourceId;
@@ -146,6 +150,12 @@ public sealed class ImageCache
     }
 
     const float RestartBackoffMs = 2000f;   // min gap between visible retries on the same handle (avoids hammering a dead URL)
+    // Mid-scroll reveals (see SuppressReveals): the fade runs at HALF its authored duration — short enough not to trail
+    // behind moving content, long enough that a cover landing under the cursor doesn't hard-pop. A texture that lands
+    // within InstantRevealWindowMs of its request is cache-adjacent (disk/memory hit, no visible placeholder period):
+    // fading THAT reads as lag, so it keeps the original instant reveal.
+    const float ScrollRevealScale = 0.5f;
+    const float InstantRevealWindowMs = 100f;
 
     private readonly Dictionary<SourceKey, int> _byKey = new();
     private readonly Dictionary<DerivedKey, int> _byDerivedKey = new();
@@ -270,7 +280,7 @@ public sealed class ImageCache
 
         id = _nextId++;
         _byKey[key] = id;
-        var entry = new Entry { Key = key, State = ImageState.Pending, LastUsed = _clock++, Transition = transition ?? ImageTransition.Default };
+        var entry = new Entry { Key = key, State = ImageState.Pending, LastUsed = _clock++, RequestedMs = _clockMs, Transition = transition ?? ImageTransition.Default };
         _byId[id] = entry;
         _pendingCount++;   // a miss always creates a Pending entry; OnDecodeComplete decrements when it resolves
         _totalRequested++;
@@ -341,6 +351,7 @@ public sealed class ImageCache
             BakeGeneration = 1,
             BakeQuality = BakedBlurQueue.Quality.Minimal,
             LastUsed = _clock++,
+            RequestedMs = _clockMs,
             Transition = transition ?? ImageTransition.Default,
         };
         _byDerivedKey[key] = id;
@@ -398,7 +409,11 @@ public sealed class ImageCache
     /// <summary>Monotonic reveal clock (ms) — passed to the GPU replay path to resolve fade params baked into DrawImageCmd.</summary>
     public float ClockMs => _clockMs;
 
-    /// <summary>While true, newly arriving textures skip the reveal animation (instant CrossFade=1) — used during scroll.</summary>
+    /// <summary>While true (scroll), a newly arriving texture reveals at HALF its authored duration instead of the full
+    /// fade — and skips the animation entirely (instant CrossFade=1) only when it landed within
+    /// <see cref="InstantRevealWindowMs"/> of its request, i.e. a cache-adjacent hit with no visible placeholder period.
+    /// See <see cref="BeginReveal"/>: this used to finish EVERY mid-scroll reveal instantly, which reads as a pop now
+    /// that full-size covers actually land during the gesture.</summary>
     public bool SuppressReveals { get; set; }
 
     /// <summary>While true, per-frame GPU texture uploads are throttled (see <see cref="DecodeScheduler.ScrollThrottled"/>)
@@ -418,7 +433,7 @@ public sealed class ImageCache
             return false;
         }
         startMs = e.TextureMs;
-        durationMs = e.Transition.DurationMs;
+        durationMs = e.RevealMs;              // the CURRENT reveal's length (halved for a mid-scroll landing)
         easing = (int)e.Transition.Easing;
         return true;
     }
@@ -439,12 +454,20 @@ public sealed class ImageCache
         if (!e.Transition.Enabled)
         {
             e.TextureMs = float.NaN;
+            e.RevealMs = 0f;
             return;
         }
+        e.RevealMs = e.Transition.DurationMs;
+        e.TextureMs = _clockMs;
         if (SuppressReveals)
-            e.TextureMs = _clockMs - e.Transition.DurationMs;
-        else
-            e.TextureMs = _clockMs;
+        {
+            // Scroll. Textures now LAND mid-gesture (DecodeScheduler admits one completion per frame whatever its
+            // size), so the old "already finished" reveal would hard-pop a full-size cover in under a moving finger —
+            // more visible than the fade it was avoiding. Give it a half-length fade instead, except for a
+            // cache-adjacent landing, which stays instant (a fade there reads as lag, not as a reveal).
+            if (_clockMs - e.RequestedMs <= InstantRevealWindowMs) e.TextureMs = _clockMs - e.RevealMs;
+            else e.RevealMs *= ScrollRevealScale;
+        }
         NoteCrossfadeDeadline(e);
     }
 
@@ -454,7 +477,7 @@ public sealed class ImageCache
     public float CrossFadeOf(ImageHandle h)
     {
         if (!_byId.TryGetValue(h.Id, out var e) || float.IsNaN(e.TextureMs)) return 1f;
-        return e.Transition.Progress(_clockMs - e.TextureMs);
+        return ResolveFade(_clockMs, e.TextureMs, e.RevealMs, (int)e.Transition.Easing);
     }
 
     /// <summary>True while any image is still revealing — the host keeps painting so the fade animates to completion.
@@ -467,7 +490,7 @@ public sealed class ImageCache
     private void NoteCrossfadeDeadline(Entry e)
     {
         if (!e.Transition.Enabled || float.IsNaN(e.TextureMs)) return;
-        float deadline = e.TextureMs + e.Transition.DurationMs;
+        float deadline = e.TextureMs + e.RevealMs;
         if (deadline > _maxCrossfadeDeadlineMs) _maxCrossfadeDeadlineMs = deadline;
     }
 
@@ -479,7 +502,7 @@ public sealed class ImageCache
         foreach (var e in _byId.Values)
             if (e.Transition.Enabled && !float.IsNaN(e.TextureMs))
             {
-                float d = e.TextureMs + e.Transition.DurationMs;
+                float d = e.TextureMs + e.RevealMs;
                 if (d > max) max = d;
             }
         _maxCrossfadeDeadlineMs = max;
@@ -560,6 +583,7 @@ public sealed class ImageCache
         // limiter at all. Re-baking a READY derivative (the retheme/evict path) is unaffected — only Failed is gated.
         if (e.State == ImageState.Failed && _clockMs - e.LastRestartMs < RestartBackoffMs) return;
         e.LastRestartMs = _clockMs;
+        e.RequestedMs = _clockMs;
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Bytes = 0;
@@ -631,6 +655,7 @@ public sealed class ImageCache
             && _clockMs - e.LastRestartMs < RestartBackoffMs)
             return;
         e.LastRestartMs = _clockMs;
+        e.RequestedMs = _clockMs;
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Attempts = 0;
@@ -753,7 +778,7 @@ public sealed class ImageCache
             e.Bytes = 0;
             _evictSink(r.Id);   // async ⇒ enqueues an evict job (releases any resident blur-hash/partial placement)
             bool wasActiveDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs)
-                && e.TextureMs + e.Transition.DurationMs >= _clockMs;
+                && e.TextureMs + e.RevealMs >= _clockMs;
             e.TextureMs = float.NaN;
             e.State = ImageState.Failed;
             e.Failure = r.Result == ImageUploadResult.ResourceExhausted ? ImageFailureKind.GpuResourceExhausted : ImageFailureKind.GpuUpload;
@@ -803,7 +828,7 @@ public sealed class ImageCache
             // non-drawable, so release that partial placement too; otherwise a zero-byte Failed entry leaks one SRV.
             _evictSink(id);
             bool wasActiveDeadline = e.Transition.Enabled && !float.IsNaN(e.TextureMs)
-                && e.TextureMs + e.Transition.DurationMs >= _clockMs;
+                && e.TextureMs + e.RevealMs >= _clockMs;
             e.TextureMs = float.NaN;
             if (wasActiveDeadline) RecomputeCrossfadeDeadline();
         }
@@ -852,7 +877,7 @@ public sealed class ImageCache
             UsedBytes -= e2.Bytes;
             if (e2.Derived) DerivedUsedBytes -= e2.Bytes;
             bool activeDeadline = e2.Transition.Enabled && !float.IsNaN(e2.TextureMs)
-                && e2.TextureMs + e2.Transition.DurationMs >= _clockMs;
+                && e2.TextureMs + e2.RevealMs >= _clockMs;
             e2.State = ImageState.None;
             e2.Failure = ImageFailureKind.None;
             e2.Attempts = 0;

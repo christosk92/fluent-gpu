@@ -32,9 +32,12 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     // Control completions (cancel/fail) drain independently from decoded pixels. They must never consume the GPU-upload
     // apply/byte budget or sit behind a scroll-throttled oversized texture.
     private readonly ConcurrentQueue<Done> _controlOut = new();
-    // Workers classify decoded pixels before publishing them. During active scroll Pump consumes only the bounded-size
-    // lane, so a 1–4 MiB cover cannot puncture the 512 KiB fence-stall budget; the small lane still drains, avoiding the
-    // old head-of-line wedge. At rest the sequence stamp merges both lane heads back into completion order.
+    // Workers classify decoded pixels by size before publishing them, so the pump can tell a 1–4 MiB cover from a
+    // thumbnail without touching the payload. BOTH lanes are visible to every pump (scrolling or not): the sequence
+    // stamp merges the two heads back into completion order, and the byte budget bounds only the ADDITIONAL applies
+    // behind the head. Hiding the large lane during scroll (the previous rule) meant a 512x512 cover — 1 MiB, i.e.
+    // every real album cover — could not land until the gesture ended, which is what pinned the visible BlurHash smear
+    // for a whole homepage scroll and then popped it in afterwards.
     private readonly ConcurrentQueue<Done> _pixelOut = new();
     private readonly ConcurrentQueue<Done> _largePixelOut = new();
     // Claimed ids remain active until their terminal completion is consumed by Pump. This lets a late recycle cancel a
@@ -56,15 +59,19 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private static readonly int s_maxApplyBytesPerFrame =
         int.TryParse(System.Environment.GetEnvironmentVariable("FG_IMG_UPLOAD_BYTES"), out int __b) && __b > 0
             ? __b : 2 * 1024 * 1024;
+    // Scroll-time BURST budget + the lane-classification threshold. It is NOT a size ceiling: like the at-rest budget it
+    // only refuses ADDITIONAL applies once the frame's head has been applied (see Pump). A frame's head always makes
+    // progress, whatever it weighs.
     private const int ScrollApplyBytesPerFrame = 512 * 1024;
     private const int ControlDrainPerFrame = 256;
 
     /// <summary>Scroll-scoped upload throttle: while a scroll gesture is live the per-frame apply cap drops to 1 —
     /// each apply stages a GPU CopyTextureRegion into the SAME command list the double-buffered present then fences on
     /// (max-latency-1 couples the UI thread to GPU completion), so an upload burst mid-scroll reads as a fence-wait
-    /// hitch (traced as the dominant GPU hitch class). Reveals are already suppressed during scroll, so the slower
-    /// landing is invisible. An image larger than the scroll byte budget waits in its worker-published large lane until
-    /// rest, while smaller completions behind it remain eligible — strict pacing without head-of-line starvation.
+    /// hitch (traced as the dominant GPU hitch class). ONE completion still lands per frame regardless of its size —
+    /// the same "head always makes progress" rule the at-rest budget uses — because the alternative (deferring every
+    /// oversized completion to rest) left every 512x512 cover as a BlurHash smear for the whole gesture and popped them
+    /// all in at the end. One ~1 MiB upload per frame is amortizable; a permanent LQIP smear is not.
     /// (Triple-buffering was the alternative and is OFF-LIMITS: it correlated with a DXGI_ERROR_DEVICE_HUNG on the
     /// Adreno — see D3D12Device.FRAME_COUNT.)</summary>
     public bool ScrollThrottled { get; set; }
@@ -166,7 +173,7 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         int cap = ScrollThrottled ? Math.Min(1, s_maxAppliesPerFrame) : s_maxAppliesPerFrame;
         int byteCap = ScrollThrottled ? Math.Min(ScrollApplyBytesPerFrame, s_maxApplyBytesPerFrame) : s_maxApplyBytesPerFrame;
         int appliedBytes = 0;
-        while (applied < cap && TryPeekPixels(ScrollThrottled, out var next, out bool large))
+        while (applied < cap && TryPeekPixels(out var next, out bool large))
         {
             // A row may recycle after the worker published pixels but before this UI-thread pump. Discard that buffer
             // as control work: no upload, no apply slot, and no byte-budget charge.
@@ -179,9 +186,9 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
                 if (++controlDrained >= ControlDrainPerFrame) break;
                 continue;
             }
-            // At rest the byte budget is a burst budget, not an absolute size ceiling: one oversized head item may use
-            // the frame so it cannot wedge forever. During scroll TryPeekPixels exposes only the <=512 KiB lane, making
-            // the scroll byte cap strict while still allowing a small completion behind a deferred large cover.
+            // The byte budget is a burst budget, not an absolute size ceiling — at rest AND during scroll: one oversized
+            // head item may use the whole frame so it can never wedge, and the budget then refuses only the applies
+            // BEHIND it. (During scroll the apply cap is 1 anyway, so this bounds the at-rest burst.)
             if (next.ByteLen > byteCap - appliedBytes && applied > 0) break;
             if (!TryDequeuePixels(large, out var d)) continue;
             // UI-thread callers normally serialize Cancel and Pump, but retain the final check for another-thread
@@ -214,14 +221,11 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
         }
     }
 
-    private bool TryPeekPixels(bool scrollThrottled, out Done done, out bool large)
+    // Merge the two size lanes back into ONE completion-ordered stream: the older Sequence wins, so a small completion
+    // published before a large one still lands first. Scroll-throttled or not — the lanes exist to classify, never to
+    // hide work from the pump.
+    private bool TryPeekPixels(out Done done, out bool large)
     {
-        if (scrollThrottled)
-        {
-            large = false;
-            return _pixelOut.TryPeek(out done);
-        }
-
         bool hasSmall = _pixelOut.TryPeek(out var small);
         bool hasLarge = _largePixelOut.TryPeek(out var big);
         if (!hasSmall)

@@ -121,10 +121,15 @@ public interface IGpuDevice : IDisposable
     /// the maximize lock is content fill/overdraw (not uploads/blur). 0 when off. Host folds into <c>FrameStats.GpuSceneMs</c>.</summary>
     double LastGpuSceneMs => 0;
 
-    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the rect/solid-FILL portion (all opaque/blended
-    /// primitive fills — rects, shadows, arcs, polylines, gradients). Isolates overdraw fill cost from image/text/composite.
-    /// 0 when off/unsupported. Host folds into <c>FrameStats.GpuFillMs</c>.</summary>
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the rect/solid-FILL portion (opaque/blended
+    /// rects, arcs, polylines, gradients — shadows split out into <see cref="LastGpuShadowMs"/>). Isolates overdraw fill
+    /// cost from image/text/composite. 0 when off/unsupported. Host folds into <c>FrameStats.GpuFillMs</c>.</summary>
     double LastGpuFillMs => 0;
+
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the drop-SHADOW portion. Split out of
+    /// <see cref="LastGpuFillMs"/> because a shadow is a large always-blended SDF quad whose cost tracks shadow COUNT and
+    /// AREA, not the plate fills it batches beside. 0 when off. Folds into <c>FrameStats.GpuShadowMs</c>.</summary>
+    double LastGpuShadowMs => 0;
 
     /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the IMAGE-draw portion. 0 when off. Folds into <c>FrameStats.GpuImageMs</c>.</summary>
     double LastGpuImageMs => 0;

@@ -686,12 +686,14 @@ public sealed class ScrollIntegrator
             if (sc.UserScrollActive) AnyUserScrollActiveThisFrame = true;
             if (moved || syncMoved) AnyOffsetWroteThisFrame = true;   // §5.4: a real offset advance (tick chase OR synchronous ScrollMoved pulse) — the stationary-hover re-resolve gate
             bool over = sc.PointerOver;
-            bool lane = sc.PointerOverScrollbar;
 
             // Below the overflow floor the content effectively fits (a fractional-layout remainder) — never arm the bar,
             // so a hover or a tiny pan can't flicker it in. Real overflow (≥ MinBarOverflowPx) behaves as before.
             float overflow = (sc.Orientation == 1 ? sc.ContentW - sc.ViewportW : sc.ContentH - sc.ViewportH);
             bool scrollable = overflow > MinBarOverflowPx;
+            // A viewport that STOPPED being scrollable has no lane to hover either: its bar is on its way out, and a
+            // resting pointer must not keep the 400ms expand dwell alive (that would retain the timer row forever).
+            bool lane = sc.PointerOverScrollbar && scrollable;
 
             if (scrollable && (moved || movingNow)) cs.ScrolledSinceReveal = true;
 
@@ -726,8 +728,14 @@ public sealed class ScrollIntegrator
             cs.AwayMs = over ? 0f : cs.AwayMs + dtMs;
             bool show = scrollable && (movingNow || over || lane);
             bool hideDue = !show &&
-                (cs.ScrolledSinceReveal ? sc.IdleMs >= IdleHideMs       // WinUI ScrollBarContractDelay 2s
-                                        : cs.AwayMs >= LeaveHideMs);    // hover-flash retire (≈667ms; class remarks)
+                // A viewport that became NON-scrollable while its bar was up (a fit-width shelf settling as its item
+                // count/width resolve) can satisfy NEITHER delay: ScrolledSinceReveal needs `scrollable` so it stays
+                // false, and AwayMs pins at 0 while the pointer rests over the viewport. That left dwellPending true
+                // forever ⇒ armed forever ⇒ (before the motion-gated grace) a permanent display-rate free-run. Nothing
+                // to show ⇒ retire it; the fade-out still animates normally, it just has a reason to start.
+                ((!scrollable && !movingNow)
+                 || (cs.ScrolledSinceReveal ? sc.IdleMs >= IdleHideMs       // WinUI ScrollBarContractDelay 2s
+                                            : cs.AwayMs >= LeaveHideMs));   // hover-flash retire (≈667ms; class remarks)
             float fadeWant = show ? 1f : hideDue ? 0f : sc.FadeT > 0f ? 1f : 0f;
             if (fadeWant != cs.FadeTarget) StartTrack(ref cs.FadeFrom, ref cs.FadeTarget, ref cs.FadeClockMs, sc.FadeT, fadeWant);
 

@@ -54,7 +54,7 @@ public sealed class ImageSchedulingTests
     }
 
     [Fact]
-    public async Task ScrollBudget_StillAdmitsOneOversizedCompletion()
+    public async Task ScrollBudget_AdmitsExactlyOneOversizedCompletionPerFrame()
     {
         using var scheduler = new DecodeScheduler(new Codec(), new Fetcher(),
             new DecodeOptions { MaxConcurrency = 2 }) { ScrollThrottled = true };
@@ -65,8 +65,67 @@ public sealed class ImageSchedulingTests
 
         int applied = 0;
         scheduler.Pump((_, ok, _, _, _, _) => { if (ok) applied++; }, static (_, _, _, _) => { });
-        Assert.Equal(1, applied);                 // each item is >512 KiB, but the head always makes progress
+        Assert.Equal(1, applied);                 // each item is 1 MiB (> the 512 KiB scroll budget): the head still lands
         Assert.True(scheduler.HasReadyCompletions);
+
+        // …and the NEXT frame takes the next one. A cover that cannot land until the gesture ends is a BlurHash smear
+        // for the whole scroll; one 1 MiB upload per frame is the paced alternative.
+        scheduler.Pump((_, ok, _, _, _, _) => { if (ok) applied++; }, static (_, _, _, _) => { });
+        Assert.Equal(2, applied);
+        Assert.False(scheduler.HasReadyCompletions);
+    }
+
+    [Fact]
+    public async Task ScrollPump_PreservesCompletionOrderAcrossSizeLanes()
+    {
+        // ONE worker ⇒ the two decodes complete in request order, so the 16 KiB completion is strictly OLDER than the
+        // 1 MiB one. The size lanes exist to classify, never to reorder: a scroll-throttled pump must still drain them
+        // oldest-first.
+        using var scheduler = new DecodeScheduler(new Codec(), new Fetcher(),
+            new DecodeOptions { MaxConcurrency = 1 }) { ScrollThrottled = true };
+        Assert.True(scheduler.Begin(1, "small", 64, 64));      // 16 KiB → the small lane
+        await WaitForAsync(() => scheduler.HasReadyCompletions);
+        Assert.True(scheduler.Begin(2, "large", 512, 512));    // 1 MiB → the large lane
+        await WaitForAsync(() => scheduler.QueueDepth == 0 && scheduler.RequestCount == 0 && scheduler.Inflight == 0);
+
+        int first = 0, second = 0;
+        scheduler.Pump((id, ok, _, _, _, _) => { if (ok && first == 0) first = id; }, static (_, _, _, _) => { });
+        scheduler.Pump((id, ok, _, _, _, _) => { if (ok && second == 0) second = id; }, static (_, _, _, _) => { });
+        Assert.Equal(1, first);
+        Assert.Equal(2, second);
+        Assert.False(scheduler.HasReadyCompletions);
+    }
+
+    [Fact]
+    public void ScrollReveal_IsHalfLength_ExceptForACacheAdjacentLanding()
+    {
+        var cache = new ImageCache(new FakeImageDecoder());
+        float dur = ImageTransition.Default.DurationMs;
+
+        // At rest: the full authored fade.
+        var rest = cache.Request("rest", 64, 64);
+        cache.Tick(500f);
+        cache.Pump();
+        Assert.Equal(0f, cache.CrossFadeOf(rest));
+        cache.Tick(dur * 0.5f);
+        Assert.True(cache.CrossFadeOf(rest) < 1f);
+        cache.Tick(dur * 0.5f);
+        Assert.Equal(1f, cache.CrossFadeOf(rest));
+
+        // Mid-scroll, landing long after its request: a HALF-length fade — not the old instant pop.
+        cache.SuppressReveals = true;
+        var slow = cache.Request("slow", 64, 64);
+        cache.Tick(500f);
+        cache.Pump();
+        Assert.Equal(0f, cache.CrossFadeOf(slow));
+        cache.Tick(dur * 0.5f);
+        Assert.Equal(1f, cache.CrossFadeOf(slow));
+
+        // Mid-scroll, cache-adjacent (landed within 100ms of the request): still instant — fading a hit reads as lag.
+        var fast = cache.Request("fast", 64, 64);
+        cache.Tick(16f);
+        cache.Pump();
+        Assert.Equal(1f, cache.CrossFadeOf(fast));
     }
 
     [Fact]

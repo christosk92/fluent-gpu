@@ -1608,6 +1608,71 @@ static class ScrollSuite
                 $"wIdle={wIdle} (want >300) wHold={wHold} (want <={paceFloor}) wAfter={wAfter} (want >300) holdArmed={holdArmed}");
         }
 
+        // gate.wake.scrollGraceNeedsMotion (W2.75-C1): the post-scroll display-rate grace must be armed by REAL MOTION,
+        // not by the ScrollAnim wake bit. That bit is also set by merely-ARMED viewports (a scrollbar fade/away timer,
+        // zero offset motion — ScrollIntegrator.HasActive counts armed, not moving), and re-arming off it made the loop
+        // free-run at the display rate for ~2s after every scroll with nothing to render, defeating the ambient cap.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("scroll-grace", new Size2(480, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
+            host.RunFrame();
+            // Reveal the bar over the lane, then leave the VIEWPORT: armed for its away/fade dwell with ZERO motion.
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(198f, 100f), 0, 0));
+            for (int i = 0; i < 6; i++) host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(400f, 260f), 0, 0));
+            host.RunFrame();
+            bool armedNoMotion = host.ScrollAnimatorCensus > 0 && !host.ScrollIntegratorForTest.AnyOffsetWroteThisFrame;
+
+            host.SetScrollGraceForTest(0);
+            host.RecommendedWaitMs();
+            bool notExtended = host.ScrollGraceUntilForTest == 0;
+
+            // The grace still exists for the motion it was written for: a real wheel notch re-arms it.
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(100f, 100f), 0, 0, WheelNotch: 1f));
+            bool moved = false;
+            for (int i = 0; i < 6 && !moved; i++) { host.RunFrame(); moved = host.ScrollIntegratorForTest.AnyOffsetWroteThisFrame; }
+            host.SetScrollGraceForTest(0);
+            host.RecommendedWaitMs();
+            bool extended = host.ScrollGraceUntilForTest > 0;
+
+            Check("gate.wake.scrollGraceNeedsMotion the post-scroll display-rate grace is armed by a real offset write, NOT by the ScrollAnim wake bit: an armed-but-motionless viewport (scrollbar fade timer) does not extend it; a wheel notch does",
+                armedNoMotion && notExtended && moved && extended,
+                $"armedNoMotion={armedNoMotion} notExtended={notExtended} moved={moved} extended={extended} armed={host.ScrollAnimatorCensus}");
+        }
+
+        // gate.scroll.nonScrollableBarRetires (W2.75-C2): a viewport whose content settles to FIT while its bar is up and
+        // the pointer rests over it could satisfy neither hide delay (ScrolledSinceReveal needs `scrollable`; AwayMs pins
+        // at 0 while `over`) ⇒ dwellPending forever ⇒ armed forever. Reachable on a fit-width shelf whose count/width
+        // settle after mount. Nothing to show ⇒ it must fade out and DROP (retiring its timer row) within the fade.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("bar-retire", new Size2(480, 320), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new ScrollProbe());
+            host.RunFrame();
+            var vp = FindScrollNode(host.Scene, host.Scene.Root);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(198f, 100f), 0, 0));
+            for (int i = 0; i < 8; i++) host.RunFrame();
+            bool revealedArmed = !vp.IsNull && host.ScrollAnimatorCensus > 0 && host.Scene.ScrollRef(vp).FadeT == 1f;
+
+            int frames = 0;
+            bool dropped = false;
+            for (; frames < 40 && !vp.IsNull; frames++)
+            {
+                // The content now fits. Re-asserted each frame so a relayout restoring the overflow can't mask the gate.
+                host.Scene.ScrollRef(vp).ContentH = host.Scene.ScrollRef(vp).ViewportH;
+                host.RunFrame();
+                if (host.ScrollAnimatorCensus == 0) { dropped = true; break; }
+            }
+            float fadeAfter = vp.IsNull ? -1f : host.Scene.ScrollRef(vp).FadeT;
+            bool retired = host.ScrollIntegratorForTest.ConsciousStateCount == 0;
+            bool withinFade = frames <= 12;   // FadeMs=83 at the headless ~16ms step ⇒ ~6 frames
+
+            Check("gate.scroll.nonScrollableBarRetires a revealed scrollbar on a viewport that becomes NON-scrollable under a resting pointer fades to hidden and DROPS (timer row retired) within the fade duration — never a permanent arm",
+                revealedArmed && dropped && fadeAfter == 0f && retired && withinFade,
+                $"revealedArmed={revealedArmed} dropped={dropped} fadeAfter={fadeAfter:0.###} retired={retired} frames={frames}");
+        }
+
         // gate.host.ambientRateMode: the ambient cap's RATE selection. HalfRefresh must be panel-DERIVED (a whole-vblank
         // divisor at every rate — 120⇒60, 90⇒45, 60⇒30 — which is the whole point: a fixed 60 beats against the vsync-
         // locked present on a 120Hz panel and is simply the wrong number on a 90Hz one), while ExplicitFps stays

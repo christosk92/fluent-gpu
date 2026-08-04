@@ -1705,7 +1705,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 switch (kind)
                 {
                     case PrimKind.Shadow:
-                        SceneCat(CatFill);
+                        // Own category: a drop-shadow is a large, always-blended SDF quad and behaves nothing like the
+                        // opaque plate fills it batches next to — with both in `rect` the 5ms number was unattributable.
+                        SceneCat(CatShadow);
                         bool bindShadowShared = !_sharedSdfStateBound;
                         bool bindShadowPso = _boundPipe != BoundPipe.Shadow;
                         NoteSdfPipeBind(_shadowPipe!.Record(_cmdList, shadowSpan.Slice(sc, count), lw, lh, bindShadowShared, bindShadowPso),
@@ -2612,7 +2614,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private double _lastGpuRenderMs;
     private double _lastGpuSceneMs;   // of the whole: the scene-raster block (clear + drawlist playback + layer composites), excl. uploads/baked-blur
     // ── Per-category scene split (FG_GPU_TIMING=1) ─────────────────────────────────────────────────────────────────────
-    // The scene-raster block (mid→end) is further split into rect/solid FILL, IMAGE, GLYPH and layer/acrylic COMPOSITE. The
+    // The scene-raster block (mid→end) is further split into rect/solid FILL, SHADOW, IMAGE, GLYPH and layer/acrylic COMPOSITE. The
     // categories INTERLEAVE in painter order (a card emits bg-fill → image → text; segments repeat), so a fixed pair-per-run
     // bracket is impossible within a compile-time slot budget. Instead we lay down a *boundary timeline*: mid is the first
     // boundary, and one timestamp is emitted at every category CHANGE (SceneCat). The interval between two consecutive marks
@@ -2624,7 +2626,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // group's full-window clear lands in COMPOSITE instead of the FILL interval that happened to precede it. The remaining
     // un-marked composite work (the region-sized local-blur lease) still falls into the preceding FILL interval (a
     // documented, benign approximation). All zero when FG_GPU_TIMING is off or the query heap is unavailable.
-    private const byte CatFill = 0, CatImage = 1, CatGlyph = 2, CatComposite = 3, CatNone = 0xFF;
+    private const byte CatFill = 0, CatImage = 1, CatGlyph = 2, CatComposite = 3, CatShadow = 4, CatNone = 0xFF;
     private const int SceneMarkCap = 256;   // interior-boundary timestamp slots per frame (past this the tail lumps into the current category)
     private byte _sceneCurCat = CatNone;    // category currently active in the scene replay; CatNone before the first run
     private int _sceneMarkCount;            // interior boundaries emitted this frame (slots used past base+3)
@@ -2636,7 +2638,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         for (int i = 0; i < a.Length; i++) a[i] = new byte[SceneMarkCap + 1];
         return a;
     }
-    private double _lastGpuFillMs, _lastGpuImageMs, _lastGpuGlyphMs, _lastGpuCompositeMs;
+    private double _lastGpuFillMs, _lastGpuShadowMs, _lastGpuImageMs, _lastGpuGlyphMs, _lastGpuCompositeMs;
     private const uint GpuTsPerFrame = 3 + (uint)SceneMarkCap;   // begin | mid (after uploads+baked-blur) | end | then up to SceneMarkCap category-boundary marks
     /// <inheritdoc/>
     public double LastGpuRenderMs => _lastGpuRenderMs;
@@ -2644,6 +2646,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public double LastGpuSceneMs => _lastGpuSceneMs;
     /// <inheritdoc/>
     public double LastGpuFillMs => _lastGpuFillMs;
+    /// <inheritdoc/>
+    public double LastGpuShadowMs => _lastGpuShadowMs;
     /// <inheritdoc/>
     public double LastGpuImageMs => _lastGpuImageMs;
     /// <inheritdoc/>
@@ -2718,7 +2722,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
         // Fold the boundary timeline into the four category buckets. Marks in EXECUTION order: mid (t0), then
         // _sceneCatCount-1 interior boundaries at slots q+3+j, then end. Interval j (category = cats[j]) spans [t_j, t_{j+1}].
-        double fill = 0, image = 0, glyph = 0, comp = 0;
+        double fill = 0, shadow = 0, image = 0, glyph = 0, comp = 0;
         int nCat = _sceneCatCount[frameIndex];
         if (nCat > 0)
         {
@@ -2731,6 +2735,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 switch (cats[j])
                 {
                     case CatFill: fill += ms; break;
+                    case CatShadow: shadow += ms; break;
                     case CatImage: image += ms; break;
                     case CatGlyph: glyph += ms; break;
                     case CatComposite: comp += ms; break;
@@ -2738,7 +2743,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 prev = cur;
             }
         }
-        _lastGpuFillMs = fill; _lastGpuImageMs = image; _lastGpuGlyphMs = glyph; _lastGpuCompositeMs = comp;
+        _lastGpuFillMs = fill; _lastGpuShadowMs = shadow; _lastGpuImageMs = image; _lastGpuGlyphMs = glyph; _lastGpuCompositeMs = comp;
     }
 
     /// <inheritdoc/>
