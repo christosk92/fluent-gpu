@@ -97,6 +97,47 @@ public sealed class ImageSchedulingTests
     }
 
     [Fact]
+    public void CancelRacingTheClaim_IsObservable_NotLostInTheRegistrationGap()
+    {
+        // NO workers: this test IS the worker, so the claim/cancel interleaving is exact — no sleeps, no timing.
+        using var scheduler = new DecodeScheduler(new Codec(), new Fetcher(),
+            new DecodeOptions { MaxConcurrency = 1 }, startWorkers: false);
+        Assert.True(scheduler.Begin(7, "cover", 64, 64));
+        Assert.True(scheduler.TryClaimForTest(out int claimed));
+        Assert.Equal(7, claimed);
+
+        // The id has left _reqs. In the OLD shape it was not yet in _activeIds either (WorkerLoop registered it only
+        // after TryClaim returned), so a Cancel arriving here found it in NEITHER map and was dropped silently — the
+        // decode then published pixels for an already-recycled row. TryClaim now registers BEFORE claiming, so the
+        // cancel must be observable: either as a queued Canceled control completion or as a live tombstone.
+        scheduler.Cancel(7);
+        Assert.True(scheduler.CanceledPending > 0 || scheduler.HasReadyCompletions,
+            "a Cancel inside the claim window must not vanish");
+        Assert.Equal(1, scheduler.CanceledPending);
+    }
+
+    [Fact]
+    public async Task CancelFromInsideTheClaimWindow_SuppressesTheDecode()
+    {
+        // One worker; the cancel is fired FROM the worker thread inside TryClaim's claim window (the ClaimBarrier
+        // hook), which is the exact interleaving a sleep-based race test can never reach reliably.
+        using var scheduler = new DecodeScheduler(new Codec(), new Fetcher(),
+            new DecodeOptions { MaxConcurrency = 1 });
+        scheduler.ClaimBarrier = () => { scheduler.ClaimBarrier = null; scheduler.Cancel(11); };   // once
+        Assert.True(scheduler.Begin(11, "cover", 64, 64));
+
+        await WaitForAsync(() => scheduler.QueueDepth == 0 && scheduler.RequestCount == 0
+            && scheduler.Inflight == 0 && scheduler.HasReadyCompletions);
+
+        int canceled = 0, pixels = 0;
+        scheduler.Pump((_, ok, _, _, failure, _) => { if (!ok && failure == ImageFailureKind.Canceled) canceled++; },
+            (_, _, _, _) => pixels++);
+        Assert.Equal(1, canceled);
+        Assert.Equal(0, pixels);                      // nothing published for the recycled row
+        Assert.Equal(0, scheduler.CanceledPending);   // the tombstone is reclaimed by Pump — bounded, per the contract
+    }
+
+    [Fact]
     public void ScrollReveal_IsHalfLength_ExceptForACacheAdjacentLanding()
     {
         var cache = new ImageCache(new FakeImageDecoder());

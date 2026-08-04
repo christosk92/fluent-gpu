@@ -1440,7 +1440,12 @@ float4 BlurPS(V i) : SV_Target
         D3D12_VIEWPORT vp = new() { TopLeftX = minX, TopLeftY = minY, Width = rw, Height = rh, MaxDepth = 1 };
         cmd->RSSetViewports(1, &vp);
         cmd->RSSetScissorRects(1, &box);
-        Composite(cmd, slot, alpha);
+        // Census: this is a BLUR group composited through a BOUNDING scissor (`box` above) — NOT the unbounded plain
+        // Composite this used to route through. Attributing a pin HIT to `Opacity, bounded:false` made every hit read
+        // as a full-canvas plain-opacity blend in the `opgrp` split, so a session in which the pin cache worked
+        // perfectly was indistinguishable from one in which it never hit at all (`o0/full0` on every frame). A hit is
+        // the CHEAPEST blur path there is; it must not be counted as the most expensive class.
+        CompositeUv(cmd, slot, alpha, 0f, 0f, 1f, 1f, GroupKind.Blur, bounded: true);
         SetViewport(cmd, _w, _h);   // restore the full-canvas viewport (+ full scissor; the caller re-applies its clip)
     }
 

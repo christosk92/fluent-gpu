@@ -104,14 +104,32 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     public void SetCompletionWake(Action? wake) => Volatile.Write(ref _completionWake, wake);
 
     public DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options = null)
+        : this(codec, fetcher, options, startWorkers: true) { }
+
+    /// <summary>Test-only seam: <paramref name="startWorkers"/> false constructs the scheduler with NO worker tasks, so
+    /// a test can drive the claim/cancel interleaving by hand (<see cref="TryClaimForTest"/>) with no sleeps and no
+    /// timing dependence. Production always uses the public constructor.</summary>
+    internal DecodeScheduler(IImageCodec codec, IImageFetcher fetcher, DecodeOptions? options, bool startWorkers)
     {
         _codec = codec;
         _fetcher = fetcher;
         _opt = options ?? new DecodeOptions();
         _pixels = _opt.PixelPool ?? new PixelBufferPool();
         int workers = _opt.MaxConcurrency > 0 ? _opt.MaxConcurrency : Math.Clamp(Environment.ProcessorCount - 2, 2, 6);
-        _workers = new Task[workers];
-        for (int i = 0; i < workers; i++) _workers[i] = Task.Run(WorkerLoop);
+        _workers = new Task[startWorkers ? workers : 0];
+        for (int i = 0; i < _workers.Length; i++) _workers[i] = Task.Run(WorkerLoop);
+    }
+
+    /// <summary>Test-only hook invoked ONCE on the worker thread between a successful claim and TryClaim's return —
+    /// i.e. exactly inside the window a racing <see cref="Cancel"/> must survive. Null (and free) in production.</summary>
+    internal Action? ClaimBarrier;
+
+    /// <summary>Test-only: run one <c>TryClaim</c> on the calling thread and report the claimed id.</summary>
+    internal bool TryClaimForTest(out int id)
+    {
+        bool claimed = TryClaim(out var req);
+        id = req.Id;
+        return claimed;
     }
 
     // UI thread: non-blocking enqueue into the priority lane. Visible is never dropped; off-screen lanes drop under load.
@@ -256,7 +274,8 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
             {
                 await _signal.WaitAsync(_shutdown.Token).ConfigureAwait(false);
                 if (!TryClaim(out var req)) continue;          // stale (promotion dup / canceled) → back to wait
-                _activeIds[req.Id] = 0;
+                // NOTE: _activeIds registration happens INSIDE TryClaim, before the claim itself — see the invariant
+                // comment there. Registering it here (the old shape) left a window in which the id was in NEITHER map.
                 Interlocked.Increment(ref _inflight);
                 try { await Process(req).ConfigureAwait(false); }
                 finally { Interlocked.Decrement(ref _inflight); }
@@ -267,15 +286,39 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
 
     // Claim the next real request from the highest non-empty lane. The first worker to TryRemove an id owns it; any
     // duplicate lane entry (from a Prioritize promotion) finds it gone and is skipped — so each request runs once.
+    //
+    // ID-IN-AT-LEAST-ONE-MAP INVARIANT (enforced here, not merely documented). Cancel(id) looks in exactly two places:
+    // _reqs (still queued ⇒ publish a Canceled control completion) and _activeIds (claimed ⇒ set a tombstone). An id
+    // must therefore be visible in one of them at EVERY instant between Begin and its terminal completion being
+    // consumed by Pump — otherwise a Cancel lands in the hole and is dropped silently, and the decode later publishes
+    // pixels for an already-recycled row (the 46d2 flake). The old shape registered _activeIds in WorkerLoop AFTER
+    // TryClaim returned, so the claim's TryRemove(_reqs) opened exactly such a hole.
+    // Registering BEFORE the claim attempt makes the two memberships OVERLAP instead of leaving a gap, and every
+    // interleaving stays sound:
+    //   • Cancel wins the _reqs race → it publishes the Canceled completion; our claim fails and we un-register, so
+    //     the id ends up in neither map, exactly as before.
+    //   • We win → Cancel falls through to the _activeIds probe, which is ALREADY true, so it tombstones; Process
+    //     re-checks _canceled on entry (and again after the fetch) and completes as Canceled.
+    //   • Both observe the id (the benign overlap) → Cancel completes it AND tombstones; Finish reclaims the tombstone
+    //     on the Pump that drains that completion, so the bounded-tombstone contract holds.
+    // The un-register is guarded by TryAdd's `added`: a Prioritize DUPLICATE whose original is already claimed must
+    // not evict the live claim's registration (that would re-open the very hole this closes). `added == true` proves
+    // no live claim was registered at that instant, which is also why dropping a tombstone that attached to our
+    // transient entry is correct — nothing would ever consume it.
     private bool TryClaim(out Req req)
     {
         for (int lane = 0; lane < _lanes.Length; lane++)
             while (_lanes[lane].TryDequeue(out int id))
+            {
+                bool added = _activeIds.TryAdd(id, 0);
                 if (_reqs.TryRemove(id, out req))
                 {
                     Interlocked.Decrement(ref _queued);
+                    ClaimBarrier?.Invoke();   // test-only: the claim/cancel race window, made deterministic
                     return true;
                 }
+                if (added && _activeIds.TryRemove(id, out _)) _canceled.TryRemove(id, out _);
+            }
         req = default;
         return false;
     }
@@ -283,8 +326,10 @@ public sealed class DecodeScheduler : IImageDecoder, IDisposable
     private async Task Process(Req req)
     {
         // The worker claimed req.Id exclusively (TryClaim's atomic TryRemove), so this is the single owner of the id for
-        // its whole lifetime. _activeIds and any cancellation tombstone stay live through the UI-thread Pump so a row
-        // recycled after decode publication can still suppress the pending upload.
+        // its whole lifetime. TryClaim registered it in _activeIds BEFORE the claim, so a Cancel that raced the claim
+        // is guaranteed to have found it and tombstoned — this check is where that tombstone is honored. _activeIds and
+        // the tombstone stay live through the UI-thread Pump so a row recycled after decode publication can still
+        // suppress the pending upload.
         if (_canceled.ContainsKey(req.Id)) { Complete(req.Id, false, 0, 0, ImageFailureKind.Canceled, 0, null, 0); return; }
 
         var (fetch, attempts) = await FetchWithRetry(req.Src, req.Id).ConfigureAwait(false);

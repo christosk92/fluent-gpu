@@ -381,9 +381,21 @@ public static class FluentApp
                     // Both counters are plain device fields, so this costs one string only on the frames that log.
                     long efStripPx = gpuDev?.LastEdgeFadeStripPx ?? 0L;
                     int efFallbacks = gpuDev?.LastEdgeFadeStripFallbacks ?? 0;
-                    string edgeStripTok = (opEdge > 0 || efStripPx > 0 || efFallbacks > 0)
-                        ? $" efS{efStripPx}/efL{efFallbacks}"
+                    // …and WHY they fell back, because the three rejections have different fixes: g = nested inside an
+                    // open pooled opacity/blur group, d = the strip-depth cap, s = the strip scratch pool was empty.
+                    // Appended only when efL > 0, so a clean frame's token is byte-identical to before.
+                    string efReasonTok = efFallbacks > 0
+                        ? $"(g{gpuDev?.LastEdgeFadeStripRejectNested ?? 0}/d{gpuDev?.LastEdgeFadeStripRejectDepth ?? 0}/s{gpuDev?.LastEdgeFadeStripRejectScratch ?? 0})"
                         : "";
+                    string edgeStripTok = (opEdge > 0 || efStripPx > 0 || efFallbacks > 0)
+                        ? $" efS{efStripPx}/efL{efFallbacks}{efReasonTok}"
+                        : "";
+                    // rq<opaque>/<blended> — rect INSTANCES by PSO class. Ungated for the same reason efS/efL is: a feel
+                    // session (no FG_GPU_TIMING, no FG_DIAG) has to be able to see whether a heavy page's fill cost is
+                    // opaque plate coverage or a stack of full-viewport translucent passes. Two plain device fields.
+                    int rqOpaque = gpuDev?.LastRectOpaqueInstances ?? 0;
+                    int rqBlended = gpuDev?.LastRectBlendedInstances ?? 0;
+                    string rectPassTok = (rqOpaque > 0 || rqBlended > 0) ? $" rq{rqOpaque}/{rqBlended}" : "";
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
                     // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit
@@ -448,7 +460,7 @@ public static class FluentApp
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok}{rectPassTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}{inputPaceTok}");
                 }
             }

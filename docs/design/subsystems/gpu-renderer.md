@@ -265,6 +265,37 @@ public struct DrawGradientStrokeCmd {      // = DrawGradientRectCmd + StrokeWidt
 > decode it; `HeadlessGpuDevice` exposes `LastGradientStrokes` for golden checks. Corner radius uses `radii.x`
 > (uniform) — fine for the 4 px control radius.
 
+> **⚠️ §3.2–§3.4 ARE DESIGN, NOT AS-BUILT (verified 2026-08-04).** The sort/batch machinery below —
+> the 64-bit `SortKey` as a *consumed* key, the LSD radix `Batcher`, and `OverlapGrid` — **is not
+> implemented**, and the design text is retained as the intended target, not as a description of the
+> shipping renderer. What is actually built:
+>
+> - **`SortKey` is recorded but never read.** `DrawList` carries the parallel `ulong[]` arena
+>   (`PushSort`, the `SortKeys` span) and the RHI seam still threads it —
+>   `IGpuDevice.SubmitDrawList(drawList, sortKeys, ctx)` — but **no leaf consumes it**:
+>   `D3D12Device.SubmitDrawList` takes the span and never touches it, and `SceneRecorder` emits a
+>   non-zero key at exactly one call site. Nothing depends on the bit layout in §3.2 today.
+> - **No `Batcher`, no radix sort, no `OverlapGrid` type exists in `src/`.**
+> - **The leaf replays the DrawList in STREAM (painter) order, with run coalescing.**
+>   `D3D12Device.Decode` walks the opcodes in order, appending each primitive to its per-kind instance
+>   list, while `PushRun(PrimKind)` merges **consecutive same-kind** primitives into a run
+>   (`Rect | Shadow | Gradient | Image | Arc | Polyline | VideoHole`). `FlushSegment` then replays
+>   `_runs` **in that order**, so a shadow recorded before a plate still paints under it. Glyphs are
+>   accumulated separately and drawn **last within each segment**. Clip ops update desired scissor
+>   state and flush only when pending draws need the old rect; **layer ops are hard segment breaks**.
+> - **The only sort-like step preserves order exactly.** Inside a `Rect` run, a second pass splits
+>   maximal same-class sub-runs (opaque-plain vs everything else) **in painter order, never
+>   reordered**, and draws each with its PSO — an opaque no-blend fast path, not a reordering batcher.
+> - **Consequence for painter order:** correctness comes from *never reordering at all*, not from
+>   `RecordSeq` + the `OverlapGrid` break. The §3.3 break rules describe the same batch boundaries the
+>   as-built segmentation happens to produce (pipeline, texture, clip, layer), but they are enforced
+>   by stream position, not by scanning a sorted command array. §3.6.1's "SortKey placement" for the
+>   selection/overlay opcodes is likewise a design statement — those opcodes are emitted in the paint
+>   order that §3.6.1 describes, which is what actually delivers the ordering it argues for.
+>
+> Building §3.2–§3.4 for real means adding the consumer, not changing the recorder: the keys, the
+> parallel arena, and the seam parameter are already in place.
+
 ### 3.2 SortKey layout (64-bit) — folds the painter-order BLOCKER
 
 **MADE: the primary key is a monotonic paint-order record sequence (tree pre-order emit index), with
@@ -290,6 +321,9 @@ bit 03..00  ClipBucket       (4b: scissor-compatible clips share a bucket; SDF/s
 
 ### 3.3 Batch-break rules (authoritative)
 
+*(Design — see the §3.2–§3.4 as-built callout above: there is no sorted command array to scan; the
+as-built leaf breaks runs by stream position.)*
+
 A new `InstanceBatch` starts when, scanning sorted cmds, ANY changes vs the open batch:
 1. **PipelineId** (RenderLane class, blend, sample count) → `SetPipeline`.
 2. **Bound texture** (atlas page / gradient / image atlas page / layer-source) → `BindTexture`.
@@ -304,6 +338,9 @@ Everything else (rect, color, radii, transform, gradient stops, image dst) is **
 a break. Solid fills, same-atlas gradients, same-page images, and shadows of arbitrary geometry merge.
 
 ### 3.4 OverlapGrid — painter-order break (folds the hardened fix)
+
+*(Design — NOT BUILT. No `OverlapGrid` type exists in `src/`; the as-built renderer preserves painter
+order by replaying the stream unsorted. See the §3.2–§3.4 callout above.)*
 
 **MADE: a per-layer coarse occupancy structure (bounding-interval list / coarse tile grid over expanded
 device bounds) that stores the LAST WRITER per cell and breaks the batch when a later differently-

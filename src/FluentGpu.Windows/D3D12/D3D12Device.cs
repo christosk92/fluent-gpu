@@ -115,6 +115,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // PURE fades this frame that were eligible by payload but still had to take the legacy lease (nested in a pooled
     // group / scratch pool momentarily full). Ungated — the [fps] line reads it so a feel session can see engagement.
     private int _edgeFadeStripFallbacks;
+    // …split by REASON. The three rejections have completely different fixes (an enclosing pooled group is a renderer
+    // eligibility question; a depth/scratch rejection is a pool-sizing question), and one merged counter cannot say
+    // which one is costing the ~1.5 ms per fallback frame. They sum to _edgeFadeStripFallbacks except for the
+    // structurally-unreachable "no compositor / no top target" case (the layered submit path always has both), which is
+    // counted in the total only.
+    private enum StripFadeReject : byte { None = 0, Unavailable, Nested, Depth, Scratch }
+    private int _efStripRejectNested, _efStripRejectDepth, _efStripRejectScratch;
 
     public int LastBlurCacheHit => _blurCacheHit;
     public int LastBlurCacheMiss => _blurCacheMiss;
@@ -134,8 +141,22 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// nested inside a pooled opacity/blur group, or the scratch pool was momentarily full. Disambiguates "no eligible
     /// fade on screen" (0) from "eligible but rejected" (&gt; 0) when <see cref="LastEdgeFadeStripPx"/> is 0.</summary>
     public int LastEdgeFadeStripFallbacks => _edgeFadeStripFallbacks;
+    /// <summary>Of <see cref="LastEdgeFadeStripFallbacks"/>, the ones rejected because a POOLED opacity/blur group was
+    /// already open (the shifted-viewport / partially-cleared-pool blockers documented on <c>TryBeginStripFade</c>).</summary>
+    public int LastEdgeFadeStripRejectNested => _efStripRejectNested;
+    /// <summary>Of <see cref="LastEdgeFadeStripFallbacks"/>, the ones rejected because the strip-fade nesting depth cap
+    /// (<c>MaxStripFadeDepth</c>) was already reached.</summary>
+    public int LastEdgeFadeStripRejectDepth => _efStripRejectDepth;
+    /// <summary>Of <see cref="LastEdgeFadeStripFallbacks"/>, the ones rejected because the strip scratch pool was
+    /// momentarily exhausted (<c>AcquireStripScratch</c> returned -1) — a pool-sizing signal, not an eligibility one.</summary>
+    public int LastEdgeFadeStripRejectScratch => _efStripRejectScratch;
     /// <summary>Of <see cref="LastOpacityGroups"/>, the ones that blended the FULL canvas (no bounding scissor).</summary>
     public int LastFullTargetGroups => _opacity?.FullTargetGroupsThisFrame ?? 0;
+    /// <summary>Rect instances this frame drawn through the OPAQUE (no-blend, no-SDF) rect PSO.</summary>
+    public int LastRectOpaqueInstances => _frameRectOpaqueInsts;
+    /// <summary>Rect instances this frame drawn through the BLENDED rect PSO — each one is a read-modify-write over its
+    /// covered pixels, so this (not the raw rect count) is what a full-viewport translucent ladder shows up as.</summary>
+    public int LastRectBlendedInstances => _frameRectBlendedInsts;
     private GlyphRenderer? _glyphs;
     private ImageTextureStore? _imageTextures;
     private ImagePipeline? _imagePipe;
@@ -158,6 +179,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private float _frameScale = 1f;
     private float _imageClockMs;
     private int _frameRectCount;
+    // Of the rect instances actually RECORDED this frame, how many went through the opaque no-blend PSO vs the blended
+    // SDF PSO. `rects` alone cannot distinguish a page whose fills are cheap opaque plates from one whose ladder is all
+    // translucent (α < 1 by theming contract) and therefore pays a full read-modify-write per covered pixel — which is
+    // exactly the "heavy-page rect overdraw" question. VideoHole punches ride the rect buffer but take the DestOut PSO
+    // and are counted in NEITHER bucket.
+    private int _frameRectOpaqueInsts, _frameRectBlendedInsts;
     private int _frameGlyphInstanceCount;
     // ── Cross-segment command-list state cache ──
     // Clip ops now update desired scissor state and flush only when pending draws need the old scissor; layer ops remain
@@ -997,6 +1024,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _sceneCurCat = CatNone; _sceneMarkCount = 0; _sceneCatCount[_frameIndex] = 0;   // reset the per-category scene-split timeline (FG_GPU_TIMING)
         _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0;
         _edgeFadeStripFallbacks = 0;   // reset HERE (not only in SubmitWithLayers) so a layer-free frame reports 0, not the last layered frame's count
+        _efStripRejectNested = 0; _efStripRejectDepth = 0; _efStripRejectScratch = 0;
+        _frameRectOpaqueInsts = 0; _frameRectBlendedInsts = 0;
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
         // Every pipe banks its instance upload buffer by back-buffer index: WaitForFrame above fenced the submit that
@@ -1060,6 +1089,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "opacityGroupsEdgeFade", _opacity?.EdgeFadeGroupsThisFrame ?? 0);
         Diag.Set("d3d12", "edgeFadeStripPx", _opacity?.EdgeFadeStripPixelsThisFrame ?? 0L);   // px copied+restored by the PURE-fade strip path (0 ⇒ every fade took the legacy full-canvas group RT; cf. edgeFadeClearPx)
         Diag.Set("d3d12", "edgeFadeStripFallbacks", _edgeFadeStripFallbacks);                 // pure fades that were strip-eligible by payload but still had to lease (nested in a pooled group / scratch full)
+        Diag.Set("d3d12", "edgeFadeStripRejectNested", _efStripRejectNested);                 // ── the per-reason split of the line above (they sum to it)
+        Diag.Set("d3d12", "edgeFadeStripRejectDepth", _efStripRejectDepth);
+        Diag.Set("d3d12", "edgeFadeStripRejectScratch", _efStripRejectScratch);
         Diag.Set("d3d12", "opacityGroupsFullTarget", _opacity?.FullTargetGroupsThisFrame ?? 0);   // full-canvas read+blend (the costly class)
         Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
         Diag.Set("d3d12", "blurLayers", _opacity?.BlurLayersThisFrame ?? 0);
@@ -1083,6 +1115,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "scissorSkipped", _frameScissorSkipped);            // scissor sets deduped (rect unchanged)
         Diag.Set("d3d12", "instancesDropped", DroppedInstanceCount());        // instance-buffer overflow visibility
         Diag.Set("d3d12", "rects", _frameRectCount);
+        Diag.Set("d3d12", "rectInstOpaque", _frameRectOpaqueInsts);           // rect instances drawn through the opaque no-blend PSO
+        Diag.Set("d3d12", "rectInstBlended", _frameRectBlendedInsts);         // ── and through the blended SDF PSO (the read-modify-write class)
         Diag.Set("d3d12", "glyphInstances", _frameGlyphInstanceCount);
         // Sub-glyph WIPE (karaoke) budget: only the ACTIVELY wiping run reaches the gradient batch — a settled split
         // routes to the plain glyph batch (GlyphRenderer.LayoutRunGradient). >0 dropped ⇒ a truncated wipe; the peak is
@@ -1747,6 +1781,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         {
                             bool bindRectShared = !_sharedSdfStateBound;
                             bool bindRectPso = _boundPipe != BoundPipe.Rect;
+                            _frameRectBlendedInsts += rectRun.Length;   // opaque PSO unavailable ⇒ every instance blends
                             NoteSdfPipeBind(_rectPipe!.Record(_cmdList, rectRun, lw, lh, bindRectShared, bindRectPso),
                                 bindRectShared, bindRectPso, BoundPipe.Rect);
                             break;
@@ -1756,6 +1791,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             bool op = IsOpaquePlainRect(in rectRun[si]);
                             int sj = si + 1;
                             while (sj < rectRun.Length && IsOpaquePlainRect(in rectRun[sj]) == op) sj++;
+                            if (op) _frameRectOpaqueInsts += sj - si; else _frameRectBlendedInsts += sj - si;
                             var want = op ? BoundPipe.RectOpaque : BoundPipe.Rect;
                             bool bindShared = !_sharedSdfStateBound;
                             bool bindPso = _boundPipe != want;
@@ -2044,15 +2080,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // disjointness/coverage invariants). Everything else keeps the lease path below.
                     if (EdgeFadeStrips.IsPureFade(in L))
                     {
-                        if (TryBeginStripFade(in L, directToBackBuffer, backRtv))
+                        if (TryBeginStripFade(in L, directToBackBuffer, backRtv, out StripFadeReject why))
                         {
                             _layerKinds.Add(StripFadeLayerKind);
                             continue;
                         }
                         // A PURE fade that still had to lease. Counted so a live [fps] line can tell "no eligible fade
                         // on screen" (efL 0) from "eligible but rejected — nested in a pooled group, or no scratch"
-                        // (efL > 0) without turning on FG_DIAG.
+                        // (efL > 0) without turning on FG_DIAG, and — via the per-reason split — WHICH rejection it was.
                         _edgeFadeStripFallbacks++;
+                        switch (why)
+                        {
+                            case StripFadeReject.Nested: _efStripRejectNested++; break;
+                            case StripFadeReject.Depth: _efStripRejectDepth++; break;
+                            case StripFadeReject.Scratch: _efStripRejectScratch++; break;
+                        }
                     }
                     // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically. A
                     // Blur (or edge-fade-with-blur) group carries its σ — the RT is gaussian-blurred on pop before the
@@ -2273,13 +2315,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     //   • a region-local self-blur group runs a SHIFTED viewport, so SV_Position would not be canvas space — the
     //     restore shader's whole geometry assumes a 1:1 canvas-space device pixel.
     // A nested fade simply keeps the legacy lease path, which is correct there.
-    private bool TryBeginStripFade(in PushLayerCmd L, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    // <paramref name="why"/> reports WHICH of the rejections above fired, so the [fps] `efL` token can split the
+    // fallback count by reason (the three have different fixes — see the _efStripReject* fields).
+    private bool TryBeginStripFade(in PushLayerCmd L, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv,
+        out StripFadeReject why)
     {
-        if (_opacity == null) return false;
-        if (_opacityGroups.Count != 0) return false;
-        if (_stripGroups.Count >= MaxStripFadeDepth) return false;
+        why = StripFadeReject.None;
+        if (_opacity == null) { why = StripFadeReject.Unavailable; return false; }
+        if (_opacityGroups.Count != 0) { why = StripFadeReject.Nested; return false; }
+        if (_stripGroups.Count >= MaxStripFadeDepth) { why = StripFadeReject.Depth; return false; }
         ID3D12Resource* target = TopTargetResource(directToBackBuffer);
-        if (target == null) return false;
+        if (target == null) { why = StripFadeReject.Unavailable; return false; }
         int depth = _stripGroups.Count;
         Span<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(depth * EdgeFadeStrips.MaxStrips, EdgeFadeStrips.MaxStrips);
         EdgeFadeStrips.Compute(in L, _frameScale, (int)_w, (int)_h, strips, out int count);
@@ -2288,7 +2334,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         {
             SceneCat(CatComposite);   // the strip snapshot IS layer overhead — attribute it to comp, like the lease path
             slot = _opacity.AcquireStripScratch(_cmdList, strips, count, _fenceValue + 1);
-            if (slot < 0) return false;   // no scratch available — fall back to the legacy lease path (nothing rebound yet)
+            if (slot < 0) { why = StripFadeReject.Scratch; return false; }   // no scratch available — fall back to the legacy lease path (nothing rebound yet)
             BeginTopTargetCopySource(directToBackBuffer);
             _opacity.CopyStripSnapshot(_cmdList, target, slot, strips, count, post: false);
             EndTopTargetCopySource(directToBackBuffer);
