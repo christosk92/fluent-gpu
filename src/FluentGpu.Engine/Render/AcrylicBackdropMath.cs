@@ -164,6 +164,33 @@ public static class AcrylicBackdropMath
         return b;
     }
 
+    /// <summary>
+    /// The sample bounds a down/up-sample or separable-blur pass must upload for the ONE pooled texture it samples:
+    /// the texel size (1/tex), the used-uv fraction (used/tex) and the max sample uv (usedFrac − half texel). Pooled RTs
+    /// are BUCKET-quantized (<see cref="BucketDim"/>) and a pool lease is BEST-FIT ≥ the requested size, never exact —
+    /// so the surface is usually LARGER than the region actually written into it, and everything outside [0,used] holds
+    /// stale texels from a previous lease. The shader's only guard against reading them is this clamp.
+    ///
+    /// The whole point of this type is that the sampled texture's DIMENSIONS and its USED EXTENT are computed together,
+    /// from one call, so a pass cannot be handed one surface's dims paired with another surface's extent. That exact
+    /// pairing mistake — a blur pass sampling scratch B while clamped with scratch A's dims — read unwritten texels of
+    /// the larger surface at the wrong texel step and baked multicolour streaks into the self-blur region pins
+    /// (gate.acrylic.sampleWindowPairing pins the contract; the D3D12 leaves derive the dims from the sampled slot).
+    /// </summary>
+    public readonly record struct SampleWindow(float TexelW, float TexelH, float UsedFracX, float UsedFracY, float MaxU, float MaxV)
+    {
+        /// <summary>Build the window for a pass that samples a <paramref name="texW"/>×<paramref name="texH"/> pooled
+        /// surface whose valid (written) region is <paramref name="usedW"/>×<paramref name="usedH"/> texels at its
+        /// origin. Both pairs describe the SAME texture — never mix a sibling lease's dims in here. Allocation-free.</summary>
+        public static SampleWindow For(int texW, int texH, int usedW, int usedH)
+        {
+            int tw = Math.Max(1, texW), th = Math.Max(1, texH);
+            float tx = 1f / tw, ty = 1f / th;
+            float ux = (float)usedW / tw, uy = (float)usedH / th;
+            return new SampleWindow(tx, ty, ux, uy, ux - tx * 0.5f, uy - ty * 0.5f);
+        }
+    }
+
     /// <summary>The determinants of a layer's blurred backdrop: the inputs to the snapshot+blur passes. Two frames whose
     /// stamps are equal produce a bit-identical blurred snapshot, so the compositor can REUSE a retained RT instead of
     /// re-running passes A/B/C (design/subsystems/backdrop-effects-animation.md §2.3 "snapshot taken once on the

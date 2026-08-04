@@ -2845,7 +2845,67 @@ static class OverlaySuite
             noRetainedAlwaysBlurs && cadenceHolds && cadenceRefreshes && stampChangeAlwaysBlurs && releasedHeals && degenerate,
             $"cad={cad} noRetained={noRetainedAlwaysBlurs} holds={cadenceHolds} refresh={cadenceRefreshes} stamp={stampChangeAlwaysBlurs} released={releasedHeals} degen={degenerate}");
 
+        SampleWindowPairingChecks();
         KawaseChainChecks();
+    }
+
+    // gate.acrylic.sampleWindowPairing — the portable half of a GPU corruption that had no headless surface: a blur pass
+    // sampling one pooled scratch while clamped with a SIBLING scratch's dimensions. Pooled RT leases are BEST-FIT ≥ the
+    // requested bucket (OpacityLayerCompositor.AcquireScratch), so two leases for the same (w,h) can be physically
+    // different sizes and everything outside a lease's used extent holds stale texels from a previous tenant. The shader's
+    // ONLY guard is the maxUv clamp uploaded with the pass, so a mismatched pair reads that garbage at a wrong texel step
+    // and — for a self-blur, via RetainPinFromScratch — bakes it into a retained region pin (the multicolour streak blocks
+    // in heavily-blurred lyric lines; only σ ≥ 5, i.e. downsample ≥ 2, took that path).
+    //
+    // The D3D12 leaves are unreachable headlessly (TerraFX/COM, render-thread-confined), so the CONTRACT is pinned here at
+    // the helper both leaves now compute through — AcrylicBackdropMath.SampleWindow, which derives texel size, used
+    // fraction and maxUv from ONE (texture dims, used extent) call so the two halves cannot come from different surfaces.
+    // OpacityLayerCompositor.DsBlurPass additionally reads the sampled slot's dims itself (they are no longer a caller
+    // parameter), making the mismatch unrepresentable at the call site.
+    static void SampleWindowPairingChecks()
+    {
+        // (a) Well-formed window for a lease that is LARGER than its used region (the normal bucketed case): texel size is
+        //     1/tex, usedFrac is used/tex, and maxUv sits exactly half a texel inside usedFrac (the bilinear guard).
+        int texW = AcrylicBackdropMath.BucketDim(200), texH = AcrylicBackdropMath.BucketDim(140);   // 256 × 256
+        var w1 = AcrylicBackdropMath.SampleWindow.For(texW, texH, 200, 140);
+        bool shapeOk = MathF.Abs(w1.TexelW - 1f / texW) < 1e-7f && MathF.Abs(w1.TexelH - 1f / texH) < 1e-7f
+            && MathF.Abs(w1.UsedFracX - 200f / texW) < 1e-7f && MathF.Abs(w1.UsedFracY - 140f / texH) < 1e-7f
+            && MathF.Abs(w1.MaxU - (w1.UsedFracX - w1.TexelW * 0.5f)) < 1e-7f
+            && MathF.Abs(w1.MaxV - (w1.UsedFracY - w1.TexelH * 0.5f)) < 1e-7f
+            && w1.MaxU < w1.UsedFracX && w1.MaxV < w1.UsedFracY   // strictly inside the written region
+            && w1.UsedFracX <= 1f && w1.UsedFracY <= 1f;          // never past the surface
+
+        // (b) THE BUG'S SIGNATURE. Pass H leases A (256²) and pass V samples B, which best-fit landed on a LARGER free
+        //     entry (512²). Clamping B with A's dims yields maxUv 0.78 while B's true used region ends at 0.39 — the pass
+        //     samples ~2× beyond everything it wrote, i.e. stale texels of the previous tenant, and at 2× the texel step.
+        //     Correctly pairing B's dims with B's extent keeps maxUv inside B's written region.
+        const int used = 200;
+        int aTex = AcrylicBackdropMath.BucketDim(used);        // 256 — A's lease
+        int bTex = aTex * 2;                                   // 512 — B best-fit onto a bigger free entry
+        var wrong = AcrylicBackdropMath.SampleWindow.For(aTex, aTex, used, used);   // A's dims × B's extent (the corruption)
+        var right = AcrylicBackdropMath.SampleWindow.For(bTex, bTex, used, used);   // B's own pair
+        float bTrueUsedFrac = (float)used / bTex;
+        bool bugSignature = wrong.MaxU > bTrueUsedFrac && wrong.MaxV > bTrueUsedFrac      // reads past B's written region
+            && wrong.TexelW > right.TexelW                                                // and at the wrong texel step
+            && right.MaxU < bTrueUsedFrac && right.MaxV < bTrueUsedFrac                   // the fix stays inside
+            && MathF.Abs(right.UsedFracX - bTrueUsedFrac) < 1e-7f;
+
+        // (c) Why it was INTERMITTENT: when both leases happen to land on the same bucket the mismatched call is
+        //     indistinguishable from the correct one — the corruption only appears once the pool is mixed-size.
+        var sameBucket = AcrylicBackdropMath.SampleWindow.For(aTex, aTex, used, used);
+        bool intermittent = sameBucket.Equals(AcrylicBackdropMath.SampleWindow.For(aTex, aTex, used, used))
+            && !sameBucket.Equals(right);
+
+        // (d) Degenerate/robustness: a full-surface lease clamps at 1 − half texel, and a 0/negative dim can't divide by 0.
+        var full = AcrylicBackdropMath.SampleWindow.For(64, 64, 64, 64);
+        var degen = AcrylicBackdropMath.SampleWindow.For(0, 0, 1, 1);
+        bool edgeOk = MathF.Abs(full.UsedFracX - 1f) < 1e-7f && full.MaxU < 1f
+            && float.IsFinite(degen.TexelW) && float.IsFinite(degen.MaxU);
+
+        Check("gate.acrylic.sampleWindowPairing: blur/copy sample bounds come from the SAMPLED texture's own dims+extent; a sibling lease's dims clamp past the written region",
+            shapeOk && bugSignature && intermittent && edgeOk,
+            $"shape={shapeOk} bug={bugSignature} intermittent={intermittent} edge={edgeOk} " +
+            $"wrongMaxU={wrong.MaxU:0.0000} bUsedFrac={bTrueUsedFrac:0.0000} rightMaxU={right.MaxU:0.0000}");
     }
 
     static void ContentDialogChromeChecks(StringTable strings)

@@ -669,12 +669,14 @@ float4 PSMain(V i) : SV_Target
     // p0 = (srcTexel.x, srcTexel.y, offset, 0); p1 = (usedFrac.x, usedFrac.y, maxU, maxV) where maxUv = usedFrac − half
     // texel. The shader maps its 0..1 dst uv onto usedFrac and clamps every tap to [half-texel, maxUv] (the used sub-rect
     // of a possibly larger pooled bucket RT). Same layout for both the down and up passes; only the source dims differ.
+    // The (bucket dims, used extent) pair comes from AcrylicBackdropMath.SampleWindow so both halves always describe the
+    // SAME source level — mixing one surface's dims with another's extent computes a too-large maxUv and samples stale,
+    // never-written texels of the larger pooled RT (gate.acrylic.sampleWindowPairing).
     private void WriteKawaseConsts(int srcBucketW, int srcBucketH, int srcUsedW, int srcUsedH, float offset)
     {
-        float tx = 1f / srcBucketW, ty = 1f / srcBucketH;
-        float ux = (float)srcUsedW / srcBucketW, uy = (float)srcUsedH / srcBucketH;
-        _scratchK[0] = tx; _scratchK[1] = ty; _scratchK[2] = offset; _scratchK[3] = 0f;
-        _scratchK[4] = ux; _scratchK[5] = uy; _scratchK[6] = ux - tx * 0.5f; _scratchK[7] = uy - ty * 0.5f;
+        var win = AcrylicBackdropMath.SampleWindow.For(srcBucketW, srcBucketH, srcUsedW, srcUsedH);
+        _scratchK[0] = win.TexelW; _scratchK[1] = win.TexelH; _scratchK[2] = offset; _scratchK[3] = 0f;
+        _scratchK[4] = win.UsedFracX; _scratchK[5] = win.UsedFracY; _scratchK[6] = win.MaxU; _scratchK[7] = win.MaxV;
     }
 
     private void FullScreen(ID3D12GraphicsCommandList* cmd, ID3D12PipelineState* pso, int srvSlot, ReadOnlySpan<float> consts)

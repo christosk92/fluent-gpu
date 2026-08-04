@@ -1206,14 +1206,12 @@ float4 BlurPS(V i) : SV_Target
         BeginRead(cmd, groupSlot);
         Bind(cmd, scratch);
         SetViewport(cmd, (uint)surface.UsedW, (uint)surface.UsedH);
-        DsBlurPass(cmd, groupSlot, (int)_pool[groupSlot].W, (int)_pool[groupSlot].H,
-            surface.UsedW, surface.UsedH, 1f, 0f, offsets, weights, count);
+        DsBlurPass(cmd, groupSlot, surface.UsedW, surface.UsedH, 1f, 0f, offsets, weights, count);
 
         BeginRead(cmd, scratch);
         Bind(cmd, groupSlot);
         SetViewport(cmd, (uint)surface.UsedW, (uint)surface.UsedH);
-        DsBlurPass(cmd, scratch, (int)_pool[scratch].W, (int)_pool[scratch].H,
-            surface.UsedW, surface.UsedH, 0f, 1f, offsets, weights, count);
+        DsBlurPass(cmd, scratch, surface.UsedW, surface.UsedH, 0f, 1f, offsets, weights, count);
 
         BeginRead(cmd, groupSlot);
         Release(scratch);
@@ -1396,6 +1394,14 @@ float4 BlurPS(V i) : SV_Target
         }
         if (e.Res == null)
         {
+            // NO CreateRenderTargetView here (unlike Acquire/AcquireScratch), by design: a pin is only ever a COPY DEST
+            // and an SRV, never bound as a render target, so slot's RTV descriptor may keep describing the retired
+            // resource. That is safe because a pin's slot can NEVER be re-leased as an RT in place: RetainPinFromScratch
+            // is only called with hash != 0 (D3D12Device gates it), so every pin carries PinHash != 0, and BOTH lease
+            // paths skip PinHash != 0 entries (Acquire's reuse guard, AcquireScratch's "pins are never scratch"). The only
+            // route from pin → render target runs through an eviction that does `_pool[slot] = default` and then
+            // CreateTarget + CreateRenderTargetView. INVARIANT TO KEEP: if a pin can ever become RT-bound without that
+            // reset (e.g. a hash-0 pin, or unpinning in place), create the RTV here too.
             e.Res = CreateTarget(rw, rh, $"OpacityLayer.Pin[{slot}]");
             e.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
             e.W = rw; e.H = rh;
@@ -1480,13 +1486,13 @@ float4 BlurPS(V i) : SV_Target
             Bind(cmd, scratch);
             SetViewport(cmd, _w, _h);                 // full viewport (1:1 mapping); the scissor below bounds the work
             cmd->RSSetScissorRects(1, &box);
-            DsBlurPass(cmd, groupSlot, (int)_w, (int)_h, (int)_w, (int)_h, 1f, 0f, exactOffsets, exactWeights, exactCount);
+            DsBlurPass(cmd, groupSlot, (int)_w, (int)_h, 1f, 0f, exactOffsets, exactWeights, exactCount);
             // pass V: scratch (SRV) → group (RT), same scissor
             BeginRead(cmd, scratch);
             Bind(cmd, groupSlot);
             SetViewport(cmd, _w, _h);
             cmd->RSSetScissorRects(1, &box);
-            DsBlurPass(cmd, scratch, (int)_w, (int)_h, (int)_w, (int)_h, 0f, 1f, exactOffsets, exactWeights, exactCount);
+            DsBlurPass(cmd, scratch, (int)_w, (int)_h, 0f, 1f, exactOffsets, exactWeights, exactCount);
             BlurWorkPixelsThisFrame += regionPixels * 2L;
             // leave the group readable for the composite; the scratch returns to the free list (same-queue reuse, no fence)
             BeginRead(cmd, groupSlot);
@@ -1505,33 +1511,44 @@ float4 BlurPS(V i) : SV_Target
         int a = AcquireScratch(cmd, dw, dh, frameFence);           // bucketed small RT (region/down) — reused by size bucket
         int b = AcquireScratch(cmd, dw, dh, frameFence);
         BlurWorkPixelsThisFrame += (long)dw * dh * 3L + regionPixels;
-        int bwA = (int)_pool[a].W, bhA = (int)_pool[a].H;          // A/B share the same bucket (same dw,dh)
+        // A and B are leased for the SAME (dw,dh), but AcquireScratch is BEST-FIT ≥ the bucket, NOT exact: it returns the
+        // SMALLEST FREE pool entry that can hold the bucket (and only creates one at the exact bucket when none fits). With
+        // a mixed-size pool the two leases therefore routinely land on DIFFERENT-sized surfaces. Every pass below must get
+        // the dims of the texture IT SAMPLES paired with that texture's used extent (AcrylicBackdropMath.SampleWindow) —
+        // DsBlurPass now derives them from _pool[srcSlot] itself so the pairing cannot be broken at a call site. Using one
+        // lease's dims for the other computes a too-large maxUv clamp and a wrong texel step ⇒ the pass reads STALE,
+        // never-written texels of the larger surface, and RetainPinFromScratch then bakes that into a per-line pin
+        // (the multicolour streak blocks in heavily-blurred lyric lines). Only the down > 1 path (σ ≥ 5) ever hit it.
 
-        // pass 0: DOWNSAMPLE — group RT region [minX..maxX] → A [0..dw] (bilinear stretch, the prefilter)
+        // pass 0: DOWNSAMPLE — group RT region [minX..maxX] → A [0..dw] (bilinear stretch, the prefilter). The sampled
+        // texture is the GROUP RT, so the uv normalizers are the GROUP slot's own dims (canvas-sized: the caller leases it
+        // through Acquire, whose reuse guard is W==_w && H==_h) — not _w/_h reached for independently.
         BeginRead(cmd, groupSlot);
         Bind(cmd, a);
         SetViewport(cmd, (uint)dw, (uint)dh);
-        CopyDsPass(cmd, groupSlot, (float)minX / _w, (float)minY / _h, (float)regionW / _w, (float)regionH / _h,
-            (float)minX / _w, (float)minY / _h, (float)maxX / _w, (float)maxY / _h);
-        // pass H: A → B at texelSigma over the downsampled scratch
+        float srcW = _pool[groupSlot].W, srcH = _pool[groupSlot].H;
+        CopyDsPass(cmd, groupSlot, minX / srcW, minY / srcH, regionW / srcW, regionH / srcH,
+            minX / srcW, minY / srcH, maxX / srcW, maxY / srcH);
+        // pass H: A → B at texelSigma over the downsampled scratch (samples A ⇒ A's dims, derived inside DsBlurPass)
         BeginRead(cmd, a);
         Bind(cmd, b);
         SetViewport(cmd, (uint)dw, (uint)dh);
-        DsBlurPass(cmd, a, bwA, bhA, dw, dh, 1f, 0f, koff, kwgt, nt);
-        // pass V: B → A
+        DsBlurPass(cmd, a, dw, dh, 1f, 0f, koff, kwgt, nt);
+        // pass V: B → A (samples B ⇒ B's OWN dims — the corruption was passing A's here)
         BeginRead(cmd, b);
         Bind(cmd, a);
         SetViewport(cmd, (uint)dw, (uint)dh);
-        DsBlurPass(cmd, b, bwA, bhA, dw, dh, 0f, 1f, koff, kwgt, nt);
-        // pass U: UPSAMPLE — A [0..dw] → group RT region [minX..maxX] (bilinear stretch back, overwrite)
+        DsBlurPass(cmd, b, dw, dh, 0f, 1f, koff, kwgt, nt);
+        // pass U: UPSAMPLE — A [0..dw] → group RT region [minX..maxX] (bilinear stretch back, overwrite). Samples A, so
+        // the stretch + clamp come from A's own (texW,texH)+(usedW,usedH) window.
         BeginRead(cmd, a);
         Bind(cmd, groupSlot);
-        float tx = 1f / bwA, ty = 1f / bhA;
-        float ux = (float)dw / bwA, uy = (float)dh / bhA;         // A's used-uv fraction
+        var aWin = AcrylicBackdropMath.SampleWindow.For((int)_pool[a].W, (int)_pool[a].H, dw, dh);
         D3D12_VIEWPORT rvp = new() { TopLeftX = minX, TopLeftY = minY, Width = regionW, Height = regionH, MaxDepth = 1 };
         cmd->RSSetViewports(1, &rvp);
         cmd->RSSetScissorRects(1, &box);
-        CopyDsPass(cmd, a, 0f, 0f, ux, uy, tx * 0.5f, ty * 0.5f, ux - tx * 0.5f, uy - ty * 0.5f);
+        CopyDsPass(cmd, a, 0f, 0f, aWin.UsedFracX, aWin.UsedFracY,
+            aWin.TexelW * 0.5f, aWin.TexelH * 0.5f, aWin.MaxU, aWin.MaxV);
         // restore the full-canvas viewport (device sets it once) + the region scissor, and leave the group readable —
         // matching the full-res tail so the caller's Composite (a canvas-sized 1:1 pass) maps correctly.
         SetViewport(cmd, _w, _h);
@@ -1544,7 +1561,13 @@ float4 BlurPS(V i) : SV_Target
     /// downsample-blur scratch — distinct from the canvas-sized <see cref="Acquire"/> (which the down==1 blur binds) and
     /// from region PINS. Kept in the shared pool as a transient entry (PinHash 0) with a NON-canvas size, so the canvas
     /// <see cref="Acquire"/>'s <c>W==_w &amp;&amp; H==_h</c> reuse guard never grabs it and this never grabs a canvas slot; a
-    /// downsampling burst (a height tween) reuses the same bucket frame-to-frame. NO managed allocation.</summary>
+    /// downsampling burst (a height tween) reuses the same bucket frame-to-frame. NO managed allocation.
+    /// <para><b>Contract — BEST-FIT, NOT EXACT.</b> The returned slot is the SMALLEST FREE pool entry that is ≥ the
+    /// bucket of (w,h); only when nothing free fits is a new surface created at exactly that bucket. So the lease is
+    /// generally LARGER than requested, two leases for the SAME (w,h) can differ in size, and the texels outside
+    /// [0,w]×[0,h] are whatever the previous lease left there. Every pass that samples a lease must therefore take its
+    /// texel size / uv clamp from THAT lease's own <c>_pool[slot].W/H</c> paired with its used extent
+    /// (<see cref="AcrylicBackdropMath.SampleWindow"/>) — never from a sibling lease.</para></summary>
     private int AcquireScratch(ID3D12GraphicsCommandList* cmd, int w, int h, ulong frameFence)
     {
         int bw = AcrylicBackdropMath.BucketDim(w), bh = AcrylicBackdropMath.BucketDim(h);
@@ -1611,18 +1634,24 @@ float4 BlurPS(V i) : SV_Target
 
     // Separable gaussian at texelSigma over the downsampled scratch, one axis per invocation. The taps come from
     // AcrylicBackdropMath.BuildKernel (≤ 7); the shader unrolls 7 pairs with unused weights zeroed, so no dynamic indexing.
-    private void DsBlurPass(ID3D12GraphicsCommandList* cmd, int srcSlot, int bucketW, int bucketH, int usedW, int usedH,
+    //
+    // The sample bounds (texel size + usedFrac + maxUv) are derived HERE from the SAMPLED slot's own pool dims — they are
+    // deliberately NOT caller parameters. Pool leases are best-fit ≥ the requested bucket (see AcquireScratch), so two
+    // scratches leased for the same (w,h) can be physically different sizes; passing one lease's dims while sampling the
+    // other is the mixed-bucket corruption this signature makes unrepresentable. Only the USED extent — a property of the
+    // content written into the surface, not of the surface — stays a parameter. Contract: AcrylicBackdropMath.SampleWindow
+    // (gate.acrylic.sampleWindowPairing).
+    private void DsBlurPass(ID3D12GraphicsCommandList* cmd, int srcSlot, int usedW, int usedH,
         float dirX, float dirY, ReadOnlySpan<float> off, ReadOnlySpan<float> wgt, int nt)
     {
         ID3D12DescriptorHeap* h = _srvHeap;
         cmd->SetDescriptorHeaps(1, &h);
         cmd->SetGraphicsRootSignature(_dsBlurRoot);
         cmd->SetPipelineState(_dsBlurPso);
-        float tx = 1f / bucketW, ty = 1f / bucketH;
-        float ux = (float)usedW / bucketW, uy = (float)usedH / bucketH;
+        var win = AcrylicBackdropMath.SampleWindow.For((int)_pool[srcSlot].W, (int)_pool[srcSlot].H, usedW, usedH);
         var s = _blurTaps;
-        s[0] = tx; s[1] = ty; s[2] = dirX; s[3] = dirY;                       // p0
-        s[4] = ux; s[5] = uy; s[6] = ux - tx * 0.5f; s[7] = uy - ty * 0.5f;   // p1 (usedFrac, maxUv)
+        s[0] = win.TexelW; s[1] = win.TexelH; s[2] = dirX; s[3] = dirY;             // p0
+        s[4] = win.UsedFracX; s[5] = win.UsedFracY; s[6] = win.MaxU; s[7] = win.MaxV;   // p1 (usedFrac, maxUv)
         for (int k = 0; k < 8; k++) { s[8 + k] = 0f; s[16 + k] = 0f; }        // o0/o1 + w0/w1 (unused taps → 0)
         for (int k = 0; k < nt; k++) { s[8 + k] = off[k]; s[16 + k] = wgt[k]; }
         fixed (float* c = s)
