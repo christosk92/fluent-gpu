@@ -771,6 +771,47 @@ static class DiagnosticsSuite
         }
         Check("palette.distinct presets read visibly different (pairwise flattened dark content-layer max-channel delta)", distinctOk, dDetail.ToString());
 
+        // MERGED RUNG (theming.md §2.2bis): a shell may paint rungs 1+2 as ONE translucent surface
+        // (ColorContrast.Over(pane, plate) — Wavee's WaveeColors.ContentPaneMerged) instead of stacking two blended
+        // full-region passes. This is only legal because source-over is ASSOCIATIVE, so assert exactly that, for every
+        // preset × theme × the full assumed Mica swing (Default/Bright/Dim — a merged rung must hold over ANY backdrop,
+        // including the opaque inactive-window fallback at α=1, which is also the deactivate-swing case): the merged
+        // surface flattened over a backdrop must equal the pane flattened over the plate flattened over the same
+        // backdrop, to the byte. Also assert the merge is a real MERGE (α = αpane + αplate(1−αpane), still < 1 so the
+        // backdrop keeps reading through) and that Over degenerates to Flatten on an opaque under.
+        bool mergedOk = true;
+        var mDetail = new System.Text.StringBuilder();
+        foreach (var p in all)
+        {
+            foreach (var (themeKind, shell) in new (ThemeKind, ShellPalette)[]
+            {
+                (ThemeKind.Light, p.LightShell),
+                (ThemeKind.Dark, p.DarkShell),
+            })
+            {
+                ColorF merged = ColorContrast.Over(shell.FileArea, shell.Toolbar);
+                float wantA = shell.FileArea.A + shell.Toolbar.A * (1f - shell.FileArea.A);
+                if (MathF.Abs(merged.A - wantA) > 1e-5f || merged.A >= 1f)
+                { mergedOk = false; mDetail.Append($" {p.Id}/{themeKind}/alpha({merged.A:F4} want {wantA:F4})"); }
+                ColorF[] backdrops = themeKind == ThemeKind.Light
+                    ? new[] { MicaRef.LightDefault, MicaRef.LightBright, MicaRef.LightDim, p.Light.WindowBackground }
+                    : new[] { MicaRef.DarkDefault, MicaRef.DarkBright, MicaRef.DarkDim, p.Dark.WindowBackground };
+                foreach (var bd in backdrops)
+                {
+                    ColorF one = ColorContrast.Flatten(merged, bd);
+                    ColorF two = ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, bd));
+                    if (MaxChannelDelta(one, two) > 1)
+                    { mergedOk = false; mDetail.Append($" {p.Id}/{themeKind}/assoc(Δ{MaxChannelDelta(one, two)})"); }
+                }
+                ColorF opaquePlate = ColorContrast.Flatten(shell.Toolbar, backdrops[0]);
+                if (MaxChannelDelta(ColorContrast.Over(shell.FileArea, opaquePlate),
+                                    ColorContrast.Flatten(shell.FileArea, opaquePlate)) != 0)
+                { mergedOk = false; mDetail.Append($" {p.Id}/{themeKind}/opaque-under"); }
+            }
+        }
+        Check("palette.merged-rung rungs 1+2 collapse into ONE translucent surface with identical composited pixels — ColorContrast.Over(pane, plate) flattens to pane-on-plate-on-backdrop over the whole assumed Mica swing AND the opaque inactive-window fallback (source-over associativity), stays translucent, and degenerates to Flatten on an opaque under",
+            mergedOk, mDetail.ToString());
+
         int e0 = Tok.Epoch;
         var kind = Tok.Theme;
         Tok.Use(Tok.SlatePalette, kind);

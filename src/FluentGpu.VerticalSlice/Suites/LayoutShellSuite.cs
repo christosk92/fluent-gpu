@@ -1403,6 +1403,28 @@ static class LayoutShellSuite
         var o0 = over.AbsoluteRect(Child(over, over.Root, 0));
         Check("gate.layout.zstack-align: a negative margin overhangs the corner it is aligned to",
             Near(o0.X, 84) && Near(o0.Y, -4), $"badge=({o0.X:0},{o0.Y:0})");
+
+        // The MERGED-RUNG remainder shape, taken verbatim from the app shell's content region (theming.md §2.2bis):
+        // the pane paints rungs 1+2 as ONE translucent rect (inset by its trailing gap, rounded top-left), and the
+        // plate survives only where the pane does not cover — a radius-sized CORNER CELL at the stack's top-left and a
+        // full-height TRAILING STRIP the width of that inset. The remainders must ABUT the pane, never float or
+        // overlap it beyond the corner cell: a strip that missed the trailing edge exposes bare Mica in the gap, and a
+        // strip that underlapped the pane would double-composite the plate across a visible band.
+        const float gap = 8f, radius = 8f;
+        var rung = LayoutTree(strings, Ui.ZStack(
+            new BoxEl { Width = radius, Height = radius },                          // (a) corner cell
+            new BoxEl { Width = gap, JustifySelf = FlexAlign.End },                 // (b) trailing gap strip
+            new BoxEl { Grow = 1f, Margin = new Edges4(0f, 0f, gap, 0f) })          // the merged pane
+            with { Width = 600, Height = 400 });
+        var cell = rung.AbsoluteRect(Child(rung, rung.Root, 0));
+        var strip = rung.AbsoluteRect(Child(rung, rung.Root, 1));
+        var pane = rung.AbsoluteRect(Child(rung, rung.Root, 2));
+        bool cellAtCorner = Near(cell.X, 0) && Near(cell.Y, 0) && Near(cell.W, radius) && Near(cell.H, radius);
+        bool paneInset = Near(pane.X, 0) && Near(pane.Y, 0) && Near(pane.W, 600 - gap) && Near(pane.H, 400);
+        bool stripAbuts = Near(strip.X, pane.X + pane.W) && Near(strip.W, gap) && Near(strip.Y, 0) && Near(strip.H, 400);
+        Check("gate.layout.merged-rung-remainders: a merged content rung's plate remainders tile the uncovered region exactly — a radius corner cell at the top-left and a full-height trailing strip abutting the inset pane's edge",
+            cellAtCorner && paneInset && stripAbuts,
+            $"cell=({cell.X:0},{cell.Y:0},{cell.W:0}x{cell.H:0}) pane=(w{pane.W:0},h{pane.H:0}) strip=(x{strip.X:0},w{strip.W:0},h{strip.H:0})");
     }
 
     /// <summary>gate.reconciler.static-transform — an UNBOUND <c>Transform</c> matrix is honored (it used to be

@@ -66,6 +66,16 @@ public static class WaveeColors
         ColorContrast.Flatten(Active.Toolbar, MicaBase));
     public static ColorF PlayerBar => Active.PlayerBar;
     public static ColorF FileArea => Active.FileArea;
+
+    /// <summary>Rungs 1+2 as ONE translucent surface — the content pane (<see cref="FileArea"/>) pre-composited onto the
+    /// app-body plate (<see cref="Toolbar"/>), still translucent so live Mica reads through it exactly as before. Source-over
+    /// is associative, so painting this one rect is pixel-identical to painting the plate and then the pane on top of it
+    /// (<c>Flatten(Over(pane, plate), mica) == Flatten(pane, Flatten(plate, mica))</c>, for ANY backdrop — including the
+    /// deactivate swing, where DWM drops the backdrop to the opaque window fallback). The shell's content region uses it so
+    /// that region pays ONE blended full-region SDF pass instead of two (neither rung can ever take the opaque no-blend PSO
+    /// — α &lt; 1 is the ladder contract). Computed live like its siblings, so a theme/preset switch re-fires it via
+    /// <c>Tok.Epoch</c>; the raw rungs stay published unchanged for the plate remainders and the gates.</summary>
+    public static ColorF ContentPaneMerged => ColorContrast.Over(Active.FileArea, Active.Toolbar);
     public static ColorF Content => Active.Content;
     public static ColorF ContentAlt => Active.ContentAlt;
     public static ColorF PremiumText => Active.PremiumText;

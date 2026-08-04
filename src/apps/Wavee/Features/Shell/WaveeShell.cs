@@ -543,23 +543,45 @@ sealed class WaveeShell : Component
                                 Direction = 1, ZStack = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f,
                                 Children =
                                 [
-                                    // The app-body PLATE behind the translucent page and its rounded top-left cut-away
-                                    // (rung 1 = LayerOnMicaBaseAlt, the same bound fill as the toolbar / nav pane /
-                                    // player dock) — so the page's corner cut-away and the trailing gap show the plate,
-                                    // not bare Mica. Do not add a sidebar-colored seam strip here: it remains visible
-                                    // through the page surface as a full-height opaque rail and squares off the corner.
-                                    new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.Toolbar) },
+                                    // The app-body PLATE (rung 1 = LayerOnMicaBaseAlt, the same bound fill as the
+                                    // toolbar / nav pane / player dock) — kept ONLY where the content pane does not
+                                    // cover it (the rounded top-left cut-away + the trailing gap), so those still show
+                                    // the plate and not bare Mica. UNDER the pane the plate is folded INTO the pane's own
+                                    // fill (WaveeColors.ContentPaneMerged): source-over is associative, so pane-over-plate
+                                    // painted as ONE translucent rect composites pixel-identically over live Mica, and the
+                                    // content region (~95% of the viewport) pays ONE blended full-region SDF pass instead
+                                    // of two — neither rung can ever take the opaque no-blend PSO (α < 1 is the ladder
+                                    // contract), so the second pass was pure bandwidth. Do not add a sidebar-colored seam
+                                    // strip here: it remains visible through the page surface as a full-height opaque rail
+                                    // and squares off the corner.
+                                    //
+                                    // (a) the top-left CORNER CELL — one Radii.Card square under the pane's 8,0,0,0 corner.
+                                    // This is the one place the plate must still sit UNDER the merged pane: the cut-away is
+                                    // a square MINUS a quarter disc (concave — no rect can express it), so the cell pays one
+                                    // extra plate layer inside the arc (Δ ≈ 4/255 over ~50 DIP², at the pane's own corner)
+                                    // to keep the cut-away itself exact. The alternative — splitting the pane so the plate
+                                    // never underlaps — would split its Elevation.Card shadow onto the split seams, and that
+                                    // shadow band would read THROUGH the translucent surface: a real artifact for a
+                                    // sub-1/255 gain.
+                                    new BoxEl { Width = Radii.Card, Height = Radii.Card, Fill = Prop.Of(() => WaveeColors.Toolbar) },
+                                    // (b) the TRAILING GAP strip — the pane's Spacing.S inset, full height, abutting the
+                                    // pane's trailing edge (JustifySelf.End parks it on the ZStack's right edge; AlignItems
+                                    // stretch gives it the full height). It also receives the pane's Elevation.Card shadow,
+                                    // exactly as the full-region plate did.
+                                    new BoxEl { Width = Spacing.S, JustifySelf = FlexAlign.End, Fill = Prop.Of(() => WaveeColors.Toolbar) },
                                     // Static final-geometry underlay — and, at rest, THE content-pane surface itself
-                                    // (rung 2): the animated card above paints no fill, so this one layer of FileArea
-                                    // is the pane and it is never double-composited. WinUI translates ContentRoot but
+                                    // (rungs 1+2 MERGED): the animated card above paints no fill, so this one layer is
+                                    // the pane and it is never double-composited. WinUI translates ContentRoot but
                                     // does not animate its width; while that translated card moves, this matching
                                     // surface prevents the trailing side from exposing plate chrome (the false "right
                                     // rail ghost") — and closer to WinUI, where ContentRoot translates and the surface
-                                    // beneath does not.
+                                    // beneath does not. Its fill is FileArea-over-Toolbar as a single translucent value
+                                    // (ContentPaneMerged, above) — same composited pixels, one pass, and the ladder rungs
+                                    // themselves are untouched (the remainders above still paint the raw plate).
                                     new BoxEl
                                     {
                                         Grow = 1f, Margin = new Edges4(0f, 0f, Spacing.S, 0f),
-                                        Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        Fill = Prop.Of(() => WaveeColors.ContentPaneMerged),
                                         Corners = ContentPaneCorners,
                                         // Wino/WinUI content zones sit one elevation step above commanding chrome.
                                         // Keep the shadow on this STATIC final-geometry pane: putting it on the animated

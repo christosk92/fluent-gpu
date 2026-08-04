@@ -55,6 +55,25 @@ public static class ColorContrast
             top.B * a + under.B * (1f - a),
             1f);
     }
+
+    /// <summary>Source-over of <paramref name="top"/> onto a possibly TRANSLUCENT <paramref name="under"/>, keeping the
+    /// result translucent (straight alpha out) — two stacked ladder rungs collapsed into ONE surface. Source-over is
+    /// associative, so <c>Flatten(Over(t, u), backdrop) == Flatten(t, Flatten(u, backdrop))</c> for ANY backdrop: a
+    /// merged rung composites pixel-identically over live Mica (and over the inactive-window fallback), which is what
+    /// lets a two-pass translucent stack be painted as one blended pass. <see cref="Flatten"/> is the opaque-backdrop
+    /// special case of this (<c>under.A == 1</c> ⇒ identical result).</summary>
+    public static ColorF Over(in ColorF top, in ColorF under)
+    {
+        float at = top.A, wu = under.A * (1f - at);
+        float a = at + wu;
+        if (a <= 0f) return ColorF.Transparent;
+        float inv = 1f / a;   // straight (un-premultiplied) out: the renderer premultiplies at shader input
+        return new ColorF(
+            (top.R * at + under.R * wu) * inv,
+            (top.G * at + under.G * wu) * inv,
+            (top.B * at + under.B * wu) * inv,
+            a);
+    }
 }
 
 /// <summary>Reference DWM Mica backdrop tones for palette solving and build-time gates. Mica is wallpaper-tinted, so

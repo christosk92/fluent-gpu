@@ -186,6 +186,7 @@ multiple value sets). Owner: `src/FluentGpu.Engine/Dsl/{Tokens,PaletteBuilder}.c
 | `TokenSet.LayerOnMicaBaseAlt` | The app-body **plate** material (WinUI `LayerOnMicaBaseAltFillColorDefault`), per-preset since the tabbed ladder — its value is MIRRORED into `ShellPalette.{Toolbar,Sidebar,PlayerBar}` (the shell builders run before the `TokenSet`, so a `TokenSet`→shell read would be circular); the `palette.ladder` gate asserts the mirror |
 | `MicaRef` (`Foundation`) | Reference DWM Mica tones (`Light/Dark` × `Default/Bright/Dim`, ±0x14 assumed swing) — the flatten targets for the tertiary-ink solve, the gates, and the opaque plate/pane equivalents a floating pane needs |
 | `ColorContrast.Flatten` | Straight-alpha composite of a translucent surface over an opaque backdrop (what actually renders) |
+| `ColorContrast.Over` | Source-over of two TRANSLUCENT surfaces, result still translucent — two ladder rungs collapsed into one paintable value; `Flatten` is its opaque-backdrop special case |
 | `ColorRamp.Tinted` | No-softening HSL tint — chrome tints that survive at extreme lightness (`Neutral`'s extreme-L chroma softening crushes them) |
 | Presets | `warm` (default), `slate` (230°), `neutral`, `accent` (OS-accent-tinted; `SetAccent` rebuilds it AND re-points the active palette) |
 
@@ -239,8 +240,32 @@ omission the slice cannot see), `palette.files.filearea` (the neutral shell is t
 `palette.warm.calibration` (the seeded light exemplar: plate `#FCFAF8B3` ≈`#F7F6F5`, pane ≈`#F9F8F7`, card +
 tertiary ink anchors), `palette.contrast` (AA text tiers vs the brightest composited host — zebra row on the
 pane on the plate on bright Mica; the tertiary-ink solves in `PaletteBuilder` flatten through the same
-two-rung host so solve and gate agree), and `palette.distinct` (pairwise DARK pane-through-plate max-channel
-delta, floors 6 / 4-with-accent; light is not asserted — see above).
+two-rung host so solve and gate agree), `palette.distinct` (pairwise DARK pane-through-plate max-channel
+delta, floors 6 / 4-with-accent; light is not asserted — see above), and `palette.merged-rung` (below).
+
+**Painting the ladder is not the same as stacking it (merged rung, as-built).** A rung is a COLOR contract, not an
+element count. Source-over is associative, so `ColorContrast.Over(pane, plate)` painted as ONE translucent rect
+composites to the same bytes as a plate rect with the pane rect on top — over ANY backdrop: live Mica, the ±0x14
+wallpaper swing, and the opaque `WindowBackground` fallback the **deactivate swing** lands on (that swing moves the
+BACKDROP, not the rungs' alphas, so a merged rung swings identically; both are computed live off `Tok.Epoch`).
+Wavee's content region ships that form (`WaveeColors.ContentPaneMerged` in the `WaveeShell` content-region stack):
+the pane rect carries the merged fill and keeps its 8,0,0,0 corner, its `Elevation.Card` shadow and its trailing
+`Spacing.S` inset, while the plate survives only as the two regions the pane does not cover — a `Radii.Card` corner
+cell under the rounded cut-away plus the trailing gap strip. The motive is bandwidth, not color: that region is ~95%
+of the viewport and NEITHER rung can ever take the opaque no-blend PSO (α < 1 is the ladder contract), so the second
+full-region blended SDF pass was pure fill cost. Two bounded caveats, both by construction: the corner cell still
+underlaps the merged rect inside the corner's quarter disc (the cut-away is concave — no rect expresses it), paying
+one extra plate layer there (≈4/255 over ~50 DIP²; splitting the pane instead would split its shadow onto internal
+seams, and a shadow band reads THROUGH a translucent surface); and mid-cross-fade frames differ by a hair, since
+`Over` is not linear in its inputs. One load-bearing dependency: the merge is computed in the SAME space the ROP
+blends in (as-built the swapchain/RTV is plain `BGRA8_UNORM`, so source-over runs on the encoded values —
+exactly what `ColorContrast` models). A future sRGB-view RTV would blend in linear light and the merged value would
+have to be solved there instead. Gates: `palette.merged-rung` (associativity to the byte across the whole assumed
+Mica swing AND the opaque fallback, α stays < 1, `Over` degenerates to `Flatten` on an opaque under) plus Wavee.Tests
+`ShellMergedRungTests` for the color, and `gate.layout.merged-rung-remainders` for the geometry (the corner cell and
+the trailing strip must tile the uncovered region exactly — a strip that missed the pane's edge exposes bare Mica). `palette.ladder` / `palette.contrast` are UNCHANGED — they assert the two-rung ladder on the
+published `ShellPalette` values, and a merged paint site does not touch those, which is exactly why they assert
+flattened colors rather than element structure.
 `HoverFill`/`PressedFill` are bindable `Prop<ColorF>` channels (like `Fill`), so recycled list rows re-fire on
 `Epoch` (`prop-net.hoverfill` gate).
 
