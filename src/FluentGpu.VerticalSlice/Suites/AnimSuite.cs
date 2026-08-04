@@ -2584,6 +2584,149 @@ static class AnimSuite
             && nestedDev.LayerBalance == 0;
         Check("30b. edge-fade -> acrylic records balanced nested layers with stable target identities",
             nestedKinds, $"layers={nestedDev.LastLayers.Count} balance={nestedDev.LayerBalance}");
+
+        EdgeFadeStripChecks();
+    }
+
+    // Build an EdgeFade PushLayerCmd exactly as DrawList.PushEdgeFadeLayer would (the recorder already zeroes the band
+    // of every edge missing from the mask, which is why band > 0 IS the shader's enabled-edge predicate).
+    static PushLayerCmd EdgeFadeLayer(RectF rect, RectF clip, CornerRadius4 radii,
+        float bandL, float bandT, float bandR, float bandB,
+        float blurSigma = 0f, float groupAlpha = 1f, float intensity = 1f, int falloff = 0)
+        => new(rect, radii, default, default, 0f, blurSigma, 0f, 0f,
+            (int)LayerKind.EdgeFade, groupAlpha,
+            bandL, bandT, bandR, bandB, falloff, intensity,
+            (bandL > 0f ? 1 : 0) | (bandT > 0f ? 2 : 0) | (bandR > 0f ? 4 : 0) | (bandB > 0f ? 8 : 0), clip);
+
+    // The PURE-fade strip path (Wave 2.5): EdgeFadeStrips.Compute replaces the full-canvas group RT with ≤ 4 snapshot +
+    // restore strips. Two invariants make that legal and BOTH are gated here, because either one failing is a silent
+    // visual corruption rather than a crash:
+    //   DISJOINT — a pixel restored twice gets the feather applied twice;
+    //   COVERING — every pixel of the composite box whose analytic feather is < 1 must be in a strip, else the
+    //              direct-drawn subtree keeps a hard edge where the fade should have dissolved it.
+    static void EdgeFadeStripChecks()
+    {
+        Span<SelfBlurPixelBox> strips = stackalloc SelfBlurPixelBox[EdgeFadeStrips.MaxStrips];
+
+        // ── disjointness + coverage + containment over the representative fade shapes ────────────────────────────────
+        bool ok = true;
+        string detail = "";
+        void Probe(string what, in PushLayerCmd L, float scale, int cw, int ch, int expectedCount)
+        {
+            Span<SelfBlurPixelBox> s = stackalloc SelfBlurPixelBox[EdgeFadeStrips.MaxStrips];
+            EdgeFadeStrips.Compute(in L, scale, cw, ch, s, out int n);
+            if (n != expectedCount) { ok = false; detail += $" {what}:count={n}!={expectedCount}"; return; }
+
+            int boxL = Math.Clamp((int)MathF.Floor(L.CompositeClip.X * scale), 0, cw);
+            int boxT = Math.Clamp((int)MathF.Floor(L.CompositeClip.Y * scale), 0, ch);
+            int boxR = Math.Clamp((int)MathF.Ceiling((L.CompositeClip.X + L.CompositeClip.W) * scale), boxL, cw);
+            int boxB = Math.Clamp((int)MathF.Ceiling((L.CompositeClip.Y + L.CompositeClip.H) * scale), boxT, ch);
+
+            for (int i = 0; i < n; i++)
+            {
+                var a = s[i];
+                if (a.IsEmpty) { ok = false; detail += $" {what}:emptyStrip{i}"; }
+                if (a.MinX < boxL || a.MinY < boxT || a.MaxX > boxR || a.MaxY > boxB)
+                { ok = false; detail += $" {what}:strip{i}OutsideBox"; }
+                for (int j = i + 1; j < n; j++)
+                {
+                    var b = s[j];
+                    bool overlap = Math.Max(a.MinX, b.MinX) < Math.Min(a.MaxX, b.MaxX)
+                                && Math.Max(a.MinY, b.MinY) < Math.Min(a.MaxY, b.MaxY);
+                    if (overlap) { ok = false; detail += $" {what}:overlap{i}/{j}"; }
+                }
+            }
+
+            for (int y = boxT; y < boxB; y++)
+                for (int x = boxL; x < boxR; x++)
+                {
+                    float f = EdgeFadeStrips.FeatherAt(in L, scale, x + 0.5f, y + 0.5f);
+                    if (f >= 1f - 1e-4f) continue;                     // identity pixel — the direct draw is already right
+                    bool covered = false;
+                    for (int i = 0; i < n && !covered; i++)
+                        covered = x >= s[i].MinX && x < s[i].MaxX && y >= s[i].MinY && y < s[i].MaxY;
+                    if (!covered) { ok = false; detail += $" {what}:uncovered({x},{y},f={f:0.000})"; return; }
+                }
+        }
+
+        // Bottom-only 32 (the scroll-fade shape): a single full-width strip flush against the box bottom.
+        Probe("bottom32", EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 32), 1f, 400, 300, 1);
+        // The SAME fade clipped ABOVE its band (a scroll viewport cutting at y=80): the band is entirely outside the
+        // composite box, every visible pixel has feather 1 ⇒ NO strip at all, not an empty one.
+        Probe("bottom32.clippedAway", EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 80), default, 0, 0, 0, 32), 1f, 400, 300, 0);
+        // Perimeter 40 with corner 28 — the corner ARCS are what force the top/bottom strips to widen to the radius.
+        Probe("perimeter", EdgeFadeLayer(new RectF(20, 20, 280, 200), new RectF(20, 20, 280, 200), CornerRadius4.All(28f), 40, 40, 40, 40), 1f, 400, 300, 4);
+        Probe("perimeter@2x", EdgeFadeLayer(new RectF(10, 10, 140, 100), new RectF(10, 10, 140, 100), CornerRadius4.All(28f), 40, 40, 40, 40), 2f, 400, 300, 4);
+        // A radius much larger than the band: the arc reaches well past the straight band, still fully covered.
+        Probe("bigRadius", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(60f), 8, 8, 8, 8), 1f, 400, 300, 4);
+        // Horizontal-only: the corners are INACTIVE (each needs both adjacent edges), so left/right take the full height.
+        Probe("horizontal", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(24f), 24, 0, 24, 0), 1f, 400, 300, 2);
+        Probe("vertical", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(24f), 0, 24, 0, 24), 1f, 400, 300, 2);
+        // Partial intensity never reaches 0, but the covered set is the same (feather < 1 only inside the bands).
+        Probe("intensity.5", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(28f), 40, 40, 40, 40, intensity: 0.5f), 1f, 400, 300, 4);
+        Probe("smoothstep", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), CornerRadius4.All(28f), 40, 40, 40, 40, falloff: 1), 1f, 400, 300, 4);
+        // Bands deeper than the box: top+bottom swallow every row, so no left/right strip is emitted (still disjoint).
+        Probe("swallow", EdgeFadeLayer(new RectF(20, 20, 260, 200), new RectF(20, 20, 260, 200), default, 40, 400, 40, 400), 1f, 400, 300, 1);
+
+        // Degenerate inputs produce NO strips (the fade is an identity pass and the subtree just draws through).
+        var noEdges = EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 0);
+        EdgeFadeStrips.Compute(in noEdges, 1f, 400, 300, strips, out int noEdgeCount);
+        var emptyClip = EdgeFadeLayer(new RectF(0, 0, 200, 160), default, default, 0, 0, 0, 32);
+        EdgeFadeStrips.Compute(in emptyClip, 1f, 400, 300, strips, out int emptyClipCount);
+        var offCanvas = EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 32);
+        EdgeFadeStrips.Compute(in offCanvas, 1f, 0, 0, strips, out int noCanvasCount);
+
+        // Per-edge disabled ⇒ no strip on that side: bottom-only puts its single strip flush against the box BOTTOM.
+        var bottomOnly = EdgeFadeLayer(new RectF(0, 0, 200, 160), new RectF(0, 0, 200, 160), default, 0, 0, 0, 32);
+        EdgeFadeStrips.Compute(in bottomOnly, 1f, 400, 300, strips, out int bottomCount);
+        bool bottomShape = bottomCount == 1 && strips[0].MinX == 0 && strips[0].MaxX == 200
+                        && strips[0].MinY == 128 && strips[0].MaxY == 160;
+
+        Check("gate.edgefade.strips: pure-fade strips are disjoint, inside the composite box, and cover every feathered pixel",
+            ok && noEdgeCount == 0 && emptyClipCount == 0 && noCanvasCount == 0 && bottomShape,
+            $"noEdges={noEdgeCount} emptyClip={emptyClipCount} noCanvas={noCanvasCount} bottom={bottomCount}@" +
+            $"({strips[0].MinX},{strips[0].MinY},{strips[0].MaxX},{strips[0].MaxY}){detail}");
+
+        // ── the eligibility split the strip path rests on ───────────────────────────────────────────────────────────
+        // A blur-carrying fade MUST keep the legacy full-canvas lease (BlurInPlace reads a halo past the composite
+        // clip, so its RT needs a full-canvas clear); a pure fade clears only its box — and is what the strip path
+        // replaces outright. Landing the σ > 0 arm here guards the eligibility split itself.
+        var pure = EdgeFadeLayer(new RectF(20, 20, 100, 100), new RectF(20, 20, 100, 100), default, 0, 0, 0, 24);
+        var blurred = EdgeFadeLayer(new RectF(20, 20, 100, 100), new RectF(20, 20, 100, 100), default, 0, 0, 0, 24, blurSigma: 8f);
+        EdgeFadeLayerClear.Compute(in pure, 1f, 400, 300, out int pl, out int pt, out int pr, out int pb, out bool pFull);
+        EdgeFadeLayerClear.Compute(in blurred, 1f, 400, 300, out int bl, out int bt, out int br, out int bb, out bool bFull);
+        bool clearOk = !pFull && pl == 20 && pt == 20 && pr == 120 && pb == 120
+                    && bFull && bl == 0 && bt == 0 && br == 400 && bb == 300
+                    && EdgeFadeStrips.IsPureFade(in pure) && !EdgeFadeStrips.IsPureFade(in blurred);
+        // A group alpha below 1 is also ineligible: drawing the subtree direct would double-blend overlapping children.
+        var faded = EdgeFadeLayer(new RectF(20, 20, 100, 100), new RectF(20, 20, 100, 100), default, 0, 0, 0, 24, groupAlpha: 0.5f);
+        clearOk = clearOk && !EdgeFadeStrips.IsPureFade(in faded);
+        Check("gate.edgefade.clear-blur-fullcanvas: sigma>0 clears the FULL canvas (legacy path only); a pure fade clears its box and is strip-eligible",
+            clearOk, $"pure=({pl},{pt},{pr},{pb}) full={pFull} blur=({bl},{bt},{br},{bb}) full={bFull}");
+
+        // ── the exactness algebra the whole path rests on ───────────────────────────────────────────────────────────
+        // Legacy composite:  out = C*k + D*(1 - a*k)     (premultiplied SourceOver of src x k)
+        // Direct draw:       F   = C + D*(1 - a)
+        // Strip restore:     lerp(D, F, k) = D + k*(C - D*a) = C*k + D*(1 - a*k)   — identical for ANY backdrop alpha.
+        // A single-snapshot SourceOver restore would only match at d == 1, which a Mica back buffer never guarantees.
+        double worst = 0;
+        foreach (float a in new[] { 0f, 0.25f, 0.5f, 0.75f, 1f })
+            foreach (float cs in new[] { 0f, 0.3f, 1f })
+                foreach (float d in new[] { 0f, 0.2f, 0.6f, 1f })
+                    foreach (float ds in new[] { 0f, 0.4f, 1f })
+                        foreach (float k in new[] { 0f, 0.1f, 0.5f, 0.9f, 1f })
+                        {
+                            float c = cs * a, dc = ds * d;              // premultiplied channel values
+                            float legacy = c * k + dc * (1f - a * k);
+                            float f = c + dc * (1f - a);
+                            float restore = dc + k * (f - dc);
+                            worst = Math.Max(worst, Math.Abs(legacy - restore));
+                            float legacyA = a * k + d * (1f - a * k);
+                            float fA = a + d * (1f - a);
+                            worst = Math.Max(worst, Math.Abs(legacyA - (d + k * (fA - d))));
+                        }
+        Check("gate.edgefade.strip-lerp-exact: lerp(D, F, feather) reproduces the legacy composite for every (C, a, D, d, f)",
+            worst < 1e-6, $"maxAbsErr={worst:0.###e+0}");
     }
 
     static void AnimEngineChecks(StringTable strings)

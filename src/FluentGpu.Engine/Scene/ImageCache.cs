@@ -553,6 +553,13 @@ public sealed class ImageCache
     private void RestartDerived(int id, Entry e)
     {
         if (!e.Derived || e.State == ImageState.Pending) { TryQueueDerived(id, e); return; }
+        // Back off a FAILED bake exactly like RestartDecode's visible-retry gate (same LastRestartMs/RestartBackoffMs
+        // idiom). A bake that keeps failing — atlas pressure, a source evicted under memory pressure — used to be
+        // re-enqueued UNBOUNDED on every RequestBakedBlur / source-ready pass, which is one way the baked-blur queue
+        // ends up permanently full. Upgrades already cap at 3 attempts (TryQueueDerivedUpgrade); initial bakes had no
+        // limiter at all. Re-baking a READY derivative (the retheme/evict path) is unaffected — only Failed is gated.
+        if (e.State == ImageState.Failed && _clockMs - e.LastRestartMs < RestartBackoffMs) return;
+        e.LastRestartMs = _clockMs;
         e.State = ImageState.Pending;
         e.Failure = ImageFailureKind.None;
         e.Bytes = 0;

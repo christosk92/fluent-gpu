@@ -659,14 +659,34 @@ non-`SrcOver` blend on a subtree; an effect (backdrop blur, group drop-shadow, c
 clip-to-path applied to a whole subtree with its own AA.
 
 As-built `LayerKind`s on the `PushLayer`/`PopLayer` opcode pair: **`Acrylic`** (backdrop blur+tint recipe),
-**`Opacity`** (flat group alpha — the overlap case above), and **`Blur`** (per-node **self-blur**, the Expressive
+**`Opacity`** (flat group alpha — the overlap case above), **`Blur`** (per-node **self-blur**, the Expressive
 Motion Kit — `NodePaint.BlurSigma > 0`): the subtree renders to a pooled offscreen RT, a separable **dynamic-σ**
-Gaussian runs over it, and it composites once at the group alpha. The `Blur` kind reuses the `Opacity` group's
-`OpacityLayerCompositor` RT pool + composite (it IS an opacity group that blurs first), so it is the cheapest path that
-supports an animating blur. Semantics + the curve/token vocabulary: `backdrop-effects-animation.md` FA-2. The
-cross-frame retained self-blur **pin cache** and its position-independent key (and the `PushLayerCmd.InMotion` payload
-field — 1 = the self-blur node's world transform moved this frame; drives the compositor's settle re-mint, and is **not**
-folded into the pin key) are owned by `backdrop-effects-animation.md` §FA-2a.
+Gaussian runs over it, and it composites once at the group alpha; and **`EdgeFade`** (below). The `Blur` kind reuses the
+`Opacity` group's `OpacityLayerCompositor` RT pool + composite (it IS an opacity group that blurs first), so it is the
+cheapest path that supports an animating blur. Semantics + the curve/token vocabulary: `backdrop-effects-animation.md`
+FA-2. The cross-frame retained self-blur **pin cache** and its position-independent key (and the `PushLayerCmd.InMotion`
+payload field — 1 = the self-blur node's world transform moved this frame; drives the compositor's settle re-mint, and is
+**not** folded into the pin key) are owned by `backdrop-effects-animation.md` §FA-2a.
+
+**`EdgeFade` realization — two paths, split by eligibility.** An edge fade feathers the subtree's premultiplied alpha to
+0 over a per-edge band, following the rounded corners (the arc). It has **two** backend realizations and the split is a
+contract, not an optimization detail:
+
+- **Legacy (blur-carrying or alpha-faded fades — `BlurSigma > 0` ∨ `GroupAlpha < 1`)**: the `Opacity` recipe exactly —
+  lease a canvas-sized RT, clear it (**full canvas iff `σ > 0`**, because `BlurInPlace` reads a tap halo past the
+  composite clip; a zero-σ lease clears only the composite-clip box — `EdgeFadeLayerClear` owns that decision), render
+  the subtree into it, optionally Gaussian-blur it, then composite it back through the feather shader.
+- **Strip path (PURE fades — `BlurSigma == 0` ∧ `GroupAlpha == 1`)**: **no offscreen intermediate at all.** The backend
+  snapshots only the fade **strips** of the current target (`D`), lets the subtree draw **straight** onto the target, then
+  snapshots the same strips again (`F`) and writes them back as `lerp(D, F, feather)`. This is algebraically **exact**
+  for any backdrop alpha — legacy is `C·f + D·(1 − a·f)`, direct drawing gives `F = C + D·(1 − a)`, and
+  `lerp(D, F, f) = C·f + D·(1 − a·f)` — up to the 8-bit UNORM snapshot round-trip (~1/255). The **≤ 4 strips are
+  pairwise disjoint and cover every pixel whose feather is < 1**; both invariants, and the corner-arc fold into the
+  top/bottom band depth, are owned by `FluentGpu.Render.EdgeFadeStrips` (portable, headless-gated as
+  `gate.edgefade.strips`). The two shaders share ONE HLSL feather body, so a strip-restored fade matches a
+  legacy-composited one. Restricted to a **top-level** fade over the back buffer: an enclosing group's pooled RT is
+  cleared only over its own extent, and a region-local self-blur group runs a shifted viewport, so neither satisfies the
+  restore's 1:1 canvas-space assumption; a nested pure fade falls back to the legacy path.
 
 ```
 PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]

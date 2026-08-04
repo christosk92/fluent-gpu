@@ -63,6 +63,23 @@ sealed class ShotScene : Component
                 EfCard("Bottom only", new EdgeFadeSpec(EdgeMask.Bottom, 64f)),
             ],
         },
+        // The d < 1 exactness case for the PURE-fade STRIP path (EdgeFadeStrips): identical cards, but the page ground
+        // is TRANSLUCENT, so the back buffer under every fade holds premultiplied pixels with alpha < 1 (what a Mica
+        // window always composites through). The strip restore is lerp(D, F, feather), which is exact for ANY backdrop
+        // alpha; a single-snapshot SourceOver restore would only match where the backdrop is opaque, so this shot is
+        // the one that would visibly break it. Run it with --mica for the real Theme.WindowBackground = Transparent
+        // path; the half-alpha ground below keeps d < 1 even in an opaque window.
+        "edgefade-mica" => new BoxEl
+        {
+            Grow = 1, Direction = 0, Fill = ColorF.FromRgba(0x20, 0x20, 0x20, 0x80), Gap = 28f,
+            Padding = new Edges4(48, 48, 48, 48), AlignItems = FlexAlign.Start,
+            Children =
+            [
+                EfCard("Perimeter over d<1", EdgeFadeSpec.Perimeter(40f)),
+                EfCard("Bottom only over d<1", new EdgeFadeSpec(EdgeMask.Bottom, 64f)),
+                EfCard("Fade + blur (legacy path)", new EdgeFadeSpec(EdgeMask.All, 44f, 44f, 44f, 44f, FadeFalloff.Smoothstep, 1f, EdgeFadeMode.FadeAndBlur, 8f)),
+            ],
+        },
         // The REAL flyout through OverlayHost + the open animation (reproduces the live dropdown the user sees).
         "flyout" => Embed.Comp(() => new OverlayHost { Child = new BoxEl { Grow = 1, Fill = PageBg, Children = [Embed.Comp(() => new FlyoutLiveShot())] } }),
         "combobox-open" => OverlayShot(Embed.Comp(() => new ComboBoxOpenShot())),

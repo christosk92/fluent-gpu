@@ -97,10 +97,21 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // RT), and the leased (slot, alpha, σ) per open OPACITY/BLUR group — both reused across frames (0 steady alloc). A
     // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
     private const int NoopLayerKind = -1;
+    // A PURE edge fade (σ == 0, group alpha 1) that took the STRIP path: no group RT is leased at all, so it is NOT on
+    // _opacityGroups (everything that peeks at the innermost open group — acrylic backdrop binding, nested composites —
+    // must keep seeing the real enclosing target). It is tracked on its own stack and marked on _layerKinds with this
+    // sentinel so PushLayer/PopLayer stay balanced. See TryBeginStripFade / EndStripFade.
+    private const int StripFadeLayerKind = -2;
+    private const int MaxStripFadeDepth = 8;
     private readonly List<int> _layerKinds = new(8);
     private readonly record struct LayerGroup(int Slot, PushLayerCmd L, ulong PinHash,
         OpacityLayerCompositor.LocalBlurSurface LocalBlur);
     private readonly List<LayerGroup> _opacityGroups = new(4);
+    private readonly record struct StripFadeGroup(PushLayerCmd L, int Scratch, int Count, int Depth);
+    private readonly List<StripFadeGroup> _stripGroups = new(MaxStripFadeDepth);
+    // Flat, per-depth strip storage (depth·MaxStrips … +MaxStrips) — the strips computed at PushLayer are reused
+    // VERBATIM at PopLayer so the D and F snapshots are pixel-aligned. Preallocated: zero managed alloc on submit.
+    private readonly SelfBlurPixelBox[] _stripBoxes = new SelfBlurPixelBox[MaxStripFadeDepth * EdgeFadeStrips.MaxStrips];
 
     public int LastBlurCacheHit => _blurCacheHit;
     public int LastBlurCacheMiss => _blurCacheMiss;
@@ -1033,6 +1044,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "opacityGroupsBounded", _opacity?.BoundedOpacityGroupsThisFrame ?? 0);
         Diag.Set("d3d12", "opacityGroupsBlur", _opacity?.BlurGroupsThisFrame ?? 0);
         Diag.Set("d3d12", "opacityGroupsEdgeFade", _opacity?.EdgeFadeGroupsThisFrame ?? 0);
+        Diag.Set("d3d12", "edgeFadeStripPx", _opacity?.EdgeFadeStripPixelsThisFrame ?? 0L);   // px copied+restored by the PURE-fade strip path (0 ⇒ every fade took the legacy full-canvas group RT; cf. edgeFadeClearPx)
         Diag.Set("d3d12", "opacityGroupsFullTarget", _opacity?.FullTargetGroupsThisFrame ?? 0);   // full-canvas read+blend (the costly class)
         Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
         Diag.Set("d3d12", "blurLayers", _opacity?.BlurLayersThisFrame ?? 0);
@@ -1885,6 +1897,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         ResetDesiredScissor();
         _layerKinds.Clear();
         _opacityGroups.Clear();
+        _stripGroups.Clear();
         // One scratch RECT for partial layer-RT clears (edge-fade + plain opacity) — MUST NOT stackalloc inside the
         // draw-list loop (cookie overrun). Consumed by the ClearRenderTargetView in the same iteration that fills it.
         RECT* layerClearRect = stackalloc RECT[1];
@@ -2007,6 +2020,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         _blurHoldFallback++;
                         continue;
                     }
+                    // PURE edge fade (no blur, group alpha 1): skip the full-canvas group RT entirely. Snapshot only the
+                    // fade STRIPS of the current target (D), let the subtree draw STRAIGHT onto it, then on PopLayer
+                    // snapshot the same strips again (F) and write through lerp(D, F, feather) — algebraically identical
+                    // to the legacy composite for ANY backdrop alpha (EdgeFadeStrips documents the algebra + the
+                    // disjointness/coverage invariants). Everything else keeps the lease path below.
+                    if (EdgeFadeStrips.IsPureFade(in L) && TryBeginStripFade(in L, directToBackBuffer, backRtv))
+                    {
+                        _layerKinds.Add(StripFadeLayerKind);
+                        continue;
+                    }
                     // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically. A
                     // Blur (or edge-fade-with-blur) group carries its σ — the RT is gaussian-blurred on pop before the
                     // composite; an edge-fade carries the per-edge bands + corners, applied in EdgeFadeComposite on pop.
@@ -2094,6 +2117,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 _frameLayerOps++;
                 int kind = _layerKinds.Count > 0 ? _layerKinds[^1] : (int)LayerKind.Acrylic;
                 if (_layerKinds.Count > 0) _layerKinds.RemoveAt(_layerKinds.Count - 1);
+                if (kind == StripFadeLayerKind)
+                {
+                    EndStripFade(lw, lh, directToBackBuffer, backRtv);
+                    continue;
+                }
                 if ((kind == (int)LayerKind.Opacity || kind == (int)LayerKind.Blur || kind == (int)LayerKind.EdgeFade) && _opacityGroups.Count > 0)
                 {
                     FlushSegment(lw, lh);                   // finish the subtree into the group RT
@@ -2162,6 +2190,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
             _opacity.Release(slot);
         }
+        // Same defence for pure-fade strip groups a malformed stream left open: restore them (LIFO) so the strips are
+        // feathered and, critically, so their pooled scratch leases are returned instead of leaking as permanently InUse.
+        while (_stripGroups.Count > 0) EndStripFade(lw, lh, directToBackBuffer, backRtv);
         _layerKinds.Clear();
         _clipStack.Clear();
         _roundedClipStack.Clear();
@@ -2175,6 +2206,81 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         if (directToBackBuffer) { _cmdList->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null); SetFullViewport(); }
         else { _acrylic!.BindCanvas(_cmdList); SetFullViewport(); }
+    }
+
+    // ── PURE edge fade: the strip path (no offscreen intermediate) ───────────────────────────────────────────────────
+    // Open a pure fade WITHOUT leasing a canvas-sized group RT: compute its ≤ 4 disjoint fade strips, snapshot those
+    // pixels of the current target (D) into a small pooled scratch, and let the subtree draw straight through.
+    // Deliberately TOP-LEVEL over the back buffer only:
+    //   • an enclosing opacity group's pooled RT is cleared only over its own patched extent, so a strip could snapshot
+    //     UNCLEARED pool texels (the legacy composite never reads outside that extent);
+    //   • a region-local self-blur group runs a SHIFTED viewport, so SV_Position would not be canvas space — the
+    //     restore shader's whole geometry assumes a 1:1 canvas-space device pixel.
+    // A nested fade simply keeps the legacy lease path, which is correct there and rare in the measured workloads.
+    private bool TryBeginStripFade(in PushLayerCmd L, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    {
+        if (_opacity == null || !directToBackBuffer) return false;
+        if (_opacityGroups.Count != 0) return false;
+        if (_stripGroups.Count >= MaxStripFadeDepth) return false;
+        int depth = _stripGroups.Count;
+        Span<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(depth * EdgeFadeStrips.MaxStrips, EdgeFadeStrips.MaxStrips);
+        EdgeFadeStrips.Compute(in L, _frameScale, (int)_w, (int)_h, strips, out int count);
+        int slot = -1;
+        if (count > 0)
+        {
+            SceneCat(CatComposite);   // the strip snapshot IS layer overhead — attribute it to comp, like the lease path
+            slot = _opacity.AcquireStripSnapshot(_cmdList, _backBuffers[_frameIndex], strips, count, _fenceValue + 1);
+            if (slot < 0)
+            {
+                // No scratch available — fall back to the legacy lease path. The snapshot may have unbound the OM
+                // render targets (CopyStrips) before failing, so restore the caller's binding either way.
+                InvalidateCmdState();
+                BindLayerTopTarget(directToBackBuffer, backRtv);
+                ApplyCurrentScissor();
+                return false;
+            }
+        }
+        // Reproduce the legacy composite's BOUND. The old path scissored the group composite to CompositeClip
+        // (= the node's device bounds ∩ the inherited clip ∩ its ClipRect), so a child painting outside the node — a
+        // shadow halo, a focus ring, overflow — never reached the target. Drawing STRAIGHT to the target must be
+        // clipped identically or those pixels would newly show through. CompositeClip is already intersected with the
+        // enclosing clip by the recorder, which is exactly what _clipStack expects (it stores absolute rects).
+        PushScissor(new ClipCmd(L.CompositeClip));
+        // CopyStrips unbound the OM render targets to transition the target; rebind the target + viewport, then apply
+        // the (now narrower) clip the subtree draws under.
+        InvalidateCmdState();
+        BindLayerTopTarget(directToBackBuffer, backRtv);
+        ApplyCurrentScissor();
+        _stripGroups.Add(new StripFadeGroup(L, slot, count, depth));
+        return true;
+    }
+
+    // Close a pure fade: finish the subtree into the target, snapshot the SAME strips again (F), then write
+    // lerp(D, F, feather) through them. Nothing rebinds during the group, but nested acrylic/opacity/blur inside the
+    // subtree may have left their own PSO/viewport/scissor, so invalidate + rebind exactly like the lease path does.
+    private void EndStripFade(float lw, float lh, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    {
+        if (_stripGroups.Count == 0) return;
+        StripFadeGroup g = _stripGroups[^1];
+        _stripGroups.RemoveAt(_stripGroups.Count - 1);
+        FlushSegment(lw, lh);   // the subtree drew STRAIGHT to the target — land it before sampling those pixels
+        PopScissor();           // drop the composite-clip bound pushed at TryBeginStripFade (the stack stays balanced)
+        if (g.Count <= 0 || _opacity == null)
+        {
+            ApplyCurrentScissor();   // no enabled edge ⇒ the fade was an identity pass; just restore the enclosing clip
+            return;
+        }
+        SceneCat(CatComposite);
+        ReadOnlySpan<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(g.Depth * EdgeFadeStrips.MaxStrips, g.Count);
+        _opacity.SnapshotStripsAfter(_cmdList, _backBuffers[_frameIndex], g.Scratch, strips, g.Count);
+        InvalidateCmdState();
+        BindLayerTopTarget(directToBackBuffer, backRtv);
+        ApplyCurrentScissor();
+        PushLayerCmd gl = g.L;   // a positional record's member is a PROPERTY — bind it to a local so `in` is legal
+        _opacity.EdgeFadeStripRestore(_cmdList, g.Scratch, strips, g.Count, in gl, _frameScale, CurrentScissorRect());
+        _opacity.Release(g.Scratch);
+        InvalidateCmdState();   // the restore bound its own PSO/heap + per-strip scissors
+        ApplyCurrentScissor();
     }
 
     private void BindOpacityGroupTarget(LayerGroup group)

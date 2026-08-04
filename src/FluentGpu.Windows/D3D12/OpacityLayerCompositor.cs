@@ -94,11 +94,14 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     private readonly float[] _scratch4 = new float[4];
     private readonly float[] _scratch8 = new float[8];
     private readonly float[] _scratch16 = new float[16];
+    private readonly float[] _scratch24 = new float[24];
 
     private ID3D12RootSignature* _root;       // 1 root const (alpha) + 1 SRV table + static linear-clamp sampler
     private ID3D12PipelineState* _pso;        // fullscreen triangle, src = RT × alpha, blend ONE/INV_SRC_ALPHA
     private ID3D12RootSignature* _edgeRoot;   // edge fade: 16 root consts (rect + per-edge band + corner radii + falloff/intensity/alpha) + SRV + point sampler
     private ID3D12PipelineState* _edgePso;    // per-edge feather composite (premultiplied SourceOver, like _pso) — follows the rounded corners (the curve)
+    private ID3D12RootSignature* _edgeStripRoot;  // pure-fade strip restore: the 16 edge consts + 8 source-map consts + SRV + point sampler
+    private ID3D12PipelineState* _edgeStripPso;   // write-through lerp(D, F, feather) over the fade strips — blend DISABLED
     private ID3D12RootSignature* _copyRoot;   // down/up sample: 8 root consts (src uv off+scale + clamp bounds) + SRV table + LINEAR sampler
     private ID3D12PipelineState* _copyPso;    // bilinear stretch copy (the downsample prefilter + the upsample; no blend — full overwrite)
     private ID3D12RootSignature* _dsBlurRoot; // downsampled separable blur: 24 root consts (texel size, axis, usedFrac/maxUv, BuildKernel taps) + SRV + LINEAR
@@ -117,8 +120,13 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
     /// <summary>Self-blur groups composited this frame (<see cref="CompositeBlur"/> + the region-local path).</summary>
     public int BlurGroupsThisFrame { get; private set; }
 
-    /// <summary>Edge-fade groups composited this frame (<see cref="EdgeFadeComposite"/>).</summary>
+    /// <summary>Edge-fade groups composited this frame (<see cref="EdgeFadeComposite"/> + <see cref="EdgeFadeStripRestore"/>).</summary>
     public int EdgeFadeGroupsThisFrame { get; private set; }
+
+    /// <summary>Physical pixels COPIED (the two strip snapshots) plus DRAWN (the restore) by the PURE-fade strip path
+    /// this frame — the whole GPU cost of an edge fade that skipped its full-canvas group RT. 0 while every fade on
+    /// screen takes the legacy path (blur-carrying / alpha-faded groups, or a nested fade).</summary>
+    public long EdgeFadeStripPixelsThisFrame { get; private set; }
 
     /// <summary>Groups composited with NO bounding scissor this frame — each is a full-canvas read+blend (the expensive
     /// class: ~0.4–0.6 ms apiece at 4K-ish resolutions), so this is the number that explains a heavy `comp` bucket.</summary>
@@ -148,6 +156,7 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
         BlurGroupsThisFrame = 0;
         EdgeFadeGroupsThisFrame = 0;
         FullTargetGroupsThisFrame = 0;
+        EdgeFadeStripPixelsThisFrame = 0;
     }
 
     /// <summary>Self-blur layers filtered this frame (cache hits are excluded).</summary>
@@ -221,26 +230,18 @@ float4 BlurPS(V i) : SV_Target
 }
 """;
 
-    // Edge fade: a 1:1 composite (POINT sampler, premultiplied SourceOver — like the opacity composite) that multiplies
-    // the sampled premultiplied layer by a per-edge feather. The inward distance is to the nearest ENABLED edge,
-    // normalized by that edge's band; where a rounded corner's TWO adjacent edges both fade, the distance follows the
-    // corner ARC (the curve) — so the fade hugs the corner instead of the straight edge. Portable HLSL (smoothstep/lerp/
-    // saturate/length only — no D2D1) → a Metal PSMainEdgeFade re-implements this verbatim.
-    private const string EdgeFadeHlsl = """
-cbuffer C : register(b0) { float4 rect; float4 band; float4 corner; float4 misc; };
-// rect = device (minX,minY,maxX,maxY); band = per-edge depth px (L,T,R,B), 0 = disabled; corner = radii px (TL,TR,BR,BL);
-// misc = (falloff 0=lin/1=smooth/2=cubic, intensity 0..1, groupAlpha, unused).
-Texture2D gSrc : register(t0);
-SamplerState gSamp : register(s0);
-struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
+    // The edge-fade FEATHER, factored out so the legacy composite PS and the strip-restore PS (below) share ONE source
+    // of truth — the two must agree pixel-for-pixel or a strip-restored fade would not match a legacy-composited one.
+    // The inward distance is to the nearest ENABLED edge, normalized by that edge's band; where a rounded corner's TWO
+    // adjacent edges both fade, the distance follows the corner ARC (the curve) — so the fade hugs the corner instead
+    // of the straight edge. Portable HLSL (smoothstep/lerp/saturate/length only — no D2D1) → a Metal PSMainEdgeFade
+    // re-implements this verbatim. CPU mirror for the headless gates: FluentGpu.Render.EdgeFadeStrips.FeatherAt.
+    private const string EdgeFadeFeatherHlsl = """
 float curveF(float t, float mode) { t = saturate(t); if (mode < 0.5) return t; if (mode < 1.5) return t * t * (3.0 - 2.0 * t); return t * t * t; }
 // normalized inward arc distance for one corner — only inside its quadrant + when active (else 1e9 = no effect).
 float arcN(float2 p, float2 c, float r, float cb, bool act) { return (act && r > 0.0 && cb > 0.0) ? (r - length(p - c)) / cb : 1e9; }
-float4 PSMain(V i) : SV_Target
+float featherAt(float2 p, float4 rect, float4 band, float4 corner, float4 misc)
 {
-    float4 src = gSrc.Sample(gSamp, i.uv);   // premultiplied
-    float2 p = i.pos.xy;                       // device pixel centre
     float bx = band.x, bt = band.y, brr = band.z, bb = band.w;
     float n = 1e9;                             // nearest enabled straight edge, normalized by its own band
     if (bx > 0.0)  n = min(n, (p.x - rect.x) / bx);
@@ -257,7 +258,51 @@ float4 PSMain(V i) : SV_Target
     float2 bl = float2(rect.x + corner.w, rect.w - corner.w);
     n = min(n, arcN(p, bl, corner.w, min(bx, bb), bx > 0.0 && bb > 0.0 && p.x < bl.x && p.y > bl.y));
     float feather = curveF(n, misc.x);        // 0 at the boundary → 1 at band depth
-    return src * (lerp(1.0, feather, misc.y) * misc.z);   // premultiplied × feather × groupAlpha
+    return lerp(1.0, feather, misc.y) * misc.z;   // feather × intensity × groupAlpha
+}
+""";
+
+    // Edge fade: a 1:1 composite (POINT sampler, premultiplied SourceOver — like the opacity composite) that multiplies
+    // the sampled premultiplied layer by the shared per-edge feather.
+    private const string EdgeFadeHlsl = """
+cbuffer C : register(b0) { float4 rect; float4 band; float4 corner; float4 misc; };
+// rect = device (minX,minY,maxX,maxY); band = per-edge depth px (L,T,R,B), 0 = disabled; corner = radii px (TL,TR,BR,BL);
+// misc = (falloff 0=lin/1=smooth/2=cubic, intensity 0..1, groupAlpha, unused).
+Texture2D gSrc : register(t0);
+SamplerState gSamp : register(s0);
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
+
+""" + EdgeFadeFeatherHlsl + """
+
+float4 PSMain(V i) : SV_Target
+{
+    float4 src = gSrc.Sample(gSamp, i.uv);   // premultiplied
+    return src * featherAt(i.pos.xy, rect, band, corner, misc);   // premultiplied × feather × groupAlpha
+}
+""";
+
+    // The PURE-fade STRIP RESTORE (FluentGpu.Render.EdgeFadeStrips): no group RT at all — the subtree drew STRAIGHT to
+    // the target, and this pass writes the fade strips back through lerp(D, F, feather), where D is the pre-subtree
+    // snapshot and F the post-subtree one (packed as the top/bottom halves of ONE small scratch RT). Blend is DISABLED:
+    // the lerp IS the final pixel. Exact for any backdrop alpha — legacy is C·f + D(1−a·f), direct is F = C + D(1−a),
+    // and lerp(D, F, f) = C·f + D(1−a·f). map = (offX, offY, 1/srcW, 1/srcH) maps the device pixel centre to this
+    // strip's D texel; map2.x is the UV row delta from the D half to the F half.
+    private const string EdgeFadeStripHlsl = """
+cbuffer C : register(b0) { float4 rect; float4 band; float4 corner; float4 misc; float4 map; float4 map2; };
+Texture2D gSrc : register(t0);
+SamplerState gSamp : register(s0);
+struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
+
+""" + EdgeFadeFeatherHlsl + """
+
+float4 PSMain(V i) : SV_Target
+{
+    float2 uvD = (i.pos.xy + map.xy) * map.zw;
+    float4 D = gSrc.Sample(gSamp, uvD);                              // target BEFORE the subtree drew
+    float4 F = gSrc.Sample(gSamp, uvD + float2(0.0, map2.x));        // target AFTER the subtree drew
+    return lerp(D, F, featherAt(i.pos.xy, rect, band, corner, misc));
 }
 """;
 
@@ -314,11 +359,22 @@ float4 BlurPS(V i) : SV_Target
         BuildPipeline();
         BuildEdgeFadePipeline();
         BuildDownsamplePipelines();
+        BuildEdgeStripPipeline();
     }
 
-    // Root signature shared by the two downsample-schedule pipelines: N 32-bit root consts + 1 SRV table + a static
-    // LINEAR-clamp sampler (both the bilinear stretch and the folded-tap gaussian want bilinear filtering).
-    private ID3D12RootSignature* BuildLinearSampleRootSig(int numConsts, string what)
+    // The pure-fade strip RESTORE pipeline: the 16 edge-fade consts + the 8 source-mapping consts, 1 SRV table, a POINT
+    // sampler (1:1 texel reads out of the packed snapshot) and blend DISABLED — the lerp IS the final pixel. Deliberately
+    // its OWN root signature rather than a widened _edgeRoot, so the legacy edge-fade PSO is untouched.
+    private void BuildEdgeStripPipeline()
+    {
+        _edgeStripRoot = BuildSampleRootSig(24, D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_POINT, "OpacityLayer.EdgeStripRootSig");
+        _edgeStripPso = BuildOverwritePso(_edgeStripRoot, EdgeFadeStripHlsl, "PSMain", "OpacityLayer.EdgeStripPso");
+    }
+
+    // Root signature shared by the two downsample-schedule pipelines (LINEAR — both the bilinear stretch and the
+    // folded-tap gaussian want bilinear filtering) and by the strip-restore pipeline (POINT — 1:1 texel reads):
+    // N 32-bit root consts + 1 SRV table + one static clamp sampler at the requested filter.
+    private ID3D12RootSignature* BuildSampleRootSig(int numConsts, D3D12_FILTER filter, string what)
     {
         D3D12_DESCRIPTOR_RANGE range = default;
         range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE.D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
@@ -336,7 +392,7 @@ float4 BlurPS(V i) : SV_Target
         p[1].ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC samp = default;
-        samp.Filter = D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        samp.Filter = filter;
         samp.AddressU = samp.AddressV = samp.AddressW = D3D12_TEXTURE_ADDRESS_MODE.D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
         samp.ShaderRegister = 0;
         samp.ShaderVisibility = D3D12_SHADER_VISIBILITY.D3D12_SHADER_VISIBILITY_PIXEL;
@@ -387,9 +443,9 @@ float4 BlurPS(V i) : SV_Target
     // the down/up sample, and a separable-blur PSO whose taps come from AcrylicBackdropMath.BuildKernel.
     private void BuildDownsamplePipelines()
     {
-        _copyRoot = BuildLinearSampleRootSig(8, "OpacityLayer.CopyDsRootSig");
+        _copyRoot = BuildSampleRootSig(8, D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR, "OpacityLayer.CopyDsRootSig");
         _copyPso = BuildOverwritePso(_copyRoot, CopyDsHlsl, "CopyPS", "OpacityLayer.CopyDsPso");
-        _dsBlurRoot = BuildLinearSampleRootSig(24, "OpacityLayer.DsBlurRootSig");
+        _dsBlurRoot = BuildSampleRootSig(24, D3D12_FILTER.D3D12_FILTER_MIN_MAG_MIP_LINEAR, "OpacityLayer.DsBlurRootSig");
         _dsBlurPso = BuildOverwritePso(_dsBlurRoot, DsBlurHlsl, "BlurPS", "OpacityLayer.DsBlurPso");
     }
 
@@ -972,6 +1028,152 @@ float4 BlurPS(V i) : SV_Target
             cmd->DrawInstanced(3, 1, 0, 0);
         }
         CountGroup(GroupKind.EdgeFade, bounded: true);
+    }
+
+    // ── PURE edge fade: strip snapshot + write-through lerp restore (no group RT at all) ─────────────────────────────
+    // A fade with NO blur and group alpha 1 differs from drawing its subtree STRAIGHT onto the target only inside the
+    // fade bands (FluentGpu.Render.EdgeFadeStrips owns that geometry + the disjointness/coverage invariants). So the
+    // backend snapshots those band strips (D), lets the subtree draw direct, snapshots them again (F), and writes
+    // lerp(D, F, feather) back — algebraically identical to the legacy composite for ANY backdrop alpha, and it never
+    // touches the ~4.5 Mpx the full-canvas lease used to clear, re-render and blend. Both snapshots live in ONE pooled
+    // scratch lease: the strips stack vertically, D in the top half, F in the bottom half, so the restore needs a
+    // single SRV and the pooled lease is held only for the group's lifetime.
+
+    private static void StripPack(ReadOnlySpan<SelfBlurPixelBox> strips, int count, out int packW, out int packH)
+    {
+        packW = 0; packH = 0;
+        for (int i = 0; i < count; i++) { packW = Math.Max(packW, strips[i].Width); packH += strips[i].Height; }
+    }
+
+    /// <summary>Lease the packed snapshot scratch for a pure fade and capture the PRE-subtree strip pixels (D) from
+    /// <paramref name="target"/>. Returns the slot (release it with <see cref="Release"/> after
+    /// <see cref="EdgeFadeStripRestore"/>), or -1 when the strip set is degenerate.</summary>
+    public int AcquireStripSnapshot(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target,
+        ReadOnlySpan<SelfBlurPixelBox> strips, int count, ulong frameFence)
+    {
+        if (target == null || count <= 0) return -1;
+        StripPack(strips, count, out int packW, out int packH);
+        if (packW <= 0 || packH <= 0) return -1;
+        int slot = AcquireScratch(cmd, packW, packH * 2, frameFence);
+        if ((int)_pool[slot].H < packH * 2) { Release(slot); return -1; }   // bucket could not hold both halves
+        CopyStrips(cmd, target, slot, strips, count, dstY: 0);
+        return slot;
+    }
+
+    /// <summary>Capture the POST-subtree strip pixels (F) into the lease's second half.</summary>
+    public void SnapshotStripsAfter(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target, int slot,
+        ReadOnlySpan<SelfBlurPixelBox> strips, int count)
+    {
+        if (slot < 0 || target == null || count <= 0) return;
+        StripPack(strips, count, out _, out int packH);
+        CopyStrips(cmd, target, slot, strips, count, dstY: packH);
+    }
+
+    // Copy every strip out of the CURRENT target into the packed scratch at (0, dstY + running offset). The target is
+    // briefly RENDER_TARGET → COPY_SOURCE → RENDER_TARGET through RAW (untracked) barriers that NET to no change, so
+    // D3D12Device's explicit back-buffer state tracking stays consistent — the same trick AcrylicCompositor.
+    // SnapshotTargetRegion uses. It also UNBINDS the OM render targets first (the acrylic path does the same by
+    // rebinding the canvas): the target being copied is the one the caller had bound, and it must not be transitioned
+    // out of RENDER_TARGET while it is still bound. The CALLER re-binds + re-applies its scissor afterwards.
+    // Both surfaces are B8G8R8A8_UNORM with null-desc views, so the copy is bit-exact.
+    private void CopyStrips(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target, int slot,
+        ReadOnlySpan<SelfBlurPixelBox> strips, int count, int dstY)
+    {
+        ref var e = ref _pool[slot];
+        cmd->OMSetRenderTargets(0, null, BOOL.FALSE, null);
+        Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
+        RawTransition(cmd, target, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+        D3D12_TEXTURE_COPY_LOCATION dst = default; dst.pResource = e.Res; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
+        D3D12_TEXTURE_COPY_LOCATION src = default; src.pResource = target; src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; src.Anonymous.SubresourceIndex = 0;
+        int y = dstY;
+        for (int i = 0; i < count; i++)
+        {
+            SelfBlurPixelBox s = strips[i];
+            D3D12_BOX b = new() { left = (uint)s.MinX, top = (uint)s.MinY, front = 0, right = (uint)s.MaxX, bottom = (uint)s.MaxY, back = 1 };
+            cmd->CopyTextureRegion(&dst, 0, (uint)y, 0, &src, &b);
+            y += s.Height;
+            EdgeFadeStripPixelsThisFrame += s.AreaPx;
+        }
+        RawTransition(cmd, target, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+
+    private static void RawTransition(ID3D12GraphicsCommandList* cmd, ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
+    {
+        D3D12_RESOURCE_BARRIER b = default;
+        b.Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+        b.Anonymous.Transition.pResource = res;
+        b.Anonymous.Transition.StateBefore = before;
+        b.Anonymous.Transition.StateAfter = after;
+        b.Anonymous.Transition.Subresource = 0xFFFFFFFF;
+        cmd->ResourceBarrier(1, &b);
+    }
+
+    /// <summary>Write the fade strips back over the CURRENTLY-BOUND target as <c>lerp(D, F, feather)</c> — one scissored
+    /// fullscreen-triangle draw per strip, blend disabled. The feather constants are byte-identical to
+    /// <see cref="EdgeFadeComposite"/>'s (same shared HLSL body), so a strip-restored fade matches a legacy-composited
+    /// one. Counts as an edge-fade group either way, so the `opgrp` census stays continuous.</summary>
+    public void EdgeFadeStripRestore(ID3D12GraphicsCommandList* cmd, int slot,
+        ReadOnlySpan<SelfBlurPixelBox> strips, int count, in PushLayerCmd L, float scale, RECT clip)
+    {
+        CountGroup(GroupKind.EdgeFade, bounded: true);
+        if (slot < 0 || count <= 0) return;
+        ref var e = ref _pool[slot];
+        Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        StripPack(strips, count, out _, out int packH);
+        float invW = 1f / _pool[slot].W, invH = 1f / _pool[slot].H;
+
+        ID3D12DescriptorHeap* h = _srvHeap;
+        cmd->SetDescriptorHeaps(1, &h);
+        cmd->SetGraphicsRootSignature(_edgeStripRoot);
+        cmd->SetPipelineState(_edgeStripPso);
+        var s = _scratch24;
+        // The SAME 16 feather constants EdgeFadeComposite uploads (logical DIP space × the frame DPI factor).
+        s[0] = L.DeviceRect.X * scale;
+        s[1] = L.DeviceRect.Y * scale;
+        s[2] = (L.DeviceRect.X + L.DeviceRect.W) * scale;
+        s[3] = (L.DeviceRect.Y + L.DeviceRect.H) * scale;
+        s[4] = L.FadeBandL * scale;
+        s[5] = L.FadeBandT * scale;
+        s[6] = L.FadeBandR * scale;
+        s[7] = L.FadeBandB * scale;
+        s[8] = L.Radii.TopLeft * scale;
+        s[9] = L.Radii.TopRight * scale;
+        s[10] = L.Radii.BottomRight * scale;
+        s[11] = L.Radii.BottomLeft * scale;
+        s[12] = L.FadeFalloff;
+        s[13] = Math.Clamp(L.FadeIntensity, 0f, 1f);
+        s[14] = Math.Clamp(L.GroupAlpha, 0f, 1f);
+        s[15] = L.FadeEdges;
+        s[18] = invW; s[19] = invH;
+        s[20] = packH * invH;                 // UV row delta from the D half to the F half
+        s[21] = s[22] = s[23] = 0f;
+        cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        int y = 0;
+        for (int i = 0; i < count; i++)
+        {
+            SelfBlurPixelBox st = strips[i];
+            RECT box = new()
+            {
+                left = Math.Max(st.MinX, clip.left),
+                top = Math.Max(st.MinY, clip.top),
+                right = Math.Min(st.MaxX, clip.right),
+                bottom = Math.Min(st.MaxY, clip.bottom),
+            };
+            if (box.right > box.left && box.bottom > box.top)
+            {
+                s[16] = -st.MinX;             // srcUv = (SV_Position.xy + (s16,s17)) * (invW,invH)
+                s[17] = y - st.MinY;
+                cmd->RSSetScissorRects(1, &box);
+                fixed (float* c = s)
+                {
+                    cmd->SetGraphicsRoot32BitConstants(0, 24, c, 0);
+                    cmd->SetGraphicsRootDescriptorTable(1, SrvGpu(PoolSrvSlot(slot)));
+                    cmd->DrawInstanced(3, 1, 0, 0);
+                }
+                EdgeFadeStripPixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
+            }
+            y += st.Height;
+        }
     }
 
     /// <summary>Return the slot to the free list (same-queue reuse needs no fence).</summary>
@@ -1557,6 +1759,8 @@ float4 BlurPS(V i) : SV_Target
         if (_root != null) _root->Release();
         if (_edgePso != null) _edgePso->Release();
         if (_edgeRoot != null) _edgeRoot->Release();
+        if (_edgeStripPso != null) _edgeStripPso->Release();
+        if (_edgeStripRoot != null) _edgeStripRoot->Release();
         if (_copyPso != null) _copyPso->Release();
         if (_copyRoot != null) _copyRoot->Release();
         if (_dsBlurPso != null) _dsBlurPso->Release();
