@@ -799,7 +799,10 @@ Three properties keep it honest:
 - **Who asks.** `PaceSkipSubmit` (no present ⇒ no ack) and **unarmed** async pace waits set
   `WakeOnDisplayClock`. An **armed** phase-gate wait deliberately does not: the ack *is* its phase reference,
   and a per-tick wake would re-enter the loop while the gate is still armed and immediately gate again — the
-  same busywork the ceiling wait exists to avoid.
+  same busywork the ceiling wait exists to avoid. **One exception**, §11.1.4: while the present thread
+  attests a sustained one-vblank slip, the ack is not a phase reference but the 60 Hz *attractor*, so the
+  armed wait does ask for the clock — and `PhaseGateBlocks` **opens** on that tick rather than re-gating on
+  it, which is what keeps the busywork objection satisfied.
 
 #### 11.1.3 Pacing constants are refresh-derived (LANDED)
 
@@ -824,6 +827,79 @@ The same fix applies to the other hardcoded 7, `DmManualUpdatePacer.IntervalMs`.
 loop at the wrong rate on any display that is not 120 Hz. It now carries a per-instance interval fed
 `1000 / CurrentRefreshHz()` at DirectManipulation enable and on `WM_DISPLAYCHANGE` / `WM_DPICHANGED`, clamped
 to [3, 17] ms; an unknown rate leaves the default in force.
+
+#### 11.1.4 The armed-gate slip re-phase (LANDED)
+
+The gate's phase reference is the present-ack, and the ceiling is its only other wake source. On a 120 Hz
+panel those two numbers do not overlap the way the design assumed:
+
+> `PhaseGateCeilingMs() = clamp(round(refreshMs × 2), 8, 34)` = **17 ms**, and a one-slot-late ack interval
+> is **16.67 ms**.
+
+So after a *single* slipped vblank the system enters a **stable fixed point**. The render thread's
+frame-latency waitable settles one refresh later, acks land 16.67 ms apart, the armed wait sleeps toward 17
+and is always woken by the ack first (`CeilingEscapes` structurally **never** fires), production follows the
+acks at 60 Hz, and the next present is therefore late for exactly the same reason. It is self-sustaining, and
+nothing inside the gate can observe it: **every publish IS presented — one refresh late, forever**, which is
+precisely the state the gate calls healthy. Measured live (`ops/diag/sessions/live-20260804-073148`): `latW`
+pinned near 15.9 ms for minutes, DXGI attesting exactly one missed vsync per present, present intervals
+bimodal at 8.3 / 16.6 ms.
+
+**The detector (`Hosting/Threading/PresentSlipDetector.cs`).** The signature exists in exactly one place — the
+interval between consecutive presents — so the classifier lives at the present site. `OnPresent(nowQpc,
+refreshQpc)` is called from `AppHost.NotePresented`, on whichever thread returned from `Present()`, and bands
+the interval against the measured refresh period `R`:
+
+| Interval | Class | Effect |
+|---|---|---|
+| `< 1.5R` | healthy | streak → 0; **disengage** |
+| `[1.5R, 2.5R)` | one slip | streak++; **engage** at 3 consecutive, bumping `Episode` |
+| `>= 2.5R` | other | streak → 0; **disengage**; never engages |
+
+The hysteresis is asymmetric on purpose. Three consecutive one-slips (~25 ms at 120 Hz) is long enough that a
+single scheduling hiccup cannot trip it and short enough that the lock breaks before it is perceptible; one
+healthy interval stands it back down, because past that point the escape has done its job and holding the
+compositor tick armed is the busywork §11.1.2 objects to. The `>= 2.5R` band is not a bigger slip to fix — it
+is an idle gap, occlusion, a minimized window, or a GPU that genuinely cannot hold the panel rate, and forcing
+a deliberately-slow loop to panel rate is the one way this could make things worse.
+
+Every mutation is on the present thread; the UI thread only reads `RephaseWanted` / `Episode` through volatile
+loads. Unlike the ack handshake there is no StoreLoad pair to fence, because nothing here is a *wake* — a read
+that lands one present stale costs at most one frame of delay in engaging or disengaging.
+
+**The escape.** While engaged, the armed wait sets `WakeOnDisplayClock` (the §11.1.2 exception) and
+`AppHost.PhaseGateBlocks` **opens the gate and produces** instead of delegating to `Blocks()`:
+
+> `AppHost.ShouldRephaseEscape(rephaseWanted, gateArmed, lastWaitKind, escapesInEpisode, budget)`
+> `= rephaseWanted && gateArmed && lastWaitKind == PaceAsync && escapesInEpisode < budget`
+
+Pure and internal, so `gate.wake.armedSlipRephase` locks the truth table without a live panel, the same idiom
+as `DeriveAsyncPaceMs` (§11.1.3). Producing — not merely waking — is the whole point: a tick-woken frame that
+re-gates is pure busywork, while a tick-woken frame that publishes re-anchors the present chain to the vblank
+the tick came from, and DropOldest makes the over-production safe.
+
+Three guards keep it from ping-ponging:
+
+- **Kind must be `PaceAsync`.** The ambient and adaptive-governor branches precede the armed branch in
+  `RecommendedWaitMsCore` and produce `HostWaitKind.Ambient`. A deliberately-capped loop presents at ~2R *by
+  construction*; without this guard its own throttle's signature would drag it back to panel rate.
+- **A per-episode budget (8).** A scene that truly cannot sustain the rate keeps producing the 2R cadence no
+  matter how often the chain is re-anchored. The budget makes that cost bounded (~65 ms of re-phasing at
+  120 Hz) instead of permanent; a new `Episode` resets it, so the bound is per lock, not per process.
+- **Armed.** Armed means a publish is actually owed a present. Unarmed there is nothing to release, and that
+  branch already asks for the display clock.
+
+**Why the QPC delta and not `PresentRefreshCount`.** DXGI's attested vblank ordinal is the stronger signal and
+it is what confirmed the diagnosis, but it is only populated when present statistics are available and it is
+read on the *UI* side during latency-row assembly. The QPC delta is always on, is owned by the thread that
+already took the stamp, and costs one subtraction. If the QPC signature ever proves noisy in the field, the
+attested count is the named fallback — the bands and the hysteresis are unchanged by which source feeds them.
+
+**Census semantics are unchanged.** A re-phase escape **opens** the gate; it never counts a decline
+(`GatedFrames` stays the census of frames DropOldest would have discarded) and it is not a ceiling escape
+(`CeilingEscapes` stays the liveness backstop, which in the locked state was never firing — that is the whole
+finding). It has its own counter, `AppHost.PhaseGateRephaseEscapes`, surfaced as `rephD` in the `[fps]` line
+next to `gateD`.
 
 ---
 

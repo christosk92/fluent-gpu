@@ -271,7 +271,7 @@ public static class FluentApp
         // Deltas, not levels: PresentedSequence/FramesSkippedSubmit/PublishSequence are monotonic counters, and the
         // question a cadence investigation asks is always "how many since the last line".
         ulong prevPresentSeq = 0, prevPublishSeq = 0;
-        long prevSkipped = 0, prevGated = 0;
+        long prevSkipped = 0, prevGated = 0, prevRephased = 0;
         long prevFpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         var prevInputPacing = window.InputPacingSnapshot;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -404,6 +404,11 @@ public static class FluentApp
                     // frames that coal was counting as discarded. A large gateD with a large coal means the gate is
                     // being bypassed (ceiling hit, or a non-async path).
                     long gated = host.PhaseGatedFrames;
+                    // rephD = slip re-phase escapes since the last line (threading-render-seam.md §11.1.4). Non-zero
+                    // means the present thread attested a sustained one-vblank slip and the loop broke the 60 Hz ack
+                    // lock by producing on the compositor tick. A steady trickle at exactly the budget means the scene
+                    // cannot hold the panel rate — read it with latW and the present interval, not on its own.
+                    long rephased = host.PhaseGateRephaseEscapes;
                     long fpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
                     double fpsLineSec = Math.Max(0.000001,
                         (fpsLineQpc - prevFpsLineQpc) / (double)System.Diagnostics.Stopwatch.Frequency);
@@ -413,7 +418,8 @@ public static class FluentApp
                     string seamTok =
                         $" presentD={presentDelta} pubD={Behind(publishSeq, prevPublishSeq)} " +
                         $"coal={Behind(publishSeq, presentSeq)} lag={Behind(publishSeq, consumedSeq)} " +
-                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} gateD={gated - prevGated}";
+                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} gateD={gated - prevGated} " +
+                        $"rephD={rephased - prevRephased}";
                     string inputPaceTok =
                         $" | motion msgD={inputPacing.MotionMessages - prevInputPacing.MotionMessages}" +
                         $" moveD={inputPacing.MoveEvents - prevInputPacing.MoveEvents}" +
@@ -421,6 +427,7 @@ public static class FluentApp
                         $" deadlineD={inputPacing.DeadlineWakes - prevInputPacing.DeadlineWakes}" +
                         $" urgentD={inputPacing.UrgentBreaks - prevInputPacing.UrgentBreaks}";
                     prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevGated = gated;
+                    prevRephased = rephased;
                     prevFpsLineQpc = fpsLineQpc; prevInputPacing = inputPacing;
                     Console.Error.WriteLine(
                         $"[fps] tMs={FluentGpu.Foundation.ScrollTrace.NowMs:0.000}{(spike ? " SPIKE" : "")}{clusterTok}" +

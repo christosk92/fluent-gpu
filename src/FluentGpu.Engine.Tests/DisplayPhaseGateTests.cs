@@ -297,6 +297,192 @@ public sealed class DisplayPhaseGateTests
 }
 
 /// <summary>
+/// The armed gate's blind spot and its escape (design/subsystems/threading-render-seam.md §11.1.4).
+///
+/// The gate above restores phase by sleeping on the present-ack. That is correct until one vblank slips: the render
+/// thread's acks then land one refresh apart (16.67 ms on a 120 Hz panel), which is UNDER the 17 ms stall ceiling — so
+/// <see cref="DisplayPhaseGate.CeilingEscapes"/> structurally never fires — ack-paced production follows at 60 Hz, and
+/// the next present is late for the same reason. Nothing inside the gate can see it: every publish IS presented, one
+/// refresh late, forever. The interval between presents is the only place the signature exists.
+///
+/// Time is INJECTED here for the same reason it is above — the bands and the hysteresis are then deterministic instead
+/// of a sleep race. R is one 120 Hz refresh at a 10 MHz QPC.
+/// </summary>
+public sealed class PresentSlipDetectorTests
+{
+    private const long R = 83333;
+    private const long T0 = 1_000_000;
+
+    /// <summary>The first present has no predecessor, so there is no interval to classify.</summary>
+    [Fact]
+    public void FirstPresent_ClassifiesNothing()
+    {
+        var d = new PresentSlipDetector();
+        d.OnPresent(T0, R);
+        Assert.False(d.RephaseWanted);
+        Assert.Equal(0, d.SlipStreakForTest);
+        Assert.Equal(0, d.Episode);
+    }
+
+    /// <summary>THE HYSTERESIS. Two one-slip intervals must not engage; the third must. Engaging on the first would
+    /// fire on every isolated scheduling hiccup and force the loop to panel rate for no reason at all.</summary>
+    [Fact]
+    public void ThreeConsecutiveOneSlips_Engage_TwoDoNot()
+    {
+        var d = new PresentSlipDetector();
+        long t = T0;
+        d.OnPresent(t, R);
+        t += 2 * R; d.OnPresent(t, R);
+        Assert.False(d.RephaseWanted);
+        t += 2 * R; d.OnPresent(t, R);
+        Assert.False(d.RephaseWanted);
+        Assert.Equal(2, d.SlipStreakForTest);
+        Assert.Equal(0, d.Episode);
+
+        t += 2 * R; d.OnPresent(t, R);
+        Assert.True(d.RephaseWanted);
+        Assert.Equal(1, d.Episode);
+    }
+
+    /// <summary>Disengaging is asymmetric ON PURPOSE: the FIRST healthy interval stands the escape down. The escape has
+    /// then done its job, and keeping the compositor tick armed past that point is exactly the busywork the armed
+    /// branch's rationale objects to.</summary>
+    [Fact]
+    public void OneHealthyInterval_Disengages()
+    {
+        var d = Engaged(out long t);
+        t += R; d.OnPresent(t, R);
+        Assert.False(d.RephaseWanted);
+        Assert.Equal(0, d.SlipStreakForTest);
+        Assert.Equal(1, d.Episode);      // disengaging does not bump; only engaging does
+    }
+
+    /// <summary>A re-lock is a NEW episode, so a consumer budgeting escapes per episode starts over instead of
+    /// inheriting a budget the previous lock already spent.</summary>
+    [Fact]
+    public void ReEngaging_BumpsEpisode()
+    {
+        var d = Engaged(out long t);
+        t += R; d.OnPresent(t, R);                                      // disengage
+        for (int i = 0; i < 3; i++) { t += 2 * R; d.OnPresent(t, R); }   // re-engage
+        Assert.True(d.RephaseWanted);
+        Assert.Equal(2, d.Episode);
+    }
+
+    /// <summary>Real present intervals jitter. The band is 1.5R..2.5R, so 2R ± 0.3R is still a one-slip and holds the
+    /// engagement; 1.2R is healthy and stands it down.</summary>
+    [Fact]
+    public void JitteredSlipIntervals_StayEngaged_UntilAHealthyOne()
+    {
+        var d = Engaged(out long t);
+        t += (long)(2.3 * R); d.OnPresent(t, R);
+        Assert.True(d.RephaseWanted);
+        t += (long)(1.7 * R); d.OnPresent(t, R);
+        Assert.True(d.RephaseWanted);
+        Assert.Equal(1, d.Episode);      // still the SAME lock, not a new one
+
+        t += (long)(1.2 * R); d.OnPresent(t, R);
+        Assert.False(d.RephaseWanted);
+    }
+
+    /// <summary>Intervals at or beyond 2.5R are idle gaps, occlusion, a minimized window, or a GPU that genuinely
+    /// cannot hold the panel rate. None is a phase problem, and forcing a deliberately-slow loop to panel rate is the
+    /// one way this could make things worse — so they never engage AND they reset an in-progress streak.</summary>
+    [Fact]
+    public void LongIntervals_NeverEngage_AndResetTheStreak()
+    {
+        var d = new PresentSlipDetector();
+        long t = T0;
+        d.OnPresent(t, R);
+        t += 2 * R; d.OnPresent(t, R);
+        t += 2 * R; d.OnPresent(t, R);
+        Assert.Equal(2, d.SlipStreakForTest);   // one short of engaging
+
+        t += 40 * R; d.OnPresent(t, R);         // an idle gap lands instead
+        Assert.Equal(0, d.SlipStreakForTest);
+        for (int i = 0; i < 6; i++) { t += 3 * R; d.OnPresent(t, R); }
+        Assert.False(d.RephaseWanted);
+        Assert.Equal(0, d.Episode);
+    }
+
+    /// <summary>A long gap while ENGAGED disengages too: an occluded or stalled chain is not a phase lock, and holding
+    /// the escape armed across it would keep waking a loop that has nothing to re-anchor.</summary>
+    [Fact]
+    public void LongIntervalWhileEngaged_Disengages()
+    {
+        var d = Engaged(out long t);
+        t += 40 * R; d.OnPresent(t, R);
+        Assert.False(d.RephaseWanted);
+        Assert.Equal(0, d.SlipStreakForTest);
+    }
+
+    /// <summary>Garbage samples classify nothing and destroy nothing: no measured refresh period (the headless/unknown
+    /// case) and a non-monotonic stamp both stamp and return, leaving an in-progress streak intact.</summary>
+    [Fact]
+    public void MissingRefreshOrBackwardsClock_ClassifiesNothing()
+    {
+        var d = new PresentSlipDetector();
+        long t = T0;
+        d.OnPresent(t, R);
+        t += 2 * R; d.OnPresent(t, R);
+        t += 2 * R; d.OnPresent(t, R);
+        Assert.Equal(2, d.SlipStreakForTest);
+
+        d.OnPresent(t + 2 * R, 0);        // no refresh period reported
+        Assert.Equal(2, d.SlipStreakForTest);
+        Assert.False(d.RephaseWanted);
+        d.OnPresent(t, R);                // the clock went backwards relative to the stamp above
+        Assert.Equal(2, d.SlipStreakForTest);
+        Assert.False(d.RephaseWanted);
+    }
+
+    /// <summary>The handshake under real concurrency, in the shape the host actually runs it: the PRESENT thread is the
+    /// only writer and the UI thread only ever reads the two volatile ints. Unlike the gate there is no StoreLoad pair
+    /// to fence — nothing here is a wake — so the invariant is simply that the engagement becomes VISIBLE to a reader
+    /// that never touches the state. The assertion is a bounded wait, not a timing measurement.</summary>
+    [Fact]
+    public void EngagementIsVisibleToAReadingUiThread()
+    {
+        var d = new PresentSlipDetector();
+        using var stop = new ManualResetEventSlim(false);
+
+        var presenter = new Thread(() =>
+        {
+            long t = T0;
+            d.OnPresent(t, R);
+            while (!stop.IsSet)
+            {
+                t += 2 * R;                 // a sustained one-vblank slip, forever
+                d.OnPresent(t, R);
+                Thread.Yield();             // yield, never spin: a core-pegging test starves its neighbours (xUnit
+            }                               // runs classes in parallel — see UnderConcurrentAcks_BlockedAlwaysImpliesArmed)
+        }) { IsBackground = true };
+        presenter.Start();
+
+        var sw = Stopwatch.StartNew();
+        bool seen = false;
+        while (sw.ElapsedMilliseconds < 5000 && !(seen = d.RephaseWanted)) Thread.Yield();
+        int episode = d.Episode;
+        stop.Set();
+        presenter.Join(2000);
+
+        Assert.True(seen, "the UI-side read never observed the engagement the present thread published");
+        Assert.True(episode >= 1, $"episode should have been bumped on engage; saw {episode}");
+    }
+
+    /// <summary>Three one-slip intervals ⇒ engaged, with the stamp cursor left where the caller can continue.</summary>
+    private static PresentSlipDetector Engaged(out long t)
+    {
+        var d = new PresentSlipDetector();
+        t = T0;
+        d.OnPresent(t, R);
+        for (int i = 0; i < 3; i++) { t += 2 * R; d.OnPresent(t, R); }
+        Assert.True(d.RephaseWanted);
+        return d;
+    }
+}
+
+/// <summary>
 /// Wait classification must be STRUCTURAL (which branch chose the wait), never numeric (what integer it returned).
 /// The value-based form aliased: on a 120 Hz panel the phase-gate ceiling is 17 ms and an Ambient 60-on-120 wait
 /// returns integers 1..17, so an Ambient-throttled frame that happened to compute 17 was classified as display-rate.
@@ -309,7 +495,8 @@ public sealed class HostWaitKindClassificationTests
     // MirrorsAppHostRule_ForEveryKind below, which enumerates the enum so a newly added kind fails loudly here rather
     // than silently defaulting to "throttled" in one place and "display-rate" in the other.
     private static bool IsDisplayRateWait(HostWaitKind kind, int w) =>
-        kind is HostWaitKind.DisplayRate or HostWaitKind.PaceAsync or HostWaitKind.PaceSkipSubmit || w == 0;
+        kind is HostWaitKind.DisplayRate or HostWaitKind.PaceAsync or HostWaitKind.PaceSkipSubmit
+            || (kind is HostWaitKind.Baked && w == 0);
 
     /// <summary>THE COLLISION. Ambient at 60 Hz on a 120 Hz panel can return exactly 17, which is also the phase-gate
     /// ceiling. Numeric classification cannot tell them apart; structural classification must.</summary>
@@ -348,14 +535,21 @@ public sealed class HostWaitKindClassificationTests
     public void ThrottledBranches_AreNotDisplayRate(HostWaitKind kind, int ms)
         => Assert.False(IsDisplayRateWait(kind, ms));
 
-    /// <summary>The `w == 0` clause is NOT redundant with the kind check. BakedBlurQueue returns 0 for "due now"; no
-    /// throttle gap elapses, so resyncing there would reintroduce the very lurch that kind-based classification is
-    /// meant to avoid. This is the one case where the value still carries information the branch does not.</summary>
+    /// <summary>The `w == 0` clause is NOT redundant with the kind check, but it is SCOPED to the one kind that
+    /// legitimately produces a 0: <c>BakedBlurQueue.RecommendedWaitMs</c> returns 0 for "due now" under
+    /// <see cref="HostWaitKind.Baked"/>; no throttle gap elapses, so resyncing there would reintroduce the very lurch
+    /// that kind-based classification is meant to avoid.
+    ///
+    /// Unscoped it aliased in the OTHER direction — the same hazard as the 17 ms collision above, just by value 0: an
+    /// Idle/Ambient wait that <c>ClampWaitToTimers</c> had rewritten down to 0 for a due timer then read as
+    /// display-rate, which suppressed the step-up Resync on precisely the frames that HAD over-slept. The clamp floors
+    /// at 1 ms now, and <c>AppHost.IsDisplayRateWait</c> accepts a 0 from no branch but Baked.</summary>
     [Fact]
-    public void ZeroWait_IsDisplayRate_EvenOnAThrottledBranch()
+    public void ZeroWait_IsDisplayRate_OnlyOnTheBakedBranch()
     {
         Assert.True(IsDisplayRateWait(HostWaitKind.Baked, 0));
-        Assert.True(IsDisplayRateWait(HostWaitKind.Idle, 0));
+        Assert.False(IsDisplayRateWait(HostWaitKind.Idle, 0));
+        Assert.False(IsDisplayRateWait(HostWaitKind.Ambient, 0));
     }
 
     /// <summary>Every enum member is classified deliberately. A new HostWaitKind added without a decision here would

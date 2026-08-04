@@ -1683,6 +1683,89 @@ static class ScrollSuite
                 $"panels={panels} clamped={clamped} monotone={monotone} (120⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 120)} 144⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 144)} 240⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 240)} 60⇒{AppHost.DeriveAsyncPaceMs(1000.0 / 60)} unknown⇒{AppHost.DeriveAsyncPaceMs(0.0)})");
         }
 
+        // gate.wake.armedSlipRephase: the armed phase gate's one blind spot (threading-render-seam.md §11.1.4). After a
+        // single slipped vblank the render thread's acks land one refresh apart — 16.67 ms on a 120 Hz panel, UNDER the
+        // 17 ms ceiling, so the ceiling structurally never fires — ack-paced production follows at 60 Hz and the lock
+        // sustains itself for minutes. The escape needs the present thread to attest the slip and the UI thread to
+        // produce on the compositor tick instead of re-gating. Both halves are pure state machines over injected QPC,
+        // so both are locked here without a live panel.
+        {
+            const long R = 83333;   // one 120 Hz refresh at a 10 MHz QPC
+            // Hysteresis: two one-slips must NOT engage, the third must. Engaging on the first would fire on every
+            // isolated scheduling hiccup and force the loop to panel rate for no reason.
+            var det = new FluentGpu.Hosting.Threading.PresentSlipDetector();
+            long t = 1_000_000;
+            det.OnPresent(t, R);                       // first present: no interval to classify
+            bool firstStamped = !det.RephaseWanted && det.SlipStreakForTest == 0;
+            t += 2 * R; det.OnPresent(t, R);
+            t += 2 * R; det.OnPresent(t, R);
+            bool twoNotEnough = !det.RephaseWanted && det.SlipStreakForTest == 2 && det.Episode == 0;
+            t += 2 * R; det.OnPresent(t, R);
+            bool thirdEngages = det.RephaseWanted && det.Episode == 1;
+
+            // A healthy interval disengages IMMEDIATELY: the escape has done its job and holding the tick armed past
+            // that point is the busywork the armed branch exists to avoid.
+            t += R; det.OnPresent(t, R);
+            bool oneHealthyDisengages = !det.RephaseWanted && det.SlipStreakForTest == 0 && det.Episode == 1;
+
+            // Re-locking is a NEW episode, so a budget-spending consumer starts over rather than inheriting a spent one.
+            for (int i = 0; i < 3; i++) { t += 2 * R; det.OnPresent(t, R); }
+            bool reEngageBumpsEpisode = det.RephaseWanted && det.Episode == 2;
+
+            // Jitter tolerance: the band is 1.5R..2.5R, so 2R ± 0.3R stays engaged, and 1.2R (healthy) disengages.
+            t += (long)(2.3 * R); det.OnPresent(t, R);
+            t += (long)(1.7 * R); det.OnPresent(t, R);
+            bool jitterStaysEngaged = det.RephaseWanted && det.Episode == 2;
+            t += (long)(1.2 * R); det.OnPresent(t, R);
+            bool nearHealthyDisengages = !det.RephaseWanted;
+
+            // >= 2.5R is an idle gap, occlusion, or a GPU that genuinely cannot hold the rate — never a phase problem,
+            // and it must also RESET an in-progress streak rather than counting toward an engage.
+            var idle = new FluentGpu.Hosting.Threading.PresentSlipDetector();
+            long u = 5_000_000;
+            idle.OnPresent(u, R);
+            u += 2 * R; idle.OnPresent(u, R);
+            u += 2 * R; idle.OnPresent(u, R);          // streak 2, one short of engaging
+            u += 40 * R; idle.OnPresent(u, R);         // a long gap lands instead
+            bool gapResets = !idle.RephaseWanted && idle.SlipStreakForTest == 0 && idle.Episode == 0;
+            for (int i = 0; i < 6; i++) { u += 3 * R; idle.OnPresent(u, R); }
+            bool gapNeverEngages = !idle.RephaseWanted && idle.Episode == 0;
+            // Garbage input (no measured refresh, a non-monotonic stamp) classifies nothing and destroys no streak.
+            var junk = new FluentGpu.Hosting.Threading.PresentSlipDetector();
+            long v = 9_000_000;
+            junk.OnPresent(v, R);
+            v += 2 * R; junk.OnPresent(v, R);
+            v += 2 * R; junk.OnPresent(v, R);
+            junk.OnPresent(v + 2 * R, 0);              // no refresh period reported
+            junk.OnPresent(v - R, R);                  // clock went backwards
+            bool junkInert = !junk.RephaseWanted && junk.SlipStreakForTest == 2;
+
+            // The UI half: the escape fires only for (wanted, armed, PaceAsync, under budget). The kind guard is the
+            // load-bearing one — Ambient/adaptive-governor branches precede the armed branch and pace ~2R BY DESIGN, so
+            // without it a deliberately-capped loop would be forced to panel rate by its own throttle's signature.
+            bool truth = AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 0, 8)
+                      && AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 7, 8)
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 8, 8)     // at budget
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceAsync, 9, 8)
+                      && !AppHost.ShouldRephaseEscape(false, true, HostWaitKind.PaceAsync, 0, 8)    // no slip attested
+                      && !AppHost.ShouldRephaseEscape(true, false, HostWaitKind.PaceAsync, 0, 8)    // nothing owed
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Ambient, 0, 8)
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.DisplayRate, 0, 8)
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.PaceSkipSubmit, 0, 8)
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Idle, 0, 8)
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Hud, 0, 8)
+                      && !AppHost.ShouldRephaseEscape(true, true, HostWaitKind.Baked, 0, 8);
+
+            bool detectorOk = firstStamped && twoNotEnough && thirdEngages && oneHealthyDisengages
+                           && reEngageBumpsEpisode && jitterStaysEngaged && nearHealthyDisengages
+                           && gapResets && gapNeverEngages && junkInert;
+            Check("gate.wake.armedSlipRephase the present thread attests a sustained one-vblank slip (3 consecutive 1.5R..2.5R intervals engage, one healthy interval disengages, >=2.5R gaps never engage and reset the streak, re-engaging bumps the episode); the armed gate escapes only for (wanted, armed, PaceAsync, under budget)",
+                detectorOk && truth,
+                $"first={firstStamped} two={twoNotEnough} third={thirdEngages} healthy={oneHealthyDisengages} " +
+                $"episode={reEngageBumpsEpisode} jitter={jitterStaysEngaged} nearHealthy={nearHealthyDisengages} " +
+                $"gapReset={gapResets} gapNever={gapNeverEngages} junk={junkInert} truthTable={truth}");
+        }
+
         // gate.motion.scrollSuppressionSnapsFlip (W2-P2.2): a reconcile landing on the frame right after a scroll
         // offset actually wrote SNAPS the moved BoundsAnimated node (no structural FLIP track seeded — cards must not
         // fly through a scrolling viewport); the same move on a still frame FLIPs — both before any scroll AND after

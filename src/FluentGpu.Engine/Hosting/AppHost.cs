@@ -1286,6 +1286,21 @@ public sealed class AppHost : IDisposable
     // lost wake on ~16% of frames in the first implementation. See Threading/DisplayPhaseGate.cs.
     private Threading.DisplayPhaseGate? _phaseGate;
 
+    // The gate's one blind spot, and its escape. Once a single vblank slips, the render thread's acks land one refresh
+    // apart (16.67 ms on a 120 Hz panel) — UNDER the 17 ms ceiling, so the ceiling never fires — and ack-paced
+    // production follows at 60 Hz indefinitely. The gate cannot see it: every publish IS presented, just one refresh
+    // late, forever. Only the present site can (the interval between presents), so the detector lives there and the UI
+    // side reads two volatile ints. See Threading/PresentSlipDetector.cs and threading-render-seam.md §11.1.4.
+    private readonly Threading.PresentSlipDetector _slipDetector = new();
+    private int _rephaseEpisodeSeen;        // the engage ordinal the escape budget below is currently spending
+    private int _rephaseEscapesInEpisode;   // escapes taken inside that episode
+    private long _rephaseEscapes;           // lifetime census (diagnostic)
+    /// <summary>Escapes allowed per lock episode. Bounds the cost when a scene is genuinely too slow to hold the panel
+    /// rate and therefore sustains the 2R cadence on its own: the escape re-anchors the chain a handful of times, finds
+    /// the cadence unchanged, and stops. Eight is ~65 ms of re-phasing at 120 Hz — long enough to break a real lock,
+    /// short enough that a hopeless one is not paid for every frame.</summary>
+    private const int RephaseEscapeBudget = 8;
+
     /// <summary>Frames the display-phase gate declined to produce (diagnostic). Each one is a frame that would have
     /// been discarded by DropOldest before reaching the screen.</summary>
     public long PhaseGatedFrames => _phaseGate?.GatedFrames ?? 0;
@@ -1293,6 +1308,12 @@ public sealed class AppHost : IDisposable
     /// <summary>Times the display-phase gate's two-refresh liveness ceiling fired. Retained for liveness; every escape
     /// must be reported in pacing traces rather than treated as a smoothness win.</summary>
     public long PhaseGateCeilingEscapes => _phaseGate?.CeilingEscapes ?? 0;
+
+    /// <summary>Times the armed gate was opened by the slip re-phase escape (§11.1.4) rather than by an ack or the
+    /// ceiling. Its own counter, deliberately: a re-phase escape PRODUCES a frame, so it must not inflate
+    /// <see cref="PhaseGatedFrames"/> (the census of declines) nor <see cref="PhaseGateCeilingEscapes"/> (the liveness
+    /// backstop) — those two mean what the pacing argument uses them for only if this stays separate.</summary>
+    public long PhaseGateRephaseEscapes => Volatile.Read(ref _rephaseEscapes);
 
     /// <summary>Stall ceiling for the gate, in ms: never wait more than two refresh periods for a present-ack. The gate
     /// must be an optimization, never a liveness dependency — an occluded, stalled, or device-lost render thread stops
@@ -1308,12 +1329,46 @@ public sealed class AppHost : IDisposable
     /// <summary>Stall ceiling in Stopwatch ticks (the gate's own clock domain).</summary>
     private long PhaseGateCeilingTicks() => (long)(PhaseGateCeilingMs() * (Stopwatch.Frequency / 1000.0));
 
+    /// <summary>Should this frame take the slip re-phase escape — open the armed gate and PRODUCE, breaking the 60 Hz
+    /// ack lock (§11.1.4)? Pure and internal so the gate can lock the truth table without a live panel, exactly as
+    /// <see cref="DeriveAsyncPaceMs"/> is.
+    ///
+    /// The three conjuncts past <paramref name="rephaseWanted"/> are the ping-pong guards, and each closes a distinct
+    /// way this could make the loop worse:
+    /// <list type="number">
+    /// <item><b>Kind must be <see cref="HostWaitKind.PaceAsync"/>.</b> The ambient and adaptive-governor branches sit
+    /// BEFORE the armed branch in <see cref="RecommendedWaitMsCore"/> and produce <see cref="HostWaitKind.Ambient"/>.
+    /// A loop that is deliberately capped — 30 Hz shimmer, a governor that measured the GPU cannot hold panel rate —
+    /// presents ~2R by construction and would otherwise be forced back to panel rate by its own throttle's signature.</item>
+    /// <item><b>Under budget.</b> A scene that genuinely cannot sustain the rate keeps producing the 2R cadence no
+    /// matter how often the chain is re-anchored; the per-episode budget makes that cost bounded instead of permanent.</item>
+    /// <item><b>Armed.</b> Armed means a publish is actually owed a present. Unarmed there is nothing to release, and
+    /// the unarmed branch already asks for the display clock.</item>
+    /// </list></summary>
+    internal static bool ShouldRephaseEscape(bool rephaseWanted, bool gateArmed, HostWaitKind lastWaitKind, int escapesInEpisode, int budget)
+        => rephaseWanted && gateArmed && lastWaitKind == HostWaitKind.PaceAsync && escapesInEpisode < budget;
+
     /// <summary>True when a published frame has not yet been presented, so producing another would only feed DropOldest.
     /// Delegates the arm/recheck handshake to <see cref="Threading.DisplayPhaseGate"/>. Open when async is off, when no
     /// render thread owns the present, or past the stall ceiling. UI thread only.</summary>
     private bool PhaseGateBlocks()
     {
         if (!_asyncActive || _renderThread is null || _phaseGate is null) return false;
+        // A NEW lock episode gets a fresh budget: the count below bounds one episode's re-phasing, not the process's.
+        int episode = _slipDetector.Episode;
+        if (episode != _rephaseEpisodeSeen) { _rephaseEpisodeSeen = episode; _rephaseEscapesInEpisode = 0; }
+        // The re-phase escape. While the present thread attests a sustained one-vblank slip, the wake that got us here
+        // (the compositor tick the armed branch now asks for — see RecommendedWaitMsCore) must PRODUCE, not re-gate.
+        // Re-gating on the tick is precisely the busywork the armed branch's rationale objects to; producing is what
+        // re-anchors the present chain to the vblank the tick came from, and DropOldest makes the over-production safe.
+        // _lastWaitKind is the kind latched by the wait that paced INTO this frame (RecommendedWaitMs), not a prediction.
+        if (ShouldRephaseEscape(_slipDetector.RephaseWanted, _phaseGate.IsArmed, _lastWaitKind, _rephaseEscapesInEpisode, RephaseEscapeBudget))
+        {
+            _phaseGate.Open();           // idempotent, and never counts — this is a produced frame, not a decline
+            _rephaseEscapesInEpisode++;
+            _rephaseEscapes++;
+            return false;
+        }
         return _phaseGate.Blocks(_renderSeam.PublishSeq, Stopwatch.GetTimestamp(), PhaseGateCeilingTicks());
     }
 
@@ -1524,9 +1579,18 @@ public sealed class AppHost : IDisposable
         // is the behaviour being fixed. Input still ends this wait immediately (WaitForWork is MsgWait-based).
         // For the same reason this branch does NOT ask for the display clock: the ack IS its phase reference, and a
         // per-tick wake would re-enter the loop while the gate is still armed and gate again — the exact busywork above.
+        // EXCEPT while the present thread attests a sustained one-vblank slip. Then the ack is not a phase reference at
+        // all, it IS the 60 Hz attractor: acks land 16.67 ms apart on a 120 Hz panel, under the 17 ms ceiling, so the
+        // ceiling never fires, production follows the acks, and the next present is late for the same reason — a stable
+        // fixed point that held for minutes live (ops/diag/sessions/live-20260804-073148). Sleeping on the ack is then
+        // sleeping on the lock, and the compositor tick is the only wake source outside it. The busywork objection still
+        // stands, which is why the tick is not merely a supplementary wake here: PhaseGateBlocks OPENS the gate on it
+        // instead of re-gating, so the woken frame produces and re-anchors the chain to the vblank. Bounded twice over —
+        // the engaged episode ends on the first healthy present, and the escape budget bounds it inside the episode.
         if (_asyncActive && _phaseGate is { IsArmed: true })
         {
             _lastWaitKind = HostWaitKind.PaceAsync;
+            _lastWaitWantsDisplayClock = _slipDetector.RephaseWanted;
             return PhaseGateCeilingMs();
         }
         // Unarmed async: nothing is owed a present, so there is no ack to sleep on and the wall-clock cap is the only
@@ -3760,9 +3824,14 @@ public sealed class AppHost : IDisposable
     /// screen) does NOT move the ack, so the ack stays monotone and a joiner never sees it go backwards.</summary>
     private void NotePresented(ulong publishSeq)
     {
-        Volatile.Write(ref _lastPresentQpc, Stopwatch.GetTimestamp());
+        long qpc = Stopwatch.GetTimestamp();   // first statement: everything downstream of Present is attribution error
+        Volatile.Write(ref _lastPresentQpc, qpc);
         if (publishSeq != 0) Volatile.Write(ref _lastPresentPublishSeq, (long)publishSeq);
         Interlocked.Increment(ref _presentedSequence);
+        // The one place the 60 Hz phase-lock is observable (§11.1.4): the interval between consecutive presents. The
+        // gate sees only "publish owed a present", and in the locked state every publish IS presented — one refresh
+        // late, forever. Present-thread-owned; the UI side only reads two volatile ints.
+        _slipDetector.OnPresent(qpc, RefreshPeriodQpcOrDefault());
     }
 
     private void UpdateFrameTiming(long frameStart)
