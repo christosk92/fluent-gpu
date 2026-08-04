@@ -422,13 +422,18 @@ public static class ScrollTrace
     /// <item>101 = resampler hit the no-extrapolation clamp — Animation/ScrollIntegrator.cs</item>
     /// <item>102 / 103 = pending anchor shift folded into the live anchor / drained with no tracked gesture (i1=node)</item>
     /// <item>104 = stale pre-latch shift discarded (i1=node)</item>
+    /// <item>105 = touchpad slop-crossing latch REFUSED → wheel fallback (f0/f1 = accumX/accumY;
+    ///       i1 bit0-3 = reason 1 wheelHandlerFallback / 2 noScrollerEitherAxis, bit4 = dominant axis was horizontal,
+    ///       bit5 = the fallback's DispatchWheel was consumed) — Input/InputDispatcher.cs</item>
+    /// <item>106 = wheel fallback RE-LATCHED on a later pan packet (f0=anchor, i1=node, i2=horiz, f1=gesture travel px)
+    ///       — Input/InputDispatcher.cs. A 105 with no following 106 for the same gesture IS the dead-scroll signature.</item>
     /// <item>110 = extent-table reseed (app: Wavee HomePage)</item>
     /// <item>111 = per-row extent correction — Layout/FlexLayout.cs</item>
     /// <item>113 = hitch slack + GC deltas + last requested wait — Hosting/AppHost.cs</item>
     /// <item>210 / 211 = capture-protocol phase begin / end (i1=phase ordinal, i2=repetition) — ops/diag launcher.
     ///       The 100-block is per-subsystem engine context; the deliberately distant 210-block is capture protocol.</item>
     /// </list>
-    /// Next free engine code: 105 (also 106-109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
+    /// Next free engine code: 107 (also 108, 109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
     public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
     {
         if (!CompiledIn || !Enabled) return;

@@ -114,6 +114,20 @@ float roundedBoxCoverage(float2 p, float2 halfSize, float corner)
 
 float4 PSMain(VSOut i) : SV_Target
 {
+    // A drop shadow is cast BEHIND its source surface. Remove the source rounded rectangle from the analytic gaussian
+    // instead of relying on the following fill to cover it: Fluent card fills are intentionally translucent, so the
+    // old full-box shadow remained visible through them and darkened the complete card interior.
+    // The caster coverage is computed FIRST so the fully-covered interior can DISCARD instead of running the 4-tap /
+    // 8-erf falloff loop and the ROP blend for a guaranteed aOut of 0 — the quad fully covers the caster, and on a card
+    // shadow 69-82% of the quad's area is that interior. This is a pure work cull, not a semantic change: the
+    // (1.0 - caster) multiply below still shapes the surviving antialiased rim pixels exactly as before.
+    // Derivative safety: roundedBoxCoverage uses fwidth, and it now runs BEFORE any discard, so every lane in the quad
+    // still contributes to it; nothing after the discard needs derivatives. Depth/stencil are off for this pass, so
+    // there is no early-Z to lose, and a tiled GPU skips the tile write for the discarded lanes.
+    float caster = roundedBoxCoverage(i.casterLocal, i.casterHalfSize, i.casterCorner);
+    if (caster >= 0.999) discard;                    // fully behind the caster — the (1-caster) multiply would zero it
+    if (i.color.a * i.opacity <= 0.002) discard;     // backstop: an invisible instance can produce no ink at all
+
     float low = i.local.y - i.halfSize.y;
     float high = i.local.y + i.halfSize.y;
     float start = clamp(-3.0 * i.sigma, low, high);
@@ -126,10 +140,6 @@ float4 PSMain(VSOut i) : SV_Target
         value += shadowX(i.local.x, i.local.y - y, i.sigma, i.corner, i.halfSize) * gaussian(y, i.sigma) * step;
         y += step;
     }
-    // A drop shadow is cast BEHIND its source surface. Remove the source rounded rectangle from the analytic gaussian
-    // instead of relying on the following fill to cover it: Fluent card fills are intentionally translucent, so the
-    // old full-box shadow remained visible through them and darkened the complete card interior.
-    float caster = roundedBoxCoverage(i.casterLocal, i.casterHalfSize, i.casterCorner);
     float aOut = i.color.a * saturate(value) * (1.0 - caster) * i.opacity;
     return float4(i.color.rgb * aOut, aOut);   // premultiplied
 }

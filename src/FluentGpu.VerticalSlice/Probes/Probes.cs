@@ -1659,6 +1659,41 @@ sealed class HeadlessScrollProducer
     public FrameStats Step(float dtMs) { var f = Frame(dtMs); Ms = (uint)Math.Round(FrameMs); return f; }
 }
 
+// Wave-6 Fix C (wheel-fallback re-latch) probe: three stacked bands inside a NON-scrollable column —
+//   y [0,60)    a wheel-CONSUMING strip (sets Handled) with no scroller above it,
+//   y [60,120)  an inert gap (no wheel handler, no scroller — the transient-hit-test-miss stand-in),
+//   y [120,420) a real vertical scroll viewport.
+// A pan whose slop-crossing packet lands in the INERT gap must re-latch onto the viewport as soon as a later packet
+// reaches it (the captured defect: one missed packet routed the whole 750ms gesture to a dead wheel dispatch); a pan
+// that starts on the CONSUMING strip must keep the fallback for the whole gesture (the strip is genuinely scrolling).
+sealed class WheelFallbackRelatchProbe : Component
+{
+    public const float StripH = 60f, GapH = 60f, ListH = 300f;
+    public int WheelCalls;
+    public override Element Render() => new BoxEl
+    {
+        Direction = 1, Width = 300, Height = StripH + GapH + ListH,
+        Children =
+        [
+            new BoxEl
+            {
+                Width = 300, Height = StripH, Fill = ColorF.FromRgba(60, 20, 20),
+                OnPointerWheel = e => { WheelCalls++; e.Handled = true; },
+            },
+            new BoxEl { Width = 300, Height = GapH, Fill = ColorF.FromRgba(20, 20, 20) },
+            new ScrollEl
+            {
+                Width = 300, Height = ListH, Fill = ColorF.FromRgba(30, 30, 30),
+                Content = new BoxEl
+                {
+                    Direction = 1,
+                    Children = [new BoxEl { Width = 300, Height = 3000, Fill = ColorF.FromRgba(40, 40, 40) }],
+                },
+            },
+        ],
+    };
+}
+
 // A virtualized list whose rows are clickable (the tap target). A below-slop touch down→up over a row TAPS it (the row's
 // OnClick fires); a touch drag over the list claims the pan, cancels the row's press, and never clicks. Row 0's press +
 // click are counted on the probe so a tap and a pan are distinguishable. Viewport = Scene.Root.

@@ -103,6 +103,20 @@ public sealed class InputDispatcher
     // routes the REST of its packets to the element wheel dispatch (DispatchWheel) instead of dying — precision-touchpad
     // gestures otherwise exist only as phase events. Latched in AccumulateContactDelta; reset at ScrollBegin/EndScrollGesture.
     private bool _sgWheelFallback;
+    // Wave-6 Fix C: the fallback used to be TERMINAL — one transient hit-test miss on the slop-crossing packet (a
+    // virtualized row mid-recycle under the contact) routed the ENTIRE rest of the gesture to wheel dispatch, and a
+    // captured 750ms / 62-packet vertical pan over a viewport that had latched fine 1.2s earlier scrolled nothing.
+    // Later PAN packets now re-attempt the latch, under TWO guards:
+    //   • _sgWheelFallbackReason — which arm refused. Only §A (2 = noScrollerEitherAxis, "found nothing at all") is a
+    //     retryable miss. §A′ (1 = wheelHandlerFallback) is a DELIBERATE ownership decision: an element under the contact
+    //     owns the wheel, and its documented WinUI-parity semantics are drop-don't-chain even when it can't consume (a
+    //     horizontal pan over a text box at its scroll limit must do nothing to the enclosing vertical page). Sticky for
+    //     the whole gesture, so that decision is never silently revisited.
+    //   • _sgWheelFallbackHandled — did the LAST DispatchWheel reach a handler that set Handled? While something IS
+    //     consuming the packets, the fallback is doing real work and must keep the gesture.
+    // Momentum-phase packets never retry (the gesture is already released — anchoring off a dead contact would jump).
+    private bool _sgWheelFallbackHandled;
+    private byte _sgWheelFallbackReason;
     // scroll-feel-rework-v2 §2.1/§8-gate-1 single-writer guard: TRUE only for the span of the phase-7-tick write seams
     // WriteScrollOffset / WriteOverscroll (the sole legitimate paths to the offset chokepoint ApplyScrollPosition). The
     // chokepoint asserts this is TRUE, so ANY ApplyScrollPosition reached off a non-tick stack (a touch-pan / scrollbar /
@@ -2993,6 +3007,7 @@ public sealed class InputDispatcher
                 _sgDevice = e.DeviceClassRaw;
                 _sgAccumX = 0f; _sgAccumY = 0f;
                 _sgWheelFallback = false;   // a fresh gesture re-resolves scroller-vs-wheel from scratch
+                _sgWheelFallbackHandled = false; _sgWheelFallbackReason = 0;
                 _sgVel.Reset(default, e.TimestampMs, e.QpcTicks);
                 if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
                     FluentGpu.Foundation.ScrollTrace.VelSample(2, 0f, 0f, 0f, 0f, e.QpcTicks);
@@ -3000,7 +3015,20 @@ public sealed class InputDispatcher
                 break;
 
             case InputKind.ScrollUpdate:
-                if (_sgWheelFallback) { DispatchWheel(in e); break; }   // §A: no-scroller gesture → element wheel dispatch
+                // §A: no-scroller gesture → element wheel dispatch. Wave-6 Fix C: a §A (reason 2) fallback is NOT terminal
+                // any more — while it is consuming nothing (the last DispatchWheel left the packet unhandled) and the
+                // contact is still down (never in momentum: re-anchoring off a released gesture would jump), each pan
+                // packet re-attempts the full latch first. On success the gesture falls through and continues normally
+                // from this packet. A §A′ (reason 1) fallback never retries — see _sgWheelFallbackReason.
+                if (_sgWheelFallback)
+                {
+                    if (_sgWheelFallbackReason != 2 || _sgWheelFallbackHandled || _sgMomentum
+                        || !TryRelatchFromWheelFallback(in e))
+                    {
+                        _sgWheelFallbackHandled = DispatchWheel(in e);
+                        break;
+                    }
+                }
                 if (_sgMomentum) { ApplyMomentumDelta(in e); break; }   // producer glitch tolerance: late Update inside momentum
                 if (_sgLatched) FeedGestureVelocitySide(e.PointerId);   // pre-coalesce packet stamps (cumulative deltas)
                 AccumulateContactDelta(in e);
@@ -3058,7 +3086,9 @@ public sealed class InputDispatcher
                 break;
 
             case InputKind.MomentumUpdate:
-                if (_sgWheelFallback) { DispatchWheel(in e); break; }   // §A: inertia keeps flipping; FlipView's cooldown bounds the rate
+                // §A: inertia keeps flipping; FlipView's cooldown bounds the rate. NEVER retries the latch (Fix C): the
+                // contact is already released, so anchoring a fresh latch off a dead gesture would jump the viewport.
+                if (_sgWheelFallback) { _sgWheelFallbackHandled = DispatchWheel(in e); break; }
                 ApplyMomentumDelta(in e);
                 break;
 
@@ -3101,64 +3131,108 @@ public sealed class InputDispatcher
             bool horiz = sticky
                 ? (MathF.Abs(_sgAccumX) > MathF.Abs(_sgAccumY) * (_sgLastHoriz ? 0.5f : 2f))
                 : (MathF.Abs(_sgAccumX) > MathF.Abs(_sgAccumY));
-            NodeHandle vp = ScrollableUnderForAxis(e.PositionPx, horiz);
+            NodeHandle vp = ResolveLatchTarget(e.PositionPx, ref horiz, out int refusal);
             if (vp.IsNull)
             {
-                // §A′: the DOMINANT axis has no scroller, but an element under the contact handles the wheel (e.g. a
-                // single-line text field's horizontal scroll). Route this gesture to element wheel dispatch BEFORE the
-                // cross-axis page fallback — a horizontal pan over an overflowing text box must scroll the BOX, not
+                // §A′ (refusal 1): the DOMINANT axis has no scroller, but an element under the contact handles the wheel
+                // (e.g. a single-line text field's horizontal scroll). Route this gesture to element wheel dispatch BEFORE
+                // the cross-axis page fallback — a horizontal pan over an overflowing text box must scroll the BOX, not
                 // cross-axis-latch the enclosing vertical page (WinUI parity). If the element can't consume (fits / at its
                 // limit) DispatchWheel leaves it unhandled and the packet drops — a horizontal pan legitimately does
-                // nothing to a vertical page. Reset by ScrollBegin/EndScrollGesture like the no-scroller fallback below.
-                if (HasWheelHandlerUnder(e.PositionPx))
-                {
-                    _sgWheelFallback = true;
-                    DispatchWheel(in e);
-                    return;
-                }
-                vp = ScrollableUnderForAxis(e.PositionPx, !horiz);   // dominant axis has no scroller → cross-axis fallback (standalone carousel)
-                if (vp.IsNull)
-                {
-                    // §A: no scroller on EITHER axis under the contact — route the REST of this gesture's packets to the
-                    // element wheel handlers (leaf→root, Handled-stopping) instead of dropping them. A precision-touchpad
-                    // gesture otherwise dies here (it never reaches OnPointerWheel). Reset by ScrollBegin/EndScrollGesture.
-                    _sgWheelFallback = true;
-                    DispatchWheel(in e);   // deliver the slop-crossing packet too (no viewport to scroll — the precondition)
-                    return;
-                }
-                horiz = !horiz;
+                // nothing to a vertical page.
+                // §A (refusal 2): no scroller on EITHER axis under the contact — route the REST of this gesture's packets
+                // to the element wheel handlers (leaf→root, Handled-stopping) instead of dropping them. A precision-
+                // touchpad gesture otherwise dies here (it never reaches OnPointerWheel).
+                // Both are reset by ScrollBegin/EndScrollGesture. Only §A is retried on later pan packets (see the
+                // ScrollUpdate case + the _sgWheelFallbackReason remarks): §A′ is an ownership decision, §A is a miss —
+                // and that miss was silent AND terminal, which is how a whole-gesture dead scroll stayed invisible.
+                _sgWheelFallback = true;
+                _sgWheelFallbackReason = (byte)refusal;
+                _sgWheelFallbackHandled = DispatchWheel(in e);   // deliver the slop-crossing packet too (no viewport to scroll — the precondition)
+                if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
+                    FluentGpu.Foundation.ScrollTrace.Note(105, _sgAccumX,
+                        refusal | (horiz ? 1 << 4 : 0) | (_sgWheelFallbackHandled ? 1 << 5 : 0), 0, _sgAccumY);
+                return;
             }
-            _sgTarget = vp; _sgHoriz = horiz; _sgLatched = true;
-
-            ref ScrollState s0 = ref _scene.ScrollRef(vp);
-            // A new contact ZEROES any in-flight momentum on the latched target (§2.2: contact zeroes momentum, never adds).
-            s0.PhaseFlags = 0; s0.FlingVelocity = 0f;
-            s0.FlingRetargeted = false; s0.FlingSnapTarget = float.NaN;
-            s0.PendingTargetX = float.NaN; s0.PendingTargetY = float.NaN;
-            // A fresh gesture invalidates the previous lift record (see ScrollState.LastReleaseVelocity): a control that
-            // reads it on the next settle must never see the velocity of a gesture two pans ago.
-            s0.LastReleaseVelocity = 0f;
-            _sgAnchorOffset = horiz ? s0.OffsetX : s0.OffsetY;
-            // A gesture landing over a still-easing band continues the stretch seamlessly (no one-frame erase): fold the
-            // live band back into the anchor as excess so the resampler's rawOffset = anchor + Σδ reproduces it (§2.4).
-            float viewport = horiz ? s0.ViewportW : s0.ViewportH;
-            _sgAnchorOffset += OverscrollPhysics.ExcessFromBand(s0.OverscrollPx, viewport);
-            s0.Overscrolling = s0.OverscrollPx != 0f;   // the gesture owns the band again (no spring while held)
-            s0.OverscrollVel = 0f;
-            // Record TouchpadTracking intent + latch the resampler anchor (this sets Phase = TouchpadTracking + arms).
-            OnScrollTrackBegin?.Invoke(vp, horiz, _sgAnchorOffset);
-            _sgVel.Reset(new Point2(_sgAccumX, _sgAccumY), e.TimestampMs, e.QpcTicks);
-            if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
-            {
-                FluentGpu.Foundation.ScrollTrace.Latch((int)vp.Raw.Index,
-                    _sgDevice | (horiz ? 1 << 8 : 0) | (sticky ? 1 << 9 : 0) | (_sgLastHoriz ? 1 << 10 : 0),
-                    _sgAnchorOffset, _sgAccumX, _sgAccumY);
-                FluentGpu.Foundation.ScrollTrace.VelSample(2, _sgAccumX, _sgAccumY, 0f, 0f, e.QpcTicks);
-            }
-            if (FluentGpu.Foundation.ScrollLog.On)
-                FluentGpu.Foundation.ScrollLog.Line($"SG  latch {(horiz ? "x" : "y")} dev={_sgDevice} anchor={_sgAnchorOffset:0.0}");
+            LatchGestureTarget(vp, horiz, in e, sticky);
         }
         RecordGestureSample(in e);
+    }
+
+    /// <summary>Resolve the viewport a slop-crossed pan should drive, in the ONE order §A′/§A define: same-axis scroller →
+    /// element wheel handler (refusal 1) → cross-axis scroller (flipping <paramref name="horiz"/>) → nothing (refusal 2).
+    /// Null ⇒ wheel fallback with <paramref name="refusal"/> saying which arm refused (0 = resolved).</summary>
+    private NodeHandle ResolveLatchTarget(Point2 pos, ref bool horiz, out int refusal)
+    {
+        refusal = 0;
+        NodeHandle vp = ScrollableUnderForAxis(pos, horiz);
+        if (!vp.IsNull) return vp;
+        if (HasWheelHandlerUnder(pos)) { refusal = 1; return NodeHandle.Null; }   // wheelHandlerFallback
+        vp = ScrollableUnderForAxis(pos, !horiz);   // dominant axis has no scroller → cross-axis fallback (standalone carousel)
+        if (vp.IsNull) { refusal = 2; return NodeHandle.Null; }                   // noScrollerEitherAxis
+        horiz = !horiz;
+        return vp;
+    }
+
+    /// <summary>The latch tail shared by the slop-crossing latch and the wheel-fallback retry: bind target+axis, zero the
+    /// target's in-flight momentum, anchor off its CURRENT offset (folding any live band back in as excess) and record the
+    /// TouchpadTracking intent. Never moves the offset — phase 7 owns that (§2.1).</summary>
+    private void LatchGestureTarget(NodeHandle vp, bool horiz, in InputEvent e, bool sticky)
+    {
+        _sgTarget = vp; _sgHoriz = horiz; _sgLatched = true;
+
+        ref ScrollState s0 = ref _scene.ScrollRef(vp);
+        // A new contact ZEROES any in-flight momentum on the latched target (§2.2: contact zeroes momentum, never adds).
+        s0.PhaseFlags = 0; s0.FlingVelocity = 0f;
+        s0.FlingRetargeted = false; s0.FlingSnapTarget = float.NaN;
+        s0.PendingTargetX = float.NaN; s0.PendingTargetY = float.NaN;
+        // A fresh gesture invalidates the previous lift record (see ScrollState.LastReleaseVelocity): a control that
+        // reads it on the next settle must never see the velocity of a gesture two pans ago.
+        s0.LastReleaseVelocity = 0f;
+        _sgAnchorOffset = horiz ? s0.OffsetX : s0.OffsetY;
+        // A gesture landing over a still-easing band continues the stretch seamlessly (no one-frame erase): fold the
+        // live band back into the anchor as excess so the resampler's rawOffset = anchor + Σδ reproduces it (§2.4).
+        float viewport = horiz ? s0.ViewportW : s0.ViewportH;
+        _sgAnchorOffset += OverscrollPhysics.ExcessFromBand(s0.OverscrollPx, viewport);
+        s0.Overscrolling = s0.OverscrollPx != 0f;   // the gesture owns the band again (no spring while held)
+        s0.OverscrollVel = 0f;
+        // Record TouchpadTracking intent + latch the resampler anchor (this sets Phase = TouchpadTracking + arms).
+        OnScrollTrackBegin?.Invoke(vp, horiz, _sgAnchorOffset);
+        _sgVel.Reset(new Point2(_sgAccumX, _sgAccumY), e.TimestampMs, e.QpcTicks);
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
+        {
+            FluentGpu.Foundation.ScrollTrace.Latch((int)vp.Raw.Index,
+                _sgDevice | (horiz ? 1 << 8 : 0) | (sticky ? 1 << 9 : 0) | (_sgLastHoriz ? 1 << 10 : 0),
+                _sgAnchorOffset, _sgAccumX, _sgAccumY);
+            FluentGpu.Foundation.ScrollTrace.VelSample(2, _sgAccumX, _sgAccumY, 0f, 0f, e.QpcTicks);
+        }
+        if (FluentGpu.Foundation.ScrollLog.On)
+            FluentGpu.Foundation.ScrollLog.Line($"SG  latch {(horiz ? "x" : "y")} dev={_sgDevice} anchor={_sgAnchorOffset:0.0}");
+    }
+
+    /// <summary>Wave-6 Fix C: re-attempt the latch on a later PAN packet of a gesture that fell back to wheel dispatch.
+    /// The slop-crossing hit test can miss transiently (a virtualized row recycling under the contact leaves no scrollable
+    /// ancestor for one packet) and the fallback was terminal, so one bad packet killed a 750ms gesture. Direction comes
+    /// from the WHOLE gesture so far (a single 1-2 px packet's dominant axis is noise); on success the accumulators REBASE
+    /// to zero and the anchor is taken from the target's CURRENT offset, so the gesture continues from where it is — the
+    /// pre-retry travel already went to the wheel handlers (or nowhere) and must not be replayed as a jump.
+    /// Returns true when the caller may continue on the normal latched-update path.</summary>
+    private bool TryRelatchFromWheelFallback(in InputEvent e)
+    {
+        float dirX = _sgAccumX + e.ScrollDeltaX, dirY = _sgAccumY + e.ScrollDelta;
+        if (MathF.Abs(dirX) + MathF.Abs(dirY) < PanSlopPx) return false;
+        bool horiz = MathF.Abs(dirX) > MathF.Abs(dirY);
+        NodeHandle vp = ResolveLatchTarget(e.PositionPx, ref horiz, out _);
+        if (vp.IsNull) return false;
+        float travel = MathF.Abs(dirX) + MathF.Abs(dirY);
+        _sgAccumX = 0f; _sgAccumY = 0f;   // rebase: this packet's delta is added by the caller's AccumulateContactDelta
+        _sgWheelFallback = false;
+        _sgWheelFallbackHandled = false;
+        _sgWheelFallbackReason = 0;
+        LatchGestureTarget(vp, horiz, in e, sticky: false);
+        if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
+            FluentGpu.Foundation.ScrollTrace.Note(106, _sgAnchorOffset, (int)vp.Raw.Index, horiz ? 1 : 0, travel);
+        return true;
     }
 
     /// <summary>An OS-momentum delta (DManip <c>INERTIA</c>): recorded verbatim through the SAME resampler as contact —
@@ -3282,6 +3356,7 @@ public sealed class InputDispatcher
         _sgMomentum = false;
         _sgTailConverted = false;   // §A.3 tail-ignore latch is per-gesture
         _sgWheelFallback = false;   // §A wheel-fallback latch is per-gesture
+        _sgWheelFallbackHandled = false; _sgWheelFallbackReason = 0;
         _sgAccumX = 0f; _sgAccumY = 0f;
     }
 

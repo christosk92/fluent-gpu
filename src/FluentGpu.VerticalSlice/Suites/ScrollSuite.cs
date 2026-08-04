@@ -67,6 +67,127 @@ static class ScrollSuite
         Cp2ConsolidationChecks(strings);
         D4ScrollBarChecks(strings);
         OcclusionCullChecks();
+        ShadowOpacityGateChecks();
+        WheelFallbackRelatchChecks(strings);
+    }
+
+    // Wave-6 Fix C: the §A wheel fallback used to be TERMINAL. If the slop-crossing packet's hit test found no scroller
+    // (a virtualized row recycling under the contact for one packet), every remaining packet of the gesture — 62 packets
+    // / 750 ms in the captured trace — routed to DispatchWheel and the viewport never moved, even though the same
+    // viewport latched fine a second earlier. A §A fallback (nothing under the contact at all — a MISS) now re-attempts
+    // the full latch on each PAN packet while it is consuming nothing. A §A′ fallback (an element under the contact owns
+    // the wheel — an overflowing single-line field) never retries: its documented WinUI-parity semantics are
+    // drop-don't-chain even when the element can't consume, so that ownership decision must survive the whole gesture.
+    static void WheelFallbackRelatchChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        const byte Fb = (byte)ScrollDeviceClass.WheelHiResFallback;
+
+        static NodeHandle FindScrollable(SceneStore s, NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if ((s.Flags(n) & NodeFlags.Scrollable) != 0 && s.HasScroll(n)) return n;
+            for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+            {
+                var r = FindScrollable(s, c);
+                if (!r.IsNull) return r;
+            }
+            return NodeHandle.Null;
+        }
+
+        // Pan down: two packets over `start` (which crosses the 8 DIP slop and refuses the latch), then four over the
+        // viewport. Returns whether the FIRST viewport packet latched, the offset the gesture produced, and how many
+        // wheel notches the consuming strip ate.
+        (bool LatchedOnFirstRetry, float Offset, int WheelCalls) Pan(float startY)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("fallback-relatch", new Size2(360, 500), 1f)); window.Show();
+            var probe = new WheelFallbackRelatchProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            uint t = 5000;
+            void Packet(InputKind k, float y, float dy)
+            {
+                t += 16;
+                window.QueueInput(new InputEvent(k, new Point2(150f, y), 0, 0, ScrollDelta: dy,
+                    Pointer: PointerKind.Touchpad, TimestampMs: t, PointerId: 9, DeviceClassRaw: Fb));
+                host.ScrollIntegratorForTest.FrameQpcSec = t / 1000.0;   // packet clock == frame clock (the §4.1 resampler)
+                host.RunFrame();
+            }
+            const float overViewport = 250f;   // inside the ScrollEl band [120, 420)
+            Packet(InputKind.ScrollBegin, startY, 0f);
+            Packet(InputKind.ScrollUpdate, startY, 20f);   // slop crossed HERE → latch refused → wheel fallback
+            Packet(InputKind.ScrollUpdate, startY, 20f);
+            Packet(InputKind.ScrollUpdate, overViewport, 20f);   // ← the retry packet
+            bool latchedOnFirstRetry = host.Input.GestureActive;
+            for (int i = 0; i < 3; i++) Packet(InputKind.ScrollUpdate, overViewport, 20f);
+            Packet(InputKind.ScrollEnd, overViewport, 0f);
+            host.Scene.TryGetScroll(vp, out var sc);
+            return (latchedOnFirstRetry, sc.OffsetY, probe.WheelCalls);
+        }
+
+        var recovered = Pan(90f);    // slop crossed over the INERT gap — §A, a genuine miss
+        var consumed = Pan(30f);     // slop crossed over the wheel-CONSUMING strip — §A′, an ownership decision
+
+        bool ok = recovered.LatchedOnFirstRetry && recovered.Offset > 0f && recovered.WheelCalls == 0
+               && !consumed.LatchedOnFirstRetry && consumed.Offset == 0f && consumed.WheelCalls > 0;
+        Check("gate.scroll.fallback-relatch a pan whose slop-crossing hit test finds NO scroller (§A) re-latches onto the viewport its later packets reach — latched on the FIRST retried packet, offset moves; a pan that fell back because an element OWNS the wheel (§A′) keeps that fallback for the whole gesture even once it travels over a real viewport (no re-latch, viewport untouched)",
+            ok, $"recovered(latch={recovered.LatchedOnFirstRetry} off={recovered.Offset:0.0} wheel={recovered.WheelCalls}) " +
+                $"consumed(latch={consumed.LatchedOnFirstRetry} off={consumed.Offset:0.0} wheel={consumed.WheelCalls})");
+    }
+
+    // Invisible-shadow cull (SceneRecorder: the shadow emit is gated on the cumulative opacity, exactly like the
+    // edge-fade / self-blur / opacity-group decisions beside it). ShadowPipeline's PSMain multiplies its output alpha by
+    // the per-instance opacity and blends ONE/INV_SRC_ALPHA premultiplied, so an alpha-0 shadow writes the destination
+    // back unchanged — while spanning the LARGEST quad we emit (node ⊕ spread ⊕ 3σ). Wavee's shelf cards rest at
+    // Opacity 0 with a blur-16 hover shadow, so this was the majority of a Home shelf's shadow pixels.
+    static void ShadowOpacityGateChecks()
+    {
+        // One box with a hover-sized shadow; `opacity` is the only knob. `spans` exercises the reuse path — the opacity
+        // is already an input to ComputeSpanInputSig, so crossing the threshold must invalidate and re-record.
+        static (SceneStore Scene, NodeHandle Node) Build(float opacity)
+        {
+            var scene = new SceneStore();
+            var node = scene.CreateNode(1); scene.Root = node;
+            ref RectF b = ref scene.Bounds(node); b = new RectF(20f, 20f, 160f, 90f);
+            ref NodePaint p = ref scene.Paint(node);
+            p.VisualKind = VisualKind.Box;
+            p.Fill = new ColorF(0.14f, 0.14f, 0.16f, 1f);
+            p.Corners = CornerRadius4.All(8f);
+            p.Opacity = opacity;
+            scene.SetShadow(node, new ShadowSpec(Blur: 16f, OffsetY: 4f, OffsetX: 0f,
+                Color: ColorF.FromRgba(0, 0, 0, 0x40)));
+            return (scene, node);
+        }
+
+        static int ShadowCount(SceneStore scene, DrawList dl, SpanTable? spans)
+        {
+            SceneRecorder.Record(scene, dl, spans: spans);
+            return dl.OpcodeStats.DrawShadow;
+        }
+
+        var dl0 = new DrawList();
+        var (sceneOff, _) = Build(0f);
+        int atZero = ShadowCount(sceneOff, dl0, null);
+
+        var dl1 = new DrawList();
+        var (sceneOn, _) = Build(1f);
+        int atOne = ShadowCount(sceneOn, dl1, null);
+
+        // Threshold crossing on ONE live scene through the span cache: 0 → 1 → 0 must track the emit exactly.
+        var spans = new SpanTable();
+        var dl2 = new DrawList();
+        var (scene, node) = Build(0f);
+        int span0 = ShadowCount(scene, dl2, spans);
+        scene.Paint(node).Opacity = 1f;
+        int span1 = ShadowCount(scene, dl2, spans);
+        scene.Paint(node).Opacity = 0f;
+        int span2 = ShadowCount(scene, dl2, spans);
+
+        bool ok = atZero == 0 && atOne == 1 && span0 == 0 && span1 == 1 && span2 == 0;
+        Check("gate.record.shadow-opacity-gate a node whose cumulative opacity is 0 emits NO DrawShadowCmd (the shader multiplies aOut by opacity ⇒ zero-output quad); at opacity 1 it does; crossing the threshold re-records through the span cache",
+            ok, $"atZero={atZero} atOne={atOne} spanSeq=[{span0},{span1},{span2}]");
     }
 
     // Opaque occlusion cull (SceneRecorder.IsOccludedByOpaqueChild, always-on): a node's own fill is dropped when a

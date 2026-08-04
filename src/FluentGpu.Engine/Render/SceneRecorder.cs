@@ -973,6 +973,11 @@ public static class SceneRecorder
         // GroupAlpha and blends ONE/INV_SRC_ALPHA, so at alpha 0 it writes the destination back unchanged — an offscreen
         // RT, a feather pass and a composite of exact dead work. Skipping also skips the `opacity = 1f` group reset, so
         // the subtree keeps drawing at its true ≈0 alpha (pixel-identical), still walked for hit/anim state.
+        // The SHADOW emit below is gated the same way and for the same reason: ShadowPipeline's PSMain multiplies its
+        // output alpha by the per-instance opacity and the blend is ONE/INV_SRC_ALPHA premultiplied, so an alpha-0
+        // shadow writes the destination back unchanged — and it is the LARGEST quad class we emit (the quad spans the
+        // node inflated by spread + 3σ). Wavee's shelf cards carry a hover shadow (Elevation.CardHover, blur 16) that
+        // rests at Opacity 0, so on a Home shelf the MAJORITY of shadow pixels were provably-zero-output quads.
         bool isEdgeFade = overlapsClip && hasEdgeFade && opacity > 0.001f;
         if (isEdgeFade) stats.EdgeFadeGroupCount++;
         // An opacity-zero stagger row still has a non-zero authored blur during its delay. It contributes no pixels, so
@@ -1058,8 +1063,11 @@ public static class SceneRecorder
 
         // ── shadow: drawn beneath the fill, BEFORE this node pushes its OWN clip — otherwise a ClipToBounds node (a flyout
         //    surface, a dialog) would clip its own soft-shadow halo away (the halo extends outside the node bounds). It is
-        //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. ──
-        if (maybeSparsePaint && overlapsRecordClip && scene.TryGetShadow(node, out var sh) && !sh.IsNone)
+        //    still bounded by the PARENT clip via the deviceBounds.Overlaps(clip) gate. It is ALSO gated on the cumulative
+        //    opacity (see the rationale above the edge-fade/blur/opacity-group gates): a shadow at alpha ≈ 0 is a
+        //    zero-output quad. Span-reuse-safe — `opacity` is already an input to ComputeSpanInputSig, so crossing the
+        //    threshold invalidates the span and re-records. ──
+        if (maybeSparsePaint && overlapsRecordClip && opacity > 0.001f && scene.TryGetShadow(node, out var sh) && !sh.IsNone)
         {
             dl.Shadow(local, p.Corners, sh.Color, sh.OffsetX, sh.OffsetY, sh.Blur, sh.Spread, world, opacity, key);
             // The halo paints OUTSIDE the node box — union its extent into the subtree bounds so anything that reads
