@@ -124,11 +124,14 @@ sealed class LyricsView : Component
     readonly Signal<int> _voiceLine = new(-1);    // line currently being sung (true time) — owns the karaoke wipe/glow
     readonly FloatSignal _nowMs = new(0f);
 
-    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, bit 3 UNUSED, PAST flag in bit 4). One VALUE-GATED Signal per line: the
-    // reactive core propagates staleness eagerly (a Memo does NOT gate downstream re-renders by value), so the ONLY way a
-    // line re-renders solely on ITS OWN emphasis change is a per-line signal whose setter no-ops when the packed value is
-    // unchanged. As `_activeLine` sweeps, PushEmphasis rewrites all lines but only the ~dozen crossing a bucket boundary
-    // actually notify — the rest (already at bucket 6) are no-op writes. Sized in PrepareDocument alongside `_glowAlpha`.
+    // Per-line PACKED emphasis (bucket 0..6 in bits 0-2, bit 3 UNUSED, PAST flag in bit 4). One VALUE-GATED Signal per line.
+    // What earns the ARRAY is the per-LINE subscription, not the value gate: a Memo value-gates too (the push-pull core
+    // resolves an equal recompute back to Clean without running its subscribers), but ONE shared memo over the active line
+    // would have every realized row subscribed to that one node, so every bucket sweep would fan out to the whole realized
+    // document. A signal PER LINE is the only shape under which a row re-renders solely on ITS OWN bucket/past change. As
+    // `_activeLine` sweeps, PushEmphasis rewrites all lines but only the ~dozen crossing a bucket boundary actually notify
+    // — the rest (already at bucket 6) are no-op writes. Sized in PrepareDocument alongside `_glowAlpha`, and REUSED IN
+    // PLACE across a same-line-shape document upgrade: mounted rows froze these very signal objects at mount.
     Signal<int>[] _lineEmphasis = Array.Empty<Signal<int>>();
     readonly Signal<int> _emphasisFallback = new(6);   // bucket 6 (fully dim) — only used during a transient array-resize gap
 
@@ -756,32 +759,77 @@ sealed class LyricsView : Component
         HideInterludeDots();
 
         var previous = _doc;
-        if (previous is null || !SameLineShape(previous, doc)) _layout = null;
+        // THE upgrade question, asked ONCE. SameLineShape guarantees same TrackId, same line count and identical
+        // per-line text — which is exactly the condition under which the virtual list does NOT remount its rows (same
+        // keys, same count), so every mounted LyricLineView survives the swap still holding the props it FROZE at
+        // mount: its own `_lineEmphasis[i]` signal and `_glowAlpha[i]` signal (LyricLineView ctor). Reallocating those
+        // arrays here therefore left every mounted row subscribed to an ORPHANED signal — the emphasis sweep and the
+        // glow froze for the rest of the track after any same-shape upgrade (a disk-cached line-synced doc upgraded to
+        // word-synced, a provider re-fetch). So a same-shape upgrade REUSES the per-line state in place, and only a
+        // genuine document change rebuilds it. The rest of PrepareDocument runs identically on both paths.
+        //
+        // NOTE — ACCEPTED RESIDUAL (campaign decision; this is not an undiagnosed mystery). A row also freezes its
+        // `LyricLine` at mount, and nothing reachable from here can replace it. So a same-shape upgrade that changes
+        // only the WORD TIMINGS (line-synced → word-synced with identical text, a richer syllable split) does not reach
+        // an already-mounted row's karaoke wipe data until those rows are rebuilt at the next track: post-fix such rows
+        // are LIVE on emphasis + glow, but still wipe on the pre-upgrade timing. Closing that too would mean a
+        // props-channel restructure of LyricLineView, which is deliberately out of scope.
+        bool sameShape = previous is not null && SameLineShape(previous, doc);
+        if (!sameShape) _layout = null;
         _doc = doc;
         ScanSecondaryLayers(doc);
-        _lineNodes = new NodeHandle[doc.Lines.Count];
-        _glowNodes = new NodeHandle[doc.Lines.Count];
-        _dofNodes = new NodeHandle[doc.Lines.Count];
-        _glowAlpha = new FloatSignal[doc.Lines.Count];
-        for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
-        // Run lengths start unmeasured (NaN) and the width epoch starts unknown: the first RunLengthOf per line pays
-        // one seam layout, every later call is an array read. A new doc for the SAME width still re-measures — the
-        // strings changed, so the cached fragment sums are meaningless.
-        _lineRunLen = new float[doc.Lines.Count];
-        Array.Fill(_lineRunLen, float.NaN);
-        _runLenWrapW = float.NaN;
-        // σ starts undriven (NaN): the first ramp pass adopts each line's target, which is exactly the value the element
-        // declared at mount, so a fresh doc lands on its ladder without a visible settle.
-        _dofCurrent = new float[doc.Lines.Count];
-        Array.Fill(_dofCurrent, float.NaN);
+        if (!sameShape)
+        {
+            _lineNodes = new NodeHandle[doc.Lines.Count];
+            _glowNodes = new NodeHandle[doc.Lines.Count];
+            _dofNodes = new NodeHandle[doc.Lines.Count];
+            _glowAlpha = new FloatSignal[doc.Lines.Count];
+            for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i] = new FloatSignal(0f);
+            // Run lengths start unmeasured (NaN) and the width epoch starts unknown: the first RunLengthOf per line pays
+            // one seam layout, every later call is an array read. A new doc for the SAME width still re-measures — the
+            // strings changed, so the cached fragment sums are meaningless.
+            _lineRunLen = new float[doc.Lines.Count];
+            Array.Fill(_lineRunLen, float.NaN);
+            _runLenWrapW = float.NaN;
+            // σ starts undriven (NaN): the first ramp pass adopts each line's target, which is exactly the value the element
+            // declared at mount, so a fresh doc lands on its ladder without a visible settle.
+            _dofCurrent = new float[doc.Lines.Count];
+            Array.Fill(_dofCurrent, float.NaN);
+            // Cascade state starts at rest (0 = settled, nothing to write). Sized once per doc so DriveCascade never
+            // allocates: the per-frame path only ever reads/writes these four preallocated float arrays.
+            _casComp = new float[doc.Lines.Count];
+            _casVel = new float[doc.Lines.Count];
+            _casDelayLeftMs = new float[doc.Lines.Count];
+            _casRate = new float[doc.Lines.Count];
+        }
+        else
+        {
+            // KEEP, by identity: `_lineNodes`/`_glowNodes`/`_dofNodes` (the surviving rows reported those handles ONCE,
+            // at realization, and will never report them again — a fresh array would be permanently empty), `_glowAlpha`
+            // and `_lineEmphasis` (the rows hold these very objects — keeping the arrays is what keeps their
+            // subscriptions live, i.e. the whole point), `_lineRunLen`/`_runLenWrapW` (identical text at an unchanged
+            // wrap width ⇒ the cached reading-order sums are still exact) and `_dofCurrent` (σ continuity: the ladder is
+            // a function of DISTANCE, which the identical line set preserves, so re-arming it at NaN would re-snap every
+            // ring mid-track for nothing).
+            //
+            // RESET, in place: the cascade is per-DOCUMENT motion state, not row-held, and the new document must start
+            // at rest exactly like the fresh path. ZeroCascade above already zeroed comp/vel/delay THROUGH the live
+            // handles (so the rows' transforms are back at identity); clearing here is the array-level equivalent of the
+            // fresh allocation, plus `_casRate`, and costs no allocation.
+            Array.Clear(_casComp);
+            Array.Clear(_casVel);
+            Array.Clear(_casDelayLeftMs);
+            Array.Clear(_casRate);
+            // Halo alphas are document state carried BY row-held signals: reset the VALUES (the fresh path's rows start
+            // at 0) while the signal objects survive, so an in-flight cross-fade cannot freeze a lit halo on a line the
+            // fade bookkeeping below is about to forget (`_glowInLine`/`_glowOutLine` = -1). Value-gated, and bound as
+            // the rows' Opacity, so this writes at most the one or two lit lines and re-renders nothing. Leaving a
+            // word-by-word row's glow σ un-rested is harmless — alpha 0 hides the layer (see FinishGlowOut), and the
+            // live voice line re-drives both on the very next OnFrame.
+            for (int i = 0; i < _glowAlpha.Length; i++) _glowAlpha[i].Value = 0f;
+        }
         _dofRampPending = true;
         _dofRampWallMs = 0L;
-        // Cascade state starts at rest (0 = settled, nothing to write). Sized once per doc so DriveCascade never
-        // allocates: the per-frame path only ever reads/writes these four preallocated float arrays.
-        _casComp = new float[doc.Lines.Count];
-        _casVel = new float[doc.Lines.Count];
-        _casDelayLeftMs = new float[doc.Lines.Count];
-        _casRate = new float[doc.Lines.Count];
         _cascadePending = false;
         _casQpc = 0L;
         // Seed each line at its REAL bucket for the doc's opening active line — NOT a constant. PrepareDocument runs
@@ -793,8 +841,14 @@ sealed class LyricsView : Component
         // Seeded through the SAME interlude advance OnFrame applies, so a document that lands mid-break seeds the focal
         // line the first frame will resolve to — and PushEmphasis below stays the silent no-op it is designed to be.
         int seedActive = timed ? AdvancePastInterlude(doc, ResolveLine(doc.Lines, posMs), posMs, out _, out _) : -1;
-        _lineEmphasis = new Signal<int>[doc.Lines.Count];
-        for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive));
+        // Same-shape upgrade: the signals are KEPT (mounted rows hold them), so there is nothing to seed — PushEmphasis
+        // below reaches the identical outcome through the value gate, writing only the lines whose bucket actually moved
+        // (usually none: an upgrade lands at the same position on the same lines).
+        if (!sameShape)
+        {
+            _lineEmphasis = new Signal<int>[doc.Lines.Count];
+            for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive));
+        }
         _glowInLine = -1; _glowOutLine = -1;
         if (timed)
         {
@@ -805,7 +859,8 @@ sealed class LyricsView : Component
             _activeLine.Value = -1;
             _voiceLine.Value = -1;
         }
-        PushEmphasis();   // per-line emphasis for the freshly loaded doc (before OnFrame drives it) — a no-op after the seed above
+        PushEmphasis();   // per-line emphasis for the loaded doc (before OnFrame drives it): silent after the fresh-path seed
+                          // above, and on the reuse path exactly the handful of lines whose bucket actually moved
         _nowMs.Value = posMs;
         _scrollSnapped = false;
         ResetWipeThrottle();
