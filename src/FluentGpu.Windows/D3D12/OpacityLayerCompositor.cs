@@ -897,6 +897,15 @@ float4 BlurPS(V i) : SV_Target
     /// <summary>RTV paired with <see cref="TargetResource"/> for an open group slot.</summary>
     public D3D12_CPU_DESCRIPTOR_HANDLE TargetRtv(int slot) => Rtv(slot);
 
+    /// <summary>Transition a leased slot to COPY_SOURCE through the pool's tracked state, so its pixels can be copied
+    /// out while it is the strip fade's target (a pure edge fade running INSIDE a full-canvas blur group snapshots the
+    /// group's own RT). The caller must have unbound the OM render targets first; <see cref="Bind"/> issues the tracked
+    /// transition back to RENDER_TARGET. Same discipline as <see cref="CopyStripSnapshot"/> uses for the scratch it
+    /// copies INTO — the pool owns every pooled resource's state, so nothing here may use a raw net-zero barrier
+    /// pair.</summary>
+    public void SlotToCopySource(ID3D12GraphicsCommandList* cmd, int slot)
+        => Barrier(cmd, _pool[slot].Res, ref _pool[slot].State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+
     /// <summary>Transition the slot to shader-readable. Call BEFORE the caller binds the underlying target for
     /// <see cref="Composite"/> (split out so the caller controls which target the composite lands on).</summary>
     public void BeginRead(ID3D12GraphicsCommandList* cmd, int slot)

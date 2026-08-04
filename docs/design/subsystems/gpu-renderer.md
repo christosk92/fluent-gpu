@@ -721,12 +721,25 @@ contract, not an optimization detail:
   pairwise disjoint and cover every pixel whose feather is < 1**; both invariants, and the corner-arc fold into the
   top/bottom band depth, are owned by `FluentGpu.Render.EdgeFadeStrips` (portable, headless-gated as
   `gate.edgefade.strips`). The two shaders share ONE HLSL feather body, so a strip-restored fade matches a
-  legacy-composited one. Restricted to a **top-level** fade — no pooled group open. It works over EITHER top-level
-  target (the back buffer, or the acrylic offscreen canvas): both are full-swapchain-sized, 1:1 with `SV_Position`, and
-  cleared at frame start, and the snapshot reads whichever one is actually bound. What it excludes is an enclosing
-  pooled group: that RT is cleared only over its own patched extent, and a region-local self-blur group runs a shifted
-  viewport, so neither satisfies the restore's 1:1 canvas-space assumption; a nested pure fade falls back to the legacy
-  path.
+  legacy-composited one. **Where it may run** is the second half of eligibility, owned by
+  `EdgeFadeStrips.GroupAllowsStrip(openGroupCount, innermostKind, innermostLocalUsedW)` (portable, headless-gated as
+  `gate.edgefade.strip-in-blur-group`) and decided by the **innermost open group alone** — the snapshot reads, and the
+  restore writes, exactly the one surface the subtree draws into, and nothing enclosing it is touched until its own
+  `PopLayer`. Admitted:
+  - **no pooled group open** — either top-level target (the back buffer, or the acrylic offscreen canvas): both are
+    full-swapchain-sized, 1:1 with `SV_Position`, and cleared at frame start, and the snapshot reads whichever one is
+    actually bound;
+  - **inside a FULL-CANVAS `Blur` group** (`LayerKind.Blur` ∧ `LocalBlur.UsedW == 0`): a `Blur` lease **always** takes a
+    full clear (only `EdgeFade` and a recorder-patched `Opacity` compute a partial clear rect), so every texel of that RT
+    is defined, and it binds canvas-sized under the **full** viewport, so `SV_Position` is still the canvas-space device
+    pixel the restore assumes. Both properties hold, so the same `lerp(D, F, feather)` algebra applies verbatim inside
+    the group; the group's own later Gaussian + composite then treat the feathered result exactly as they would have
+    treated a nested legacy edge-fade composite's output.
+
+  Excluded (they fall back to the legacy lease): an enclosing **plain `Opacity`** group (cleared only over its patched
+  extent) or **`EdgeFade`** group (only over its box) — a strip could snapshot uncleared pool texels; and a
+  **region-local self-blur** group (`LocalBlur.UsedW > 0`), which runs a shifted viewport into a bucketed scratch and so
+  breaks the restore's 1:1 canvas-space assumption.
 
 ```
 PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]

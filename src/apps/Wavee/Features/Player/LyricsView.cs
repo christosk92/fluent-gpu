@@ -2414,7 +2414,12 @@ sealed class LyricLineView : Component
                 // TRIMMED for strict parity with the word-by-word bloom above (was 13 large / 9 rail): a line-synced doc
                 // has no held-note signal, so this whole-line wash is the softest claim of the two — it comes down by the
                 // same ~25% spirit as HeldGlowPeakScale + the retuned baseSigma.
-                Blur = near ? (_large ? 10f : 7f) : 0f,
+                // σ ON THE ACTIVE ROW ONLY (dist == 0), NOT on every near row: at dist ≥ 1 the parent dofContent already
+                // carries a depth-of-field σ (LyricsFx.DofSigma), so a σ here would be a blur layer NESTED inside a blur
+                // layer — and a nested PushLayer is exactly what BlurPinKey.TryCompute bails on, making dofContent
+                // uncacheable for every near row. At dist == 0 the DoF σ is 0, so the halo is never nested and both
+                // layers stay pin-eligible. The glyph mount below stays on `near` — the anti-pop contract is unchanged.
+                Blur = isActive ? (_large ? 10f : 7f) : 0f,
                 // Scroll motion translates this stationary glyph subtree every frame. Reuse its retained blur when it
                 // exists; otherwise render crisp for the moving frame and rebuild the full halo after settling.
                 BlurCachePolicy = BlurCachePolicy.HoldIfCached,

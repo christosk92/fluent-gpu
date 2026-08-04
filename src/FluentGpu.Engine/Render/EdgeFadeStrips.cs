@@ -53,6 +53,29 @@ public static class EdgeFadeStrips
     public static bool IsPureFade(in PushLayerCmd layer)
         => layer.Kind == (int)LayerKind.EdgeFade && layer.BlurSigma == 0f && layer.GroupAlpha >= 0.999f;
 
+    /// <summary>Whether the strip path may run while a pooled group RT is already open — the ENCLOSING-TARGET half of
+    /// the eligibility decision (<see cref="IsPureFade"/> is the payload half). Pure decision, no GPU state, so the
+    /// headless gates own the truth table the backend then obeys.
+    ///
+    /// <para>Only the INNERMOST open group matters: the strip snapshot reads, and the restore writes, exactly the one
+    /// surface the subtree is drawing into. Two properties of that surface are what the strip algebra needs, and both
+    /// are decided by the innermost group alone:</para>
+    /// <list type="bullet">
+    /// <item><b>every texel defined.</b> A <see cref="LayerKind.Blur"/> lease always takes a FULL clear (the backend
+    /// computes a partial <c>clearRect</c> only for EdgeFade and for a recorder-patched plain Opacity group), so a strip
+    /// can never snapshot an UNCLEARED pooled texel. A plain Opacity group is cleared only over its patched extent and
+    /// an EdgeFade group only over its box — hence neither is admitted.</item>
+    /// <item><b>1:1 canvas space.</b> A full-canvas Blur lease binds the canvas-sized pool RT under the FULL viewport,
+    /// so <c>SV_Position</c> is still the canvas-space device pixel the restore shader's geometry assumes. A
+    /// REGION-LOCAL blur (<paramref name="innermostLocalUsedW"/> &gt; 0) runs a SHIFTED viewport into a bucketed
+    /// scratch — that one must keep the legacy lease.</item>
+    /// </list>
+    /// <paramref name="innermostLocalUsedW"/> is the innermost group's <c>LocalBlurSurface.UsedW</c> (0 ⇒ the
+    /// full-canvas lease). With no group open at all the strip path was always eligible.</summary>
+    public static bool GroupAllowsStrip(int openGroupCount, int innermostKind, int innermostLocalUsedW)
+        => openGroupCount <= 0
+        || (innermostKind == (int)LayerKind.Blur && innermostLocalUsedW == 0);
+
     /// <summary>Compute the (≤ 4, pairwise DISJOINT) physical-pixel strips this fade must snapshot and restore.
     /// <paramref name="strips"/> must have room for <see cref="MaxStrips"/>; <paramref name="count"/> is 0 when the
     /// fade is a no-op (no enabled edge, empty composite clip, degenerate canvas) — the subtree then simply draws

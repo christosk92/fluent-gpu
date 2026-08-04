@@ -2727,7 +2727,126 @@ static class AnimSuite
                         }
         Check("gate.edgefade.strip-lerp-exact: lerp(D, F, feather) reproduces the legacy composite for every (C, a, D, d, f)",
             worst < 1e-6, $"maxAbsErr={worst:0.###e+0}");
+
+        StripInsideGroupChecks();
+        LocalBlurSizeBailChecks();
     }
+
+    // ── the ENCLOSING-TARGET half of strip eligibility (EdgeFadeStrips.GroupAllowsStrip) ─────────────────────────────
+    // The D3D12 arm of this decision is unreachable headlessly (it needs a real device + swapchain), so the DECISION is
+    // extracted as a pure function and gated here — the DmEngageWedge precedent. Two things are checked: the truth table
+    // itself, and that a recorder-emitted "pure fade nested inside a full-canvas blur group" stream is (a) classified as
+    // STRIP (so efL stays 0 for that shape) and (b) still perfectly balanced when walked with the backend's own
+    // push/pop bookkeeping — a strip group and a leased group both occupy one _layerKinds slot, so a misclassification
+    // that opened one and closed the other would desync the whole stream.
+    static void StripInsideGroupChecks()
+    {
+        // Truth table. Admitted: no group at all, or an innermost FULL-CANVAS Blur lease (UsedW == 0).
+        // Refused: a plain Opacity group (cleared only over its patched extent), an EdgeFade group (cleared only over
+        // its box), and a REGION-LOCAL blur (UsedW > 0 ⇒ shifted viewport into a bucketed scratch, i.e. exactly the
+        // group shape B.1's widened region-local path now produces on a pin miss).
+        bool table =
+               EdgeFadeStrips.GroupAllowsStrip(0, 0, 0)
+            && EdgeFadeStrips.GroupAllowsStrip(0, (int)LayerKind.Opacity, 0)          // no group open ⇒ kind is moot
+            && EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Blur, 0)
+            && EdgeFadeStrips.GroupAllowsStrip(3, (int)LayerKind.Blur, 0)             // only the INNERMOST is examined
+            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Blur, 512)          // region-local ⇒ shifted viewport
+            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Opacity, 0)
+            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.EdgeFade, 0)
+            && !EdgeFadeStrips.GroupAllowsStrip(1, (int)LayerKind.Acrylic, 0);
+
+        // The recorder shape: PushBlurLayer(σ 6, full canvas) → PushEdgeFadeLayer(pure) → fill → PopLayer → PopLayer.
+        var dl = new DrawList();
+        var outerRect = new RectF(0, 0, 400, 300);
+        var fadeRect = new RectF(20, 20, 200, 160);
+        dl.PushBlurLayer(outerRect, default, 6f, 1f);
+        dl.PushEdgeFadeLayer(fadeRect, fadeRect, default, 1f, 8, 0f, 0f, 0f, 32f, 0, 1f);
+        dl.FillRoundRect(new RectF(0, 0, 200, 160), default, new ColorF(1f, 1f, 1f, 1f), new Affine2D(1f, 0f, 0f, 1f, 20f, 20f), 1f);
+        dl.PopLayer(fadeRect);
+        dl.PopLayer(outerRect);
+
+        // Walk it exactly as SubmitWithLayers does: maintain the open-group stack (kind + localUsedW) and the layer-kind
+        // stack, taking the strip path iff IsPureFade ∧ GroupAllowsStrip. Depth never exceeds MaxStripFadeDepth here.
+        var groups = new List<(int Kind, int UsedW)>();
+        var kinds = new List<int>();
+        int strips = 0, leases = 0, imbalance = 0;
+        int pos = 0;
+        var bytes = dl.Bytes;
+        while (pos + sizeof(int) <= bytes.Length)
+        {
+            DrawOp op = (DrawOp)MemoryMarshal.Read<int>(bytes.Slice(pos));
+            int body = pos + sizeof(int);
+            if (op == DrawOp.PushLayer)
+            {
+                var L = MemoryMarshal.Read<PushLayerCmd>(bytes.Slice(body));
+                pos = body + Unsafe.SizeOf<PushLayerCmd>();
+                bool strip = EdgeFadeStrips.IsPureFade(in L)
+                    && EdgeFadeStrips.GroupAllowsStrip(groups.Count,
+                        groups.Count > 0 ? groups[^1].Kind : 0,
+                        groups.Count > 0 ? groups[^1].UsedW : 0);
+                if (strip) { strips++; kinds.Add(-2); }
+                // A full-canvas blur lease (this stream's outer layer): UsedW 0. Nothing here goes region-local.
+                else { leases++; groups.Add((L.Kind, 0)); kinds.Add(L.Kind); }
+                continue;
+            }
+            if (op == DrawOp.PopLayer)
+            {
+                pos = body + Unsafe.SizeOf<PopLayerCmd>();
+                if (kinds.Count == 0) { imbalance++; continue; }
+                int k = kinds[^1];
+                kinds.RemoveAt(kinds.Count - 1);
+                if (k != -2)
+                {
+                    if (groups.Count == 0) imbalance++;
+                    else groups.RemoveAt(groups.Count - 1);
+                }
+                continue;
+            }
+            if (op == DrawOp.FillRoundRect) { pos = body + Unsafe.SizeOf<FillRoundRectCmd>(); continue; }
+            imbalance++;   // unexpected op — the fixture only records the three above
+            break;
+        }
+        bool balanced = imbalance == 0 && kinds.Count == 0 && groups.Count == 0;
+        Check("gate.edgefade.strip-in-blur-group: a pure fade inside a FULL-CANVAS blur group takes the STRIP path (efL 0) and the layer stream stays balanced",
+            table && balanced && strips == 1 && leases == 1,
+            $"table={table} strips={strips} leases={leases} balanced={balanced} kinds={kinds.Count} groups={groups.Count} imbalance={imbalance}");
+    }
+
+    // ── B.1: the region-local blur's own SIZE predicate ──────────────────────────────────────────────────────────────
+    // The backend no longer computes an eligibility test before calling TryAcquireLocalBlur — the ATTEMPT is the
+    // predicate, and its decline condition is the canvas-size bail (`usedW >= _w && usedH >= _h`, both axes). That bail
+    // is pure geometry: SelfBlurRegion.ComputeWork's clip-aware work box inflated by a full TapRadius guard on each
+    // side. Gate the truth of that arithmetic, since a region that is NOT smaller than the canvas must keep the legacy
+    // lease (the region-local target buys nothing and loses nested/overspill behaviour).
+    static void LocalBlurSizeBailChecks()
+    {
+        const int cw = 400, ch = 300;
+        static (int usedW, int usedH) Used(in PushLayerCmd L, int canvasW, int canvasH)
+        {
+            var g = SelfBlurRegion.ComputeWork(in L, 1f, canvasW, canvasH);
+            if (g.Work.IsEmpty || g.VisibleOutput.IsEmpty) return (0, 0);
+            int guard = SelfBlurRegion.TapRadius(L.BlurSigma);
+            return (g.Work.Width + guard * 2, g.Work.Height + guard * 2);
+        }
+        // A small transient row blur (the TextSwap/IconSwap shape): comfortably sub-canvas on both axes ⇒ the attempt
+        // succeeds and ~1.7 ms of full-canvas clear + Gaussian is not paid.
+        var small = BlurLayer(new RectF(40, 40, 160, 48), 4f);
+        var (sw, sh) = Used(in small, cw, ch);
+        // A canvas-filling blur: the work box already spans the canvas and the guard only grows it ⇒ the bail fires.
+        var full = BlurLayer(new RectF(0, 0, cw, ch), 4f);
+        var (fw, fh) = Used(in full, cw, ch);
+        // Wide-but-short: NOT bailed — the bail needs BOTH axes at canvas size (a full-width rail row is exactly this).
+        var wide = BlurLayer(new RectF(0, 100, cw, 40), 4f);
+        var (ww, wh) = Used(in wide, cw, ch);
+        bool ok = sw > 0 && !(sw >= cw && sh >= ch)
+               && fw >= cw && fh >= ch
+               && !(ww >= cw && wh >= ch);
+        Check("gate.blur.localSizeBail: the region-local attempt IS the size predicate — sub-canvas regions take it, a canvas-sized one declines (both axes)",
+            ok, $"small=({sw}x{sh}) full=({fw}x{fh}) wide=({ww}x{wh}) canvas=({cw}x{ch})");
+    }
+
+    static PushLayerCmd BlurLayer(RectF rect, float sigma)
+        => new(rect, default, default, default, 0f, sigma, 0f, 0f, (int)LayerKind.Blur, 1f, CompositeClip: rect);
 
     static void AnimEngineChecks(StringTable strings)
     {

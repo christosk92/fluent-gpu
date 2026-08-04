@@ -396,6 +396,13 @@ public static class FluentApp
                     int rqOpaque = gpuDev?.LastRectOpaqueInstances ?? 0;
                     int rqBlended = gpuDev?.LastRectBlendedInstances ?? 0;
                     string rectPassTok = (rqOpaque > 0 || rqBlended > 0) ? $" rq{rqOpaque}/{rqBlended}" : "";
+                    // pin<hit>/<miss> — the cross-frame self-blur PIN cache's per-frame census. Ungated, same discipline
+                    // as rq/efS: `bl` groups alone cannot say whether a blur-heavy view is re-blurring every submit or
+                    // riding retained pins, and the answer decides whether the blur budget is a caching problem at all.
+                    // Printed only when either side is nonzero, so a blur-free frame's line is byte-identical to before.
+                    int pinHit = gpuDev?.LastBlurCacheHit ?? 0;
+                    int pinMiss = gpuDev?.LastBlurCacheMiss ?? 0;
+                    string pinTok = (pinHit > 0 || pinMiss > 0) ? $" pin{pinHit}/{pinMiss}" : "";
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
                     // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit
@@ -460,7 +467,7 @@ public static class FluentApp
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok}{rectPassTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok}{rectPassTok}{pinTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}{inputPaceTok}");
                 }
             }

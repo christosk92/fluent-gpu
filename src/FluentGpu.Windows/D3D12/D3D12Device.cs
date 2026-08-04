@@ -107,7 +107,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private readonly record struct LayerGroup(int Slot, PushLayerCmd L, ulong PinHash,
         OpacityLayerCompositor.LocalBlurSurface LocalBlur);
     private readonly List<LayerGroup> _opacityGroups = new(4);
-    private readonly record struct StripFadeGroup(PushLayerCmd L, int Scratch, int Count, int Depth);
+    // TargetSlot = the surface the strips were snapshotted FROM and are restored INTO: -1 = the top-level target (back
+    // buffer / acrylic canvas), else the pooled slot of the full-canvas Blur group that was open at PushLayer. Recorded
+    // at Begin rather than re-derived at End so the restore can never land on a different surface than the snapshot
+    // (and so the malformed-stream drain below stays well-defined).
+    private readonly record struct StripFadeGroup(PushLayerCmd L, int Scratch, int Count, int Depth, int TargetSlot);
     private readonly List<StripFadeGroup> _stripGroups = new(MaxStripFadeDepth);
     // Flat, per-depth strip storage (depth·MaxStrips … +MaxStrips) — the strips computed at PushLayer are reused
     // VERBATIM at PopLayer so the D and F snapshots are pixel-aligned. Preallocated: zero managed alloc on submit.
@@ -141,8 +145,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// nested inside a pooled opacity/blur group, or the scratch pool was momentarily full. Disambiguates "no eligible
     /// fade on screen" (0) from "eligible but rejected" (&gt; 0) when <see cref="LastEdgeFadeStripPx"/> is 0.</summary>
     public int LastEdgeFadeStripFallbacks => _edgeFadeStripFallbacks;
-    /// <summary>Of <see cref="LastEdgeFadeStripFallbacks"/>, the ones rejected because a POOLED opacity/blur group was
-    /// already open (the shifted-viewport / partially-cleared-pool blockers documented on <c>TryBeginStripFade</c>).</summary>
+    /// <summary>Of <see cref="LastEdgeFadeStripFallbacks"/>, the ones rejected because the innermost OPEN pooled group
+    /// is not one the strip path can draw into — i.e. anything other than a FULL-CANVAS <c>LayerKind.Blur</c> lease
+    /// (the partially-cleared-pool / shifted-viewport blockers documented on <c>TryBeginStripFade</c> and gated as
+    /// <see cref="EdgeFadeStrips.GroupAllowsStrip"/>).</summary>
     public int LastEdgeFadeStripRejectNested => _efStripRejectNested;
     /// <summary>Of <see cref="LastEdgeFadeStripFallbacks"/>, the ones rejected because the strip-fade nesting depth cap
     /// (<c>MaxStripFadeDepth</c>) was already reached.</summary>
@@ -1996,13 +2002,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     if (L.Kind == (int)LayerKind.Blur && L.BlurSigma > 0f && L.BlurIsTransient != 0
                         && _opacityGroups.Count == 0
                         && BlurPinKey.TryCompute(drawList, pos, in L, out _, out _)
-                        && _opacity.TryAcquireLocalBlur(_cmdList, _fenceValue + 1, in L, _frameScale, out var localBlur))
+                        && TryBeginRegionLocalBlur(in L))
                     {
-                        _opacityGroups.Add(new LayerGroup(localBlur.Slot, L, 0UL, localBlur));
-                        _layerKinds.Add(L.Kind);
-                        InvalidateCmdState();
-                        SetLocalBlurViewport(in localBlur);
-                        ApplyCurrentScissor();
                         continue;
                     }
                     if (BlurPinKey.CanUseStationaryCache(in L)
@@ -2040,16 +2041,35 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // PopLayer copies the blurred region into a small retained pin AFTER the normal composite — but only
                         // if this exact content recurred from last frame ⇒ STATIONARY ⇒ likely a hit next frame. A fresh hash
                         // (scroll/animation moves content every frame) leaves pinHash 0 below ⇒ pure transient, no pin churn.
-                        if (BlurHashSeenLastFrame(bhash))
+                        bool seenLastFrame = BlurHashSeenLastFrame(bhash);
+                        // Mint a pin unless this is an edge-clamped region IN MOTION: an actively-scrolling clamped
+                        // strip changes its clamp size ~1px/frame, so minting a fresh region-sized RT every frame is
+                        // churn for no hit (FindPin is size-exact ⇒ next frame's different size misses anyway). At
+                        // rest the clamp size is stable, so a clamped row mints once then HITS — the fix for a
+                        // stationary edge-clamped blur re-blurring every submit. pinHash 0 ⇒ pure transient.
+                        ulong pinTag = (regionClamped && L.InMotion != 0) ? 0UL : bhash;
+                        bool willMintPin = seenLastFrame && pinTag != 0;
+                        // A miss that will mint NOTHING is a pure transient render, and a transient render of a SMALL
+                        // region has no business clearing + blurring two full canvases — that is the ~1.7 ms/lease the
+                        // transient branch above already avoids. Take the same region-local path here, but ONLY after
+                        // FindPin has run and lost: the pin cache is never bypassed (a stationary node still leases the
+                        // canvas scratch below, because RetainPinFromScratch copies its pin OUT of that canvas-space
+                        // slot — going region-local would silently retire the whole pin cache for that node). The
+                        // attempt IS the size predicate: TryAcquireLocalBlur declines when the guarded work box is not
+                        // smaller than the canvas on both axes, and then nothing was leased and we fall through to the
+                        // canvas lease exactly as before. `holdIfCached` is excluded so the hold/skip policy below keeps
+                        // its documented meaning; the flat-subtree precondition is already proven (TryCompute succeeded,
+                        // i.e. no nested PushLayer), which is what makes the shifted viewport legal.
+                        if (!willMintPin && !holdIfCached && L.BlurSigma > 0f
+                            && _opacityGroups.Count == 0 && TryBeginRegionLocalBlur(in L))
+                        {
+                            _blurCacheMiss++;   // still a pin MISS — the census must not read as a hit just because it went local
+                            continue;
+                        }
+                        if (seenLastFrame)
                         {
                             SceneCat(CatComposite);   // the lease's RT clear is layer cost — attribute it to comp, not to whatever ran before
                             int pslot = _opacity.Acquire(_cmdList, _fenceValue + 1);
-                            // Mint a pin unless this is an edge-clamped region IN MOTION: an actively-scrolling clamped
-                            // strip changes its clamp size ~1px/frame, so minting a fresh region-sized RT every frame is
-                            // churn for no hit (FindPin is size-exact ⇒ next frame's different size misses anyway). At
-                            // rest the clamp size is stable, so a clamped row mints once then HITS — the fix for a
-                            // stationary edge-clamped blur re-blurring every submit. pinHash 0 ⇒ pure transient.
-                            ulong pinTag = (regionClamped && L.InMotion != 0) ? 0UL : bhash;
                             _opacityGroups.Add(new LayerGroup(pslot, L, pinTag, default));
                             _layerKinds.Add(L.Kind);
                             _blurCacheMiss++;
@@ -2233,7 +2253,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             pos = DecodeOne(drawList, pos);
         }
         FlushSegment(lw, lh);
-        // Defensive: a malformed stream that left groups open still composites them (full alpha chain preserved).
+        // Defensive drain, STRIPS FIRST: a strip fade may now be open INSIDE a full-canvas blur group, and its restore
+        // targets that group's pooled slot. Draining groups first would release (and composite) that slot out from
+        // under the pending restore. The reverse nesting (a group left open inside a strip) is unaffected — EndStripFade
+        // binds its own recorded target either way. A well-formed stream leaves both stacks empty, so this order is
+        // observable only on the malformed path.
+        // Restore the open pure-fade strip groups (LIFO) so the strips are feathered and, critically, so their pooled
+        // scratch leases are returned instead of leaking as permanently InUse.
+        while (_stripGroups.Count > 0) EndStripFade(lw, lh, directToBackBuffer, backRtv);
+        // …then the pooled groups a malformed stream left open (full alpha chain preserved).
         while (_opacityGroups.Count > 0)
         {
             LayerGroup closed = _opacityGroups[^1];
@@ -2259,9 +2287,6 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (pinHash != 0) _opacity.RetainPinFromScratch(_cmdList, slot, pinHash, in gl, _frameScale, _fenceValue + 1);
             _opacity.Release(slot);
         }
-        // Same defence for pure-fade strip groups a malformed stream left open: restore them (LIFO) so the strips are
-        // feathered and, critically, so their pooled scratch leases are returned instead of leaking as permanently InUse.
-        while (_stripGroups.Count > 0) EndStripFade(lw, lh, directToBackBuffer, backRtv);
         _layerKinds.Clear();
         _clipStack.Clear();
         _roundedClipStack.Clear();
@@ -2278,53 +2303,95 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     // ── PURE edge fade: the strip path (no offscreen intermediate) ───────────────────────────────────────────────────
-    // The TOP-LEVEL target of the layered path: the back buffer on the directBB path, else the acrylic offscreen canvas.
-    // Both are full-swapchain-sized, 1:1 with SV_Position, and fully cleared at frame start — everything the strip
-    // restore assumes. The strip snapshot MUST read whichever one the subtree is actually drawing into; hard-coding the
-    // back buffer would snapshot a stale/blank surface (and restore garbage) whenever the canvas path is in use.
-    private ID3D12Resource* TopTargetResource(bool directToBackBuffer)
-        => directToBackBuffer ? _backBuffers[_frameIndex] : (_acrylic is null ? null : _acrylic.CanvasResource);
+    // The surface a strip fade snapshots from and restores into. With no pooled group open that is the TOP-LEVEL target
+    // of the layered path: the back buffer on the directBB path, else the acrylic offscreen canvas — both
+    // full-swapchain-sized, 1:1 with SV_Position, and fully cleared at frame start. Inside an open FULL-CANVAS Blur
+    // group (targetSlot >= 0; see the eligibility reasoning on TryBeginStripFade) it is that group's pooled RT, which
+    // Acquire creates canvas-sized and clears in FULL — same three properties. The snapshot MUST read whichever one the
+    // subtree is actually drawing into; reading the back buffer while a group is open (or while the canvas path is in
+    // use) would snapshot a stale/blank surface and restore garbage.
+    private ID3D12Resource* StripTargetResource(int targetSlot, bool directToBackBuffer)
+    {
+        if (targetSlot >= 0) return _opacity is null ? null : _opacity.TargetResource(targetSlot);
+        return directToBackBuffer ? _backBuffers[_frameIndex] : (_acrylic is null ? null : _acrylic.CanvasResource);
+    }
 
-    // Unbind the OM render targets and put the top-level target in COPY_SOURCE so its pixels can be copied out. The
-    // back buffer's state is tracked EXPLICITLY by this device (RENDER_TARGET across the whole submit), so a raw
-    // net-zero pair is right for it; the canvas's state is tracked by AcrylicCompositor._canvasState and is NOT always
-    // RENDER_TARGET mid-scene (BlurAndComposite pass A parks it in PIXEL_SHADER_RESOURCE), so that one must go through
-    // the tracked barrier. Unbinding first is required either way: a resource must not be transitioned out of
-    // RENDER_TARGET while it is still bound as one. The caller re-binds + re-applies its scissor afterwards.
-    private void BeginTopTargetCopySource(bool directToBackBuffer)
+    // Bind the strip fade's target back as the render target (canvas-sized + FULL viewport in every admitted case, so
+    // SV_Position stays the canvas-space device pixel the restore shader assumes) and restore the enclosing clip.
+    private void BindStripTarget(int targetSlot, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
+    {
+        if (targetSlot < 0) { BindLayerTopTarget(directToBackBuffer, backRtv); return; }
+        _opacity!.Bind(_cmdList, targetSlot);   // tracked barrier back to RENDER_TARGET (undoes the COPY_SOURCE below)
+        SetFullViewport();
+    }
+
+    // Unbind the OM render targets and put the strip target in COPY_SOURCE so its pixels can be copied out. Three
+    // different state-tracking regimes, hence three arms: the back buffer's state is tracked EXPLICITLY by this device
+    // (RENDER_TARGET across the whole submit), so a raw net-zero pair is right for it; the canvas's state is tracked by
+    // AcrylicCompositor._canvasState and is NOT always RENDER_TARGET mid-scene (BlurAndComposite pass A parks it in
+    // PIXEL_SHADER_RESOURCE); a pooled group slot's state is tracked per-entry by OpacityLayerCompositor, so it goes
+    // through that same tracked Barrier (exactly as CopyStripSnapshot does for the scratch it copies INTO). Unbinding
+    // first is required in every case: a resource must not be transitioned out of RENDER_TARGET while still bound as
+    // one. The caller re-binds + re-applies its scissor afterwards.
+    private void BeginStripTargetCopySource(int targetSlot, bool directToBackBuffer)
     {
         _cmdList->OMSetRenderTargets(0, null, BOOL.FALSE, null);
-        if (directToBackBuffer)
+        if (targetSlot >= 0) _opacity!.SlotToCopySource(_cmdList, targetSlot);
+        else if (directToBackBuffer)
             Barrier(_backBuffers[_frameIndex], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
         else _acrylic!.CanvasToCopySource(_cmdList);
     }
 
-    private void EndTopTargetCopySource(bool directToBackBuffer)
+    // Pair of the above. A pooled slot needs nothing here: its tracked state stays COPY_SOURCE until the matching
+    // BindStripTarget issues the tracked transition back to RENDER_TARGET (a second barrier here would be a no-op that
+    // then has to be undone anyway). The two untracked/foreign-tracked targets must be returned explicitly.
+    private void EndStripTargetCopySource(int targetSlot, bool directToBackBuffer)
     {
+        if (targetSlot >= 0) return;
         if (directToBackBuffer)
             Barrier(_backBuffers[_frameIndex], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         else _acrylic!.CanvasToRenderTarget(_cmdList);
     }
 
     // Open a pure fade WITHOUT leasing a canvas-sized group RT: compute its ≤ 4 disjoint fade strips, snapshot those
-    // pixels of the current top-level target (D) into a small pooled scratch, and let the subtree draw straight
-    // through. Eligible over EITHER top-level target (back buffer or canvas — see TopTargetResource); what is excluded
-    // is any OPEN POOLED GROUP (_opacityGroups.Count != 0), for two reasons:
-    //   • an enclosing opacity group's pooled RT is cleared only over its own patched extent, so a strip could snapshot
-    //     UNCLEARED pool texels (the legacy composite never reads outside that extent);
-    //   • a region-local self-blur group runs a SHIFTED viewport, so SV_Position would not be canvas space — the
-    //     restore shader's whole geometry assumes a 1:1 canvas-space device pixel.
-    // A nested fade simply keeps the legacy lease path, which is correct there.
-    // <paramref name="why"/> reports WHICH of the rejections above fired, so the [fps] `efL` token can split the
-    // fallback count by reason (the three have different fixes — see the _efStripReject* fields).
+    // pixels of the surface the subtree is about to draw into (D) into a small pooled scratch, and let the subtree draw
+    // straight through. Eligible over EITHER top-level target (back buffer or canvas — see StripTargetResource) AND,
+    // since the strip-in-blur widening, over an open FULL-CANVAS Blur group's pooled RT. The admitted set is exactly
+    // EdgeFadeStrips.GroupAllowsStrip (the pure, headless-gated decision); the reasoning, because it is load-bearing:
+    //   • an enclosing PLAIN OPACITY group's pooled RT is cleared only over its own patched extent, and an ENCLOSING
+    //     EDGE-FADE group's only over its box, so a strip could snapshot UNCLEARED pool texels (the legacy composite
+    //     never reads outside that extent). A LayerKind.Blur lease, by contrast, ALWAYS gets a FULL clear — clearRect
+    //     stays null for Blur; only EdgeFade and a recorder-patched Opacity compute one — so every texel of that RT is
+    //     defined and the D snapshot is meaningful everywhere the strips reach.
+    //   • a region-local self-blur group runs a SHIFTED viewport into a small bucketed scratch, so SV_Position would
+    //     not be canvas space — the restore shader's whole geometry assumes a 1:1 canvas-space device pixel. The
+    //     full-canvas lease binds 1:1 (BindOpacityGroupTarget calls SetFullViewport when LocalBlur.UsedW == 0, and
+    //     Acquire only ever hands out canvas-sized RTs), so the mapping holds there — hence the UsedW == 0 half of the
+    //     gate, which is also what keeps a B.1 region-local blur group OUT.
+    // Only the INNERMOST group is examined, and that is complete: the snapshot reads, and the restore writes, that one
+    // surface and nothing else. Whatever encloses it is untouched until its own PopLayer composites it, by which time
+    // this fade has long been restored (strip groups are LIFO on _layerKinds, so a strip opened inside a group is
+    // always closed before that group pops). Inside the group the algebra is the same lerp(D, F, feather): D is that
+    // group's own pre-subtree content (transparent where nothing drew — the full clear), and the group's later
+    // BlurInPlace + CompositeBlur then treat the feathered result exactly as it would have treated a legacy nested
+    // edge-fade composite's output.
+    // <paramref name="why"/> reports WHICH of the rejections fired, so the [fps] `efL` token can split the fallback
+    // count by reason (the three have different fixes — see the _efStripReject* fields).
     private bool TryBeginStripFade(in PushLayerCmd L, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv,
         out StripFadeReject why)
     {
         why = StripFadeReject.None;
         if (_opacity == null) { why = StripFadeReject.Unavailable; return false; }
-        if (_opacityGroups.Count != 0) { why = StripFadeReject.Nested; return false; }
+        int targetSlot = -1;
+        if (_opacityGroups.Count != 0)
+        {
+            LayerGroup inner = _opacityGroups[^1];
+            if (!EdgeFadeStrips.GroupAllowsStrip(_opacityGroups.Count, inner.L.Kind, inner.LocalBlur.UsedW))
+            { why = StripFadeReject.Nested; return false; }
+            targetSlot = inner.Slot;
+        }
         if (_stripGroups.Count >= MaxStripFadeDepth) { why = StripFadeReject.Depth; return false; }
-        ID3D12Resource* target = TopTargetResource(directToBackBuffer);
+        ID3D12Resource* target = StripTargetResource(targetSlot, directToBackBuffer);
         if (target == null) { why = StripFadeReject.Unavailable; return false; }
         int depth = _stripGroups.Count;
         Span<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(depth * EdgeFadeStrips.MaxStrips, EdgeFadeStrips.MaxStrips);
@@ -2335,9 +2402,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             SceneCat(CatComposite);   // the strip snapshot IS layer overhead — attribute it to comp, like the lease path
             slot = _opacity.AcquireStripScratch(_cmdList, strips, count, _fenceValue + 1);
             if (slot < 0) { why = StripFadeReject.Scratch; return false; }   // no scratch available — fall back to the legacy lease path (nothing rebound yet)
-            BeginTopTargetCopySource(directToBackBuffer);
+            BeginStripTargetCopySource(targetSlot, directToBackBuffer);
             _opacity.CopyStripSnapshot(_cmdList, target, slot, strips, count, post: false);
-            EndTopTargetCopySource(directToBackBuffer);
+            EndStripTargetCopySource(targetSlot, directToBackBuffer);
         }
         // Reproduce the legacy composite's BOUND. The old path scissored the group composite to CompositeClip
         // (= the node's device bounds ∩ the inherited clip ∩ its ClipRect), so a child painting outside the node — a
@@ -2348,9 +2415,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // CopyStrips unbound the OM render targets to transition the target; rebind the target + viewport, then apply
         // the (now narrower) clip the subtree draws under.
         InvalidateCmdState();
-        BindLayerTopTarget(directToBackBuffer, backRtv);
+        BindStripTarget(targetSlot, directToBackBuffer, backRtv);
         ApplyCurrentScissor();
-        _stripGroups.Add(new StripFadeGroup(L, slot, count, depth));
+        _stripGroups.Add(new StripFadeGroup(L, slot, count, depth, targetSlot));
         return true;
     }
 
@@ -2371,11 +2438,13 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         SceneCat(CatComposite);
         ReadOnlySpan<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(g.Depth * EdgeFadeStrips.MaxStrips, g.Count);
-        BeginTopTargetCopySource(directToBackBuffer);
-        _opacity.CopyStripSnapshot(_cmdList, TopTargetResource(directToBackBuffer), g.Scratch, strips, g.Count, post: true);
-        EndTopTargetCopySource(directToBackBuffer);
+        // The RECORDED target (g.TargetSlot), never a re-derived one: F must be snapshotted from — and lerp(D, F, k)
+        // written back into — the exact surface D came from.
+        BeginStripTargetCopySource(g.TargetSlot, directToBackBuffer);
+        _opacity.CopyStripSnapshot(_cmdList, StripTargetResource(g.TargetSlot, directToBackBuffer), g.Scratch, strips, g.Count, post: true);
+        EndStripTargetCopySource(g.TargetSlot, directToBackBuffer);
         InvalidateCmdState();
-        BindLayerTopTarget(directToBackBuffer, backRtv);
+        BindStripTarget(g.TargetSlot, directToBackBuffer, backRtv);
         ApplyCurrentScissor();
         PushLayerCmd gl = g.L;   // a positional record's member is a PROPERTY — bind it to a local so `in` is legal
         _opacity.EdgeFadeStripRestore(_cmdList, g.Scratch, strips, g.Count, in gl, _frameScale, CurrentScissorRect());
@@ -2390,6 +2459,29 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         OpacityLayerCompositor.LocalBlurSurface localSurface = group.LocalBlur;
         if (localSurface.UsedW > 0) SetLocalBlurViewport(in localSurface);
         else SetFullViewport();
+    }
+
+    // Open a self-blur group on a REGION-LOCAL target: a small bucketed scratch sized to the layer's clip-aware work box
+    // plus a full kernel-radius transparent guard, entered under a SHIFTED viewport so absolute screen pixels map into
+    // the local texture with no recorded transform rewritten. Replaces clearing + Gaussian-blurring two CANVAS-sized RTs
+    // with two small ones (the measured ~1.7 ms/lease on the transition-blur burst class).
+    //
+    // PRECONDITIONS the caller must have established (both are load-bearing, neither is re-checked here):
+    //   • the subtree is FLAT — BlurPinKey.TryCompute succeeded, so it contains no nested PushLayer. A nested layer
+    //     would bind its own canvas-sized RT / snapshot the enclosing target, neither of which is in this shifted space.
+    //   • no pooled group is open (_opacityGroups.Count == 0) — same reason, one level up.
+    // The SIZE predicate is the attempt itself: TryAcquireLocalBlur declines (leasing nothing) when the guarded work box
+    // is canvas-sized on both axes, and the caller then falls through to the legacy full-canvas lease.
+    private bool TryBeginRegionLocalBlur(in PushLayerCmd L)
+    {
+        if (_opacity is not { } opacity) return false;
+        if (!opacity.TryAcquireLocalBlur(_cmdList, _fenceValue + 1, in L, _frameScale, out var localBlur)) return false;
+        _opacityGroups.Add(new LayerGroup(localBlur.Slot, L, 0UL, localBlur));
+        _layerKinds.Add(L.Kind);
+        InvalidateCmdState();
+        SetLocalBlurViewport(in localBlur);
+        ApplyCurrentScissor();
+        return true;
     }
 
     // The self-blur pin cache's position-independent content key is computed by FluentGpu.Render.BlurPinKey.TryCompute
