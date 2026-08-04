@@ -123,3 +123,40 @@ public static class SidebarBuiltInDocuments
     static SidebarItemSpec Route(string id, string routeKey, string iconName)
         => new(id, SidebarItemTarget.Route, routeKey, IconOverride: iconName);
 }
+
+/// <summary>
+/// One mode component's cache of <see cref="SidebarBuiltInDocuments.Classic"/>, keyed on the only state that document
+/// is a function of — the three collapse flags, folded into the SAME bitmask the pane's mode epoch uses.
+///
+/// <para><b>Why this is load-bearing and not a micro-optimization.</b> <c>SidebarPane.PublishStage</c> decides between a
+/// per-row epoch diff and a whole-window re-skin with <c>!ReferenceEquals(stage.Document, Doc)</c> — a wholesale test
+/// that is CORRECT (a new document changes section titles, empty-state copy and inline controls without necessarily
+/// changing a row record) but that a freshly-minted document defeats unconditionally. Classic rebuilt its document on
+/// every pane render, so every publish took the wholesale arm and the landed <c>SidebarRowDiff</c> was dead code:
+/// Slot×52 + Pill×44 + Chevron×6 re-rendered on every track boundary and every navigation. Library V3 already caches its
+/// synthesized document this way (<c>LibraryV3Sidebar.BuildDocument</c>) and Curated serves the persisted instance,
+/// which the reducer only replaces on a real change — so this makes all three modes agree.</para>
+///
+/// <para>Per MODE-COMPONENT INSTANCE, never static: the docked pane and the narrow drawer are two independent mounts and
+/// must not share mutable state. The cached document is immutable, so handing the same instance to both is safe.</para>
+/// </summary>
+public sealed class ClassicDocumentCache
+{
+    SidebarCustomLayout? _doc;
+    int _flags = -1;
+
+    /// <summary>Classic's collapse flags folded into one int — bit 0 pinned, bit 1 library, bit 2 playlists. This IS the
+    /// mode epoch's bitmask; the two must not drift, or a toggle would re-plan without rebuilding the document.</summary>
+    public static int FlagsOf(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
+        => (pinnedOpen ? 1 : 0) | (libraryOpen ? 2 : 0) | (playlistsOpen ? 4 : 0);
+
+    /// <summary>The document for these flags: the SAME instance while they are unchanged, a fresh one on any flip.</summary>
+    public SidebarCustomLayout Get(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
+    {
+        int flags = FlagsOf(pinnedOpen, libraryOpen, playlistsOpen);
+        if (_doc is { } cached && _flags == flags) return cached;
+        _flags = flags;
+        _doc = SidebarBuiltInDocuments.Classic(pinnedOpen, libraryOpen, playlistsOpen);
+        return _doc;
+    }
+}

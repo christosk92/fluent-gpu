@@ -819,7 +819,22 @@ public sealed class SidebarEntries
     /// <summary>Length of the leading pin band in <see cref="Current"/>.</summary>
     public int PinCount { get; private set; }
 
-    /// <summary>Publish a completed rebuild: one version bump per rebuild, never per entry.</summary>
+    /// <summary>The exact shadow snapshot of the last published rebuild — the CONTENT GATE (see
+    /// <see cref="SidebarEntriesShadow"/>). Owned here because <see cref="Publish"/> is the one place a rebuild becomes
+    /// visible.</summary>
+    readonly SidebarEntriesShadow _shadow = new();
+
+    /// <summary>Publish a completed rebuild: at most one version bump per rebuild, never per entry — and NO bump at all
+    /// when the rebuild landed on byte-identical content.
+    ///
+    /// <para>The binder pump re-projects on every queue/track/play-log/history move, and almost all of those rebuilds
+    /// reproduce the same rows; bumping unconditionally re-planned every sidebar pane (2 storms per track boundary,
+    /// 3 per navigation) for nothing. The compare is EXACT — meta + count + elementwise — never a fingerprint: a hash
+    /// collision would freeze the sidebar on stale content.</para>
+    ///
+    /// <para>The meta fields are set either way, so a consumer that peeks them without the version still reads the
+    /// truth; <see cref="Current"/> is the live buffer the producer just refilled, so it is correct across a skipped
+    /// bump by construction (identical content is identical content).</para></summary>
     public void Publish(FluentGpu.Signals.LoadState state, Exception? error, bool anyContributingKindPending,
                         bool qualifiersAvailable, int pinCount)
     {
@@ -828,6 +843,8 @@ public sealed class SidebarEntries
         AnyContributingKindPending = anyContributingKindPending;
         QualifiersAvailable = qualifiersAvailable;
         PinCount = pinCount < 0 ? 0 : pinCount;
+        var meta = new SidebarEntriesMeta((int)state, error, anyContributingKindPending, qualifiersAvailable, PinCount);
+        if (!_shadow.Publish(_entries, in meta)) return;
         _version.Value = _version.Peek() + 1;
     }
 }

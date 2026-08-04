@@ -133,14 +133,50 @@ public sealed class ToolTip : Component
             => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text);
     }
 
+    /// <summary>DEFERRED target slots: the wrapped element as a FACTORY instead of a built tree, so a parent that
+    /// re-renders every frame stops re-rendering its tooltips.
+    ///
+    /// <para><see cref="ToolTipSlots"/> already compares the target by reference, but a parent that rebuilds its
+    /// children each render hands over a NEW instance every time, so the short-circuit never fires and every wrapped
+    /// target re-renders its ToolTip core — with dozens of tooltips in one shell (a sidebar rail, a command bar) that is
+    /// a measurable share of an idle reconcile flush. A <b>mount-stable</b> factory delegate is reference-equal across
+    /// renders, so the whole re-push collapses to one <c>ReferenceEquals</c> + a string compare.</para>
+    ///
+    /// <para>The factory is invoked INSIDE the ToolTip's own render, which is what makes this safe rather than stale:
+    /// any signal it reads subscribes the ToolTip, so live data still reaches the target with no re-push at all
+    /// (component-props-contract.md — a frozen VALUE would be the bug; a delegate re-read each render is the fix).</para></summary>
+    public sealed record ToolTipStableSlots(Func<Element> Target, string Text)
+    {
+        // Identity on the FACTORY, exactly like ToolTipSlots' reference compare on the built element — a delegate has no
+        // meaningful value equality, and two lambdas with the same body are still different instances.
+        public bool Equals(ToolTipStableSlots? other)
+            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text;
+
+        public override int GetHashCode()
+            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text);
+    }
+
     public static Element Wrap(Element target, string text)
         => Embed.Comp(new ToolTipSlots(target, text), () => new ToolTip());
 
+    /// <summary>Wrap a target that is built LAZILY, inside the ToolTip's render — the churn-free form of
+    /// <see cref="Wrap"/> (see <see cref="ToolTipStableSlots"/>).
+    ///
+    /// <para><b><paramref name="target"/> must be MOUNT-STABLE</b>: a method group, a cached field, or a delegate held
+    /// in a <c>UseMemo</c>/<c>UseRef</c>. A lambda allocated per render is a fresh instance every time, which makes the
+    /// props compare unequal and reintroduces exactly the churn this overload exists to remove (it stays CORRECT — just
+    /// pointless). The factory runs on every ToolTip render, so it must be cheap and side-effect-free.</para></summary>
+    public static Element WrapStable(Func<Element> target, string text)
+        => Embed.Comp(new ToolTipStableSlots(target, text), () => new ToolTip());
+
     public override Element Render()
     {
-        var slots = UsePropsOrDefault<ToolTipSlots>();
-        Element target = slots?.Target ?? Target;
-        string text = slots?.Text ?? Text;
+        // The deferred form wins when present: it is the one the parent chose, and resolving it FIRST is what puts the
+        // factory's signal reads inside THIS component's render (the whole point of the overload).
+        var stable = UsePropsOrDefault<ToolTipStableSlots>();
+        var slots = stable is null ? UsePropsOrDefault<ToolTipSlots>() : null;
+        Element target = stable is not null ? stable.Target() : (slots?.Target ?? Target);
+        string text = stable?.Text ?? slots?.Text ?? Text;
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
         var anchor = UseRef<NodeHandle>(default);

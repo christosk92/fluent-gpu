@@ -29,7 +29,10 @@ static class SidebarPaneRail
 
     public static Element Build(SidebarPane owner, SidebarRowPlan plan)
     {
-        string sel = owner.SelectedRoute;           // subscribe → the rail's selected tile follows navigation
+        // PEEKED: this whole subtree is memoized by the pane on (plan version, selected route, theme, culture), so the
+        // route lives in that dep key — a raw subscription here would re-render the pane on every navigation for a
+        // tile strip the memo is about to rebuild anyway.
+        string sel = owner.SelectedRoutePeek;
         var rows = plan.Rows;
         var kids = new List<Element>(rows.Count + 4);
 

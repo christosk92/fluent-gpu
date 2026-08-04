@@ -47,7 +47,10 @@ sealed class SidebarPaneSlot : Component
     {
         int index = _scope.Index.Value;        // a recycle writes this → exactly this row re-renders
         _ = _o.SubscribeRowEpoch(index);      // THIS row's epoch only (see SidebarPane.SubscribeRowEpoch)
-        string sel = _o.SelectedRoute;        // pane selection is the live ROUTE, never a list index
+        // Pane selection is the live ROUTE, never a list index — PEEKED, not subscribed: the pane's RefreshSelection
+        // sweep bumps this row's epoch (read above) when it gains or loses the pill, so a navigation re-renders the two
+        // rows it concerns instead of every realized row. Subscribing here put the whole window on the route fanout.
+        string sel = _o.SelectedRoutePeek;
 
         var plan = _o.Plan;
         var rows = plan.Rows;
@@ -247,7 +250,9 @@ sealed class SidebarPaneSlot : Component
             : SidebarPaneText.ShortUri(entry.Uri);
         bool track = entry.IsTrack;
         string? route = entry.RouteKey;
-        bool selected = route is { Length: > 0 } && string.Equals(route, sel, StringComparison.Ordinal);
+        // Through the pane, which resolves it with SidebarRowResolve — the SAME rule its selection sweep uses, so the
+        // row that draws the pill and the row whose epoch got bumped can never disagree.
+        bool selected = _o.RowSelectsRoute(index, sel);
         bool reordering = _o.TryBandOf(index, out _);
         // Resolved pane-side by ONE signal effect over the playback bridge (SidebarPane.RefreshPlayState), so this row
         // never joins the hot Identity fanout: a change to it bumped this row's epoch, which is what re-rendered us.
@@ -433,7 +438,7 @@ sealed class SidebarPaneSlot : Component
     Element RouteRow(SidebarSectionSpec section, SidebarItemSpec item, string sel, int index)
     {
         var dest = ShellNav.Dest(item.Key);
-        bool selected = string.Equals(item.Key, sel, StringComparison.Ordinal);
+        bool selected = _o.RowSelectsRoute(index, sel);   // one owner: SidebarRowResolve (see EntryRow)
         float height = SidebarPaneMetrics.RowHeight(section);
         string key = item.Key;
         string title = item.LabelOverride is { Length: > 0 } alias ? alias : dest.Title;
@@ -645,7 +650,7 @@ sealed class SidebarPaneSlot : Component
         string uri = resolved ? entry.Uri : "";
         bool track = resolved && entry.IsTrack;
         string? route = resolved ? entry.RouteKey : SidebarPinId.FromUri(uri);
-        bool selected = route is { Length: > 0 } && string.Equals(route, sel, StringComparison.Ordinal);
+        bool selected = _o.RowSelectsRoute(index, sel);   // one owner: SidebarRowResolve (see EntryRow)
         var (playing, animated) = _o.RowPlayState(index);
         bool canPlay = resolved && section.Opts.PlayButton && uri.Length > 0 && entry.IsPlayable;
         var snapshot = entry;
@@ -765,7 +770,9 @@ sealed class SidebarPaneSlot : Component
     {
         bool circular = entry.Circular || entry.Kind == SidebarEntryKind.Artist;
         string? route = entry.RouteKey;
-        bool selected = route is { Length: > 0 } && string.Equals(route, sel, StringComparison.Ordinal);
+        // A grid CELL is not a plan row (one strip row draws several), so it asks the resolver about the ENTRY — the
+        // same predicate the row-level sweep ORs across the strip's range.
+        bool selected = SidebarRowResolve.EntrySelects(in entry, sel);
         string label = entry.Name.Length > 0 ? entry.Name : SidebarPaneText.ShortUri(entry.Uri);
         var snapshot = entry;
         float artEdge = MathF.Max(SidebarCover.S40, edge - Spacing.S);
@@ -1027,7 +1034,9 @@ sealed class SidebarPaneSlot : Component
     {
         int index = _scope.Index.Value;
         _ = _o.SubscribeRowEpoch(index);
-        string selectedRoute = _o.SelectedRoute;
+        // Peeked for the same reason the slot peeks it: the row epoch this probe already reads is what RefreshSelection
+        // bumps on a route edge, so subscribing here would only re-add every realized pill to the route fanout.
+        string selectedRoute = _o.SelectedRoutePeek;
         var state = _pillState;
         bool selected = state.Route is { Length: > 0 }
             && string.Equals(state.Route, selectedRoute, StringComparison.Ordinal);

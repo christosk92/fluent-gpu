@@ -45,6 +45,13 @@ sealed class WaveeSidebar : Component
     SidebarPreferences? _prefs;
     LibraryBridge? _lib;
 
+    // The document cache. `Document` is invoked on EVERY pane render, and a freshly-minted document per call defeats
+    // SidebarPane.PublishStage's wholesale `!ReferenceEquals(stage.Document, Doc)` test — so every publish re-skinned the
+    // WHOLE realized window (Slot×52 + Pill×44 + Chevron×6 per track boundary / navigation) and the landed per-row
+    // SidebarRowDiff never ran. Keyed on the three collapse flags, exactly as LibraryV3Sidebar caches its synthesized
+    // document; the flag READS stay unconditional below, because they ARE the pane's subscription.
+    readonly ClassicDocumentCache _docCache = new();
+
     public WaveeSidebar(Signal<Route> route, Action<string, string?> go, Signal<bool> compact, Signal<float> expandedWidth)
     {
         _route = route; _go = go; _compact = compact; _expandedWidth = expandedWidth;
@@ -79,17 +86,22 @@ sealed class WaveeSidebar : Component
         return Embed.Comp(() => new SidebarPane(config, _route, _go, _compact, _expandedWidth));
     }
 
-    /// <summary>Classic's locked document, rebuilt from its three live collapse flags. The section ids are STABLE strings,
-    /// so the pane's reorder bands and collapse routing survive every rebuild.</summary>
+    /// <summary>Classic's locked document, built from its three live collapse flags. The section ids are STABLE strings,
+    /// so the pane's reorder bands and collapse routing survive every rebuild.
+    ///
+    /// <para>The three flag reads are UNCONDITIONAL and come first — they are the pane's subscription (this runs inside
+    /// the pane's own render), so short-circuiting them behind the cache would silently stop a toggle from re-planning.
+    /// Only the BUILD is cached, and only while the flags are unchanged, so a publish that changed nothing hands the
+    /// pane the same document instance and its per-row diff can do its job.</para></summary>
     SidebarCustomLayout BuildDocument()
     {
         var prefs = _prefs;
         // `prefs == null` (an isolated harness mount) keeps every section open and simply has no pins — the same defensive
         // shape the landed component used.
-        return SidebarBuiltInDocuments.Classic(
-            prefs?.ClassicPinnedOpen.Value ?? true,
-            prefs?.ClassicLibraryOpen.Value ?? true,
-            prefs?.ClassicPlaylistsOpen.Value ?? true);
+        bool pinnedOpen = prefs?.ClassicPinnedOpen.Value ?? true;
+        bool libraryOpen = prefs?.ClassicLibraryOpen.Value ?? true;
+        bool playlistsOpen = prefs?.ClassicPlaylistsOpen.Value ?? true;
+        return _docCache.Get(pinnedOpen, libraryOpen, playlistsOpen);
     }
 
     /// <summary>The three section flags folded into the pane's mode epoch. Reading them with <c>.Value</c> IS the
@@ -98,9 +110,10 @@ sealed class WaveeSidebar : Component
     {
         var prefs = _prefs;
         if (prefs is null) return 0;
-        return (prefs.ClassicPinnedOpen.Value ? 1 : 0)
-             | (prefs.ClassicLibraryOpen.Value ? 2 : 0)
-             | (prefs.ClassicPlaylistsOpen.Value ? 4 : 0);
+        // The SAME bitmask BuildDocument's cache is keyed on (ClassicDocumentCache.FlagsOf) — one owner, so a toggle
+        // cannot re-plan against a document the cache decided not to rebuild.
+        return ClassicDocumentCache.FlagsOf(
+            prefs.ClassicPinnedOpen.Value, prefs.ClassicLibraryOpen.Value, prefs.ClassicPlaylistsOpen.Value);
     }
 
     void SetSection(string sectionId, bool collapsed)

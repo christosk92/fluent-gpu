@@ -107,6 +107,20 @@ sealed class SidebarPane : Component
     /// <summary>The row indices currently carrying a nonzero <see cref="_rowPlay"/> byte, so clearing them is O(matches)
     /// rather than a second full sweep.</summary>
     readonly List<int> _rowPlaySet = new();
+
+    /// <summary>The plan-row indices that currently draw SELECTED, ascending — maintained by <see cref="RefreshSelection"/>
+    /// exactly as <see cref="_rowPlaySet"/> is by <see cref="RefreshPlayState"/>. Selection used to be a raw
+    /// <c>SelectedRoute</c> signal read inside every realized slot, every pill probe and the rail, so ONE navigation
+    /// re-rendered the whole realized window; the pane now sweeps the plan once and bumps only the rows that flipped.
+    /// <see cref="_rowSelNext"/> is the reused scratch the sweep fills and <see cref="_rowSelFlip"/> the reused symmetric
+    /// difference of the two — the exact set of epochs a route edge bumps.</summary>
+    readonly List<int> _rowSelSet = new();
+    readonly List<int> _rowSelNext = new();
+    readonly List<int> _rowSelFlip = new();
+    /// <summary>Cached delegate for the sweep's section lookup — <c>ListOptions</c>-style stability, so a per-route sweep
+    /// allocates nothing.</summary>
+    Func<string, SidebarSectionSpec?>? _sectionOf;
+
     static readonly bool DisclosureTraceEnabled =
         string.Equals(Environment.GetEnvironmentVariable("WAVEE_SIDEBAR_DISCLOSURE_TRACE"), "1", StringComparison.Ordinal);
     Action<ItemDisclosureDiagnostic>? _disclosureTrace;
@@ -221,7 +235,7 @@ sealed class SidebarPane : Component
 
         var stage = UseMemo(() => BuildStage(sourceDoc, search), PlanDep(search));
         if (!_planPublished) PublishStage(stage, notify: false);
-        _ = _planVersion.Value;
+        int planVersion = _planVersion.Value;
         int disclosureUiVersion = _disclosureVersion.Value;
         UseLayoutEffect(() => TryPublishStage(stage),
             DepKey.From(HashCode.Combine(stage.Epoch, disclosureUiVersion)));
@@ -233,6 +247,9 @@ sealed class SidebarPane : Component
         // per-row now-playing bytes and bumps only the rows that flipped, so a track change re-renders the two rows it
         // concerns instead of the whole realized window.
         UseSignalEffect(RefreshPlayState);
+        // …and the pane's ONE read of the live ROUTE on behalf of every row: it bumps the epoch of the row that lost the
+        // pill and the row that gained it, so a navigation re-renders two rows instead of the whole realized window.
+        UseSignalEffect(RefreshSelection);
         int selectionEpoch = _selEpoch;
         UseLayoutEffect(RunSelectionTransaction, selectionEpoch);
         int rows = Plan.Rows.Count;
@@ -261,6 +278,39 @@ sealed class SidebarPane : Component
             Children = ExpandedChildren(rows),
         };
 
+        // THE COMPACT RAIL IS MEMOIZED. Classic's preservation contract keeps BOTH layers mounted at all times (the
+        // cross-fade needs both mid-transition), so the 56-DIP rail was rebuilt inside EVERY pane render even at
+        // Opacity 0 — 26 `ToolTip.Wrap` targets, each handing the reused ToolTip core a FRESH target element, which
+        // defeated ToolTipSlots' ReferenceEquals short-circuit and put ToolTip×26 in nearly every idle flush. The rail
+        // is a pure function of the RAIL PLAN and the SELECTED ROUTE, so memoizing it on those makes the short-circuit
+        // fire and the whole subtree reconcile as one reference-equal child.
+        //
+        // THE DEP SET IS THE AUDIT (everything `SidebarPaneRail.Build`/`Tile` reads that can change what it draws):
+        //   • the plan version — the rail plan itself, `SectionOf`, the "no binder yet ⇒ skeleton" fallback and the
+        //     mode's RailFooter tiles all move only with a publish, which bumps it;
+        //   • the selected route — the rail's own selected-tile treatment (read with Peek here, since this dep IS the
+        //     re-entry condition and the pane already subscribes the route through TrackSelection);
+        //   • Tok.Epoch — a memo is invisible to RethemeAll, which re-renders components but cannot re-enter a memo
+        //     whose key held; every tile resolves Tok.* colours by VALUE, so without this a theme switch would leave
+        //     the rail on the old palette;
+        //   • the culture epoch — same argument for the tile labels (`Loc.Get` inside the tooltip/`ShellNav.Dest`).
+        //     Reading it here is also the subscription that re-renders this pane on a culture switch.
+        // Unconditional (the hooks-order rule) even in the drawer, which has no rail at all.
+        Element compactRail = UseMemo(
+            () => _inDrawer
+                ? (Element)new BoxEl { Height = 0f, Shrink = 0f }
+                : ScrollView(SidebarPaneRail.Build(this, _railPlan)) with
+                {
+                    Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
+                },
+            DepKey.Combine(
+                DepKey.From(planVersion, Tok.Epoch, Localization.CultureEpoch.Value,
+                            // …and the binder's PRESENCE, which the "no driver yet ⇒ shimmer the whole rail" fallback
+                            // reads directly. A binder arriving after the first frame need not move any of the versions
+                            // above (they all start at 0), and the rail must not stay on skeletons if it does.
+                            (_inDrawer ? 1 : 0) | (Prefs?.Binder is null ? 0 : 2)),
+                SelectedRoutePeek));
+
         var children = new List<Element>(2) { expanded };
         if (!_inDrawer)
             children.Add(new BoxEl
@@ -269,10 +319,7 @@ sealed class SidebarPane : Component
                 Opacity = compact ? 1f : 0f, HitTestVisible = compact,
                 // As Classic always did: the rail's overlay scrollbar occupies the same gutter as the shell's resize seam
                 // and reads as a page-spanning border, so wheel/touch scrolling stays and the bar does not paint.
-                Children = [ScrollView(SidebarPaneRail.Build(this, _railPlan)) with
-                {
-                    Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
-                }],
+                Children = [compactRail],
             });
 
         var root = new BoxEl
@@ -960,8 +1007,54 @@ sealed class SidebarPane : Component
         }
     }
 
-    /// <summary>The live selected route. Reading it SUBSCRIBES the caller — a row slot, or this pane for the rail.</summary>
+    /// <summary>The live selected route. Reading it SUBSCRIBES the caller.
+    ///
+    /// <para>Only <see cref="TrackSelection"/>'s read in the pane's own render uses this now (a navigation re-rendering
+    /// the PANE is by design — it re-plans nothing, but it is what drives the selection transaction). Row slots, pill
+    /// probes and the rail read <see cref="SelectedRoutePeek"/> instead and are re-rendered by their row epoch, which
+    /// <see cref="RefreshSelection"/> bumps for exactly the rows that flipped.</para></summary>
     internal string SelectedRoute => _route.Value.Name;
+
+    /// <summary>The selected route WITHOUT subscribing. The caller must have another reason to re-render on a route
+    /// change — a realized row has its per-row epoch (<see cref="RefreshSelection"/>), and the rail's memo has the route
+    /// in its dep key.</summary>
+    internal string SelectedRoutePeek => _route.Peek().Name;
+
+    /// <summary>Does row <paramref name="index"/> draw itself SELECTED for <paramref name="route"/>? Delegates to the ONE
+    /// owner of that rule (<see cref="SidebarRowResolve.SelectsRoute"/>), which the pane's selection sweep also uses — so
+    /// the rows the sweep bumps are exactly the rows whose skin changes. The same single-owner discipline as
+    /// <see cref="RowPlayUri"/>.</summary>
+    internal bool RowSelectsRoute(int index, string route)
+    {
+        var rows = Plan.Rows;
+        if ((uint)index >= (uint)rows.Count) return false;
+        var row = rows[index];
+        return SidebarRowResolve.SelectsRoute(in row, Plan.Entries, SectionOf(row.SectionId), route);
+    }
+
+    /// <summary>The pane's ONE read of the live route on behalf of every row (the same shape as
+    /// <see cref="RefreshPlayState"/>): it sweeps the plan for the rows that draw selected and bumps the SYMMETRIC
+    /// DIFFERENCE against the previous set — the row that lost the pill and the row that gained it, and nothing else.
+    /// Before this, every realized slot, its pill and the rail read the route signal directly, so a navigation
+    /// re-rendered the whole realized window (Slot×52 + Pill×44) three times over.</summary>
+    void RefreshSelection()
+    {
+        string route = _route.Value.Name;   // SUBSCRIBE — a navigation re-runs the sweep
+        _ = _planVersion.Value;             // a republish re-plans which index holds which row, so re-resolve
+
+        var next = _rowSelNext;
+        next.Clear();
+        SidebarRowResolve.Sweep(Plan.Rows, Plan.Entries, _sectionOf ??= SectionOf, route, next);
+
+        var prev = _rowSelSet;
+        var flipped = _rowSelFlip;
+        flipped.Clear();
+        SidebarRowResolve.Flipped(prev, next, flipped);
+        for (int i = 0; i < flipped.Count; i++) BumpRowEpoch(flipped[i]);
+
+        prev.Clear();
+        for (int i = 0; i < next.Count; i++) prev.Add(next[i]);
+    }
 
     // ── selection travel ─────────────────────────────────────────────────────────────────────────────────────────────
 

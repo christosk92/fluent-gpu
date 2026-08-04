@@ -78,6 +78,106 @@ static class ControlsSuite
         GradientBorderChecks(strings);
         PolylineStrokeChecks(strings);
         ContextMenuChecks(strings);
+        ToolTipStableWrapChecks(strings);
+    }
+
+    // gate.tooltip.stableWrap — ToolTip.Wrap vs ToolTip.WrapStable, the churn contract.
+    //
+    // Wrap compares its target by REFERENCE (ToolTipSlots.Equals), which is correct but useless to a parent that
+    // rebuilds its children every render: the target is a new instance each time, so every wrapped element re-renders
+    // its mounted ToolTip core. A shell that wraps dozens of targets (a compact sidebar rail, a command bar) therefore
+    // put ToolTip×N in nearly every idle reconcile flush. WrapStable takes the target as a MOUNT-STABLE factory, so an
+    // unchanged (delegate, text) pair compares equal and the re-push short-circuits — while a real TEXT change still
+    // re-renders, and the factory (invoked inside the ToolTip's OWN render) still delivers live content.
+    static void ToolTipStableWrapChecks(StringTable strings)
+    {
+        // (a) Wrap — a fresh target per parent render REACHES the mounted core (its new width lands, no remount).
+        bool wrapLive;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tt-wrap", new Size2(320, 160), 1f)); window.Show();
+            var w = new Signal<float>(100f);
+            var targets = new List<NodeHandle>();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Padding = Edges4.All(12),
+                        Children =
+                        [
+                            ToolTip.Wrap(
+                                new BoxEl
+                                {
+                                    Width = w.Value, Height = 20f, Fill = Tok.AccentDefault,
+                                    OnRealized = h => { if (!targets.Contains(h)) targets.Add(h); },
+                                }, "tip"),
+                        ],
+                    },
+                });
+            host.RunFrame();
+            var t0 = targets.Count > 0 ? targets[0] : NodeHandle.Null;
+            bool mount = targets.Count == 1 && !t0.IsNull && Near(host.Scene.AbsoluteRect(t0).W, 100f);
+            w.Value = 160f;
+            host.RunFrame(); host.RunFrame();
+            wrapLive = mount && targets.Count == 1 && Near(host.Scene.AbsoluteRect(t0).W, 160f);
+        }
+
+        // (b)+(c) WrapStable — the same parent churn is SILENT, but a text change is not.
+        bool stableMount, stableQuiet, stableTextLive;
+        int quietBuilds, liveBuilds;
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tt-stable", new Size2(320, 160), 1f)); window.Show();
+            var bump = new Signal<int>(0);      // re-renders the PARENT only
+            var text = new Signal<string>("tip");
+            var targets = new List<NodeHandle>();
+            float width = 100f;                 // deliberately NOT a signal: only a ToolTip re-render can observe it
+            int builds = 0;
+            Element MakeTarget()
+            {
+                builds++;
+                return new BoxEl
+                {
+                    Width = width, Height = 20f, Fill = Tok.AccentDefault,
+                    OnRealized = h => { if (!targets.Contains(h)) targets.Add(h); },
+                };
+            }
+            Func<Element> factory = MakeTarget;   // ONE delegate instance for the whole run — the stability contract
+
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Direction = 1, Padding = Edges4.All(12),
+                        Children = [new TextEl("gen " + bump.Value) { Size = 10f }, ToolTip.WrapStable(factory, text.Value)],
+                    },
+                });
+            host.RunFrame();
+            var t0 = targets.Count > 0 ? targets[0] : NodeHandle.Null;
+            stableMount = builds == 1 && targets.Count == 1 && !t0.IsNull
+                          && Near(host.Scene.AbsoluteRect(t0).W, 100f);
+
+            // (b) the parent re-renders and re-pushes an EQUAL (delegate, text) pair → the ToolTip must NOT re-render,
+            //     so the factory does not run again and the non-reactive width change is (correctly) not observed.
+            width = 160f;
+            bump.Value = 1;
+            host.RunFrame(); host.RunFrame();
+            quietBuilds = builds;
+            stableQuiet = stableMount && builds == 1 && Near(host.Scene.AbsoluteRect(t0).W, 100f);
+
+            // (c) a TEXT change IS a prop change → the core re-renders in place, the factory runs again inside ITS
+            //     render, and the new width lands on the same node (no remount).
+            text.Value = "tip2";
+            host.RunFrame(); host.RunFrame();
+            liveBuilds = builds;
+            stableTextLive = builds >= 2 && targets.Count == 1 && Near(host.Scene.AbsoluteRect(t0).W, 160f);
+        }
+
+        Check("gate.tooltip.stableWrap ToolTip.Wrap re-renders on a fresh target; WrapStable with the same delegate+text does not, but a text change does",
+            wrapLive && stableQuiet && stableTextLive,
+            $"wrapLive={wrapLive} mount={stableMount} quiet={stableQuiet}(builds={quietBuilds}) textLive={stableTextLive}(builds={liveBuilds})");
     }
 
     static void NestedChecks(StringTable strings)

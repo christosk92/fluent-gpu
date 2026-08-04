@@ -633,6 +633,17 @@ popup itself. Opening/closing reveals via a phase-7 `AnimTrack` (flyout fade/sca
 - **Name/role:** the tooltip text is the owner's `HelpText` (not a separate `Name`).
 - **Motion/cursor/RTL:** fast fade-in motion-token; `FlipEnabled=false` is acceptable (tooltips may prefer
   truncation, layout §10B note); cursor unchanged.
+- **Wrapping API — two forms, one core.** `ToolTip.Wrap(Element target, string text)` re-pushes `ToolTipSlots`, whose
+  `Equals` compares the target by REFERENCE (never a deep element walk — see component-props-contract.md). That is
+  correct but silent only for a parent that hands back the SAME instance; a parent rebuilding its children every render
+  produces a fresh target each time, so every wrapped element re-renders its mounted ToolTip core — with dozens of
+  tooltips in one shell that is a measurable share of an idle reconcile flush.
+  `ToolTip.WrapStable(Func<Element> target, string text)` re-pushes `ToolTipStableSlots` instead, comparing the FACTORY
+  by reference and the text by value, so an unchanged pair short-circuits the re-push entirely. The factory is invoked
+  **inside the ToolTip's own render**, which is what keeps it live rather than frozen: signal reads inside it subscribe
+  the ToolTip. Its one contract is that the delegate must be **mount-stable** (a method group, a cached field, a
+  `UseMemo`/`UseRef` value) — a per-render lambda is a new instance every time, which is still correct but reintroduces
+  exactly the churn the overload removes. Gate: `gate.tooltip.stableWrap` (ControlsSuite).
 
 ### 6.5 As built (2026-07, G5f) — the controlled Popup primitive, Flyout sugar, and the Toast host
 

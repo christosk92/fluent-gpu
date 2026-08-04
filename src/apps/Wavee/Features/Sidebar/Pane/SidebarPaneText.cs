@@ -32,19 +32,13 @@ static class SidebarPaneText
 
     /// <summary>The hand-placed item a plan row was projected from, by the planner's join rule (a hand-placed row carries
     /// <c>Key == item.Key</c>, unique within its section). Also finds a Pinned OVERRIDE row's side-table entry, which is
-    /// what makes an alias/icon override apply to a pinned row.</summary>
+    /// what makes an alias/icon override apply to a pinned row.
+    ///
+    /// <para>The implementation lives in the engine-free <see cref="SidebarRowResolve"/>, which also owns the SELECTION
+    /// rule built on top of it — the pane's per-row selection sweep and the row's own <c>Selected</c> flag must resolve a
+    /// row identically, so both live in one place. This stays as the renderer-side name every call site already uses.</para></summary>
     public static SidebarItemSpec? ItemOf(SidebarSectionSpec section, string key)
-    {
-        var items = section.ItemList;
-        for (int i = 0; i < items.Count; i++)
-        {
-            var item = items[i];
-            if (item.Hidden) continue;
-            if (string.Equals(item.Key, key, StringComparison.Ordinal)) return item;
-            if (string.Equals(item.Id, key, StringComparison.Ordinal)) return item;
-        }
-        return null;
-    }
+        => SidebarRowResolve.ItemOf(section, key);
 
     /// <summary>The per-kind subtitle (§3.1.3's table): playlist → song count · album → "Album · first artist" ·
     /// artist → "Artist" · show → "Podcast · publisher" · folder → item count · track → its artist.</summary>
