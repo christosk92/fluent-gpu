@@ -1045,47 +1045,37 @@ float4 BlurPS(V i) : SV_Target
         for (int i = 0; i < count; i++) { packW = Math.Max(packW, strips[i].Width); packH += strips[i].Height; }
     }
 
-    /// <summary>Lease the packed snapshot scratch for a pure fade and capture the PRE-subtree strip pixels (D) from
-    /// <paramref name="target"/>. Returns the slot (release it with <see cref="Release"/> after
-    /// <see cref="EdgeFadeStripRestore"/>), or -1 when the strip set is degenerate.</summary>
-    public int AcquireStripSnapshot(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target,
+    /// <summary>Lease the packed snapshot scratch for a pure fade (D in the top half, F in the bottom). Returns the
+    /// slot — release it with <see cref="Release"/> after <see cref="EdgeFadeStripRestore"/> — or -1 when the strip set
+    /// is degenerate. Leases only: the caller owns the TARGET's state transition, because the top-level target is the
+    /// back buffer on one path and the acrylic CANVAS on the other, and those track their state differently.</summary>
+    public int AcquireStripScratch(ID3D12GraphicsCommandList* cmd,
         ReadOnlySpan<SelfBlurPixelBox> strips, int count, ulong frameFence)
     {
-        if (target == null || count <= 0) return -1;
+        if (count <= 0) return -1;
         StripPack(strips, count, out int packW, out int packH);
         if (packW <= 0 || packH <= 0) return -1;
         int slot = AcquireScratch(cmd, packW, packH * 2, frameFence);
         if ((int)_pool[slot].H < packH * 2) { Release(slot); return -1; }   // bucket could not hold both halves
-        CopyStrips(cmd, target, slot, strips, count, dstY: 0);
         return slot;
     }
 
-    /// <summary>Capture the POST-subtree strip pixels (F) into the lease's second half.</summary>
-    public void SnapshotStripsAfter(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target, int slot,
-        ReadOnlySpan<SelfBlurPixelBox> strips, int count)
+    /// <summary>Copy every strip out of <paramref name="target"/> into the packed scratch — the PRE-subtree snapshot
+    /// (<paramref name="post"/> false ⇒ the D half) or the POST-subtree one (true ⇒ the F half). <paramref name="target"/>
+    /// MUST already be in COPY_SOURCE and unbound from the OM (the caller does that: it alone knows whether the
+    /// top-level target is the back buffer — raw, device-tracked — or the acrylic canvas — tracked by
+    /// <c>AcrylicCompositor._canvasState</c>). Both surfaces are B8G8R8A8_UNORM with null-desc views, so the copy is
+    /// bit-exact and the colour space matches.</summary>
+    public void CopyStripSnapshot(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target, int slot,
+        ReadOnlySpan<SelfBlurPixelBox> strips, int count, bool post)
     {
         if (slot < 0 || target == null || count <= 0) return;
         StripPack(strips, count, out _, out int packH);
-        CopyStrips(cmd, target, slot, strips, count, dstY: packH);
-    }
-
-    // Copy every strip out of the CURRENT target into the packed scratch at (0, dstY + running offset). The target is
-    // briefly RENDER_TARGET → COPY_SOURCE → RENDER_TARGET through RAW (untracked) barriers that NET to no change, so
-    // D3D12Device's explicit back-buffer state tracking stays consistent — the same trick AcrylicCompositor.
-    // SnapshotTargetRegion uses. It also UNBINDS the OM render targets first (the acrylic path does the same by
-    // rebinding the canvas): the target being copied is the one the caller had bound, and it must not be transitioned
-    // out of RENDER_TARGET while it is still bound. The CALLER re-binds + re-applies its scissor afterwards.
-    // Both surfaces are B8G8R8A8_UNORM with null-desc views, so the copy is bit-exact.
-    private void CopyStrips(ID3D12GraphicsCommandList* cmd, ID3D12Resource* target, int slot,
-        ReadOnlySpan<SelfBlurPixelBox> strips, int count, int dstY)
-    {
         ref var e = ref _pool[slot];
-        cmd->OMSetRenderTargets(0, null, BOOL.FALSE, null);
         Barrier(cmd, e.Res, ref e.State, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST);
-        RawTransition(cmd, target, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
         D3D12_TEXTURE_COPY_LOCATION dst = default; dst.pResource = e.Res; dst.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; dst.Anonymous.SubresourceIndex = 0;
         D3D12_TEXTURE_COPY_LOCATION src = default; src.pResource = target; src.Type = D3D12_TEXTURE_COPY_TYPE.D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX; src.Anonymous.SubresourceIndex = 0;
-        int y = dstY;
+        int y = post ? packH : 0;
         for (int i = 0; i < count; i++)
         {
             SelfBlurPixelBox s = strips[i];
@@ -1094,18 +1084,6 @@ float4 BlurPS(V i) : SV_Target
             y += s.Height;
             EdgeFadeStripPixelsThisFrame += s.AreaPx;
         }
-        RawTransition(cmd, target, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
-    }
-
-    private static void RawTransition(ID3D12GraphicsCommandList* cmd, ID3D12Resource* res, D3D12_RESOURCE_STATES before, D3D12_RESOURCE_STATES after)
-    {
-        D3D12_RESOURCE_BARRIER b = default;
-        b.Type = D3D12_RESOURCE_BARRIER_TYPE.D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-        b.Anonymous.Transition.pResource = res;
-        b.Anonymous.Transition.StateBefore = before;
-        b.Anonymous.Transition.StateAfter = after;
-        b.Anonymous.Transition.Subresource = 0xFFFFFFFF;
-        cmd->ResourceBarrier(1, &b);
     }
 
     /// <summary>Write the fade strips back over the CURRENTLY-BOUND target as <c>lerp(D, F, feather)</c> — one scissored

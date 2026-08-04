@@ -370,6 +370,18 @@ public static class FluentApp
                     string gpuRenderTok = gpuRenderMs > 0.0
                         ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
                         : "";
+                    // efS = physical px the PURE-fade STRIP path copied + restored this frame (the offscreen-free edge
+                    // fade); efL = pure fades that were strip-eligible by payload yet still had to lease a full-canvas
+                    // group RT. Read together with `ef` above: `efS0/efL0` = no pure fade on screen, `efS0/efL2` = two
+                    // were rejected (nested in a pooled group / scratch full), `efS>0` = the path engaged. Deliberately
+                    // UNGATED (like latW) rather than folded into the FG_GPU_TIMING-only opgrp token: a feel session
+                    // must be able to confirm engagement, and Diag.Set needs FG_DIAG which feel sessions must not set.
+                    // Both counters are plain device fields, so this costs one string only on the frames that log.
+                    long efStripPx = gpuDev?.LastEdgeFadeStripPx ?? 0L;
+                    int efFallbacks = gpuDev?.LastEdgeFadeStripFallbacks ?? 0;
+                    string edgeStripTok = (opEdge > 0 || efStripPx > 0 || efFallbacks > 0)
+                        ? $" efS{efStripPx}/efL{efFallbacks}"
+                        : "";
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
                     // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit
@@ -434,7 +446,7 @@ public static class FluentApp
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}{inputPaceTok}");
                 }
             }

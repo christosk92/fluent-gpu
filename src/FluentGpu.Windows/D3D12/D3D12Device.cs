@@ -112,6 +112,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Flat, per-depth strip storage (depth·MaxStrips … +MaxStrips) — the strips computed at PushLayer are reused
     // VERBATIM at PopLayer so the D and F snapshots are pixel-aligned. Preallocated: zero managed alloc on submit.
     private readonly SelfBlurPixelBox[] _stripBoxes = new SelfBlurPixelBox[MaxStripFadeDepth * EdgeFadeStrips.MaxStrips];
+    // PURE fades this frame that were eligible by payload but still had to take the legacy lease (nested in a pooled
+    // group / scratch pool momentarily full). Ungated — the [fps] line reads it so a feel session can see engagement.
+    private int _edgeFadeStripFallbacks;
 
     public int LastBlurCacheHit => _blurCacheHit;
     public int LastBlurCacheMiss => _blurCacheMiss;
@@ -123,6 +126,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public int LastBoundedOpacityGroups => _opacity?.BoundedOpacityGroupsThisFrame ?? 0;
     public int LastBlurGroups => _opacity?.BlurGroupsThisFrame ?? 0;
     public int LastEdgeFadeGroups => _opacity?.EdgeFadeGroupsThisFrame ?? 0;
+    /// <summary>Physical px copied + restored by the PURE-fade STRIP path this frame (the offscreen-free edge fade).
+    /// Ungated, so a feel session's `[fps]` line can confirm engagement without FG_DIAG: with
+    /// <see cref="LastEdgeFadeGroups"/> &gt; 0, a 0 here means every fade fell back to the legacy full-canvas lease.</summary>
+    public long LastEdgeFadeStripPx => _opacity?.EdgeFadeStripPixelsThisFrame ?? 0L;
+    /// <summary>Of this frame's edge fades, how many were PURE (strip-eligible by payload) yet still had to lease —
+    /// nested inside a pooled opacity/blur group, or the scratch pool was momentarily full. Disambiguates "no eligible
+    /// fade on screen" (0) from "eligible but rejected" (&gt; 0) when <see cref="LastEdgeFadeStripPx"/> is 0.</summary>
+    public int LastEdgeFadeStripFallbacks => _edgeFadeStripFallbacks;
     /// <summary>Of <see cref="LastOpacityGroups"/>, the ones that blended the FULL canvas (no bounding scissor).</summary>
     public int LastFullTargetGroups => _opacity?.FullTargetGroupsThisFrame ?? 0;
     private GlyphRenderer? _glyphs;
@@ -985,6 +996,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
         _sceneCurCat = CatNone; _sceneMarkCount = 0; _sceneCatCount[_frameIndex] = 0;   // reset the per-category scene-split timeline (FG_GPU_TIMING)
         _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0;
+        _edgeFadeStripFallbacks = 0;   // reset HERE (not only in SubmitWithLayers) so a layer-free frame reports 0, not the last layered frame's count
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
         // Every pipe banks its instance upload buffer by back-buffer index: WaitForFrame above fenced the submit that
@@ -1045,6 +1057,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "opacityGroupsBlur", _opacity?.BlurGroupsThisFrame ?? 0);
         Diag.Set("d3d12", "opacityGroupsEdgeFade", _opacity?.EdgeFadeGroupsThisFrame ?? 0);
         Diag.Set("d3d12", "edgeFadeStripPx", _opacity?.EdgeFadeStripPixelsThisFrame ?? 0L);   // px copied+restored by the PURE-fade strip path (0 ⇒ every fade took the legacy full-canvas group RT; cf. edgeFadeClearPx)
+        Diag.Set("d3d12", "edgeFadeStripFallbacks", _edgeFadeStripFallbacks);                 // pure fades that were strip-eligible by payload but still had to lease (nested in a pooled group / scratch full)
         Diag.Set("d3d12", "opacityGroupsFullTarget", _opacity?.FullTargetGroupsThisFrame ?? 0);   // full-canvas read+blend (the costly class)
         Diag.Set("d3d12", "opacityPoolRts", _opacity?.PooledRtCount ?? 0);    // live pooled group RTs (≈ nesting depth while fading)
         Diag.Set("d3d12", "blurLayers", _opacity?.BlurLayersThisFrame ?? 0);
@@ -2025,10 +2038,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // snapshot the same strips again (F) and write through lerp(D, F, feather) — algebraically identical
                     // to the legacy composite for ANY backdrop alpha (EdgeFadeStrips documents the algebra + the
                     // disjointness/coverage invariants). Everything else keeps the lease path below.
-                    if (EdgeFadeStrips.IsPureFade(in L) && TryBeginStripFade(in L, directToBackBuffer, backRtv))
+                    if (EdgeFadeStrips.IsPureFade(in L))
                     {
-                        _layerKinds.Add(StripFadeLayerKind);
-                        continue;
+                        if (TryBeginStripFade(in L, directToBackBuffer, backRtv))
+                        {
+                            _layerKinds.Add(StripFadeLayerKind);
+                            continue;
+                        }
+                        // A PURE fade that still had to lease. Counted so a live [fps] line can tell "no eligible fade
+                        // on screen" (efL 0) from "eligible but rejected — nested in a pooled group, or no scratch"
+                        // (efL > 0) without turning on FG_DIAG.
+                        _edgeFadeStripFallbacks++;
                     }
                     // Lease + clear + bind the group RT; scissor state carries over so the subtree clips identically. A
                     // Blur (or edge-fade-with-blur) group carries its σ — the RT is gaussian-blurred on pop before the
@@ -2209,19 +2229,50 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     // ── PURE edge fade: the strip path (no offscreen intermediate) ───────────────────────────────────────────────────
+    // The TOP-LEVEL target of the layered path: the back buffer on the directBB path, else the acrylic offscreen canvas.
+    // Both are full-swapchain-sized, 1:1 with SV_Position, and fully cleared at frame start — everything the strip
+    // restore assumes. The strip snapshot MUST read whichever one the subtree is actually drawing into; hard-coding the
+    // back buffer would snapshot a stale/blank surface (and restore garbage) whenever the canvas path is in use.
+    private ID3D12Resource* TopTargetResource(bool directToBackBuffer)
+        => directToBackBuffer ? _backBuffers[_frameIndex] : (_acrylic is null ? null : _acrylic.CanvasResource);
+
+    // Unbind the OM render targets and put the top-level target in COPY_SOURCE so its pixels can be copied out. The
+    // back buffer's state is tracked EXPLICITLY by this device (RENDER_TARGET across the whole submit), so a raw
+    // net-zero pair is right for it; the canvas's state is tracked by AcrylicCompositor._canvasState and is NOT always
+    // RENDER_TARGET mid-scene (BlurAndComposite pass A parks it in PIXEL_SHADER_RESOURCE), so that one must go through
+    // the tracked barrier. Unbinding first is required either way: a resource must not be transitioned out of
+    // RENDER_TARGET while it is still bound as one. The caller re-binds + re-applies its scissor afterwards.
+    private void BeginTopTargetCopySource(bool directToBackBuffer)
+    {
+        _cmdList->OMSetRenderTargets(0, null, BOOL.FALSE, null);
+        if (directToBackBuffer)
+            Barrier(_backBuffers[_frameIndex], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+        else _acrylic!.CanvasToCopySource(_cmdList);
+    }
+
+    private void EndTopTargetCopySource(bool directToBackBuffer)
+    {
+        if (directToBackBuffer)
+            Barrier(_backBuffers[_frameIndex], D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        else _acrylic!.CanvasToRenderTarget(_cmdList);
+    }
+
     // Open a pure fade WITHOUT leasing a canvas-sized group RT: compute its ≤ 4 disjoint fade strips, snapshot those
-    // pixels of the current target (D) into a small pooled scratch, and let the subtree draw straight through.
-    // Deliberately TOP-LEVEL over the back buffer only:
+    // pixels of the current top-level target (D) into a small pooled scratch, and let the subtree draw straight
+    // through. Eligible over EITHER top-level target (back buffer or canvas — see TopTargetResource); what is excluded
+    // is any OPEN POOLED GROUP (_opacityGroups.Count != 0), for two reasons:
     //   • an enclosing opacity group's pooled RT is cleared only over its own patched extent, so a strip could snapshot
     //     UNCLEARED pool texels (the legacy composite never reads outside that extent);
     //   • a region-local self-blur group runs a SHIFTED viewport, so SV_Position would not be canvas space — the
     //     restore shader's whole geometry assumes a 1:1 canvas-space device pixel.
-    // A nested fade simply keeps the legacy lease path, which is correct there and rare in the measured workloads.
+    // A nested fade simply keeps the legacy lease path, which is correct there.
     private bool TryBeginStripFade(in PushLayerCmd L, bool directToBackBuffer, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
-        if (_opacity == null || !directToBackBuffer) return false;
+        if (_opacity == null) return false;
         if (_opacityGroups.Count != 0) return false;
         if (_stripGroups.Count >= MaxStripFadeDepth) return false;
+        ID3D12Resource* target = TopTargetResource(directToBackBuffer);
+        if (target == null) return false;
         int depth = _stripGroups.Count;
         Span<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(depth * EdgeFadeStrips.MaxStrips, EdgeFadeStrips.MaxStrips);
         EdgeFadeStrips.Compute(in L, _frameScale, (int)_w, (int)_h, strips, out int count);
@@ -2229,16 +2280,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (count > 0)
         {
             SceneCat(CatComposite);   // the strip snapshot IS layer overhead — attribute it to comp, like the lease path
-            slot = _opacity.AcquireStripSnapshot(_cmdList, _backBuffers[_frameIndex], strips, count, _fenceValue + 1);
-            if (slot < 0)
-            {
-                // No scratch available — fall back to the legacy lease path. The snapshot may have unbound the OM
-                // render targets (CopyStrips) before failing, so restore the caller's binding either way.
-                InvalidateCmdState();
-                BindLayerTopTarget(directToBackBuffer, backRtv);
-                ApplyCurrentScissor();
-                return false;
-            }
+            slot = _opacity.AcquireStripScratch(_cmdList, strips, count, _fenceValue + 1);
+            if (slot < 0) return false;   // no scratch available — fall back to the legacy lease path (nothing rebound yet)
+            BeginTopTargetCopySource(directToBackBuffer);
+            _opacity.CopyStripSnapshot(_cmdList, target, slot, strips, count, post: false);
+            EndTopTargetCopySource(directToBackBuffer);
         }
         // Reproduce the legacy composite's BOUND. The old path scissored the group composite to CompositeClip
         // (= the node's device bounds ∩ the inherited clip ∩ its ClipRect), so a child painting outside the node — a
@@ -2272,7 +2318,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         SceneCat(CatComposite);
         ReadOnlySpan<SelfBlurPixelBox> strips = _stripBoxes.AsSpan(g.Depth * EdgeFadeStrips.MaxStrips, g.Count);
-        _opacity.SnapshotStripsAfter(_cmdList, _backBuffers[_frameIndex], g.Scratch, strips, g.Count);
+        BeginTopTargetCopySource(directToBackBuffer);
+        _opacity.CopyStripSnapshot(_cmdList, TopTargetResource(directToBackBuffer), g.Scratch, strips, g.Count, post: true);
+        EndTopTargetCopySource(directToBackBuffer);
         InvalidateCmdState();
         BindLayerTopTarget(directToBackBuffer, backRtv);
         ApplyCurrentScissor();
@@ -2334,7 +2382,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 case DrawOp.PushLayer:
                     var L = MemoryMarshal.Read<PushLayerCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<PushLayerCmd>();
-                    if (L.Kind == (int)LayerKind.Acrylic) return 2;   // acrylic ⇒ canvas path required (decided)
+                    // Acrylic ⇒ kind 2. NB this no longer means "canvas path required" (a superseded decision the old
+                    // comment here still claimed): the caller runs BOTH kinds with directToBackBuffer: true and an
+                    // acrylic snapshots its small region OUT of the back buffer (SnapshotTargetRegion), keeping the
+                    // canvas as scratch only. Kind 2 survives purely to size that scratch (_acrylic.EnsureSize).
+                    if (L.Kind == (int)LayerKind.Acrylic) return 2;
                     kind = 1;
                     break;
                 case DrawOp.PopLayer: pos += Unsafe.SizeOf<PopLayerCmd>(); break;

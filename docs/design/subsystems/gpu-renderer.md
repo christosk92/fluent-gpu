@@ -684,9 +684,12 @@ contract, not an optimization detail:
   pairwise disjoint and cover every pixel whose feather is < 1**; both invariants, and the corner-arc fold into the
   top/bottom band depth, are owned by `FluentGpu.Render.EdgeFadeStrips` (portable, headless-gated as
   `gate.edgefade.strips`). The two shaders share ONE HLSL feather body, so a strip-restored fade matches a
-  legacy-composited one. Restricted to a **top-level** fade over the back buffer: an enclosing group's pooled RT is
-  cleared only over its own extent, and a region-local self-blur group runs a shifted viewport, so neither satisfies the
-  restore's 1:1 canvas-space assumption; a nested pure fade falls back to the legacy path.
+  legacy-composited one. Restricted to a **top-level** fade — no pooled group open. It works over EITHER top-level
+  target (the back buffer, or the acrylic offscreen canvas): both are full-swapchain-sized, 1:1 with `SV_Position`, and
+  cleared at frame start, and the snapshot reads whichever one is actually bound. What it excludes is an enclosing
+  pooled group: that RT is cleared only over its own patched extent, and a region-local self-blur group runs a shifted
+  viewport, so neither satisfies the restore's 1:1 canvas-space assumption; a nested pure fade falls back to the legacy
+  path.
 
 ```
 PushLayer → BeginRenderPass(layerRT, Clear transparent) → [children draw into layerRT]

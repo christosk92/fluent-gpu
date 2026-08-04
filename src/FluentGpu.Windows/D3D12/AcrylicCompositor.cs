@@ -620,6 +620,29 @@ float4 PSMain(V i) : SV_Target
 
     private void SetHeap(ID3D12GraphicsCommandList* cmd) { ID3D12DescriptorHeap* h = _srvHeap; cmd->SetDescriptorHeaps(1, &h); }
 
+    /// <summary>The offscreen canvas — the TOP-LEVEL render target whenever <c>D3D12Device</c> runs the layered path
+    /// with <c>directToBackBuffer: false</c>. Null before the first <c>EnsureSize</c>. Exposed so a caller that must
+    /// READ the top-level target's pixels (the pure-fade strip snapshot, <c>EdgeFadeStrips</c>) can copy out of the
+    /// real target instead of assuming the back buffer.</summary>
+    public ID3D12Resource* CanvasResource => _canvas;
+
+    /// <summary>Transition the canvas to COPY_SOURCE through its TRACKED state, for a caller that needs to read its
+    /// pixels mid-scene. Must go through <c>Barrier</c> rather than a raw "assume RENDER_TARGET" transition: the canvas
+    /// is RENDER_TARGET for most of the scene (<see cref="BeginCanvas"/> sets it, and the acrylic composite pass
+    /// restores it before <see cref="BindCanvas"/>), but pass A of <see cref="BlurAndComposite"/> parks it in
+    /// PIXEL_SHADER_RESOURCE while the Kawase chain runs — and desyncing <c>_canvasState</c> would corrupt every later
+    /// barrier, including <see cref="BlitToBackBuffer"/>'s. Pair with <see cref="CanvasToRenderTarget"/>.</summary>
+    public void CanvasToCopySource(ID3D12GraphicsCommandList* cmd)
+    {
+        if (_canvas != null) Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_SOURCE);
+    }
+
+    /// <summary>Return the canvas to RENDER_TARGET after a <see cref="CanvasToCopySource"/> read.</summary>
+    public void CanvasToRenderTarget(ID3D12GraphicsCommandList* cmd)
+    {
+        if (_canvas != null) Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+    }
+
     /// <summary>Re-bind the canvas RTV + full viewport (after the blur passes switched targets), to continue scene drawing.</summary>
     public void BindCanvas(ID3D12GraphicsCommandList* cmd)
     {
