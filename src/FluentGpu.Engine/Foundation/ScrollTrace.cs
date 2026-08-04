@@ -433,13 +433,24 @@ public static class ScrollTrace
     ///       1 stop / 2 recycle / 3 disable, dmStatus = DIRECTMANIPULATION_STATUS) — Pal/Win32DirectManipulation.cs.
     ///       This block survives a session run with FG_SCROLL_LOG off, which is what made the 218-second input
     ///       blackout forensically silent; a detector-5 row names WHICH rung revived input.</item>
+    /// <item>108 = DirectManipulation IDLE HEARTBEAT surfaced something (f0 = ms since the last DM_POINTERHITTEST,
+    ///       f1 = ms since DM last engaged, i1 = statusBefore | statusAfter&lt;&lt;8 (DIRECTMANIPULATION_STATUS),
+    ///       i2 = sink callbacks that fired inside the heartbeat's UpdateManager.Update) — Pal/Win32DirectManipulation.cs.
+    ///       Emitted ONLY when the 250 ms disarmed-pacer Update actually flushed queued DM state, so any 108 row is
+    ///       direct evidence of the third stall class: manual-update DM sitting silently on a queue no other pump
+    ///       would have drained (zero phase events, zero hit-tests, zero WM motion, ending in a burst).</item>
+    /// <item>109 = DM_POINTERHITTEST arrival, rate-limited to one row per 250 ms (f0 = ms since DM last engaged,
+    ///       i1 = DIRECTMANIPULATION_STATUS, i2 = unserved hit-tests since the last engage) —
+    ///       Pal/Win32DirectManipulation.cs. The disambiguator for the NEXT blackout: 109 rows running THROUGH it mean
+    ///       contacts arrived and went unserved (silent-owner shape); no 109 rows at all mean no contact ever reached
+    ///       the window. Note 107's f1 carries the same clock, so the two blocks join directly.</item>
     /// <item>110 = extent-table reseed (app: Wavee HomePage)</item>
     /// <item>111 = per-row extent correction — Layout/FlexLayout.cs</item>
     /// <item>113 = hitch slack + GC deltas + last requested wait — Hosting/AppHost.cs</item>
     /// <item>210 / 211 = capture-protocol phase begin / end (i1=phase ordinal, i2=repetition) — ops/diag launcher.
     ///       The 100-block is per-subsystem engine context; the deliberately distant 210-block is capture protocol.</item>
     /// </list>
-    /// Next free engine code: 108 (also 109, 112, &gt;=114). Register here in the same commit as the emitter.</summary>
+    /// Next free engine code: 112 (also &gt;=114). Register here in the same commit as the emitter.</summary>
     public static void Note(int code, float f0 = 0f, int i1 = 0, int i2 = 0, float f1 = 0f)
     {
         if (!CompiledIn || !Enabled) return;

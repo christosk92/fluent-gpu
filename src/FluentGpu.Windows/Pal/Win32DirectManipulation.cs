@@ -79,6 +79,21 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// enough that a user never sees the poll. Recovery goes through <c>Viewport.Stop()</c> so the ordinary READY
     /// callback runs the ordinary terminal path — this watchdog never fabricates state.</summary>
     internal const long DmInertiaStallTimeoutMs = 250;
+    /// <summary>Idle heartbeat period (ms) for the manual-update pump — see <see cref="UpdateIfDue"/>. DM runs in
+    /// MANUALUPDATE mode, so everything it has queued (content deltas AND status transitions) surfaces only inside an
+    /// <c>IDirectManipulationUpdateManager.Update</c> call. Before this heartbeat that call was issued ONLY while
+    /// <see cref="NeedsClockTick"/> held, i.e. only while we already believed a gesture was live or pending. If DM still
+    /// owns a contact stream while our <c>_status</c> reads READY (a contact-end lost under CPU pressure — the same
+    /// non-live blind spot as the silent-owner case, one layer deeper), DM sits on its queue forever: a CONTINUING
+    /// manipulation posts no new DM_POINTERHITTEST, so the silent-owner detector (which needs &gt;=2 unserved hit-tests)
+    /// is structurally blind and NOTHING pumps the queue. The live signature is 1.5-4 s of total input silence during an
+    /// active scroll, ended by a burst when a genuinely new contact finally hit-tests → SetContact → RUNNING → flush.
+    /// 250 ms is far slower than any gesture cadence (4 idle COM calls/s costs nothing measurable) and short enough that
+    /// a queue can never sit for the seconds the capture recorded.</summary>
+    internal const long IdleHeartbeatMs = 250;
+    /// <summary>Minimum gap (ms) between ScrollTrace note-109 hit-test rows. Normal scrolling hit-tests at contact
+    /// cadence and would otherwise flood the ring, hiding the very stall the row exists to characterise.</summary>
+    internal const long HitTestNoteMinGapMs = 250;
 
     // The fake event-source viewport = the real window client rect, with NO SetContentRect (scroll-feel-v2.1 §A.5). Both
     // browsers (direct_manipulation_helper_win.cc, DirectManipulationOwner.cpp) size the viewport to the window and never
@@ -128,6 +143,10 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     private long _lastEngagedMs;            // TickCount64 when DM last actually manipulated (RUNNING/INERTIA, or an owned content delta); 0 = never
     private long _lastHitTestMs;            // TickCount64 at the last DM_POINTERHITTEST (see NoteHitTest)
     private int _hitTestsSinceEngage;       // hit-tests observed since DM last engaged — the "unserved attempts" count
+    private long _lastHitTestNoteMs;        // TickCount64 at the last note-109 row (rate limit; 0 = never, so the first hit-test always records)
+    // ── idle heartbeat (see IdleHeartbeatMs) ──
+    private long _lastHeartbeatMs;          // TickCount64 at the last disarmed-pacer UpdateCore; 0 = never (first idle pump beats)
+    private int _sinkCallbacks;             // monotone count of DM sink callbacks (status + content), sampled around the heartbeat Update
     // ── unified recovery escalation (all four detectors feed it) ──
     private DmRecoveryLadder _ladder;
     // A strike raised from inside a COM sink callback, serviced at the next pump. RecordStrike can reach the Disable
@@ -186,7 +205,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// <summary>True while manual-update DirectManipulation needs a compositor tick. The update manager is STA-bound:
     /// the window pump owns the tick, while <see cref="DmManualUpdatePacer"/> prevents self-posted DM messages from
     /// advancing it faster than display production.</summary>
-    internal bool NeedsClockTick => _enabled && (_awaitingEngage || GestureLive);
+    internal bool NeedsClockTick => DmIdleHeartbeat.NeedsClockTick(_enabled, _awaitingEngage, _status);
 
     /// <summary>Remaining whole milliseconds until the absolute manual-update deadline, or -1 while idle.</summary>
     internal int DelayUntilNextUpdateMs(long nowQpc)
@@ -333,11 +352,47 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
         if (!NeedsClockTick)
         {
             _updatePacer.Disarm();
+            IdleHeartbeat(nowQpc, nowMs);
             return;
         }
         if (!_updatePacer.Armed) _updatePacer.ArmImmediate(nowQpc);
         if (!_updatePacer.TryConsume(nowQpc)) return;
         UpdateCore(nowQpc, nowMs);
+    }
+
+    /// <summary>The idle heartbeat: keep pumping <c>UpdateManager.Update</c> at <see cref="IdleHeartbeatMs"/> even when
+    /// the pacer is disarmed, so manual-update DM can never sit silently on a queue.
+    ///
+    /// <para><b>Where this runs.</b> <see cref="UpdateIfDue"/> skips <see cref="UpdateCore"/> in exactly three places:
+    /// (a) <c>!_enabled</c> (or a strike that just disabled us) — a torn-down producer, where nothing may be called;
+    /// (b) <c>!NeedsClockTick</c> — the pacer is DISARMED and no update would EVER be issued; (c) an armed pacer whose
+    /// absolute deadline has not come due — where an update is already guaranteed within one display interval. The
+    /// heartbeat lives in (b) alone: (a) still returns before reaching it and (c) is untouched, so the armed
+    /// display-paced path keeps its exact cadence and the self-wake bound the pacer exists to enforce.</para>
+    ///
+    /// <para><b>Division of labour (deliberate).</b> This method adds NO recovery. Its only job is to guarantee DM gets
+    /// a chance to speak; if the Update surfaces stuck state, the EXISTING machinery reacts through the ordinary
+    /// callbacks — a surfaced status transition runs <see cref="HandleStatusChanged"/> (emitting the terminal phase
+    /// event, re-stamping the watchdog inputs and, on RUNNING, resetting the ladder), and a surfaced content delta runs
+    /// <see cref="HandleContentUpdated"/>. The four detectors and <see cref="DmRecoveryLadder"/> keep sole ownership of
+    /// escalation. The heartbeat also never arms the pacer itself: should the Update land us in RUNNING/INERTIA,
+    /// <see cref="NeedsClockTick"/> is true on the NEXT pump and the armed path re-arms exactly as after a SetContact.</para></summary>
+    private void IdleHeartbeat(long nowQpc, long nowMs)
+    {
+        if (!_enabled || _torn || _upd == null) return;
+        if (!DmIdleHeartbeat.Due(nowMs, _lastHeartbeatMs)) return;
+        _lastHeartbeatMs = nowMs;
+
+        // Cheap before/after evidence: two int/field reads, no allocation, no COM call of their own. `_sinkCallbacks`
+        // moves only when DM calls INTO us, so a non-zero difference proves this Update flushed something DM had been
+        // holding — which is the whole hypothesis under test.
+        int statusBefore = _status;
+        int callbacksBefore = _sinkCallbacks;
+        UpdateCore(nowQpc, nowMs);
+        int surfaced = _sinkCallbacks - callbacksBefore;
+        if (surfaced != 0 || _status != statusBefore)
+            ScrollTrace.Note(108, (float)(nowMs - _lastHitTestMs), statusBefore | (_status << 8), surfaced,
+                (float)(nowMs - _lastEngagedMs));
     }
 
     private void UpdateCore(long nowQpc, long nowMs)
@@ -383,8 +438,18 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
     /// untouched. The counter zeroes when DM engages, so it reads "attempts DM has not served".</summary>
     internal void NoteHitTest()
     {
-        _lastHitTestMs = Environment.TickCount64;
+        long nowMs = Environment.TickCount64;
+        _lastHitTestMs = nowMs;
         if (_hitTestsSinceEngage < int.MaxValue) _hitTestsSinceEngage++;
+        // ScrollTrace note 109 (registered in ScrollTrace.cs), rate-limited on its OWN stamp: the next stall must be
+        // decidable from the ring alone — a blackout with NO 109 rows means no contact ever reached us (DM or the OS
+        // swallowed the stream), while 109 rows through the blackout mean hit-tests arrived and went unserved, which is
+        // the silent-owner shape. Without it the two are indistinguishable in a capture.
+        if (DmIdleHeartbeat.DueEvery(nowMs, _lastHitTestNoteMs, HitTestNoteMinGapMs))
+        {
+            _lastHitTestNoteMs = nowMs;
+            ScrollTrace.Note(109, (float)(nowMs - _lastEngagedMs), _status, _hitTestsSinceEngage);
+        }
     }
 
     /// <summary>DM_POINTERHITTEST (0x0250) → claim this contact for DManip. Gated to <c>PT_TOUCHPAD</c> by the caller
@@ -418,6 +483,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
     internal void HandleStatusChanged(int current, int previous)
     {
+        unchecked { _sinkCallbacks++; }   // DM spoke — the idle heartbeat's evidence counter (see IdleHeartbeat)
         // OUR tracked prior status drives every emit/disarm decision, not DM's `previous` param. They are identical in
         // normal flow; they diverge exactly when the recovery ladder has already fabricated the terminal event and set
         // _status = DM_READY itself (rungs >=2), and then a late real READY(previous=RUNNING) must NOT re-emit it.
@@ -501,6 +567,7 @@ internal sealed unsafe class Win32DirectManipulation : IDisposable
 
     internal void HandleContentUpdated(IDirectManipulationContent* content)
     {
+        unchecked { _sinkCallbacks++; }   // counted BEFORE any early-out: a callback at all is the evidence, not its payload
         if (content == null) return;
         float* m = stackalloc float[6];
         if (content->GetContentTransform(m, 6).FAILED) return;
@@ -849,6 +916,36 @@ internal static class DmInertiaStall
     /// will ever terminate is what pins the host wait at 0.</summary>
     internal static bool IsStalled(bool gestureLive, long nowMs, long lastProgressMs)
         => gestureLive && nowMs - lastProgressMs > Win32DirectManipulation.DmInertiaStallTimeoutMs;
+}
+
+/// <summary>Pure cadence arbitration for the manual-update idle heartbeat (and the note-109 rate limit), split out like
+/// <see cref="DmInertiaStall"/>/<see cref="DmSilentOwner"/> so the Windows headless tests can lock the boundary without a
+/// real HWND, a real viewport or an STA pump. Inclusive (<c>&gt;=</c>) on purpose: a fixed-period heartbeat that only
+/// fires strictly past its period drifts one pump later every beat.</summary>
+internal static class DmIdleHeartbeat
+{
+    /// <summary>True when the disarmed-pacer pump owes DM an <c>UpdateManager.Update</c>. A zero
+    /// <paramref name="lastMs"/> (never beaten) is always due — <c>TickCount64</c> is machine uptime, so the very first
+    /// idle pump of the process beats once and then settles onto the period.</summary>
+    internal static bool Due(long nowMs, long lastMs) => DueEvery(nowMs, lastMs, Win32DirectManipulation.IdleHeartbeatMs);
+
+    /// <summary>The same fixed-period predicate with an explicit period — used by the note-109 rate limit, which shares
+    /// the shape but keeps its own stamp and its own constant.</summary>
+    internal static bool DueEvery(long nowMs, long lastMs, long periodMs) => nowMs - lastMs >= periodMs;
+
+    /// <summary>The pacer-arming predicate behind <see cref="Win32DirectManipulation.NeedsClockTick"/>, lifted here so
+    /// the heartbeat's branch condition is a single pinned expression rather than one the tests restate.</summary>
+    internal static bool NeedsClockTick(bool enabled, bool awaitingEngage, int status)
+        => enabled && (awaitingEngage
+                    || status == Win32DirectManipulation.DM_RUNNING
+                    || status == Win32DirectManipulation.DM_INERTIA);
+
+    /// <summary>True exactly in the branch the heartbeat may run in: the producer is alive, and the pacer is DISARMED
+    /// so no update would otherwise ever be issued. A disabled/torn producer must reach neither branch (no COM call at
+    /// all), and an armed pacer already guarantees an update within one display interval — beating there would
+    /// double-pump a live gesture.</summary>
+    internal static bool BeatsInsteadOfPacing(bool enabled, bool awaitingEngage, int status)
+        => enabled && !NeedsClockTick(enabled, awaitingEngage, status);
 }
 
 /// <summary>Which watchdog raised a strike. The values are wire-visible: they are the low nibble of ScrollTrace note

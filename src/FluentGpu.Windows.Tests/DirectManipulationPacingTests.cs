@@ -327,6 +327,67 @@ public sealed class DirectManipulationPacingTests
         Assert.Equal(0, stuck.ZeroWaitRun);
     }
 
+    /// <summary>The idle heartbeat's cadence decision. Manual-update DM surfaces its queue ONLY inside an
+    /// <c>UpdateManager.Update</c>, and before the heartbeat that call was issued only while the pacer was armed — so a
+    /// DM that still owned a contact stream while our status read READY sat on its queue for seconds (the live
+    /// 1.5-4 s input blackouts). Inclusive on the period: a strictly-greater test drifts one pump later every beat.</summary>
+    [Fact]
+    public void IdleHeartbeat_FiresOnThePeriod_AndNotBefore()
+    {
+        const long t0 = 100_000;
+        long period = Win32DirectManipulation.IdleHeartbeatMs;
+
+        Assert.False(DmIdleHeartbeat.Due(t0, t0));
+        Assert.False(DmIdleHeartbeat.Due(t0 + period - 1, t0));
+        Assert.True(DmIdleHeartbeat.Due(t0 + period, t0));          // boundary is inclusive — no per-beat drift
+        Assert.True(DmIdleHeartbeat.Due(t0 + 10 * period, t0));     // a long idle beats once, not ten times (one stamp)
+
+        // Never beaten (stamp 0) is always due: TickCount64 is machine uptime, so the first idle pump beats and then
+        // settles onto the period.
+        Assert.True(DmIdleHeartbeat.Due(t0, 0));
+
+        // The note-109 rate limit shares the shape but keeps its own period + its own stamp.
+        Assert.False(DmIdleHeartbeat.DueEvery(t0 + Win32DirectManipulation.HitTestNoteMinGapMs - 1, t0,
+            Win32DirectManipulation.HitTestNoteMinGapMs));
+        Assert.True(DmIdleHeartbeat.DueEvery(t0 + Win32DirectManipulation.HitTestNoteMinGapMs, t0,
+            Win32DirectManipulation.HitTestNoteMinGapMs));
+        Assert.True(DmIdleHeartbeat.DueEvery(t0, 0, Win32DirectManipulation.HitTestNoteMinGapMs));
+    }
+
+    /// <summary>The heartbeat must reach ONLY the disarmed branch. <c>UpdateIfDue</c> skips its update in exactly three
+    /// states — torn-down/disabled, pacer disarmed (<c>!NeedsClockTick</c>), and armed-but-not-due — and the heartbeat
+    /// belongs to the middle one alone: a disabled producer may not be called at all, and an armed pacer already
+    /// guarantees an update within one display interval, so beating there would double-pump a live gesture. This pins
+    /// the branch predicate the way the file expresses it (<c>NeedsClockTick = _enabled &amp;&amp; (awaitingEngage ||
+    /// RUNNING || INERTIA)</c>) so a future edit to the pacer arming cannot silently move the heartbeat.</summary>
+    [Fact]
+    public void IdleHeartbeat_BranchIsReachedOnlyWhileThePacerIsDisarmed()
+    {
+        // Disarmed = idle DM: no engage pending and a non-live status. This is the state that produced the blackout —
+        // and precisely the state whose _status can be READY while DM still owns a contact stream nobody pumps.
+        foreach (int idle in new[] { Win32DirectManipulation.DM_READY, Win32DirectManipulation.DM_ENABLED,
+                                     Win32DirectManipulation.DM_BUILDING, Win32DirectManipulation.DM_SUSPENDED,
+                                     Win32DirectManipulation.DM_DISABLED })
+        {
+            Assert.False(DmIdleHeartbeat.NeedsClockTick(enabled: true, awaitingEngage: false, idle));
+            Assert.True(DmIdleHeartbeat.BeatsInsteadOfPacing(enabled: true, awaitingEngage: false, idle));
+        }
+
+        // Armed: the display-paced path owns these, and the heartbeat branch is unreachable — no double-pumping a live
+        // gesture, and the armed pacer's absolute-deadline cadence is untouched.
+        Assert.True(DmIdleHeartbeat.NeedsClockTick(enabled: true, awaitingEngage: true, Win32DirectManipulation.DM_READY));
+        Assert.True(DmIdleHeartbeat.NeedsClockTick(enabled: true, awaitingEngage: false, Win32DirectManipulation.DM_RUNNING));
+        Assert.True(DmIdleHeartbeat.NeedsClockTick(enabled: true, awaitingEngage: false, Win32DirectManipulation.DM_INERTIA));
+        Assert.False(DmIdleHeartbeat.BeatsInsteadOfPacing(enabled: true, awaitingEngage: true, Win32DirectManipulation.DM_READY));
+        Assert.False(DmIdleHeartbeat.BeatsInsteadOfPacing(enabled: true, awaitingEngage: false, Win32DirectManipulation.DM_RUNNING));
+        Assert.False(DmIdleHeartbeat.BeatsInsteadOfPacing(enabled: true, awaitingEngage: false, Win32DirectManipulation.DM_INERTIA));
+
+        // A disabled/torn-down producer reaches NEITHER branch — the heartbeat must never call into released COM.
+        Assert.False(DmIdleHeartbeat.NeedsClockTick(enabled: false, awaitingEngage: true, Win32DirectManipulation.DM_RUNNING));
+        Assert.False(DmIdleHeartbeat.BeatsInsteadOfPacing(enabled: false, awaitingEngage: true, Win32DirectManipulation.DM_RUNNING));
+        Assert.False(DmIdleHeartbeat.BeatsInsteadOfPacing(enabled: false, awaitingEngage: false, Win32DirectManipulation.DM_READY));
+    }
+
     [Fact]
     public void OnlyKnownPhysicalMouse_PreemptsLiveDirectManipulation()
     {
