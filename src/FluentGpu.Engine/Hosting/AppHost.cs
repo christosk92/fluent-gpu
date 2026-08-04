@@ -519,6 +519,9 @@ public sealed class AppHost : IDisposable
     // the fill/border/text color diffs animate. RequestThemeTransition is the explicit entry (app toggle / OS follow).
     private int _lastThemeEpoch;                 // last Tok.Epoch the host rethemed for (seeded just after the root mount)
     private float _pendingThemeMs = float.NaN;   // explicit RequestThemeTransition duration for this frame; NaN = none requested
+    // The Mica backdrop override rides its OWN counter (Tok.WindowBackgroundEpoch): a window activation flip changes
+    // only the frame's clear color, which is read live at submit, so it repaints WITHOUT a re-render or a cross-fade.
+    private int _lastWindowBgEpoch;              // last Tok.WindowBackgroundEpoch the host forced a submit for
 
     /// <summary>Host seam set by the windowing backend: re-apply the OS window material (DWM immersive-dark + Mica) when
     /// the theme flips. Invoked on the UI thread on every theme change with the new "is dark" flag. Headless leaves it null;
@@ -2158,6 +2161,7 @@ public sealed class AppHost : IDisposable
         // Baseline the re-theme epoch AFTER the root mount — startup theme injection (OS accent / Mica window background,
         // applied before this ctor returns) has already bumped Tok.Epoch, so the FIRST paint must not see a spurious change.
         _lastThemeEpoch = Tok.Epoch;
+        _lastWindowBgEpoch = Tok.WindowBackgroundEpoch;
     }
 
     private void WakeFrame()
@@ -2649,6 +2653,16 @@ public sealed class AppHost : IDisposable
                 OnApplyThemeMaterial?.Invoke(Tok.Theme == ThemeKind.Dark);   // instant OS material flip (cannot cross-fade)
                 _reconciler.SetThemeTransition(themeMs);
                 _reconciler.RethemeAll();
+            }
+            // Backdrop-only flip (Mica activate/deactivate sets Theme.WindowBackground): the frame's CLEAR COLOR changed
+            // and nothing else did — no token a component reads moved, so this must NOT retheme or cross-fade. It must
+            // still reach the screen: the recorded command stream is byte-identical, so the skip-submit hash would elide
+            // the present and the inactive fallback would never appear. Zero the presented-hash latch — the device-lost
+            // idiom — to force exactly ONE real submit, which reads Clear live.
+            if (Tok.WindowBackgroundEpoch != _lastWindowBgEpoch)
+            {
+                _lastWindowBgEpoch = Tok.WindowBackgroundEpoch;
+                _lastPresentedDrawListHash = 0;
             }
             bool virtualsChanged = false;
             double reactiveFlushMs = 0, virtualRealizeMs = 0;

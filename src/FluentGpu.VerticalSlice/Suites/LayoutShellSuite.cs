@@ -108,6 +108,8 @@ static class LayoutShellSuite
         ResponsiveResizeChecks(strings);
         CollapsedHeroRebakeChecks(strings);
         CollapsedHeroFocusChecks(strings);
+        ThemeWindowBgEpochChecks();
+        ThemeWindowBgHostChecks(strings);
         SidebarResizeSimChecks(strings);
         LayoutBoundaryMeasuredChecks(strings);
         ShellSidebarScrollChecks(strings);
@@ -514,7 +516,7 @@ static class LayoutShellSuite
             float afterSteadyShift = s.Paint(probe.Hero).ChildShiftY;
             float mediaSteady = s.Paint(probe.Media).Opacity;
 
-            Check("RZ-HERO. collapsed hero survives window blur/focus (Mica re-theme) with PresentedHTrailing intact",
+            Check("RZ-HERO. collapsed hero survives window blur/focus (Mica backdrop flip) with PresentedHTrailing intact",
                 Near(collapsed, 0f, 0.5f)
                 && Near(afterBlur, 0f, 0.5f)
                 && Near(afterFocus, 0f, 0.5f)
@@ -522,7 +524,7 @@ static class LayoutShellSuite
                 $"collapsed={collapsed:0.#} blur={afterBlur:0.#} focus={afterFocus:0.#} steady={afterSteady:0.#}/{afterSteadyShift:0.#} "
                 + $"blurReuse={blurStats.SpansReused} focusReuse={focusStats.SpansReused} steadyReuse={steadyStats.SpansReused}");
 
-            // The hero PHOTO's scroll-bound dissolve (Opacity → 0) must ALSO survive the re-theme re-bake: a fresh bind
+            // The hero PHOTO's scroll-bound dissolve (Opacity → 0) must ALSO survive a bind re-bake here: a fresh bind
             // row change-gating its first write away leaves the reconciled literal (1) — the photo band popping back
             // over the collapsed hero on focus regain (the user-visible regression this guards).
             Check("RZ-HERO. scroll-bound media opacity stays 0 across window blur/focus (re-bake first-write)",
@@ -531,6 +533,103 @@ static class LayoutShellSuite
                 && Near(mediaFocus, 0f, 0.01f)
                 && Near(mediaSteady, 0f, 0.01f),
                 $"collapsed={mediaCollapsed:0.##} blur={mediaBlur:0.##} focus={mediaFocus:0.##} steady={mediaSteady:0.##}");
+        }
+        finally { Theme.WindowBackground = priorBg; }
+    }
+
+    // gate.theme.windowBgNoRetheme — the Tok counter split, unit-level. The Mica backdrop override feeds ONE consumer
+    // (the frame's clear color, read live at submit) and no mounted component, so it must move its own counter and
+    // leave Tok.Epoch — the RethemeAll + cross-fade trigger — alone. Palette/kind changes must still bump Epoch.
+    // Tok is process-global static state, so every mutation is restored in finally.
+    static void ThemeWindowBgEpochChecks()
+    {
+        var priorBg = Theme.WindowBackground;
+        var priorPalette = Tok.Palette;
+        var priorKind = Tok.Theme;
+        try
+        {
+            Theme.WindowBackground = ColorF.Transparent;   // known start value, so the set below is a real change
+            int theme0 = Tok.Epoch, bg0 = Tok.WindowBackgroundEpoch;
+
+            var inactive = ColorF.FromRgba(0x20, 0x20, 0x20);   // the opaque inactive fallback a Mica host flips to
+            Theme.WindowBackground = inactive;
+            int theme1 = Tok.Epoch, bg1 = Tok.WindowBackgroundEpoch;
+
+            Theme.WindowBackground = inactive;                  // redundant set — the value gate absorbs it
+            int theme2 = Tok.Epoch, bg2 = Tok.WindowBackgroundEpoch;
+
+            // A real theme change (different palette AND kind, so Tok.Use cannot no-op) still rethemes.
+            Tok.Use(priorPalette == Tok.SlatePalette ? Tok.WarmPalette : Tok.SlatePalette,
+                    priorKind == ThemeKind.Dark ? ThemeKind.Light : ThemeKind.Dark);
+            int theme3 = Tok.Epoch, bg3 = Tok.WindowBackgroundEpoch;
+
+            Check("gate.theme.windowBgNoRetheme Theme.WindowBackground bumps WindowBackgroundEpoch only (repaint, no retheme), a same-color set bumps neither, and Tok.Use still bumps Epoch",
+                bg1 == bg0 + 1 && theme1 == theme0
+                && bg2 == bg1 && theme2 == theme1
+                && theme3 > theme2 && bg3 == bg2,
+                $"bg={bg0}->{bg1}->{bg2}->{bg3} theme={theme0}->{theme1}->{theme2}->{theme3}");
+        }
+        finally
+        {
+            Tok.Use(priorPalette, priorKind);
+            Theme.WindowBackground = priorBg;
+        }
+    }
+
+    // gate.theme.windowBgNoRetheme.host — the same contract on a REAL host across a REAL activation flip (the headless
+    // IsActive seam queues WindowFocus/WindowBlur exactly like WM_ACTIVATE). Both halves are asserted together because
+    // either alone is a bug: the flip must NOT bump Tok.Epoch (that is RethemeAll + a 250ms cross-fade on every
+    // alt-tab), and it must still reach the screen — the command stream is byte-identical across it, so if the
+    // skip-submit hash is not defeated the present is elided and the inactive fallback never appears.
+    static void ThemeWindowBgHostChecks(StringTable strings)
+    {
+        var priorBg = Theme.WindowBackground;
+        try
+        {
+            // Read BEFORE the ctor: the host latches "is this a Mica window" off the transparent backdrop at wire-up.
+            Theme.WindowBackground = ColorF.Transparent;
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("mica-activation", new Size2(320, 220), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            using var host = new AppHost(app, window, device, fonts, strings, new Counter());
+
+            for (int i = 0; i < 4; i++) host.RunFrame();
+
+            // Half 1 — the real activation path. Only the backdrop counter may move: a Tok.Epoch bump here IS the
+            // RethemeAll + 250ms cross-fade on every alt-tab this contract exists to kill.
+            int theme0 = Tok.Epoch, bg0 = Tok.WindowBackgroundEpoch;
+            window.IsActive = false;                       // WM_ACTIVATE(inactive) → the host swaps in the opaque fallback
+            host.RunFrame();
+            int bgBlur = Tok.WindowBackgroundEpoch;
+            window.IsActive = true;                        // back to Transparent → the live Mica shows again
+            host.RunFrame();
+            int theme1 = Tok.Epoch, bg1 = Tok.WindowBackgroundEpoch;
+
+            // Half 2 — the submit. Driven through Paint directly: an IDLE headless host early-outs of RunFrame before
+            // Paint (HasActiveWork false), so the skip-submit gate is only reachable this way. Two identical quiet
+            // paints — the second elides submit+present, which is the state the flip has to break out of.
+            host.Paint(0);
+            long skipped0 = host.FramesSkippedSubmit;
+            host.Paint(0);
+            bool gateLive = host.FramesSkippedSubmit == skipped0 + 1;   // else every assert below is vacuous
+            // The backdrop change mutates NO recorded command (the clear color is not in the stream), so without the
+            // latch defeat this frame elides too and the inactive fallback never reaches the screen.
+            long skipped1 = host.FramesSkippedSubmit;
+            Theme.WindowBackground = Tok.T.WindowBackground;
+            host.Paint(0);
+            bool flipSubmitted = host.FramesSkippedSubmit == skipped1;
+            // …and the defeat is ONE-SHOT: the next quiet frame is back to eliding (a permanent defeat would re-arm
+            // the ~2.5ms/frame idle submit cost for the rest of the session).
+            long skipped2 = host.FramesSkippedSubmit;
+            host.Paint(0);
+            bool backToQuiet = host.FramesSkippedSubmit == skipped2 + 1;
+
+            Check("gate.theme.windowBgNoRetheme.host a Mica window blur/focus flip bumps WindowBackgroundEpoch without touching Tok.Epoch (no RethemeAll, no cross-fade), and a backdrop change defeats the skip-submit hash for exactly one frame",
+                bgBlur == bg0 + 1 && bg1 == bg0 + 2 && theme1 == theme0
+                && gateLive && flipSubmitted && backToQuiet,
+                $"bg={bg0}->{bgBlur}->{bg1} theme={theme0}->{theme1} gateLive={gateLive} flipSubmitted={flipSubmitted} backToQuiet={backToQuiet}");
         }
         finally { Theme.WindowBackground = priorBg; }
     }

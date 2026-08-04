@@ -244,6 +244,23 @@ delta, floors 6 / 4-with-accent; light is not asserted — see above).
 `HoverFill`/`PressedFill` are bindable `Prop<ColorF>` channels (like `Fill`), so recycled list rows re-fire on
 `Epoch` (`prop-net.hoverfill` gate).
 
+### 2.2quater Two counters: `Tok.Epoch` re-themes, `Tok.WindowBackgroundEpoch` only repaints (SHIPPED)
+
+`Tok` carries **two** monotonic counters, and the split is load-bearing:
+
+| Counter | Bumped by | Host response |
+|---|---|---|
+| `Tok.Epoch` | `Tok.Use` (light/dark, preset) and `Tok.SetAccent` | `RethemeAll()` + `SetThemeTransition(250ms)` — every mounted component re-renders in place and the color diffs cross-fade |
+| `Tok.WindowBackgroundEpoch` | `Tok.SetWindowBackground` / `Theme.WindowBackground` only | latch + defeat the skip-submit hash once (`_lastPresentedDrawListHash = 0`) — one guaranteed submit, **no** re-render, **no** cross-fade, **no** `OnApplyThemeMaterial` |
+
+The backdrop override has exactly one engine consumer: the frame's clear color, which the host reads **live** at
+submit (`AppHost.Clear => Theme.WindowBackground`). No mounted component reads it, so the re-render is pure cost —
+and a Mica window flips it on every activation change (active → `Transparent`, inactive → the opaque
+`WindowBackground` fallback above), which charged a whole-tree re-render plus a 250ms brush-anim tail to every
+alt-tab and to launch. Both halves of the replacement are required together: the recorded command stream is
+byte-identical across the flip, so without the skip-submit defeat the present is elided and the inactive fallback
+never reaches the screen. Gate: `gate.theme.windowBgNoRetheme`.
+
 ### 2.2ter On-media ink/scrim, OnAccent (memoized), spacing/radii scales, generated accessors (SHIPPED — G3, 2026-07)
 
 The flagship overhaul (program phase G3) added the non-color-token layer and the two token source generators. All
