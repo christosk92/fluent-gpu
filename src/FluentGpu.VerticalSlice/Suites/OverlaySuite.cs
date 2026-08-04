@@ -2813,6 +2813,38 @@ static class OverlaySuite
         Check("gate.acrylic.ownSubtreeDamageCarvedOut: own-subtree entries excluded; an external entry on the tight region re-blurs; overflow falls back to the union",
             ownCarved && externalBlocks && overflowUnion, $"carved={ownCarved} external={externalBlocks} overflow={overflowUnion}");
 
+        // gate.acrylic.scrollHoldCadence (E10): the scroll-cadence decision (AcrylicScrollHold.ShouldRefresh). A
+        // scrolling page damages EVERY frame, so the damage test above misses every frame and the whole snapshot+Kawase
+        // chain re-ran at frame rate. During the user-scroll hold a layer that already HAS a retained snapshot of the
+        // SAME geometry stretches it, refreshing only every Nth frame — the same lever the self-blur groups' holdBlur
+        // pulls. The hold may NEVER manufacture a backdrop: no retained snapshot, or a changed stamp, refreshes now.
+        const int cad = AcrylicScrollHold.ScrollRefreshCadence;
+        // (a) no retained snapshot (first frame / post-resize / LayerId == 0) ⇒ always refresh, hold or not.
+        bool noRetainedAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(true, hasRetained: false, stampUnchanged: true, 0, cad)
+            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: false, stampUnchanged: true, cad - 1, cad)
+            && AcrylicScrollHold.ShouldRefresh(false, hasRetained: false, stampUnchanged: true, 0, cad);
+        // (b) hold + retained + same stamp ⇒ hold for cad-1 frames, refresh on the cad-th.
+        bool cadenceHolds = true;
+        for (int i = 0; i < cad - 1; i++)
+            if (AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, i, cad)) cadenceHolds = false;
+        bool cadenceRefreshes = AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, cad - 1, cad)
+            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, cad + 5, cad);
+        // (c) a CHANGED stamp is never held — the snapshot belongs to a different rect/sigma/scale/source/clip, so
+        //     reusing it would MISPLACE the frost, not merely date it.
+        bool stampChangeAlwaysBlurs = AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: false, 0, cad)
+            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: false, 1, cad);
+        // (d) hold released ⇒ damage-driven again, and a stale (held) entry heals on that very first frame.
+        bool releasedHeals = AcrylicScrollHold.ShouldRefresh(false, hasRetained: true, stampUnchanged: true, 0, cad)
+            && AcrylicScrollHold.ShouldRefresh(false, hasRetained: true, stampUnchanged: true, 1, cad);
+        // (e) cadence ≤ 1 degenerates to "never hold" (the pre-E10 behavior), and the shipped cadence bounds staleness
+        //     to cad-1 frames (≤25 ms at 120 Hz).
+        bool degenerate = AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, 0, 1)
+            && AcrylicScrollHold.ShouldRefresh(true, hasRetained: true, stampUnchanged: true, 0, 0)
+            && cad >= 2 && cad <= 8;
+        Check("gate.acrylic.scrollHoldCadence: scroll hold stretches an EXISTING same-geometry backdrop every Nth frame; no-retained/stamp-change/hold-release always re-blur",
+            noRetainedAlwaysBlurs && cadenceHolds && cadenceRefreshes && stampChangeAlwaysBlurs && releasedHeals && degenerate,
+            $"cad={cad} noRetained={noRetainedAlwaysBlurs} holds={cadenceHolds} refresh={cadenceRefreshes} stamp={stampChangeAlwaysBlurs} released={releasedHeals} degen={degenerate}");
+
         KawaseChainChecks();
     }
 

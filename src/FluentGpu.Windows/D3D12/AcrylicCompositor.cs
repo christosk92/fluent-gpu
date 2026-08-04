@@ -66,6 +66,14 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
         // reuses it (passes A/B/C skipped) until the geometry changes or the damage region touches its snapshot region.
         public ulong PinLayer;
         public AcrylicBackdropMath.BackdropStamp Stamp;
+        // Scroll-cadence hold (§2.3/E10, AcrylicScrollHold): consecutive frames this retained snapshot has been
+        // composited STALE — i.e. its damage test missed but the frame's user-scroll hold let it be stretched instead
+        // of re-blurred. 0 = the snapshot matches its stamp's backdrop (an ordinary cache entry). Nonzero doubles as
+        // the "known stale" marker that forces a full refresh on the first frame after the hold releases, even when
+        // that frame is damage-clean (otherwise the plain reuse test would report a HIT and freeze the stale blur).
+        // Lives BESIDE Stamp so it is per-LayerId: pinned entries are keyed by the scene node handle, which is unique
+        // across the main tree and every popup stream, so no hold state can leak between targets.
+        public int HeldFrames;
     }
     private readonly PoolEntry[] _pool = new PoolEntry[MaxPool];
 
@@ -93,6 +101,12 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     /// <summary>Of <see cref="LayersThisFrame"/>, how many REUSED a retained blurred backdrop (cache hit — passes A/B/C
     /// skipped) instead of re-blurring. A stationary acrylic surface being scrolled should read all-hits (diagnostics).</summary>
     public int CacheHitsThisFrame { get; private set; }
+
+    /// <summary>Of <see cref="CacheHitsThisFrame"/>, how many were SCROLL-CADENCE HOLDS (§2.3/E10) — a retained
+    /// snapshot whose damage test MISSED but which was stretched one more frame because this frame carried
+    /// <c>FrameInfo.ScrollHold</c> and the layer had not yet reached <see cref="AcrylicScrollHold.ScrollRefreshCadence"/>.
+    /// A sustained user scroll over a chrome acrylic should read ≈¾ of layers held (diagnostics).</summary>
+    public int ScrollHoldsThisFrame { get; private set; }
 
     /// <summary>Live pooled RTs (diagnostics; a re-blur holds iterations+1 pyramid levels, ≤5, plus retained cache RTs).</summary>
     public int PooledRtCount
@@ -453,7 +467,7 @@ float4 PSMain(V i) : SV_Target
     public void TickIdle(ulong completedFence)
     {
         if (_retired.Count > 0 || PooledRtCount > 0) TickPool(completedFence);
-        LayersThisFrame = 0; CacheHitsThisFrame = 0;
+        LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
     }
 
     /// <summary>Direct-to-back-buffer frame setup: set THIS frame's SRV parity bank + run pool upkeep, WITHOUT binding or
@@ -464,7 +478,7 @@ float4 PSMain(V i) : SV_Target
     {
         _parity = parity & 1;
         if (_retired.Count > 0 || PooledRtCount > 0) TickPool(completedFence);
-        LayersThisFrame = 0; CacheHitsThisFrame = 0;
+        LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
     }
 
     /// <summary>Lease a pooled RT at least (w,h) texels (bucket-quantized). Steady state hits the free-list "fits"
@@ -607,7 +621,7 @@ float4 PSMain(V i) : SV_Target
     public void BeginCanvas(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int parity)
     {
         _parity = parity & 1;
-        LayersThisFrame = 0; CacheHitsThisFrame = 0;
+        LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
         TickPool(completedFence);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
         var rtv = Rtv(0);
@@ -677,10 +691,14 @@ float4 PSMain(V i) : SV_Target
     /// layer is stationary and nothing behind it moved this frame) skip the snapshot+blur and composite the retained
     /// snapshot; else snapshot the canvas region, run the dual-Kawase down/up chain, and composite — RETAINING the
     /// result for a keyed (<see cref="PushLayerCmd.LayerId"/> != 0) layer. Leaves the canvas bound for continued drawing.
-    /// The damage rect (physical px) is this frame's union of moved-node bounds (SceneRecorder) — empty ⇒ reuse.</summary>
+    /// The damage rect (physical px) is this frame's union of moved-node bounds (SceneRecorder) — empty ⇒ reuse.
+    /// <paramref name="scrollHold"/> is <c>FrameInfo.ScrollHold</c>: while set, a layer that ALREADY HAS a retained
+    /// snapshot of the SAME geometry may keep compositing it despite damage, refreshing only every
+    /// <see cref="AcrylicScrollHold.ScrollRefreshCadence"/>-th frame (§2.3/E10) — a scrolling backdrop damages every
+    /// frame, so without this the cache misses at frame rate and the whole chain re-runs per frame.</summary>
     public void BlurAndComposite(ID3D12GraphicsCommandList* cmd, in PushLayerCmd L, float lw, float lh, float scale, ulong frameFence,
         float dmgX, float dmgY, float dmgW, float dmgH, RECT compositeScissor, ulong backdropSourceId,
-        ID3D12Resource* backdropTarget = null, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv = default)
+        ID3D12Resource* backdropTarget = null, D3D12_CPU_DESCRIPTOR_HANDLE targetRtv = default, bool scrollHold = false)
     {
         if (scale <= 0f) scale = 1f;
         // directBB: when D3D12Device renders straight to the back buffer, snapshot ONLY the small region under this acrylic
@@ -712,16 +730,32 @@ float4 PSMain(V i) : SV_Target
         if (L.LayerId != 0)
         {
             int pin = FindPinned(L.LayerId);
-            if (pin >= 0 && AcrylicBackdropMath.BackdropReusable(_pool[pin].Stamp, nowStamp, tightPhys, damagePhys))
+            if (pin >= 0)
             {
-                ref var hit = ref _pool[pin];
-                hit.InUse = true; hit.IdleFrames = 0; hit.LastUseFence = frameFence;
-                CreateSrv(hit.Res, SrvCpu(PoolSrvSlot(pin)));     // refresh THIS frame's parity bank for the composite sample
-                Composite(cmd, in L, lw, lh, rx, ry, rw, rh, pin, dw, dh, compTarget, !external, compositeScissor);
-                hit.InUse = false;
-                LayersThisFrame++; CacheHitsThisFrame++;
-                if (!external) BindCanvas(cmd);
-                return;
+                // Two ways to take the cheap composite-only path (identical GPU work — passes A/B/C skipped):
+                //  (1) a genuine HIT: the stamp is unchanged AND no damage touched the tight region, and the entry is
+                //      not carrying stale held frames (a held snapshot no longer matches its stamp's backdrop, so a
+                //      damage-clean frame must NOT be allowed to report it clean — that would freeze the staleness);
+                //  (2) a scroll-cadence HOLD (§2.3/E10): the damage test missed, but this frame is inside the user-scroll
+                //      hold window, the geometry is unchanged, and the layer has not yet reached the refresh cadence.
+                bool stampSame = _pool[pin].Stamp.Equals(nowStamp);
+                bool stale = _pool[pin].HeldFrames > 0;
+                bool clean = !stale && AcrylicBackdropMath.BackdropReusable(_pool[pin].Stamp, nowStamp, tightPhys, damagePhys);
+                bool hold = !clean && !AcrylicScrollHold.ShouldRefresh(scrollHold, hasRetained: true, stampSame,
+                    _pool[pin].HeldFrames, AcrylicScrollHold.ScrollRefreshCadence);
+                if (clean || hold)
+                {
+                    ref var hit = ref _pool[pin];
+                    hit.InUse = true; hit.IdleFrames = 0; hit.LastUseFence = frameFence;
+                    hit.HeldFrames = hold ? hit.HeldFrames + 1 : 0;
+                    CreateSrv(hit.Res, SrvCpu(PoolSrvSlot(pin)));     // refresh THIS frame's parity bank for the composite sample
+                    Composite(cmd, in L, lw, lh, rx, ry, rw, rh, pin, dw, dh, compTarget, !external, compositeScissor);
+                    hit.InUse = false;
+                    LayersThisFrame++; CacheHitsThisFrame++;
+                    if (hold) ScrollHoldsThisFrame++;
+                    if (!external) BindCanvas(cmd);
+                    return;
+                }
             }
         }
 
@@ -777,7 +811,9 @@ float4 PSMain(V i) : SV_Target
         int ia = lv[0];
         Composite(cmd, in L, lw, lh, rx, ry, rw, rh, ia, dw, dh, compTarget, !external, compositeScissor);
 
-        if (cache) { _pool[ia].Stamp = nowStamp; _pool[ia].InUse = false; }   // KEEP level 0 pinned; record what it blurred
+        // KEEP level 0 pinned; record what it blurred. HeldFrames = 0 restarts the scroll-cadence window: this snapshot
+        // now matches its stamp's backdrop exactly, so it is a clean cache entry again (§2.3/E10).
+        if (cache) { _pool[ia].Stamp = nowStamp; _pool[ia].HeldFrames = 0; _pool[ia].InUse = false; }
         else Release(ia);
         for (int k = 1; k <= iters; k++) Release(lv[k]);                      // pyramid levels → free list
         LayersThisFrame++;

@@ -358,6 +358,30 @@ public readonly struct AcrylicParams        // packed into EffectChain payload (
     (reused-subtree) layer carries a stale epoch and safely falls back to the whole-frame `FrameInfo.Damage` union, so
     a copied `PushLayerCmd` can never apply a stale carve-out. `pendingStructuralDamage` seeds land before any layer's
     push ⇒ they are outside every own-range ⇒ never carved (global), as intended.
+  - **Scroll-cadence hold (E10).** E7–E9 make a *stationary* backdrop reusable; they cannot help a **scrolling**
+    one — a scrolling page emits damage every frame *and* that damage genuinely overlaps a chrome acrylic's tight
+    region, so the cache misses at frame rate and the whole A/B/C chain re-runs per frame (measured: the dominant
+    component of a ~5 ms composite pass on the Wavee scroll path). So while a user scroll is live, a layer that
+    **already has** a retained snapshot of the **same** geometry keeps compositing it despite damage, refreshing only
+    every `AcrylicScrollHold.ScrollRefreshCadence`-th frame (4 ⇒ 30 Hz at 120 Hz, ≤25 ms of backdrop lag). This is the
+    same lever the self-blur groups already pull (`SceneRecorder`'s `holdBlur`), and WinUI likewise decouples acrylic
+    refresh from frame rate: a heavily-blurred backdrop is low-frequency by construction, so the blur destroys exactly
+    the detail that would make ≤3 frames of lag legible under fast-moving content.
+    **Carrier:** the hold is frame-global (AppHost's ~0.12 s `SelfBlurHold` latch, `holdSelfBlurForScroll`) and rides
+    the RHI seam as **`FrameInfo.ScrollHold`** — decided on the UI thread as the frame is published, so it describes
+    the PUBLISHED frame rather than the UI thread's current instant, exactly like the `Damage`/`FrameEpoch` beside it.
+    Deliberately **not** a `PushLayerCmd` bit: the flag is not a per-node property, and putting it in the byte stream
+    would make it a span-reuse input (`ComputeSpanInputSig` keys on `userScrollActive`, not on the global hold), so a
+    span-copied acrylic could carry a stale flag or the hold flip would re-key every span.
+    **Never manufactures a backdrop:** no retained snapshot (first frame, post-resize, `LayerId == 0`) blurs
+    immediately, and a changed stamp blurs immediately — that snapshot belongs to a different rect/sigma/scale/source,
+    so reusing it would *misplace* the frost, not merely date it. The counter lives per retained entry (per `LayerId`,
+    beside its `BackdropStamp` — unique across the main tree and every popup stream, so no hold state leaks between
+    targets); a **nonzero** counter doubles as the "known stale" marker that forces a full refresh on the first frame
+    after the hold releases, even when that frame is damage-clean (the plain reuse test would otherwise report a HIT
+    and freeze the staleness). The decision is `AcrylicScrollHold.ShouldRefresh` (portable + headless-gated, VerticalSlice
+    `gate.acrylic.scrollHoldCadence`); a held frame takes the ordinary cache-hit composite, so it is `CatComposite` cost
+    with passes A/B/C skipped — nothing new to attribute in the GPU timing split.
 - **Honest limitation (paint stays "v1 at rest"):** paint-only / layout-only changes *directly behind* a stationary
   overlay are NOT in the damage set (`PaintDirty` is sticky and `LayoutDirty` clears pre-record in the current
   single-thread engine), so they refresh on the next motion / re-open — barely perceptible through frosted glass.

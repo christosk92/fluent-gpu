@@ -3105,7 +3105,10 @@ public sealed class AppHost : IDisposable
                 // ForceSync: the fgpu-render thread submits/presents; the UI BLOCKS in DrainSync. Async (the default):
                 // the UI WakeAsyncs and PROCEEDS — the render thread presents on its own
                 // timeline (the smoothness win: the GPU fence-wait no longer bounds back to the UI thread).
-                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch);
+                // holdSelfBlurForScroll rides the seam as FrameInfo.ScrollHold: the acrylic retained-backdrop cache
+                // rate-limits its re-blur to every Nth frame while it is set (§2.3/E10) — the same hold window the
+                // self-blur groups already use, decided here so the flag describes the frame being published.
+                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll);
                 if (resized && keepAlive) _device.HintSettlePresent();
                 double gpuRenderMs = _device.LastGpuRenderMs;
                 bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive

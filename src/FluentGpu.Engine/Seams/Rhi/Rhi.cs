@@ -9,7 +9,13 @@ namespace FluentGpu.Rhi;
 // FrameEpoch = a nonzero monotonic frame counter (0 = none) matched against PushLayerCmd.DamageEpoch: a cached acrylic
 // layer whose baked epoch equals FrameEpoch uses its own EXTERNAL damage rect (own-subtree carve-out, §2.3/E9); a stale
 // (span-copied) or unpatched (popup/uncached) layer mismatches and falls back to the whole-frame Damage union.
-public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0);
+// ScrollHold = this PUBLISHED frame fell inside AppHost's user-scroll hold window (any user scroll this frame + the
+// ~0.12s SelfBlurHold tail — the same latch that drives the self-blur groups' holdBlur). Frame-global by nature, and
+// decided on the UI thread as the frame is published, so the render thread reads a flag that describes THIS frame's
+// content rather than the UI thread's current instant. The acrylic retained-backdrop cache uses it to rate-limit the
+// re-blur of a layer that already HAS a snapshot (§2.3/E10, AcrylicScrollHold.ShouldRefresh); a layer with no retained
+// snapshot always blurs immediately, so the flag can never surface a fallback/garbage backdrop.
+public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0, bool ScrollHold = false);
 
 /// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
 /// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,

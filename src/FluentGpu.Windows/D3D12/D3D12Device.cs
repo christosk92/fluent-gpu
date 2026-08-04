@@ -1051,6 +1051,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         }
         Diag.Set("d3d12", "acrylicLayers", _acrylic?.LayersThisFrame ?? 0);   // PushLayer composites this frame
         Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
+        Diag.Set("d3d12", "acrylicCacheHits", _acrylic?.CacheHitsThisFrame ?? 0);   // of acrylicLayers, how many skipped passes A/B/C
+        Diag.Set("d3d12", "acrylicScrollHolds", _acrylic?.ScrollHoldsThisFrame ?? 0);   // ── of those, scroll-cadence holds (§2.3/E10)
         Diag.Set("d3d12", "opacityGroups", _opacity?.GroupsThisFrame ?? 0);   // flat opacity groups composited this frame
         Diag.Set("d3d12", "opacityGroupsPlain", _opacity?.OpacityGroupsThisFrame ?? 0);       // ── the per-kind split of the line above
         Diag.Set("d3d12", "opacityGroupsBounded", _opacity?.BoundedOpacityGroupsThisFrame ?? 0);
@@ -2123,9 +2125,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     float dmgX = carve ? L.OwnDmgX : ctx.Damage.X, dmgY = carve ? L.OwnDmgY : ctx.Damage.Y;
                     float dmgW = carve ? L.OwnDmgW : ctx.Damage.W, dmgH = carve ? L.OwnDmgH : ctx.Damage.H;
                     SceneCat(CatComposite);
+                    // §2.3/E10: ctx.ScrollHold lets a layer that already HAS a retained snapshot of this exact geometry
+                    // stretch it across the scroll (refreshing on the cadence) instead of re-blurring on the every-frame
+                    // damage a scrolling backdrop emits. A first-frame / post-resize / uncached layer still blurs now.
                     _acrylic.BlurAndComposite(_cmdList, L, lw, lh, _frameScale, _fenceValue + 1,
                         dmgX * _frameScale, dmgY * _frameScale, dmgW * _frameScale, dmgH * _frameScale,
-                        acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv);
+                        acrylicClip, backdropSourceId, acrylicTarget, acrylicRtv, ctx.ScrollHold);
                     InvalidateCmdState();   // the acrylic passes bound their own PSOs/heap + viewport/scissor
                     if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);   // back to the open group RT
                     ApplyCurrentScissor();
