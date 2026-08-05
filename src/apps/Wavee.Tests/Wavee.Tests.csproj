@@ -115,6 +115,9 @@
     <!-- the teaching-tip service's PURE half: the acknowledged-id set codec + the one gating decision (System + BCL only;
          the engine-bound WaveeTips.cs service that consumes it is deliberately NOT included) — WaveeTipsCoreTests -->
     <Compile Include="..\Wavee\App\WaveeTipsCore.cs" Link="WaveeTipsCore.cs" />
+    <!-- the SMTC timeline latch: the PURE half of SystemMediaControlsBridge (System only — no WinRT, no FluentGpu), so
+         SmtcTimelineCoalescerTests pins the newest-wins burst coalescing without a media session — SmtcTimelineCoalescerTests -->
+    <Compile Include="..\Wavee\App\SmtcTimelineCoalescer.cs" Link="SmtcTimelineCoalescer.cs" />
     <!-- the engine-free core of the extension registry (System + Wavee.Core + SidebarPinId only) — WaveeExtensionRegistryTests -->
     <Compile Include="..\Wavee\Actions\Extensibility\WaveeRegistryTable.cs" />
     <Compile Include="..\Wavee\Actions\Extensibility\WaveeActionTargeting.cs" />

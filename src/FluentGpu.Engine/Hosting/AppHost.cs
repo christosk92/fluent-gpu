@@ -2279,14 +2279,34 @@ public sealed class AppHost : IDisposable
         _window.Wake();   // thread-safe (Win32 PostMessage WM_NULL); breaks a blocked WaitForWork so an idle loop drains promptly
     }
 
+    /// <summary>Absolute per-drain ceiling on cross-thread UI posts. A backlog deeper than this is spread across frames
+    /// (<see cref="DrainUiPosts"/> re-arms <c>_frameNeeded</c> while the queue is non-empty) instead of being paid in one
+    /// synchronous frame — so ANY future accumulator bug degrades to a brief catch-up rather than a multi-second hang
+    /// inside <c>DispatchMessageW</c> ("Not Responding"). 256 is far above any real frame's post count (Wavee's busiest
+    /// bursts are single digits) and far below the thousands a long minimize used to pile up. Internal: the Engine.Tests
+    /// ceiling gate pins the exact number.</summary>
+    internal const int MaxUiPostsPerDrain = 256;
+
+    /// <summary>Cross-thread UI posts still queued (test seam — the Engine.Tests drain gates; also read by the
+    /// restore-edge diagnostic).</summary>
+    internal int PendingUiPostCount => _uiPosts.Count;
+
     private void DrainUiPosts()
     {
-        // Bounded to a one-frame snapshot of the queue depth: an action that unconditionally re-Posts itself (re-enqueues
-        // + Wake()s) must not livelock this drain into a CPU-spin — its re-post lands in _uiPosts and is picked up by a
-        // LATER frame (the Wake keeps the loop alive). The migrated cards never self-re-post, but the cap is cheap insurance.
-        int budget = _uiPosts.Count;
+        // TWO bounds, both load-bearing; FIFO is preserved either way (ConcurrentQueue dequeues in enqueue order).
+        //  • The one-frame SNAPSHOT (`Count`) is the anti-LIVELOCK bound: an action that unconditionally re-Posts itself
+        //    (re-enqueues + Wake()s) must not spin this drain — its re-post lands in _uiPosts and is picked up by a LATER
+        //    frame (the Wake keeps the loop alive). The migrated cards never self-re-post, but the cap is cheap insurance.
+        //  • MaxUiPostsPerDrain is the anti-BURST bound, which the snapshot alone never was: a queue that accumulated for
+        //    minutes was still drained WHOLE in one frame. Capping the slice turns a pathological backlog into a bounded
+        //    per-frame cost; the remainder re-arms _frameNeeded below so the loop keeps producing frames until it drains.
+        int budget = Math.Min(_uiPosts.Count, MaxUiPostsPerDrain);
         while (budget-- > 0 && _uiPosts.TryDequeue(out var a))
             try { a(); } catch { /* a posted action must never take down the frame */ }
+        // Re-arm on leftovers: _uiPosts is NOT a term in ComputeWakeReasons(), so a ceiling-truncated drain could
+        // otherwise idle-gate before its next slice ran. (Every Post also carries its own WM_NULL, so the WAKE is already
+        // guaranteed; this makes the FRAME guaranteed too — including after a self-re-post the snapshot deferred.)
+        if (!_uiPosts.IsEmpty) _frameNeeded = true;
     }
 
     /// <summary>Wired to <see cref="InputDispatcher.OnFlingStarted"/>: a touch pan released with a flick speed hands its
@@ -2408,13 +2428,52 @@ public sealed class AppHost : IDisposable
             }
         }
 
+        // ── Cross-thread UI posts (HostDispatch.Post / UsePost) ──────────────────────────────────────────────────────
+        // Drained HERE: before the minimize gate AND before the idle gate further down. Both gates return early and
+        // _uiPosts is NOT itself a term in ComputeWakeReasons(), so a drain placed after either one is structurally
+        // unreachable for as long as that gate holds — and the queue is an UNBOUNDED ConcurrentQueue. Two hazards, one
+        // drain:
+        //   • IDLE gate — an otherwise-idle page (e.g. the migrated WindowsApi cards that dropped FrameClock.Tick) would
+        //     early-return at `if (!HasActiveWork)` BEFORE Paint, the only other drain (inside Paint) would never run,
+        //     and the posted signal writes would be stranded forever (a structural freeze, not a deadlock).
+        //   • MINIMIZE gate — a minimized app keeps posting (Wavee folds ~1-2/s of playback position/state while
+        //     minimized), and with the drain below the gate those posts accumulated for the ENTIRE minimize, then all
+        //     landed in ONE drain on the restore frame — which runs synchronously inside the WndProc's WM_SIZE. Thousands
+        //     of queued actions, each paying a cross-process SMTC RPC, is a multi-second "Not Responding" hang whose
+        //     length is proportional to how long the window was minimized.
+        // COST: zero extra wakeups. Post() enqueues and THEN Wake()s (PostMessage WM_NULL), so the loop is already
+        // running one iteration per post; this only processes what already woke it. An empty queue is a no-op and
+        // RecommendedWaitMsCore still returns -1 while minimized/idle, so a quiet loop stays blocked at 0% CPU.
+        // ORDERING: unchanged relative to the pump + input dispatch above (a post still never jumps ahead of the same
+        // frame's input). Relative to Paint it moved EARLIER within the same frame, which is unobservable to consumers:
+        // posts are cross-thread MARSHALS whose only ordering contract is FIFO against each other (preserved), they were
+        // already free to run either side of the idle gate depending on queue state, and Paint's own drain still runs
+        // afterwards for anything posted in between. Running inside _runtime.Batch coalesces the actions' signal writes
+        // into one re-render and defers the FrameRequested wake to the batch's end, where it sets _frameNeeded — so
+        // HasActiveWork (FrameNeeded || HasPending) is true THIS frame and we fall through to Paint, whose
+        // _runtime.Flush() applies the coalesced re-render. No lost-wakeup: Post enqueues before Wake, so a post that
+        // arrives after this drain but before the gate still posted its own WM_NULL that re-wakes the loop next iteration.
+        bool minimized = IsMinimized;
+        bool restoreEdge = _wasMinimized && !minimized;
+        int restorePosts = 0, restoreTimers = 0;
+        long restoreDrainT0 = 0;
+        if (restoreEdge) { restorePosts = _uiPosts.Count; restoreTimers = _timers.Count; restoreDrainT0 = Stopwatch.GetTimestamp(); }
+        bool drainedPosts = !_uiPosts.IsEmpty;
+        if (drainedPosts) _runtime.Batch(DrainUiPosts);
+        if (restoreEdge)
+            // Permanent + unconditional (no env knob): one line per restore is a human-rate event, and this IS the
+            // standing evidence that the minimize accumulator stays dead. Same one-shot Console.Error shape as the
+            // `[fps resize]` marker. Expect uiPosts≈0 and drainMs≈0 now that the drain runs while minimized; a large
+            // backlog with a multi-ms drain is this bug regressing, and `left=` shows the ceiling spreading it.
+            Console.Error.WriteLine(
+                $"[restore] uiPosts={restorePosts} timers={restoreTimers} drainMs={(Stopwatch.GetTimestamp() - restoreDrainT0) * 1000.0 / Stopwatch.Frequency:0.00} left={_uiPosts.Count}");
+
         // Minimize gate: a minimized window paints nothing — but the pump+dispatch above MUST run so the restore
         // message lands (RecommendedWaitMs blocks indefinitely while minimized, so the loop only wakes on a message).
         // Skip Paint entirely (no record/submit/present), BEFORE the image-pump early-out below; the restore EDGE
         // forces a frame so the first visible frame paints immediately. Headless never reports Minimized (its State
-        // defaults to Normal and nothing here flips it), so the headless path is unaffected.
-        bool minimized = IsMinimized;
-        if (_wasMinimized && !minimized) _frameNeeded = true;   // restored: repaint now
+        // defaults to Normal and only a test seam flips it), so the headless path is unaffected.
+        if (restoreEdge) _frameNeeded = true;   // restored: repaint now
         if (_wasMinimized != minimized)
         {
             // Window-visibility EDGE → update the Activation.IsActive signal so every component's UseIsActive flips and
@@ -2427,6 +2486,12 @@ public sealed class AppHost : IDisposable
         _wasMinimized = minimized;
         if (minimized)
         {
+            // The hoisted drain above ran, but Paint — the only _runtime.Flush() call site on the normal path — does not.
+            // Flush here after a NON-EMPTY drain so the reactive pending queue does not simply become the new
+            // accumulator: the posted signal writes are applied (memos recompute, effects run, components re-render into
+            // the scene) instead of piling up until the restore frame. Same intent as the minimize-EDGE flush above, now
+            // per drained minimized frame; a frame with nothing drained costs nothing.
+            if (drainedPosts) _runtime.Flush();
             LastStats = new FrameStats(0, clicks, 0, Rendered: false) { Fps = _fps, FrameMs = _frameMs };
             // Awake-but-skipped: counts toward _framesRun + _framesMinimized (rendered:false), the wake-diag's
             // "frames spent minimized" signal. wake is recomputed here since the s_wakeDiag snapshot is below.
@@ -2441,18 +2506,9 @@ public sealed class AppHost : IDisposable
             return LastStats;
         }
 
-        // Cross-thread UI posts (HostDispatch.Post / UsePost): drain BEFORE the idle gate below. A worker that posts an
-        // action Wake()s the loop (PostMessage WM_NULL), but a pending _uiPosts queue is NOT itself a wake term in
-        // ComputeWakeReasons() — so without draining here, an otherwise-idle page (e.g. the migrated WindowsApi cards that
-        // dropped FrameClock.Tick) would early-return at `if (!HasActiveWork)` BEFORE Paint, the only other drain (inside
-        // Paint) would never run, and the posted signal writes would be stranded forever (a structural freeze, not a
-        // deadlock). Running inside _runtime.Batch coalesces the actions' signal writes into one re-render and defers the
-        // FrameRequested wake to the batch's end, where it sets _frameNeeded — so HasActiveWork (FrameNeeded || HasPending)
-        // is true THIS frame and we fall through to Paint, whose _runtime.Flush() applies the coalesced re-render. When the
-        // queue is empty this is a no-op: the loop still idles (RecommendedWaitMs==-1), so render-purity is preserved — a
-        // frame is forced ONLY when a post is actually pending. No lost-wakeup: Post enqueues before Wake, so a post that
-        // arrives after this drain but before the gate still posted its own WM_NULL that re-wakes the loop next iteration.
-        if (!_uiPosts.IsEmpty) _runtime.Batch(DrainUiPosts);
+        // (The cross-thread UI-post drain used to sit HERE, below the minimize gate. It is hoisted above that gate — see
+        // the block before it — so a minimized app drains instead of accumulating. Render purity is unchanged: an empty
+        // queue is a no-op and the loop still idles at RecommendedWaitMs == -1.)
 
         // Wake attribution: snapshot the mask at the idle decision point (before the image pump can flip _frameNeeded).
         WakeReasons wake = s_wakeDiag ? ComputeWakeReasons() : WakeReasons.None;
@@ -2652,10 +2708,12 @@ public sealed class AppHost : IDisposable
 
             long before = GC.GetAllocatedBytesForCurrentThread();
 
-            // Drain cross-thread UI posts so their signal writes land in THIS flush. RunFrame already drained them before
-            // its idle gate, so on the normal frame path this is a no-op on an empty queue; it earns its keep on the
-            // Paint-ONLY path (the PaintRequested keep-alive fired from inside an OS modal move/size loop, which bypasses
-            // RunFrame entirely) — there a post that arrived mid-drag still applies this frame instead of being stranded.
+            // Drain cross-thread UI posts so their signal writes land in THIS flush. RunFrame already drained them above
+            // its minimize/idle gates, so on the normal frame path this is a no-op on an empty queue; it earns its keep on
+            // the Paint-ONLY path (the PaintRequested keep-alive fired from inside an OS modal move/size loop, which
+            // bypasses RunFrame entirely) — there a post that arrived mid-drag still applies this frame instead of being
+            // stranded. It also picks up the second slice when RunFrame's drain hit MaxUiPostsPerDrain, which is exactly
+            // the intended spread-across-frames behaviour (each slice is itself bounded by the same ceiling).
             if (!_uiPosts.IsEmpty) _runtime.Batch(DrainUiPosts);
             // Frame-clock timers (UseTimeout/UseInterval/UseDebouncedValue/UseThrottledValue): fire due callbacks INSIDE
             // the hot-phase window, before the flush, so their signal writes coalesce into THIS frame's re-render (same

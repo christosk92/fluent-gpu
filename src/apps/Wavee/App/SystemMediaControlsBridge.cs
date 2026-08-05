@@ -42,13 +42,17 @@ public sealed class SystemMediaControlsBridge : IDisposable
     string? _lastUri = null;
     MediaPlaybackStatus _lastStatus = (MediaPlaybackStatus)(-1);
     bool _lastCanNext = true, _lastCanPrev = true;
-    long _lastTimelineSec = -1;
+    // The timeline's dedupe moved INTO the coalescer (it still carries the whole-second `_lastTimelineSec` rule as its
+    // steady-state gate) so the burst latch and the per-second gate can't disagree. See SmtcTimelineCoalescer.
+    SmtcTimelineCoalescer _timeline;
+    readonly Action _flushTimeline;   // cached once: the per-tick path must not allocate a delegate
 
     public SystemMediaControlsBridge(PlaybackBridge bridge, IPlaybackPlayer player, Action<Action> post)
     {
         _bridge = bridge;
         _player = player;
         _post = post;
+        _flushTimeline = FlushTimeline;
     }
 
     /// <summary>Acquire the SMTC for <paramref name="hwnd"/> (the real top-level window handle — pass
@@ -130,17 +134,29 @@ public sealed class SystemMediaControlsBridge : IDisposable
     /// <summary>Push the timeline (position + duration) so the Win11 flyout / lock-screen scrub bar tracks playback.
     /// Called from <see cref="PlaybackBridge"/> on each position tick (UI thread); throttled to whole-second changes so
     /// it stays the ~1 Hz cadence the OS expects. Seek-DRAG on the OS scrub bar arrives via
-    /// <see cref="SystemMediaControls.PositionChangeRequested"/> → <see cref="OnSeek"/> (a best-effort seam).</summary>
+    /// <see cref="SystemMediaControls.PositionChangeRequested"/> → <see cref="OnSeek"/> (a best-effort seam).
+    /// <para>
+    /// COALESCED (newest wins): the tick itself only latches — the actual <c>UpdateTimeline</c> (a WinRT activation plus a
+    /// CROSS-PROCESS COM RPC, ~1 ms) is deferred to one posted flush per burst. A frame that drains a BACKLOG of queued
+    /// position ticks — each carrying a different whole second, so the per-second dedupe never fired — used to pay that
+    /// RPC once per tick, synchronously on the UI thread. Now it pays it once, at the top of the next frame, with the
+    /// newest position. Zero-alloc per tick: a struct latch and a cached flush delegate.
+    /// </para></summary>
     public void OnPositionChanged(long positionMs)
     {
-        if (_smtc is not { } smtc || _disposed) return;
-        long dur = _bridge.DurationMs.Peek();
-        if (dur <= 0) return;
-        long pos = Math.Clamp(positionMs, 0, dur);
-        long sec = pos / 1000;
-        if (sec == _lastTimelineSec) return;
-        _lastTimelineSec = sec;
-        try { smtc.UpdateTimeline(TimeSpan.FromMilliseconds(pos), TimeSpan.FromMilliseconds(dur)); } catch (Exception) { }
+        if (_smtc is null || _disposed) return;
+        if (_timeline.Push(positionMs)) _post(_flushTimeline);
+    }
+
+    // The one deferred timeline push per burst. Posted (never called inline), so it runs on the UI thread at the top of a
+    // later frame — by which time the whole burst has been latched and only the newest position survives. TryTake always
+    // clears the scheduled bit, so a bail-out here can never wedge the latch armed.
+    void FlushTimeline()
+    {
+        var smtc = _smtc;
+        long dur = smtc is null || _disposed ? 0 : _bridge.DurationMs.Peek();
+        if (!_timeline.TryTake(dur, out long pos)) return;
+        try { smtc!.UpdateTimeline(TimeSpan.FromMilliseconds(pos), TimeSpan.FromMilliseconds(dur)); } catch (Exception) { }
     }
 
     // The OS/user pressed a transport button. Routed to the UI thread by ButtonDispatcher, then translated into a player
