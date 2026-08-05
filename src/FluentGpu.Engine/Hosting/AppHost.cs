@@ -2473,7 +2473,20 @@ public sealed class AppHost : IDisposable
         // Skip Paint entirely (no record/submit/present), BEFORE the image-pump early-out below; the restore EDGE
         // forces a frame so the first visible frame paints immediately. Headless never reports Minimized (its State
         // defaults to Normal and only a test seam flips it), so the headless path is unaffected.
-        if (restoreEdge) _frameNeeded = true;   // restored: repaint now
+        if (restoreEdge)
+        {
+            _frameNeeded = true;   // restored: repaint now
+            // Restore is a cold-start interaction edge exactly like the post-input arm above (search WarmCadenceInputMask):
+            // the render thread and DM were parked through the minimize, so DM re-establishes its surfacing rhythm in
+            // BURSTS. Without a hold, ComputeWakeReasons reads None in the gaps between bursts, RecommendedWaitMsCore takes
+            // the Idle branch and ClampWaitToTimers stretches the wait to the next armed timer (the observed wait=idle703
+            // mid-scroll → burst → idle stutter for ~2s). Arm the SAME warm-cadence hold input arms: it only prevents the
+            // Idle branch (keeps the loop AWAKE), it is absent from LatencySensitiveWake/GovernorNeverPace so it can NEVER
+            // force display rate or defeat the ambient cap (the _scrollGraceUntil-on-wake-bit free-run class), and it
+            // self-expires after WarmCadenceHoldMs off the same wall clock. A restore is simply another interaction edge.
+            if (_warmCadenceEnabled && WarmCadenceHoldMs > 0f)
+                _warmCadenceUntilMs = _timers.NowMs + WarmCadenceHoldMs;
+        }
         if (_wasMinimized != minimized)
         {
             // Window-visibility EDGE → update the Activation.IsActive signal so every component's UseIsActive flips and

@@ -1279,6 +1279,27 @@ static class HooksSuite
                 idleBefore && passiveStayedCold && warmLit && held && quiescedAfter,
                 $"idleBefore={idleBefore} passiveStayedCold={passiveStayedCold} warmLit={warmLit} warmFrames={warmFrames} quiescedAfter={quiescedAfter}");
         }
+
+        // ── gate.timer.warm-cadence.restore: a restore edge arms warm cadence (DM re-establishes in bursts; without the
+        //    hold the loop long-idles between them → wait=idle703 mid-scroll for ~2s). Same arm the post-input edge uses.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("timer-warm-restore", new Size2(200, 120), 1f)); window.Show();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new InertBoxProbe());
+            host.WarmCadenceEnabledForTest = true;
+            for (int i = 0; i < 6 && host.HasActiveWork; i++) host.RunFrame();
+            bool coldAtRest = (host.CurrentWakeReasons & WakeReasons.WarmCadence) == 0;   // no warm hold live at rest
+            window.Minimize();                        // WindowState.Minimized — IsMinimized true next frame
+            host.RunFrame();                          // enter-minimize edge: no arm
+            double untilBeforeRestore = host.WarmCadenceUntilForTest;
+            window.State = WindowState.Normal;         // restore
+            host.RunFrame();                          // restore edge: warm cadence armed
+            bool restoreArmed = (host.CurrentWakeReasons & WakeReasons.WarmCadence) != 0
+                && host.WarmCadenceUntilForTest > untilBeforeRestore;   // deadline pushed forward on the restore edge
+            Check("gate.timer.warm-cadence.restore restoring from minimize arms the warm-cadence hold (kills the post-restore idle-gap stutter); a resting window does not",
+                coldAtRest && restoreArmed,
+                $"coldAtRest={coldAtRest} restoreArmed={restoreArmed}");
+        }
     }
 
     static void AsyncCommandChecks(StringTable strings)
