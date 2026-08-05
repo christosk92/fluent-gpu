@@ -397,13 +397,29 @@ static class AnimSuite
         SceneRecordStats user = SceneRecorder.Record(scene, dl);
         BlurCachePolicy userPolicy = FirstBlurPolicy(dl.Bytes);
 
+        // …and the FRAME-GLOBAL arm of the same gate. The hold is not only a lyrics-viewport scroll: AppHost latches
+        // `holdSelfBlurForScroll` for 0.12 s on ANY user scroll and the recorder ORs it in (`globalBlurHold ||
+        // userScrollActive`), so scrolling the MAIN app holds the lyrics panel's DoF layers while the panel itself is
+        // perfectly still — UserScrollActive false throughout. That is the exact state the "whole panel flashes crisp"
+        // report lives in, and nothing exercised it. Recorded from a CLEAN (untranslated) frame so the assertion is
+        // about the hold arm alone, not about motion.
+        scene.ClearTransformDirty();
+        scene.ClearRecordDirty();
+        scroll.UserScrollActive = false;
+        scene.Mark(lyric, NodeFlags.PaintDirty);
+        SceneRecordStats global = SceneRecorder.Record(scene, dl, holdSelfBlurForAnyUserScroll: true);
+        BlurCachePolicy globalPolicy = FirstBlurPolicy(dl.Bytes);
+
         bool programmaticKeepsDof = programmatic.BlurHoldCandidateCount == 0
             && programmaticPolicy == BlurCachePolicy.Normal;
         bool userMayHold = user.BlurHoldCandidateCount == 1
             && userPolicy == BlurCachePolicy.HoldIfCached;
-        Check("gate.lyrics.programmaticFollowKeepsDoF: a programmatic content translation records the full blur, while direct user scroll may hold it",
-            programmaticKeepsDof && userMayHold,
-            $"programmatic={programmaticPolicy}/hold{programmatic.BlurHoldCandidateCount} user={userPolicy}/hold{user.BlurHoldCandidateCount}");
+        bool globalHolds = global.BlurHoldCandidateCount == 1
+            && globalPolicy == BlurCachePolicy.HoldIfCached
+            && !scroll.UserScrollActive;
+        Check("gate.lyrics.programmaticFollowKeepsDoF: a programmatic content translation records the full blur, while direct user scroll — or a frame-global scroll hold with the panel itself still — may hold it",
+            programmaticKeepsDof && userMayHold && globalHolds,
+            $"programmatic={programmaticPolicy}/hold{programmatic.BlurHoldCandidateCount} user={userPolicy}/hold{user.BlurHoldCandidateCount} global={globalPolicy}/hold{global.BlurHoldCandidateCount}");
 
         static BlurCachePolicy FirstBlurPolicy(ReadOnlySpan<byte> bytes)
         {
@@ -2730,6 +2746,7 @@ static class AnimSuite
 
         StripInsideGroupChecks();
         LocalBlurSizeBailChecks();
+        StaleHoldPinChecks();
     }
 
     // ── the ENCLOSING-TARGET half of strip eligibility (EdgeFadeStrips.GroupAllowsStrip) ─────────────────────────────
@@ -2847,6 +2864,67 @@ static class AnimSuite
 
     static PushLayerCmd BlurLayer(RectF rect, float sigma)
         => new(rect, default, default, default, 0f, sigma, 0f, 0f, (int)LayerKind.Blur, 1f, CompositeClip: rect);
+
+    // gate.blur.staleHoldPin — the HoldIfCached MISS fallback (the lyrics "whole panel flashes crisp" fix).
+    //
+    // The asymmetry this closes: AcrylicScrollHold's contract is that a hold EXTENDS an existing snapshot and never
+    // invents one, while the self-blur hold used to substitute a CRISP, full-alpha inline rendering on a miss — and
+    // because the recorder folds a row's opacity into the layer's GroupAlpha and resets the subtree to 1, that fallback
+    // dropped the dim as well as the blur. A lyric-line advance moves the distance-keyed σ ladder on every visible row
+    // at once, so the whole panel took it in the same frame.
+    //
+    // The D3D12 path itself (pool entries, SRV banks, viewports) is unreachable headlessly, so the two decisions that
+    // make the fallback correct are gated on their portable helpers, which the leaf calls verbatim:
+    // BlurPinKey.StalePinEligible (WHICH pin may serve) and SelfBlurRegion.StalePinBox (WHERE it lands, and — the
+    // load-bearing half — at WHAT SIZE). Pixels remain a --screenshot check.
+    static void StaleHoldPinChecks()
+    {
+        const int cw = 1920, ch = 1080;
+        const ulong layer = 0x0000002A_00000007UL;    // a scene layer id (index|gen), as SceneRecorder packs it
+        const ulong other = 0x0000002B_00000007UL;
+        ulong now = 1000UL;
+
+        // WHICH: a live, already-blurred pin OF THIS LAYER within the age bound serves; every other entry does not.
+        bool servesOwn = BlurPinKey.StalePinEligible(layer, 0xABCDUL, blurReady: true, inUse: false, mintFence: now - 3UL, layer, now);
+        bool refusesOtherLayer = !BlurPinKey.StalePinEligible(other, 0xABCDUL, true, false, now - 3UL, layer, now);
+        bool refusesTransient = !BlurPinKey.StalePinEligible(layer, 0UL, true, false, now - 3UL, layer, now);   // PinHash 0 = a transient scratch slot
+        bool refusesUnblurred = !BlurPinKey.StalePinEligible(layer, 0xABCDUL, false, false, now - 3UL, layer, now);
+        bool refusesInUse = !BlurPinKey.StalePinEligible(layer, 0xABCDUL, true, true, now - 3UL, layer, now);
+        bool refusesAnonymous = !BlurPinKey.StalePinEligible(0UL, 0xABCDUL, true, false, now - 3UL, 0UL, now);   // id 0 = manual/test draw lists
+        // …and the staleness BOUND: a layer id packs a node handle, and a recycled index+gen pair is the one route to a
+        // wrong-content pin. At the limit it still serves; one frame past it, it does not.
+        bool servesAtLimit = BlurPinKey.StalePinEligible(layer, 0xABCDUL, true, false, now - (ulong)BlurPinKey.StalePinMaxAgeFrames, layer, now);
+        bool refusesTooOld = !BlurPinKey.StalePinEligible(layer, 0xABCDUL, true, false, now - (ulong)BlurPinKey.StalePinMaxAgeFrames - 1UL, layer, now);
+        // The hold latch it must outlive is 0.12 s of scroll — ~8 frames at 60 Hz, ~15 at 120.
+        bool boundOutlivesHold = BlurPinKey.StalePinMaxAgeFrames >= 16;
+        Check("gate.blur.staleHoldPin.eligibility: a hold miss serves only a LIVE, already-blurred, age-bounded pin of its OWN layer (never another node's, never a transient slot, never an in-use lease)",
+            servesOwn && refusesOtherLayer && refusesTransient && refusesUnblurred && refusesInUse && refusesAnonymous
+            && servesAtLimit && refusesTooOld && boundOutlivesHold,
+            $"own={servesOwn} otherLayer={refusesOtherLayer} transient={refusesTransient} unblurred={refusesUnblurred} inUse={refusesInUse} anon={refusesAnonymous} limit={servesAtLimit}/{refusesTooOld} bound={BlurPinKey.StalePinMaxAgeFrames}");
+
+        // WHERE + WHAT SIZE. The pin was minted for other content at another σ, so its size is NOT this frame's region
+        // size. It must be drawn at its OWN size at THIS frame's region origin: position follows the node (a held blur
+        // still scrolls), size never does — mapping its UV[0,1] onto the current region is exactly the stretch the
+        // size-exact FindPin pairing exists to make impossible.
+        var thin = BlurLayer(new RectF(100f, 400f, 300f, 40f), 3f);     // this frame: σ3 ⇒ halo 9 ⇒ 318 x 58
+        SelfBlurRegion.RegionBox(in thin, 1f, cw, ch, out int rx, out int ry, out int rxe, out int rye);
+        int pinW = rxe - rx + 24, pinH = rye - ry + 24;                  // the pin: a FATTER σ from an earlier frame
+        var box = SelfBlurRegion.StalePinBox(in thin, 1f, cw, ch, pinW, pinH);
+        bool noStretch = box.Width == pinW && box.Height == pinH;
+        bool atCurrentOrigin = box.MinX == rx && box.MinY == ry;
+        bool differsFromRegion = box.MaxX != rxe || box.MaxY != rye;     // the whole point: sizes genuinely disagree
+        // A pure translation moves the box with the node, and nothing else about it changes.
+        var moved = BlurLayer(new RectF(140f, 460f, 300f, 40f), 3f);
+        var movedBox = SelfBlurRegion.StalePinBox(in moved, 1f, cw, ch, pinW, pinH);
+        SelfBlurRegion.RegionBox(in moved, 1f, cw, ch, out int mx, out int my, out _, out _);
+        bool travels = movedBox.MinX == mx && movedBox.MinY == my
+                    && movedBox.Width == pinW && movedBox.Height == pinH;
+        // A degenerate pin is no pin (the caller falls through to the crisp inline fallback).
+        bool emptyIsEmpty = SelfBlurRegion.StalePinBox(in thin, 1f, cw, ch, 0, 0).IsEmpty;
+        Check("gate.blur.staleHoldPin.geometry: a stale pin composites at THIS frame's region origin sized from the PIN's own W/H — it travels, and it is never stretched onto the current region box",
+            noStretch && atCurrentOrigin && differsFromRegion && travels && emptyIsEmpty,
+            $"box={box} pin=({pinW}x{pinH}) region=({rx},{ry},{rxe},{rye}) moved={movedBox} empty={emptyIsEmpty}");
+    }
 
     static void AnimEngineChecks(StringTable strings)
     {

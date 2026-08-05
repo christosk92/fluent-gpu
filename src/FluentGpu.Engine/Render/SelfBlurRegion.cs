@@ -139,6 +139,21 @@ public static class SelfBlurRegion
         maxY = Math.Min(canvasH, (int)MathF.Ceiling((L.DeviceRect.Y + L.DeviceRect.H) * scale) + r);
     }
 
+    /// <summary>Where a STALE pin lands when it serves a HoldIfCached miss (<see cref="BlurPinKey.StalePinEligible"/>):
+    /// at THIS frame's <see cref="RegionBox"/> ORIGIN, sized from the PIN's own <paramref name="pinW"/>/<paramref name="pinH"/>.
+    /// The pin was minted for a different content/σ/size, so its box is NOT this frame's region box — and mapping its
+    /// UV[0,1] onto this frame's (taller/shorter) region would STRETCH it, the exact distortion the size-exact
+    /// <see cref="RegionBox"/>/FindPin pairing exists to make impossible. Position follows the current frame (a held
+    /// blur still scrolls with its node); size never does. Off-canvas overhang is left to the caller's scissor — the
+    /// box is deliberately NOT clamped to the canvas, because clamping would shrink the viewport and reintroduce the
+    /// stretch it exists to prevent.</summary>
+    public static SelfBlurPixelBox StalePinBox(in PushLayerCmd L, float scale, int canvasW, int canvasH, int pinW, int pinH)
+    {
+        if (pinW <= 0 || pinH <= 0) return default;
+        RegionBox(in L, scale, canvasW, canvasH, out int minX, out int minY, out _, out _);
+        return new SelfBlurPixelBox(minX, minY, minX + pinW, minY + pinH);
+    }
+
     /// <summary>True iff the halo-inflated region is clamped by a CANVAS edge — i.e. the UNCLAMPED box would poke
     /// outside <c>[0,canvasW] × [0,canvasH]</c>. A clamped region captures only a PARTIAL strip, so its pin is smaller
     /// than the full on-canvas strip; the compositor's size-exact <c>FindPin</c> keeps the two distinct (a clamped pin

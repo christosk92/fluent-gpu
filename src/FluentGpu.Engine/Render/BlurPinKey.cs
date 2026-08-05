@@ -40,6 +40,27 @@ public static class BlurPinKey
     public static bool CanUseStationaryCache(in PushLayerCmd layer)
         => layer.Kind == (int)LayerKind.Blur && layer.BlurSigma > 0f && layer.BlurIsTransient == 0;
 
+    /// <summary>How many SUBMITTED frames a pin may serve as a STALE fallback after its last real mint. A hold miss with
+    /// no live pin of its own composites the node's most recent pin instead of flashing the subtree crisp (see
+    /// <see cref="StalePinEligible"/>); that pin is keyed by LAYER ID, and a layer id is only as stable as the node handle
+    /// it packs. A recycled index+gen pair therefore has a theoretical route to a WRONG-CONTENT pin, so the fallback is
+    /// bounded in time as well as by liveness. ~1.5 s at 60 Hz: far longer than the 0.12 s scroll-hold latch this serves
+    /// (so a real hold never runs out of pin) and far shorter than any plausible recycle-and-still-holding window.</summary>
+    public const int StalePinMaxAgeFrames = 90;
+
+    /// <summary>May pool entry <paramref name="entryLayerId"/> serve <paramref name="layerId"/>'s HoldIfCached MISS as a
+    /// STALE pin? Mirrors the acrylic contract (<c>AcrylicScrollHold</c>): a hold extends an EXISTING snapshot and never
+    /// invents one, so the entry must be a live, already-blurred pin of THIS layer whose last real mint is within
+    /// <see cref="StalePinMaxAgeFrames"/>. Unlike the exact <c>FindPin</c> this deliberately ignores BOTH the content
+    /// hash and the region SIZE — the whole point is to serve a frame whose content/σ/size just changed — which is why
+    /// the composite must never stretch: it draws the pin at its OWN pixel size (see
+    /// <see cref="SelfBlurRegion.StalePinBox"/>).</summary>
+    public static bool StalePinEligible(ulong entryLayerId, ulong entryPinHash, bool blurReady, bool inUse,
+        ulong mintFence, ulong layerId, ulong frameFence)
+        => layerId != 0 && entryLayerId == layerId && entryPinHash != 0 && blurReady && !inUse
+           && mintFence != 0 && frameFence >= mintFence
+           && frameFence - mintFence <= (ulong)StalePinMaxAgeFrames;
+
     /// <summary>Compute the position-independent pin key for the self-blur subtree starting at <paramref name="start"/>
     /// (the first op AFTER the <see cref="PushLayerCmd"/>) up to its matching <see cref="DrawOp.PopLayer"/>. Returns
     /// false (uncacheable, render normally) on a nested <see cref="DrawOp.PushLayer"/> or any unrecognized op.

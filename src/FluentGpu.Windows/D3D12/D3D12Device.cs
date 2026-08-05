@@ -86,6 +86,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // by the recorder's scroll-defer (it drops the blur entirely while that viewport is in motion).
     private int _blurCacheHit, _blurCacheMiss;   // per-frame diagnostics (Diag "d3d12" blurCacheHit/Miss)
     private int _blurHoldHit, _blurHoldFallback; // per-frame diagnostics for hold-if-cached blur layers
+    // Hold MISSES served by the node's most recent pin (OpacityLayerCompositor.CompositeStalePin) instead of the crisp
+    // inline fallback. Split out of _blurHoldFallback deliberately: a stale composite is a CORRECT-LOOKING frame (blurred
+    // + dimmed, one content generation old) whereas a fallback is the white flash, so a live session must be able to tell
+    // "the hold is working" from "the hold gave up" at a glance.
+    private int _blurHoldStale;
     // Blur-cache recurrence test: a self-blur is PINNED (retained) on a miss ONLY when its content hash recurred from the
     // PREVIOUS frame (⇒ a STATIONARY surface that will hit next frame). Scrolling/animating content has a fresh hash every
     // frame ⇒ never recurs ⇒ renders into a transient slot ⇒ no per-layer distinct-RT churn (pinning every scroll miss
@@ -131,6 +136,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public int LastBlurCacheMiss => _blurCacheMiss;
     public int LastBlurHoldHit => _blurHoldHit;
     public int LastBlurHoldFallback => _blurHoldFallback;
+    /// <summary>Hold misses this frame that composited the node's most recent (STALE) pin — a held blur that kept its
+    /// blur AND its dim, instead of the crisp full-alpha fallback counted by <see cref="LastBlurHoldFallback"/>.</summary>
+    public int LastBlurHoldStale => _blurHoldStale;
     public int LastOpacityGroups => _opacity?.GroupsThisFrame ?? 0;
     // Per-kind split of LastOpacityGroups (they sum to it) — layer-heavy frames are attributable without a GPU capture.
     public int LastPlainOpacityGroups => _opacity?.OpacityGroupsThisFrame ?? 0;
@@ -1028,7 +1036,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _frameScissorSets = 0; _frameScissorSkipped = 0;
         _frameSegments = 0; _frameRuns = 0; _frameClipOps = 0; _frameLayerOps = 0;
         _sceneCurCat = CatNone; _sceneMarkCount = 0; _sceneCatCount[_frameIndex] = 0;   // reset the per-category scene-split timeline (FG_GPU_TIMING)
-        _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0;
+        _blurCacheHit = 0; _blurCacheMiss = 0; _blurHoldHit = 0; _blurHoldFallback = 0; _blurHoldStale = 0;
         _edgeFadeStripFallbacks = 0;   // reset HERE (not only in SubmitWithLayers) so a layer-free frame reports 0, not the last layered frame's count
         _efStripRejectNested = 0; _efStripRejectDepth = 0; _efStripRejectScratch = 0;
         _frameRectOpaqueInsts = 0; _frameRectBlendedInsts = 0;
@@ -1111,6 +1119,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         Diag.Set("d3d12", "blurCacheMiss", _blurCacheMiss);                   // blur layers re-rendered+re-blurred (content/position/σ changed)
         Diag.Set("d3d12", "blurHoldHit", _blurHoldHit);
         Diag.Set("d3d12", "blurHoldFallback", _blurHoldFallback);
+        Diag.Set("d3d12", "blurHoldStale", _blurHoldStale);
         Diag.Set("d3d12", "segments", _frameSegments);                        // non-empty FlushSegment calls (clips flush only when pending draws need the old scissor)
         Diag.Set("d3d12", "runs", _frameRuns);                                // painter-order runs replayed across all segments
         Diag.Set("d3d12", "clipOps", _frameClipOps);                          // Push/PopClip ops decoded this frame
@@ -2057,10 +2066,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         // slot — going region-local would silently retire the whole pin cache for that node). The
                         // attempt IS the size predicate: TryAcquireLocalBlur declines when the guarded work box is not
                         // smaller than the canvas on both axes, and then nothing was leased and we fall through to the
-                        // canvas lease exactly as before. `holdIfCached` is excluded so the hold/skip policy below keeps
-                        // its documented meaning; the flat-subtree precondition is already proven (TryCompute succeeded,
-                        // i.e. no nested PushLayer), which is what makes the shifted viewport legal.
-                        if (!willMintPin && !holdIfCached && L.BlurSigma > 0f
+                        // canvas lease exactly as before. Only HoldOrSkipOnMiss is excluded — its whole contract is that a
+                        // miss DROPS the subtree rather than paying for it, and it never renders crisp, so it has nothing
+                        // to gain here. HoldIfCached is deliberately INCLUDED (it used to be excluded with the rest of the
+                        // hold policies): a FIRST-SIGHT small-σ hold miss — a lyric line whose distance-keyed σ crossed a
+                        // pin bucket during a scroll-hold, before any pin for that content exists — then renders a correct
+                        // fresh blur instead of falling through to the crisp inline fallback below. σ > 4 first-sights
+                        // decline here (TryAcquireLocalBlur refuses a downsampled schedule) and land on the stale pin.
+                        // The flat-subtree precondition is already proven (TryCompute succeeded, i.e. no nested
+                        // PushLayer), which is what makes the shifted viewport legal.
+                        if (!willMintPin && !skipOnHoldMiss && L.BlurSigma > 0f
                             && _opacityGroups.Count == 0 && TryBeginRegionLocalBlur(in L))
                         {
                             _blurCacheMiss++;   // still a pin MISS — the census must not read as a hit just because it went local
@@ -2077,8 +2092,31 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                         }
                         if (holdIfCached)
                         {
-                            if (skipOnHoldMiss) pos = afterPop;
-                            else _layerKinds.Add(NoopLayerKind);
+                            if (skipOnHoldMiss) { pos = afterPop; _blurHoldFallback++; continue; }
+                            // HoldIfCached miss, and the region-local path above declined (σ > 4 / canvas-sized / nested).
+                            // ADOPT THE ACRYLIC CONTRACT (AcrylicScrollHold: a hold extends an EXISTING snapshot): serve
+                            // the node's most recent pin, positioned at this frame's origin and drawn at its own size, at
+                            // THIS frame's GroupAlpha. One content generation of staleness is imperceptible under a blur
+                            // and under motion — where the old fallback (NoopLayerKind: draw the subtree INLINE, and the
+                            // recorder has already folded the row's opacity into GroupAlpha and reset the subtree to 1)
+                            // published the whole subtree CRISP and at FULL brightness. That is the lyrics panel's
+                            // "everything goes white" flash: a line advance shifts the σ/emphasis ladder across the whole
+                            // visible window at once, so every row misses in the same frame.
+                            int stale = _opacity.FindLastPinForLayer(L.LayerId, _fenceValue + 1);
+                            if (stale >= 0)
+                            {
+                                if (_opacityGroups.Count > 0) BindOpacityGroupTarget(_opacityGroups[^1]);
+                                else BindLayerTopTarget(directToBackBuffer, backRtv);
+                                _opacity.CompositeStalePin(_cmdList, stale, L.GroupAlpha, in L, _frameScale, CurrentScissorRect());
+                                InvalidateCmdState();   // the composite bound its own PSO/heap + viewport/scissor
+                                ApplyCurrentScissor();
+                                _blurHoldStale++;
+                                pos = afterPop;         // the subtree is represented by the pin — skip it and its PopLayer
+                                continue;
+                            }
+                            // NEVER pinned (and too big to blur locally): there is nothing to hold, so the subtree draws
+                            // inline. This is the ONLY surviving crisp fallback.
+                            _layerKinds.Add(NoopLayerKind);
                             _blurHoldFallback++;
                             continue;
                         }

@@ -451,6 +451,46 @@ sealed class LyricsView : Component
     const float InterludeBreathAlpha = 0.10f;   // …and of the alpha pulse, so a FULLY filled dot still peaks at exactly 1
     const float InterludeDotWriteEps = 0.004f;  // ≈1/255: below this an alpha write cannot change a pixel
 
+    // ── The dots' RESERVED BAND ──────────────────────────────────────────────────────────────────────────────────────
+    // The dots are still an overlay (the blast-radius reasoning above is unchanged — no pseudo-row, no index mapping
+    // grows a conditional), but an overlay that draws over the lyrics is not free of layout: with no reserved space they
+    // sat inside the retired line above (its glyph bottom is only rowPad clear of the anchor row) and, once the anchor
+    // wrapped to three lines, inside the anchor's OWN text. So the ANCHOR ROW buys the space, conditionally, for exactly
+    // as long as it is the anchor: `dot + 2·air` of extra TOP PAD.
+    //
+    // PAD, not MARGIN, and that is load-bearing: the measured-virtual seam feeds the extent table from
+    // Measure(row) — the row's own BORDER box, which excludes its margin (FlexLayout.Measure adds MarginMain in the
+    // PARENT's loop) — while pass 2 arranges into `slot − margin`. A top margin would therefore reserve nothing and
+    // SQUASH the row by the same amount. Padding is inside the border box, so measure and arrange agree exactly.
+    //
+    // WHERE IT GOES. The follow centres the row's CONTENT box (row minus the reserve) on the focal band — see
+    // ScrollActiveIntoView — so the sung line does not move at all when the reserve arms; the space opens ABOVE it and
+    // the dots sit in it. Air is measured off the type size on both surfaces.
+    // VERIFICATION is live, not gated, and deliberately so: this geometry is a LyricsView + measured-virtual-layout
+    // interaction, and LyricsView is outside every test closure the repo has (Wavee.Tests source-includes only the
+    // engine-free Backend; the VerticalSlice references Engine+Controls and never the app). Repro: play a word-by-word
+    // track with a ≥5 s instrumental break, let the follow park through it on BOTH surfaces (rail + immersive), and
+    // check the dots sit in their own band with clear air above and below — including when the anchor line wraps to
+    // two or three lines, and while the handoff cascade is still settling.
+    internal static float InterludeDotSize(bool large) => large ? 12f : 9f;
+    internal static float InterludeDotAir(bool large) => large ? 10f : 8f;
+    internal static float InterludeReserveDip(bool large) => InterludeDotSize(large) + 2f * InterludeDotAir(large);
+    // How far the dots' BOTTOM edge sits above the focal band at REST (the build-time flex anchor; DriveInterludeDots
+    // adds a dynamic lift for rows too tall for it). One definition, read by the anchor math and the per-frame lane.
+    internal static float InterludeDotLift(bool large) => large ? 48f : 36f;
+
+    // The line currently holding the reserve, or -1. Armed when the dots go up, released at the NEXT HANDOFF (never at
+    // the dots' own exit: that lands one second before the next line starts, so the document would close the gap — and
+    // jump — in the middle of the silence) and at follow detach. Both release edges coincide with a latch+cascade, which
+    // is what absorbs the height change as motion instead of a snap.
+    int _interludeReserveLine = -1;
+    // Frames after a reserve edge during which the follow re-evaluates its target. The height change reaches the extent
+    // table only on the NEXT arrange, so the frame that arms cannot see it; re-running ScrollActiveIntoView for a few
+    // frames lets the ordinary handoff branch (delta > 0.5 ⇒ LatchViewport + ArmCascade) pick the correction up on
+    // whichever frame the measure lands, and no-op on the others.
+    const int ReserveRelatchFrames = 4;
+    int _reserveRelatchFrames;
+
     // Whether the dots are mounted. Flipped exactly TWICE per interlude (Signal<T> coalesces the equal writes), so the
     // ShowEl re-renders twice per break and never per frame; the per-frame lane writes only the scene + the dot alphas.
     readonly Signal<bool> _dotsShown = new(false);
@@ -461,13 +501,14 @@ sealed class LyricsView : Component
 
     Element InterludeDots()
     {
-        float d = _large ? 12f : 9f;
+        float d = InterludeDotSize(_large);
         float gap = _large ? 10f : 8f;
-        // How far the dots' BOTTOM edge sits above the focal band. The band centres the upcoming row, whose single-line
-        // height is RowLineHeight + 2·rowPad (47 rail / 64 immersive), so half of that is where the row's TOP edge is:
-        // 36 and 48 leave ~12 and ~16 DIP of air above it — clear of the lyric, and nowhere near the line that just
-        // retired one row further up.
-        float lift = _large ? 48f : 36f;
+        // How far the dots' BOTTOM edge sits above the focal band AT REST. The band centres the upcoming row's CONTENT
+        // box, whose single-line height is RowLineHeight + 2·rowPad (47 rail / 64 immersive), so half of that is where
+        // that box's TOP edge is: 36 and 48 leave ~12 and ~16 DIP of air above it, inside the band the anchor row now
+        // reserves (InterludeReserveDip). A TALLER (wrapped) anchor pushes its own top edge past this constant, which is
+        // what DriveInterludeDots' dynamic extra lift answers — the rest anchor stays a pure build-time constant.
+        float lift = InterludeDotLift(_large);
         float band = FocalBand;
         // The anchor, in pure flex and with no geometry read at all: two EMPTY Grow spacers (basis 0) split the panel's
         // free space at exactly `band`, and the dots row's own bottom MARGIN buys back the difference. Solving
@@ -591,12 +632,60 @@ sealed class LyricsView : Component
             if (MathF.Abs(alpha[k].Peek() - a) >= InterludeDotWriteEps) alpha[k].Value = a;
         }
 
+        // LIFT — the one geometry read in this lane. The flex anchor above is exact for a SINGLE-LINE anchor row; a
+        // wrapped (2-3 line) one has a taller content box, so its top edge — and with it the reserved band the dots must
+        // sit in — is further above the focal band than the build-time `lift` constant assumes. Solve for the dots'
+        // bottom edge sitting `air` above that top edge: bottom = band − (H/2 + air) ⇒ extra = H/2 + air − lift, floored
+        // at 0 so a short row keeps the rest anchor (and the dots never drift DOWN into the lyric). H is the row's
+        // CONTENT height, i.e. the measured extent minus the reserve this same row is carrying.
+        // On the one or two frames between arming the reserve and the arrange that measures it, the extent is still the
+        // UNRESERVED height while the subtraction already applies, so H reads one reserve short and the extra lift comes
+        // out a little low. That is nil for a single-line anchor (both values floor at 0) and a few DIP for a wrapped
+        // one — and it lands during the dots' own scale+fade enter, on the same frames the handoff cascade is flying.
+        float extraLift = 0f;
+        int anchor = _activeLine.Peek();
+        if (_layout is { } lay && anchor >= 0 && !_viewportNode.IsNull && scene.IsLive(_viewportNode) && scene.HasScroll(_viewportNode))
+        {
+            ref ScrollState sc = ref scene.ScrollRef(_viewportNode);
+            float rowH = lay.ItemRect(anchor, sc.ViewportW).H - ReserveOf(anchor);
+            extraLift = MathF.Max(0f, rowH * 0.5f + InterludeDotAir(_large) - InterludeDotLift(_large));
+        }
+
         var h = _dotsRowNode;
         if (h.IsNull || !scene.IsLive(h)) return;
         ref NodePaint paint = ref scene.Paint(h);
-        if (MathF.Abs(paint.LocalTransform.M11 - breathS) < 0.002f) return;
-        paint.LocalTransform = breathS >= 1f ? Affine2D.Identity : Affine2D.Scale(breathS, breathS);
+        // Both channels live in ONE matrix (a node has a single transform owner), so the early-out must compare BOTH —
+        // gating on the breath scale alone would swallow a lift change on any frame the pulse happened to be flat.
+        float dy = -extraLift;   // the matrix translates DOWN-positive; the lift is upward
+        if (MathF.Abs(paint.LocalTransform.M11 - breathS) < 0.002f && MathF.Abs(paint.LocalTransform.Dy - dy) < 0.05f) return;
+        paint.LocalTransform = breathS >= 1f && dy == 0f
+            ? Affine2D.Identity
+            : new Affine2D(breathS, 0f, 0f, breathS, 0f, dy);
         scene.Mark(h, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+    }
+
+    // The vertical space line `index` is currently reserving for the dots (0 unless it is the interlude anchor).
+    float ReserveOf(int index) => index >= 0 && index == _interludeReserveLine ? InterludeReserveDip(_large) : 0f;
+
+    // Arm/release the reserved band. One write per edge, through the SAME per-line emphasis signal the ladder already
+    // uses (bit 3, free since the deleted recede), so exactly the one or two affected rows re-render — a shared
+    // "interlude anchor" signal read by every row would re-render the whole realized document twice per break.
+    void SetInterludeReserve(int line)
+    {
+        if (_interludeReserveLine == line) return;
+        int prev = _interludeReserveLine;
+        _interludeReserveLine = line;
+        var em = _lineEmphasis;
+        int active = _activeLine.Peek();
+        if ((uint)prev < (uint)em.Length) em[prev].Value = PackEmphasis(prev, active, line);
+        if ((uint)line < (uint)em.Length) em[line].Value = PackEmphasis(line, active, line);
+        // A row height changed mid-document: the same recovery the secondary-line toggle uses, minus the hard re-latch.
+        // Re-arranging is what feeds the corrected extent into the table; the follow then rides its ORDINARY handoff
+        // branch (see _reserveRelatchFrames) so the document travels to the new target with the cascade, instead of
+        // ResetScrollSnap's first-landing jump — which would also zero the cascade the interlude handoff just armed.
+        if (Context.Scene is { } sc && !_viewportNode.IsNull && sc.IsLive(_viewportNode))
+            sc.Mark(_viewportNode, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty);
+        _reserveRelatchFrames = ReserveRelatchFrames;
     }
 
     // Retire the dots. The ShowEl unmount runs the Exit terminal; dropping the handle guarantees the per-frame lane can
@@ -846,8 +935,12 @@ sealed class LyricsView : Component
         // (usually none: an upgrade lands at the same position on the same lines).
         if (!sameShape)
         {
+            // A new line set: whatever line was holding the interlude band no longer means anything, and the freshly
+            // minted signals must not carry bit 3 into it. (A SAME-shape upgrade keeps the signals AND the anchor —
+            // same lines, same break, and the band is mid-flight.)
+            _interludeReserveLine = -1;
             _lineEmphasis = new Signal<int>[doc.Lines.Count];
-            for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive));
+            for (int i = 0; i < _lineEmphasis.Length; i++) _lineEmphasis[i] = new Signal<int>(PackEmphasis(i, seedActive, -1));
         }
         _glowInLine = -1; _glowOutLine = -1;
         if (timed)
@@ -907,8 +1000,8 @@ sealed class LyricsView : Component
         return true;
     }
 
-    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, bit 3 UNUSED (it carried the
-    // deleted interlude recede — see the interlude block; the past bit deliberately stays at bit 4 so the ladder's
+    // Packed per-line emphasis: bucket (distance from active, clamped 0..6) in bits 0-2, INTERLUDE RESERVE in bit 3 (it
+    // once carried the deleted recede and was free; the past bit deliberately stays at bit 4 so the ladder's
     // `& 16` test and every packed value above bucket 6 are unchanged), PAST flag in bit 4. Clamp 6 is exact for the
     // look — the DoF ladder saturates at ring 5 and the glyph-mount `near`
     // threshold is dist ≤ 2, so any line ≥6 away is visually identical; clamping lets far lines share bucket 6 and skip
@@ -919,10 +1012,16 @@ sealed class LyricsView : Component
     // ladders (LyricLineView.OpacityOf). It is deliberately NOT set at the saturated bucket 6: both ladders bottom out at
     // the same 0.10/σ 6.5 there, so tagging far lines would be visually identical while breaking the far-line no-op —
     // every line above the active one would re-render on a seek instead of sitting silent at bucket 6.
-    static int PackEmphasis(int index, int active)
+    // Bit 3 (reserve) is the interlude anchor's extra TOP PAD — the band the breathing dots occupy (see the reserve
+    // block above). It rides the emphasis signal rather than a signal of its own because that signal is already
+    // per-line and value-gated: arming the reserve then re-renders exactly the anchor row, and releasing it exactly the
+    // row that had it. It carries no ladder meaning — OpacityOf ignores it, `dist`/`past` are unchanged — so a line's
+    // brightness, scale and σ are identical whether or not it is holding the band.
+    static int PackEmphasis(int index, int active, int reserveLine)
     {
         int bucket = active < 0 ? 6 : Math.Min(Math.Abs(index - active), 6);
         int e = bucket;
+        if (index == reserveLine) e |= 8;                           // holds the interlude dots' reserved band
         if (active >= 0 && index < active && bucket < 6) e |= 16;   // already sung ⇒ the dimmer of the two ladders
         return e;
     }
@@ -936,7 +1035,8 @@ sealed class LyricsView : Component
         var em = _lineEmphasis;
         if (em.Length == 0) return;
         int active = _activeLine.Peek();
-        for (int i = 0; i < em.Length; i++) em[i].Value = PackEmphasis(i, active);
+        int reserve = _interludeReserveLine;
+        for (int i = 0; i < em.Length; i++) em[i].Value = PackEmphasis(i, active, reserve);
     }
 
     void ClearDocument()
@@ -978,6 +1078,10 @@ sealed class LyricsView : Component
         _activeLine.Value = -1;
         _voiceLine.Value = -1;
         HideInterludeDots();
+        // The emphasis signals are gone with the document, so this is a plain field reset — SetInterludeReserve would
+        // have nothing to write to (and ResetFollowState above no-ops when the mode was already Following).
+        _interludeReserveLine = -1;
+        _reserveRelatchFrames = 0;
         _nowMs.Value = 0f;
         _scrollSnapped = false;
         ResetWipeThrottle();
@@ -1596,7 +1700,10 @@ sealed class LyricsView : Component
         // every mode transition goes through, so detach + resync are both covered here. The interlude dots go with it
         // and for the same reason — they are a follow-owned overlay — retired HERE so the ShowEl exit animation runs at
         // the detach EDGE rather than one frame later in OnFrame's gate.
-        if (next != LyricsFollowMode.Following) { ZeroCascade(scene); HideInterludeDots(); }
+        // …and the reserved band goes with them: it exists only to hold space for the dots, so leaving it armed would
+        // park a 25-32 DIP hole above a line the user has scrolled away from. This is the OTHER release edge (the first
+        // is the next handoff); the dots' own exit, one second before the next line, deliberately is not.
+        if (next != LyricsFollowMode.Following) { ZeroCascade(scene); HideInterludeDots(); SetInterludeReserve(-1); }
         if (wasSuppressed != nowSuppressed) ApplyDofSuppression(scene);
     }
 
@@ -1788,16 +1895,27 @@ sealed class LyricsView : Component
         if (scene is null) return;
         TickFollowState(scene, wallMs);
 
-        // ── Core lane (always): programmatic scroll follow + the interlude dots ──
-        if (active >= 0 && (uint)active < (uint)doc.Lines.Count && (!_scrollSnapped || activeChanged || forceVisual))
-            ScrollActiveIntoView(scene, active, FollowScrollIntent.Normal);
+        // ── Core lane (always): the reserved band, the programmatic scroll follow, then the interlude dots ──
         // The dots are mounted for the break MINUS its last second, so they are gone before the next line's first
         // syllable lands and that handoff stays the clean one it always was. Outside a break this is one bool Peek.
         // FOLLOW-GATED like every other follow-owned visual: once the user has scrolled away, the dots would be a
         // filling, pulsing overlay floating over whatever lyrics they are reading, next to the resync pill. They come
         // back with the follow (SetFollowMode runs the exit at the detach edge so the retirement is animated, not a
         // frame-boundary disappearance).
-        if (_followMode.Peek() == LyricsFollowMode.Following && inInterlude && nowMs < gapEnd - InterludeDotsExitMs)
+        bool dotsUp = _followMode.Peek() == LyricsFollowMode.Following && inInterlude && nowMs < gapEnd - InterludeDotsExitMs;
+        // The band's two edges, decided BEFORE the follow runs so an arm and its first latch can share a frame. RELEASE
+        // rides the next handoff (a height change is only ever paid for while the document is already travelling);
+        // ARMING is the dots' own onset, which IS a handoff (AdvancePastInterlude lands in `active` before
+        // `activeChanged` is computed). Ordered release-then-arm so back-to-back breaks hand the band over cleanly.
+        if (activeChanged && _interludeReserveLine >= 0 && _interludeReserveLine != active) SetInterludeReserve(-1);
+        if (dotsUp && _interludeReserveLine != active) SetInterludeReserve(active);
+        // A reserve edge changes a row height that this frame's extent table has not seen yet — keep the follow live for
+        // a few frames so the arrange that measures it is followed by an ordinary latch+cascade onto the new target.
+        bool reserveRelatch = _reserveRelatchFrames > 0;
+        if (reserveRelatch) _reserveRelatchFrames--;
+        if (active >= 0 && (uint)active < (uint)doc.Lines.Count && (!_scrollSnapped || activeChanged || reserveRelatch || forceVisual))
+            ScrollActiveIntoView(scene, active, FollowScrollIntent.Normal);
+        if (dotsUp)
         {
             _dotsShown.Value = true;
             DriveInterludeDots(scene, nowMs, gapStart, gapEnd);
@@ -2041,7 +2159,13 @@ sealed class LyricsView : Component
         layout.SetViewport(sc.ViewportH, sc.ViewportW);
 
         RectF item = layout.ItemRect(active, sc.ViewportW);
-        float target = item.Y + item.H * 0.5f - sc.ViewportH * _band;
+        // The band centres the row's CONTENT box, not its outer box. They differ by exactly one thing: the interlude
+        // reserve, a top pad the anchor row carries while the dots are up (see the reserve block). Centring the padded
+        // outer box would drop the sung line by half the reserve for the whole break and lift it back at the handoff —
+        // a focal line that drifts is precisely what the follow exists to prevent. Skipping the reserve instead opens
+        // the whole band ABOVE the line and leaves the line itself exactly where it always sits.
+        float reserve = MathF.Min(ReserveOf(active), item.H);
+        float target = item.Y + reserve + (item.H - reserve) * 0.5f - sc.ViewportH * _band;
         target = Math.Clamp(target, 0f, MathF.Max(0f, sc.ContentH - sc.ViewportH));
 
         if (!_scrollSnapped && intent == FollowScrollIntent.Normal)
@@ -2300,6 +2424,11 @@ sealed class LyricLineView : Component
         int dist = e & 7;                        // bucket 0..6 (clamped distance from the active line)
         bool past = (e & 16) != 0;               // already sung — rides the dimmer of the two opacity ladders
         bool isActive = dist == 0;               // bucket 0 ⇔ this is the active line
+        // Bit 3: this row is the interlude anchor and owes the breathing dots a band of real space above its text (the
+        // overlay reserves nothing on its own — it used to draw straight over the retired line and, on a wrapped anchor,
+        // over its own lyric). Purely additive top PAD: it changes no ladder value, so the row's colour, scale, opacity
+        // and σ are byte-identical with and without it — the only thing that moves is where its text sits.
+        float reserve = (e & 8) != 0 ? LyricsView.InterludeReserveDip(_large) : 0f;
 
         // Emphasis targets. Active line: full focus (scale 1 / opacity 1 / crisp). A row has NO interlude state of its
         // own any more — an instrumental break retires the finished line onto the past ladder and advances focus (see
@@ -2480,7 +2609,7 @@ sealed class LyricLineView : Component
             // No fixed Height — the row sizes to its text (1 line short, 2 lines tall); the measured layout reads that
             // natural height so there is no dead space. Vertical padding (_rowPad) is the inter-line gap.
             Shrink = 0f,
-            Padding = new Edges4(_sidePad, _rowPad, _sidePad, _rowPad),
+            Padding = new Edges4(_sidePad, _rowPad + reserve, _sidePad, _rowPad),
             Justify = FlexJustify.Center,
             AlignItems = FlexAlign.Stretch,
             // LEFT-anchored emphasis scale on BOTH surfaces: rows breathe about their leading margin instead of their

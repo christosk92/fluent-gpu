@@ -62,6 +62,13 @@ internal sealed unsafe class OpacityLayerCompositor : IDisposable
         public ulong PinHash;                  // 0 = transient slot; else the blur-cache content hash this slot retains
         public bool BlurReady;                 // (pins) the RT currently holds the FINAL blurred result for PinHash
         public int RegionX, RegionY;           // (pins) physical-px screen origin of the retained blur region (for the composite)
+        // (pins) WHICH scene layer minted this pin, and WHEN. PinHash identifies the CONTENT; these identify the NODE and
+        // the age, which is what the hold-miss fallback needs: on a HoldIfCached miss the layer has no pin for its new
+        // content, so FindLastPinForLayer serves its most recent one instead of a crisp flash (see CompositeStalePin).
+        // Cleared with the rest of the entry on every retire/evict path (`= default`), so a recycled slot can never
+        // present another node's pixels as this node's.
+        public ulong PinLayerId;
+        public ulong PinMintFence;
         // What resource each parity bank's SRV descriptor for this slot currently DESCRIBES (null = never written).
         // Lets Acquire/FindPin skip the per-frame CreateShaderResourceView when the slot's resource is unchanged —
         // the descriptor write was pure per-acquire overhead. Every retire/recreate path clears the whole entry
@@ -1427,6 +1434,67 @@ float4 BlurPS(V i) : SV_Target
 
         e.PinHash = hash; e.BlurReady = true; e.InUse = false; e.IdleFrames = 0; e.LastUseFence = frameFence;
         e.RegionX = minX; e.RegionY = minY;
+        e.PinLayerId = L.LayerId; e.PinMintFence = frameFence;   // the hold-miss fallback's key + age (FindLastPinForLayer)
+    }
+
+    /// <summary>The most recently MINTED live pin belonging to scene layer <paramref name="layerId"/>, or -1 — the
+    /// HoldIfCached-miss fallback. Mirrors <see cref="FindPin"/> except that it is keyed on the LAYER instead of the
+    /// content hash and ignores the region SIZE: a hold miss is by definition a frame whose content (and often σ, and
+    /// therefore region size) just changed, so demanding either would guarantee the miss again. That is exactly what
+    /// makes the composite a <see cref="CompositeStalePin"/> and never a <see cref="CompositePinnedBlur"/> — a
+    /// wrong-sized pin must be drawn at its OWN size, never stretched onto this frame's region.
+    /// <para>Freshest MINT wins: one layer can hold several pins (one per σ bucket it has rested at), and the newest is
+    /// the closest to what the node looks like now. Staleness is bounded by
+    /// <see cref="BlurPinKey.StalePinMaxAgeFrames"/> (the recycled-node-id residual documented there).</para>
+    /// <para>A hit stamps <c>LastUseFence</c>/<c>IdleFrames</c> exactly as <see cref="FindPin"/> does: serving a stale
+    /// frame IS a use, so the pin stays MRU and <see cref="EvictLruPin"/>/<see cref="TickPool"/> cannot retire the very
+    /// pin that is holding a scrolling panel's blur together.</para></summary>
+    public int FindLastPinForLayer(ulong layerId, ulong frameFence)
+    {
+        int best = -1;
+        for (int i = 0; i < MaxPool; i++)
+        {
+            ref var e = ref _pool[i];
+            if (e.Res == null) continue;
+            if (!BlurPinKey.StalePinEligible(e.PinLayerId, e.PinHash, e.BlurReady, e.InUse, e.PinMintFence, layerId, frameFence))
+                continue;
+            if (best < 0 || e.PinMintFence > _pool[best].PinMintFence) best = i;
+        }
+        if (best < 0) return -1;
+        ref var b = ref _pool[best];
+        b.IdleFrames = 0;
+        b.LastUseFence = frameFence;   // a stale hit is a USE (MRU) — see the summary
+        EnsureParitySrv(ref b, best);
+        return best;
+    }
+
+    /// <summary>Composite a STALE pin (<see cref="FindLastPinForLayer"/>) over the currently-bound target: positioned at
+    /// THIS frame's region ORIGIN so the held blur still travels with its node, but sized from the PIN'S OWN W/H so it is
+    /// drawn 1:1 and NEVER stretched into this frame's (different) region box — the size-exactness rationale on
+    /// <see cref="FindPin"/> is precisely why this needs to be its own variant instead of a relaxed hit.
+    /// <paramref name="alpha"/> is the CURRENT frame's <see cref="PushLayerCmd.GroupAlpha"/>, not the alpha the pin was
+    /// minted at: the recorder folds the node's opacity into the group alpha and resets the subtree to 1, so compositing
+    /// at anything else (or, as the old crisp fallback did, not compositing at all) publishes the subtree at FULL
+    /// brightness — the white flash. Restores the full-canvas viewport after, like <see cref="CompositePinnedBlur"/>;
+    /// the caller re-applies its clip.</summary>
+    public void CompositeStalePin(ID3D12GraphicsCommandList* cmd, int slot, float alpha, in PushLayerCmd L, float scale, RECT clip)
+    {
+        SelfBlurPixelBox pin = SelfBlurRegion.StalePinBox(in L, scale, (int)_w, (int)_h, (int)_pool[slot].W, (int)_pool[slot].H);
+        if (pin.IsEmpty) return;
+        RECT box = new()
+        {
+            left = Math.Max(pin.MinX, clip.left),
+            top = Math.Max(pin.MinY, clip.top),
+            right = Math.Min(pin.MaxX, clip.right),
+            bottom = Math.Min(pin.MaxY, clip.bottom),
+        };
+        if (box.right <= box.left || box.bottom <= box.top) return;
+        D3D12_VIEWPORT vp = new() { TopLeftX = pin.MinX, TopLeftY = pin.MinY, Width = pin.Width, Height = pin.Height, MaxDepth = 1 };
+        cmd->RSSetViewports(1, &vp);
+        cmd->RSSetScissorRects(1, &box);
+        CompositeUv(cmd, slot, alpha, 0f, 0f, 1f, 1f, GroupKind.Blur, bounded: true);
+        BlurCompositePixelsThisFrame += (long)(box.right - box.left) * (box.bottom - box.top);
+        SetViewport(cmd, _w, _h);   // restore the full-canvas viewport; the caller re-applies its clip
     }
 
     /// <summary>Composite a cache-HIT REGION pin over the currently-bound target at its screen position. The pin holds the
