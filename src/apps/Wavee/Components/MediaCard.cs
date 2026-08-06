@@ -1241,6 +1241,8 @@ sealed class LazyNowPlayingOverlay : Component
         // same bool, and resolves CLEAN — no re-render, so the cold-card laziness this component exists for is intact.
         // A Memo also re-links its sources on every recompute, so the read always lands on the CURRENT signal.
         var hovered = UseComputed(() => UseProps<Props>().Hovered.Value);
+        // Stable signal identity for the EQ pause prop (hooks before any early return).
+        var hoverSig = UseProps<Props>().Hovered;
 
         if (!hovered.Value && !active.Value)
         {
@@ -1251,8 +1253,8 @@ sealed class LazyNowPlayingOverlay : Component
             return new BoxEl { Width = _fab, Height = _fab, Shrink = 0f, HitTestVisible = false };
         }
 
-        return Embed.Comp(() => new NowPlayingOverlay(
-            _uri, _onPlay, _fab, _cover, _inner, _onNavigate, _centered));
+        return Embed.Comp(new NowPlayingOverlay.HoverProps(hoverSig),
+            () => new NowPlayingOverlay(_uri, _onPlay, _fab, _cover, _inner, _onNavigate, _centered));
     }
 }
 
@@ -1264,6 +1266,8 @@ sealed class LazyNowPlayingOverlay : Component
 //     pause/resume when it's the active context, else plays this context.
 sealed class NowPlayingOverlay : Component
 {
+    internal sealed record HoverProps(IReadSignal<bool> Hovered);
+
     readonly string _uri;
     readonly Action _onPlay;
     readonly Action? _onNavigate;
@@ -1282,6 +1286,8 @@ sealed class NowPlayingOverlay : Component
 
     public override Element Render()
     {
+        // Optional — ArtCard mounts this without HoverProps; EQ then keeps ticking under HoverOpacity (no pause signal).
+        var hoverPaused = UsePropsOrDefault<HoverProps>()?.Hovered;
         var b = UseContext(PlaybackBridge.Slot);
         // Re-render only when THIS card's own visual state changes — not on every track skip / play-pause of OTHER
         // contexts. Reading CurrentContext/CurrentTrack/IsPlaying directly here would re-render EVERY visible card's
@@ -1349,10 +1355,14 @@ sealed class NowPlayingOverlay : Component
                     MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab)
                   ],
         };
-        Element EqPill() => new BoxEl
+        Element EqPill(bool pauseOnHover) => new BoxEl
         {
             Padding = new Edges4(5f, 3f, 5f, 3f), Corners = CornerRadius4.All(4f), Fill = ColorF.FromRgba(0, 0, 0, 150),
-            Children = [ WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f) ],
+            Children =
+            [
+                WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f,
+                    paused: pauseOnHover ? hoverPaused : null),
+            ],
         };
 
         if (_cover && _centered)
@@ -1374,7 +1384,7 @@ sealed class NowPlayingOverlay : Component
                 Children =
                 [
                     active
-                        ? new BoxEl { Width = _inner, Height = _inner, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f, Children = [ EqPill() ] }
+                        ? new BoxEl { Width = _inner, Height = _inner, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f, Children = [ EqPill(pauseOnHover: true) ] }
                         : new BoxEl(),
                     rowFab,
                 ],
@@ -1395,7 +1405,7 @@ sealed class NowPlayingOverlay : Component
                     {
                         Grow = 1f, Direction = 1, Justify = FlexJustify.End, AlignItems = FlexAlign.Start,
                         Padding = new Edges4(MediaCard.FabInset, 0f, 0f, MediaCard.FabInset),
-                        Children = [ active ? EqPill() : new BoxEl() ],
+                        Children = [ active ? EqPill(pauseOnHover: false) : new BoxEl() ],
                     },
                     new BoxEl   // FAB — bottom-right, revealed on hover
                     {
@@ -1413,8 +1423,14 @@ sealed class NowPlayingOverlay : Component
             Children =
             [
                 active
-                    ? new BoxEl { AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f,
-                                  Children = [ WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f) ] }
+                    ? new BoxEl
+                    {
+                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverOpacity = 0f,
+                        Children =
+                        [
+                            WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f, paused: hoverPaused),
+                        ],
+                    }
                     : new BoxEl(),
                 reveal,
             ],

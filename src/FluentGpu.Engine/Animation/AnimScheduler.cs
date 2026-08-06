@@ -41,9 +41,10 @@ public sealed partial class AnimEngine
     /// <summary>Live, non-parked rows drive the loop — a parked subtree's looping animation can't defeat the idle stop.</summary>
     public bool HasActive => _slab.Count - _parked > 0;
 
-    /// <summary>ms until the next animation frame is due: 0 (present-now) while anything is active, else +∞.
-    /// (The Cadence-classed `min(next-due)` refinement — Hz shimmer, Driven event-wake — lands with the SignalSource table.)</summary>
-    public float NextDueMs(double now) => HasActive ? 0f : float.PositiveInfinity;
+    /// <summary>ms until the next animation frame is due. <c>0</c> = present-now; <c>+∞</c> = nothing timer-due
+    /// (idle, or only <see cref="AnimFlags.Driven"/> rows). Memoized with the Loop/DisplayRate census — see
+    /// <see cref="NextDueMs()"/> in the parity partial.</summary>
+    public float NextDueMs(double now) => NextDueMs();
 
     // ── frame entry ───────────────────────────────────────────────────────────────────────────────
     /// <summary>Advance the clock by the clamped wall delta (or the resume quantum) and run one tick. The headless
@@ -168,6 +169,12 @@ public sealed partial class AnimEngine
     private void Compose(NodeHandle node, in Accum acc)
     {
         ref NodePaint p = ref _scene.Paint(node);
+        // Snapshot before write — skip TransformDirty/PaintDirty when compose is a true no-op so skip-submit can elide
+        // frames for settled hover/press fades and springs at rest that still tick while active.
+        Affine2D prevTf = p.LocalTransform;
+        float prevOp = p.Opacity, prevBlur = p.BlurSigma, prevSw = p.PresentedW, prevSh = p.PresentedH;
+        float prevTrimS = p.StrokeTrimStart, prevTrimE = p.StrokeTrimEnd;
+        RectF prevClip = p.ClipRect;
         var tf = Affine2D.Translation(acc.Tx, acc.Ty);
         if (acc.Rot != 0f) tf = tf.Multiply(Affine2D.Rotation(acc.Rot * (MathF.PI / 180f)));
         if (acc.Sx != 1f || acc.Sy != 1f) tf = tf.Multiply(Affine2D.Scale(acc.Sx, acc.Sy));
@@ -175,16 +182,20 @@ public sealed partial class AnimEngine
         // the whole gesture (it re-anchors the translate off the node's CURRENT resting origin every move). Writing
         // them here stomps the drag translate, which RetargetFromRest then double-counts into a per-frame runaway —
         // and a hover/press MotionTarget on a dragged card would fight the lift. Every other channel still composes.
+        bool wroteXf = false;
         if ((_scene.Flags(node) & NodeFlags.DragGhost) == 0)
         {
+            wroteXf = prevTf != tf || prevOp != acc.Op;
             p.LocalTransform = tf;
             p.Opacity = acc.Op;
         }
-        p.BlurSigma = MathF.Max(0f, acc.Blur);
-        if (!float.IsNaN(acc.Sw)) p.PresentedW = acc.Sw;
-        if (!float.IsNaN(acc.Sh)) p.PresentedH = acc.Sh;
-        if (!float.IsNaN(acc.TrimStart)) p.StrokeTrimStart = acc.TrimStart;
-        if (!float.IsNaN(acc.TrimEnd)) p.StrokeTrimEnd = acc.TrimEnd;
+        float blur = MathF.Max(0f, acc.Blur);
+        bool wrotePaint = prevBlur != blur;
+        p.BlurSigma = blur;
+        if (!float.IsNaN(acc.Sw)) { wrotePaint |= prevSw != acc.Sw; p.PresentedW = acc.Sw; }
+        if (!float.IsNaN(acc.Sh)) { wrotePaint |= prevSh != acc.Sh; p.PresentedH = acc.Sh; }
+        if (!float.IsNaN(acc.TrimStart)) { wrotePaint |= prevTrimS != acc.TrimStart; p.StrokeTrimStart = acc.TrimStart; }
+        if (!float.IsNaN(acc.TrimEnd)) { wrotePaint |= prevTrimE != acc.TrimEnd; p.StrokeTrimEnd = acc.TrimEnd; }
         if (!float.IsNaN(acc.ClipL) || !float.IsNaN(acc.ClipT) || !float.IsNaN(acc.ClipR) || !float.IsNaN(acc.ClipB))
         {
             ref RectF cb = ref _scene.Bounds(node);
@@ -192,9 +203,12 @@ public sealed partial class AnimEngine
             float ct = float.IsNaN(acc.ClipT) ? 0f : acc.ClipT;
             float cr = float.IsNaN(acc.ClipR) ? cb.W : acc.ClipR;
             float cbm = float.IsNaN(acc.ClipB) ? cb.H : acc.ClipB;
-            p.ClipRect = RectF.FromLTRB(cl, ct, cr, cbm);
+            var clip = RectF.FromLTRB(cl, ct, cr, cbm);
+            wrotePaint |= prevClip != clip;
+            p.ClipRect = clip;
         }
-        _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+        if (wroteXf || wrotePaint)
+            _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
         // Relayout-mode presented-size change → the host re-solves this subtree (live re-wrap).
         if ((!float.IsNaN(acc.Sw) || !float.IsNaN(acc.Sh)) && (_scene.Flags(node) & NodeFlags.Relayouting) != 0)
             IncrementalRoots.Add(node);

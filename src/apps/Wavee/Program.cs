@@ -298,13 +298,13 @@ static class Program
             // STARTUP seed only; the Settings toggle re-applies the material live on the running window through
             // FluentApp.SetWindowMaterialAlt, so the two paths agree without an env var.
             // NO AmbientFps here any more (it used to hard-code 60): the pacing of PERPETUAL ambient motion — the
-            // always-playing seek playhead, the now-playing equalizer, skeleton shimmer, buffering spinner, the karaoke
-            // lyrics wipe — is now AmbientPowerPolicy's call, attached above. A fixed 60 was wrong twice: it beat against
-            // the vblank on a 120 Hz panel (and was simply the wrong number on a 90 Hz one), and it capped the app even
-            // when the user was looking at it on mains power. The policy pays the cap only where it buys something —
-            // on battery or in the background — and takes the rate from the panel. Latency-sensitive input
-            // (scroll/hover/drag) is exempt in the engine and always runs at the display rate; FG_ANIM_FPS still
-            // overrides everything (=30 to pin the old cadence, =0 for uncapped / full display rate).
+            // seek playhead, now-playing equalizer, skeleton shimmer, buffering spinner, karaoke lyrics wipe — is
+            // AmbientPowerPolicy's call, attached above. Explicit ~30 fps always (HalfRefresh is avoided — on a 120 Hz
+            // panel it is 60 fps, still too hot for Wavee's full-window Present). Ambient Present is a full-window
+            // translucent pass on this engine, so Uncapped is never used (it disabled the adaptive-FPS governor and
+            // let a 13 px equalizer pin ~56% GPU). Latency-sensitive input (scroll/hover/drag) and FrameClock consumers
+            // (lyrics) stay at the display rate; FG_ANIM_FPS still overrides everything (=30 to pin a fixed cadence,
+            // =0 for uncapped).
             FluentAppHarness.Run(() => new WaveeApp(settings, appLocale),
                 new AppOptions
                 {

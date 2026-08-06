@@ -59,10 +59,11 @@ public static class WaveeColors
     /// band (the narrow nav drawer). It must not be translucent: the page it covers would read through it.</summary>
     public static ColorF FloatingChrome => ColorContrast.Flatten(Active.Toolbar, MicaBase);
 
-    /// <summary>Opaque equivalent of the CONTENT PANE (rung 2 = pane on plate) — for a floating pane that replaces a
-    /// docked CONTENT surface (the non-docked right rail). It must be flattened through BOTH rungs, or the floating rail
-    /// desyncs from the docked rail it stands in for.</summary>
-    public static ColorF FloatingPane => ColorContrast.Flatten(Active.Content,
+    /// <summary>Opaque equivalent of the CONTENT PANE (rungs 1+2) — <see cref="FileArea"/> on the plate on Mica.
+    /// Matches <see cref="ContentPaneMerged"/>'s compositing (FileArea, not <see cref="Content"/>) so the opaque B4
+    /// plate is the same colour as the translucent merge it replaced. Also used for floating surfaces that replace a
+    /// docked content band.</summary>
+    public static ColorF FloatingPane => ColorContrast.Flatten(Active.FileArea,
         ColorContrast.Flatten(Active.Toolbar, MicaBase));
     public static ColorF PlayerBar => Active.PlayerBar;
     public static ColorF FileArea => Active.FileArea;

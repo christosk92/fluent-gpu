@@ -1508,8 +1508,9 @@ static class ScrollSuite
                 blanks == 0, $"blanks={blanks}/{frames}");
         }
 
-        // ── gate.virt.budgetSpreadsOverscan — steady scroll with budget < overscan: the overscan halo completes across
-        // ≥2 subsequent frames, VirtualRangeDirty persists then clears, and the host stays awake until caught up. ────────
+        // ── gate.virt.budgetSpreadsOverscan — while flinging with budget < overscan the halo drips across ≥2 frames;
+        // at rest the halo finishes in one paint (eager overscan). Pin |FlingVelocity| above FlingGuard during the
+        // drip window so at-rest eager does not short-circuit ClipRealizeBudget. ─────────────────────────────────────
         {
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("virt-budget-spread", new Size2(640, 480), 1f)); window.Show();
@@ -1523,8 +1524,12 @@ static class ScrollSuite
 
             int dirtyFrames = 0, growthFrames = 0, prevWidth = -1, finalWidth = 0;
             bool everAwakeWhileDirty = false, invariantHeld = true;
-            for (int f = 0; f < 25; f++)
+            const float flingPin = VirtualWindowing.FlingGuardThreshold + 800f;
+            for (int f = 0; f < 15; f++)
             {
+                // Keep E4 drip engaged — at-rest eager would finish the halo in one paint.
+                ref ScrollState scPin = ref host.Scene.ScrollRef(vp);
+                scPin.FlingVelocity = flingPin;
                 host.RunFrame();
                 host.Scene.TryGetScroll(vp, out var sc);
                 bool dirty = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) != 0;
@@ -1535,9 +1540,21 @@ static class ScrollSuite
                 if (prevWidth >= 0 && width > prevWidth) growthFrames++;
                 prevWidth = width; finalWidth = width;
             }
+            // Drop velocity → at-rest eager clears VirtualRangeDirty / HasBudgetDeferredVirtuals.
+            ref ScrollState scRest = ref host.Scene.ScrollRef(vp);
+            scRest.FlingVelocity = 0f;
+            for (int f = 0; f < 10; f++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var sc);
+                int width = sc.LastRealized - sc.FirstRealized;
+                int vFirst = (int)MathF.Floor(sc.OffsetY / 40f);
+                if (!(sc.FirstRealized <= vFirst)) invariantHeld = false;
+                prevWidth = width; finalWidth = width;
+            }
             bool finalClean = (host.Scene.Flags(vp) & NodeFlags.VirtualRangeDirty) == 0;
             bool spread = dirtyFrames >= 2 && growthFrames >= 2 && everAwakeWhileDirty && finalClean && finalWidth >= 16 && invariantHeld;
-            Check("gate.virt.budgetSpreadsOverscan a budget<overscan steady scroll fills the overscan halo across ≥2 frames (VirtualRangeDirty persists, host awake via HasBudgetDeferredVirtuals) then clears; the visible band stays covered throughout",
+            Check("gate.virt.budgetSpreadsOverscan a budget<overscan fling fills the overscan halo across ≥2 frames (VirtualRangeDirty persists, host awake via HasBudgetDeferredVirtuals) then clears at rest; the visible band stays covered throughout",
                 spread, $"dirtyFrames={dirtyFrames} growthFrames={growthFrames} awake={everAwakeWhileDirty} finalClean={finalClean} finalWidth={finalWidth} invariant={invariantHeld}");
         }
 
@@ -1598,14 +1615,14 @@ static class ScrollSuite
                 $"maxWidth={maxWidth} mandWidth={mandWidth} loMin={loMin} hiMin={hiMin} loStreak={loStreak} hiStreak={hiStreak} maxVel={maxVel:F0} minTravel={minTravel:F0} endOff={endOff:F0} blanks={blanks}");
         }
 
-        // ── gate.virt.nestedRailDefersInner — mounting a virtual rail realizes the visible cards only; the overscan
-        // halo fills over subsequent frames (the nested-rail-into-view spike flattener). ─────────────────────────────────
+        // ── gate.virt.nestedRailDefersInner — mounting a virtual rail realizes the visible cards only; the next
+        // FrameEpoch at rest fills the overscan in one paint (eager). Same-epoch re-realize must not expand. ──────────
         {
             var probe = new NestedRailProbe();
             using var app = new HeadlessPlatformApp();
             var window = new HeadlessWindow(new WindowDesc("virt-nested-rail", new Size2(400, 200), 1f)); window.Show();
             using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
-            host.Reconciler.SteadyRealizeBudgetForTest = 2;   // throttle so the mount deferral is observable
+            host.Reconciler.SteadyRealizeBudgetForTest = 2;   // throttle so same-epoch remount cannot sneak the halo in
             host.RunFrame();
             probe.Show.Value = true;
             host.RunFrame();   // mount frame
@@ -1618,9 +1635,9 @@ static class ScrollSuite
             host.Scene.TryGetScroll(rail, out var scFull);
             int fullWidth = scFull.LastRealized - scFull.FirstRealized;
             // Visible = 300/60 = 5 cards; at offset 0 the behind overscan clamps, so the settled window is visible + the
-            // ahead overscan (≈ 11). The mount frame realizes only ≈ visible+guard+one budget slice — strictly narrower.
+            // ahead overscan (≈ 11). Mount stays ≤ visible+guard (+ at most one same-epoch budget slice).
             bool defers = !rail.IsNull && mountWidth < fullWidth && (fullWidth - mountWidth) >= 2 && mountWidth <= 10 && settleFrames >= 1;
-            Check("gate.virt.nestedRailDefersInner a freshly-mounted virtual rail realizes the visible cards only (overscan 0 at mount), then fills its overscan window over a few frames via the row budget",
+            Check("gate.virt.nestedRailDefersInner a freshly-mounted virtual rail realizes the visible cards only (overscan 0 at mount), then fills its overscan on the next at-rest paint",
                 defers, $"mountWidth={mountWidth} fullWidth={fullWidth} settleFrames={settleFrames} rail={(rail.IsNull ? "null" : "ok")}");
         }
 

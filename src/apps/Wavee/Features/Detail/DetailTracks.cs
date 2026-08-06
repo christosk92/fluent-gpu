@@ -2173,8 +2173,8 @@ sealed class TrackList : Component
     // ── bound row ────────────────────────────────────────────────────────────────────────────────────────
     // A bound row: ONE self-subscribing content component (re-renders on recycle/sort/now-playing, patching cells in
     // place — never a remount, so no flash) wrapped in the shape-stable bound selection skin.
-    Element BoundRow(RowScope scope, IReadSignal<Track> item, float rowH, int trackStart)
-        => Embed.Comp(() => new BoundRowContent(this, scope, item, _rowsSnapshot!, rowH, trackStart));
+    Element BoundRow(RowScope scope, IReadSignal<Track> item, float rowH, int trackStart, IReadSignal<bool>? hoverPaused = null)
+        => Embed.Comp(() => new BoundRowContent(this, scope, item, _rowsSnapshot!, rowH, trackStart, hoverPaused));
 
     // ── Phase-D touch swipe-to-action for the VIRTUALIZED track rows (OFF by default) ────────────────────────────────
     // FLAGGED OFF: shipping the swipe layer on the eager queue/preview lists first. Before flipping this on, three things
@@ -2252,9 +2252,13 @@ sealed class TrackList : Component
         readonly IReadSignal<TrackRowsSnapshot> _state;
         readonly float _rowH;
         readonly int _trackStart;
+        readonly IReadSignal<bool>? _hoverPaused;
         public BoundRowContent(TrackList o, RowScope scope, IReadSignal<Track> item, IReadSignal<TrackRowsSnapshot> state,
-                               float rowH, int trackStart)
-        { _o = o; _scope = scope; _item = item; _state = state; _rowH = rowH; _trackStart = trackStart; }
+                               float rowH, int trackStart, IReadSignal<bool>? hoverPaused = null)
+        {
+            _o = o; _scope = scope; _item = item; _state = state; _rowH = rowH; _trackStart = trackStart;
+            _hoverPaused = hoverPaused;
+        }
 
         public override Element Render()
         {
@@ -2308,7 +2312,7 @@ sealed class TrackList : Component
                                   var current = _item.Peek();
                                   if (current.Uri.Length > 0) _o._lib?.ToggleSaved(current.Uri, current.Title);
                               }) : null,
-                              likePop: likePop, presentation: row);
+                              likePop: likePop, presentation: row, hoverPaused: _hoverPaused);
         }
     }
 
@@ -2693,6 +2697,8 @@ sealed class TrackList : Component
             // saw a different sequence depending on whether the row was open — a rules-of-hooks violation that made the
             // expanded render read another slot's hook state.
             var svc = UseContext(Services.Slot);
+            // Row hover → EQ pause (same interactive ancestor that drives #-cell HoverOpacity). Stable UseSignal.
+            var rowHovered = UseSignal(false);
 
             var track = _item.Value;                       // subscribe → recycle rebinds this slot
             string expanded = _o._expandedRow.Value;       // subscribe → open/close re-renders only the two slots involved
@@ -2700,8 +2706,8 @@ sealed class TrackList : Component
             // per-row uid, so a recycle must be able to move the drawer off this slot.
             int displayIndex = _scope.Index.Value - _trackStart;
             var row = _o.WrapRowSwipe(_scope,
-                _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, _trackStart),
-                    _rowH, _narrate, _trackStart),
+                _o.BoundRowSkin(_scope, _o.BoundRow(_scope, _item, _rowH, _trackStart, rowHovered),
+                    _rowH, _narrate, _trackStart, rowHovered),
                 _trackStart, _item);
 
             bool hasTrack = track is { Uri.Length: > 0 };
@@ -2804,7 +2810,8 @@ sealed class TrackList : Component
     // (BoundRowContent), and the skeleton passes a static title. Plain/diffable → a BoundRowContent re-render patches in place.
     Element RowGrid(Track t, int displayIndex, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Element title,
                     ColumnSet set, TrackSize[] tracks, float rowH, Action? onPlay = null, bool saved = false, Action? onLike = null,
-                    bool likePop = false, bool more = true, RowPresentation? presentation = null)
+                    bool likePop = false, bool more = true, RowPresentation? presentation = null,
+                    IReadSignal<bool>? hoverPaused = null)
     {
         var snapshot = presentation is null ? _rowsSnapshot!.Peek() : default;
         bool showTrackArtist = presentation is { } row ? row.ShowTrackArtist : snapshot.Config.ShowTrackArtist;
@@ -2828,7 +2835,8 @@ sealed class TrackList : Component
                              : null,
                          showAlbumInMeta: showListMetadata && !set.Album,
                          showListBadges: showListMetadata,
-                         moreEnabled: more);
+                         moreEnabled: more,
+                         hoverPaused: hoverPaused);
     }
 
     static Owner? AddedByProfile(DetailModel model, Track t)
@@ -2844,7 +2852,8 @@ sealed class TrackList : Component
     // and the left accent pill is an ALWAYS-PRESENT child revealed by a BOUND opacity on scope.IsSelected — so a
     // selection change is a compositor-only re-skin (no list re-render, no remount, no Enter replay → no flash).
     // Border stays uniform; the bound hover/press restores the zebra-vs-flush hover-depth nuance.
-    BoxEl BoundRowSkin(RowScope scope, Element content, float rowH, bool entrance, int trackStart)
+    BoxEl BoundRowSkin(RowScope scope, Element content, float rowH, bool entrance, int trackStart,
+                       Signal<bool>? rowHovered = null)
     {
         var index = scope.Index;
         var isSel = scope.IsSelected;
@@ -2947,10 +2956,14 @@ sealed class TrackList : Component
                     args.Handled = true;
             },
             OnFocusChanged = onFocusChanged,
-            // A no-op pointer-exit registers PointerBit so the row counts as the "interactive ancestor" whose hover
-            // progress its NON-interactive descendants inherit (SceneRecorder.TryResolveInteractionProgress) — that is what
-            // lets the # cell reveal its play/pause glyph on hover ANYWHERE in the row. Cached static lambda → no per-row alloc.
-            OnPointerExit = static () => { },
+            // Enter/exit: PointerBit so HoverOpacity descendants inherit row hover, AND write rowHovered so the EQ
+            // stops ticking while the #-cell is faded out. Without rowHovered, keep the historic no-op exit.
+            OnHoverMove = rowHovered is { } h
+                ? _ => { if (!h.Peek()) h.Value = true; }
+                : null,
+            OnPointerExit = rowHovered is { } h2
+                ? () => { if (h2.Peek()) h2.Value = false; }
+                : static () => { },
             // Content lane (Grow fills the ZStack) + the WinUI ListView-style left accent selection bar. The pill is
             // ALWAYS present (shape-stable) and revealed by a BOUND opacity (no mount-Enter spring — the slot never
             // remounts, so selection is a compositor-only re-skin); press still shrinks it (10/16).

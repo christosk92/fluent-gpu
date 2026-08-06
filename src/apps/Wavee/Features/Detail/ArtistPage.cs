@@ -275,7 +275,7 @@ sealed partial class ArtistPage : Component
                     Direction = 1,
                     Children =
                     [
-                        Banner(a, uri, Play, Shuffle, Radio, go, compactInteractive.Value),
+                        Banner(a, uri, Play, Shuffle, Radio, compactInteractive.Value),
                         sentinel,
                         new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false },
                         new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },

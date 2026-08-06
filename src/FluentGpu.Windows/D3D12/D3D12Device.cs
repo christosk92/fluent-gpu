@@ -1014,9 +1014,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 InvalidateCmdState();
             }
         }
-        // GPU timer: mid (query 3i+1) — everything after this point is the scene-raster block (clear + drawlist + layers).
-        if (s_gpuTiming && _gpuQueryHeap != null)
-            _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 1u);
+        // Mid stamp moves to AFTER the back-buffer transition + clear (StampGpuSceneMid) — stamping here billed the
+        // barrier/clear/queue stall into CatFill and made FG_GPU_TIMING's scene/fill numbers unusable.
 
         ID3D12Resource* backBuffer = _backBuffers[_frameIndex];
         Barrier(backBuffer, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
@@ -1089,6 +1088,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
             fixed (float* clear = _clearScratch4)
                 _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
+            StampGpuSceneMid();   // scene-raster block starts after transition+clear
             SetFullViewport();
             SubmitStreaming(drawList, lw, lh);
         }
@@ -1672,12 +1672,17 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     }
 
     /// <summary>Stamp the innermost rounded clip (if any) onto a RoundRect-pipeline instance (the PS multiplies its
-    /// coverage by the rounded-box SDF — the tier-2 path for animated clips on rounded surfaces).</summary>
+    /// coverage by the rounded-box SDF — the tier-2 path for animated clips on rounded surfaces). Skip the stamp when
+    /// the instance's axis-aligned device AABB lies inside the clip deflated by <c>radius + aaSlack</c> — the SDF would
+    /// evaluate to full coverage anyway (pixel-identical), and leaving <c>ClipW ≤ 0</c> unlocks the opaque no-blend PSO
+    /// for interior fills once the content plate is opaque.</summary>
     private void ApplyRoundedClip(ref RectInstance inst)
     {
         if (_roundedClipStack.Count == 0) return;
         var (rect, radius) = _roundedClipStack[^1];
         if (rect.W <= 0f) return;
+        if (RoundedClipRedundant(rect, radius, inst.PosX, inst.PosY, inst.W, inst.H, inst.M11, inst.M12, inst.M21, inst.M22, inst.Dx, inst.Dy))
+            return;
         inst.ClipX = rect.X; inst.ClipY = rect.Y; inst.ClipW = rect.W; inst.ClipH = rect.H; inst.ClipR = radius;
     }
 
@@ -1686,6 +1691,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_roundedClipStack.Count == 0) return;
         var (rect, radius) = _roundedClipStack[^1];
         if (rect.W <= 0f) return;
+        if (RoundedClipRedundant(rect, radius, inst.PosX, inst.PosY, inst.W, inst.H, inst.M11, inst.M12, inst.M21, inst.M22, inst.Dx, inst.Dy))
+            return;
         inst.ClipX = rect.X; inst.ClipY = rect.Y; inst.ClipW = rect.W; inst.ClipH = rect.H; inst.ClipR = radius;
     }
 
@@ -1694,7 +1701,32 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_roundedClipStack.Count == 0) return;
         var (rect, radius) = _roundedClipStack[^1];
         if (rect.W <= 0f) return;
+        if (RoundedClipRedundant(rect, radius, inst.PosX, inst.PosY, inst.W, inst.H, inst.M11, inst.M12, inst.M21, inst.M22, inst.Dx, inst.Dy))
+            return;
         inst.ClipX = rect.X; inst.ClipY = rect.Y; inst.ClipW = rect.W; inst.ClipH = rect.H; inst.ClipR = radius;
+    }
+
+    /// <summary>~1 DIP AA feather (matches the RoundRect PS soft edge) — deflate by radius+slack before claiming the
+    /// instance is fully inside. Stamp on any doubt (rotated/skewed transform, degenerate rect).</summary>
+    private const float RoundedClipAaSlack = 1f;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool RoundedClipRedundant(in RectF clip, float radius,
+        float posX, float posY, float w, float h,
+        float m11, float m12, float m21, float m22, float dx, float dy)
+    {
+        if (w <= 0f || h <= 0f) return false;
+        // Axis-aligned only — a rotation/skew means the local AABB is not the device AABB.
+        if (m12 != 0f || m21 != 0f || m11 <= 0f || m22 <= 0f) return false;
+        float inset = radius + RoundedClipAaSlack;
+        if (clip.W <= 2f * inset || clip.H <= 2f * inset) return false;
+        // Local rect → device via scale+translate (linear-identity aside from uniform/non-uniform scale).
+        float x0 = posX * m11 + dx, y0 = posY * m22 + dy;
+        float x1 = (posX + w) * m11 + dx, y1 = (posY + h) * m22 + dy;
+        float l = MathF.Min(x0, x1), r = MathF.Max(x0, x1);
+        float t = MathF.Min(y0, y1), b = MathF.Max(y0, y1);
+        return l >= clip.X + inset && t >= clip.Y + inset
+            && r <= clip.X + clip.W - inset && b <= clip.Y + clip.H - inset;
     }
 
     private void ApplyCurrentScissor()
@@ -1954,9 +1986,14 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
             fixed (float* clr = _clearScratch4)
                 _cmdList->ClearRenderTargetView(backRtv, clr, 0, null);
+            StampGpuSceneMid();   // scene-raster block starts after transition+clear
             SetFullViewport();
         }
-        else _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
+        else
+        {
+            _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
+            StampGpuSceneMid();
+        }
         _opacity!.BeginFrame(completed, (int)(_frameIndex & 1));
         InvalidateCmdState();   // canvas/back-buffer setup may have touched viewport/scissor outside the cache
         ClearInsts();
@@ -2643,6 +2680,30 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // Seam (DIM on-screen fix): bind the DirectComposition graph on the PRESENTING thread the first time this composited
         // swapchain presents — deferred out of the UI-thread InitSwapChain so DComp is owned by the thread that Presents.
         if (target.Composited && target.DcompBindPending) BindDComp(target);
+        _lastPresentStoodDown = false;
+        HWND hwnd = target.Hwnd;
+        // Cloak / hidden / iconic: skip Present (no GPU). AppHost reads LastPresentStoodDown and applies the same pacing
+        // floor as skip-submit so the sync path does not free-spin without a Present pacer.
+        if (IsHwndCovered(hwnd))
+        {
+            StandDownPresent();
+            return;
+        }
+        // OCCLUDED latch: MUST probe with DXGI_PRESENT_TEST while latched — a full stand-down before Present would make
+        // the clear-on-S_OK path unreachable and freeze the window forever after the first OCCLUDED.
+        if (_occludedLatched)
+        {
+            HRESULT test = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(
+                _swapChain, 0, DxgiPresentTest);
+            if ((int)test == DxgiStatusOccluded) { StandDownPresent(); return; }
+            if ((int)test < 0)
+            {
+                uint reason = ((uint)test == 0x887A0005u || (uint)test == 0x887A0007u) ? (uint)_device->GetDeviceRemovedReason() : 0u;
+                if (_signalDeviceLostInsteadOfThrow) { System.Threading.Volatile.Write(ref _deviceLostReason, reason != 0u ? (int)reason : (int)(uint)test); return; }
+                throw new InvalidOperationException($"Present(TEST) failed: 0x{(uint)test:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
+            }
+            _occludedLatched = false;   // S_OK (or other success) — window is showable again; fall through to a real Present
+        }
         // A keep-alive repaint fired from inside an OS modal move/size loop (host called SuppressVsyncOnce) presents at
         // SyncInterval 0 so the WndProc thread isn't blocked up to a vblank — the live-resize/move hitch. On the composited
         // DComp flip swapchain interval-0 is a cheap, tear-free hand-off (DWM still composites at vblank); steady-state
@@ -2653,6 +2714,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         uint interval = (_vsync && !noVsync) ? 1u : 0u;
         uint flags = (interval == 0 && _tearingSupported) ? DXGI.DXGI_PRESENT_ALLOW_TEARING : 0u;
         HRESULT pr = (HRESULT)global::FluentGpu.Interop.Generated.IDXGISwapChainVtbl.Present(_swapChain, interval, flags);   // GEN-COM (wired)
+        // DXGI_STATUS_OCCLUDED (0x087A0001) is a SUCCESS code — previously dropped by the `< 0` check. Composition
+        // swapchains often never return it; when they do, latch and stand down (next frame probes with PRESENT_TEST).
+        if ((int)pr == DxgiStatusOccluded)
+        {
+            _occludedLatched = true;
+            Diag.Count("d3d12", "presentOccluded");
+            StandDownPresent();
+            return;
+        }
         if ((int)pr < 0)
         {
             // Surface GetDeviceRemovedReason on a device-removed/reset so a GPU fault names its cause instead of a bare
@@ -2666,6 +2736,42 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (_hintSettlePresent) { _hintSettlePresent = false; _ = DwmFlush(); }
         if (ReferenceEquals(target, _primarySwapchain)) SamplePresentStats();
         StoreActive();
+    }
+
+    // DXGI_STATUS_OCCLUDED — Present succeeded but the window is fully occluded (HWND flip-model). Not reliably returned
+    // for CreateSwapChainForComposition; cloak/visibility is the composition path's stand-down. DXGI_PRESENT_TEST = 1.
+    private const int DxgiStatusOccluded = unchecked((int)0x087A0001);
+    private const uint DxgiPresentTest = 1u;
+    private const uint DwmwaCloaked = 14;
+    private bool _occludedLatched;
+    private bool _lastPresentStoodDown;
+
+    /// <inheritdoc/>
+    public bool LastPresentStoodDown => _lastPresentStoodDown;
+
+    [LibraryImport("dwmapi.dll")]
+    private static partial int DwmGetWindowAttribute(nint hwnd, uint attr, out int value, uint size);
+
+    private static bool IsHwndCovered(HWND hwnd)
+    {
+        if (hwnd == HWND.NULL) return false;
+        if (IsIconic(hwnd) != 0 || IsWindowVisible(hwnd) == 0) return true;
+        return DwmGetWindowAttribute((nint)hwnd, DwmwaCloaked, out int cloaked, sizeof(int)) >= 0 && cloaked != 0;
+    }
+
+    private void StandDownPresent()
+    {
+        _lastPresentStoodDown = true;
+        _hintSettlePresent = false;
+        _skipVsyncOnce = false;
+        StoreActive();
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void StampGpuSceneMid()
+    {
+        if (s_gpuTiming && _gpuQueryHeap != null)
+            _cmdList->EndQuery(_gpuQueryHeap, D3D12_QUERY_TYPE.D3D12_QUERY_TYPE_TIMESTAMP, GpuTsPerFrame * _frameIndex + 1u);
     }
 
     // ── OS-attested present statistics (always on) ──────────────────────────────────────────────────────────────────
@@ -2894,18 +3000,23 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // above proved it). end-begin over the queue's timestamp frequency = the true GPU raster ms of that earlier frame.
     private void CollectGpuRenderTime(uint frameIndex)
     {
+        // Freshness: a successful resolve sets GpuTimingSampleFresh; skip-submit / stand-down never call Collect, so the
+        // [fps] printer must check the flag (otherwise it re-quotes the last present's grender forever).
+        _gpuTimingFresh = false;
         if (_gpuTsData == null || _gpuTsFreq == 0 || !_gpuTsPending[frameIndex]) return;
         _gpuTsPending[frameIndex] = false;
         uint q = GpuTsPerFrame * frameIndex;
         ulong begin = _gpuTsData[q], mid = _gpuTsData[q + 1], end = _gpuTsData[q + 2];
-        if (end >= begin) _lastGpuRenderMs = (end - begin) * 1000.0 / _gpuTsFreq;   // whole frame (uploads + baked-blur + scene)
-        if (end >= mid) _lastGpuSceneMs = (end - mid) * 1000.0 / _gpuTsFreq;         // scene-raster block only (the fill-cost suspect)
+        // Mid is stamped AFTER transition+clear; if mid is unset treat scene == whole.
+        if (end >= begin) _lastGpuRenderMs = (end - begin) * 1000.0 / _gpuTsFreq;
+        if (mid >= begin && end >= mid) _lastGpuSceneMs = (end - mid) * 1000.0 / _gpuTsFreq;
+        else _lastGpuSceneMs = _lastGpuRenderMs;
 
         // Fold the boundary timeline into the four category buckets. Marks in EXECUTION order: mid (t0), then
         // _sceneCatCount-1 interior boundaries at slots q+3+j, then end. Interval j (category = cats[j]) spans [t_j, t_{j+1}].
         double fill = 0, shadow = 0, image = 0, glyph = 0, comp = 0;
         int nCat = _sceneCatCount[frameIndex];
-        if (nCat > 0)
+        if (nCat > 0 && mid > 0)
         {
             byte[] cats = _sceneCat[frameIndex];
             ulong prev = mid;
@@ -2925,7 +3036,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             }
         }
         _lastGpuFillMs = fill; _lastGpuShadowMs = shadow; _lastGpuImageMs = image; _lastGpuGlyphMs = glyph; _lastGpuCompositeMs = comp;
+        _gpuTimingFresh = true;
     }
+
+    private bool _gpuTimingFresh;
+    /// <summary>True when <see cref="LastGpuRenderMs"/> was resolved this submit (not a leftover from a prior present).</summary>
+    public bool GpuTimingSampleFresh => _gpuTimingFresh;
 
     /// <inheritdoc/>
     public bool HasPendingUploads => _imageTextures?.HasPendingUploads ?? false;

@@ -179,7 +179,8 @@ internal static class TrackRow
                                  Action? onPlay = null, Action? onLike = null, Owner? addedByProfile = null,
                                  bool likePop = false, Element? actionsCell = null,
                                  bool showAlbumInMeta = false, bool showListBadges = false,
-                                 Element? expandCell = null, bool moreEnabled = true)
+                                 Element? expandCell = null, bool moreEnabled = true,
+                                 IReadSignal<bool>? hoverPaused = null)
     {
         float thumb = ThumbSize;   // fixed art size → a stable dedicated art column
 
@@ -201,7 +202,7 @@ internal static class TrackRow
         // # cell: number / live equalizer / fetch spinner at rest; reveals a SINGLE-CLICK play (or pause) button on ROW
         // hover — suppressed for a track that is not released, where the hover play would be a button that does nothing.
         Add(CellKey.Num, NumberCell(displayIndex, st.IsNow, st.IsPlaying, st.IsBuffering, st.IsTop,
-                                    notYetOut ? null : onPlay));
+                                    notYetOut ? null : onPlay, hoverPaused));
 
         // ♥ — in the left cluster (between # and the art thumb). Filled when saved; click toggles via the caller's bridge.
         if (set.Heart) Add(CellKey.Heart, CenterCell(Heart(st.Saved, onLike, likePop)));
@@ -287,34 +288,52 @@ internal static class TrackRow
     // transport reveal + the now-playing equalizer + the per-row heart behave EXACTLY like the big virtualized lists; only
     // virtualization + multi-select are dropped (these are short previews). Single-click plays (no multi-select here). The
     // title is a plain now-playing-coloured ellipsis (the marquee is reserved for the full lists' now-playing row).
+    // Component-hosted so the row hover signal (EQ pause + HoverOpacity source) lives across parent re-renders.
     internal static Element Row(Track t, int displayIndex, in State st, ColumnSet set, TrackSize[] tracks, float rowH,
                                 bool showTrackArtist, Action<string, string?> go, Action onPlay, Action? onLike = null, bool zebra = false,
                                 Element? actionsCell = null)
+        => Embed.Comp(
+            new EagerRowProps(t, displayIndex, st, set, tracks, rowH, showTrackArtist, go, onPlay, onLike, zebra, actionsCell),
+            () => new EagerRowHost());
+
+    sealed record EagerRowProps(
+        Track Track, int DisplayIndex, State St, ColumnSet Set, TrackSize[] Tracks, float RowH,
+        bool ShowTrackArtist, Action<string, string?> Go, Action OnPlay, Action? OnLike, bool Zebra, Element? ActionsCell);
+
+    sealed class EagerRowHost : Component
     {
-        bool oddZebra = zebra && displayIndex % 2 != 0;
-        Element title = new TextEl(t.Title)
+        public override Element Render()
         {
-            Size = 14f, Weight = 600, Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
-            Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-        };
-        return new BoxEl
-        {
-            MinHeight = rowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
-            Corners = CornerRadius4.All(6f),
-            // Row fills are neutral translucent overlays: light uses a quiet ink ramp that remains visible over pale
-            // Mica, while dark uses white-alpha. The preset tint still comes from the surface beneath.
-            Fill = oddZebra ? WaveeColors.RowZebra : ColorF.Transparent,
-            HoverFill = oddZebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
-            PressedFill = oddZebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
-            PressScale = 0.985f, BorderWidth = 1f,
-            BorderColor = oddZebra ? Tok.StrokeCardDefault : ColorF.Transparent,
-            HoverBorderColor = Tok.StrokeCardDefault,
-            Role = AutomationRole.Button, OnClick = onPlay,
-            // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover progress the
-            // # cell inherits (SceneRecorder.TryResolveInteractionProgress) — that's what reveals play/pause on row hover.
-            OnPointerExit = static () => { },
-            Children = [Grid(t, displayIndex, st, set, tracks, rowH, title, showTrackArtist, go, onPlay, onLike, actionsCell: actionsCell)],
-        };
+            var m = UsePropsOrDefault<EagerRowProps>();
+            if (m is null) return new BoxEl();
+            var hovered = UseSignal(false);
+            bool oddZebra = m.Zebra && m.DisplayIndex % 2 != 0;
+            Element title = new TextEl(m.Track.Title)
+            {
+                Size = 14f, Weight = 600, Color = m.St.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+            };
+            return new BoxEl
+            {
+                MinHeight = m.RowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
+                Corners = CornerRadius4.All(6f),
+                Fill = oddZebra ? WaveeColors.RowZebra : ColorF.Transparent,
+                HoverFill = oddZebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
+                PressedFill = oddZebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
+                PressScale = 0.985f, BorderWidth = 1f,
+                BorderColor = oddZebra ? Tok.StrokeCardDefault : ColorF.Transparent,
+                HoverBorderColor = Tok.StrokeCardDefault,
+                Role = AutomationRole.Button, OnClick = m.OnPlay,
+                // Real enter/exit (not a no-op): PointerBit for HoverOpacity inheritance AND the EQ pause signal.
+                OnHoverMove = _ => { if (!hovered.Peek()) hovered.Value = true; },
+                OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
+                Children =
+                [
+                    Grid(m.Track, m.DisplayIndex, m.St, m.Set, m.Tracks, m.RowH, title, m.ShowTrackArtist, m.Go,
+                         m.OnPlay, m.OnLike, actionsCell: m.ActionsCell, hoverPaused: hovered),
+                ],
+            };
+        }
     }
 
     // The artist subline as inline HYPERLINK spans — one clickable link per artist (each navigates on its own), joined by
@@ -755,12 +774,15 @@ internal static class TrackRow
     // the nearest interactive ancestor (the row), so the reveal follows ROW hover, and survives the pointer crossing onto
     // the button. The transport layer is itself the SINGLE-CLICK target (its OnClick + hand cursor); the inner glyph
     // PressScale-pushes on press for a real button feel.
-    internal static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop, Action? onPlay = null)
+    /// <param name="hoverPaused">Row/card hover signal that also drives this cell's HoverOpacity fade — pause the EQ
+    /// while invisible. Must come from the interactive ancestor (not the bars' own hit target).</param>
+    internal static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop,
+                                       Action? onPlay = null, IReadSignal<bool>? hoverPaused = null)
     {
         ColorF accent = Tok.AccentTextPrimary;
         Element rest =
             isBuffering ? Spinner()
-            : isNow     ? WaveeEqualizer.Of(isPlaying, static () => Tok.AccentTextPrimary)
+            : isNow     ? WaveeEqualizer.Of(isPlaying, static () => Tok.AccentTextPrimary, paused: hoverPaused)
             : isTop     ? Icon(Icons.FavoriteStarFill, 11f, accent)
             :             new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary };
         Element transport = isBuffering

@@ -76,6 +76,9 @@ public sealed class TreeReconciler
         // per-frame row budget was exhausted (or a nested-rail mount deferred its overscan). The window's VISIBLE band is
         // always fully realized; only the overscan halo is spread across frames. Tracked so the host stays awake until caught up.
         public bool RealizeDeferred;
+        // FrameEpoch of the most recent mount-deferral paint. Same-epoch ReRealizeVirtuals must not at-rest-eager the
+        // halo (MountVirtual + re-realize in one Paint would otherwise expand immediately and defeat the mount gate).
+        public int MountDeferEpoch = -1;
         // ── extended bound-realize state (research adjustments #5 keep-alive + #16 content-type) — allocated ONLY when
         //    ve.KeepAlive or ve.ContentType is set (the default RealizeBoundWindow leaves both null; byte-identical path).
         // Keep-alive bucket: item index → its parked slot (detached, hidden, quiesced). Bounded + LRU-evicted.
@@ -1591,17 +1594,43 @@ public sealed class TreeReconciler
             if (b.Transform.IsBound)
             {
                 var tb = b.Transform.Thunk; var ts = b.Transform.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).LocalTransform = tb is not null ? tb() : ts!.Value; _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                // Value-gate: an unchanged matrix must NOT set TransformDirty — that bit alone defeats skip-submit
+                // (AppHost maybeUnchanged requires !transformWrote). Quantized EQ/seek land here often with equal values.
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    Affine2D next = tb is not null ? tb() : ts!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.LocalTransform == next) return;
+                    paint.LocalTransform = next;
+                    _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.Opacity.IsBound)
             {
                 var ob = b.Opacity.Thunk; var os = b.Opacity.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Opacity = ob is not null ? ob() : os!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    float next = ob is not null ? ob() : os!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.Opacity == next) return;
+                    paint.Opacity = next;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.Fill.IsBound)
             {
                 var fb = b.Fill.Thunk; var fs = b.Fill.Signal;
-                AddBinding(node, new Effect(Runtime, () => { if (_scene.IsLive(node)) { _scene.Paint(node).Fill = fb is not null ? fb() : fs!.Value; _scene.Mark(node, NodeFlags.PaintDirty); } }, owner: null, runNow: true));
+                AddBinding(node, new Effect(Runtime, () =>
+                {
+                    if (!_scene.IsLive(node)) return;
+                    ColorF next = fb is not null ? fb() : fs!.Value;
+                    ref NodePaint paint = ref _scene.Paint(node);
+                    if (paint.Fill == next) return;
+                    paint.Fill = next;
+                    _scene.Mark(node, NodeFlags.PaintDirty);
+                }, owner: null, runNow: true));
             }
             if (b.HoverFill.IsBound)
             {
@@ -1948,8 +1977,17 @@ public sealed class TreeReconciler
         int rowOverscan = ve.Overscan;
         if (!float.IsNaN(ve.CacheExtentPx) && ve.CacheExtentPx >= 0f)
             rowOverscan = Math.Max(0, (int)MathF.Ceiling(ve.CacheExtentPx / (avgExtent > 0f ? avgExtent : 1f)));
-        bool eagerOverscan = ve.RealizeOverscanImmediately;
-        int effOverscan = mount && !eagerOverscan ? 0 : rowOverscan;
+        // Prop-eager (RealizeOverscanImmediately) OR at-rest catch-up: when not flinging, finish the full overscan
+        // halo in one paint so HasBudgetDeferredVirtuals drops to 0 on a static page. Mount still defers the halo
+        // for one frame unless prop-eager (visible band first; next FrameEpoch at rest fills overscan without E4 drip).
+        bool propEager = ve.RealizeOverscanImmediately;
+        bool atRest = MathF.Abs(sc.FlingVelocity) <= VirtualWindowing.FlingGuardThreshold;
+        bool mountDefer = mount && !propEager;
+        if (mountDefer) entry.MountDeferEpoch = FrameEpoch;
+        int effOverscan = mountDefer ? 0 : rowOverscan;
+        // Same-epoch as mount-defer: keep ClipRealizeBudget (MountVirtual + ReRealizeVirtuals share one Paint).
+        bool sameEpochAsMountDefer = entry.MountDeferEpoch == FrameEpoch;
+        bool eagerOverscan = propEager || (atRest && !mountDefer && !sameEpochAsMountDefer);
         VirtualWindowing.DirectionalOverscan(effOverscan, sc.FlingVelocity, avgExtent, out int lowOv, out int highOv);
 
         int first, last, visibleFirst, visibleLast, mandFirst, mandLast;
@@ -2001,9 +2039,10 @@ public sealed class TreeReconciler
             first = Math.Max(first, prefix); last = Math.Max(last, prefix);
         }
 
-        // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row pool.
+        // E4 budget: the mandatory band is realized unconditionally; the overscan halo is clipped to the per-frame row
+        // pool while scrolling/flinging. At rest (and prop-eager) ClipRealizeBudget is skipped — full desired window.
         bool budgetDeficit = !eagerOverscan && ClipRealizeBudget(in sc, mandFirst, mandLast, avgExtent, ref first, ref last);
-        bool stayDirty = budgetDeficit || (mount && !eagerOverscan);
+        bool stayDirty = budgetDeficit || mountDefer;
         if (last < first) last = first;
         int w = last - first;
         int visibleSlots = Math.Clamp(visibleLast - first, 0, w);

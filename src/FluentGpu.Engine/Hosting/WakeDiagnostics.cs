@@ -35,6 +35,8 @@ public enum WakeReasons
     BakedBlurPending = 1 << 21, // queued static derivatives, serviced at a low 30 Hz budget only after interaction settles
     FrameClockPoller = 1 << 22, // an explicit FrameClock.Tick subscriber (for example the smooth compositor-bound playhead)
     VideoPumpPending = 1 << 23, // one coalesced native-video / geometry pump must run after layout settles
+    WarmingVirtuals = 1 << 24,  // bound cold-realize stagger and/or KeepAlive unpark replay drip still in flight
+    BudgetDeferredVirtuals = 1 << 25, // E4 overscan halo only partially realized this paint — catch-up owed next frame
 }
 
 /// <summary>
@@ -48,13 +50,13 @@ public enum WakeReasons
 internal sealed class WakeDiagnostics
 {
     // Per-reason awake-frame counts this window, indexed by bit position (0..ReasonCount-1).
-    private const int ReasonCount = 24;
+    private const int ReasonCount = 26;
     private static readonly string[] s_reasonNames =
     [
         "frameNeeded", "runtimePending", "dynamicText", "anim", "interact", "scrollAnim", "repeat", "caret",
         "brushAnims", "imagesPending", "imageCrossfades", "orphans", "dragDropWork", "dragActive", "gestureHold",
         "popupAnim", "touchPress", "videoPresenting", "timer", "warmCadence", "imageReady", "bakedBlurPending",
-        "frameClockPoller", "videoPumpPending",
+        "frameClockPoller", "videoPumpPending", "warmingVirtuals", "budgetDeferredVirtuals",
     ];
 
     private readonly long[] _reasonFrames = new long[ReasonCount];   // frames where reason i kept the loop awake

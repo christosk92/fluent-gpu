@@ -259,7 +259,8 @@ sealed class ArtistPopular : Component
 
     // ── the prototype row (shared by live rows and the skeleton) ────────────────────────────────────────────
     static Element Row(Track t, int index, in TrackRow.State st, float art, bool showDuration,
-                       bool fullPlays, bool stackSub, Element? featLine, Action onPlay, Action? onLike)
+                       bool fullPlays, bool stackSub, Element? featLine, Action onPlay, Action? onLike,
+                       IReadSignal<bool>? hoverPaused = null)
     {
         // Tight cells: feat and plays stop competing for one line — feat keeps line 2, plays moves to line 3
         // (where the full count always fits). Rows without a feat line never cramped, so they stay 2-line.
@@ -301,15 +302,19 @@ sealed class ArtistPopular : Component
             BorderColor = ColorF.Transparent,
             HoverBorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, OnClick = onPlay,
-            // No-op pointer-exit → registers PointerBit so this row is the "interactive ancestor" whose hover
-            // progress the # cell inherits — that's what reveals play/pause on row hover (TrackRow.Row idiom).
-            OnPointerExit = static () => { },
+            // Enter/exit write hoverPaused (EQ stop-tick) and keep PointerBit for HoverOpacity inheritance.
+            OnHoverMove = hoverPaused is Signal<bool> hs
+                ? _ => { if (!hs.Peek()) hs.Value = true; }
+                : null,
+            OnPointerExit = hoverPaused is Signal<bool> hs2
+                ? () => { if (hs2.Peek()) hs2.Value = false; }
+                : static () => { },
             Children =
             [
                 new BoxEl
                 {
                     Width = 24f, Height = 24f, Shrink = 0f,
-                    Children = [TrackRow.NumberCell(index, st.IsNow, st.IsPlaying, st.IsBuffering, false, onPlay)],
+                    Children = [TrackRow.NumberCell(index, st.IsNow, st.IsPlaying, st.IsBuffering, false, onPlay, hoverPaused)],
                 },
                 new BoxEl
                 {
@@ -441,6 +446,7 @@ sealed class ArtistPopular : Component
                 var track = _o._live[_index];
                 return new Presentation(track, TrackRow.StateOf(_o._bridge, _lib, track));
             });
+            var hovered = UseSignal(false);
             if (presentation.Value.Track is not { } t) return new BoxEl();
             var st = presentation.Value.State;
             return Row(t, _index, st, _art, _showDuration, _fullPlays, _stackSub,
@@ -451,7 +457,8 @@ sealed class ArtistPopular : Component
                 // along only as the fallback for a uri the server list doesn't carry.
                 onPlay: () => TrackRow.Invoke(_o._bridge, t, () => _ = _o._svc.Player.PlayContextTrackAsync(
                     _o._ctx, new PlaybackContextTrack(t.Uri), _index)),
-                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null);
+                onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
+                hoverPaused: hovered);
         }
     }
 

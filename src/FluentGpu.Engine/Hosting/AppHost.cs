@@ -959,7 +959,9 @@ public sealed class AppHost : IDisposable
         // An explicit UI frame-clock poller or a queued native-video hand-off must not be swallowed by a modal loop.
         WakeReasons.FrameClockPoller | WakeReasons.VideoPumpPending |
         // A due frame-clock timer (a debounce/timeout/interval) must still fire while the user drags/resizes the window.
-        WakeReasons.Timer;
+        WakeReasons.Timer |
+        // Virtual-list catch-up used to ride FrameNeeded; keep them essential so modal ambient bail cannot starve refill.
+        WakeReasons.WarmingVirtuals | WakeReasons.BudgetDeferredVirtuals;
     private static bool OnlyAmbientWakeReasons(WakeReasons reasons) => (reasons & ModalLoopEssentialWake) == 0;
     // Dynamic-text (HUD) intern-on-change cache, indexed by (int)DynamicTextKind (None..FrameMs = 0..5). Each slot
     // holds the last DISPLAYED quantized value (the int fps / int cmd|draw|cull / 0.1-rounded ms — exactly the display
@@ -1714,8 +1716,13 @@ public sealed class AppHost : IDisposable
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
     private long _framesSkippedSubmit;          // diagnostic census of elided submits (idle/playback redundant presents avoided)
     private bool _lastFrameSkippedSubmit;       // the previous frame elided Present → RecommendedWaitMs must self-pace (no vsync block happened)
+    private long _framesStoodDown;              // census of covered/cloaked Present stand-downs — NOT skip-submit elisions
     /// <summary>Frames whose GPU submit+present was elided because the recorded command stream matched the last presented one.</summary>
     public long FramesSkippedSubmit => _framesSkippedSubmit;
+    /// <summary>Frames whose Present was skipped because the window was covered/cloaked/iconic (see the device's covered
+    /// stand-down). Deliberately NOT folded into <see cref="FramesSkippedSubmit"/>: that counter is the redundant-frame
+    /// elision metric a perf capture is judged by, and a hidden window must not be able to inflate it.</summary>
+    public long FramesStoodDown => _framesStoodDown;
 
     /// <summary>Steady-state guardrail (finding #4): the number of live <c>FrameClock.Tick</c> subscribers (per-frame
     /// pollers — e.g. the playback playhead ticker). It MUST fall back to 0 once playback/animation stops; a soak/CI
@@ -1745,15 +1752,15 @@ public sealed class AppHost : IDisposable
     {
         WakeReasons r = WakeReasons.None;
         if (_frameNeeded) r |= WakeReasons.FrameNeeded;
-        // A bound virtual list spreading its initial window across frames (cold-realize stagger) needs frames to keep
-        // coming until it finishes — it's neither a re-render nor an animation, so fold it into FrameNeeded.
-        if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.FrameNeeded;
-        // A viewport whose overscan the steady-scroll row budget (or a nested-rail mount) only partially realized needs
-        // frames to keep coming until the halo catches up — the visible band is already fully realized (never a stall).
-        if (_reconciler.HasBudgetDeferredVirtuals) r |= WakeReasons.FrameNeeded;
+        // Own bits (not folded into FrameNeeded) so FG_WAKE_DIAG can name the treadmill: warming vs budget vs latch.
+        if (_reconciler.HasWarmingVirtuals) r |= WakeReasons.WarmingVirtuals;
+        if (_reconciler.HasBudgetDeferredVirtuals) r |= WakeReasons.BudgetDeferredVirtuals;
         if (_runtime.HasPending) r |= WakeReasons.RuntimePending;
         if (_scene.HasDynamicText) r |= WakeReasons.DynamicText;
-        if (_anim.HasActive || _connected.HasActive) r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
+        // Anim wake: Cadence/NextDueMs — Driven-only rows are event-woken (signal write), not timer-due. HasActive alone
+        // used to pin the host at panel rate for a paused Driven playhead; NextDueMs returns +∞ for that case.
+        if (_connected.HasActive || (_anim.HasActive && _anim.NextDueMs(_timers.NowMs) <= 0f))
+            r |= WakeReasons.Anim;   // connected fly / snapshot awaiting dest; hover/press fades are now _anim tracks too
         if (_scrollAnim.HasActive) r |= WakeReasons.ScrollAnim;
         if (_repeat.HasActive) r |= WakeReasons.Repeat;
         if (_caretBlinker.HasActive) r |= WakeReasons.Caret;
@@ -2671,7 +2678,7 @@ public sealed class AppHost : IDisposable
             //      resize) is a finite track, so AnimIsAmbient() is false and we DON'T bail — the button animates in/out
             //      while only the perpetual playback ticker is dropped. A real resize / band-crossing relayout still
             //      paints; WM_EXITSIZEMOVE flushes any deferred work in one settle frame, so nothing visible is lost.
-            //      Warming virtual lists (FrameNeeded from HasWarmingVirtuals) and any other essential wake bit still
+            //      Warming / budget-deferred virtual lists (own wake bits) and any other essential wake bit still
             //      paint — OnlyAmbientWakeReasons masks them off so a seek ticker cannot starve mid-drag refill.
             var wakeReasons = ComputeWakeReasons();
             if (keepAlive && !resized && _everLaidOut && !_needFullLayout
@@ -3237,7 +3244,24 @@ public sealed class AppHost : IDisposable
                     }
                 }
                 if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)
-                _lastFrameSkippedSubmit = false;   // a real submit/present paced this frame
+                // Covered Present stand-down skips the sync path's only pacer — reuse the skip-submit pacing floor.
+                // Only when Present was awaited on this turn (inline / force-sync). Async Present completes later on the
+                // render thread; reading LastPresentStoodDown here would sample the previous present.
+                bool presentAwaited = (_renderThread is null && _parentRenderThread is null)
+                    || (_renderThread is not null && !_asyncActive)
+                    || (_parentRenderThread is not null && !_asyncActive);
+                if (presentAwaited)
+                {
+                    // Counted SEPARATELY from skip-submit. `skipD` is the elided-redundant-frame metric a perf capture
+                    // is judged by; folding stand-downs into it would let a covered/cloaked window manufacture a pass.
+                    _lastFrameSkippedSubmit = _device.LastPresentStoodDown;
+                    if (_lastFrameSkippedSubmit) _framesStoodDown++;
+                }
+                // A real submit+present paced this frame. MUST clear unconditionally: on the async path presentAwaited
+                // is false (the default since the render-async flip), so without this the flag latches true for the rest
+                // of the session after the first skip-submit frame, and the pacing floor then fires on a frame that
+                // actually presented the moment _asyncActive drops (modal loop, resize, render-thread teardown).
+                else _lastFrameSkippedSubmit = false;
                 hotAlloc = GC.GetAllocatedBytesForCurrentThread() - before;
                 tSubmit = Stopwatch.GetTimestamp();
             }

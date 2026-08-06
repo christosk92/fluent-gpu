@@ -30,21 +30,26 @@ public sealed partial class AnimEngine
     private int _censusVersion = -1;
     private int _censusLoopCount;
     private bool _censusDisplayRate;
+    private float _censusNextDueMs = float.PositiveInfinity;
 
     private void RefreshCensus()
     {
         if (_censusVersion == _slab.Version) return;
         _censusVersion = _slab.Version;
-        int loops = 0; bool displayRate = false;
+        int loops = 0; bool displayRate = false; bool timerDue = false;
         for (int nodeIndex = _slab.FirstActiveNode; nodeIndex >= 0; nodeIndex = _slab.NextActiveNode(nodeIndex))
             for (int s = _slab.HeadOnNode(nodeIndex); s >= 0; s = _slab.At(s).NextOnNode)
             {
                 AnimFlags f = _slab.At(s).Flags;
                 if ((f & AnimFlags.Loop) != 0) loops++;
                 if ((f & AnimFlags.DisplayRate) != 0) displayRate = true;
+                // NextDueMs: Driven rows are event-woken (never timer-due). Any other live row is due-now today
+                // (DisplayRate / OneShot / ambient Loop — AmbientCap paces the Loop case).
+                if ((f & (AnimFlags.Parked | AnimFlags.Done | AnimFlags.Driven)) == 0) timerDue = true;
             }
         _censusLoopCount = loops;
         _censusDisplayRate = displayRate;
+        _censusNextDueMs = timerDue ? 0f : float.PositiveInfinity;
     }
 
     /// <summary>Looping rows (the Loop flag) — memoized per slab-mutation version (see <see cref="RefreshCensus"/>);
@@ -54,6 +59,10 @@ public sealed partial class AnimEngine
     /// that opts out of the ambient frame-rate cap so it runs at the panel refresh. Read by the host's cap decision;
     /// memoized per slab-mutation version alongside <see cref="LoopTrackCount"/>.</summary>
     public bool DisplayRateActive { get { RefreshCensus(); return _censusDisplayRate; } }
+    /// <summary>Memoized <c>min(next-due)</c> over live non-Driven rows — same Version gate as
+    /// <see cref="LoopTrackCount"/>. <see cref="FluentGpu.Hosting.AppHost"/> calls this from
+    /// <c>ComputeWakeReasons</c> several times per frame.</summary>
+    public float NextDueMs() { RefreshCensus(); return _censusNextDueMs; }
     /// <summary>Live per-node layout-transition specs — O(1).</summary>
     public int TransitionCount => _transitions.Count;
 

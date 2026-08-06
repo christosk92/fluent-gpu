@@ -652,7 +652,10 @@ public static class SceneRecorder
             if (cp.BlurSigma > 0.01f || cp.OpacityGroup) continue;
             if (!float.IsNaN(cp.PresentedW) || !float.IsNaN(cp.PresentedH)) continue;   // a reveal draws non-layout extents
             var cn = cp.Corners;
-            if (cn.TopLeft != 0f || cn.TopRight != 0f || cn.BottomRight != 0f || cn.BottomLeft != 0f) continue;  // square only (rounded reveals corners)
+            // Rounded opaque children may occlude if the VISIBLE rect lies inside the child's bounds deflated by each
+            // corner radius (conservative — the rounded nibs never claim coverage). Square children keep the old path
+            // (inset 0). Uniform max-radius inset is enough for the content-pane TL radius case (B4 → scroll cull).
+            float inset = MathF.Max(MathF.Max(cn.TopLeft, cn.TopRight), MathF.Max(cn.BottomRight, cn.BottomLeft));
             // Only a translated (linear-identity) child is modeled: its drawn rect is its layout bounds shifted by its
             // own Dx/Dy (translation composes cleanly), transformed through the parent `world`. A non-identity linear
             // part (the seek-bar value-fill's Scale(0.3,1)) draws a rect we can't derive from cb through `world` alone —
@@ -663,12 +666,17 @@ public static class SceneRecorder
             RectF childDevice = world.TransformBounds(new RectF(
                 childShiftX + cb.X + clt.Dx, childShiftY + cb.Y + clt.Dy, cb.W, cb.H));
             // Containment with a tiny slack: EXPAND the child rect by ε (never shrink `visible`) so AA-irrelevant subpixel
-            // rounding can't defeat an otherwise-full opaque cover.
+            // rounding can't defeat an otherwise-full opaque cover. For rounded children, also DEFATE by `inset` so the
+            // quarter-disc nibs are never treated as covering the parent.
             const float eps = 0.01f;
-            if (childDevice.X - eps <= visible.X && childDevice.Y - eps <= visible.Y
-                && childDevice.X + childDevice.W + eps >= visible.X + visible.W
-                && childDevice.Y + childDevice.H + eps >= visible.Y + visible.H)
-                return true;   // this child's opaque square fill fully contains the node's visible rect
+            float covL = childDevice.X + inset - eps;
+            float covT = childDevice.Y + inset - eps;
+            float covR = childDevice.X + childDevice.W - inset + eps;
+            float covB = childDevice.Y + childDevice.H - inset + eps;
+            if (covL <= visible.X && covT <= visible.Y
+                && covR >= visible.X + visible.W
+                && covB >= visible.Y + visible.H)
+                return true;   // this child's opaque fill (square or conservatively-inset rounded) covers the visible rect
         }
         return false;
     }

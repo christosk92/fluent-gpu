@@ -146,6 +146,15 @@ public interface IGpuDevice : IDisposable
     /// <summary>Diagnostic (FG_GPU_TIMING=1): of <see cref="LastGpuSceneMs"/>, the layer/acrylic COMPOSITE portion. 0 when off. Folds into <c>FrameStats.GpuCompositeMs</c>.</summary>
     double LastGpuCompositeMs => 0;
 
+    /// <summary>Diagnostic (FG_GPU_TIMING=1): true when <see cref="LastGpuRenderMs"/> was resolved on the most recent
+    /// submit (not a leftover from a prior present). Skip-submit / present stand-down leave this false so <c>[fps]</c>
+    /// does not re-quote a stale <c>grender</c>.</summary>
+    bool GpuTimingSampleFresh => false;
+
+    /// <summary>True when the most recent <see cref="ISwapchain.Present"/> stood down (cloaked / OCCLUDED probe still
+    /// occluded) without a real present. The host treats this like skip-submit for the sync-path pacing floor.</summary>
+    bool LastPresentStoodDown => false;
+
     /// <summary>Diagnostic: the OS-attested present/compositor statistics sampled at the last present, or
     /// <c>default</c> on a backend that has none (headless — the struct's <c>Valid</c> bit reads false, which every
     /// consumer must treat as NOT MEASURED rather than as zeroes). ALWAYS-ON: two OS calls per present and one per

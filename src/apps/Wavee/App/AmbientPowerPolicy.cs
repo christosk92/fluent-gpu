@@ -12,10 +12,12 @@ namespace Wavee;
 /// now-playing equalizer, skeleton shimmer, the buffering spinner, the karaoke lyrics wipe — free-run at the panel's
 /// full refresh, and when should it be paced?
 ///
-/// <para><b>The rule.</b> Plugged in AND focused ⇒ <see cref="AmbientRateMode.Uncapped"/> (the user is looking at the
-/// app on mains power: give them the display rate). On battery OR unfocused ⇒ <see cref="AmbientRateMode.HalfRefresh"/>
-/// (half the panel's live refresh — 60 on a 120 Hz panel, 45 on 90 Hz, 30 on 60 Hz; a whole-vblank divisor, so unlike
-/// the old hard-coded 60 it never beats against the vsync-locked present).</para>
+/// <para><b>The rule.</b> Always explicit ~30 fps while ambient motion is the only wake (plugged/focused OR
+/// battery/background). Ambient frames are full-window presents on this engine (translucent shell), so
+/// <see cref="AmbientRateMode.Uncapped"/> is never used — it made <c>AmbientCapEngaged</c> false and disabled the
+/// adaptive-FPS governor exactly when a 13 px equalizer could pin ~56% GPU. <see cref="AmbientRateMode.HalfRefresh"/>
+/// is also avoided: on a 120 Hz panel it resolves to 60 fps, which is still too hot for full-window Present of the
+/// Wavee shell (measured ~35% <c>engtype_3d</c> while playing).</para>
 ///
 /// <para><b>Why the two inputs.</b> Battery is the economics an always-open music app actually pays; focus is the
 /// attention — a background window's shimmer is worth nothing at any rate. Neither input alone is enough (a plugged-in
@@ -36,6 +38,10 @@ static class AmbientPowerPolicy
 {
     /// <summary>How long a NEW power reading must hold before it may change the cadence.</summary>
     private const double DebounceSeconds = 2.0;
+    /// <summary>Foreground ambient rate — explicit fps (full-window Present tax; not HalfRefresh).</summary>
+    private const int ForegroundAmbientFps = 30;
+    /// <summary>Background / battery ambient rate — explicit fps, refresh-independent.</summary>
+    private const int BackgroundAmbientFps = 24;
     /// <summary>Power-read cadence — deliberately equal to the debounce, so a real transition costs exactly two reads
     /// (~2-4 s to apply) and a blip shorter than one interval is usually never even sampled. It is NOT finer: the
     /// hosting <c>UseInterval</c> is a frame-clock timer that clamps the loop's idle wait, so every tick is a wake, and
@@ -111,7 +117,8 @@ static class AmbientPowerPolicy
     private static void Apply()
     {
         if (s_host is not { } host) return;
-        host.AmbientRate = s_plugged && s_focused ? AmbientRateMode.Uncapped : AmbientRateMode.HalfRefresh;
+        // Never Uncapped / HalfRefresh: ambient Present is a full-window pass. Explicit fps only.
+        host.AmbientAnimationFps = (s_plugged && s_focused) ? ForegroundAmbientFps : BackgroundAmbientFps;
     }
 
     /// <summary>

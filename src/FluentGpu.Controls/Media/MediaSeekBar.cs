@@ -160,8 +160,8 @@ public sealed class MediaSeekBar : Component
             Children = [rail, thumb],
         };
 
-        // Frame-clock ticker: interpolates _displayFrac while playing; unmounted when paused/stopped so the frame loop
-        // can idle. It NEVER re-renders this component (only writes a signal the compositor binds read).
+        // Pixel-due ticker (UseInterval — not FrameClock.Tick, which pins the host at panel rate via FrameClockPoller).
+        // Unmounted when paused/stopped so the frame loop can idle. NEVER re-renders this component.
         bool canAdvance = enabled && playing && !buffering;
         Element? ticker = canAdvance ? Embed.Comp(() => new MediaSeekTicker { Owner = this }) : null;
 
@@ -273,12 +273,20 @@ public sealed class MediaSeekBar : Component
         float w = _width.Peek() > 0f ? _width.Peek() : 1f;
         return Math.Clamp(x / w, 0f, 1f);
     }
+
+    /// <summary>Pixel dwell of the playhead: <c>durationMs / trackWidthPx</c>, clamped ~[33, 250] ms.</summary>
+    internal float TickIntervalMs()
+    {
+        double durSec = Player.Duration.Peek().TotalSeconds;
+        float w = _width.Peek();
+        if (durSec <= 0.0 || w <= 1f) return 100f;
+        return Math.Clamp((float)(durSec * 1000.0 / w), 33f, 250f);
+    }
 }
 
-/// <summary>Per-frame stepper for <see cref="MediaSeekBar"/> (the conscious-ticker idiom): mounted only while playing,
-/// it subscribes to the host frame clock and advances the owner's <c>_displayFrac</c> signal each frame so the playhead
-/// interpolates smoothly between coarse position reports. Unmounted on pause/stop, idling the frame loop. It NEVER
-/// re-renders the owner.</summary>
+/// <summary>Pixel-due stepper for <see cref="MediaSeekBar"/>: mounted only while playing, advances <c>_displayFrac</c>
+/// on a <see cref="Component.UseInterval"/> at the playhead's pixel dwell (not <c>FrameClock.Tick</c>). Unmounted on
+/// pause/stop. NEVER re-renders the owner.</summary>
 public sealed class MediaSeekTicker : Component
 {
     /// <summary>The seek bar this ticker advances.</summary>
@@ -286,12 +294,7 @@ public sealed class MediaSeekTicker : Component
 
     public override Element Render()
     {
-        var tick = UseContextSignal(FrameClock.Tick);
-        UseSignalEffect(() =>
-        {
-            _ = tick.Value;
-            Owner.Recompute();
-        });
+        UseInterval(() => Owner.Recompute(), Owner.TickIntervalMs());
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
     }
 }

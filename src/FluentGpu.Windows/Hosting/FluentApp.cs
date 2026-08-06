@@ -271,7 +271,7 @@ public static class FluentApp
         // Deltas, not levels: PresentedSequence/FramesSkippedSubmit/PublishSequence are monotonic counters, and the
         // question a cadence investigation asks is always "how many since the last line".
         ulong prevPresentSeq = 0, prevPublishSeq = 0;
-        long prevSkipped = 0, prevGated = 0, prevRephased = 0;
+        long prevSkipped = 0, prevGated = 0, prevRephased = 0, prevStoodDown = 0;
         long prevFpsLineQpc = System.Diagnostics.Stopwatch.GetTimestamp();
         var prevInputPacing = window.InputPacingSnapshot;
         long scrollPerfWindowStart = scrollPerf ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
@@ -369,7 +369,10 @@ public static class FluentApp
                     // grender X(scene Y: rect R shad S img I glyph G comp C) opgrpN(o/bo/bl/ef,full) — all 0 unless FG_GPU_TIMING.
                     // `shad` is split out of `rect`: the two behave differently (a shadow is a big always-blended SDF quad),
                     // and the merged number could not say which one owned the ~5ms.
-                    string gpuRenderTok = gpuRenderMs > 0.0
+                    // Freshness gate: after skip-submit / stand-down, LastGpuRenderMs still holds the prior sample —
+                    // only print grender when this submit actually resolved timestamps.
+                    bool gpuFresh = gpuDev?.GpuTimingSampleFresh ?? false;
+                    string gpuRenderTok = gpuRenderMs > 0.0 && gpuFresh
                         ? $" grender {gpuRenderMs:0.0}ms(scene {s.GpuSceneMs:0.0}: rect {s.GpuFillMs:0.0} shad {s.GpuShadowMs:0.0} img {s.GpuImageMs:0.0} glyph {s.GpuGlyphMs:0.0} comp {s.GpuCompositeMs:0.0}) opgrp{opGroups}(o{opPlain}/bo{opBounded}/bl{opBlur}/ef{opEdge},full{opFull})"
                         : "";
                     // efS = physical px the PURE-fade STRIP path copied + restored this frame (the offscreen-free edge
@@ -427,6 +430,7 @@ public static class FluentApp
                     ulong presentSeq = host.PresentedSequence, publishSeq = host.PublishSequence;
                     ulong consumedSeq = host.ConsumedSequence;
                     long skipped = host.FramesSkippedSubmit;
+                    long stoodDown = host.FramesStoodDown;   // covered/cloaked Present skips — kept OUT of skipD
                     // Saturating, because these are UNSIGNED counters that do not track each other exactly: a present
                     // can happen with nothing newly acquired (the previous frame stays on screen), so presentSeq may
                     // legitimately run ahead of publishSeq. An unguarded subtraction would wrap to ~1.8e19 and read as
@@ -451,7 +455,7 @@ public static class FluentApp
                     string seamTok =
                         $" presentD={presentDelta} pubD={Behind(publishSeq, prevPublishSeq)} " +
                         $"coal={Behind(publishSeq, presentSeq)} lag={Behind(publishSeq, consumedSeq)} " +
-                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} gateD={gated - prevGated} " +
+                        $"ack={host.RenderPresentSeq} skipD={skipped - prevSkipped} sdD={stoodDown - prevStoodDown} gateD={gated - prevGated} " +
                         $"rephD={rephased - prevRephased}";
                     string inputPaceTok =
                         $" | motion msgD={inputPacing.MotionMessages - prevInputPacing.MotionMessages}" +
@@ -459,7 +463,7 @@ public static class FluentApp
                         $" coalD={inputPacing.CoalescedMoveEvents - prevInputPacing.CoalescedMoveEvents}" +
                         $" deadlineD={inputPacing.DeadlineWakes - prevInputPacing.DeadlineWakes}" +
                         $" urgentD={inputPacing.UrgentBreaks - prevInputPacing.UrgentBreaks}";
-                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevGated = gated;
+                    prevPresentSeq = presentSeq; prevPublishSeq = publishSeq; prevSkipped = skipped; prevGated = gated; prevStoodDown = stoodDown;
                     prevRephased = rephased;
                     prevFpsLineQpc = fpsLineQpc; prevInputPacing = inputPacing;
                     Console.Error.WriteLine(

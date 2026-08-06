@@ -20,7 +20,7 @@ sealed partial class ArtistPage : Component
     readonly Signal<float> _heroWidth = new(ArtistHeroLayout.WideWidth);
 
     Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
-                   Action<string, string?> go, bool compactCanHit)
+                   bool compactCanHit)
     {
         float width = MathF.Max(1f, _heroWidth.Value);
         var tier = UseRef(ArtistHeroTier.Wide);
@@ -43,23 +43,6 @@ sealed partial class ArtistPage : Component
                     ],
                 }
                 : new BoxEl();
-
-            var wf = a.Extras?.WatchFeed;
-            bool hasWatchFeed = wf is { EntrypointUri.Length: > 0, CanvasUrl.Length: > 0 }
-                                && (wf.Thumbnail?.Url is { Length: > 0 } || a.Image?.Url is { Length: > 0 });
-            if (hasWatchFeed)
-            {
-                verified = new BoxEl
-                {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
-                    Children =
-                    [
-                        ArtistWatchFeedPicture.Create(wf, a.Image, a.Name, 36f,
-                            onOpen: () => go(wf!.EntrypointUri, a.Name)),
-                        verified,
-                    ],
-                };
-            }
 
             TextEl name = metrics.Tier switch
             {

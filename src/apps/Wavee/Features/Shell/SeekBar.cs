@@ -15,15 +15,15 @@ namespace Wavee;
 //      1 Hz position tick can't yank the thumb back under the finger. Slider.Bind reads one signal; we need a derived
 //      fraction (scrubbing ? scrubFrac : playing ? interpolated : positionFrac).
 //   2. SMOOTH PLAYHEAD. The transport only reports position ~1 Hz, so a raw bind steps once a second (jerky). While
-//      playing we interpolate between ticks off the per-frame FrameClock, anchored to the wall-clock at the last tick.
+//      playing we interpolate between ticks on a pixel-due UseInterval, anchored to the wall-clock at the last tick.
 //   3. CLICK-ANYWHERE SCRUB modeled on ScrollBar's thumb-drag (grab on down, normalized 0..1 on drag), committing on
 //      the drag-end (OnClick) so we issue ONE SeekAsync, not one per move.
 //
 // Cost discipline (signals-first): this is a leaf sub-component. The fill/thumb position is a compositor Transform BIND
 // reading ONE signal (_displayFrac) — it NEVER re-renders this component. While playing, a mounted SeekTicker advances
-// _displayFrac per frame (the ScrollBar conscious-ticker idiom: a FrameClock consumer that writes a signal the binds
-// read); when paused/stopped the ticker is unmounted and the frame loop idles. The component re-renders only on the
-// LOW-frequency state it reads in Render (playing/enabled), never per move or per frame.
+// _displayFrac on a pixel-due interval (not FrameClock — that pins the host via FrameClockPoller); when paused/stopped
+// the ticker is unmounted and the frame loop idles. The component re-renders only on the LOW-frequency state it reads
+// in Render (playing/enabled), never per move or per frame.
 sealed class SeekBar : Component
 {
     const float HitHeight = 32f;     // WinUI SliderHorizontalHeight
@@ -196,8 +196,8 @@ sealed class SeekBar : Component
             Children = [rail, thumb],
         };
 
-        // While playing, mount the per-frame ticker (a FrameClock consumer that advances _displayFrac each frame); it
-        // unmounts when paused/stopped so the frame loop idles. The ticker NEVER re-renders this component.
+        // While playing, mount the pixel-due ticker (UseInterval — NOT FrameClock.Tick, which would pin the host at
+        // panel rate via FrameClockPoller). Unmounts when paused/stopped so the frame loop idles. NEVER re-renders us.
         bool canAdvance = b.CurrentTrack.Peek() is not null && b.Error.Peek() is null && !b.IsLoading.Peek()
             && playing && !buffering;
         Element? ticker = canAdvance ? Embed.Comp(() => new SeekTicker { Owner = this }) : null;
@@ -331,24 +331,29 @@ sealed class SeekBar : Component
         float w = _width > 0f ? _width : 1f;
         return Math.Clamp(x / w, 0f, 1f);
     }
+
+    /// <summary>Pixel dwell of the playhead: <c>durationMs / trackWidthPx</c>, clamped so short tracks stay smooth and
+    /// long tracks don't oversample (~44× at panel rate for a multi-minute bar).</summary>
+    internal float TickIntervalMs()
+    {
+        long dur = _b.DurationMs.Peek();
+        float w = _width;
+        if (dur <= 0L || w <= 1f) return 100f;
+        return Math.Clamp(dur / w, 33f, 250f);
+    }
 }
 
-/// <summary>Per-frame stepper for <see cref="SeekBar"/> (the ScrollBar conscious-ticker idiom): mounted only while the
-/// track is playing, it subscribes to the host frame clock and advances the owner's <c>_displayFrac</c> signal each
-/// frame so the playhead interpolates smoothly between the ~1 Hz position ticks. The owner unmounts it on pause/stop,
-/// idling the frame loop. It NEVER re-renders the owner (it only writes a signal the compositor binds read).</summary>
+/// <summary>Pixel-due stepper for <see cref="SeekBar"/>: mounted only while playing, advances <c>_displayFrac</c> on a
+/// <see cref="Component.UseInterval"/> at the playhead's pixel dwell (not <c>FrameClock.Tick</c> — that bit is
+/// latency-sensitive and would pin the whole host at panel rate). Unmounted on pause/stop. NEVER re-renders the owner.</summary>
 sealed class SeekTicker : Component
 {
     public required SeekBar Owner;
 
     public override Element Render()
     {
-        var tick = UseContextSignal(FrameClock.Tick);
-        UseSignalEffect(() =>
-        {
-            _ = tick.Value;
-            Owner.Recompute();
-        });
+        // Parent SeekBar re-renders ~1 Hz on PositionMs — refreshes the interval when duration/width settle.
+        UseInterval(() => Owner.Recompute(), Owner.TickIntervalMs());
         return new BoxEl { HitTestVisible = false, Width = 0f, Height = 0f };
     }
 }

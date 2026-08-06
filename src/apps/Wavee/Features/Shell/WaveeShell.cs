@@ -559,25 +559,22 @@ sealed class WaveeShell : Component
                                     // This is the one place the plate must still sit UNDER the merged pane: the cut-away is
                                     // a square MINUS a quarter disc (concave — no rect can express it), so the cell pays one
                                     // extra plate layer inside the arc (Δ ≈ 4/255 over ~50 DIP², at the pane's own corner)
-                                    // to keep the cut-away itself exact. The alternative — splitting the pane so the plate
-                                    // never underlaps — would split its Elevation.Card shadow onto the split seams, and that
-                                    // shadow band would read THROUGH the translucent surface: a real artifact for a
-                                    // sub-1/255 gain.
+                                    // to keep the cut-away itself exact.
                                     new BoxEl { Width = Radii.Card, Height = Radii.Card, Fill = Prop.Of(() => WaveeColors.Toolbar) },
                                     // (b) the TRAILING GAP strip — the pane's Spacing.S inset, full height, abutting the
                                     // pane's trailing edge (JustifySelf.End parks it on the ZStack's right edge; AlignItems
                                     // stretch gives it the full height). It also receives the pane's Elevation.Card shadow,
                                     // exactly as the full-region plate did.
                                     new BoxEl { Width = Spacing.S, JustifySelf = FlexAlign.End, Fill = Prop.Of(() => WaveeColors.Toolbar) },
-                                    // Static final-geometry underlay — and, at rest, THE content-pane surface itself
-                                    // (rungs 1+2 MERGED): the animated card above paints no fill, so this one layer is
-                                    // the pane and it is never double-composited. WinUI translates ContentRoot but
-                                    // does not animate its width; while that translated card moves, this matching
-                                    // surface prevents the trailing side from exposing plate chrome (the false "right
-                                    // rail ghost") — and closer to WinUI, where ContentRoot translates and the surface
-                                    // beneath does not. Its fill is FileArea-over-Toolbar as a single translucent value
-                                    // (ContentPaneMerged, above) — same composited pixels, one pass, and the ladder rungs
-                                    // themselves are untouched (the remainders above still paint the raw plate).
+                                    // Static final-geometry underlay — rungs 1+2 MERGED into ONE TRANSLUCENT surface, so
+                                    // live Mica still reads through the content region.
+                                    //
+                                    // REVERTED from the opaque `FloatingPane` plate (the WinUI "opaque Window.Content hides
+                                    // the backdrop" policy). It was measured worthless HERE: `rq` stayed at 2 opaque against
+                                    // 98→138 blended rect instances, i.e. it converted ~1.4% of the frame while costing the
+                                    // whole Mica show-through. The opaque no-blend PSO needs the ROW chrome (square corners,
+                                    // α=1 zebra/hover) to qualify too — until that lands, an opaque plate buys nothing and
+                                    // the entire measured GPU win (56% → ~19%) came from cutting the frame RATE instead.
                                     new BoxEl
                                     {
                                         Grow = 1f, Margin = new Edges4(0f, 0f, Spacing.S, 0f),
@@ -708,16 +705,17 @@ sealed class WaveeShell : Component
                                 HitTestPassThrough = true,
                                 Children =
                                 [
-                                    // Opaque backing band for the FLOATING overlay only. Docked stays transparent: the
-                                    // rail's rounded top-left wedge must show the chrome behind it, exactly like the
-                                    // card's rounded top-right on the other side of the gap.
+                                    // Opaque backing band for the FLOATING overlay only — FloatingChrome (plate), not
+                                    // FloatingPane: RightRail paints FileArea on top, and FloatingPane-then-FileArea was a
+                                    // double-coat that made the floating rail one rung darker than docked. Docked stays
+                                    // transparent so the rail's rounded TL wedge shows chrome behind it.
                                     new BoxEl
                                     {
                                         // Paint-only closed-rail backing: never become the deepest hit in this retained
                                         // overlay. The interactive RightRail subtree above owns input while open.
                                         Grow = 1f, HitTestPassThrough = true,
                                         Fill = Prop.Of(() => _shellUi.RailOpen.Value && !_shellUi.RailFits.Value
-                                            ? WaveeColors.FloatingPane : ColorF.Transparent),
+                                            ? WaveeColors.FloatingChrome : ColorF.Transparent),
                                     },
                                     new BoxEl
                                     {
