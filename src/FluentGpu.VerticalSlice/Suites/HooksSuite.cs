@@ -50,6 +50,7 @@ static class HooksSuite
         AsyncCommandChecks(strings);
         TimerHookChecks(strings);
         GranularityChecks(strings);
+        LayoutDirtyGateChecks(strings);
         SliderSignalChecks(strings);
         SliderUnifiedChecks(strings);
         FlowChecks(strings);
@@ -1488,6 +1489,43 @@ static class HooksSuite
         Check("59. setState re-renders ONLY the owning component (granular, not the app)",
             only0 && f.ComponentsRendered == 1 && HasGlyph(device, strings, "c0:1"),
             $"c0+{Gran.Counts[0] - a0} c1+{Gran.Counts[1] - b0} parent+{Gran.Parent - p0} componentsRendered={f.ComponentsRendered}");
+    }
+
+    // gate.hooks.layout-dirty-identical-tree — RunComponent re-render whose reconcile mutates only paint (Fill) must
+    // leave MeasureCount==0 (no LayoutDirty roots → RunDirty early-out). A Width flip still dirties and re-solves.
+    static void LayoutDirtyGateChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("layout-dirty-gate", new Size2(320, 120), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var hostProbe = new LayoutDirtyGateHost();
+        using var host = new AppHost(app, window, device, fonts, strings, hostProbe);
+        host.RunFrame();
+        host.RunFrame();   // settle; ClearLayoutDirty ran
+
+        // Root = child component anchor (Embed.Comp); its FirstChild is the rendered BoxEl.
+        var box = Child(host.Scene, host.Scene.Root, 0);
+        float w0 = host.Scene.AbsoluteRect(box).W;
+        var child = hostProbe.Child!;
+
+        child.Fill!.Value = ColorF.FromRgba(0xFF, 0x00, 0x00);
+        var fPaint = host.RunFrame();
+        // Paint-only: re-render ran, but RunDirty saw an empty LayoutDirty worklist (MeasureCount stays 0; width unchanged).
+        bool paintOnly = fPaint.ComponentsRendered >= 1 && fPaint.MeasureCount == 0
+                         && MathF.Abs(host.Scene.AbsoluteRect(box).W - w0) < 0.5f;
+
+        child.Width!.Value = 120f;
+        var fLayout = host.RunFrame();
+        float w1 = host.Scene.AbsoluteRect(box).W;
+        // Width flip: WriteColumns marks LayoutDirty → scoped arrange updates AbsoluteRect.
+        // Explicit-size leaves often arrange without a Flex measure, so MeasureCount may stay 0 — width is the oracle.
+        bool layoutDirties = fLayout.ComponentsRendered >= 1 && MathF.Abs(w1 - 120f) < 0.5f;
+
+        Check("gate.hooks.layout-dirty-identical-tree paint-only re-render ⇒ zero layout measures; Width flip still dirties",
+            paintOnly && layoutDirties,
+            $"paintOnly comps={fPaint.ComponentsRendered} measures={fPaint.MeasureCount} w0={w0:0.#}; layout comps={fLayout.ComponentsRendered} w1={w1:0.#}");
     }
 
     static void SliderSignalChecks(StringTable strings)

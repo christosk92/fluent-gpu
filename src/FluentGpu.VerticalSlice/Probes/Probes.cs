@@ -2611,6 +2611,36 @@ sealed class WaveeShell : Component
     };
 }
 
+// Re-render LayoutDirty gate (§5.3): nested so RunComponent (not RunRoot) is the path under test.
+// Paint-only Fill flip ⇒ MeasureCount==0; Width flip still dirties + re-solves.
+sealed class LayoutDirtyGateHost : Component
+{
+    public LayoutDirtyGateChild? Child;
+    public override Element Render()
+        => Embed.Comp(() => { var c = new LayoutDirtyGateChild(); Child = c; return c; });
+}
+
+sealed class LayoutDirtyGateChild : Component
+{
+    public Signal<ColorF>? Fill;
+    public Signal<float>? Width;
+    public override Element Render()
+    {
+        var fill = UseSignal(ColorF.FromRgba(0x20, 0x20, 0x20));
+        var width = UseSignal(80f);
+        Fill = fill;
+        Width = width;
+        // Fixed-size ClipToBounds boundary so a Width change re-solves locally (MeasureCount > 0) without escaping.
+        return new BoxEl
+        {
+            Width = width.Value,
+            Height = 40f,
+            Fill = fill.Value,
+            ClipToBounds = true,
+        };
+    }
+}
+
 // ── Signals-first probes: granular re-render, the compositor bypass, reactive control-flow ──
 static class Gran { public static int[] Counts = new int[2]; public static int Parent; }
 

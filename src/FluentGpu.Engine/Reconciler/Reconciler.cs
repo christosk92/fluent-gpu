@@ -248,6 +248,10 @@ public sealed class TreeReconciler
     private Element? _oldRoot;
     private Effect? _rootEffect;
     private bool _reconciled;   // set when any structural/column change happened → the host runs (scoped) layout
+    // Set during Update/WriteColumns/structural reconcile when layout shape actually changed. RunComponent/RunRoot
+    // mark their rendered root LayoutDirty only when this is true — so paint-only re-renders skip layout, while a
+    // deep structural/size change still dirties ABOVE ContentSized scroll firewalls (TabView strip / add button).
+    private bool _layoutShapeMutated;
     private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
     private int _keepAliveLayoutSuppressionFrames;   // activation commit + first bounds-measure correction
     private float _themeTransitionMs = float.NaN;        // live-re-theme cross-fade duration; armed only during a RethemeAll flush
@@ -456,8 +460,14 @@ public sealed class TreeReconciler
     {
         _renderCount++;
         NoteRenderCensus(root);
+        bool prevShape = _layoutShapeMutated;
+        _layoutShapeMutated = false;
         Element newRoot = root.RenderWithHooks();
         RenderRootDiff(newRoot);
+        // Same gate as RunComponent: mark the root only when reconcile mutated layout shape.
+        if (_layoutShapeMutated && !_scene.Root.IsNull)
+            _scene.Mark(_scene.Root, NodeFlags.LayoutDirty);
+        _layoutShapeMutated = prevShape;   // nested Mount sets the bit on the outer via ReconcileSingleChild after Mount
     }
 
     private void RenderRootDiff(Element newRoot)
@@ -472,10 +482,8 @@ public sealed class TreeReconciler
         else
         {
             Update(_scene.Root, newRoot, _oldRoot);
-            // Scoped relayout (the RunComponent idiom, :344): the root render-effect may have changed the root's own
-            // layout inputs or subtree structure — a column write alone never marks LayoutDirty, which left a
-            // root-level Width/Height change reconciled but never re-laid-out (RunDirty had nothing to solve).
-            if (!_scene.Root.IsNull) _scene.Mark(_scene.Root, NodeFlags.LayoutDirty);
+            // LayoutDirty is marked by WriteColumns (layout-input / grid / clip-flag change) and by structural
+            // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
         _oldRoot = newRoot;
         if (_root is not null) _root.Context.HostNode = _scene.Root;
@@ -667,6 +675,7 @@ public sealed class TreeReconciler
                 content = _scene.CreateNode(nse.Content.ElementTypeId);
                 _scene.AppendChild(node, content);
                 Mount(content, nse.Content);
+                _layoutShapeMutated = true;
             }
             else if (oldContent is not null && oldContent.ElementTypeId == nse.Content.ElementTypeId)
             {
@@ -678,6 +687,7 @@ public sealed class TreeReconciler
                 content = _scene.CreateNode(nse.Content.ElementTypeId);
                 _scene.AppendChild(node, content);
                 Mount(content, nse.Content);
+                _layoutShapeMutated = true;
             }
             _scene.ScrollRef(node).ContentNode = content;
             return;
@@ -789,7 +799,7 @@ public sealed class TreeReconciler
         var child = _scene.FirstChild(parent);
         if (newChild is null)
         {
-            if (!child.IsNull) Remove(child);
+            if (!child.IsNull) { Remove(child); _layoutShapeMutated = true; }
             return;
         }
         if (child.IsNull)
@@ -798,6 +808,7 @@ public sealed class TreeReconciler
             _scene.AppendChild(parent, c);
             Mount(c, newChild);
             _scene.Mark(parent, NodeFlags.LayoutDirty);
+            _layoutShapeMutated = true;
         }
         else if (oldChild is not null && oldChild.ElementTypeId == newChild.ElementTypeId)
         {
@@ -816,6 +827,7 @@ public sealed class TreeReconciler
             _scene.AppendChild(parent, c);
             Mount(c, newChild);
             _scene.Mark(parent, NodeFlags.LayoutDirty);
+            _layoutShapeMutated = true;
         }
     }
 
@@ -848,6 +860,7 @@ public sealed class TreeReconciler
         _scene.AppendChild(parent, c);
         Mount(c, newChild);
         _scene.Mark(parent, NodeFlags.LayoutDirty);
+        _layoutShapeMutated = true;
     }
 
     // ── Components (render-effects) ──────────────────────────────────────────────────────────────
@@ -920,14 +933,22 @@ public sealed class TreeReconciler
         Element newRendered = comp.RenderWithHooks();
         if (entry.DerivedSkeletonStyle is { } skeletonStyle)
             newRendered = SkeletonDeriver.Derive(newRendered, skeletonStyle);
+        bool prevShape = _layoutShapeMutated;
+        _layoutShapeMutated = false;
         ReconcileSingleChild(node, newRendered, entry.Rendered);
         MirrorParticipation(node, _scene.FirstChild(node));
         comp.Context.HostNode = _scene.FirstChild(node);
         entry.Rendered = newRendered;
-        // Scoped relayout: a re-render may have changed this component's subtree size/structure → mark its rendered
-        // subtree dirty; the LayoutInvalidator walks up to the nearest layout boundary and re-solves just that subtree.
-        var child = _scene.FirstChild(node);
-        if (!child.IsNull) _scene.Mark(child, NodeFlags.LayoutDirty);
+        // Scoped relayout: mark the rendered root only when reconcile mutated structure or a layout-affecting
+        // column. Starting the dirty walk HERE (not only at the deep mutation site) clears ContentSized scroll
+        // firewalls so a TabView equal-width / add-button strip still reflows. Paint-only re-renders leave the bit
+        // clear → no LayoutDirty → no page-scale flex solve.
+        if (_layoutShapeMutated)
+        {
+            var child = _scene.FirstChild(node);
+            if (!child.IsNull) _scene.Mark(child, NodeFlags.LayoutDirty);
+        }
+        _layoutShapeMutated = prevShape;   // nested Mount sets the bit on the outer via ReconcileSingleChild after Mount
     }
 
     private void MountProvider(NodeHandle node, ContextProviderEl cp)
@@ -1107,7 +1128,8 @@ public sealed class TreeReconciler
         // is its chrome) can't fill its parent: the region collapses to the content's intrinsic size and a viewport-driven
         // list realizes 0 rows (the empty-Liked bug). Large-intrinsic content (home shelves, a detail rail) masked it.
         MirrorParticipation(node, _scene.FirstChild(node));
-        _scene.Mark(node, NodeFlags.LayoutDirty);
+        // LayoutDirty: ReplaceSingleChild / ReconcileSingleChild (structural) and WriteColumns (layout-input change)
+        // already mark. A force re-run on an unchanged Ready branch (parent re-render) must not page-dirty the region.
         _skelState[idx] = (branch, desired, se.Group);
 
         // Hide the enclosing scrollbar while this region is loading (branch 1): the short skeleton → tall real swap
@@ -2821,7 +2843,11 @@ public sealed class TreeReconciler
         }
 
         // The window moved (children are positioned by FirstRealized + document order) or changed size/shape → re-arrange.
-        if (structural || newN != oldN || shift != 0) _scene.Mark(node, NodeFlags.LayoutDirty);
+        if (structural || newN != oldN || shift != 0)
+        {
+            _scene.Mark(node, NodeFlags.LayoutDirty);
+            _layoutShapeMutated = true;
+        }
     }
 
     /// <summary>True if the subtree is a PLAIN visual tree (box/grid/text/image/polyline, no reactive binds, no
@@ -3080,7 +3106,11 @@ public sealed class TreeReconciler
 
         // Structural change to the child set (including a pure keyed reorder) → relayout this container's subtree
         // (scoped to its boundary).
-        if (structural || moved || newN != oldN) _scene.Mark(node, NodeFlags.LayoutDirty);
+        if (structural || moved || newN != oldN)
+        {
+            _scene.Mark(node, NodeFlags.LayoutDirty);
+            _layoutShapeMutated = true;
+        }
     }
 
     // ── Removal / unmount (dispose reactive effects) ────────────────────────────────────────────
@@ -3578,6 +3608,19 @@ public sealed class TreeReconciler
 
     private void WriteColumns(NodeHandle node, Element el, bool isMount, Element? old = null)
     {
+        // Snapshot layout shape before column writes so an update that only touches paint can skip LayoutDirty
+        // (RunComponent no longer force-marks). float.Equals so NaN auto-sizes compare equal.
+        LayoutInput layoutBefore = default;
+        NodeFlags layoutFlagsBefore = 0;
+        bool hadGrid = false;
+        GridSpec gridBefore = default;
+        if (!isMount)
+        {
+            layoutBefore = _scene.Layout(node);
+            layoutFlagsBefore = _scene.Flags(node) & (NodeFlags.ClipsToBounds | NodeFlags.LayoutBoundary | NodeFlags.ZStack);
+            hadGrid = _scene.TryGetGrid(node, out gridBefore);
+        }
+
         // Shared-element (connected-animation) tag: a node carrying MorphId is a Hero participant — its laid-out rect +
         // art are tracked so they fly between routes. Runs for every element type (cover Image, skeleton/cover Box).
         int nodeIdx = (int)node.Raw.Index;
@@ -4233,7 +4276,12 @@ public sealed class TreeReconciler
                 if (!t.Text.IsBound)
                 {
                     var newText = _strings.Intern(t.Text.Value);
-                    if (paint.Text != newText) { SetPaintText(ref paint, newText); _scene.Mark(node, NodeFlags.LayoutDirty); }
+                    if (paint.Text != newText)
+                    {
+                        SetPaintText(ref paint, newText);
+                        _scene.Mark(node, NodeFlags.LayoutDirty);
+                        _layoutShapeMutated = true;
+                    }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -4325,6 +4373,7 @@ public sealed class TreeReconciler
                     var newText = _strings.Intern(concat);
                     if (paint.Text != newText) SetPaintText(ref paint, newText);
                     _scene.Mark(node, NodeFlags.LayoutDirty);
+                    _layoutShapeMutated = true;
                 }
                 _scene.SetSpanText(node, spans);   // always — hyperlink actions may change without a shaping change
 
@@ -4355,7 +4404,57 @@ public sealed class TreeReconciler
             }
         }
 
-        if (!isMount) { _scene.Mark(node, NodeFlags.PaintDirty); _reconciled = true; }
+        if (!isMount)
+        {
+            _scene.Mark(node, NodeFlags.PaintDirty);
+            _reconciled = true;
+            // Equality-gate LayoutDirty: structural mounts/removals mark elsewhere; Text/SpanText already mark on
+            // content/shaping change. This catches Width/Height/flex/gap/padding/TextStyle/grid/clip-flag flips that
+            // WriteColumns used to silently rewrite without dirtying (RunComponent's blanket mark papered over it).
+            ref LayoutInput layoutAfter = ref _scene.Layout(node);
+            NodeFlags layoutFlagsAfter = _scene.Flags(node) & (NodeFlags.ClipsToBounds | NodeFlags.LayoutBoundary | NodeFlags.ZStack);
+            bool gridChanged = false;
+            if (el is GridEl)
+            {
+                bool hasGrid = _scene.TryGetGrid(node, out var gridAfter);
+                gridChanged = hadGrid != hasGrid || (hasGrid && !SameGridSpec(in gridBefore, in gridAfter));
+            }
+            if (gridChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
+            {
+                _scene.Mark(node, NodeFlags.LayoutDirty);
+                _layoutShapeMutated = true;
+            }
+        }
+    }
+
+    /// <summary>Layout-column equality for the WriteColumns LayoutDirty gate. Uses <see cref="float.Equals"/> so NaN
+    /// (auto) compares equal to NaN — same contract as the bound Width/Height effects.</summary>
+    private static bool SameLayoutInput(in LayoutInput a, in LayoutInput b)
+        => a.Direction == b.Direction
+           && a.Gap.Equals(b.Gap)
+           && a.Padding == b.Padding
+           && a.Margin == b.Margin
+           && a.Width.Equals(b.Width) && a.Height.Equals(b.Height)
+           && a.AspectRatio.Equals(b.AspectRatio)
+           && a.MinW.Equals(b.MinW) && a.MinH.Equals(b.MinH)
+           && a.MaxW.Equals(b.MaxW) && a.MaxH.Equals(b.MaxH)
+           && a.FlexGrow.Equals(b.FlexGrow) && a.FlexShrink.Equals(b.FlexShrink) && a.FlexBasis.Equals(b.FlexBasis)
+           && a.AlignSelf == b.AlignSelf && a.JustifySelf == b.JustifySelf
+           && a.Justify == b.Justify && a.AlignItems == b.AlignItems
+           && a.Wrap == b.Wrap
+           && a.TextStyle == b.TextStyle;
+
+    private static bool SameGridSpec(in GridSpec a, in GridSpec b)
+    {
+        if (!a.ColGap.Equals(b.ColGap) || !a.RowGap.Equals(b.RowGap)
+            || !a.RowHeight.Equals(b.RowHeight) || !a.MinColWidth.Equals(b.MinColWidth))
+            return false;
+        TrackSize[]? ac = a.Columns, bc = b.Columns;
+        if (ReferenceEquals(ac, bc)) return true;
+        if (ac is null || bc is null || ac.Length != bc.Length) return false;
+        for (int i = 0; i < ac.Length; i++)
+            if (ac[i] != bc[i]) return false;
+        return true;
     }
 
     private bool MountsInsideHoveredScope(NodeHandle node)
