@@ -1491,8 +1491,11 @@ static class HooksSuite
             $"c0+{Gran.Counts[0] - a0} c1+{Gran.Counts[1] - b0} parent+{Gran.Parent - p0} componentsRendered={f.ComponentsRendered}");
     }
 
-    // gate.hooks.layout-dirty-identical-tree — RunComponent re-render whose reconcile mutates only paint (Fill) must
-    // leave MeasureCount==0 (no LayoutDirty roots → RunDirty early-out). A Width flip still dirties and re-solves.
+    // gate.hooks.layout-dirty-identical-tree — a re-render whose reconcile mutates only paint must reach the scoped
+    // relayout with an EMPTY LayoutDirty worklist; anything that changes shape must still dirty it. Four arms:
+    // RunComponent paint-only / RunComponent Width flip / Skel Ready→Ready force re-run / Skel branch swap, plus the
+    // RunRoot remount arm. ScopedRelayoutMarks (always-on) is the oracle — Measure/ArrangeCount need FG_LAYOUT_DIAG,
+    // so on their own they read 0 unconditionally and prove nothing.
     static void LayoutDirtyGateChecks(StringTable strings)
     {
         using var app = new HeadlessPlatformApp();
@@ -1512,20 +1515,77 @@ static class HooksSuite
 
         child.Fill!.Value = ColorF.FromRgba(0xFF, 0x00, 0x00);
         var fPaint = host.RunFrame();
-        // Paint-only: re-render ran, but RunDirty saw an empty LayoutDirty worklist (MeasureCount stays 0; width unchanged).
-        bool paintOnly = fPaint.ComponentsRendered >= 1 && fPaint.MeasureCount == 0
+        // Paint-only: the re-render ran, but RunDirty saw an empty worklist — no mark, no measure, no arrange.
+        bool paintOnly = fPaint.ComponentsRendered >= 1
+                         && fPaint.ScopedRelayoutMarks == 0 && fPaint.MeasureCount == 0 && fPaint.ArrangeCount == 0
                          && MathF.Abs(host.Scene.AbsoluteRect(box).W - w0) < 0.5f;
 
         child.Width!.Value = 120f;
         var fLayout = host.RunFrame();
         float w1 = host.Scene.AbsoluteRect(box).W;
-        // Width flip: WriteColumns marks LayoutDirty → scoped arrange updates AbsoluteRect.
+        // Width flip: WriteColumns marks LayoutDirty → the worklist is non-empty and the scoped arrange updates AbsoluteRect.
         // Explicit-size leaves often arrange without a Flex measure, so MeasureCount may stay 0 — width is the oracle.
-        bool layoutDirties = fLayout.ComponentsRendered >= 1 && MathF.Abs(w1 - 120f) < 0.5f;
+        bool layoutDirties = fLayout.ComponentsRendered >= 1 && fLayout.ScopedRelayoutMarks > 0
+                             && MathF.Abs(w1 - 120f) < 0.5f;
 
-        Check("gate.hooks.layout-dirty-identical-tree paint-only re-render ⇒ zero layout measures; Width flip still dirties",
+        Check("gate.hooks.layout-dirty-identical-tree paint-only re-render ⇒ zero layout-dirty marks; Width flip still dirties",
             paintOnly && layoutDirties,
-            $"paintOnly comps={fPaint.ComponentsRendered} measures={fPaint.MeasureCount} w0={w0:0.#}; layout comps={fLayout.ComponentsRendered} w1={w1:0.#}");
+            $"paintOnly comps={fPaint.ComponentsRendered} marks={fPaint.ScopedRelayoutMarks} measures={fPaint.MeasureCount} arranges={fPaint.ArrangeCount} w0={w0:0.#}; layout comps={fLayout.ComponentsRendered} marks={fLayout.ScopedRelayoutMarks} w1={w1:0.#}");
+
+        LayoutDirtySkelChecks(strings);
+        LayoutDirtyRootSwapChecks(strings);
+    }
+
+    // gate.hooks.layout-dirty-skel — a parent re-render force-reruns the Skel.Region effect. On an unchanged Ready
+    // branch that reconcile is a no-op and must not dirty layout; a branch flip must.
+    static void LayoutDirtySkelChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("layout-dirty-skel", new Size2(320, 200), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var hostProbe = new LayoutDirtySkelHost();
+        using var host = new AppHost(app, window, device, fonts, strings, hostProbe);
+        host.RunFrame();
+        host.RunFrame();   // settle on the Ready branch
+
+        var child = hostProbe.Child!;
+        child.Fill!.Value = ColorF.FromRgba(0x11, 0x22, 0x33);
+        var fReady = host.RunFrame();
+        bool readyToReady = fReady.ComponentsRendered >= 1 && fReady.ScopedRelayoutMarks == 0;
+
+        child.Data.SetPending();
+        var fSwap = host.RunFrame();
+        bool swapDirties = fSwap.ScopedRelayoutMarks > 0;
+
+        Check("gate.hooks.layout-dirty-skel Ready→Ready force re-run ⇒ no layout-dirty marks; branch swap still dirties",
+            readyToReady && swapDirties,
+            $"ready comps={fReady.ComponentsRendered} marks={fReady.ScopedRelayoutMarks}; swap marks={fSwap.ScopedRelayoutMarks}");
+    }
+
+    // gate.hooks.layout-dirty-root-remount — RenderRootDiff's Remove+CreateNode+Mount arm. CreateNode does not set
+    // LayoutDirty and Mount's WriteColumns takes the isMount arm, so without the shape bit the post-first-layout root
+    // swap left an empty worklist and the fresh root kept its zeroed Bounds.
+    static void LayoutDirtyRootSwapChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("layout-dirty-root-swap", new Size2(320, 120), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var hostProbe = new LayoutDirtyRootSwapHost();
+        using var host = new AppHost(app, window, device, fonts, strings, hostProbe);
+        host.RunFrame();
+        host.RunFrame();   // settle: _needFullLayout is consumed, so the swap below MUST go through scoped relayout
+
+        hostProbe.Swapped!.Value = true;
+        var fSwap = host.RunFrame();
+        float h = host.Scene.Bounds(host.Scene.Root).H;
+
+        Check("gate.hooks.layout-dirty-root-remount root ElementTypeId flip ⇒ the fresh root is dirtied and laid out",
+            fSwap.ScopedRelayoutMarks > 0 && h > 0f,
+            $"marks={fSwap.ScopedRelayoutMarks} rootH={h:0.#}");
     }
 
     static void SliderSignalChecks(StringTable strings)

@@ -251,6 +251,8 @@ public sealed class TreeReconciler
     // Set during Update/WriteColumns/structural reconcile when layout shape actually changed. RunComponent/RunRoot
     // mark their rendered root LayoutDirty only when this is true — so paint-only re-renders skip layout, while a
     // deep structural/size change still dirties ABOVE ContentSized scroll firewalls (TabView strip / add button).
+    // Scope-local by construction: the only READS are inside RunRoot/RunComponent, each after clearing it, so a value
+    // left set by a writer running OUTSIDE a render scope (the host's ReRealizeVirtuals) is inert, never a false mark.
     private bool _layoutShapeMutated;
     private int _renderCount;   // component render-effects that ran since the last frame (granularity metric)
     private int _keepAliveLayoutSuppressionFrames;   // activation commit + first bounds-measure correction
@@ -478,6 +480,10 @@ public sealed class TreeReconciler
             var node = _scene.CreateNode(newRoot.ElementTypeId);
             _scene.Root = node;
             Mount(node, newRoot);
+            // A remount is the one structural path with nothing below it to mark: CreateNode does not set LayoutDirty
+            // and Mount's WriteColumns takes the isMount arm. Without this a post-first-layout root swap left the
+            // worklist empty and the host's scoped RunDirty skipped the new tree entirely.
+            MarkLayoutShape(node);
         }
         else
         {
@@ -603,6 +609,17 @@ public sealed class TreeReconciler
         _ => [],
     };
 
+    /// <summary>Mark a node <see cref="NodeFlags.LayoutDirty"/> AND raise <c>_layoutShapeMutated</c>. Every
+    /// reconcile-time layout mark goes through here: the local mark alone can be firewalled below a ContentSized
+    /// scroll viewport, so the enclosing RunComponent/RunRoot must ALSO start a dirty walk at its rendered root.
+    /// <para>Deliberately NOT used by the bound Width/Height/Text effects: those fire outside a render scope, own
+    /// exactly one node, and must stay a purely local mark.</para></summary>
+    private void MarkLayoutShape(NodeHandle node)
+    {
+        _scene.Mark(node, NodeFlags.LayoutDirty);
+        _layoutShapeMutated = true;
+    }
+
     // ── Update ────────────────────────────────────────────────────────────────────────────────────
 
     private void Update(NodeHandle node, Element newEl, Element oldEl)
@@ -675,7 +692,7 @@ public sealed class TreeReconciler
                 content = _scene.CreateNode(nse.Content.ElementTypeId);
                 _scene.AppendChild(node, content);
                 Mount(content, nse.Content);
-                _layoutShapeMutated = true;
+                MarkLayoutShape(node);
             }
             else if (oldContent is not null && oldContent.ElementTypeId == nse.Content.ElementTypeId)
             {
@@ -687,7 +704,7 @@ public sealed class TreeReconciler
                 content = _scene.CreateNode(nse.Content.ElementTypeId);
                 _scene.AppendChild(node, content);
                 Mount(content, nse.Content);
-                _layoutShapeMutated = true;
+                MarkLayoutShape(node);
             }
             _scene.ScrollRef(node).ContentNode = content;
             return;
@@ -799,7 +816,7 @@ public sealed class TreeReconciler
         var child = _scene.FirstChild(parent);
         if (newChild is null)
         {
-            if (!child.IsNull) { Remove(child); _layoutShapeMutated = true; }
+            if (!child.IsNull) { Remove(child); MarkLayoutShape(parent); }
             return;
         }
         if (child.IsNull)
@@ -807,8 +824,7 @@ public sealed class TreeReconciler
             var c = _scene.CreateNode(newChild.ElementTypeId);
             _scene.AppendChild(parent, c);
             Mount(c, newChild);
-            _scene.Mark(parent, NodeFlags.LayoutDirty);
-            _layoutShapeMutated = true;
+            MarkLayoutShape(parent);
         }
         else if (oldChild is not null && oldChild.ElementTypeId == newChild.ElementTypeId)
         {
@@ -826,8 +842,7 @@ public sealed class TreeReconciler
             var c = _scene.CreateNode(newChild.ElementTypeId);
             _scene.AppendChild(parent, c);
             Mount(c, newChild);
-            _scene.Mark(parent, NodeFlags.LayoutDirty);
-            _layoutShapeMutated = true;
+            MarkLayoutShape(parent);
         }
     }
 
@@ -853,14 +868,13 @@ public sealed class TreeReconciler
     {
         var child = _scene.FirstChild(parent);
         if (!child.IsNull) Remove(child);
-
-        if (newChild is null) return;
+        // A removal alone changes the parent's shape, and the mount path below is skipped — mark before the early-out.
+        if (newChild is null) { if (!child.IsNull) MarkLayoutShape(parent); return; }
 
         var c = _scene.CreateNode(newChild.ElementTypeId);
         _scene.AppendChild(parent, c);
         Mount(c, newChild);
-        _scene.Mark(parent, NodeFlags.LayoutDirty);
-        _layoutShapeMutated = true;
+        MarkLayoutShape(parent);
     }
 
     // ── Components (render-effects) ──────────────────────────────────────────────────────────────
@@ -999,6 +1013,10 @@ public sealed class TreeReconciler
         foreach (var k in kids) Remove(k);
         if (_comps.Remove(node, out var old)) { old.QueuedReplay = false; old.Scope?.Dispose(); _live.Remove(old.Comp); _anchorOf.Remove(old.Comp); }
         MountComponent(node, ce);
+        // Remount (the shimmer↔real swap) — a whole child tree was torn down and rebuilt. Promote AFTER MountComponent:
+        // the nested RunComponent it triggers restores the enclosing scope's saved value on exit, which would otherwise
+        // erase a bit raised before the call.
+        _layoutShapeMutated = true;
     }
 
     // ── Reactive control-flow (Show / For) ──────────────────────────────────────────────────────
@@ -1275,7 +1293,7 @@ public sealed class TreeReconciler
                 Cacheable = cacheable,
             };
             state.Entries[key] = entry;
-            _scene.Mark(node, NodeFlags.LayoutDirty);
+            MarkLayoutShape(node);
         }
         else
         {
@@ -1373,7 +1391,7 @@ public sealed class TreeReconciler
         SetSubtreeParked(entry.Root, parked: false,
             snapStructural: options.SuppressLayoutTransitionsOnActivation, budgetReplays: true);
         _scene.Mark(entry.Root, NodeFlags.HitTestVisible);
-        _scene.Mark(parent, NodeFlags.LayoutDirty);
+        MarkLayoutShape(parent);
     }
 
     private void DeactivateKeepAliveEntry(KeepAliveEntry entry, KeepAliveOptions options)
@@ -1408,7 +1426,7 @@ public sealed class TreeReconciler
         entry.El = desired;
         entry.Attached = true;
         entry.ResourcesActive = true;
-        _scene.Mark(parent, NodeFlags.LayoutDirty);
+        MarkLayoutShape(parent);
     }
 
     private void EvictInactiveKeepAliveEntries(KeepAliveState state, KeepAliveOptions options)
@@ -2244,7 +2262,7 @@ public sealed class TreeReconciler
         sc.PersistentPrefixCount = prefixCount;
         if (prefixChanged)
         {
-            _scene.Mark(content, NodeFlags.LayoutDirty);
+            MarkLayoutShape(content);
             _reconciled = true;
             _realizeProgress = true;
         }
@@ -2414,7 +2432,7 @@ public sealed class TreeReconciler
         bool moved = structural || orderChanged || first != entry.PrevFirst || mat != entry.PrevLen;
         entry.PrevFirst = first;
         entry.PrevLen = mat;
-        if (moved) _scene.Mark(content, NodeFlags.LayoutDirty);   // children are positioned by FirstRealized + order
+        if (moved) MarkLayoutShape(content);   // children are positioned by FirstRealized + order
         if (structural) _reconciled = true;
 
         ref ScrollState scw = ref _scene.ScrollRef(node);
@@ -2501,7 +2519,7 @@ public sealed class TreeReconciler
         if (keepAlive is null && contentTypeOf is not null && slots.Count == w && entry.PrevLen == w
             && TryRealizeBoundWindowExtendedFast(content, slots, ve, entry.PrevFirst, first))
         {
-            if (first != entry.PrevFirst) _scene.Mark(content, NodeFlags.LayoutDirty);
+            if (first != entry.PrevFirst) MarkLayoutShape(content);
             ref ScrollState fastScroll = ref _scene.ScrollRef(node);
             fastScroll.FirstRealized = first; fastScroll.LastRealized = first + w;
             if (stayDirty) _scene.Mark(node, NodeFlags.VirtualRangeDirty);
@@ -2656,7 +2674,7 @@ public sealed class TreeReconciler
         }
 
         if (structural) _reconciled = true;
-        _scene.Mark(content, NodeFlags.LayoutDirty);   // window/order changed → re-arrange the realized band
+        MarkLayoutShape(content);   // window/order changed → re-arrange the realized band
 
         ref ScrollState scw = ref _scene.ScrollRef(node);
         scw.FirstRealized = first; scw.LastRealized = first + w;
@@ -2843,11 +2861,7 @@ public sealed class TreeReconciler
         }
 
         // The window moved (children are positioned by FirstRealized + document order) or changed size/shape → re-arrange.
-        if (structural || newN != oldN || shift != 0)
-        {
-            _scene.Mark(node, NodeFlags.LayoutDirty);
-            _layoutShapeMutated = true;
-        }
+        if (structural || newN != oldN || shift != 0) MarkLayoutShape(node);
     }
 
     /// <summary>True if the subtree is a PLAIN visual tree (box/grid/text/image/polyline, no reactive binds, no
@@ -3106,11 +3120,7 @@ public sealed class TreeReconciler
 
         // Structural change to the child set (including a pure keyed reorder) → relayout this container's subtree
         // (scoped to its boundary).
-        if (structural || moved || newN != oldN)
-        {
-            _scene.Mark(node, NodeFlags.LayoutDirty);
-            _layoutShapeMutated = true;
-        }
+        if (structural || moved || newN != oldN) MarkLayoutShape(node);
     }
 
     // ── Removal / unmount (dispose reactive effects) ────────────────────────────────────────────
@@ -3434,7 +3444,7 @@ public sealed class TreeReconciler
             scroll.FirstRealized = entry.PrevFirst;
             scroll.LastRealized = entry.PrevFirst + entry.PrevLen;
             if (!current.ContentNode.IsNull && _scene.IsLive(current.ContentNode))
-                _scene.Mark(current.ContentNode, NodeFlags.LayoutDirty);
+                MarkLayoutShape(current.ContentNode);
         }
         _scene.Mark(viewport, NodeFlags.VirtualRangeDirty);
         _realizeProgress = true;
@@ -4276,12 +4286,7 @@ public sealed class TreeReconciler
                 if (!t.Text.IsBound)
                 {
                     var newText = _strings.Intern(t.Text.Value);
-                    if (paint.Text != newText)
-                    {
-                        SetPaintText(ref paint, newText);
-                        _scene.Mark(node, NodeFlags.LayoutDirty);
-                        _layoutShapeMutated = true;
-                    }
+                    if (paint.Text != newText) { SetPaintText(ref paint, newText); MarkLayoutShape(node); }
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -4372,8 +4377,7 @@ public sealed class TreeReconciler
 
                     var newText = _strings.Intern(concat);
                     if (paint.Text != newText) SetPaintText(ref paint, newText);
-                    _scene.Mark(node, NodeFlags.LayoutDirty);
-                    _layoutShapeMutated = true;
+                    MarkLayoutShape(node);
                 }
                 _scene.SetSpanText(node, spans);   // always — hyperlink actions may change without a shaping change
 
@@ -4420,10 +4424,7 @@ public sealed class TreeReconciler
                 gridChanged = hadGrid != hasGrid || (hasGrid && !SameGridSpec(in gridBefore, in gridAfter));
             }
             if (gridChanged || layoutFlagsBefore != layoutFlagsAfter || !SameLayoutInput(in layoutBefore, in layoutAfter))
-            {
-                _scene.Mark(node, NodeFlags.LayoutDirty);
-                _layoutShapeMutated = true;
-            }
+                MarkLayoutShape(node);
         }
     }
 

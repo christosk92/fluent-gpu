@@ -27,6 +27,12 @@ public sealed class LayoutInvalidator
     /// solves NOT paid. escapes==localResolves on a frame means every escape was absorbed (no root solve at all).</summary>
     public int LocalResolvesThisFrame { get; private set; }
 
+    /// <summary>LayoutDirty marks this frame's scoped relayout passes consumed — surfaced as
+    /// <c>FrameStats.ScopedRelayoutMarks</c>. Always-on. Zero means the worklist was EMPTY, i.e. reconcile decided
+    /// nothing about layout shape changed and no solve ran at all; it is the oracle the re-render LayoutDirty gate
+    /// asserts on (MeasureCount/ArrangeCount are only populated under FG_LAYOUT_DIAG).</summary>
+    public int DirtyMarksThisFrame { get; private set; }
+
     /// <summary>DEBUG-only best-effort node→key resolver for the escape message (wired by the host to the reconciler).
     /// Invoked only inside the throttled, FG_DIAG-gated message path, so it costs nothing on Release / when quiet.</summary>
     public Func<NodeHandle, string?>? DebugKeyResolver;
@@ -46,6 +52,7 @@ public sealed class LayoutInvalidator
     {
         EscapesThisFrame = 0;
         LocalResolvesThisFrame = 0;
+        DirtyMarksThisFrame = 0;
         _frameNowMs = frameNowMs;
     }
 
@@ -106,6 +113,7 @@ public sealed class LayoutInvalidator
     public void RunDirty(Size2 window)
     {
         var dirty = _scene.LayoutDirtyNodes;
+        DirtyMarksThisFrame += dirty.Count;   // accumulates: a frame can run several scoped passes (D1 realize catch-up)
         if (dirty.Count == 0) return;
 
         _roots.Clear();

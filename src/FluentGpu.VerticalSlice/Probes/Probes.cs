@@ -2612,7 +2612,7 @@ sealed class WaveeShell : Component
 }
 
 // Re-render LayoutDirty gate (§5.3): nested so RunComponent (not RunRoot) is the path under test.
-// Paint-only Fill flip ⇒ MeasureCount==0; Width flip still dirties + re-solves.
+// Paint-only Fill flip ⇒ zero LayoutDirty marks reach the scoped relayout; Width flip still dirties + re-solves.
 sealed class LayoutDirtyGateHost : Component
 {
     public LayoutDirtyGateChild? Child;
@@ -2638,6 +2638,55 @@ sealed class LayoutDirtyGateChild : Component
             Fill = fill.Value,
             ClipToBounds = true,
         };
+    }
+}
+
+// Skel.Region arm of the same gate: a parent re-render force-reruns the region effect. An unchanged Ready branch must
+// reconcile without dirtying layout; a branch flip must still dirty it.
+sealed class LayoutDirtySkelHost : Component
+{
+    public LayoutDirtySkelChild? Child;
+    public override Element Render()
+        => Embed.Comp(() => { var c = new LayoutDirtySkelChild(); Child = c; return c; });
+}
+
+sealed class LayoutDirtySkelChild : Component
+{
+    public readonly Loadable<string> Data = Loadable<string>.Ready("ready");
+    public Signal<ColorF>? Fill;
+    public override Element Render()
+    {
+        var fill = UseSignal(ColorF.FromRgba(0x20, 0x20, 0x20));
+        Fill = fill;
+        // No reveal / no smooth-resize: both seed animation tracks whose own reflow would dirty later frames and blur
+        // the oracle. The fixed-size ClipToBounds boundary keeps the branch swap's relayout local.
+        return new BoxEl
+        {
+            Width = 200f,
+            Height = 60f,
+            Fill = fill.Value,
+            ClipToBounds = true,
+            Children = [Skel.Region(Data, s => new TextEl(s) { Size = 14f },
+                reveal: SkelReveal.None, smoothResize: false)],
+        };
+    }
+}
+
+// Root-remount arm: RenderRootDiff's Remove+CreateNode+Mount path (a root whose ElementTypeId flips). Nothing below a
+// fresh mount marks LayoutDirty, so without the shape bit the host's scoped RunDirty saw an empty worklist and the new
+// root was never laid out.
+sealed class LayoutDirtyRootSwapHost : Component
+{
+    public Signal<bool>? Swapped;
+    public override Element Render()
+    {
+        var swapped = UseSignal(false);
+        Swapped = swapped;
+        // Both arms are TEXT-FREE on purpose: WriteColumns' Text branch marks LayoutDirty on the MOUNT write too
+        // (paint.Text starts empty), which would mask the hole this arm exists to catch.
+        return swapped.Value
+            ? new GridEl { Width = 140f, Height = 24f }
+            : new BoxEl { Width = 90f, Height = 30f, ClipToBounds = true };
     }
 }
 

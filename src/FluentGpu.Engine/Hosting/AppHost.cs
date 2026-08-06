@@ -43,6 +43,10 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int MeasureCount { get; init; }
     public int ArrangeCount { get; init; }
     public int TextShapeMisses { get; init; }
+    /// <summary>LayoutDirty marks this frame's scoped relayout consumed (ALWAYS-ON, unlike Measure/ArrangeCount). 0 means
+    /// no layout ran at all — the oracle for "a re-render whose tree is unchanged must not dirty layout". Stays 0 on a
+    /// full-layout frame (that path does not go through the invalidator).</summary>
+    public int ScopedRelayoutMarks { get; init; }
     // Relayout-escape diagnostic (ALWAYS-ON, incl. Release): the number of dirty nodes this frame whose scoped-relayout
     // search (LayoutInvalidator.FindRelayoutRoot) walked a node at depth > 1 ALL the way to the scene root — i.e. found no
     // layout boundary, forcing a full-subtree relayout from the top. A sustained nonzero value during interaction means a
@@ -3341,6 +3345,7 @@ public sealed class AppHost : IDisposable
                 MeasureCount = _layout.DiagMeasure,
                 ArrangeCount = _layout.DiagArrange,
                 TextShapeMisses = _layout.DiagTextMiss,
+                ScopedRelayoutMarks = _invalidator.DirtyMarksThisFrame,
                 RootRelayoutEscapes = _invalidator.EscapesThisFrame,
                 Fps = _fps,
                 PresentFps = _presentFps,
