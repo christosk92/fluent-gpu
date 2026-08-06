@@ -140,11 +140,8 @@ sealed partial class ArtistPage : Component
             Children =
             [
                 media,
-                new BoxEl
-                {
-                    Width = width, Height = height, HitTestVisible = false,
-                    Gradient = Surfaces.ArtistHeroVeil(_washAccent ?? _accent, metrics.VeilAxis),
-                },
+                CoverPaletteLeaves.ArtistHeroVeil(
+                    PaletteImageUrl(a), metrics.VeilAxis, width, height, key: "artist-veil:" + uri),
                 copy,
             ],
         };

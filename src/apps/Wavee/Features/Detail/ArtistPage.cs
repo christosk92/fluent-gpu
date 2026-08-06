@@ -78,37 +78,16 @@ sealed partial class ArtistPage : Component
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 
-        // ArtistPage is kept alive and reused for artist -> artist navigation, just like DetailShell. Claim the shell
-        // tint immediately (null while loading clears any prior page's tint), then republish when the overview palette
-        // arrives. Previously ArtistPage only drew its in-card gradient, so a whole-window tint on this route was stale
-        // state from whichever detail page happened to be visited before it.
+        // ArtistPage is kept alive and reused for artist -> artist navigation, just like DetailShell. Shell tint + wash
+        // Watch subscriptions live in cover-keyed leaves (CoverPaletteLeaves) — never in this Render — so a graded batch
+        // does not rebuild the magazine tree. HeaderImage is the dominant visual; fall back to the avatar only when
+        // there is no hero image.
         bool artistReady = artist.State.Value == (byte)LoadState.Ready;
         var currentArtist = artist.Value.Value;
         string? paletteUrl = PaletteImageUrl(currentArtist);
-        // Grade the artwork the hero actually presents. HeaderImage is the dominant visual on this page; using the
-        // small avatar instead made an incidental portrait colour override the full-bleed hero it visibly belongs to.
-        // Fall back to the avatar only when there is no hero image. Watch that one source so the shell tint lands
-        // without coupling
-        // this page to every batch the discography grid kicks off while scrolling.
-        _ = SpotifyLive.CoverColorPlane.Current.Watch(paletteUrl).Value;
-        var artPalette = artistReady ? Surfaces.SchemeFor(paletteUrl) : null;
-        ColorF? micaTint = colorWashesDisabled || artPalette is not { } artScheme ? null : Tok.Theme == ThemeKind.Light
-            ? WaveePalette.Lift(WaveePalette.ToColor(artScheme.TextBase)) with { A = 0.05f }
-            : WaveePalette.TintedDark(artScheme) with { A = 0.14f };
-
-        void SetTint(ColorF? color)
-        {
-            if (shellTint is not null) shellTint.Value = new ShellTintState(color, _tintOwner);
-        }
-        void ClearTint()
-        {
-            if (shellTint is not null && ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default;
-        }
-
-        // Exact deps are intentional: this is a low-frequency navigation/data effect, and route identity must refresh
-        // ownership even when two artists happen to have the same extracted colour.
-        UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(routeKey, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled)));
-        UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
+        Element tintBinder = CoverPaletteLeaves.ShellTint(
+            paletteUrl, artistReady, colorWashesDisabled, apply: true, _tintOwner, shellTint,
+            key: "artist-tint:" + routeKey);
 
         var compactInteractive = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
@@ -140,7 +119,7 @@ sealed partial class ArtistPage : Component
         return Ctx.Provide(LazyScroll.Slot, (IReadSignal<float>)pageScroll, new BoxEl
         {
             Key = "artist-page:" + routeKey, Grow = 1f, Direction = 1,
-            Children = [scroll],
+            Children = [tintBinder, scroll],
         });
     }
 
@@ -250,20 +229,10 @@ sealed partial class ArtistPage : Component
                 OnFlag = v => compactInteractive.Value = v }],
         };
         float heroWidth = _heroWidth.Value;
-        bool lightWash = Tok.Theme == ThemeKind.Light;
-        ColorF wash = lightWash ? (_washAccent ?? Tok.AccentDefault)
-                    : WaveePalette.BackgroundDark(pagePal ?? WaveePalette.Neutral);
         bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
-        Element washLayer = colorWashesDisabled
-            ? new BoxEl()
-            : new BoxEl
-            {
-                Height = ArtistHeroLayout.BlendBackdropHeightFor(heroWidth), HitTestVisible = false,
-                Gradient = GradientDown(
-                    new GradientStop(0f, wash with { A = lightWash ? 0.20f : 0.30f }),
-                    new GradientStop(ArtistHeroLayout.BlendBoundaryFor(heroWidth), wash with { A = lightWash ? 0.06f : 0.08f }),
-                    new GradientStop(1f, wash with { A = 0f })),
-            };
+        // Cover-keyed leaf: a late grading re-renders only the wash box, not this Body / magazine sections.
+        Element washLayer = CoverPaletteLeaves.ArtistBlendWash(
+            paletteUrl, heroWidth, colorWashesDisabled, key: "artist-wash:" + uri);
         return new BoxEl
         {
             ZStack = true,

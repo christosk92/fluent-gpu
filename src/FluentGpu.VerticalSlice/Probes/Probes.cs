@@ -450,6 +450,21 @@ sealed class ScopeParkPage : Component
 // coalesces a fresh-but-equal re-push; an Element slot rides the same record so a slot re-push reconciles in place.
 sealed record PropsPayload(int N, Element? Slot = null);
 
+/// <summary>Props carrying a Signal by reference — models MediaCard.Shelf → LazyNowPlayingOverlay: parent re-render
+/// with the SAME signal instance must not re-render the child (component-props-contract stable-props reuse).</summary>
+sealed record SignalProps(IReadSignal<bool> Flag);
+
+sealed class SignalPropsChild : Component
+{
+    public int Renders;
+    public override Element Render()
+    {
+        _ = UseProps<SignalProps>().Flag.Value;
+        Renders++;
+        return new BoxEl { Width = 5, Height = 5 };
+    }
+}
+
 // An Equals-COUNTING props record: the reference short-circuit at the reuse seam must prevent this Equals from ever
 // running when the SAME reference is re-supplied (a memoized/cached props object).
 sealed record CountingProps(int N)

@@ -22,10 +22,10 @@ public static class MediaCard
 {
     public const float QuickW = 64f;     // quick-pick cover edge
     public const float QuickH = 64f;     // quick-pick tile height
-    const float ShelfDecodePx = 256f;    // stable across responsive card widths, avoids resize-time redecodes
-    const float FabSize  = 44f;
+    internal const float ShelfDecodePx = 256f;    // stable across responsive card widths, avoids resize-time redecodes
+    internal const float FabSize  = 44f;
     internal const float FabInset = 8f;
-    const float Pad      = Spacing.S;
+    internal const float Pad      = Spacing.S;
 
     // The hover signal rides the PROPS channel, not the factory closure. These card builders are STATIC element
     // factories, so every parent re-render (a shelf refit, a LazyGrid window move, a page re-render) allocates a FRESH
@@ -34,7 +34,7 @@ public static class MediaCard
     // new one, and hover silently stopped revealing the FAB until the card remounted (the component-props contract:
     // data reaching a child must travel by props/context/Key, never a ctor arg). Re-pushed props are equality-gated and
     // the overlay reads them through a Memo on the VALUE, so a swap that carries the same hover state costs no render.
-    static Element LazyOverlay(Signal<bool> hovered, string uri, Action onPlay, float fab, bool cover, float inner,
+    internal static Element LazyOverlay(Signal<bool> hovered, string uri, Action onPlay, float fab, bool cover, float inner,
                                Action? onNavigate = null, bool centered = false)
         => Embed.Comp(new LazyNowPlayingOverlay.Props(hovered),
                       () => new LazyNowPlayingOverlay(uri, onPlay, fab, cover, inner, onNavigate, centered))
@@ -64,7 +64,7 @@ public static class MediaCard
     // hovered so the lift halo isn't overpainted by a later card (the design's z-index:2); layout/hit-testing
     // unchanged. The returned box is the card ROOT — callers may still override Grow / Height / Border / Fill for
     // owner states (e.g. the discography drawer owner's accent border).
-    static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null, bool persistent = false) => new BoxEl
+    internal static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null, bool persistent = false) => new BoxEl
     {
         ZStack = true, Corners = CornerRadius4.All(Radii.Card),
         OnClick = onClick,
@@ -95,7 +95,7 @@ public static class MediaCard
     // context-request funnel here and the walk finds the card's OnContextRequested. Same dark-glass chrome as
     // CoverActionFab; hover-revealed like the play FAB. Rendered only when the card actually carries a menu.
     // Skeletonized(false): a hover-only affordance is not skeleton content (the NowPlayingOverlay rule).
-    static Element MoreCorner(bool show, bool persistent = false) => show
+    internal static Element MoreCorner(bool show, bool persistent = false) => show
         ? new BoxEl
         {
             Grow = 1f, Direction = 1, AlignItems = FlexAlign.End,
@@ -184,88 +184,11 @@ public static class MediaCard
     public static Element Shelf(Image? cover, string title, string subtitle, string uri,
                                 Action onClick, Action onPlay, float cardW, bool circular = false, string? morphKey = null,
                                 Action<string>? onNavUri = null, MenuAttach? menu = null, DragSource? drag = null)
-    {
-        var hovered = new Signal<bool>(false);
-        float inner = MathF.Max(48f, cardW - 2f * Pad);
-        float r = circular ? inner / 2f : Radii.Card;
-
-        Element face = circular
-            // A missing artist photo must still be an intentional card, not a blank gray rectangle. PersonPicture gives
-            // us WinUI initials/contact fallback and the same circular crop when a real URL is present.
-            ? PersonPicture.Create("", inner, displayName: title, imageSourcePath: cover?.Url)
-            : cover is null && LikedSongsArtwork.IsLikedUri(uri)
-                ? LikedSongsArtwork.Cover(inner, r, morphKey)
-                : cover?.MosaicTiles is { Count: >= 4 } mtiles
-                    ? Surfaces.Mosaic(mtiles, inner, inner, r)
-                    : ZStack(
-                        // A neutral shimmer tile sits behind the art so a card is never an empty box — it breathes while
-                        // the real art loads and settles once it lands.
-                        // The shimmer tile carries the cover's own graded colour (CoverColorPlane) when it is known,
-                        // so a loading card is that album's colour rather than a neutral hole. The Image keeps a
-                        // TRANSPARENT placeholder on purpose — the tinted tile behind it is the backdrop.
-                        Surfaces.Shimmer(cover?.Url, (int)ShelfDecodePx, (int)ShelfDecodePx, inner, inner, r),
-                        Image(cover?.Url ?? "", ImageFit.Cover, 1f, ShelfDecodePx, r, placeholder: ColorF.Transparent)
-                            with { MorphId = morphKey });
-
-        var coverStack = new BoxEl
-        {
-            // The artwork already owns its square/circular crop. Do not apply that CIRCLE clip to the action layer:
-            // a bottom-right FAB is inside the cover's rectangular slot but outside the avatar circle, so clipping the
-            // whole stack shears its accent background. Square covers retain the old bounds clip.
-            Width = inner, Height = inner, ZStack = true, ClipToBounds = !circular, Corners = CornerRadius4.All(r),
-            HoverScale = Motion.ReducedMotion ? 1f : 1.035f,
-            HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
-            Children =
-            [
-            face,
-            // The now-playing equalizer (bottom-left, when this card's context is playing) + the play/pause FAB
-            // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries NO
-            // OnClick, so the hit walks up to the card (its HoverScale fires + the FAB reveals off the card's hover);
-            // only the FAB itself is a hit target.
-            // Skeletonized(false): a hover-only affordance is not skeleton content — without this the deriver maps the
-            // opaque overlay to its default bar, leaving a stray stripe across the top-left of every loading cover.
-            LazyOverlay(hovered, uri, onPlay, FabSize, cover: true, inner),
-            MoreCorner(menu is not null),
-            ],
-        };
-
-        var content = new BoxEl
-        {
-            // No explicit Width: the shelf cell (a column container) cross-stretches the card to the cell's LIVE width.
-            // Grow=1 fills the cell's HEIGHT too: in a measured shelf the engine sizes the cell to the TALLEST card's
-            // natural height and every card fills it → uniform panels, exact, no reserved worst case; content stays
-            // top-aligned (cover, then text) with any slack below. The card itself just sizes to its content.
-            Direction = 1, Gap = Pad, Grow = 1f,
-            Padding = new Edges4(Pad, Pad, Pad, Spacing.M),
-            Children =
-            [
-                coverStack,
-                new BoxEl
-                {
-                    Direction = 1, Gap = 2f, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
-                    Children =
-                    [
-                        // Explicit Width clamps the run to the card (no overflow, ellipsis at the edge). MaxLines caps how
-                        // tall a verbose card can grow (and thus the whole uniform row); short text renders fewer lines.
-                        WaveeType.TrackTitle(title) with { Width = inner, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                        // The description can be an HTML fragment (links to artists/playlists, bold) — parse → rich spans
-                        // (links accent + clickable via onNavUri, bold rendered, entities decoded), capped at two lines.
-                        RichText.Of(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, inner, 2, onNavUri),
-                    ],
-                },
-            ],
-        };
-        // Grow=1 on the shell: a measured shelf cell stretches every card to the tallest card's height.
-        var card = (CardShell(content, onClick) with
-        {
-            Grow = 1f,
-            Draggable = drag,
-            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
-            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
-        }).WithMenu(menu);
-        // The padding box is the shelf's GUTTER, not the card — the drag source above deliberately sits inside it.
-        return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [ card ] };
-    }
+        // Component owns a mount-stable hovered signal so LazyNowPlayingOverlay props stay reference-equal across
+        // parent re-renders (a fresh Signal per static-factory call was defeating the overlay's equality gate).
+        => Embed.Comp(new ShelfCard.Props(cover, title, subtitle, uri, onClick, onPlay, cardW, circular, morphKey,
+                                          onNavUri, menu, drag),
+                      () => new ShelfCard());
 
     // ── Grid card: fills the grid cell width (no cardW), square or circular cover. For AutoGrid/UniformGrid cells. ──
     // Mirrors the Shelf card but is width-AGNOSTIC: the cover fills the cell (Surfaces.ArtworkFill, CSS aspect-ratio 1)
@@ -1119,21 +1042,10 @@ public static class MediaCard
         Children = [ FabGlyph(glyph, size * 0.42f, Tok.TextOnAccentPrimary) ],
     };
 
-    internal static Element CoverActionFab(Action onClick, string glyph, string tooltip, float size) => ToolTip.Wrap(new BoxEl
-    {
-        Width = size, Height = size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(size / 2f),
-        Fill = ColorF.FromRgba(0, 0, 0, 185),
-        HoverFill = ColorF.FromRgba(20, 20, 20, 225),
-        PressedFill = ColorF.FromRgba(0, 0, 0, 245),
-        BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
-        Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
-        OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
-        BlocksDragArm = true,   // a cover action button is its own affordance, not a card drag handle
-        Children = [ FabGlyph(glyph, size * 0.40f, Tok.OnMediaPrimary) ],
-    }, tooltip);
+    internal static Element CoverActionFab(Action onClick, string glyph, string tooltip, float size)
+        => Embed.Comp(new CoverActionFabCore.Props(onClick, glyph, tooltip, size), () => new CoverActionFabCore());
 
-    static TextEl FabGlyph(string glyph, float size, ColorF color) => new(glyph)
+    internal static TextEl FabGlyph(string glyph, float size, ColorF color) => new(glyph)
     {
         Width = size,
         Height = size,
@@ -1142,7 +1054,107 @@ public static class MediaCard
         FontFamily = Theme.IconFont,
         Color = color,
     };
+}
 
+/// <summary>Shelf card as a Component so <see cref="_hovered"/> is mount-stable — LazyNowPlayingOverlay props then
+/// compare reference-equal across parent re-renders (see MediaCard.Shelf).</summary>
+sealed class ShelfCard : Component
+{
+    internal sealed record Props(
+        Image? Cover, string Title, string Subtitle, string Uri,
+        Action OnClick, Action OnPlay, float CardW, bool Circular, string? MorphKey,
+        Action<string>? OnNavUri, MenuAttach? Menu, DragSource? Drag);
+
+    readonly Signal<bool> _hovered = new(false);
+
+    public override Element Render()
+    {
+        var p = UseProps<Props>();
+        float inner = MathF.Max(48f, p.CardW - 2f * MediaCard.Pad);
+        float r = p.Circular ? inner / 2f : Radii.Card;
+
+        Element face = p.Circular
+            ? PersonPicture.Create("", inner, displayName: p.Title, imageSourcePath: p.Cover?.Url)
+            : p.Cover is null && LikedSongsArtwork.IsLikedUri(p.Uri)
+                ? LikedSongsArtwork.Cover(inner, r, p.MorphKey)
+                : p.Cover?.MosaicTiles is { Count: >= 4 } mtiles
+                    ? Surfaces.Mosaic(mtiles, inner, inner, r)
+                    : ZStack(
+                        Surfaces.Shimmer(p.Cover?.Url, (int)MediaCard.ShelfDecodePx, (int)MediaCard.ShelfDecodePx, inner, inner, r),
+                        Image(p.Cover?.Url ?? "", ImageFit.Cover, 1f, MediaCard.ShelfDecodePx, r, placeholder: ColorF.Transparent)
+                            with { MorphId = p.MorphKey });
+
+        var coverStack = new BoxEl
+        {
+            Width = inner, Height = inner, ZStack = true, ClipToBounds = !p.Circular, Corners = CornerRadius4.All(r),
+            HoverScale = Motion.ReducedMotion ? 1f : 1.035f,
+            HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
+            Children =
+            [
+                face,
+                MediaCard.LazyOverlay(_hovered, p.Uri, p.OnPlay, MediaCard.FabSize, cover: true, inner),
+                MediaCard.MoreCorner(p.Menu is not null),
+            ],
+        };
+
+        var content = new BoxEl
+        {
+            Direction = 1, Gap = MediaCard.Pad, Grow = 1f,
+            Padding = new Edges4(MediaCard.Pad, MediaCard.Pad, MediaCard.Pad, Spacing.M),
+            Children =
+            [
+                coverStack,
+                new BoxEl
+                {
+                    Direction = 1, Gap = 2f, AlignItems = p.Circular ? FlexAlign.Center : FlexAlign.Start,
+                    Children =
+                    [
+                        WaveeType.TrackTitle(p.Title) with { Width = inner, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        RichText.Of(p.Subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, inner, 2, p.OnNavUri),
+                    ],
+                },
+            ],
+        };
+        var hovered = _hovered;
+        var card = (MediaCard.CardShell(content, p.OnClick) with
+        {
+            Grow = 1f,
+            Draggable = p.Drag,
+            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
+            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
+        }).WithMenu(p.Menu);
+        return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [card] };
+    }
+}
+
+sealed class CoverActionFabCore : Component
+{
+    internal sealed record Props(Action OnClick, string Glyph, string Tooltip, float Size);
+
+    public override Element Render()
+    {
+        var p = UseProps<Props>();
+        var live = UseRef(p);
+        live.Value = p;
+        var factory = UseMemo(() => (Func<Element>)(() =>
+        {
+            var cur = live.Value;
+            return new BoxEl
+            {
+                Width = cur.Size, Height = cur.Size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(cur.Size / 2f),
+                Fill = ColorF.FromRgba(0, 0, 0, 185),
+                HoverFill = ColorF.FromRgba(20, 20, 20, 225),
+                PressedFill = ColorF.FromRgba(0, 0, 0, 245),
+                BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
+                Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
+                OnClick = () => live.Value.OnClick(), Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
+                BlocksDragArm = true,
+                Children = [MediaCard.FabGlyph(cur.Glyph, cur.Size * 0.40f, Tok.OnMediaPrimary)],
+            };
+        }), DepKey.Empty);
+        return ToolTip.WrapStable(factory, p.Tooltip);
+    }
 }
 
 sealed class CardLibraryAction : Component
@@ -1158,6 +1170,26 @@ sealed class CardLibraryAction : Component
     public override Element Render()
     {
         var lib = UseContext(LibraryBridge.Slot);
+        var live = UseRef<(LibraryBridge? lib, bool saved, ColorF idle)>(default);
+        var factory = UseMemo(() => (Func<Element>)(() =>
+        {
+            var s = live.Value;
+            return new BoxEl
+            {
+                Width = 40f, Height = 40f, Shrink = 0f,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(20f),
+                Fill = _onDark ? ColorF.FromRgba(0, 0, 0, 120) : ColorF.Transparent,
+                HoverFill = _onDark ? ColorF.FromRgba(0, 0, 0, 184) : Tok.FillSubtleSecondary,
+                PressedFill = _onDark ? ColorF.FromRgba(0, 0, 0, 218) : Tok.FillSubtleTertiary,
+                BorderWidth = _onDark ? 1f : 0f,
+                BorderColor = _onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
+                Role = AutomationRole.Button, Cursor = CursorId.Hand,
+                OnClick = () => s.lib?.ToggleSaved(_uri, _name),
+                BlocksDragArm = true,
+                Children = [Icon(s.saved ? Icons.HeartFill : Icons.Heart, 17f, s.saved ? Tok.AccentTextPrimary : s.idle)],
+            };
+        }), DepKey.Empty);
         if (lib is null || _kind == HomeCardKind.Liked) return new BoxEl();
         bool saved = lib.IsSaved(_uri);
         bool follow = _kind is HomeCardKind.Artist or HomeCardKind.Playlist;
@@ -1165,21 +1197,8 @@ sealed class CardLibraryAction : Component
             ? Loc.Get(saved ? Strings.Artist.Following : Strings.Artist.Follow)
             : Loc.Get(saved ? Strings.Detail.Edit.Saved : Strings.Detail.Edit.Save);
         ColorF idle = _onDark ? ColorF.FromRgba(255, 255, 255, 225) : Tok.TextSecondary;
-        return ToolTip.Wrap(new BoxEl
-        {
-            Width = 40f, Height = 40f, Shrink = 0f,
-            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(20f),
-            Fill = _onDark ? ColorF.FromRgba(0, 0, 0, 120) : ColorF.Transparent,
-            HoverFill = _onDark ? ColorF.FromRgba(0, 0, 0, 184) : Tok.FillSubtleSecondary,
-            PressedFill = _onDark ? ColorF.FromRgba(0, 0, 0, 218) : Tok.FillSubtleTertiary,
-            BorderWidth = _onDark ? 1f : 0f,
-            BorderColor = _onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
-            Role = AutomationRole.Button, Cursor = CursorId.Hand,
-            OnClick = () => lib.ToggleSaved(_uri, _name),
-            BlocksDragArm = true,   // save/follow is its own affordance, not a card drag handle
-            Children = [ Icon(saved ? Icons.HeartFill : Icons.Heart, 17f, saved ? Tok.AccentTextPrimary : idle) ],
-        }, tip);
+        live.Value = (lib, saved, idle);
+        return ToolTip.WrapStable(factory, tip);
     }
 }
 
@@ -1188,8 +1207,8 @@ sealed class CardLibraryAction : Component
 // equalizer, and icon tree in the first flush.
 sealed class LazyNowPlayingOverlay : Component
 {
-    /// <summary>The one prop that must stay LIVE: the card's hover signal, re-allocated by every parent re-render of the
-    /// static card builders. Everything else below is genuinely per-card-identity and frozen at mount.</summary>
+    /// <summary>The one prop that must stay LIVE: the card's hover signal. ShelfCard owns a mount-stable instance;
+    /// other static card builders still allocate per parent re-render — props equality then gates the overlay.</summary>
     internal sealed record Props(IReadSignal<bool> Hovered);
 
     readonly string _uri;
@@ -1330,6 +1349,8 @@ sealed class NowPlayingOverlay : Component
             ColorF hover = _light ? ColorF.FromRgba(235, 235, 235) : Tok.AccentSecondary;
             ColorF pressed = _light ? ColorF.FromRgba(215, 215, 215) : Tok.AccentTertiary;
             ColorF ink = _light ? ColorF.FromRgba(12, 12, 14) : Tok.TextOnAccentPrimary;
+            // ToolTip.Wrap (not WrapStable): this branch is behind `_persistent` and already past earlier hooks —
+            // a WrapStable UseMemo here would violate stable hook order vs the non-persistent path.
             return ToolTip.Wrap(new BoxEl
             {
                 Width = _fab, Height = _fab, Shrink = 0f,
@@ -1337,7 +1358,7 @@ sealed class NowPlayingOverlay : Component
                 Corners = CornerRadius4.All(_fab / 2f), Fill = fill, HoverFill = hover, PressedFill = pressed,
                 Shadow = Elevation.Card, Role = AutomationRole.Button, Cursor = CursorId.Hand, OnClick = Toggle,
                 BlocksDragArm = true,
-                Children = [ Icon(playingHere ? Icons.Pause : Icons.Play, _fab * 0.38f, ink) ],
+                Children = [Icon(playingHere ? Icons.Pause : Icons.Play, _fab * 0.38f, ink)],
             }, Loc.Get(playingHere ? Strings.Home.Pause : Strings.Home.Play));
         }
 

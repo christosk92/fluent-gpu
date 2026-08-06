@@ -660,6 +660,7 @@ static class DetailVerticalHero
             HoverScale = 1.03f, PressScale = 0.97f,
             Children = [Icon(glyph, 14f, fg)],
         };
+        // Static helper — WrapStable needs a mount-stable Func; callers that churn rebuild this tree each render.
         return ToolTip.Wrap(button, label);
     }
 }
@@ -678,10 +679,10 @@ sealed class DetailHeroSaveButton : Component
     public override Element Render()
     {
         var lib = UseContext(LibraryBridge.Slot);
-        if (lib is null) return new BoxEl();
-        bool saved = lib.IsSaved(_uri);
-        string label = Loc.Get(saved ? Strings.Menu.Saved : Strings.Menu.Save);
-        Element button = new BoxEl
+        var libRef = UseRef(lib);
+        var savedRef = UseRef(false);
+        libRef.Value = lib;
+        var factory = UseMemo(() => (Func<Element>)(() => new BoxEl
         {
             Width = _size, Height = _size,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -692,11 +693,15 @@ sealed class DetailHeroSaveButton : Component
             BorderWidth = 1f, BorderColor = DetailHeroImmersiveGlass.Stroke,
             BrushTransitionMs = 100f,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
-            OnClick = () => lib.ToggleSaved(_uri, _name),
+            OnClick = () => libRef.Value?.ToggleSaved(_uri, _name),
             HoverScale = 1.06f, PressScale = 0.92f,
-            Children = [Icon(saved ? Icons.Accept : Icons.Add, 15f, Tok.OnMediaPrimary)],
-        };
-        return ToolTip.Wrap(button, label);
+            Children = [Icon(savedRef.Value ? Icons.Accept : Icons.Add, 15f, Tok.OnMediaPrimary)],
+        }), DepKey.Empty);
+        if (lib is null) return new BoxEl();
+        bool saved = lib.IsSaved(_uri);
+        savedRef.Value = saved;
+        string label = Loc.Get(saved ? Strings.Menu.Saved : Strings.Menu.Save);
+        return ToolTip.WrapStable(factory, label);
     }
 }
 

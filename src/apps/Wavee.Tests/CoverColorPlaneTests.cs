@@ -242,6 +242,41 @@ public class CoverColorPlaneTests
     }
 
     [Fact]
+    public async Task LandedBatch_BumpsOnlyWatchersForKeysInThatBatch()
+    {
+        // Pins the paint-only topology: a graded batch must wake per-key Watch signals for the keys it filled —
+        // never a silent global fan-out to every Watcher (CoverShimmer / page leaves subscribe per key).
+        var plane = new CoverColorPlane(TempFile());
+        const string a = Large;
+        const string b = "https://i.scdn.co/image/ab67616d0000b273cafe00000000000000cafe0a";
+        const string c = "https://i.scdn.co/image/ab67616d0000b273cafe00000000000000cafe0b";
+        plane.Filler = (keys, _) =>
+        {
+            var result = new CoverColorPlane.GradedColors?[keys.Count];
+            for (int i = 0; i < keys.Count; i++)
+            {
+                // Grade only the first two request slots; leave the rest null so their watchers stay quiet.
+                if (i < 2) result[i] = new CoverColorPlane.GradedColors(Dark, Light, false);
+            }
+            return Task.FromResult<IReadOnlyList<CoverColorPlane.GradedColors?>>(result);
+        };
+
+        var watchA = plane.Watch(a);
+        var watchB = plane.Watch(b);
+        var watchC = plane.Watch(c);
+        int a0 = watchA.Peek(), b0 = watchB.Peek(), c0 = watchC.Peek();
+
+        Assert.False(plane.TryGetTint(a, false, out _));
+        Assert.False(plane.TryGetTint(b, false, out _));
+        Assert.False(plane.TryGetTint(c, false, out _));
+        for (int i = 0; i < 100 && watchA.Peek() == a0; i++) await Task.Delay(25);
+
+        Assert.True(watchA.Peek() > a0);
+        Assert.True(watchB.Peek() > b0);
+        Assert.Equal(c0, watchC.Peek());   // in the batch request but ungraded ⇒ its Watch stays put
+    }
+
+    [Fact]
     public void NoFiller_ServesTheCacheAndNeverThrows()
     {
         var plane = new CoverColorPlane(TempFile());   // logged out / offline / headless

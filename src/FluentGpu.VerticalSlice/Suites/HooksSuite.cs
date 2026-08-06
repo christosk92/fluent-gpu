@@ -904,6 +904,45 @@ static class HooksSuite
                 $"subs={child.Context.PropsSig!.SubscriberCount} renders={child.Renders} flushDelta={delta}B");
         }
 
+        // gate.props.stable-signal-reuse — parent re-render + reference-equal Signal props ⇒ child does NOT re-render
+        // (component-props-contract.md; MediaCard.Shelf → LazyNowPlayingOverlay hovered identity).
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var child = new SignalPropsChild();
+            var flag = new Signal<bool>(false);
+            var parentBump = new Signal<int>(0);
+            Element Tree() => new BoxEl
+            {
+                Children =
+                [
+                    new TextEl("p" + parentBump.Value) { Size = 8f },
+                    Embed.Comp(new SignalProps(flag), () => child),
+                ],
+            };
+            var t1 = Tree(); recon.ReconcileRoot(t1, null); recon.Runtime.Flush();
+            int afterMount = child.Renders;
+            parentBump.Value = 1;
+            var t2 = Tree(); recon.ReconcileRoot(t2, t1); recon.Runtime.Flush();
+            bool quiet = child.Renders == afterMount;
+            var t3 = Tree();
+            recon.ReconcileRoot(t3, t2); recon.Runtime.Flush();
+            var fresh = new Signal<bool>(false);
+            Element TreeFresh() => new BoxEl
+            {
+                Children =
+                [
+                    new TextEl("p" + parentBump.Value) { Size = 8f },
+                    Embed.Comp(new SignalProps(fresh), () => child),
+                ],
+            };
+            recon.ReconcileRoot(TreeFresh(), t3); recon.Runtime.Flush();
+            bool liveOnSwap = child.Renders == afterMount + 1;
+            Check("gate.props.stable-signal-reuse parent re-render + same Signal props ⇒ no child re-render; new Signal identity does",
+                afterMount == 1 && quiet && liveOnSwap,
+                $"afterMount={afterMount} quietRenders={child.Renders} quiet={quiet} liveOnSwap={liveOnSwap}");
+        }
+
         // gate.props.useprops-throws-propless — UseProps<T> on a propless mount THROWS naming the component + props type;
         // UsePropsOrDefault returns null propless, the value when present.
         {

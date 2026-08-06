@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -44,13 +43,6 @@ readonly record struct DetailHandlers(
 // lifecycle), and the now-playing re-skin epoch. Delegates the rail / track list / trailing to the static builders.
 sealed class DetailShell : Component
 {
-    static readonly LayoutTransition PaletteWashTransition = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(420f, Easing.SmoothOut),
-        Enter: new EnterExit(Opacity: 0f, Active: true),
-        Exit: new EnterExit(Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(320f, Easing.SmoothOut));
-
     // The model is a Loadable: the HEADER (cover/title/artist) renders immediately from its current value (the partial
     // preview the Home card had, or the loaded model on a deep link) and updates in place when the full model arrives;
     // the TRACK LIST streams in via the engine's Skel.Region inside TrackList. Connected cover animation is intentionally
@@ -183,73 +175,24 @@ sealed class DetailShell : Component
         if (!string.Equals(paletteUrl, coverUrl, StringComparison.Ordinal))
             coverArt = Surfaces.SchemeFor(paletteUrl);
         var coverChrome = Surfaces.ChromeSchemeFor(paletteUrl);
-        _ = SpotifyLive.CoverColorPlane.Current.Watch(paletteUrl).Value;
         bool thisPlaying = cur is not null && trackIds.Contains(cur.Id);
-        // The page tints from its OWN cover; while this page is playing, a page with no grading of its own (Liked, a
-        // show) falls back to the now-playing track's cover — so it degrades to "no tint", never to a wrong colour.
-        if (thisPlaying) _ = SpotifyLive.CoverColorPlane.Current.Watch(cur?.Image?.Url).Value;
-        var livePal = thisPlaying ? Surfaces.SchemeFor(cur?.Image?.Url) : null;
-        var liveChrome = thisPlaying ? Surfaces.ChromeSchemeFor(cur?.Image?.Url) : null;
-        var art = coverArt ?? livePal;
+        // Watch lives in cover-keyed leaves (wash + shell tint) — never in this Render — so a graded batch does not
+        // rebuild the rail/track-list tree. While this page is playing, a page with no grading of its own (Liked, a
+        // show) falls back to the now-playing track's cover for SchemeFor / leaf Watch.
+        string? liveUrl = thisPlaying ? cur?.Image?.Url : null;
+        var liveChrome = liveUrl is not null ? Surfaces.ChromeSchemeFor(liveUrl) : null;
 
-        // The graded backgroundBase is near-black on most covers, so LIFT the page accent for legibility.
-        // Two treatments from the same artwork, on purpose:
-        //   accentBase — brightness-lifted only. The LIGHT hero wash paints this; the wash's strength is owned by
-        //                Surfaces.HeroWashLightA, not by chroma.
-        //   accent     — the provider's OPPOSITE contrast branch through WaveePalette.ChromeAccent: softer on dark
-        //                heroes, stronger on pale pages. Every accent-FILLED control reads this: the rail Play pill,
-        //                the vertical hero's non-immersive Play, anything reading DetailHandlers.Accent.
-        // Keeping them apart means a saturation change can never be mistaken for a wash-alpha regression.
-        ColorF accentBase;
-        if (coverArt is { } cover)
-            accentBase = WaveePalette.Lift(WaveePalette.Accent(cover));
-        else if (livePal is { } lp)
-        {
-            // Keep the live track's raw role for the low-alpha WASH, matching the player tint. Accent-FILLED controls
-            // still need the page-wide ChromeAccent contract: the wire's background role may be dark, and a dark Play
-            // capsule reads disabled even though it carries the right hue.
-            accentBase = WaveePalette.Accent(lp);
-        }
-        else accentBase = Tok.AccentDefault;
+        // Accent for Play / row chrome: SchemeFor at this render (cached hits land immediately). Late gradings update
+        // the wash/tint leaves paint-only; accent-filled controls refresh on the next natural shell re-render
+        // (track change, model ready, theme). Wash colour itself is owned by CoverKeyedWash (same lift / BackgroundDark
+        // contract as before).
         var chrome = coverChrome ?? liveChrome;
         ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp) : Tok.AccentDefault;
-        // The hero wash. Dark: the art's dark background tone (or the neutral #1C1C1C). Light: a soft ACCENT band instead
-        // — a neutral-dark wash over the off-white card just reads as a muddy gray smudge. The light branch reads the
-        // NON-vivid accentBase on purpose (see above): the wash is an alpha decision, not a chroma one.
-        ColorF washColor = Tok.Theme == ThemeKind.Light
-            ? accentBase
-            : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
-        // The Mica scrim colour: the art's tinted-dark tone at a low alpha so Mica keeps reading as Mica (≈0.14). Null
-        // when there is no real palette ⇒ plain Mica.
-        ColorF? micaTint = (colorWashesDisabled || art is not { } scheme || !_cfg.TwoColumn) ? null : Tok.Theme == ThemeKind.Light
-            ? WaveePalette.Lift(WaveePalette.ToColor(scheme.TextBase)) with { A = 0.05f }
-            : WaveePalette.TintedDark(scheme) with { A = 0.14f };
 
-        // ── page-scoped Mica tint via the activation lifecycle (reconciler-hooks §0bis) ──
-        // SET on mount + colour change (UseEffect) and on REACTIVATION (UseActivation.onActivated — a cached page does
-        // not re-run the mount effect); CLEAR on park (UseActivation.onDeactivated), which KeepAlive always fires before
-        // it evicts/unmounts a backgrounded page, so navigating away (incl. to a non-detail page) reverts to plain Mica.
-        // Every clear is owner-gated so an A→B navigation lands on B's colour no matter which effect fires first.
-        void SetTint(ColorF? c)
-        {
-            if (shellTint is not null) shellTint.Value = new ShellTintState(c, _tintOwner);
-        }
-        void ClearTint()
-        {
-            if (shellTint is not null && ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default;
-        }
-
-        // This shell is reused across detail routes. Key the publication on the exact nullable colour and route instead
-        // of their 32-bit hash: the latter could suppress a real palette change and did not force a fresh ownership
-        // claim when A -> B happened to resolve to the same tint. Reference comparison is correct for the shell signal;
-        // nullable ColorF and routeName compare by value.
-        UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(route.Name, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme)));
-        UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
-        // onDeactivated fires ONLY on PARK, never on unmount (RenderContext.UseActivation). A nav that unmounts this page
-        // without parking it first (keep-alive eviction / direct replace) would otherwise leave the wash stuck — owned by
-        // a gone page — until the next page's SetTint overwrites it (the intermittent "color wash sticks" bug). Clear on
-        // UNMOUNT too via a mount-once effect cleanup; owner-gated, so it never clobbers the next page's tint.
-        UseEffect(() => (Action?)ClearTint, DepKey.Empty);
+        // Page-scoped Mica tint: cover-keyed binder (activation + unmount clear), not a page-scope Watch.
+        Element tintBinder = CoverPaletteLeaves.ShellTint(
+            paletteUrl, modelReady, colorWashesDisabled, apply: _cfg.TwoColumn, _tintOwner, shellTint,
+            key: "detail-tint:" + route.Name, fallbackUrl: liveUrl);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──
         void Play(int index) { if (m.ContextUri is { } uri && svc is not null) _ = svc.Player.PlayAsync(uri, Math.Max(0, index)); }
@@ -460,17 +403,10 @@ sealed class DetailShell : Component
                 ZStack = true, Grow = 1f, OnBoundsChanged = Measure, ClipToBounds = true,
                 Children =
                 [
-                    new BoxEl
-                    {
-                        Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":"
-                            + colorWashesDisabled + ":" + immersiveHero,
-                        ZStack = true, Grow = 1f, HitTestVisible = false,
-                        // Confine the wash to the shell-owned content-pane shape. A route must not round the trailing
-                        // corner independently and make the page silhouette change during navigation.
-                        ClipToBounds = true, Corners = WaveeShell.ContentPaneCorners,
-                        Gradient = colorWashesDisabled ? null : Surfaces.DetailHeroWash(washColor, immersiveHero),
-                        Animate = PaletteWashTransition,
-                    },
+                    tintBinder,
+                    CoverPaletteLeaves.DetailWash(
+                        paletteUrl, liveUrl, immersiveHero, vertical: true, colorWashesDisabled,
+                        key: "detail-wash:" + route.Name + ":" + Tok.Theme + ":v:" + immersiveHero),
                     verticalPage,
                 ],
             };
@@ -523,15 +459,10 @@ sealed class DetailShell : Component
             OnBoundsChanged = Measure, ClipToBounds = true,
             Children =
             [
-                new BoxEl
-                {
-                    Key = "detail-wash:" + (art?.GetHashCode() ?? 0) + ":" + Tok.Theme + ":" + colorWashesDisabled,
-                    ZStack = true, Grow = 1f, HitTestVisible = false,
-                    // Confine the wash to the shell-owned content-pane shape. A route must not round the trailing
-                    // corner independently and make the page silhouette change during navigation.
-                    ClipToBounds = true, Corners = WaveeShell.ContentPaneCorners,
-                    Gradient = colorWashesDisabled ? null : Surfaces.HeroWash(washColor), Animate = PaletteWashTransition,
-                },
+                tintBinder,
+                CoverPaletteLeaves.DetailWash(
+                    paletteUrl, liveUrl, immersive: false, vertical: false, colorWashesDisabled,
+                    key: "detail-wash:" + route.Name + ":" + Tok.Theme + ":h"),
                 twoColumnPage,
             ],
         };

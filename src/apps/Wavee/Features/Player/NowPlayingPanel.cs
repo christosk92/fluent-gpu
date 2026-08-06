@@ -35,10 +35,7 @@ sealed class NowPlayingPanel : Component
         if (b is null) return new BoxEl { Grow = 1f };
         if (track is null) return Empty(Loc.Get(Strings.Player.NothingPlaying));
 
-        // The now-playing colour, from the track's OWN cover. Watching just that image recolours the hero the moment
-        // it is graded, without waking this panel for unrelated batches.
-        _ = SpotifyLive.CoverColorPlane.Current.Watch(track.Image?.Url).Value;
-        var pal = Surfaces.SchemeFor(track.Image?.Url);
+        // Cover colour for the hero is paint-only (bound Placeholder inside Hero) — do not Watch at panel scope.
         var sections = new List<Element>(8);
         if (info?.About is { } about)
         {
@@ -65,7 +62,7 @@ sealed class NowPlayingPanel : Component
             Direction = 1,
             Children =
             [
-                Hero(track, lib, go, pal),
+                Hero(track, lib, go),
                 sections.Count == 0 ? new BoxEl()
                     : new BoxEl
                     {
@@ -86,11 +83,8 @@ sealed class NowPlayingPanel : Component
         catch { return null; }
     }
 
-    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go, SpotifyLive.CoverColorPlane.Scheme? palette)
+    static Element Hero(Track track, LibraryBridge? lib, Action<string, string?>? go)
     {
-        ColorF accent = palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : Tok.AccentDefault;
-        ColorF wash = ColorF.Lerp(Tok.FillCardSecondary, accent, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.10f);
-
         var meta = new List<Element>(3);
         if (track.Artists.Count > 0)
             meta.Add(go is null
@@ -105,16 +99,19 @@ sealed class NowPlayingPanel : Component
             meta.Add(new TextEl(track.Album.Name) { Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
         string? url = track.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
-        Element art = url is { Length: > 0 }
-            ? Ui.Image(url, ImageFit.Cover, 1f, 512, Radii.Card, wash, track.Image?.BlurHash) with { AlignSelf = FlexAlign.Stretch }
-            : new ImageEl
-            {
-                Source = "",
-                AspectRatio = 1f,
-                AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(Radii.Card),
-                Placeholder = wash,
-            };
+        // Bound placeholder: Watch is inside the thunk so a late grading paints without re-rendering the panel.
+        Prop<ColorF> wash = Prop.Of(() => HeroWashColor(url));
+        Element art = new ImageEl
+        {
+            Source = url ?? "",
+            Fit = ImageFit.Cover,
+            AspectRatio = 1f,
+            DecodePx = 512,
+            Corners = CornerRadius4.All(Radii.Card),
+            Placeholder = wash,
+            BlurHash = track.Image?.BlurHash,
+            AlignSelf = FlexAlign.Stretch,
+        };
 
         return new BoxEl
         {
@@ -147,6 +144,15 @@ sealed class NowPlayingPanel : Component
                 },
             ],
         };
+    }
+
+    static ColorF HeroWashColor(string? url)
+    {
+        if (url is { Length: > 0 })
+            _ = SpotifyLive.CoverColorPlane.Current.Watch(url).Value;
+        var palette = Surfaces.SchemeFor(url);
+        ColorF accent = palette is { } p ? WaveePalette.Lift(WaveePalette.Accent(p)) : Tok.AccentDefault;
+        return ColorF.Lerp(Tok.FillCardSecondary, accent, Tok.Theme == ThemeKind.Dark ? 0.18f : 0.10f);
     }
 
     static Element HeroArtistLinks(IReadOnlyList<ArtistRef> artists, Action<string, string?> go, ColorF color)

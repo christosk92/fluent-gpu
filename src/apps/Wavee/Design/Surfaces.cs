@@ -4,6 +4,7 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Scene;
+using FluentGpu.Signals;
 using Wavee.Core;
 using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
@@ -47,9 +48,9 @@ public static class Surfaces
     }
 
     /// <summary>The full graded roles behind a cover — for PAGE chrome (hero washes, accent bars, the Play button, the
-    /// shell's Mica tint) rather than a placeholder tile. Null until the plane has a grading for this theme; a caller
-    /// that wants the wash to appear the moment it lands should also read <c>CoverColorPlane.Current.Epoch</c>. That is
-    /// safe at page scope (one subscriber) but deliberately NOT done per card — see <c>CoverShimmer</c>.</summary>
+    /// shell's Mica tint) rather than a placeholder tile. Null until the plane has a grading for this theme. Callers that
+    /// want the wash to appear the moment it lands must NOT read <c>Watch</c>/<c>Epoch</c> at page scope (that rebuilds
+    /// the whole page); subscribe from a leaf wash/tint node or a bound Fill instead — see <c>CoverKeyedWash</c>.</summary>
     internal static SpotifyLive.CoverColorPlane.Scheme? SchemeFor(string? url) =>
         SpotifyLive.CoverColorPlane.Current.TryGetScheme(url, Tok.Theme == ThemeKind.Light);
 
@@ -317,16 +318,23 @@ sealed class CoverShimmer : Component
             else if (state == ImageState.Failed && failure != ImageFailureKind.Canceled) settled.Value = true;
             else loading = state is ImageState.None or ImageState.Pending;
         }
-        // Subscribe to the cover-colour plane ONLY while this tile is still the visible surface: the moment a graded
-        // batch lands, mounted placeholders repaint in their covers' colours. Art tiles are the only subscribers by
-        // design — subscribing at card level would turn one colour batch into a reconcile flush across every card.
-        if (loading) _ = SpotifyLive.CoverColorPlane.Current.Epoch.Value;
-
         // On the loading→settled edge `loading` flips, the dep changes, and the effect re-seeds a finite flat track
         // (loop:false) — the looping pulse is replaced in place and the loop-track count drops so the frame loop quiesces.
         UseKeyframes(AnimChannel.Opacity, loading ? Breathe : Flat, loading ? 1000f : 1f, loading, DepKey.From(loading));   // #9: DepKey, not a boxed object[]
-        // The tile is the cover's own colour, not a grey slab. This is the surface that is on screen the LONGEST for a
-        // cold grid, so it is the one that decides whether a page reads as "loading its art" or as "broken".
-        return new BoxEl { Width = _w, Height = _h, Corners = CornerRadius4.All(_corners), Fill = Surfaces.PlaceholderFor(_url) };
+        // Tint is paint-only: the Fill bind reads the per-key Watch signal, so a landed grading marks PaintDirty on
+        // exactly this tile — never a CoverShimmer re-render, and never the global Epoch fan-out that used to re-render
+        // every still-loading cover in the grid at once.
+        return new BoxEl
+        {
+            Width = _w, Height = _h, Corners = CornerRadius4.All(_corners),
+            Fill = Prop.Of(PlaceholderFill),
+        };
+    }
+
+    ColorF PlaceholderFill()
+    {
+        if (_url is { Length: > 0 } url)
+            _ = SpotifyLive.CoverColorPlane.Current.Watch(url).Value;
+        return Surfaces.PlaceholderFor(_url);
     }
 }
