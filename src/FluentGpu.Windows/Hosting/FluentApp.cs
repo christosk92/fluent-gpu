@@ -412,9 +412,27 @@ public static class FluentApp
                     // against a real workload (settled playback ≈ a few %, scroll ≈ full) is a feel-session activity, and
                     // no renderer consumes the region yet, so this token IS the only evidence. Printed only when the frame
                     // published something, so an elided frame's line is byte-identical to before.
-                    string dmgTok = s.RepaintFullReason != FluentGpu.Rhi.RepaintFullReason.None
-                        ? $" dmgF:{s.RepaintFullReason}"
-                        : (s.RepaintRectCount > 0 ? $" dmg{s.RepaintCoverage * 100f:0.0}%/{s.RepaintRectCount}" : "");
+                    // …and (§5.1-B) the ROUTE the renderer actually took for it: P = damage-scissored partial into the
+                    // persistent canvas (followed by the replay-rect count), C = a full canvas REBUILD, F = the
+                    // full-direct safe harbor + the reason it gave up. The coverage/rect figures describe the frame the
+                    // HOST last published; the route + replay count are the device's last SUBMIT, which under the async
+                    // seam can be a frame behind — read the pair as a cadence, not as one frame's record. `dmg F:` with
+                    // a reason the host never set (BackendUnsupported / PublishGap) means the DEVICE surrendered.
+                    var dmgRoute = gpuDev?.LastRepaintRoute ?? FluentGpu.Rhi.RepaintRoute.FullDirect;
+                    char dmgRouteCh = dmgRoute switch
+                    {
+                        FluentGpu.Rhi.RepaintRoute.Partial => 'P',
+                        FluentGpu.Rhi.RepaintRoute.FullIntoCanvas => 'C',
+                        _ => 'F',
+                    };
+                    var dmgReason = s.RepaintFullReason != FluentGpu.Rhi.RepaintFullReason.None
+                        ? s.RepaintFullReason
+                        : (gpuDev?.LastRepaintFullReason ?? FluentGpu.Rhi.RepaintFullReason.None);
+                    string dmgTok = dmgReason != FluentGpu.Rhi.RepaintFullReason.None
+                        ? $" dmg F:{dmgReason}"
+                        : (s.RepaintRectCount > 0 || dmgRoute != FluentGpu.Rhi.RepaintRoute.FullDirect
+                            ? $" dmg {dmgRouteCh}{gpuDev?.LastReplayRectCount ?? 0} {s.RepaintCoverage * 100f:0.0}%/{s.RepaintRectCount}"
+                            : "");
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
                     // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit

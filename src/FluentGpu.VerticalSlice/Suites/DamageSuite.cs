@@ -27,6 +27,299 @@ static class DamageSuite
         RecordDamageChecks();
         PublishGapChecks();
         HeadlessPayloadChecks(strings);
+        PolicyChecks();
+        StreamSafetyChecks();
+        CullHaloChecks();
+    }
+
+    // ── §5.1-B: the pure decision layer (RepaintPolicy / RepaintStreamSafety / RepaintCull) ──────────────────────────
+    // The D3D12 partial-repaint path cannot run headlessly, so everything about it that CAN be a pure function is one,
+    // and these gates are the whole safety net for that half. The binding property throughout: every uncertain input
+    // resolves to a FULL redraw.
+    const float W = 1000f, H = 1000f;   // a 1e6 DIP² target — a rect's area in "% of target" reads directly
+
+    static RepaintRoute Decide(in RepaintDamageRegion r, int layerKind, bool streamSafe, bool canvasValid, bool sizeMatches,
+        out ReplayRects rects)
+        => RepaintPolicy.Decide(in r, W, H, layerKind, streamSafe, canvasValid, sizeMatches, out rects);
+
+    static RepaintDamageRegion Small()
+    {
+        var r = default(RepaintDamageRegion);
+        r.Add(new RectF(10f, 10f, 50f, 50f));   // 0.25 % coverage
+        return r;
+    }
+
+    static void PolicyChecks()
+    {
+        // Every disqualifier forces a FULL redraw, one at a time off an otherwise partial-eligible frame.
+        {
+            var ok = Decide(Small(), RepaintPolicy.LayerKindNone, true, true, true, out var okRects);
+            bool baseline = ok == RepaintRoute.Partial && okRects.Count == 1;
+
+            bool unsafeStream = Decide(Small(), RepaintPolicy.LayerKindNone, false, true, true, out _) == RepaintRoute.FullDirect;
+            bool sizeMismatch = Decide(Small(), RepaintPolicy.LayerKindNone, true, true, false, out _) == RepaintRoute.FullDirect;
+            bool acrylic = Decide(Small(), RepaintPolicy.LayerKindAcrylic, true, true, true, out _) == RepaintRoute.FullDirect;
+            bool unknownKind = Decide(Small(), 7, true, true, true, out _) == RepaintRoute.FullDirect;
+            var smallRegion = Small();
+            bool degenerate = RepaintPolicy.Decide(in smallRegion, 0f, 0f, RepaintPolicy.LayerKindNone, true, true, true, out _) == RepaintRoute.FullDirect;
+
+            var forced = default(RepaintDamageRegion);
+            forced.Add(new RectF(10f, 10f, 50f, 50f));
+            forced.ForceFull(RepaintFullReason.ImageContent);
+            bool forcedFull = Decide(forced, RepaintPolicy.LayerKindNone, true, true, true, out _) == RepaintRoute.FullDirect;
+
+            Check("gate.repaint.policy-fallbacks EVERY uncertain input forces a FULL redraw off an otherwise partial-eligible frame — unsafe stream, target-size disagreement, an acrylic stream (its backdrop snapshot writes INTO the canvas), an UNKNOWN layer kind, a degenerate target, and a forced-full region",
+                baseline && unsafeStream && sizeMismatch && acrylic && unknownKind && degenerate && forcedFull,
+                $"baseline={ok}/{okRects.Count} unsafe={unsafeStream} size={sizeMismatch} acrylic={acrylic} unknown={unknownKind} degenerate={degenerate} forced={forcedFull}");
+        }
+
+        // Acrylic (kind 2) is full EVEN with a live canvas and empty damage: SnapshotTargetRegion clobbers the canvas.
+        {
+            var empty = default(RepaintDamageRegion);
+            bool emptyToo = Decide(empty, RepaintPolicy.LayerKindAcrylic, true, true, true, out _) == RepaintRoute.FullDirect;
+            var half = default(RepaintDamageRegion);
+            half.Add(new RectF(0f, 0f, W, H * 0.4f));
+            bool bigToo = Decide(half, RepaintPolicy.LayerKindAcrylic, true, true, true, out _) == RepaintRoute.FullDirect;
+            Check("gate.repaint.policy-acrylic-always-full an acrylic stream is FullDirect on every input — even empty damage over a live canvas — because the backdrop snapshot physically copies target regions INTO the canvas",
+                emptyToo && bigToo, $"empty={emptyToo} small={bigToo}");
+        }
+
+        // The coverage cutoff, checked on BOTH sides of the line and BOTH sides of the merge.
+        {
+            var under = default(RepaintDamageRegion);
+            under.Add(new RectF(0f, 0f, W, H * 0.55f));                       // 55 % — under
+            bool underPartial = Decide(under, RepaintPolicy.LayerKindNone, true, true, true, out var uRects) == RepaintRoute.Partial
+                                && uRects.Count == 1;
+
+            var over = default(RepaintDamageRegion);
+            over.Add(new RectF(0f, 0f, W, H * 0.65f));                        // 65 % — over
+            bool overFull = Decide(over, RepaintPolicy.LayerKindNone, true, true, true, out _) == RepaintRoute.FullDirect;
+
+            // POST-MERGE: five separated full-height columns total 50 % RAW — under the cutoff — but coalescing five
+            // rects down to four must swallow the gap between two of them, and the merged set reaches 62.5 %. A policy
+            // that only tested the accumulated rects would run a partial that costs more than a full frame.
+            var cols = default(RepaintDamageRegion);
+            for (int i = 0; i < 5; i++) cols.Add(new RectF(i * 225f, 0f, 100f, H));   // 5 × 10 % = 50 % raw, gaps of 125
+            float rawCoverage = cols.Coverage(W, H);
+            bool postMerge = Decide(cols, RepaintPolicy.LayerKindNone, true, true, true, out var tRects) == RepaintRoute.FullDirect
+                             && tRects.Count == 0;
+
+            Check("gate.repaint.policy-coverage-cutoff the 60 % cutoff is checked BOTH pre- and post-merge: 55 % stays partial, 65 % goes full, and five separated columns totalling 50 % RAW go FULL because coalescing them to 4 replay rects swallows a gap and reaches 62.5 % (the merge adds dead area — checking only the accumulated rects would authorize a partial that costs more than a full frame)",
+                underPartial && overFull && postMerge && rawCoverage < RepaintPolicy.CoverageCutoff,
+                $"under={underPartial} over={overFull} raw={rawCoverage:0.000} postMerge={postMerge} tRects={tRects.Count}");
+        }
+
+        // Coalescing: ≤ MaxReplayRects, still pairwise disjoint, and the union of the inputs is fully covered.
+        {
+            var many = default(RepaintDamageRegion);
+            for (int i = 0; i < 8; i++) many.Add(new RectF(i * 100f, i * 100f, 20f, 20f));   // 8 separated dots
+            var route = Decide(many, RepaintPolicy.LayerKindNone, true, true, true, out var rects);
+            bool capped = rects.Count > 0 && rects.Count <= RepaintPolicy.MaxReplayRects;
+            bool disjoint = ReplayDisjoint(in rects);
+            bool covers = true;
+            for (int i = 0; i < many.Count; i++) covers &= CoveredBy(many[i], in rects);
+            // Least-waste: merging near neighbours must beat merging far ones, so the merged set's total area stays far
+            // below the bounding box of everything.
+            bool notOneBigBox = rects.SummedArea() < 700f * 700f;
+            Check("gate.repaint.policy-coalesce 8 disjoint damage dots coalesce to <= 4 replay rects that are still PAIRWISE DISJOINT (so no pixel is cleared+replayed twice and SummedArea stays exact) and that COVER every input rect, via least-waste pair merging rather than one bounding box",
+                route == RepaintRoute.Partial && capped && disjoint && covers && notOneBigBox,
+                $"route={route} count={rects.Count} disjoint={disjoint} covers={covers} area={rects.SummedArea():0}");
+        }
+
+        // The layered route collapses to ONE union rect (a group RT is pool-leased ⇒ the stream cannot replay twice).
+        {
+            var many = default(RepaintDamageRegion);
+            many.Add(new RectF(10f, 10f, 20f, 20f));
+            many.Add(new RectF(300f, 300f, 20f, 20f));
+            many.Add(new RectF(600f, 100f, 20f, 20f));
+            var route = Decide(many, RepaintPolicy.LayerKindGroups, true, true, true, out var rects);
+            bool one = rects.Count == 1;
+            bool spans = one && rects[0].X <= 10f && rects[0].Y <= 10f && rects[0].Right >= 620f && rects[0].Bottom >= 320f;
+            // …and the same damage on the STREAMING route keeps its three rects.
+            Decide(many, RepaintPolicy.LayerKindNone, true, true, true, out var streamRects);
+            Check("gate.repaint.policy-layered-single-rect the LAYERED route (opacity groups) collapses to ONE union rect — a group RT is pool-leased (acquire -> composite -> release) so the stream cannot be replayed twice — while the same damage on the STREAMING route keeps its separate rects",
+                route == RepaintRoute.Partial && one && spans && streamRects.Count == 3,
+                $"route={route} layered={rects.Count} spans={spans} streaming={streamRects.Count}");
+        }
+
+        // Empty damage: blit-only over a live canvas, full redraw without one (FLIP_DISCARD leaves it undefined).
+        {
+            var empty = default(RepaintDamageRegion);
+            var blitOnly = Decide(empty, RepaintPolicy.LayerKindNone, true, canvasValid: true, sizeMatches: true, out var noRects);
+            var mustDraw = Decide(empty, RepaintPolicy.LayerKindNone, true, canvasValid: false, sizeMatches: true, out _);
+            Check("gate.repaint.policy-empty-damage an empty region blits the RETAINED canvas (Partial with zero replay rects — the upload-forced frame) when the canvas is live, and redraws in full when it is not: a FLIP_DISCARD back buffer is undefined after present, so SOMETHING must be painted",
+                blitOnly == RepaintRoute.Partial && noRects.Count == 0 && mustDraw == RepaintRoute.FullDirect,
+                $"blitOnly={blitOnly}/{noRects.Count} mustDraw={mustDraw}");
+        }
+
+        // An invalid canvas + small damage rebuilds INTO the canvas (so the NEXT frame can go partial); an invalid
+        // canvas + big damage stays on the cheapest full frame there is.
+        {
+            var rebuild = Decide(Small(), RepaintPolicy.LayerKindNone, true, canvasValid: false, sizeMatches: true, out var rRects);
+            var big = default(RepaintDamageRegion);
+            big.Add(new RectF(0f, 0f, W, H * 0.9f));
+            var stayDirect = Decide(big, RepaintPolicy.LayerKindNone, true, canvasValid: false, sizeMatches: true, out _);
+            Check("gate.repaint.policy-canvas-rebuild an INVALID canvas plus SMALL damage takes FullIntoCanvas — one full replay whose only purpose is to make the next small-damage frame partial-eligible — while an invalid canvas plus BIG damage stays FullDirect (no blit tax on a frame that could never have gone partial)",
+                rebuild == RepaintRoute.FullIntoCanvas && rRects.Count == 0 && stayDirect == RepaintRoute.FullDirect,
+                $"rebuild={rebuild}/{rRects.Count} big={stayDirect}");
+        }
+
+        // Rects are clamped to the target before anything else: an 8-DIP AA pad hanging off the edge must not inflate
+        // coverage, and a rect wholly outside must not become a replay rect.
+        {
+            var edge = default(RepaintDamageRegion);
+            edge.Add(new RectF(-40f, -40f, 80f, 80f));         // three quarters outside the top-left corner
+            Decide(edge, RepaintPolicy.LayerKindNone, true, true, true, out var rects);
+            bool clamped = rects.Count == 1 && rects[0].X >= 0f && rects[0].Y >= 0f
+                           && rects[0].Right <= W && rects[0].Bottom <= H
+                           && MathF.Abs(rects[0].W - 40f) < 1e-3f;
+            var outside = default(RepaintDamageRegion);
+            outside.Add(new RectF(W + 10f, H + 10f, 30f, 30f));
+            var outRoute = Decide(outside, RepaintPolicy.LayerKindNone, true, true, true, out var outRects);
+            Check("gate.repaint.policy-clamp-to-target replay rects are clamped to the target first, so the AA/effect pad hanging off a screen edge cannot inflate coverage, and damage entirely off-target yields NO replay rect (it degenerates to the retained-canvas blit)",
+                clamped && outRoute == RepaintRoute.Partial && outRects.Count == 0,
+                $"clamped={clamped} out={outRoute}/{outRects.Count}");
+        }
+    }
+
+    static void StreamSafetyChecks()
+    {
+        var white = new ColorF(1f, 1f, 1f, 1f);
+        var id = Affine2D.Identity;
+
+        // Plain content is safe.
+        {
+            var dl = new DrawList();
+            dl.FillRoundRect(new RectF(0f, 0f, 10f, 10f), default, white, id, 1f);
+            dl.DrawImage(new RectF(0f, 0f, 10f, 10f), default, 1, true, white, id, 1f, new RectF(0f, 0f, 1f, 1f));
+            dl.PushClip(new RectF(0f, 0f, 10f, 10f));
+            dl.Shadow(new RectF(0f, 0f, 10f, 10f), default, white, 0f, 2f, 8f, 1f, id, 1f);
+            dl.PopClip();
+            bool plainSafe = RepaintStreamSafety.Scan(dl.Bytes);
+            bool emptySafe = RepaintStreamSafety.Scan(ReadOnlySpan<byte>.Empty);
+
+            // A plain OPACITY group is safe: its pooled RT is cleared this frame and composited back under the clamped
+            // scissor, so every texel it reads was written inside the clamp.
+            var og = new DrawList();
+            og.PushOpacityLayer(new RectF(0f, 0f, 10f, 10f), default, 0.5f);
+            og.FillRoundRect(new RectF(0f, 0f, 10f, 10f), default, white, id, 1f);
+            og.PopLayer(new RectF(0f, 0f, 10f, 10f));
+            bool opacitySafe = RepaintStreamSafety.Scan(og.Bytes);
+
+            Check("gate.repaint.stream-safe plain fills/images/shadows/clips (and an empty stream) survive a damage-clamped replay, and so does a flat OPACITY group — its pooled RT is cleared this frame and composited back under the clamped scissor",
+                plainSafe && emptySafe && opacitySafe,
+                $"plain={plainSafe} empty={emptySafe} opacity={opacitySafe}");
+        }
+
+        // Acrylic / blur / edge-fade (BOTH classes) are unsafe.
+        {
+            var acr = new DrawList();
+            acr.PushLayer(new RectF(0f, 0f, 10f, 10f), default, white, white, 1f, 8f, 0f, 1f);
+            acr.PopLayer(new RectF(0f, 0f, 10f, 10f));
+            bool acrylicUnsafe = !RepaintStreamSafety.Scan(acr.Bytes);
+
+            var blur = new DrawList();
+            blur.PushBlurLayer(new RectF(0f, 0f, 10f, 10f), default, 6f, 1f);
+            blur.PopLayer(new RectF(0f, 0f, 10f, 10f));
+            bool blurUnsafe = !RepaintStreamSafety.Scan(blur.Bytes);
+
+            // sigma == 0 ⇒ the PLAIN strip-fade class specifically (R12), not the blurred one already covered above.
+            var fade = new DrawList();
+            fade.PushEdgeFadeLayer(new RectF(0f, 0f, 10f, 10f), new RectF(0f, 0f, 10f, 10f), default, 1f,
+                edges: 1, bandL: 4f, bandT: 0f, bandR: 0f, bandB: 0f, falloff: 0, intensity: 1f, blurSigma: 0f);
+            fade.PopLayer(new RectF(0f, 0f, 10f, 10f));
+            bool fadeUnsafe = !RepaintStreamSafety.Scan(fade.Bytes);
+
+            Check("gate.repaint.stream-unsafe-layers acrylic (snapshot writes INTO the canvas), self-blur (gaussian taps read OUTSIDE the clamp) and edge fade — INCLUDING the plain sigma=0 strip-fade class, unverified under a clamped replay in v1 (R12) — all mark the stream unsafe",
+                acrylicUnsafe && blurUnsafe && fadeUnsafe,
+                $"acrylic={acrylicUnsafe} blur={blurUnsafe} edgeFade={fadeUnsafe}");
+        }
+
+        // An unknown opcode and a truncated payload are unsafe — never guessed past.
+        {
+            Span<byte> unknown = stackalloc byte[4];
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(unknown, 9999);
+            bool unknownUnsafe = !RepaintStreamSafety.Scan(unknown);
+
+            var dl = new DrawList();
+            dl.FillRoundRect(new RectF(0f, 0f, 10f, 10f), default, white, id, 1f);
+            byte[] truncated = dl.Bytes.Slice(0, dl.Bytes.Length - 8).ToArray();
+            bool truncatedUnsafe = !RepaintStreamSafety.Scan(truncated);
+
+            Check("gate.repaint.stream-unknown-op an unrecognized opcode and a TRUNCATED payload both mark the stream unsafe — a walk that cannot account for every byte must never be allowed to authorize a clamped replay",
+                unknownUnsafe && truncatedUnsafe, $"unknown={unknownUnsafe} truncated={truncatedUnsafe}");
+        }
+    }
+
+    static void CullHaloChecks()
+    {
+        var rect = new RectF(100f, 100f, 100f, 100f);
+
+        // Edge-exact primitives are KEPT (the tests are inclusive on every side) — the single most dangerous rounding
+        // direction in the whole cull, because a wrongly-dropped boundary straddler is a visible seam.
+        {
+            RepaintCull.Aabb(0f, 100f, 100f, 100f, 1f, 0f, 0f, 1f, 0f, 0f, out float l, out float t, out float r, out float b);
+            bool touching = RepaintCull.Keep(l, t, r, b, 0f, in rect);        // right edge == rect.X exactly
+            bool clearOf = !RepaintCull.Keep(l - 50f, t, r - 50f, b, 0f, in rect);
+            Check("gate.repaint.cull-edge-inclusive a primitive whose device AABB touches the replay rect EXACTLY on an edge is KEPT (inclusive on all four sides), while one clear of it by real space is culled — a wrongly-dropped boundary straddler is a visible seam",
+                touching && clearOf, $"touching={touching} clearOf={clearOf}");
+        }
+
+        // Per-kind halos pull an outside primitive back in by exactly the footprint its vertex shader rasterizes.
+        {
+            // A stroke 20 wide whose box ends 11 units left of the rect: half the band (10) + the 2-unit AA feather reaches in.
+            float strokeHalo = RepaintCull.StrokeHalo(20f);
+            bool strokeReaches = RepaintCull.Keep(80f, 100f, 89f, 200f, strokeHalo, in rect);
+            bool strokeIsHalf = MathF.Abs(strokeHalo - 12f) < 1e-4f;
+
+            // A shadow's tail: spread 4 + 3σ. The halo must be at least the shader's own 3·max(blur/2, 0.5).
+            float shadowHalo = RepaintCull.ShadowHalo(4f, 10f);
+            bool shadowCoversShader = shadowHalo >= 4f + 3f * MathF.Max(10f * 0.5f, 0.5f);
+            bool shadowReaches = RepaintCull.Keep(60f, 100f, 70f, 200f, shadowHalo, in rect);
+
+            // Glyph: max(4, em/2), floored for tiny text and scaling with big text; the wipe LIFT adds on top.
+            bool glyphFloor = MathF.Abs(RepaintCull.GlyphHalo(4f) - 4f) < 1e-4f;
+            bool glyphScales = MathF.Abs(RepaintCull.GlyphHalo(40f) - 20f) < 1e-4f;
+            bool glyphLift = MathF.Abs(RepaintCull.GlyphHalo(40f, 6f) - 26f) < 1e-4f;
+
+            // A plain fill gets only the SDF pipelines' 2-unit AA margin — and 5 units away it is genuinely gone.
+            bool aaKeeps = RepaintCull.Keep(98f, 100f, 99f, 200f, RepaintCull.AaHaloDip, in rect);
+            bool aaDrops = !RepaintCull.Keep(90f, 100f, 95f, 200f, RepaintCull.AaHaloDip, in rect);
+
+            Check("gate.repaint.cull-halos the per-kind halos match the footprint each vertex shader actually rasterizes — stroke w/2+2, shadow spread+3sigma (>= the shader's own 3*max(blur/2,0.5)), glyph max(4, em/2) plus any wipe lift, plain fill the 2-unit AA margin — so an off-rect primitive whose PIXELS reach in is kept and one whose pixels do not is dropped",
+                strokeReaches && strokeIsHalf && shadowCoversShader && shadowReaches
+                && glyphFloor && glyphScales && glyphLift && aaKeeps && aaDrops,
+                $"stroke={strokeHalo} shadow={shadowHalo} glyph={RepaintCull.GlyphHalo(40f, 6f)} aaKeeps={aaKeeps} aaDrops={aaDrops}");
+        }
+
+        // Rotation: the AABB must come from all FOUR transformed corners (canon §13.1), not from transforming the
+        // top-left/bottom-right pair — a 45° square's AABB is sqrt(2)x wider than its axis-aligned box.
+        {
+            const float c = 0.70710678f;
+            RepaintCull.Aabb(0f, 0f, 100f, 100f, c, c, -c, c, 150f, 20f, out float l, out float t, out float r, out float b);
+            bool widened = MathF.Abs((r - l) - 141.42f) < 0.1f && MathF.Abs((b - t) - 141.42f) < 0.1f;
+            bool reachesIn = RepaintCull.Keep(l, t, r, b, 0f, in rect);
+            Check("gate.repaint.cull-rotated-aabb the cull AABB folds all FOUR transformed corners, so a rotated primitive's true footprint (a 45-degree square spans sqrt(2)x its side) is tested — transforming only two corners would under-cover and drop a straddler",
+                widened && reachesIn, $"w={(r - l):0.00} h={(b - t):0.00} reachesIn={reachesIn}");
+        }
+    }
+
+    static bool ReplayDisjoint(in ReplayRects r)
+    {
+        for (int i = 0; i < r.Count; i++)
+            for (int j = i + 1; j < r.Count; j++)
+                if (r[i].Overlaps(r[j])) return false;
+        return true;
+    }
+
+    static bool CoveredBy(in RectF probe, in ReplayRects rects)
+    {
+        for (int i = 0; i < rects.Count; i++)
+        {
+            RectF c = rects[i];
+            if (probe.X >= c.X && probe.Y >= c.Y && probe.Right <= c.Right && probe.Bottom <= c.Bottom) return true;
+        }
+        return false;
     }
 
     // ── pure region algebra ─────────────────────────────────────────────────────────────────────────────────────────

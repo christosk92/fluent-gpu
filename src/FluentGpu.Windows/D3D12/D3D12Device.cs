@@ -232,6 +232,58 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private readonly bool _composited;
     private readonly float[] _clearScratch4 = new float[4];
 
+    // ── §13.1 damage-scissored repaint into the persistent canvas ───────────────────────────────────────────────────
+    // The ROOT DAMAGE CLAMP is VALUE-LEVEL, not chokepoint-level (R3): FullScissorRect() returns the active replay rect
+    // and CurrentScissorRect() returns clip ∩ replay-rect, so the clamp covers BOTH the SetScissorRect chokepoint AND
+    // every layer composite that receives the rect BY VALUE and programs its own RSSetScissorRects. Only ever active
+    // inside a partial replay of the PRIMARY swapchain; cleared before the full-surface blit.
+    private bool _rootDamageActive;
+    private RECT _rootDamage;              // physical px — the replay rect currently being repainted
+    private bool _cullActive;              // decode-time culling armed (R2 — mandatory: instance banks are PER FRAME)
+    private RectF _cullRect;               // DIP — the same replay rect, padded by CullSafetyDip
+    // ToScissor rounds OUT (floor/ceil), so the physical scissor can be up to one device pixel wider than the DIP rect
+    // the cull tests against. One DIP of slack covers that on any sane DPI (the per-kind halos are ≥ 2 DIP anyway).
+    private const float CullSafetyDip = 1f;
+    // The canvas ledger — ONE state keyed to the canvas (R11), never a per-back-buffer pair (that shape belongs to
+    // FLIP_SEQUENTIAL and would repaint every change twice). Reset wholesale by InitSwapChain / Resize / RecoverDevice.
+    private bool _canvasValid;             // the persistent canvas holds a COMPLETE, coherent scene
+    private uint _canvasW, _canvasH;       // the size the canvas was last ensured at (a change invalidates it)
+    private ulong _lastPublishSequence;    // publish-gap backstop (the publisher already unions dropped damage forward)
+    private ColorF _lastClearColor;
+    private bool _lastClearValid;
+    private FluentGpu.Rhi.RepaintRoute _lastRepaintRoute;
+    private RepaintFullReason _lastRepaintFullReason;
+    private int _lastReplayRectCount;
+    private float _lastRepaintCoverage;
+    private long _dmgPartialFrames, _dmgFullFrames;
+
+    /// <summary>The route the most recent primary submit took (gpu-renderer.md §13.1). Ungated — the `[fps]` line reads
+    /// it so a feel session can attribute a regression to "everything went full" without FG_DIAG.</summary>
+    public FluentGpu.Rhi.RepaintRoute LastRepaintRoute => _lastRepaintRoute;
+    /// <summary>Why the last frame gave up on a partial repaint (<c>None</c> when it did not).</summary>
+    public RepaintFullReason LastRepaintFullReason => _lastRepaintFullReason;
+    /// <summary>Replay rects cleared + replayed on the last partial frame (0 = blit-only / full route).</summary>
+    public int LastReplayRectCount => _lastReplayRectCount;
+    /// <summary>Fraction of the target the last frame's repaint set covered, 0..1.</summary>
+    public float LastRepaintCoverage => _lastRepaintCoverage;
+    /// <summary>Primary submits served partially (incl. blit-only) since process start.</summary>
+    public long RepaintPartialFrames => _dmgPartialFrames;
+    /// <summary>Primary submits that redrew the whole target since process start.</summary>
+    public long RepaintFullFrames => _dmgFullFrames;
+
+    // Forget everything we believe about the canvas. Any path that destroys/recreates the canvas, the swapchain, or the
+    // device must call this: a stale canvasValid would blit garbage, and a stale publish sequence would hide a real gap.
+    private void ResetRepaintLedger()
+    {
+        _canvasValid = false;
+        _canvasW = 0; _canvasH = 0;
+        _lastPublishSequence = 0;
+        _lastClearValid = false;
+        ClearRootDamage();
+    }
+
+    private void ClearRootDamage() { _rootDamageActive = false; _cullActive = false; }
+
     private void InvalidateCmdState() { _boundPipe = BoundPipe.None; _sharedSdfStateBound = false; _scissorValid = false; }
 
     // DirectComposition (Mica path): the swapchain is composed onto the HWND so DWM's Mica shows through transparent pixels.
@@ -711,6 +763,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
 
     private void InitSwapChain(D3D12Swapchain target)
     {
+        // §13.1 (R5/R6): a fresh swapchain — new back buffers, and on the recovery path a freshly-created canvas too.
+        // Nothing retained is trustworthy, and the publish sequence restarts against a new consumer baseline.
+        ResetRepaintLedger();
         DXGI_SWAP_CHAIN_DESC1 sd = default;
         sd.Width = target.W;
         sd.Height = target.H;
@@ -1039,6 +1094,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _edgeFadeStripFallbacks = 0;   // reset HERE (not only in SubmitWithLayers) so a layer-free frame reports 0, not the last layered frame's count
         _efStripRejectNested = 0; _efStripRejectDepth = 0; _efStripRejectScratch = 0;
         _frameRectOpaqueInsts = 0; _frameRectBlendedInsts = 0;
+        ClearRootDamage();   // §13.1: the clamp is per-REPLAY state — never let a previous frame's leak into this one
         (_lastBlurHashes, _curBlurHashes) = (_curBlurHashes, _lastBlurHashes);   // rotate the blur-cache recurrence ring
         _lastBlurHashCount = _curBlurHashCount; _curBlurHashCount = 0;
         // Every pipe banks its instance upload buffer by back-buffer index: WaitForFrame above fenced the submit that
@@ -1067,30 +1123,103 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         // lyrics rail (blur layers) then does NOT tax the whole window's scrolling/animation; (2) an ACRYLIC layer IS
         // present → the canvas path (acrylic must snapshot the backdrop offscreen to blur it): clear the canvas, render the
         // scene into it, run the layer passes, blit back.
-        int layerKind = sc == _primarySwapchain ? StreamLayerKind(drawList) : 0;
-        if (layerKind != 0)
+        bool isPrimary = ReferenceEquals(sc, _primarySwapchain);
+        int layerKind = isPrimary ? StreamLayerKind(drawList) : 0;
+
+        // ── §13.1 route select. Popups keep today's path UNCONDITIONALLY (they must never touch the shared canvas — the
+        // documented DEVICE_REMOVED class above), so the whole ledger is primary-only. ────────────────────────────────
+        var route = FluentGpu.Rhi.RepaintRoute.FullDirect;
+        ReplayRects replay = default;
+        if (isPrimary)
         {
-            // Both opacity/blur (kind 1) and acrylic (kind 2) composite directly on the back buffer — no offscreen canvas
-            // + blit. An acrylic keeps the canvas only as its region-copy scratch (SnapshotTargetRegion), so size it
-            // when one is present in the stream.
-            if (layerKind == 2) _acrylic!.EnsureSize(_w, _h);
-            _opacity!.EnsureSize(_w, _h);
-            SubmitWithLayers(drawList, ctx, lw, lh, rtv, directToBackBuffer: true);
+            // A local, not ctx.RepaintDamage directly: the region is a ~264-byte value on a readonly record struct, so
+            // every member access off the property would re-copy it (and `in` needs an lvalue).
+            RepaintDamageRegion damage = ctx.RepaintDamage;
+            _lastRepaintFullReason = damage.FullReason;
+            _lastRepaintCoverage = damage.Coverage(lw, lh);
+            // R5: size the canvas from the DEVICE fields, AFTER Activate — never from ctx.SizePx (a published frame can
+            // describe a size the swapchain has already moved past) and never on a popup submit. _w/_h only change under
+            // Resize (which WaitForGpu()s first) or InitSwapChain, which is exactly the fence EnsureSize assumes.
+            _acrylic!.EnsureSize(_w, _h);
+            if (_canvasW != _w || _canvasH != _h) { _canvasValid = false; _canvasW = _w; _canvasH = _h; }
+
+            // The published frame describes a DIFFERENT target than the one we are about to paint: nothing about its
+            // damage is trustworthy in this target's coordinates.
+            bool sizeMatches = (uint)ctx.SizePx.Width == _w && (uint)ctx.SizePx.Height == _h;
+            // Publish-gap BACKSTOP (R8). The publisher already unions the damage of frames the consumer never acquired,
+            // so this only fires if that carry ever fails; a 0 sequence means "not published through the seam".
+            bool gapOk = ctx.PublishSequence == 0 || _lastPublishSequence == 0
+                         || ctx.PublishSequence == _lastPublishSequence + 1;
+            // A clear-colour change (theme switch) repaints every undamaged texel, and the DrawList carries no clear op.
+            bool clearSame = _lastClearValid && _lastClearColor.Equals(ctx.Clear);
+            bool streamSafe = RepaintStreamSafety.Scan(drawList);
+            if (!gapOk || !clearSame) _canvasValid = false;
+
+            route = RepaintPolicy.Decide(in damage, lw, lh, layerKind, streamSafe, _canvasValid, sizeMatches, out replay);
+            // Name the cause the frame actually surrendered on, FIRST cause wins (the region's own reason already did).
+            if (_lastRepaintFullReason == RepaintFullReason.None && route != FluentGpu.Rhi.RepaintRoute.Partial)
+            {
+                if (!sizeMatches) _lastRepaintFullReason = RepaintFullReason.TargetInvalidated;
+                else if (!streamSafe || layerKind == RepaintPolicy.LayerKindAcrylic) _lastRepaintFullReason = RepaintFullReason.BackendUnsupported;
+                else if (!gapOk) _lastRepaintFullReason = RepaintFullReason.PublishGap;
+            }
+            _lastPublishSequence = ctx.PublishSequence;
+            _lastClearColor = ctx.Clear; _lastClearValid = true;
+            _lastRepaintRoute = route;
+            _lastReplayRectCount = replay.Count;
+        }
+
+        if (route == FluentGpu.Rhi.RepaintRoute.FullDirect)
+        {
+            // ── The permanent SAFE HARBOR: byte-identical to the pre-§13.1 path, and also the cheapest full frame there
+            // is (no canvas, no blit). Scroll (~81 % coverage) lands here by policy, so it costs exactly what it did. ──
+            if (layerKind != 0)
+            {
+                // Both opacity/blur (kind 1) and acrylic (kind 2) composite directly on the back buffer — no offscreen canvas
+                // + blit. An acrylic keeps the canvas only as its region-copy scratch (SnapshotTargetRegion), so size it
+                // when one is present in the stream.
+                if (layerKind == 2) _acrylic!.EnsureSize(_w, _h);
+                _opacity!.EnsureSize(_w, _h);
+                SubmitWithLayers(drawList, ctx, lw, lh, rtv, directToBackBuffer: true);
+            }
+            else
+            {
+                // GEN-COM (WIRED): the generated hand-vtable calli binding replaces the TerraFX method call. TerraFX still
+                // supplies the ID3D12Fence* type; the vtable[8] calli is emitted from d3d12.comabi.json (no human-typed slot).
+                _acrylic?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));   // age/trim layer RT pools
+                _opacity?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));
+                _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
+                _clearScratch4[0] = ctx.Clear.R; _clearScratch4[1] = ctx.Clear.G;
+                _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
+                fixed (float* clear = _clearScratch4)
+                    _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
+                StampGpuSceneMid();   // scene-raster block starts after transition+clear
+                SetFullViewport();
+                SubmitStreaming(drawList, lw, lh);
+            }
+            // The back buffer now holds the scene; the canvas holds whatever it held before (and an ACRYLIC frame has
+            // actively clobbered it with snapshot scratch). Either way it is not a scene — the next partial-eligible
+            // frame rebuilds it with one FullIntoCanvas pass. A POPUP submit is exempt: it never touches the shared
+            // canvas (forced to layerKind 0, and EnsureSize is primary-only), so invalidating on it would starve the
+            // main window of partial repaints for as long as a menu is open.
+            if (isPrimary) _canvasValid = false;
         }
         else
         {
-            // GEN-COM (WIRED): the generated hand-vtable calli binding replaces the TerraFX method call. TerraFX still
-            // supplies the ID3D12Fence* type; the vtable[8] calli is emitted from d3d12.comabi.json (no human-typed slot).
-            _acrylic?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));   // age/trim layer RT pools
-            _opacity?.TickIdle(global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence));
-            _cmdList->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
-            _clearScratch4[0] = ctx.Clear.R; _clearScratch4[1] = ctx.Clear.G;
-            _clearScratch4[2] = ctx.Clear.B; _clearScratch4[3] = ctx.Clear.A;
-            fixed (float* clear = _clearScratch4)
-                _cmdList->ClearRenderTargetView(rtv, clear, 0, null);
-            StampGpuSceneMid();   // scene-raster block starts after transition+clear
-            SetFullViewport();
-            SubmitStreaming(drawList, lw, lh);
+            SubmitIntoCanvas(drawList, ctx, lw, lh, rtv, layerKind, route, replay);
+            // Self-heal (R2): a frame that DROPPED primitives (an instance bank overflowed) did not paint what the
+            // stream said, so the canvas is not a coherent scene — never build the next partial on top of it.
+            _canvasValid = DroppedInstanceCount() == 0;
+        }
+        if (isPrimary)
+        {
+            if (route == FluentGpu.Rhi.RepaintRoute.Partial) _dmgPartialFrames++; else _dmgFullFrames++;
+            Diag.Set("d3d12", "dmgRoute", (int)route);                    // 0 = FullDirect, 1 = FullIntoCanvas, 2 = Partial
+            Diag.Set("d3d12", "dmgPartialFrames", _dmgPartialFrames);     // primary submits served from the canvas (incl. blit-only)
+            Diag.Set("d3d12", "dmgFullFrames", _dmgFullFrames);           // ── and those that redrew the whole target
+            Diag.Set("d3d12", "dmgReplayRects", _lastReplayRectCount);    // rects cleared + replayed this frame
+            Diag.Set("d3d12", "dmgCoveragePct", (int)MathF.Round(_lastRepaintCoverage * 100f));
+            Diag.Set("d3d12", "dmgFullReason", (int)_lastRepaintFullReason);
         }
         Diag.Set("d3d12", "acrylicLayers", _acrylic?.LayersThisFrame ?? 0);   // PushLayer composites this frame
         Diag.Set("d3d12", "acrylicPoolRts", _acrylic?.PooledRtCount ?? 0);    // live pooled layer RTs (steady state: 2 while a surface is open)
@@ -1214,6 +1343,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<FillRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<FillRoundRectCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1234,6 +1365,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunCmd>();
+                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                             g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
+                             RepaintCull.GlyphHalo(g.FontSize))) break;
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
                     {
@@ -1249,6 +1383,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var g = MemoryMarshal.Read<DrawGlyphRunGradientCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGlyphRunGradientCmd>();
+                    if (Cull(g.Bounds.X, g.Bounds.Y, g.Bounds.W, g.Bounds.H, g.Transform.M11, g.Transform.M12,
+                             g.Transform.M21, g.Transform.M22, g.Transform.Dx, g.Transform.Dy,
+                             RepaintCull.GlyphHalo(g.FontSize, g.Lift))) break;
                     string s = _strings.Resolve(g.Text);
                     if (s.Length > 0)
                     {
@@ -1279,6 +1416,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var im = MemoryMarshal.Read<DrawImageCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawImageCmd>();
+                    if (Cull(im.Rect.X, im.Rect.Y, im.Rect.W, im.Rect.H, im.Transform.M11, im.Transform.M12,
+                             im.Transform.M21, im.Transform.M22, im.Transform.Dx, im.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     // Draw whatever texture is resident under this id — the BlurHash LQIP preview (uploaded at request)
                     // OR the full-res art (which replaces it on decode). Flat tint only when no texture exists yet.
                     if (_imageTextures!.Has(im.ImageId)) AddReadyImage(in im);
@@ -1289,6 +1428,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawRoundRectStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawRoundRectStrokeCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.StrokeWidth))) break;
                     var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1310,6 +1452,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     // radii.x carries the top radius, radii.w (RBL) the bottom flare radius (see RectInstance docs).
                     var c = MemoryMarshal.Read<DrawTabShapeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawTabShapeCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     var inst = new RectInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1329,6 +1473,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawShadowCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawShadowCmd>();
+                    // The shadow quad is the caster box TRANSLATED by (OffsetX, OffsetY) and inflated by spread + the
+                    // gaussian tail — shift the box, then use the symmetric halo (ShadowPipeline VS).
+                    if (Cull(c.Rect.X + c.OffsetX, c.Rect.Y + c.OffsetY, c.Rect.W, c.Rect.H,
+                             c.Transform.M11, c.Transform.M12, c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.ShadowHalo(c.Spread, c.Blur))) break;
                     _shadowInsts.Add(new ShadowInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1344,6 +1493,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawArcCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawArcCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.Thickness))) break;
                     const float Deg2Rad = MathF.PI / 180f;
                     _arcInsts.Add(new ArcInstance
                     {
@@ -1360,6 +1512,10 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawPolylineStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawPolylineStrokeCmd>();
+                    // PolylineStrokePipeline's VS rasterizes exactly Rect ± (thickness/2 + 2) — the points are Rect-local.
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.Thickness))) break;
                     _polylineInsts.Add(new PolylineStrokeInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1377,6 +1533,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientRectCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     var inst = new GradientInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1399,6 +1557,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var c = MemoryMarshal.Read<DrawGradientStrokeCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawGradientStrokeCmd>();
+                    if (Cull(c.Rect.X, c.Rect.Y, c.Rect.W, c.Rect.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy,
+                             RepaintCull.StrokeHalo(c.StrokeWidth))) break;
                     var inst = new GradientInstance
                     {
                         PosX = c.Rect.X, PosY = c.Rect.Y, W = c.Rect.W, H = c.Rect.H,
@@ -1421,6 +1582,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                 {
                     var ic = MemoryMarshal.Read<DrawIconMaskCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawIconMaskCmd>();
+                    if (Cull(ic.Rect.X, ic.Rect.Y, ic.Rect.W, ic.Rect.H, ic.Transform.M11, ic.Transform.M12,
+                             ic.Transform.M21, ic.Transform.M22, ic.Transform.Dx, ic.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     if (ic.PathId != 0 && ic.Tint.A > 0f && ic.Rect.W > 0f && ic.Rect.H > 0f)
                     {
                         // Device px like glyphs (size × dpi). Miss ⇒ rasterize now (colorless R8) + shelf-pack into the
@@ -1460,6 +1623,12 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     var c = MemoryMarshal.Read<DrawVideoCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<DrawVideoCmd>();
                     if (c.VideoReady <= 0f || c.Opacity <= 0f) break;   // nothing to erase (poster/audio-only)
+                    // A hole punch OUTSIDE the replay rect is not re-punched — and must not be: the canvas still holds
+                    // last frame's premultiplied-zero hole there, and the blend:false blit propagates it verbatim. The
+                    // recorder inflates any damage overlapping Dst to the WHOLE Dst (§5.1-A), so a hole that is repainted
+                    // at all is repainted completely.
+                    if (Cull(c.Dst.X, c.Dst.Y, c.Dst.W, c.Dst.H, c.Transform.M11, c.Transform.M12,
+                             c.Transform.M21, c.Transform.M22, c.Transform.Dx, c.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     var inst = new RectInstance
                     {
                         PosX = c.Dst.X, PosY = c.Dst.Y, W = c.Dst.W, H = c.Dst.H,
@@ -1484,6 +1653,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                     var e = MemoryMarshal.Read<EraseRoundRectCmd>(cmds.Slice(pos));
                     pos += Unsafe.SizeOf<EraseRoundRectCmd>();
                     if (e.Strength <= 0f || e.Opacity <= 0f) break;   // nothing to erase
+                    if (Cull(e.Rect.X, e.Rect.Y, e.Rect.W, e.Rect.H, e.Transform.M11, e.Transform.M12,
+                             e.Transform.M21, e.Transform.M22, e.Transform.Dx, e.Transform.Dy, RepaintCull.AaHaloDip)) break;
                     var einst = new RectInstance
                     {
                         PosX = e.Rect.X, PosY = e.Rect.Y, W = e.Rect.W, H = e.Rect.H,
@@ -1583,8 +1754,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         SetFullScissor();
     }
 
+    // The frame's OUTERMOST scissor. Normally the whole target; during a damage-scissored replay it is the active
+    // replay rect (R3), which is what makes the clamp reach every consumer — the SetScissorRect chokepoint, the
+    // layer composites that take CurrentScissorRect() BY VALUE, and SetFullViewport's restore after a compositor pass.
     private RECT FullScissorRect()
-        => new() { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
+        => _rootDamageActive ? _rootDamage : new RECT { left = 0, top = 0, right = (int)_w, bottom = (int)_h };
 
     private void SetFullScissor()
         => SetScissorRect(FullScissorRect());
@@ -1633,8 +1807,50 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private static bool SameRect(in RECT a, in RECT b)
         => a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom;
 
+    // The innermost clip ∩ the root damage clamp. Every value consumer (layer composites, the acrylic clip, the strip
+    // fade's bound) goes through here, so a partial frame can never paint outside its replay rect (R3).
     private RECT CurrentScissorRect()
-        => _clipStack.Count == 0 ? FullScissorRect() : ToScissor(_clipStack[^1]);
+    {
+        if (_clipStack.Count == 0) return FullScissorRect();
+        RECT r = ToScissor(_clipStack[^1]);
+        if (!_rootDamageActive) return r;
+        RECT d = _rootDamage;
+        RECT x = new()
+        {
+            left = Math.Max(r.left, d.left),
+            top = Math.Max(r.top, d.top),
+            right = Math.Min(r.right, d.right),
+            bottom = Math.Min(r.bottom, d.bottom),
+        };
+        if (x.right < x.left) x.right = x.left;
+        if (x.bottom < x.top) x.bottom = x.top;
+        return x;
+    }
+
+    /// <summary>Decode-time cull test (R2): true ⇒ SKIP this primitive, its conservative device AABB (inflated by the
+    /// per-kind <paramref name="halo"/>) misses the active replay rect. Always false when no replay is in progress, so
+    /// the full routes decode byte-identically to before.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private bool Cull(float x, float y, float w, float h,
+        float m11, float m12, float m21, float m22, float dx, float dy, float halo)
+    {
+        if (!_cullActive) return false;
+        RepaintCull.Aabb(x, y, w, h, m11, m12, m21, m22, dx, dy, out float l, out float t, out float r, out float b);
+        return !RepaintCull.Keep(l, t, r, b, halo, in _cullRect);
+    }
+
+    // Arm the root-damage clamp + decode-time culling for one replay rect (DIP), and drop the scissor dedup caches so
+    // the next SetScissorRect actually records (the rect changed under them).
+    private void BeginReplayRect(in RectF dip)
+    {
+        _rootDamage = ToScissor(in dip);
+        _rootDamageActive = true;
+        _cullRect = new RectF(dip.X - CullSafetyDip, dip.Y - CullSafetyDip,
+                              dip.W + 2f * CullSafetyDip, dip.H + 2f * CullSafetyDip);
+        _cullActive = true;
+        _scissorValid = false;
+        _desiredScissorValid = false;
+    }
 
     private bool HasPendingSegment()
         => _runs.Count != 0 || _glyphInsts.Count != 0 || _gradGlyphInsts.Count != 0;
@@ -1965,11 +2181,93 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         SetFullScissor();
     }
 
+    /// <summary>
+    /// §13.1: paint into the PERSISTENT CANVAS and blit it to the back buffer. Only reached for the primary swapchain
+    /// after <see cref="RepaintPolicy.Decide"/> has proved the stream is replay-safe, the target size agrees and the
+    /// layer kind is 0 or 1 — so no acrylic / self-blur / edge-fade can appear here, and the canvas holds a complete
+    /// coherent scene when this returns. Three shapes:
+    /// <list type="bullet">
+    /// <item><b>Partial, 0 rects</b> — nothing changed: blit the retained canvas (the upload-forced frame). The blit is
+    /// mandatory: a FLIP_DISCARD back buffer's contents are undefined after present.</item>
+    /// <item><b>FullIntoCanvas</b> — whole-target clear + one full replay: a canvas REBUILD, so the next small-damage
+    /// frame can go partial. Costs today's full frame plus the blit, taken only when partial is otherwise eligible.</item>
+    /// <item><b>Partial, N rects</b> — clear ONLY those rects (R1), then replay the stream once per rect under the root
+    /// damage clamp (R3) with decode-time culling (R2).</item>
+    /// </list>
+    /// </summary>
+    private void SubmitIntoCanvas(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh,
+        D3D12_CPU_DESCRIPTOR_HANDLE backRtv, int layerKind, FluentGpu.Rhi.RepaintRoute route, ReplayRects replay)
+    {
+        ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
+        int parity = (int)(_frameIndex & 1);
+        ReadOnlySpan<RectF> rectsDip = replay.AsSpan();
+        int n = rectsDip.Length;
+
+        if (route == FluentGpu.Rhi.RepaintRoute.Partial && n == 0)
+        {
+            // Nothing to repaint. Uploads already flushed at the top of the submit; the glyph atlas may still hold an
+            // unflushed page from a decode, so land it before the (glyph-free) frame ends.
+            _acrylic?.TickIdle(completed);
+            _opacity?.TickIdle(completed);
+            _glyphs!.UploadIfDirty(_cmdList);
+            StampGpuSceneMid();           // keep the begin/mid/end triple well-formed on EVERY route
+            SceneCat(CatComposite);
+            ClearRootDamage();
+            _acrylic!.BlitToBackBuffer(_cmdList, backRtv);
+            InvalidateCmdState();
+            return;
+        }
+
+        // DIP → physical, rounding OUT at the RHI leaf (canon §13.1). Same conversion the scissor uses, so the cleared
+        // box and the scissored replay describe the SAME pixels.
+        Span<RECT> phys = stackalloc RECT[RepaintPolicy.MaxReplayRects];
+        for (int i = 0; i < n; i++) phys[i] = ToScissor(rectsDip[i]);
+
+        if (layerKind != 0)
+        {
+            // Layered canvas route: ONE replay only. A group RT is pool-leased (acquire → composite → release), so the
+            // stream cannot be walked twice — RepaintPolicy already collapsed the damage to a single union rect.
+            _opacity!.EnsureSize(_w, _h);
+            if (n == 1) BeginReplayRect(in rectsDip[0]);
+            SubmitWithLayers(drawList, ctx, lw, lh, backRtv, directToBackBuffer: false, canvasClearRects: phys.Slice(0, n));
+            return;   // SubmitWithLayers drops the clamp and does the CatComposite-stamped blit itself
+        }
+
+        _opacity?.TickIdle(completed);   // no groups this frame; the acrylic pool is ticked by BeginCanvas* below
+        if (n == 0)
+        {
+            _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, parity);   // whole-target clear (TBDR fast-clear path)
+            StampGpuSceneMid();
+            InvalidateCmdState();
+            SetFullViewport();
+            SubmitStreaming(drawList, lw, lh);
+        }
+        else
+        {
+            _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, parity, phys.Slice(0, n));
+            StampGpuSceneMid();   // R10: the scene-raster block starts AFTER the canvas transition + the rect clears
+            InvalidateCmdState();
+            SetFullViewport();
+            for (int i = 0; i < n; i++)
+            {
+                BeginReplayRect(in rectsDip[i]);
+                SubmitStreaming(drawList, lw, lh);
+            }
+        }
+        ClearRootDamage();       // the blit is FULL-SURFACE — nothing may narrow it
+        SceneCat(CatComposite);  // R10: bill the blit to COMPOSITE, not to whatever category the scene ended on
+        _acrylic!.BlitToBackBuffer(_cmdList, backRtv);
+        InvalidateCmdState();
+    }
+
     // Layered path: render the scene into the canvas, processing the stream in order. An Acrylic PushLayer blurs the
     // backdrop drawn so far then composites the frosted surface (content draws on top; its PopLayer is a no-op). An
     // Opacity PushLayer redirects drawing into a leased transparent canvas-sized RT; its PopLayer composites that RT
     // once over the underlying target at GroupAlpha (flat group — no double-blend). Kinds nest via _layerKinds.
-    private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer)
+    // <paramref name="canvasClearRects"/> (canvas path only) = a §13.1 PARTIAL frame's replay rects: clear only those
+    // instead of the whole canvas. Empty ⇒ the whole-canvas clear (a rebuild, or the acrylic path's legacy behaviour).
+    private void SubmitWithLayers(ReadOnlySpan<byte> drawList, in FrameInfo ctx, float lw, float lh, D3D12_CPU_DESCRIPTOR_HANDLE backRtv, bool directToBackBuffer,
+        ReadOnlySpan<RECT> canvasClearRects = default)
     {
         // completed fence gates pool retire/drain; (frameIndex & 1) selects this frame's parity-banked SRV slots.
         ulong completed = global::FluentGpu.Interop.Generated.ID3D12FenceVtbl.GetCompletedValue(_fence);
@@ -1989,10 +2287,20 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             StampGpuSceneMid();   // scene-raster block starts after transition+clear
             SetFullViewport();
         }
+        else if (canvasClearRects.Length > 0)
+        {
+            // §13.1 PARTIAL: clear only the replay rects (R1 — the DrawList assumes a cleared base; the clear is not an
+            // opcode, so replaying over last frame's final pixels would double-blend). Everything else keeps last
+            // frame's presented content, which the full-surface blit then carries to the back buffer verbatim.
+            _acrylic!.BeginCanvasPartial(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1), canvasClearRects);
+            StampGpuSceneMid();   // R10: after the canvas transition + the rect clears
+            SetFullViewport();    // the compositor set the GPU viewport; this also resets the device's target bookkeeping
+        }
         else
         {
             _acrylic!.BeginCanvas(_cmdList, ctx.Clear, completed, (int)(_frameIndex & 1));
             StampGpuSceneMid();
+            SetFullViewport();    // ── ditto: _targetOrigin/_targetWidth must describe the CANVAS, not a stale local-blur surface
         }
         _opacity!.BeginFrame(completed, (int)(_frameIndex & 1));
         InvalidateCmdState();   // canvas/back-buffer setup may have touched viewport/scissor outside the cache
@@ -2366,7 +2674,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         _clipStack.Clear();
         _roundedClipStack.Clear();
         _opacity.EndFrame(_cmdList);
-        if (!directToBackBuffer) _acrylic.BlitToBackBuffer(_cmdList, backRtv);   // back-buffer-direct path already drew there
+        // §13.1: the blit is FULL-SURFACE — drop the root damage clamp first so nothing narrows it (the compositor sets
+        // its own raw scissor anyway, but leaving the clamp armed past the scene would be a trap for the next reader).
+        ClearRootDamage();
+        if (!directToBackBuffer)
+        {
+            SceneCat(CatComposite);   // R10: bill the blit to COMPOSITE so CatFill/CatGlyph stay honest
+            _acrylic.BlitToBackBuffer(_cmdList, backRtv);   // back-buffer-direct path already drew there
+            InvalidateCmdState();
+        }
     }
 
     // Bind the TOP-LEVEL composite target for the layered path — the back buffer (FG_BACKBUFFER_LAYERS fast path) or the
@@ -2380,11 +2696,18 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // ── PURE edge fade: the strip path (no offscreen intermediate) ───────────────────────────────────────────────────
     // The surface a strip fade snapshots from and restores into. With no pooled group open that is the TOP-LEVEL target
     // of the layered path: the back buffer on the directBB path, else the acrylic offscreen canvas — both
-    // full-swapchain-sized, 1:1 with SV_Position, and fully cleared at frame start. Inside an open FULL-CANVAS Blur
-    // group (targetSlot >= 0; see the eligibility reasoning on TryBeginStripFade) it is that group's pooled RT, which
-    // Acquire creates canvas-sized and clears in FULL — same three properties. The snapshot MUST read whichever one the
-    // subtree is actually drawing into; reading the back buffer while a group is open (or while the canvas path is in
-    // use) would snapshot a stale/blank surface and restore garbage.
+    // full-swapchain-sized, 1:1 with SV_Position, and holding a COMPLETE COHERENT SCENE at the moment the strips are
+    // read. (Was "fully cleared at frame start", which §13.1 made too narrow: on the canvas path the canvas may retain
+    // pixels from earlier frames outside this frame's replay rects. That is still the right precondition — by induction
+    // every retained texel is what the last full/partial repaint published there, and the freshly-cleared+replayed
+    // damage rects are complete for this frame. On the direct path the back buffer IS cleared this frame.) Inside an
+    // open FULL-CANVAS Blur group (targetSlot >= 0; see the eligibility reasoning on TryBeginStripFade) it is that
+    // group's pooled RT, which Acquire creates canvas-sized and clears in FULL — same three properties. The snapshot
+    // MUST read whichever one the subtree is actually drawing into; reading the back buffer while a group is open (or
+    // while the canvas path is in use) would snapshot a stale/blank surface and restore garbage.
+    // NB in v1 the two facts never meet: an EdgeFade anywhere in the stream is stream-UNSAFE (RepaintStreamSafety), so a
+    // strip fade only ever runs on a FullDirect frame — the clamped-replay interaction is untested and excluded, not
+    // relied upon (R12; admitting the plain σ = 0 strip fade to the partial path is a marked follow-up).
     private ID3D12Resource* StripTargetResource(int targetSlot, bool directToBackBuffer)
     {
         if (targetSlot >= 0) return _opacity is null ? null : _opacity.TargetResource(targetSlot);
@@ -3157,7 +3480,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
         if (w < 1) w = 1; if (h < 1) h = 1;
         if (target.Disposed || (w == target.W && h == target.H)) return;
         Activate(target);
-        WaitForGpu();
+        WaitForGpu();   // §13.1 relies on this: it is the fence that makes the canvas EnsureSize's unfenced release safe
+        ResetRepaintLedger();   // the canvas is about to be recreated at a new size — retained content is void
         D3D12MemoryDiagnostics.Resize("Swapchain", w, h);
         for (uint i = 0; i < FRAME_COUNT; i++)
         {
@@ -3231,6 +3555,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     public void RecoverDevice()
     {
         AssertSubmitThread();
+        // §13.1 (R5): _acrylic (and with it the canvas) is disposed below — forget everything the ledger believes. The
+        // per-swapchain InitSwapChain calls at the end reset it again; doing it here too covers an early throw.
+        ResetRepaintLedger();
         // 1. Release every swapchain's GPU resources but KEEP the D3D12Swapchain objects (their W/H/Hwnd/Composited/etc.
         //    survive for re-init); reset Disposed since we are recreating, not tearing down.
         for (int i = 0; i < _swapchains.Count; i++)

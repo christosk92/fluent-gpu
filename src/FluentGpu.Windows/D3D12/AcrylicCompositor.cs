@@ -632,6 +632,37 @@ float4 PSMain(V i) : SV_Target
         SetViewport(cmd, _w, _h);
     }
 
+    /// <summary>The DAMAGE-SCISSORED sibling of <see cref="BeginCanvas"/> (gpu-renderer.md §13.1): bind the canvas and
+    /// clear ONLY <paramref name="rects"/> (physical px) to <paramref name="clear"/>, leaving every other texel holding
+    /// last frame's presented pixels. The clear is not optional and not a load-preserve (R1): the DrawList assumes a
+    /// cleared base — the clear is NOT an opcode — so replaying translucent fills / AA edges / glyphs over last frame's
+    /// final pixels would double-blend and darken progressively. Whole-target clears stay on <see cref="BeginCanvas"/>
+    /// (<c>NumRects = 0</c> keeps the TBDR fast-clear path).
+    /// <para>Every state change goes through the TRACKED <c>_canvasState</c> barrier — a raw "assume RENDER_TARGET"
+    /// transition here would desync every later barrier including <see cref="BlitToBackBuffer"/>'s.</para></summary>
+    public void BeginCanvasPartial(ID3D12GraphicsCommandList* cmd, in ColorF clear, ulong completedFence, int parity,
+        ReadOnlySpan<RECT> rects)
+    {
+        _parity = parity & 1;
+        LayersThisFrame = 0; CacheHitsThisFrame = 0; ScrollHoldsThisFrame = 0;
+        TickPool(completedFence);
+        Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_RENDER_TARGET);
+        var rtv = Rtv(0);
+        cmd->OMSetRenderTargets(1, &rtv, BOOL.FALSE, null);
+        if (rects.Length > 0)
+        {
+            _scratch4[0] = clear.R; _scratch4[1] = clear.G; _scratch4[2] = clear.B; _scratch4[3] = clear.A;
+            fixed (float* c = _scratch4)
+            fixed (RECT* r = rects)
+                cmd->ClearRenderTargetView(rtv, c, (uint)rects.Length, r);
+        }
+        SetViewport(cmd, _w, _h);
+    }
+
+    /// <summary>The size the canvas is currently allocated at (0 before the first <see cref="EnsureSize"/>). The device's
+    /// repaint ledger watches this: a canvas recreated at a new size holds nothing, so retained content is void.</summary>
+    public (uint W, uint H) CanvasSize => (_canvas == null ? 0u : _w, _canvas == null ? 0u : _h);
+
     private void SetHeap(ID3D12GraphicsCommandList* cmd) { ID3D12DescriptorHeap* h = _srvHeap; cmd->SetDescriptorHeaps(1, &h); }
 
     /// <summary>The offscreen canvas — the TOP-LEVEL render target whenever <c>D3D12Device</c> runs the layered path
