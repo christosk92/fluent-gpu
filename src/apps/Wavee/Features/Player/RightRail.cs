@@ -56,11 +56,16 @@ sealed class RightRail : Component
                     EasingSpec.CubicBezier(0f, 0.35f, 0.15f, 1f));
             }
         }, DepKey.From(HashCode.Combine(open, railWidth, baseline)));
-        // Flat FileArea surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the content
-        // card's top-right — the two sit as sibling cards across the 4px chrome gap.
+        // TOP-LEFT rounded like the content card — the two sit as sibling cards across the 4px chrome gap.
+        // Docked: Transparent — the shell spacer's ContentPaneMerged underlay already owns the band coat (three coats
+        // → one). Floating: FileArea over the shell's FloatingChrome backing (B2), completing the same ladder.
         var corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f);
 
-        Element surface = new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.FileArea), Corners = corners, ClipToBounds = true };
+        Element surface = new BoxEl
+        {
+            Grow = 1f, Corners = corners, ClipToBounds = true,
+            Fill = Prop.Of(() => ui.RailFits.Value ? ColorF.Transparent : WaveeColors.FileArea),
+        };
 
         // Lyrics only: promote the panel to the fullscreen immersive surface (WaveeShell mounts it off this signal).
         // The rail is left exactly as it is underneath — the surface covers the shell rather than replacing the panel.

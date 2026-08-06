@@ -1425,6 +1425,24 @@ static class LayoutShellSuite
         Check("gate.layout.merged-rung-remainders: a merged content rung's plate remainders tile the uncovered region exactly — a radius corner cell at the top-left and a full-height trailing strip abutting the inset pane's edge",
             cellAtCorner && paneInset && stripAbuts,
             $"cell=({cell.X:0},{cell.Y:0},{cell.W:0}x{cell.H:0}) pane=(w{pane.W:0},h{pane.H:0}) strip=(x{strip.X:0},w{strip.W:0},h{strip.H:0})");
+
+        // Rail-band twin (WaveeShell docked right-rail reservation): rungs 1+2 merge into ONE translucent coat with the
+        // same top-left radius corner; the plate survives only as a radius-sized CORNER CELL (no trailing-strip inset —
+        // the rail band is flush). The cell must sit under the cut-away; the merged coat fills the reserved band.
+        const float railW = 340f, railH = 400f;
+        var rail = LayoutTree(strings, Ui.ZStack(
+            new BoxEl { Width = radius, Height = radius },                          // (a) corner cell
+            new BoxEl { Grow = 1f })                                                // merged rail coat
+            with { Width = railW, Height = railH });
+        var railCell = rail.AbsoluteRect(Child(rail, rail.Root, 0));
+        var railCoat = rail.AbsoluteRect(Child(rail, rail.Root, 1));
+        bool railCellAtCorner = Near(railCell.X, 0) && Near(railCell.Y, 0)
+            && Near(railCell.W, radius) && Near(railCell.H, radius);
+        bool railCoatFills = Near(railCoat.X, 0) && Near(railCoat.Y, 0)
+            && Near(railCoat.W, railW) && Near(railCoat.H, railH);
+        Check("gate.layout.merged-rung-remainders: a merged rail-band coat keeps a radius corner cell at the top-left under its cut-away and fills the reserved band flush (no trailing-strip inset)",
+            railCellAtCorner && railCoatFills,
+            $"cell=({railCell.X:0},{railCell.Y:0},{railCell.W:0}x{railCell.H:0}) coat=(w{railCoat.W:0},h{railCoat.H:0})");
     }
 
     /// <summary>gate.reconciler.static-transform — an UNBOUND <c>Transform</c> matrix is honored (it used to be

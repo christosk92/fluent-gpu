@@ -641,27 +641,30 @@ sealed class WaveeShell : Component
                             // width flips 0<->RailWidth at commit with NO Animate — it SNAPS to the reserved extent, and the
                             // content card's FLIP (SidebarReveal) absorbs the shift while the rail overlay slide-reveals into
                             // the reserved band. (Animating both the spacer AND the overlay was the old double width track.)
+                            //
+                            // Docked band coats MERGED (theming.md §2.2bis / content-pane twin): rungs 1+2 collapse into
+                            // ONE translucent ContentPaneMerged rect so the reserved band pays one blended pass instead of
+                            // Toolbar + FileArea + RightRail's FileArea. The plate survives only in the top-left CORNER
+                            // CELL under the underlay's Radii.Card cut-away (concave — no rect can express it). RightRail's
+                            // own surface goes Transparent while docked and draws on this coat; floating keeps FileArea
+                            // over FloatingChrome (B2).
                             new BoxEl
                             {
-                                Shrink = 0f,
-                                // CHROME backing: the rail's rounded top-left wedge (underlay + overlay above) reads against this.
-                                Fill = Prop.Of(() => WaveeColors.Toolbar),
+                                Shrink = 0f, ZStack = true,
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailSpacerAnim,   // null (snap) in the projected path; Reflow spring in the baseline
                                 Children =
                                 [
-                                    // Static final-geometry underlay — the rail-side twin of the content card's underlay
-                                    // above. The reserved width SNAPS at commit while RightRail translates its panel in
-                                    // over 300ms; without this, that band is raw Toolbar chrome for the whole slide and
-                                    // the open reads as "the content jumps away from a dark hole, then a panel arrives".
-                                    // Painting the rail's own surface here (same Fill + same top-left card corner as
-                                    // RightRail's surface) means the band IS the rail from frame 0 and only the panel's
-                                    // CONTENT is seen to arrive. Paint-only: never a hit target, no opacity track (a
-                                    // fading full-height rail surface is what produced the old "ghost rail").
+                                    // (a) top-left CORNER CELL — plate under the underlay's 8,0,0,0 corner cut-away.
+                                    new BoxEl { Width = Radii.Card, Height = Radii.Card, Fill = Prop.Of(() => WaveeColors.Toolbar) },
+                                    // Static final-geometry underlay — rungs 1+2 MERGED. The reserved width SNAPS at
+                                    // commit while RightRail translates its panel in over 300ms; without this, that band
+                                    // is raw chrome for the whole slide. Paint-only: never a hit target, no opacity track
+                                    // (a fading full-height rail surface is what produced the old "ghost rail").
                                     new BoxEl
                                     {
                                         Grow = 1f, HitTestPassThrough = true,
-                                        Fill = Prop.Of(() => WaveeColors.FileArea),
+                                        Fill = Prop.Of(() => WaveeColors.ContentPaneMerged),
                                         Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
                                     },
                                 ],
