@@ -89,6 +89,25 @@ public sealed class HostTimerQueue
         SiftUp(i);
     }
 
+    /// <summary>Eagerly drop every heap entry tagged with <paramref name="gen"/>. Lazy cancel (generation bump alone)
+    /// still works for re-arm; this is for pause/disable/unmount paths that would otherwise leave a phantom earliest-due
+    /// shaping <c>RecommendedWaitMs</c> / <c>sole: timer</c> wakes toward a dead deadline.</summary>
+    public void Cancel(long gen)
+    {
+        if (_count == 0) return;
+        int w = 0;
+        for (int r = 0; r < _count; r++)
+        {
+            if (_heap[r].Gen == gen) { _heap[r] = default; continue; }
+            if (w != r) _heap[w] = _heap[r];
+            w++;
+        }
+        if (w == _count) return;
+        for (int i = w; i < _count; i++) _heap[i] = default;
+        _count = w;
+        for (int i = (_count >> 1) - 1; i >= 0; i--) SiftDown(i);
+    }
+
     /// <summary>Fire every timer due at the current clock, earliest first. Zero-alloc: callbacks are mount-allocated and
     /// generation-guarded; a callback may re-<see cref="Schedule"/> itself (an interval tick / a debounce re-arm) — those
     /// fresh entries are deferred to the NEXT drain (they carry a sequence past this drain's snapshot), so a sub-frame

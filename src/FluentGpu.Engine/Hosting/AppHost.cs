@@ -1731,7 +1731,8 @@ public sealed class AppHost : IDisposable
 
     /// <summary>FNV-1a 64 over the recorded command stream + painter sort keys, length-prefixed so the two spans can't
     /// alias. Record is a pure function of the scene, so an equal hash ⇒ byte-identical pixels ⇒ the front buffer is still
-    /// correct. Hashed 8 bytes at a time; only computed on quiet candidate frames (active frames short-circuit before it).</summary>
+    /// correct. Hashed 8 bytes at a time. Computed on every presenting frame (and on quiet skip-candidates) so the
+    /// elision baseline tracks the stream that actually reached the screen.</summary>
     private static ulong DrawListHash(ReadOnlySpan<byte> bytes, ReadOnlySpan<ulong> sortKeys)
     {
         const ulong Off = 14695981039346656037UL, Prime = 1099511628211UL;
@@ -2832,6 +2833,10 @@ public sealed class AppHost : IDisposable
                 long tRx2 = Stopwatch.GetTimestamp();
                 reactiveFlushMs = ToMs(tRx1 - tRx0) + ToMs(tRx2 - tVr1);
                 virtualRealizeMs = ToMs(tVr1 - tRx1);
+                // Fix C (§5.2): absorb pre-flush mid-paint wakes. Timer drain / UI-post Batch close inside Paint fires
+                // FrameRequested → WakeFrame → _frameAfterPaint while _inPaint, but THIS flush already applied those
+                // writes. Clearing here leaves post-flush WakeFrame sites (passive effects, popups, theme, …) intact.
+                _frameAfterPaint = false;
             }
             finally { if (themeChanged) _reconciler.SetThemeTransition(float.NaN); }
             bool reconciled = _reconciler.ConsumeReconciled() || virtualsChanged;
@@ -3124,7 +3129,9 @@ public sealed class AppHost : IDisposable
             CaptureProbeScroll(ProbeLyricsViewport, out int probeLyMode, out bool probeLyUser, out bool probeLyDirty);
             CaptureProbeScroll(ProbeMainViewport, out int probeMainMode, out bool _, out bool probeMainDirty);
             // 8c consume the frame's motion bits (the glyph-snap gate read them during record). A motion frame queues ONE
-            // settle frame: the last moved frame recorded its text unsnapped, so the trailing static record re-snaps crisp.
+            // settle frame ONLY when glyph runs were recorded unsnapped (InMotion=1): the trailing static record re-snaps
+            // crisp. Rect-only transform ticks (EQ bars / seek playhead) must NOT pay a follow-up frame (§5.2 Fix B).
+            // transformWrote is snapshotted BEFORE ClearTransformDirty — keep that order.
             bool transformWrote = _scene.AnyTransformWrote;
             // A bake is already bounded to ONE adaptive, downscaled job per cadence interval (BakedBlurQueue: the 33ms
             // throttle + adaptive quality + backlog downscale), so its per-frame cost is bounded by construction. Pause
@@ -3137,7 +3144,11 @@ public sealed class AppHost : IDisposable
             _bakedBlurQueue.Paused = scrollActive
                 || clicks > 0 || _tracePumpedEvents > 0
                 || _dispatcher.Drag.IsActive || _dispatcher.DragDrop.IsActive;
-            if (transformWrote) { _frameAfterPaint = true; _scene.ClearTransformDirty(); }
+            if (transformWrote)
+            {
+                if (recordStats.UnsnappedGlyphSpans > 0) _frameAfterPaint = true;
+                _scene.ClearTransformDirty();
+            }
             _scene.ClearRecordDirty();
             long tRecord = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegRecord, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -3147,19 +3158,29 @@ public sealed class AppHost : IDisposable
             // Skip-submit gate (idle/slow-change power, finding #3a): when this frame mutated nothing the recorder reads
             // (no reconcile, no relayout, no transform write) AND the recorded command stream is byte-identical to the last
             // PRESENTED frame, the already-presented front buffer is still correct — elide the GPU submit + Present (the
-            // dominant ~2.5ms/frame cost at rest). The cheap flags short-circuit so ACTIVE frames never hash; the hash
-            // confirms byte-identity for paint-channel / image-state changes that set no flag. Conservative: steady main
-            // window only (presented before, no resize, not a modal keep-alive, no interleaving popup windows). A playback
-            // playhead quantized to whole pixels (SeekBar) lands on the same stream most frames, so this fires during play.
-            // Active image reveals resolve at replay time — defeat skip-submit while fades are live.
+            // dominant ~2.5ms/frame cost at rest). Cheap flags short-circuit the hash for skip candidates that already
+            // fail a flag; presenting frames ALWAYS hash so the baseline tracks the stream that reached the screen
+            // (§5.2 Fix A — without that, an active tick presents S1 while the baseline still holds H(S0) and the next
+            // quiet frame re-presents). Conservative: steady main window only (presented before, no resize, not a modal
+            // keep-alive, no interleaving popup windows). A playback playhead quantized to whole pixels (SeekBar) lands
+            // on the same stream most frames, so this fires during play. Active image reveals resolve at replay time —
+            // defeat skip-submit while fades are live.
             bool maybeUnchanged = _everLaidOut && !resized && !keepAlive && _popupWindows.Count == 0
                 && !reconciled && !layoutNeeded && !transformWrote
                 && !imageContentChanged
                 && !_device.HasPendingUploads
                 && !_bakedBlurQueue.HasRunnableJob
                 && !_images.HasActiveCrossfades;
-            ulong dlHash = maybeUnchanged ? DrawListHash(_drawList.Bytes, _drawList.SortKeys) : 0UL;
-            bool skipSubmit = maybeUnchanged && dlHash == _lastPresentedDrawListHash;
+            ulong dlHash = 0UL;
+            bool skipSubmit = false;
+            if (maybeUnchanged)
+            {
+                dlHash = DrawListHash(_drawList.Bytes, _drawList.SortKeys);
+                skipSubmit = dlHash == _lastPresentedDrawListHash;
+                if (s_wakeDiag && !skipSubmit)
+                    Console.Error.WriteLine(
+                        $"[wake-diag] skip-miss hash={dlHash:x16} baseline={_lastPresentedDrawListHash:x16} cmds={_drawList.CommandCount}");
+            }
             RememberDeviceLostFrame(clicks, keepAlive, resized, reconciled, layoutNeeded, transformWrote,
                 maybeUnchanged, skipSubmit, in recordStats, frameStart, tFlush, tLayout, tAnim, tRecord);
             long subStart = (keepAlive && s_resizeDiag) ? Stopwatch.GetTimestamp() : 0;
@@ -3243,7 +3264,9 @@ public sealed class AppHost : IDisposable
                         return LastStats;
                     }
                 }
-                if (maybeUnchanged) _lastPresentedDrawListHash = dlHash;   // track the stream only across quiet runs (active frames don't hash)
+                // §5.2 Fix A: every submitted stream becomes the elision baseline — active frames hash too.
+                if (dlHash == 0UL) dlHash = DrawListHash(_drawList.Bytes, _drawList.SortKeys);
+                _lastPresentedDrawListHash = dlHash;
                 // Covered Present stand-down skips the sync path's only pacer — reuse the skip-submit pacing floor.
                 // Only when Present was awaited on this turn (inline / force-sync). Async Present completes later on the
                 // render thread; reading LastPresentStoodDown here would sample the previous present.

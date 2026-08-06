@@ -37,6 +37,9 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     /// <summary>Spatial reuse-scoping (scene-memory.md): how many ancestor-chain nodes were span-reuse-BLOCKED this
     /// frame (popup/overlay/orphan/fly chains). &gt; 0 means a scoped block was active WITHOUT the old whole-tree kill.</summary>
     public int ScopedBlocks { get; init; }
+    /// <summary>Glyph runs emitted with <c>InMotion=1</c> this frame (transform-dirty subtree skipped device-grid snap).
+    /// The host queues a settle re-record only when this is nonzero — rect-only motion (EQ/seek) must not pay it.</summary>
+    public int UnsnappedGlyphSpans { get; init; }
 }
 
 /// <summary>
@@ -138,6 +141,7 @@ public static class SceneRecorder
         public int SpansReRecorded;
         public int SpanBytesCopied;
         public int ScopedBlocks;
+        public int UnsnappedGlyphSpans;
         public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
@@ -182,6 +186,7 @@ public static class SceneRecorder
             SpansReRecorded = this.SpansReRecorded,
             SpanBytesCopied = this.SpanBytesCopied,
             ScopedBlocks = this.ScopedBlocks,
+            UnsnappedGlyphSpans = this.UnsnappedGlyphSpans,
             SpanReuseDisabledReasons = this.SpanReuseDisabledReasons,
         };
     }
@@ -922,6 +927,13 @@ public static class SceneRecorder
                             if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
                                 stats.AddDamage(visualBounds);
                         }
+                        // Translate-rebase patches InMotion=1 onto glyph payloads without re-walking Text nodes — count
+                        // them so the host still queues a settle re-snap (§5.2 Fix B).
+                        if (inMotion)
+                        {
+                            int glyphs = copiedStats.DrawGlyphRun + copiedStats.DrawGlyphRunGradient;
+                            if (glyphs > 0) stats.UnsnappedGlyphSpans += glyphs;
+                        }
                         stats.SpansReused++;
                         stats.SpansRebased++;
                         stats.SpanBytesCopied += span.ByteLength;
@@ -1317,6 +1329,7 @@ public static class SceneRecorder
                 int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
                 {
+                    if (inMotion) stats.UnsnappedGlyphSpans++;
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
                         dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,

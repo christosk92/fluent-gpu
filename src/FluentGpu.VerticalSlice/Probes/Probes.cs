@@ -1204,6 +1204,35 @@ sealed class IntervalProbe : Component
     public override Element Render() { UseInterval(() => Ticks++, _ms); return new BoxEl(); }
 }
 
+/// <summary>§5.2 present-elision probe: a 30 Hz-class interval writes a bound Transform each tick (EQ/seek idiom).
+/// <see cref="WithGlyph"/> nests a text run under the moving plate so the glyph-snap settle latch stays load-bearing.</summary>
+sealed class BoundTransformTickProbe : Component
+{
+    private readonly float _ms;
+    private readonly bool _withGlyph;
+    public readonly Signal<float> Tx = new(0f);
+    public int Ticks;
+    public BoundTransformTickProbe(float ms, bool withGlyph = false) { _ms = ms; _withGlyph = withGlyph; }
+    public override Element Render()
+    {
+        UseInterval(() =>
+        {
+            Ticks++;
+            // Whole-DIP steps so the reconciler value-gate never collapses equal matrices (quantized EQ idiom).
+            Tx.Value = Ticks;
+        }, _ms);
+        Element child = _withGlyph
+            ? new TextEl("eq") { Size = 12f, Color = ColorF.FromRgba(255, 255, 255) }
+            : new BoxEl { Width = 12, Height = 24, Fill = ColorF.FromRgba(255, 255, 255) };
+        return new BoxEl
+        {
+            Width = 40, Height = 40,
+            Transform = Prop.Of(() => Affine2D.Translation(Tx.Value, 0f)),
+            Children = [child],
+        };
+    }
+}
+
 // A parent that conditionally mounts a timeout-owning child so the gate can UNMOUNT it (Flow.Show flip) before the fire.
 sealed class TimeoutUnmountParent : Component
 {

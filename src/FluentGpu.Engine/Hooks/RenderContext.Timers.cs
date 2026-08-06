@@ -149,12 +149,23 @@ internal sealed class IntervalCell : HookCell, IDisposableCell
     public void Reconcile()
     {
         if (Running) { if (!Armed) ReArm(); }
-        else if (Armed) { Gen++; Armed = false; }
+        else if (Armed)
+        {
+            // Eager Cancel so a paused interval does not leave an orphan heap entry shaping RecommendedWaitMs (§5.2 Fix D).
+            Queue?.Cancel(Gen);
+            Gen++;
+            Armed = false;
+        }
     }
 
     public void SetEnabled(bool e) { if (Enabled == e) return; Enabled = e; Reconcile(); }
     public void SetActive(bool a) { if (Active == a) return; Active = a; Reconcile(); }
-    public void DisposeCell() { Gen++; ActiveWatcher?.Dispose(); }
+    public void DisposeCell()
+    {
+        if (Armed) Queue?.Cancel(Gen);
+        Gen++;
+        ActiveWatcher?.Dispose();
+    }
 }
 
 public sealed partial class RenderContext

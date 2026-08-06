@@ -1254,6 +1254,61 @@ static class HooksSuite
                 worst == 0, $"worst={worst} bytes (armed timers={host.TimersForTest.Count})");
         }
 
+        // ── gate.present.transform-tick-rect: §5.2 Fixes A–C — rect-only bound-Transform ticks submit once per tick,
+        //    queue no glyph-settle follow-up, and elide any forced quiet follow-up paint via the DrawList hash baseline.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("present-tick-rect", new Size2(200, 120), 1f)); window.Show();
+            var probe = new BoundTransformTickProbe(32f, withGlyph: false);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 24; i++) host.Paint(0);   // warm past mount + first ticks
+            int t0 = probe.Ticks;
+            long skip0 = host.FramesSkippedSubmit;
+            int presented = 0, settleLatches = 0, quietFollowUps = 0;
+            for (int i = 0; i < 96; i++)
+            {
+                int before = probe.Ticks;
+                var f = host.Paint(0);
+                bool tick = probe.Ticks > before;
+                if (f.Presented) presented++;
+                else quietFollowUps++;
+                if (tick && (host.CurrentWakeReasons & WakeReasons.FrameNeeded) != 0) settleLatches++;
+            }
+            int ticks = probe.Ticks - t0;
+            long skipped = host.FramesSkippedSubmit - skip0;
+            bool onePresentPerTick = ticks >= 8 && presented == ticks;
+            bool noSettle = settleLatches == 0;
+            bool followUpsElided = quietFollowUps > 0 && skipped == quietFollowUps;
+            Check("gate.present.transform-tick-rect a 30Hz-class interval writing a bound Transform on a glyph-free subtree submits exactly once per tick, queues no settle FrameNeeded, and elides forced quiet follow-up paints (FramesSkippedSubmit == follow-up count)",
+                onePresentPerTick && noSettle && followUpsElided,
+                $"ticks={ticks} presented={presented} settleLatches={settleLatches} quietFollowUps={quietFollowUps} skipped={skipped}");
+        }
+
+        // ── gate.present.transform-tick-glyph: companion — a glyph run under the moving plate KEEPS the settle frame.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("present-tick-glyph", new Size2(200, 120), 1f)); window.Show();
+            var probe = new BoundTransformTickProbe(32f, withGlyph: true);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            for (int i = 0; i < 24; i++) host.Paint(0);
+            int settleSeen = 0, settlePresented = 0, ticksSeen = 0;
+            for (int i = 0; i < 96 && ticksSeen < 6; i++)
+            {
+                int before = probe.Ticks;
+                var f = host.Paint(0);
+                if (probe.Ticks <= before) continue;
+                ticksSeen++;
+                bool settleQueued = (host.CurrentWakeReasons & WakeReasons.FrameNeeded) != 0;
+                if (!settleQueued) continue;
+                settleSeen++;
+                var settle = host.Paint(0);   // the host-queued settle re-snap
+                if (settle.Presented) settlePresented++;
+            }
+            Check("gate.present.transform-tick-glyph a glyph run inside a transform-dirty subtree keeps the settle FrameNeeded and that settle frame still submits (crisp re-snap)",
+                ticksSeen >= 4 && settleSeen == ticksSeen && settlePresented == settleSeen,
+                $"ticksSeen={ticksSeen} settleSeen={settleSeen} settlePresented={settlePresented}");
+        }
+
         // ── gate.timer.warm-cadence: passive motion stays cold; semantic input holds cadence, then quiesces ──
         {
             using var app = new HeadlessPlatformApp();
