@@ -711,7 +711,7 @@ sealed class WaveeShell : Component
                                     // Opaque backing band for the FLOATING overlay only — FloatingChrome (plate), not
                                     // FloatingPane: RightRail paints FileArea on top, and FloatingPane-then-FileArea was a
                                     // double-coat that made the floating rail one rung darker than docked. Docked stays
-                                    // transparent so the rail's rounded TL wedge shows chrome behind it.
+                                    // transparent so the rail's rounded TL wedge shows the spacer's ContentPaneMerged.
                                     new BoxEl
                                     {
                                         // Paint-only closed-rail backing: never become the deepest hit in this retained
