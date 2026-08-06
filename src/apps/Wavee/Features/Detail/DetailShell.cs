@@ -190,8 +190,10 @@ sealed class DetailShell : Component
         ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp) : Tok.AccentDefault;
 
         // Page-scoped Mica tint: cover-keyed binder (activation + unmount clear), not a page-scope Watch.
+        // Ready: true — match pre-leaf SchemeFor timing: apply as soon as a cover URL is known (preview / cached
+        // grading). Gating on modelReady left Home→detail with a cached palette on plain Mica until Ready.
         Element tintBinder = CoverPaletteLeaves.ShellTint(
-            paletteUrl, modelReady, colorWashesDisabled, apply: _cfg.TwoColumn, _tintOwner, shellTint,
+            paletteUrl, ready: true, colorWashesDisabled, apply: _cfg.TwoColumn, _tintOwner, shellTint,
             key: "detail-tint:" + route.Name, fallbackUrl: liveUrl);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──

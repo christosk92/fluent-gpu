@@ -21,10 +21,9 @@ sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
     readonly object _tintOwner = new();   // stable ownership across artist -> artist reuse and KeepAlive park/reactivate
-    // Two axes, never one value: CHROME chroma for accent-filled controls and the quieter WASH tint used as one
-    // ingredient in the Editorial Split's semantic copy surface.
-    ColorF? _paletteAccent;                // cover-extracted page CHROME accent; null keeps the semantic default live
-    ColorF? _washAccent;                   // cover-extracted WASH accent (lifted only, NOT saturation-floored)
+    // Cover-extracted page CHROME accent for accent-filled controls; null keeps the semantic default live.
+    // WASH accent lives in CoverPaletteLeaves (veil / blend wash) — not a page field.
+    ColorF? _paletteAccent;
     ColorF _accent => _paletteAccent ?? Tok.AccentDefault;
     ActionServices? _acts;                // shelf-card context menus — resolved per-render, read by the shelf builders
     IOverlayService? _menuOverlay;
@@ -136,14 +135,10 @@ sealed partial class ArtistPage : Component
                  PlaybackBridge? bridge, Signal<bool> compactInteractive)
     {
         string uri = a.Uri;
-        // Cover-extracted page accent in two treatments: solid chrome uses the provider's opposite-contrast branch;
-        // the editorial copy field uses the current page branch and stays lift-only.
-        // Null palette ⇒ the neutral default. Both are set before the tree builds so every accent helper reads them.
+        // Cover-extracted chrome accent (null ⇒ semantic default). Wash/veil accents are owned by CoverPaletteLeaves.
         string? paletteUrl = PaletteImageUrl(a);
-        var pagePal = Surfaces.SchemeFor(paletteUrl);
         var chromePal = Surfaces.ChromeSchemeFor(paletteUrl);
         _paletteAccent = chromePal is { } pal ? WaveePalette.ChromeAccent(pal) : null;
-        _washAccent = pagePal is { } wp ? WaveePalette.Lift(WaveePalette.Accent(wp)) : null;
         Func<ColorF> accent = () => _accent;
         var extras = a.Extras;
         var popular = a.TopTracks is { Count: > 0 } tt ? tt : FakeData.TopTracksOf(a);
