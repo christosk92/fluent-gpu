@@ -1,4 +1,5 @@
 ﻿using FluentGpu.Foundation;
+using FluentGpu.Rhi;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Render;
@@ -40,6 +41,11 @@ public readonly record struct SceneRecordStats(int NodesVisited, int DrawnNodeCo
     /// <summary>Glyph runs emitted with <c>InMotion=1</c> this frame (transform-dirty subtree skipped device-grid snap).
     /// The host queues a settle re-record only when this is nonzero — rect-only motion (EQ/seek) must not pay it.</summary>
     public int UnsnappedGlyphSpans { get; init; }
+    /// <summary>The frame's REPAINT set (gpu-renderer.md §13.1) — every region whose pixels may differ from the last
+    /// presented frame. A SECOND accumulator, deliberately independent of <see cref="Damage"/>: that one is the acrylic
+    /// blur-cache union (transform-moved nodes only, scroll content and paint-only writes excluded by design). Never
+    /// substitute one for the other.</summary>
+    public RepaintDamageRegion RepaintDamage { get; init; }
 }
 
 /// <summary>
@@ -98,9 +104,45 @@ public static class SceneRecorder
     private static readonly AcrylicDamageRange[] _acrylicRanges = new AcrylicDamageRange[AcrylicRangeCap];
     private static int _acrylicRangeCount;
 
+    // ── Repaint-damage scratch (gpu-renderer.md §13.1) ──────────────────────────────────────────────────────────────
+    // The AA floor every emitted repaint rect is padded by. Per-kind effect extent (shadow offset+spread+3σ, self-blur
+    // 3σ) rides on TOP of it via DamageExtent below — this constant is only the anti-aliasing/ink slop, same class as
+    // OpacityGroupExtentPadDip above.
+    private const float RepaintAaPadDip = 8f;
+
+    // Video Dst rects recorded this frame. A DrawVideo punches a hole the compositor fills from a DComp visual, so a
+    // partial repaint that touches ANY part of it must redraw the whole punch or the hole's edges tear. Same UI-thread
+    // static-scratch discipline as the damage entries; capacity is tiny because a frame has at most a handful.
+    private const int VideoRectCap = 8;
+    private static readonly RectF[] _videoRects = new RectF[VideoRectCap];
+    private static int _videoRectCount;
+
+    private static void NoteVideoRect(in RectF deviceRect)
+    {
+        if (_videoRectCount >= VideoRectCap || deviceRect.W <= 0f || deviceRect.H <= 0f) return;
+        _videoRects[_videoRectCount++] = deviceRect;
+    }
+
+    // Effect-halo allowance for an extent captured OUTSIDE the recorder — a freed node's model rect, a structural-cancel
+    // seed. Those carry no shadow/blur information, whereas every extent the recorder itself produces already does:
+    // SpanRecordResult.SubtreeBounds unions the shadow quad's `offset + spread + 3σ` box (see the shadow emit) and the
+    // self-blur's ±3σ OutputBounds (see `visualBounds`) as they are recorded. Sized to the engine's largest stock
+    // elevation (Elevation.CardHover — blur 16, offset 8 ⇒ 8 + 3·8 = 32), same conservative-bound reasoning as
+    // HoverElevateHoistSlackDip.
+    private const float RepaintUnknownHaloDip = 32f;
+
+    /// <summary>The repaint band for an extent: the AA/ink floor, plus <paramref name="extraHalo"/> for extents whose
+    /// per-kind effect halo is NOT already folded in. The ONE place repaint rects are padded.</summary>
+    private static RectF RepaintBand(in RectF extent, float extraHalo = 0f)
+    {
+        if (extent.W <= 0f || extent.H <= 0f) return default;
+        float pad = RepaintAaPadDip + extraHalo;
+        return new RectF(extent.X - pad, extent.Y - pad, extent.W + 2f * pad, extent.H + 2f * pad);
+    }
+
     private static void ResetDamageEntries()
     {
-        _dmgEntryCount = 0; _dmgOverflow = false; _acrylicRangeCount = 0;
+        _dmgEntryCount = 0; _dmgOverflow = false; _acrylicRangeCount = 0; _videoRectCount = 0;
     }
 
     // Register a freshly-walked cached-acrylic layer's PushLayer byte offset + its own-subtree entry-range start.
@@ -145,6 +187,11 @@ public static class SceneRecorder
         public SpanReuseDisabledReason SpanReuseDisabledReasons;
         public RectF Damage;       // union of this frame's changed-node device bounds → the acrylic backdrop-cache damage region
         public bool HasDamage;
+        // The SECOND, independent accumulator: the frame's repaint set. Two accumulators exist on purpose — Damage above
+        // answers "what must a cached acrylic blur re-sample?" (transform moves only; scroll content and paint-only
+        // writes are excluded BY DESIGN), Repaint answers "what pixels must be redrawn?" (moves ∪ paint/layout
+        // re-records ∪ removals ∪ scrolled viewports). Feeding either from the other reintroduces the bug the split fixes.
+        public RepaintDamageRegion Repaint;
         public bool HasActiveVirtualDisclosures;
 
         // Hover-elevate clip-ESCAPE (HoverElevateClipRootBit): under a flagged clip root, the sibling deferral PARKS
@@ -172,8 +219,12 @@ public static class SceneRecorder
             Damage = new RectF(x0, y0, x1 - x0, y1 - y0);
         }
 
+        /// <summary>Union a rect into the REPAINT set (already padded by <see cref="DamageExtent"/> at the call site).</summary>
+        public void AddRepaint(in RectF r) => Repaint.Add(in r);
+
         public readonly SceneRecordStats ToStats() => new(NodesVisited, DrawnNodeCount, CulledNodeCount, HasDamage ? Damage : default)
         {
+            RepaintDamage = this.Repaint,
             NodesCulled = this.NodesCulled,
             BlurCandidateCount = this.BlurCandidateCount,
             BlurGroupCount = this.BlurGroupCount,
@@ -293,9 +344,32 @@ public static class SceneRecorder
         // at last frame, but no node re-touches that band — so the region-aware acrylic/backdrop cache would freeze last
         // frame's pixels there (the "ghost rail"). Unioning the last-presented rects into the damage forces a repaint of the
         // vacated region. AddDamage handles the first-rect/empty case; the host drains the list after this record.
+        // …and seed the REPAINT set from the same rects (§13.1 "structural-track cancellation damages the last-presented
+        // extent"): they arrive from outside the recorder, so they get the unknown-halo allowance.
         for (int i = 0; i < pendingStructuralDamage.Length; i++)
+        {
             stats.AddDamage(pendingStructuralDamage[i]);
+            stats.AddRepaint(RepaintBand(pendingStructuralDamage[i], RepaintUnknownHaloDip));
+        }
         uint spanFrame = spans?.BeginFrame(scene.Capacity) ?? 0;
+        // Unmount/removal damage: a freed subtree stops covering the band it presented at, and — unlike a move — nothing
+        // re-touches that band, so a region-aware repaint would freeze last frame's pixels there. The span table holds the
+        // EXACT extent it presented at (halos folded in) under its pre-free (index, gen); the scene's ledger holds the
+        // model rect as the fallback. Neither ⇒ the vacated band is unknown ⇒ full. Record is the ledger's only consumer,
+        // so it drains it here.
+        var removals = scene.PendingRemovalExtents;
+        if (scene.PendingRemovalOverflow) stats.Repaint.ForceFull(RepaintFullReason.StructuralInvalidation);
+        for (int i = 0; i < removals.Length; i++)
+        {
+            RectF presented = default;
+            bool fresh = false;
+            bool got = spans is not null
+                && spans.TryGetPriorExtent(removals[i].NodeIndex, removals[i].Gen, spanFrame, out presented, out fresh);
+            if (got) stats.AddRepaint(RepaintBand(in presented, fresh ? 0f : RepaintUnknownHaloDip));
+            else if (!removals[i].ModelRect.IsEmpty) stats.AddRepaint(RepaintBand(removals[i].ModelRect, RepaintUnknownHaloDip));
+            else stats.Repaint.ForceFull(RepaintFullReason.MissingRemovalExtent);   // never presented AND no model rect
+        }
+        scene.ClearPendingRemovals();
         SpanReuseDisabledReason disabledReasons = spanReuseDisabled;
         if (spans is not null && !spans.HasPrior) disabledReasons |= SpanReuseDisabledReason.FirstRecord;
         // PopupWindows/Overlays/Orphans/Detached are now SPATIALLY SCOPED (scene-memory.md): rather than killing span reuse
@@ -478,6 +552,20 @@ public static class SceneRecorder
                  Affine2D.Translation(abs.X - ob.X - op.LocalTransform.Dx, abs.Y - ob.Y - op.LocalTransform.Dy),
                  1f, (1 << 16) | 2, RectF.Infinite, in focus, in textEdit, scrollThumb, scrollTrack,
                  1f, 1f, false, holdSelfBlurForAnyUserScroll, false, false, default, skipRoots, null, 0, true, false, ref stats);
+        }
+
+        // Video hole punches (architecture-spec's deferred rule, now REQUIRED under partial repaint): the erase drives a
+        // DComp visual below the swapchain, so a repaint that covers only PART of a punch re-erases only part of it and
+        // the seam tears. Any repaint rect overlapping a Dst inflates to the whole Dst.
+        for (int v = 0; v < _videoRectCount && !stats.Repaint.IsFull; v++)
+        {
+            RectF dst = _videoRects[v];
+            bool touches = false;
+            {
+                var rects = stats.Repaint.AsSpan();
+                for (int i = 0; i < rects.Length && !touches; i++) touches = rects[i].Overlaps(in dst);
+            }
+            if (touches) stats.AddRepaint(RepaintBand(in dst));
         }
 
         // E9 own-subtree carve-out: now that every entry + every cached-acrylic own-subtree range is known, bake each
@@ -889,6 +977,7 @@ public static class SceneRecorder
                 spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
                 stats.SpansReused++;
                 stats.SpanBytesCopied += span.ByteLength;
+                if (copiedStats.DrawVideo > 0) NoteVideoRect(span.SubtreeBounds);
                 var copiedResult = new SpanRecordResult();
                 copiedResult.Include(span.SubtreeBounds);
                 return copiedResult;
@@ -924,9 +1013,20 @@ public static class SceneRecorder
                         if ((flags & NodeFlags.TransformDirty) != 0)
                         {
                             var dmgParent = scene.Parent(node);
-                            if (dmgParent.IsNull || (scene.Flags(dmgParent) & NodeFlags.Scrollable) == 0)
-                                stats.AddDamage(visualBounds);
+                            bool underScroller = !dmgParent.IsNull && (scene.Flags(dmgParent) & NodeFlags.Scrollable) != 0;
+                            if (!underScroller) stats.AddDamage(visualBounds);
+                            // Repaint set: this span MOVED, so old ∪ new. `span.SubtreeBounds` is the extent it presented
+                            // at (halos folded in) and `translatedBounds` is where it lands. A scrolled viewport's content
+                            // node instead damages the VIEWPORT — the acrylic union excludes that case by design, the
+                            // repaint set must not (that omission is exactly what made the old union unusable here).
+                            if (underScroller) stats.AddRepaint(RepaintBand(scene.AbsoluteRect(dmgParent)));
+                            else
+                            {
+                                stats.AddRepaint(RepaintBand(span.SubtreeBounds));
+                                stats.AddRepaint(RepaintBand(in translatedBounds));
+                            }
                         }
+                        if (copiedStats.DrawVideo > 0) NoteVideoRect(translatedBounds);
                         // Translate-rebase patches InMotion=1 onto glyph payloads without re-walking Text nodes — count
                         // them so the host still queues a settle re-snap (§5.2 Fix B).
                         if (inMotion)
@@ -1298,6 +1398,7 @@ public static class SceneRecorder
                 // than the back buffer, so the hole vanishes under acrylic and during enter/exit fades.
                 // ImageId carries the video registry SurfaceId (the IconLayer PathId pun — Columns.cs).
                 dl.DrawVideo(local, p.Corners, p.ImageId, 1f, world, opacity, key);
+                NoteVideoRect(world.TransformBounds(local));   // repaint damage: a touched hole punch repaints WHOLE (§13.1)
                 break;
             }
             case VisualKind.Text:
@@ -1820,6 +1921,44 @@ public static class SceneRecorder
                     globalBlurHold, stats.PendingElevateScrollInMotion, stats.PendingElevateUserScrollActive, stats.PendingElevateState, skipRoots, spans, spanFrame,
                     spanReuseDisabled: true, spanStoreEnabled: false, ref stats);
                 result.Include(hoistResult);
+            }
+        }
+
+        // ── Repaint damage (§13.1), re-record path ──────────────────────────────────────────────────────────────────
+        // Emitted HERE, at the tail, because `result.SubtreeBounds` is only complete now: it is the superset of every
+        // pixel this node AND its descendants drew (device boxes + shadow halos + self-blur halos + focus rings), which
+        // is what a repaint must cover — the node's own box is not (a moved card carries its children with it).
+        // Read BEFORE the Store below, which overwrites the slot this frame's prior extent lives in.
+        // Only SELF-dirty nodes emit: a node re-recorded merely because a descendant is dirty contributes nothing new,
+        // and the descendant emits its own band.
+        if (!stats.Repaint.IsFull && result.HasBounds)
+        {
+            bool movedNode = (flags & NodeFlags.TransformDirty) != 0;
+            bool contentDirtyNode = (scene.RecordDirtySelfBits(node) & SceneStore.RecordDirtyContent) != 0;
+            if (movedNode || contentDirtyNode)
+            {
+                var repaintParent = scene.Parent(node);
+                if (movedNode && !repaintParent.IsNull && (scene.Flags(repaintParent) & NodeFlags.Scrollable) != 0)
+                {
+                    // A scrolled viewport's content node: the changed pixels are the VIEWPORT, not the content's (far
+                    // taller) box. The acrylic Damage above deliberately skips this; the repaint set must not.
+                    stats.AddRepaint(RepaintBand(scene.AbsoluteRect(repaintParent)));
+                }
+                else
+                {
+                    stats.AddRepaint(RepaintBand(result.SubtreeBounds));
+                    // old ∪ new: the band the node VACATED repaints too. A brand-new node never presented, so its
+                    // current extent is the whole truth; a CARRIED-OVER extent (not refreshed last frame, because an
+                    // ancestor reused its span) is padded conservatively, since an ancestor's translated copy could have
+                    // shifted it without re-recording this node. With no span table at all there is no prior to recover
+                    // and a move leaves an unknown vacated band ⇒ full.
+                    if (spans is null)
+                    {
+                        if (movedNode) stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
+                    }
+                    else if (spans.TryGetPriorExtent((int)node.Raw.Index, node.Raw.Gen, spanFrame, out RectF priorExtent, out bool fresh))
+                        stats.AddRepaint(RepaintBand(in priorExtent, fresh ? 0f : RepaintUnknownHaloDip));
+                }
             }
         }
 

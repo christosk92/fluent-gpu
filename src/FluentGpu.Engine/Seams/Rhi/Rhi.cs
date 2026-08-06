@@ -15,7 +15,18 @@ namespace FluentGpu.Rhi;
 // content rather than the UI thread's current instant. The acrylic retained-backdrop cache uses it to rate-limit the
 // re-blur of a layer that already HAS a snapshot (§2.3/E10, AcrylicScrollHold.ShouldRefresh); a layer with no retained
 // snapshot always blurs immediately, so the flag can never surface a fallback/garbage backdrop.
-public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0, bool ScrollHold = false);
+// RepaintDamage = the REPAINT set (gpu-renderer.md §13.1): every region whose PIXELS may differ from the last presented
+// frame — old∪new for moved nodes, prior∪current for paint/layout re-records, vacated extents for removals, the viewport
+// for a scrolled content node — each padded by the AA floor + its effect halo. Empty + RepaintFullReason.None means
+// NOTHING changed; a forced-full region names the cause. It is DELIBERATELY not the same set as Damage above (which is
+// the acrylic blur-cache union: transform-moved nodes only, scroll content and paint-only changes excluded) — the two
+// answer different questions and must never be substituted for one another.
+// PublishSequence = the monotonic seq SceneFramePublisher.Publish stamped on this frame (0 = never published, e.g. a
+// direct SubmitDrawList). A consumer that sees a jump of more than one since the frame it last consumed missed logical
+// frames; the publisher already unions the skipped frames' RepaintDamage forward, and this is the backstop that lets the
+// consumer notice anyway.
+public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0, bool ScrollHold = false,
+    RepaintDamageRegion RepaintDamage = default, ulong PublishSequence = 0);
 
 /// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
 /// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,

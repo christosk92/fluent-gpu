@@ -50,6 +50,7 @@ public static class SuiteRegistry
         new("controls", "controls", ControlsSuite.Run),
         new("nav", "nav", NavSuite.Run),
         new("overlay", "overlay", OverlaySuite.Run),
+        new("damage", "damage", DamageSuite.Run),
         new("text", "text", TextSuite.Run),
         new("diagnostics", "diagnostics", DiagnosticsSuite.Run),
     ];

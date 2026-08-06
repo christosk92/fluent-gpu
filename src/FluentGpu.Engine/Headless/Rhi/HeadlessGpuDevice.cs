@@ -40,6 +40,10 @@ public sealed class HeadlessGpuDevice : IGpuDevice
     public bool SupportsSecondarySwapchains => true;
     public int FrameCount { get; private set; }
     public ColorF LastClear { get; private set; }
+    /// <summary>The full submit context of the most recent <see cref="SubmitDrawList(ReadOnlySpan{byte},ReadOnlySpan{ulong},in FrameInfo)"/>
+    /// — including <see cref="FrameInfo.RepaintDamage"/> and <see cref="FrameInfo.PublishSequence"/>, which no backend
+    /// consumes yet. Captured so the headless gates can assert on the payload that crosses the seam.</summary>
+    public FrameInfo LastFrameInfo { get; private set; }
     public IReadOnlyList<FillRoundRectCmd> LastRects => _rects;
     /// <summary>Clip-stack depth at each <see cref="LastRects"/> command (parallel list).</summary>
     public IReadOnlyList<int> LastRectClipDepths => _rectClipDepth;
@@ -148,6 +152,7 @@ public sealed class HeadlessGpuDevice : IGpuDevice
         _erases.Clear();
         _videoClipDepth.Clear();
         LastClear = ctx.Clear;
+        LastFrameInfo = ctx;
         FrameCount++;
         int balance = 0;
         int layerBalance = 0;

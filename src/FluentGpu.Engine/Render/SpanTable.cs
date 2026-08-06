@@ -159,6 +159,34 @@ public sealed class SpanTable
         return true;
     }
 
+    /// <summary>Repaint damage (gpu-renderer.md §13.1): the extent this node was LAST RECORDED at — its stored
+    /// <see cref="DrawSpan.SubtreeBounds"/>, i.e. device-space with every shadow/self-blur halo and focus ring already
+    /// folded in. Paired with the node's CURRENT bounds this gives the old∪new repaint band.
+    /// <para>Deliberately NOT gated on frame recency, unlike <see cref="TryGet"/>/<see cref="TryGetSubtree"/>. Those ask
+    /// "may I replay these bytes?", which only a span refreshed LAST frame can answer. This asks "where are this node's
+    /// pixels on screen right now?", and a node whose ancestor exact-copied its span for the last twenty frames has not
+    /// been re-recorded since — so its last stored extent IS what is presented. Requiring recency here made every
+    /// descendant of a reused subtree report a lost extent the moment it changed (a hover fade under an idle page),
+    /// which forced a full repaint on exactly the frames partial repaint exists for.</para>
+    /// <para>The slot is overwritten by THIS frame's <see cref="Store"/>, so the recorder must read it BEFORE it
+    /// re-records the node.</para>
+    /// <paramref name="fresh"/> is true when the extent WAS refreshed on the previous frame (exact); false means it is a
+    /// carried-over extent, which an ancestor's translated-span copy could have shifted without re-recording this node —
+    /// callers pad such a band conservatively. A <c>false</c> RETURN means the node has never stored a span under this
+    /// generation: brand new, nothing was presented behind it, its current bounds are the whole truth.</summary>
+    public bool TryGetPriorExtent(int nodeIndex, uint gen, uint frameId, out RectF prior, out bool fresh)
+    {
+        if ((uint)nodeIndex >= (uint)_gen.Length || _gen[nodeIndex] != gen || _frame[nodeIndex] == 0)
+        {
+            prior = default;
+            fresh = false;
+            return false;
+        }
+        fresh = frameId > 1 && _frame[nodeIndex] == frameId - 1;
+        prior = _subtreeBounds[nodeIndex];
+        return true;
+    }
+
     public void Store(int nodeIndex, uint gen, uint frameId, ulong inputSig, ulong moveSig, in DrawSpan span)
     {
         EnsureCapacity(nodeIndex + 1);

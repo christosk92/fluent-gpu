@@ -32,6 +32,14 @@ public sealed class SceneFramePublisher
     private ulong _publishSeq;         // UI-private monotonic counter
     private ulong _lastConsumedSeq;    // consumer writes (release) → UI reads (acquire); also drives quarantine (§5)
 
+    // Publish-gap accumulation (gpu-renderer.md §13.1). TryAcquire is last-writer-wins (DropOldest), so under sustained
+    // load the consumer never sees some published frames — and their repaint damage would be lost, leaving stale pixels
+    // exactly when partial repaint matters most. Carry the un-consumed frames' region forward into the next publish:
+    // _pendingRepaint holds the region of the most recent publish, valid until the consumer acknowledges that seq.
+    // Over-inclusion is the safe direction (a rect repainted twice costs fill; one missed leaves a ghost).
+    private RepaintDamageRegion _pendingRepaint;
+    private ulong _pendingRepaintSeq;
+
     public SceneFramePublisher(int cmdCap = 1 << 16, int sortCap = 1 << 12)
     {
         for (int i = 0; i < 3; i++)
@@ -61,13 +69,24 @@ public sealed class SceneFramePublisher
         cmds.CopyTo(_cmds[free]);
         sort.CopyTo(_sort[free]);
         ulong seq = ++_publishSeq;
+        // Fold forward the damage of every frame published since the consumer's last acknowledgement (DropOldest can drop
+        // them entirely), then remember THIS frame's accumulated region as the new pending set. Once the consumer has
+        // acknowledged _pendingRepaintSeq (or anything newer) the carry is discharged. Racing a concurrent TryAcquire can
+        // only make us re-carry an already-consumed region — the safe direction.
+        var region = submit.RepaintDamage;
+        if (_pendingRepaintSeq != 0 && Volatile.Read(ref _lastConsumedSeq) < _pendingRepaintSeq)
+            region.Union(in _pendingRepaint);
+        _pendingRepaint = region;
+        _pendingRepaintSeq = seq;
         _slots[free] = new RenderFrame
         {
             PublishSeq = seq,
             ArenaIndex = free,
             ByteLen = cmds.Length,
             SortLen = sort.Length,
-            Submit = submit,
+            // The seq is stamped INSIDE Publish (the counter lives here) so a consumer can detect skipped logical frames
+            // from the FrameInfo alone, without reaching back into the header.
+            Submit = submit with { RepaintDamage = region, PublishSequence = seq },
             SuppressVsync = suppressVsync,
             InteractivePresent = interactivePresent,
         };

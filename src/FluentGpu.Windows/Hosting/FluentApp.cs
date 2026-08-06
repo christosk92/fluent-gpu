@@ -406,6 +406,15 @@ public static class FluentApp
                     int pinHit = gpuDev?.LastBlurCacheHit ?? 0;
                     int pinMiss = gpuDev?.LastBlurCacheMiss ?? 0;
                     string pinTok = (pinHit > 0 || pinMiss > 0) ? $" pin{pinHit}/{pinMiss}" : "";
+                    // dmg<coverage%>/<rects> — the §5.1-A repaint-damage measure point: what fraction of the client area
+                    // this frame's repaint set covers and over how many disjoint rects, or dmgF:<reason> when the region
+                    // gave up and named the cause. Ungated for the same reason rq/efS are: validating the accumulator
+                    // against a real workload (settled playback ≈ a few %, scroll ≈ full) is a feel-session activity, and
+                    // no renderer consumes the region yet, so this token IS the only evidence. Printed only when the frame
+                    // published something, so an elided frame's line is byte-identical to before.
+                    string dmgTok = s.RepaintFullReason != FluentGpu.Rhi.RepaintFullReason.None
+                        ? $" dmgF:{s.RepaintFullReason}"
+                        : (s.RepaintRectCount > 0 ? $" dmg{s.RepaintCoverage * 100f:0.0}%/{s.RepaintRectCount}" : "");
                     string clusterTok = spike && spikeCluster > 0 ? $" cluster={spikeCluster}" : "";
                     // layout X.X(fx A eff B conn C rf D) — the four passengers of the layout bucket (they sum to it):
                     // fx = the flex solve, eff = DrainLayoutEffects, conn = ConnectedAnimation.Tick65, rf = enter/exit
@@ -471,7 +480,7 @@ public static class FluentApp
                         $"{(s.ScrollActive ? " scroll" : "")} loop {s.Fps:0}fps {s.FrameMs:0.0}ms " +
                         $"(flush{s.FlushMs:0.0} rx{s.ReactiveFlushMs:0.0}/vr{s.VirtualRealizeMs:0.0} layout{s.LayoutMs:0.0}{layoutSplitTok} " +
                         $"anim{s.AnimMs:0.0} record{s.RecordMs:0.0} submit{s.SubmitMs:0.0}) | presentNow {presentNow:0}fps present1s {host.PresentFps:0}fps seq={presentSeq}{seamTok} " +
-                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok}{rectPassTok}{pinTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
+                        $"gpu {gpuMs:0.0}ms latW{latWaitMs:0.0}{gpuRenderTok}{edgeStripTok}{rectPassTok}{pinTok}{dmgTok} | wait {WaitTok(host.LastWaitKind)}{host.LastWaitMs} " +
                         $"{szpx.Width}x{szpx.Height}@{cachedHz}Hz (f{n}){hitchTok}{scrollTok}{inputPaceTok}");
                 }
             }

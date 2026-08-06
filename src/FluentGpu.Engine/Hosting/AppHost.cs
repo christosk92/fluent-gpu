@@ -35,6 +35,15 @@ public readonly record struct FrameStats(int DrawCommandCount, int ClicksHandled
     public int SpanBytesCopied { get; init; }
     public int NodesCulled { get; init; }
     public SpanReuseDisabledReason SpanReuseDisabledReasons { get; init; }
+    // Repaint damage (gpu-renderer.md §13.1) — the measure point for §5.1-A: what fraction of the window this frame
+    // would have had to repaint, over how many disjoint rects, and (when the region gave up) why. No renderer consumes
+    // the region yet, so these are the ONLY way to validate the accumulator against a real workload.
+    /// <summary>Fraction of the client area this frame's repaint set covers (0..1; 1 when a full repaint was forced).</summary>
+    public float RepaintCoverage { get; init; }
+    /// <summary>Disjoint rects in this frame's repaint set (0 when full, and 0 also means "nothing changed").</summary>
+    public int RepaintRectCount { get; init; }
+    /// <summary><see cref="RepaintFullReason.None"/> unless the frame forced a full repaint.</summary>
+    public RepaintFullReason RepaintFullReason { get; init; }
     // Per-frame layout-cost counters (FlexLayout diag; valid only when FG_LAYOUT_DIAG=1, else 0). MeasureCount/ArrangeCount
     // are total node visits across the frame's full + scoped + phase-7 reflow layout passes — MeasureCount counts REAL
     // measures (within-pass memo hits are excluded; FlexLayout.DiagMeasureMemoHits has those); TextShapeMisses is DirectWrite
@@ -682,6 +691,7 @@ public sealed class AppHost : IDisposable
         _device.DumpDeviceLostDiagnostics(WriteDeviceLostLine);
         _device.RecoverDevice();
         _scene.MarkAllPaintDirty();
+        _repaintTargetValid = false;   // the rebuilt target holds nothing — the next frame repaints in full (§13.1)
         _needFullLayout = true;
         _lastPresentedDrawListHash = 0;
         _images.ReRealizeAllResident();
@@ -1716,6 +1726,13 @@ public sealed class AppHost : IDisposable
         _pixelPool.Trim();             // release the idle CPU pixel-pool retention to the GC on the same idle cadence
     }
 
+    // ── Repaint-damage host state (gpu-renderer.md §13.1) ────────────────────────────────────────────────────────────
+    // The recorder can only see what the SCENE changed. These are the host-level facts that invalidate the target
+    // itself — nothing in the scene is dirty, yet every pixel is untrustworthy. Each forces a full repaint with a named
+    // reason. No renderer consumes the region yet, so these are pure bookkeeping in Phase A.
+    private bool _repaintTargetValid;           // false until the first frame publishes; cleared by resize/DPI/device recovery
+    private ColorF _lastPublishedClear;         // theme switch changes the clear color under a byte-identical stream
+
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
     private long _framesSkippedSubmit;          // diagnostic census of elided submits (idle/playback redundant presents avoided)
@@ -2418,6 +2435,7 @@ public sealed class AppHost : IDisposable
             {
                 if (s_dlTrace) System.Console.Error.WriteLine($"[dl] UI: detected reason=0x{_device.PollDeviceLost():X} at frame {_frameOrdinal} → requesting recover");
                 _scene.MarkAllPaintDirty();
+                _repaintTargetValid = false;   // the rebuilt target holds nothing — the next frame repaints in full (§13.1)
                 _needFullLayout = true;
                 dl.RecoverRequest = 1;
                 _renderThread!.WakeAsync();   // CRITICAL: wake the parked render loop so it reaches the recover gate
@@ -3189,6 +3207,9 @@ public sealed class AppHost : IDisposable
                 maybeUnchanged, skipSubmit, in recordStats, frameStart, tFlush, tLayout, tAnim, tRecord);
             long subStart = (keepAlive && s_resizeDiag) ? Stopwatch.GetTimestamp() : 0;
             long tSubmitDone, tSubmit, hotAlloc;
+            // The repaint region this frame actually PUBLISHED (§13.1). An elided frame publishes nothing, so it stays
+            // empty — which is the truth: the presented pixels did not change.
+            RepaintDamageRegion publishedRepaint = default;
             if (skipSubmit)
             {
                 // Terminal `neverPresented`: this frame publishes nothing, so any latency sample tagged with it can
@@ -3211,7 +3232,21 @@ public sealed class AppHost : IDisposable
                 // holdSelfBlurForScroll rides the seam as FrameInfo.ScrollHold: the acrylic retained-backdrop cache
                 // rate-limits its re-blur to every Nth frame while it is set (§2.3/E10) — the same hold window the
                 // self-blur groups already use, decided here so the flag describes the frame being published.
-                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll);
+                // RepaintDamage (§13.1) rides the same seam. The recorder filled it from SCENE changes; the host folds in
+                // the invalidations only it can see — an untrustworthy target (first frame / resize / DPI / device
+                // recovery), a clear-color change under a byte-identical stream (theme switch), and the two classes whose
+                // PIXELS move with no dirty bit at all (an image whose content epoch advanced under identical commands,
+                // and live crossfades driven by ImageClockMs). Nothing consumes the region yet — this is Phase A.
+                var repaint = recordStats.RepaintDamage;
+                if (!_repaintTargetValid || resized || Clear != _lastPublishedClear)
+                    repaint.ForceFull(RepaintFullReason.TargetInvalidated);
+                if (imageContentChanged) repaint.ForceFull(RepaintFullReason.ImageContent);
+                if (_images.HasActiveCrossfades) repaint.ForceFull(RepaintFullReason.DetachedContent);
+                _repaintTargetValid = true;
+                _lastPublishedClear = Clear;
+                publishedRepaint = repaint;
+                var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll,
+                                               repaint);
                 if (resized && keepAlive) _device.HintSettlePresent();
                 double gpuRenderMs = _device.LastGpuRenderMs;
                 bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive
@@ -3342,6 +3377,9 @@ public sealed class AppHost : IDisposable
                 SpansReRecorded = recordStats.SpansReRecorded,
                 SpanBytesCopied = recordStats.SpanBytesCopied,
                 SpanReuseDisabledReasons = recordStats.SpanReuseDisabledReasons,
+                RepaintCoverage = publishedRepaint.Coverage(layoutSize.Width, layoutSize.Height),
+                RepaintRectCount = publishedRepaint.Count,
+                RepaintFullReason = publishedRepaint.FullReason,
                 MeasureCount = _layout.DiagMeasure,
                 ArrangeCount = _layout.DiagArrange,
                 TextShapeMisses = _layout.DiagTextMiss,

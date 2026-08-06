@@ -323,6 +323,16 @@ public sealed class SceneStore : ISceneBackend
     public void FreeSubtree(NodeHandle node)
     {
         if (!IsLive(node)) return;
+        // Repaint damage (§13.1): the vacated band must be recorded BEFORE the subtree is torn down — after the free
+        // there is no handle left to ask. Only the subtree ROOT is captured; its extent (and the span table's stored
+        // SubtreeBounds, which the recorder prefers) already covers the descendants going with it.
+        CaptureRemovalExtent(node);
+        FreeSubtreeCore(node);
+    }
+
+    private void FreeSubtreeCore(NodeHandle node)
+    {
+        if (!IsLive(node)) return;
         // Logically-detached exiting children are absent from the topology walk below. Retire them with a hard-freed
         // visual parent instead of letting them escape into a root-level render band.
         ReclaimOrphanChildren(node);
@@ -332,7 +342,7 @@ public sealed class SceneStore : ISceneBackend
         while (c != 0)
         {
             int next = _nextSib[c];
-            FreeSubtree(new NodeHandle(new Handle((uint)c, _gen[c])));
+            FreeSubtreeCore(new NodeHandle(new Handle((uint)c, _gen[c])));
             c = next;
         }
         DetachFromParent(idx);
@@ -423,6 +433,49 @@ public sealed class SceneStore : ISceneBackend
         _nextFree[idx] = _freeHead;
         _freeHead = idx;
         LiveCount--;
+    }
+
+    // ── Repaint-damage removal ledger (gpu-renderer.md §13.1) ───────────────────────────────────────────────────────
+    // An unmounted node stops covering the band it presented at last frame, and — unlike a MOVE — nothing re-touches
+    // that band, so a region-aware repaint would freeze last frame's pixels there. The free path is the only place the
+    // extent still exists, so it is snapshotted here and drained by SceneRecorder.Record (its single consumer).
+    // Fixed capacity, no growth: a teardown larger than the ledger sets the overflow flag and the recorder forces a
+    // full repaint instead of silently under-damaging.
+    private const int RemovalLedgerCap = 64;
+
+    /// <summary>One unmounted node's identity + its model extent at free time (see <see cref="PendingRemovalExtents"/>).
+    /// The recorder prefers the span table's stored SubtreeBounds for this (index, gen) — which folds in every halo —
+    /// and falls back to <paramref name="ModelRect"/> when the node presented under no stored span.</summary>
+    public readonly record struct RemovedNodeExtent(int NodeIndex, uint Gen, RectF ModelRect);
+
+    private readonly RemovedNodeExtent[] _removedExtents = new RemovedNodeExtent[RemovalLedgerCap];
+    private int _removedCount;
+    private bool _removedOverflow;
+
+    /// <summary>Nodes unmounted since the last record, with the extent they last occupied.</summary>
+    public ReadOnlySpan<RemovedNodeExtent> PendingRemovalExtents => _removedExtents.AsSpan(0, _removedCount);
+
+    /// <summary>More removals happened than the ledger holds ⇒ the repaint set cannot be trusted; force a full repaint.</summary>
+    public bool PendingRemovalOverflow => _removedOverflow;
+
+    /// <summary>Drop the ledger — called by <c>SceneRecorder.Record</c> once it has folded the extents into the frame's
+    /// repaint region.</summary>
+    public void ClearPendingRemovals()
+    {
+        _removedCount = 0;
+        _removedOverflow = false;
+    }
+
+    private void CaptureRemovalExtent(NodeHandle node)
+    {
+        if (_removedCount >= RemovalLedgerCap) { _removedOverflow = true; return; }
+        RectF abs = AbsoluteRect(node);
+        ref NodePaint p = ref _paint[(int)node.Raw.Index];
+        float pw = float.IsNaN(p.PresentedW) ? abs.W : p.PresentedW;   // presented (Reveal) extent may exceed the model box
+        float ph = float.IsNaN(p.PresentedH) ? abs.H : p.PresentedH;
+        // A degenerate rect is recorded too (not skipped): the recorder needs to see the entry so it can tell "this node
+        // never presented anything" from "it presented and we lost the extent" (⇒ MissingRemovalExtent).
+        _removedExtents[_removedCount++] = new RemovedNodeExtent((int)node.Raw.Index, node.Raw.Gen, new RectF(abs.X, abs.Y, pw, ph));
     }
 
     public void AppendChild(NodeHandle parent, NodeHandle child)
