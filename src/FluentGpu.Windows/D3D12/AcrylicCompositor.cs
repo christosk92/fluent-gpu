@@ -91,7 +91,7 @@ internal sealed unsafe class AcrylicCompositor : IDisposable
     private readonly float[] _scratch28 = new float[28];
 
     private ID3D12RootSignature* _copyRoot;   // copy/Kawase: root consts + 1 SRV table + static linear-clamp sampler
-    private ID3D12PipelineState* _copyPso, _kdownPso, _kupPso;
+    private ID3D12PipelineState* _copyPso, _blitPso, _kdownPso, _kupPso;
     private ID3D12RootSignature* _compRoot;   // composite: 28 root consts + 1 SRV table + static sampler
     private ID3D12PipelineState* _compPso;
 
@@ -123,6 +123,14 @@ SamplerState gSamp : register(s0);
 struct V { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
 V VSMain(uint id : SV_VertexID) { V o; float2 uv = float2((id << 1) & 2, id & 2); o.pos = float4(uv * 2.0 - 1.0, 0, 1); o.pos.y = -o.pos.y; o.uv = uv; return o; }
 float4 CopyPS(V i) : SV_Target { return gSrc.Sample(gSamp, srcOffScale.xy + i.uv * srcOffScale.zw); }   // preserve premultiplied alpha → transparent pixels reach the backbuffer so DWM Mica composites
+// The 1:1 canvas → back-buffer BLIT (BlitToBackBuffer): an integer TEXEL FETCH, never a filtered Sample. srcOffScale.xy
+// is the source origin in TEXELS (0 for the full-surface blit). A bilinear Sample is NOT bit-exact here even though the
+// mapping is exactly 1:1: `uv` is interpolated in fp32, so uv*width can land an ULP either side of the texel centre and
+// the sampler's 8-bit sub-texel weight quantises that to 255/256 instead of 1 — folding 1/256 of the neighbouring texel
+// in. On flat or smooth neighbourhoods that rounds away; across a high-contrast edge (glyph AA fringes, the DrawVideo
+// hole's corner) it lands ±1 LSB, which is precisely the canvas-vs-direct route delta --repaint-identity measured.
+// Load takes no sampler and no interpolation, so the canvas route now reaches the back buffer bit-for-bit.
+float4 BlitPS(V i) : SV_Target { return gSrc.Load(int3((int2)i.pos.xy + (int2)srcOffScale.xy, 0)); }
 """;
 
     // Dual-Kawase downsample/upsample chain (ARM SIGGRAPH 2015 dual filter — the LIVE-BACKDROP blur, Wave B). Both passes
@@ -344,13 +352,15 @@ float4 PSMain(V i) : SV_Target
         _copyRoot = SampleRootSig(8);   // copy uses 4 floats, each Kawase pass uses 8 (p0 + p1) — shared sig sized for the larger
         ID3DBlob* vs = Compile(CopyHlsl, "VSMain", "vs_5_1");
         ID3DBlob* copyPs = Compile(CopyHlsl, "CopyPS", "ps_5_1");
+        ID3DBlob* blitPs = Compile(CopyHlsl, "BlitPS", "ps_5_1");
         ID3DBlob* kVs = Compile(KawaseHlsl, "VSMain", "vs_5_1");
         ID3DBlob* kDown = Compile(KawaseHlsl, "KawaseDownPS", "ps_5_1");
         ID3DBlob* kUp = Compile(KawaseHlsl, "KawaseUpPS", "ps_5_1");
         _copyPso = MakePso(_copyRoot, vs, copyPs, blend: false);
+        _blitPso = MakePso(_copyRoot, vs, blitPs, blend: false);
         _kdownPso = MakePso(_copyRoot, kVs, kDown, blend: false);
         _kupPso = MakePso(_copyRoot, kVs, kUp, blend: false);
-        vs->Release(); copyPs->Release(); kVs->Release(); kDown->Release(); kUp->Release();
+        vs->Release(); copyPs->Release(); blitPs->Release(); kVs->Release(); kDown->Release(); kUp->Release();
     }
 
     private void BuildCompositePipeline()
@@ -854,18 +864,24 @@ float4 PSMain(V i) : SV_Target
         if (!external) BindCanvas(cmd);
     }
 
-    /// <summary>Blit the finished canvas to the back buffer (already bound as the render target by the caller).</summary>
+    /// <summary>Blit the finished canvas to the back buffer (already bound as the render target by the caller).
+    /// <para>ROUTE PARITY (gpu-renderer.md §13.1): canvas and back buffer are the same size, the same
+    /// <c>B8G8R8A8_UNORM</c> format and both carry a null-desc view, so this copy must be BIT-EXACT — anything else
+    /// makes a canvas frame differ from the byte-identical FullDirect render of the same scene, and §13.1 makes canvas
+    /// frames the normal case. It therefore uses <c>_blitPso</c> (an integer <c>Load</c>), never the filtered
+    /// <c>_copyPso</c>: see BlitPS for why a 1:1 bilinear <c>Sample</c> is not exact. <c>--repaint-identity</c>'s
+    /// route-delta gate pins this.</para></summary>
     public void BlitToBackBuffer(ID3D12GraphicsCommandList* cmd, D3D12_CPU_DESCRIPTOR_HANDLE backRtv)
     {
         SetHeap(cmd);
         Barrier(cmd, _canvas, ref _canvasState, D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         cmd->OMSetRenderTargets(1, &backRtv, BOOL.FALSE, null);
         SetViewport(cmd, _w, _h);
-        _scratch4[0] = 0f;
+        _scratch4[0] = 0f;   // BlitPS reads .xy as the source origin in TEXELS — the full-surface blit starts at (0,0)
         _scratch4[1] = 0f;
-        _scratch4[2] = 1f;
-        _scratch4[3] = 1f;
-        FullScreen(cmd, _copyPso, 0, _scratch4);
+        _scratch4[2] = 0f;
+        _scratch4[3] = 0f;
+        FullScreen(cmd, _blitPso, 0, _scratch4);
     }
 
     /// <summary>directBB acrylic: copy the back-buffer region [rx,ry → +rw,+rh] into the canvas at the SAME coords so the
@@ -933,6 +949,7 @@ float4 PSMain(V i) : SV_Target
         if (_rtvHeap != null) { D3D12MemoryDiagnostics.Release(_rtvHeap, "Acrylic.RtvHeap"); _rtvHeap->Release(); }
         if (_srvHeap != null) { D3D12MemoryDiagnostics.Release(_srvHeap, "Acrylic.SrvHeap"); _srvHeap->Release(); }
         if (_copyPso != null) _copyPso->Release();
+        if (_blitPso != null) _blitPso->Release();
         if (_kdownPso != null) _kdownPso->Release();
         if (_kupPso != null) _kupPso->Release();
         if (_compPso != null) _compPso->Release();

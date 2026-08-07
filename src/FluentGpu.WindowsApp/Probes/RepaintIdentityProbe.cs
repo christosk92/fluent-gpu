@@ -23,6 +23,12 @@ namespace FluentGpu;
 /// bounding box + pixel count, which is what identifies WHICH class broke: a 1-px column ⇒ the pixel-grid fold, a
 /// missing glyph fragment ⇒ the cull halo, a rectangular block at a stale position ⇒ a missed vacated band.
 ///
+/// A second, independent gate rides the same loop: the <b>route delta</b>. Step 0 of the involution lands back on the
+/// exact state a FullDirect frame was captured at, so the two ROUTES can be compared at identical scene state. They must
+/// be bit-identical — the canvas and the back buffer are the same size, the same <c>B8G8R8A8_UNORM</c> format and carry
+/// the same null-desc view — and §13.1 makes canvas frames the normal case, so any delta is a permanent, visible
+/// difference between a scrolling window and an idle one.
+///
 /// This cannot live in FluentGpu.VerticalSlice — that harness is headless by contract and there are no pixels there.
 /// It is a command-line arm, not a behaviour switch: nothing here changes the default path, and the one API it needs
 /// (<c>RequestFullRepaintOnce</c>) is the explicit form of an invalidation the engine already performs internally.
@@ -139,7 +145,8 @@ internal static class RepaintIdentityProbe
             // ── P: the SAME state, reached by PARTIAL replays. Every scenario's mutation is an involution — applying it
             //    twice restores the scene exactly — so two more mutations land back on the baseline state having gone
             //    through the partial route twice, never repainting anything the damage region did not name.
-            int partialSubmits = 0, otherSubmits = 0, rects = 0, routeDelta = -1;
+            int partialSubmits = 0, otherSubmits = 0, rects = 0, routeDelta = -1, routeDeltaMax = 0;
+            byte[]? viaCanvasKeep = null;
             for (int step = 0; step < 2; step++)
             {
                 s.Mutate();
@@ -149,16 +156,23 @@ internal static class RepaintIdentityProbe
                     if (gpu.LastRepaintRoute == RepaintRoute.Partial) { partialSubmits++; rects = Math.Max(rects, gpu.LastReplayRectCount); }
                     else otherSubmits++;
                 }
-                // Step 0 lands back on the state the FullDirect capture holds — but reached through the canvas. This is
-                // the ONLY place the two routes can be compared at identical scene state, and it is reported rather than
-                // asserted: the canvas is a plain _UNORM target while the back-buffer RTV is _UNORM_SRGB, so their blend
-                // and text-gamma results are not required to be bit-identical. A NON-ZERO number here is not a §5.1 bug;
-                // it is the size of the pre-existing route-switch delta, which §5.1 made common by making canvas frames
-                // the normal case. See the report's deferrals.
+                // ── ROUTE-DELTA GATE. Step 0 lands back on the state the FullDirect capture holds — but reached through
+                //    the canvas. This is the ONLY place the two routes can be compared at identical scene state, and
+                //    since §13.1 makes canvas frames the NORMAL case (a window alternating scroll → idle crosses the
+                //    boundary constantly), the two routes must agree BIT-FOR-BIT — canvas and back buffer are the same
+                //    size, the same B8G8R8A8_UNORM format, and carry the same null-desc view, so there is no legitimate
+                //    reason for a texel to differ. It is asserted, not merely reported: the first measurement here found
+                //    a real defect (the canvas→back-buffer blit was a filtered Sample, ±1 LSB at high-contrast edges —
+                //    80 px across one text block), which nothing else in the repo could have caught.
                 if (step == 0 && dw == fw && dh == fh)
                 {
                     byte[] viaCanvas = Capture(host, gpu, out int cw2, out int ch2);
-                    if (cw2 == dw && ch2 == dh) { Compare(direct, viaCanvas, dw, dh, out routeDelta, out _, out _, out _, out _); }
+                    if (cw2 == dw && ch2 == dh)
+                    {
+                        Compare(direct, viaCanvas, dw, dh, out routeDelta, out _, out _, out _, out _);
+                        routeDeltaMax = MaxChannelDelta(direct, viaCanvas);
+                        viaCanvasKeep = viaCanvas;
+                    }
                 }
             }
             long dropped = gpu.LastDroppedInstanceCount;
@@ -182,18 +196,26 @@ internal static class RepaintIdentityProbe
                 continue;
             }
 
-            if (Compare(p, f, pw, ph, out int diffPixels, out int dl, out int dt, out int dr, out int db))
-            {
-                Console.Error.WriteLine($"[repaint-identity] {s.Id} {s.Name}: PASS  (rects={rects} partialFrames={partialSubmits} " +
-                                        $"dropped={dropped} canvasVsDirect={routeDelta}px)  [{s.Targets}]");
-                passed++;
-            }
-            else
+            if (!Compare(p, f, pw, ph, out int diffPixels, out int dl, out int dt, out int dr, out int db))
             {
                 Console.Error.WriteLine($"[repaint-identity] {s.Id} {s.Name}: FAIL  {diffPixels} px differ, bbox " +
                                         $"[{dl},{dt} → {dr},{db}] ({dr - dl}x{db - dt})  rects={rects}  [{s.Targets}]");
                 WriteEvidence(outDir, s, p, f, pw, ph);
                 failed++;
+            }
+            else if (routeDelta != 0)
+            {
+                Console.Error.WriteLine($"[repaint-identity] {s.Id} {s.Name}: FAIL (route delta)  canvasVsDirect=" +
+                                        (routeDelta < 0 ? "not measured" : $"{routeDelta}px max{routeDeltaMax}/255") +
+                                        $" — a canvas frame must be bit-identical to the FullDirect render of the same state  [{s.Targets}]");
+                if (viaCanvasKeep is not null) WriteEvidence(outDir, s, viaCanvasKeep, direct, pw, ph, "route");
+                failed++;
+            }
+            else
+            {
+                Console.Error.WriteLine($"[repaint-identity] {s.Id} {s.Name}: PASS  (rects={rects} partialFrames={partialSubmits} " +
+                                        $"dropped={dropped} canvasVsDirect={routeDelta}px)  [{s.Targets}]");
+                passed++;
             }
         }
 
@@ -292,12 +314,23 @@ internal static class RepaintIdentityProbe
         return diffPixels == 0;
     }
 
-    private static void WriteEvidence(string outDir, in Scenario s, byte[] p, byte[] f, int w, int h)
+    /// <summary>Largest single-channel difference between two captures (0 = identical). The MAGNITUDE is what separates
+    /// the two failure shapes the route-delta gate can see: 1 means a rounding/resample artefact at high-contrast edges,
+    /// while a colour-space or blend-space mismatch moves whole ramps by tens of levels.</summary>
+    private static int MaxChannelDelta(byte[] a, byte[] b)
+    {
+        int max = 0;
+        int n = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < n; i++) { int d = Math.Abs(a[i] - b[i]); if (d > max) max = d; }
+        return max;
+    }
+
+    private static void WriteEvidence(string outDir, in Scenario s, byte[] p, byte[] f, int w, int h, string tag = "")
     {
         try
         {
             System.IO.Directory.CreateDirectory(outDir);
-            string stem = System.IO.Path.Combine(outDir, $"{s.Id}-{s.Name}");
+            string stem = System.IO.Path.Combine(outDir, tag.Length == 0 ? $"{s.Id}-{s.Name}" : $"{s.Id}-{s.Name}-{tag}");
             PngWriter.WriteBgra($"{stem}-partial.png", p, w, h);
             PngWriter.WriteBgra($"{stem}-full.png", f, w, h);
             // Amplified difference: any channel delta becomes a saturated magenta pixel, so a one-column hairline is
