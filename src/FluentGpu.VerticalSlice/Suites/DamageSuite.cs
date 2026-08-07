@@ -180,6 +180,115 @@ static class DamageSuite
                 clamped && outRoute == RepaintRoute.Partial && outRects.Count == 0,
                 $"clamped={clamped} out={outRoute}/{outRects.Count}");
         }
+
+        PixelGridChecks();
+        BlitOnlyGuardChecks();
+    }
+
+    // ── C1: disjointness has to hold in the space the GPU actually uses ────────────────────────────────────────────
+    // Coalesce guarantees pairwise disjointness on CLOSED FLOAT intervals; ToPixel then rounds each rect OUT
+    // independently. Any gap in (0, 1) device pixels therefore COLLAPSES — the two rects claim the same device column,
+    // which the single ClearRenderTargetView covers ONCE and the two scissored replays composite over TWICE. In a stack
+    // with no opaque coats (Wavee's, measured) that is a permanent 1-px double-blend hairline in the retained canvas,
+    // re-created every frame the same damage geometry recurs and self-healing never.
+    static void PixelGridChecks()
+    {
+        Span<PixelRect> pix = stackalloc PixelRect[RepaintPolicy.MaxReplayRects];
+
+        // The exact case from the review, on X: A ends at 100.3 (ceil ⇒ 101), B starts at 100.7 (floor ⇒ 100).
+        var h = default(RepaintDamageRegion);
+        h.Add(new RectF(50f, 10f, 50.3f, 40f));      // A: [50, 100.3)
+        h.Add(new RectF(100.7f, 10f, 60f, 40f));     // B: [100.7, 160.7)
+        Decide(h, RepaintPolicy.LayerKindNone, true, true, true, out var hRects);
+        bool hSeparateInDip = hRects.Count == 2;                          // float-space adjacency keeps them apart…
+        int hn = RepaintPolicy.ToPixelRects(hRects.AsSpan(), 1f, (int)W, (int)H, pix);
+        bool hFolded = hn == 1 && PixelDisjoint(pix, hn);                 // …pixel space folds the shared column away
+        bool hCovers = PixelCovers(hRects.AsSpan(), pix, hn, 1f);
+
+        // The vertical twin — the same arithmetic on the other axis, which is where a stacked-row layout lands.
+        var v = default(RepaintDamageRegion);
+        v.Add(new RectF(10f, 50f, 40f, 50.3f));      // A: [50, 100.3) in Y
+        v.Add(new RectF(10f, 100.7f, 40f, 60f));     // B: [100.7, 160.7) in Y
+        Decide(v, RepaintPolicy.LayerKindNone, true, true, true, out var vRects);
+        bool vSeparateInDip = vRects.Count == 2;
+        int vn = RepaintPolicy.ToPixelRects(vRects.AsSpan(), 1f, (int)W, (int)H, pix);
+        bool vFolded = vn == 1 && PixelDisjoint(pix, vn);
+        bool vCovers = PixelCovers(vRects.AsSpan(), pix, vn, 1f);
+
+        // …and the fold must not be a sledgehammer: a gap of a WHOLE device pixel leaves two disjoint pixel sets, and
+        // keeping them apart is both correct and cheaper than their union, so the merge must NOT fire.
+        var wide = default(RepaintDamageRegion);
+        wide.Add(new RectF(50f, 10f, 50f, 40f));     // A: [50, 100)
+        wide.Add(new RectF(101f, 10f, 60f, 40f));    // B: [101, 161) — one clear device column between them
+        Decide(wide, RepaintPolicy.LayerKindNone, true, true, true, out var wRects);
+        int wn = RepaintPolicy.ToPixelRects(wRects.AsSpan(), 1f, (int)W, (int)H, pix);
+        bool keptApart = wRects.Count == 2 && wn == 2 && PixelDisjoint(pix, wn);
+
+        // A non-unit scale is the case that actually ships (150 % DPI): the same sub-pixel collapse happens at a
+        // different DIP gap, so the fold has to be driven by the SCALED arithmetic, not by a DIP-space threshold.
+        var scaled = default(RepaintDamageRegion);
+        scaled.Add(new RectF(50f, 10f, 50.2f, 40f));   // A: right 100.2 → ×1.5 = 150.3 → ceil 151
+        scaled.Add(new RectF(100.6f, 10f, 60f, 40f));  // B: left  100.6 → ×1.5 = 150.9 → floor 150
+        Decide(scaled, RepaintPolicy.LayerKindNone, true, true, true, out var sRects);
+        int sn = RepaintPolicy.ToPixelRects(sRects.AsSpan(), 1.5f, (int)(W * 1.5f), (int)(H * 1.5f), pix);
+        bool scaledFolded = sRects.Count == 2 && sn == 1 && PixelDisjoint(pix, sn);
+
+        // The conversion itself: round OUT on every side (a partially-covered device pixel must be repainted whole,
+        // or the AA edge inside it keeps last frame's value) and clamp to the target.
+        PixelRect one = RepaintPolicy.ToPixel(new RectF(10.2f, 20.9f, 5.5f, 3.2f), 1f, (int)W, (int)H);
+        bool roundsOut = one.Left == 10 && one.Top == 20 && one.Right == 16 && one.Bottom == 25;
+        PixelRect off = RepaintPolicy.ToPixel(new RectF(-50f, -50f, 20f, 20f), 1f, (int)W, (int)H);
+        bool clampsAway = off.IsEmpty;
+        PixelRect edge = RepaintPolicy.ToPixel(new RectF(W - 5f, H - 5f, 500f, 500f), 1f, (int)W, (int)H);
+        bool clampsToTarget = edge.Right == (int)W && edge.Bottom == (int)H;
+
+        Check("gate.repaint.pixel-grid-disjoint replay rects are re-disjointed in DEVICE-PIXEL space, not just in float DIPs: two bands 0.4 DIP apart survive Coalesce as SEPARATE rects (adjacency is tested on closed float intervals) and would then round OUT into a shared device column — cleared once, replayed twice, a permanent double-blend hairline — so ToPixelRects folds them into one on BOTH axes and at a non-unit scale, while a gap of a whole device pixel is deliberately kept apart; the conversion rounds OUT on every side and clamps to the target",
+            hSeparateInDip && hFolded && hCovers && vSeparateInDip && vFolded && vCovers
+            && keptApart && scaledFolded && roundsOut && clampsAway && clampsToTarget,
+            $"h={hRects.Count}->{hn}(fold={hFolded},covers={hCovers}) v={vRects.Count}->{vn}(fold={vFolded},covers={vCovers}) " +
+            $"keptApart={keptApart} scaled={sRects.Count}->{sn} roundsOut={roundsOut}({one}) clampAway={clampsAway} clampTarget={clampsToTarget}");
+    }
+
+    // ── I1: the 0-rect blit-only route is the one place the engine TRUSTS an unenforced invariant ──────────────────
+    static void BlitOnlyGuardChecks()
+    {
+        bool sameStream = RepaintPolicy.BlitOnlyStreamMatches(0xA5A5_1234UL, 0xA5A5_1234UL);
+        bool driftCaught = !RepaintPolicy.BlitOnlyStreamMatches(0xA5A5_1234UL, 0xA5A5_1235UL);
+        bool frameUnknown = RepaintPolicy.BlitOnlyStreamMatches(0UL, 0xA5A5_1234UL);
+        bool canvasUnknown = RepaintPolicy.BlitOnlyStreamMatches(0xA5A5_1234UL, 0UL);
+        bool bothUnknown = RepaintPolicy.BlitOnlyStreamMatches(0UL, 0UL);
+        // The reason has to be its OWN token: "the region said nothing changed and the bytes disagree" points at a
+        // missing damage source, which is a different bug from every other full-repaint cause.
+        bool named = RepaintFullReason.EmptyDamageStreamMismatch != RepaintFullReason.None
+                     && RepaintFullReason.EmptyDamageStreamMismatch != RepaintFullReason.TargetInvalidated
+                     && RepaintFullReason.EmptyDamageStreamMismatch != RepaintFullReason.BackendUnsupported;
+
+        Check("gate.repaint.blit-only-hash-guard the zero-rect route paints NOTHING and blits the retained canvas, which is correct only while \"bytes differ ⇒ the region is non-empty\" — an invariant nothing enforces — so the frame's content fingerprint is CHECKED against the one the canvas was painted from: equal passes, different surrenders one NAMED full frame (EmptyDamageStreamMismatch) instead of freezing a permanent ghost the host's skip-submit hash would then elide forever, and an unstamped hash on either side keeps today's behaviour rather than surrendering every blit-only frame",
+            sameStream && driftCaught && frameUnknown && canvasUnknown && bothUnknown && named,
+            $"same={sameStream} drift={driftCaught} frameUnknown={frameUnknown} canvasUnknown={canvasUnknown} bothUnknown={bothUnknown} named={named}");
+    }
+
+    static bool PixelDisjoint(ReadOnlySpan<PixelRect> p, int n)
+    {
+        for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++)
+                if (p[i].Overlaps(in p[j])) return false;
+        return true;
+    }
+
+    // Every input rect's own rounded-OUT pixel box must sit inside one merged rect: the fold may only ever GROW the
+    // covered set (a merge that dropped pixels would leave the damage unrepainted, which is the opposite failure).
+    static bool PixelCovers(ReadOnlySpan<RectF> dip, ReadOnlySpan<PixelRect> p, int n, float scale)
+    {
+        for (int i = 0; i < dip.Length; i++)
+        {
+            PixelRect want = RepaintPolicy.ToPixel(in dip[i], scale, (int)(W * scale), (int)(H * scale));
+            bool inside = false;
+            for (int j = 0; j < n && !inside; j++)
+                inside = want.Left >= p[j].Left && want.Top >= p[j].Top && want.Right <= p[j].Right && want.Bottom <= p[j].Bottom;
+            if (!inside) return false;
+        }
+        return true;
     }
 
     static void StreamSafetyChecks()
@@ -277,19 +386,55 @@ static class DamageSuite
             bool shadowCoversShader = shadowHalo >= 4f + 3f * MathF.Max(10f * 0.5f, 0.5f);
             bool shadowReaches = RepaintCull.Keep(60f, 100f, 70f, 200f, shadowHalo, in rect);
 
-            // Glyph: max(4, em/2), floored for tiny text and scaling with big text; the wipe LIFT adds on top.
-            bool glyphFloor = MathF.Abs(RepaintCull.GlyphHalo(4f) - 4f) < 1e-4f;
-            bool glyphScales = MathF.Abs(RepaintCull.GlyphHalo(40f) - 20f) < 1e-4f;
-            bool glyphLift = MathF.Abs(RepaintCull.GlyphHalo(40f, 6f) - 26f) < 1e-4f;
+            // Glyph: max(GlyphHaloMinDip, em × GlyphHaloEmScale), floored for tiny text and scaling with big text; the
+            // wipe LIFT adds on top. (Raised from the old max(4, em/2) — see gate.repaint.glyph-halo-bound.)
+            bool glyphFloor = MathF.Abs(RepaintCull.GlyphHalo(4f) - RepaintCull.GlyphHaloMinDip) < 1e-4f;
+            bool glyphScales = MathF.Abs(RepaintCull.GlyphHalo(40f) - 40f * RepaintCull.GlyphHaloEmScale) < 1e-4f;
+            bool glyphLift = MathF.Abs(RepaintCull.GlyphHalo(40f, 6f) - (40f * RepaintCull.GlyphHaloEmScale + 6f)) < 1e-4f;
 
             // A plain fill gets only the SDF pipelines' 2-unit AA margin — and 5 units away it is genuinely gone.
             bool aaKeeps = RepaintCull.Keep(98f, 100f, 99f, 200f, RepaintCull.AaHaloDip, in rect);
             bool aaDrops = !RepaintCull.Keep(90f, 100f, 95f, 200f, RepaintCull.AaHaloDip, in rect);
 
-            Check("gate.repaint.cull-halos the per-kind halos match the footprint each vertex shader actually rasterizes — stroke w/2+2, shadow spread+3sigma (>= the shader's own 3*max(blur/2,0.5)), glyph max(4, em/2) plus any wipe lift, plain fill the 2-unit AA margin — so an off-rect primitive whose PIXELS reach in is kept and one whose pixels do not is dropped",
+            Check("gate.repaint.cull-halos the per-kind halos match the footprint each vertex shader actually rasterizes — stroke w/2+2, shadow spread+3sigma (>= the shader's own 3*max(blur/2,0.5)), glyph max(GlyphHaloMinDip, em*GlyphHaloEmScale) plus any wipe lift, plain fill the 2-unit AA margin — so an off-rect primitive whose PIXELS reach in is kept and one whose pixels do not is dropped",
                 strokeReaches && strokeIsHalf && shadowCoversShader && shadowReaches
                 && glyphFloor && glyphScales && glyphLift && aaKeeps && aaDrops,
                 $"stroke={strokeHalo} shadow={shadowHalo} glyph={RepaintCull.GlyphHalo(40f, 6f)} aaKeeps={aaKeeps} aaDrops={aaDrops}");
+        }
+
+        // I4 — the glyph halo is the ONE cull halo with no vertex shader to derive it from: GlyphRenderer places quads
+        // from shaped advances + atlas bearings against a declared Bounds that is the NODE BOX, not an ink box. So it is
+        // pinned here as a BOUND with margin over the classes that provably exceed the old em/2 heuristic. Under-covering
+        // does not merely over-draw — it DROPS a run straddling a replay-rect edge and freezes a half-letter into the
+        // retained canvas until something else repaints that region.
+        {
+            // A COLR/CBDT colour-emoji fallback rasterizes past the em box (the fallback face is picked for coverage,
+            // not for metric compatibility with the run's declared size).
+            const float EmojiOverhangEm = 1.35f;
+            // A LineStacking/LineBounds line box tighter than the font's ascent+descent (~1.2 em) pushes ink outside the
+            // declared Bounds on both sides; a 0.4 em line box leaves ~0.8 em of overhang.
+            const float TightLineOverhangEm = 0.80f;
+
+            bool coversEmoji = true, coversTightLine = true, beatsOldHeuristic = true, floored = true;
+            foreach (float em in new[] { 4f, 9f, 12f, 14f, 28f, 64f, 180f })
+            {
+                float halo = RepaintCull.GlyphHalo(em);
+                coversEmoji &= halo >= em * EmojiOverhangEm - 1e-3f;
+                coversTightLine &= halo >= em * TightLineOverhangEm - 1e-3f;
+                beatsOldHeuristic &= halo > em * 0.5f;                    // strictly wider than the heuristic it replaces
+                floored &= halo >= RepaintCull.GlyphHaloMinDip - 1e-3f;   // tiny text still gets a real band
+            }
+            // The lift is a per-glyph VERTICAL displacement (karaoke wipe), so it adds to the halo rather than scaling it.
+            bool liftAdds = MathF.Abs(RepaintCull.GlyphHalo(14f, 11f) - (RepaintCull.GlyphHalo(14f) + 11f)) < 1e-4f
+                            && MathF.Abs(RepaintCull.GlyphHalo(14f, -11f) - (RepaintCull.GlyphHalo(14f) + 11f)) < 1e-4f;
+            // A run whose ink hangs one full em below its declared Bounds is KEPT when the replay rect is that far away —
+            // the concrete "chopped descender at a rect edge" case, at the engine's own body size.
+            var edge = new RectF(100f, 100f, 100f, 100f);
+            bool keepsOverhangingRun = RepaintCull.Keep(120f, 86f, 180f, 99f, RepaintCull.GlyphHalo(14f), in edge);
+
+            Check("gate.repaint.glyph-halo-bound the glyph cull halo is a BOUND, not a heuristic: it is the only one with no vertex shader to derive it from (quads come from shaped advances + atlas bearings against a NODE-BOX Bounds), so it must cover an oversized COLR/CBDT colour-emoji fallback (1.35 em past the box), a LineStacking/LineBounds line box tighter than the font's ascent+descent (0.8 em), and a hard floor for tiny text — strictly wider than the old max(4, em/2) at every size, with the karaoke wipe lift ADDING to it in both directions",
+                coversEmoji && coversTightLine && beatsOldHeuristic && floored && liftAdds && keepsOverhangingRun,
+                $"emoji={coversEmoji} tightLine={coversTightLine} beatsOld={beatsOldHeuristic} floored={floored} lift={liftAdds} keepsOverhang={keepsOverhangingRun} halo14={RepaintCull.GlyphHalo(14f)}");
         }
 
         // Rotation: the AABB must come from all FOUR transformed corners (canon §13.1), not from transforming the
@@ -629,6 +774,71 @@ static class DamageSuite
                 viewportDamaged && acrylicStillExcluded,
                 $"viewport={viewportDamaged} acrylicEmpty={acrylicStillExcluded} count={scrolled.RepaintDamage.Count} full={scrolled.RepaintDamage.FullReason}");
         }
+
+        // 6. §13.1 I3 — a node whose ancestor TRANSLATED-span-copied it, and which then moves ON ITS OWN.
+        //    CopySpanFromPriorTranslated shifts the ancestor's whole subtree WITHOUT walking one descendant, so every
+        //    descendant's stored extent keeps pre-translation coordinates and its stored frame stops advancing. The old
+        //    rule padded such a "stale" extent by RepaintUnknownHaloDip — a 32-DIP EFFECT-halo constant — while the
+        //    quantity it has to cover is the ancestor's accumulated TRANSLATION, which nothing bounds (a scroll is
+        //    hundreds of DIP). The band the node actually vacated (its post-scroll, pre-move position) was then in
+        //    NEITHER emitted rect, so the canvas kept its old pixels there — for minutes, in the playing-idle state this
+        //    campaign targets. The fallback must place that band from the nearest FRESH ancestor (a proven superset,
+        //    since the very translated copy that moved the descendant refreshed the ancestor's own SubtreeBounds), or
+        //    surrender ONE named full frame.
+        {
+            var scene = new SceneStore();
+            var root = scene.CreateNode(1); scene.Root = root;
+            scene.Bounds(root) = new RectF(0f, 0f, 400f, 300f);
+            ref NodePaint rp = ref scene.Paint(root);
+            rp.VisualKind = VisualKind.Box; rp.Fill = new ColorF(0.1f, 0.1f, 0.1f, 1f);
+
+            var viewport = scene.CreateNode(1); scene.AppendChild(root, viewport);
+            scene.Bounds(viewport) = new RectF(0f, 0f, 400f, 300f);
+            ref NodePaint vp = ref scene.Paint(viewport);
+            vp.VisualKind = VisualKind.Box; vp.Fill = new ColorF(0.15f, 0.15f, 0.18f, 1f);
+            scene.ScrollRef(viewport);
+
+            var content = scene.CreateNode(1); scene.AppendChild(viewport, content);
+            scene.Bounds(content) = new RectF(0f, 0f, 400f, 4000f);
+            ref NodePaint cp = ref scene.Paint(content);
+            cp.VisualKind = VisualKind.Box; cp.Fill = new ColorF(0.3f, 0.3f, 0.35f, 1f);
+
+            // One row, visible BOTH before the scroll (y 250) and after it (y 50) — so the recorder really stores an
+            // extent for it, and the extent it stores is 200 DIP away from where the pixels end up. 200 ≫ 32.
+            var card = scene.CreateNode(1); scene.AppendChild(content, card);
+            scene.Bounds(card) = new RectF(20f, 250f, 100f, 40f);
+            ref NodePaint kp = ref scene.Paint(card);
+            kp.VisualKind = VisualKind.Box; kp.Fill = new ColorF(0.8f, 0.4f, 0.2f, 1f);
+
+            var dl = new DrawList();
+            var spans = new SpanTable();
+            Frame(scene, dl, spans);
+            Frame(scene, dl, spans);
+
+            // Scroll: the CONTENT node moves, and the whole subtree (card included) rebases through the translated copy.
+            scene.Paint(content).LocalTransform = Affine2D.Translation(0f, -200f);
+            scene.Mark(content, NodeFlags.TransformDirty);
+            Frame(scene, dl, spans);
+
+            // Now the row makes a move of its own. Its stored extent still says y = 250; its pixels are at y = 50.
+            scene.Paint(card).LocalTransform = Affine2D.Translation(150f, 0f);
+            scene.Mark(card, NodeFlags.TransformDirty);
+            var moved = Frame(scene, dl, spans);
+
+            bool full = moved.RepaintDamage.IsFull;
+            // The band the card TRULY vacated: post-scroll (y 50), pre-move (x 20).
+            bool vacatedCovered = full ? moved.RepaintDamage.FullReason == RepaintFullReason.MissingPriorExtent
+                                       : CoveredBy(moved.RepaintDamage, new RectF(20f, 50f, 100f, 40f));
+            // …and the band it landed on.
+            bool landedCovered = full || CoveredBy(moved.RepaintDamage, new RectF(170f, 50f, 100f, 40f));
+            // The fresh-ancestor fallback is the intended outcome; a named full frame is the sound fallback of last
+            // resort. What is NOT acceptable is a bounded region that covers neither.
+            bool named = !full || moved.RepaintDamage.FullReason == RepaintFullReason.MissingPriorExtent;
+
+            Check("gate.damage.record-stale-prior-after-ancestor-translate a row whose ancestor translated-span-copied it (a scroll) and which THEN moves on its own repaints the band it truly vacated — recovered from the nearest FRESH ancestor's extent, since its own stored extent describes a pre-scroll position 200 DIP away that a 32-DIP effect halo cannot reach — or, if no ancestor on the chain can place it, surrenders ONE named MissingPriorExtent full frame; the old constant-pad rule covered neither and left a ghost for as long as the app stayed on the partial path",
+                vacatedCovered && landedCovered && named,
+                $"full={full}/{moved.RepaintDamage.FullReason} vacated={vacatedCovered} landed={landedCovered} count={moved.RepaintDamage.Count}");
+        }
     }
 
     // ── publisher: seq stamping + publish-gap accumulation ─────────────────────────────────────────────────────────
@@ -655,6 +865,11 @@ static class DamageSuite
             && CoveredBy(rf.Submit.RepaintDamage, new RectF(0f, 0f, 10f, 10f))
             && CoveredBy(rf.Submit.RepaintDamage, new RectF(300f, 200f, 10f, 10f));
         bool stamped = acquired && rf.Submit.PublishSequence == rf.PublishSeq && rf.Submit.PublishSequence == 2;
+        // I2: the seq the carried region SPEAKS FOR. A consumer that sees seq 2 after consuming nothing must be able to
+        // tell "the damage of frame 1 rode forward" from "frame 1 vanished" — otherwise a DropOldest gap (normal under
+        // exactly the load partial repaint exists for) reads as a correctness event and every dropped frame becomes a
+        // full replay PLUS a full-surface blit, strictly worse than the path it replaced.
+        bool carriedFromOldest = acquired && rf.Submit.CarriedFromSeq == 1;
 
         // Once the consumer has caught up, the carry is DISCHARGED — a later publish must not keep re-damaging bands
         // that were already presented (that would ratchet every frame toward full).
@@ -664,7 +879,10 @@ static class DamageSuite
         bool discharged = seam.TryAcquire(out var rf3)
             && rf3.Submit.RepaintDamage.Count == 1
             && CoveredBy(rf3.Submit.RepaintDamage, new RectF(100f, 100f, 10f, 10f))
-            && rf3.Submit.PublishSequence == 3;
+            && rf3.Submit.PublishSequence == 3
+            // …and with the carry discharged, the region speaks only for ITSELF again (a stamp that stayed pinned to an
+            // old seq would make the device's carry check fire forever after one drop).
+            && rf3.Submit.CarriedFromSeq == 3;
 
         // A forced-full frame that is dropped propagates its REASON forward, not just its (empty) rect list.
         var forced = default(RepaintDamageRegion);
@@ -674,9 +892,9 @@ static class DamageSuite
         bool fullCarried = seam.TryAcquire(out var rf5)
             && rf5.Submit.RepaintDamage.IsFull && rf5.Submit.RepaintDamage.FullReason == RepaintFullReason.ImageContent;
 
-        Check("gate.damage.publish-gap-union Publish stamps the monotonic PublishSequence into FrameInfo and UNIONS the damage of every frame the consumer never acquired into the next one (DropOldest drops frames, not their damage); the carry is discharged once the consumer catches up, and a dropped forced-full frame propagates its reason",
-            carriesBoth && stamped && discharged && fullCarried,
-            $"carriesBoth={carriesBoth} stamped={stamped} discharged={discharged} fullCarried={fullCarried}");
+        Check("gate.damage.publish-gap-union Publish stamps the monotonic PublishSequence into FrameInfo and UNIONS the damage of every frame the consumer never acquired into the next one (DropOldest drops frames, not their damage); CarriedFromSeq names the OLDEST seq the carried region speaks for — so a consumer can ask \"was the gap's damage carried?\" instead of the useless \"was there a gap?\" — the carry is discharged once the consumer catches up (and the stamp returns to the frame's own seq), and a dropped forced-full frame propagates its reason",
+            carriesBoth && stamped && carriedFromOldest && discharged && fullCarried,
+            $"carriesBoth={carriesBoth} stamped={stamped} carriedFrom={carriedFromOldest} discharged={discharged} fullCarried={fullCarried}");
     }
 
     // ── end-to-end: the payload the device actually receives ───────────────────────────────────────────────────────
@@ -703,11 +921,19 @@ static class DamageSuite
         bool advanced = later.PublishSequence == seqBefore + 1;
         bool partial = !later.RepaintDamage.IsFull && later.RepaintDamage.Count > 0;
         bool bounded = later.RepaintDamage.Coverage(480f, 320f) <= 1f;
+        // I1/I2: the two scalars the backend's canvas ledger reads. The content fingerprint must actually be STAMPED
+        // (an unstamped hash silently disables the blit-only self-check), it must MOVE when the stream does, and with
+        // nothing dropped the carry stamp must equal the frame's own seq.
+        bool hashStamped = first.DrawListHash != 0UL && later.DrawListHash != 0UL;
+        bool hashTracksStream = later.DrawListHash != first.DrawListHash;
+        bool carrySelf = later.CarriedFromSeq == later.PublishSequence;
 
-        Check("gate.damage.headless-payload the repaint region + publish sequence cross the render seam into the device's FrameInfo: the first frame is a NAMED full repaint (nothing was ever presented into the target), the stamp is monotonic, and a later paint-only write submits a PARTIAL region — the invalidation does not latch",
-            firstFull && firstStamped && submitted && advanced && partial && bounded,
+        Check("gate.damage.headless-payload the repaint region + publish sequence cross the render seam into the device's FrameInfo: the first frame is a NAMED full repaint (nothing was ever presented into the target), the stamp is monotonic, a later paint-only write submits a PARTIAL region (the invalidation does not latch), and the two ledger scalars ride along — a NON-ZERO DrawListHash that moves with the stream (an unstamped one silently disables the blit-only self-check) and a CarriedFromSeq equal to the frame's own seq when nothing was dropped",
+            firstFull && firstStamped && submitted && advanced && partial && bounded
+            && hashStamped && hashTracksStream && carrySelf,
             $"firstFull={first.RepaintDamage.FullReason} seq0={first.PublishSequence} submitted={submitted} advanced={advanced} " +
-            $"later={later.RepaintDamage.FullReason}/{later.RepaintDamage.Count} cov={later.RepaintDamage.Coverage(480f, 320f):0.000} seq={later.PublishSequence}");
+            $"later={later.RepaintDamage.FullReason}/{later.RepaintDamage.Count} cov={later.RepaintDamage.Coverage(480f, 320f):0.000} seq={later.PublishSequence} " +
+            $"hash={hashStamped}/{hashTracksStream} carry={later.CarriedFromSeq}");
     }
 }
 

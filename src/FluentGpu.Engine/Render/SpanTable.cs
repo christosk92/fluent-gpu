@@ -53,6 +53,14 @@ public sealed class SpanTable
     // stored span could go stale (a special-cased visual lives inside its subtree) ⇒ deny reuse AND skip the store. Stale
     // stamps from prior frames read as unblocked, so no per-frame clear is needed (the _frame/_frameId pattern).
     private uint[] _blockStamp;
+    // Repaint damage (gpu-renderer.md §13.1, I3): the frame at which this node's span was re-based by a TRANSLATED copy.
+    // A translated copy stores the ANCESTOR's shifted span only — its descendants are never walked, so their stored
+    // _subtreeBounds keep PRE-translation coordinates and their _frame stops advancing. A descendant that later moves on
+    // its own would then union its new extent with a prior extent that is wrong by the ancestor's accumulated
+    // translation (unbounded: a scroll is hundreds of DIP), ghosting at a position it never occupied. This stamp is what
+    // lets the recorder tell that case apart from the benign one — an EXACT-copy chain, where the stale extent is still
+    // exactly where the pixels are — instead of padding every stale extent by a constant that bounds nothing.
+    private uint[] _translatedFrame;
     private uint _frameId;
 
     public SpanTable(int capacity = 64)
@@ -73,6 +81,7 @@ public sealed class SpanTable
         _clipComplete = new bool[capacity];
         _culled = new bool[capacity];
         _blockStamp = new uint[capacity];
+        _translatedFrame = new uint[capacity];
     }
 
     public bool HasPrior => _frameId > 1;
@@ -85,6 +94,7 @@ public sealed class SpanTable
         {
             Array.Clear(_frame);
             Array.Clear(_blockStamp);   // wrap: a stale stamp must never falsely equal the reset frame id (1)
+            Array.Clear(_translatedFrame);
             _frameId = 1;
         }
         return _frameId;
@@ -187,6 +197,25 @@ public sealed class SpanTable
         return true;
     }
 
+    /// <summary>The record frame this node's span was last stored at (0 = never, under this generation). Paired with
+    /// <see cref="TranslatedFrameOf"/> to decide whether a carried-over prior extent is still where the pixels are.</summary>
+    public uint StoredFrameOf(int nodeIndex, uint gen)
+        => (uint)nodeIndex < (uint)_gen.Length && _gen[nodeIndex] == gen ? _frame[nodeIndex] : 0u;
+
+    /// <summary>The frame at which this node's span was re-based by a TRANSLATED copy (0 = never). See
+    /// <c>_translatedFrame</c>.</summary>
+    public uint TranslatedFrameOf(int nodeIndex, uint gen)
+        => (uint)nodeIndex < (uint)_gen.Length && _gen[nodeIndex] == gen ? _translatedFrame[nodeIndex] : 0u;
+
+    /// <summary>Record that this node's span was stored by a TRANSLATED copy at <paramref name="frameId"/> — i.e. its
+    /// whole subtree was shifted without re-recording a single descendant. Call it right after the matching
+    /// <see cref="Store"/>.</summary>
+    public void NoteTranslatedCopy(int nodeIndex, uint gen, uint frameId)
+    {
+        if ((uint)nodeIndex >= (uint)_gen.Length || _gen[nodeIndex] != gen) return;
+        _translatedFrame[nodeIndex] = frameId;
+    }
+
     public void Store(int nodeIndex, uint gen, uint frameId, ulong inputSig, ulong moveSig, in DrawSpan span)
     {
         EnsureCapacity(nodeIndex + 1);
@@ -261,5 +290,6 @@ public sealed class SpanTable
         Array.Resize(ref _clipComplete, n);
         Array.Resize(ref _culled, n);
         Array.Resize(ref _blockStamp, n);
+        Array.Resize(ref _translatedFrame, n);
     }
 }

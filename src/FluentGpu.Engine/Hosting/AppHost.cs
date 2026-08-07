@@ -646,6 +646,26 @@ public sealed class AppHost : IDisposable
     /// capture coordination (landing plan §9); it does not make windowed async safe (UploadImage/resize still race).</summary>
     public void QuiesceRenderThread() => _renderThread?.Dispose();
 
+    /// <summary>PARK the fgpu-render thread, run <paramref name="uiGpuWork"/> with the UI thread as the sole GPU owner,
+    /// then release it — the REPEATABLE form of <see cref="QuiesceRenderThread"/> (which stops the thread for good and
+    /// therefore cannot be used more than once in a live session). Exactly the mutual exclusion the fenced UI-side
+    /// swapchain <c>Resize</c> already runs under, so a UI-thread GPU read here is no more novel than that one.
+    /// <para>Used by the <c>--repaint-identity</c> harness, which has to interleave frame production with back-buffer
+    /// captures; an embedder doing any out-of-band GPU work against the same device needs the same bracket. Re-entrancy
+    /// is not supported (the underlying park/resume is not counted), and <paramref name="uiGpuWork"/> must not itself
+    /// run a frame.</para></summary>
+    public void RunWithRenderThreadParked(Action uiGpuWork)
+    {
+        ArgumentNullException.ThrowIfNull(uiGpuWork);
+        if (_renderThread is { } rt)
+        {
+            rt.Quiesce();
+            try { uiGpuWork(); }
+            finally { rt.Resume(); }
+        }
+        else uiGpuWork();
+    }
+
     private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
     {
         Threading.ThreadGuard.AssertRender();
@@ -1732,6 +1752,26 @@ public sealed class AppHost : IDisposable
     // reason. No renderer consumes the region yet, so these are pure bookkeeping in Phase A.
     private bool _repaintTargetValid;           // false until the first frame publishes; cleared by resize/DPI/device recovery
     private ColorF _lastPublishedClear;         // theme switch changes the clear color under a byte-identical stream
+
+    /// <summary>Force the NEXT published frame to repaint the WHOLE target
+    /// (<see cref="RepaintFullReason.TargetInvalidated"/>), exactly as a resize or a device recovery does. One frame
+    /// only — the flag re-arms itself at publish.
+    /// <para>Not a diagnostic switch: it is the explicit form of an invalidation the engine already performs
+    /// internally, and an embedder that paints into the same target out-of-band (an interop overlay, an external
+    /// composition pass) genuinely needs it. The <c>--repaint-identity</c> harness uses it to render the SAME scene
+    /// state twice — once partially, once in full — and compare the two captures byte for byte.</para>
+    /// <para>It also clears the skip-submit baseline, and that is not an extra: the request is for a REPAINT, and a
+    /// frame whose command stream is byte-identical to the last presented one is elided before it ever publishes — so
+    /// without this the request would be silently swallowed exactly on the frames where the caller most obviously means
+    /// it (nothing in the scene changed; the TARGET is what went stale).</para></summary>
+    public void RequestFullRepaintOnce()
+    {
+        _repaintTargetValid = false;
+        _lastPresentedDrawListHash = 0UL;
+        // …and ASK for the frame. Nothing in the scene is dirty on the frames this call is for, so without this the
+        // host's idle gate returns before Paint and the request waits for an unrelated wake that may never come.
+        WakeFrame();
+    }
 
     // ── Skip-submit gate state (finding #3a) ─────────────────────────────────────────────────────────────────────────
     private ulong _lastPresentedDrawListHash;   // FNV-1a of the last PRESENTED command stream; a byte-identical frame skips submit+present
@@ -3245,8 +3285,12 @@ public sealed class AppHost : IDisposable
                 _repaintTargetValid = true;
                 _lastPublishedClear = Clear;
                 publishedRepaint = repaint;
+                // §13.1 I1: the content fingerprint rides the seam so the backend's retained canvas can CHECK a
+                // "nothing changed" frame instead of trusting it. Hoisted above the publish from the skip-submit
+                // baseline update below — the same single hash, computed once, just earlier in the frame.
+                if (dlHash == 0UL) dlHash = DrawListHash(_drawList.Bytes, _drawList.SortKeys);
                 var submitInfo = new FrameInfo(FrameSizePx(keepAlive), _window.Scale, Clear, recordStats.Damage, _images.ClockMs, _damageEpoch, holdSelfBlurForScroll,
-                                               repaint);
+                                               repaint, DrawListHash: dlHash);
                 if (resized && keepAlive) _device.HintSettlePresent();
                 double gpuRenderMs = _device.LastGpuRenderMs;
                 bool interactivePresent = !keepAlive && s_scrollPresentIntervalZero && scrollActive
@@ -3303,8 +3347,8 @@ public sealed class AppHost : IDisposable
                         return LastStats;
                     }
                 }
-                // §5.2 Fix A: every submitted stream becomes the elision baseline — active frames hash too.
-                if (dlHash == 0UL) dlHash = DrawListHash(_drawList.Bytes, _drawList.SortKeys);
+                // §5.2 Fix A: every submitted stream becomes the elision baseline — active frames hash too. (Already
+                // computed above for FrameInfo.DrawListHash; this is the same value, not a second walk.)
                 _lastPresentedDrawListHash = dlHash;
                 // Covered Present stand-down skips the sync path's only pacer — reuse the skip-submit pacing floor.
                 // Only when Present was awaited on this turn (inline / force-sync). Async Present completes later on the

@@ -30,6 +30,11 @@ public enum RepaintFullReason : byte
     TargetInvalidated,
     /// <summary>The backend cannot honour a partial repaint for this frame's stream (blur/acrylic/unknown ops).</summary>
     BackendUnsupported,
+    /// <summary>The frame claimed "nothing changed" (no rects, no forced full) but its command stream does NOT match the
+    /// one the retained canvas was painted from — so a damage source is missing. The backend repaints in full and
+    /// invalidates the canvas, converting what would be a PERMANENT stale-pixel ghost into one named full frame. Seeing
+    /// this token in <c>dmgFullReason</c> means "find the patch that changes bytes without dirtying a node".</summary>
+    EmptyDamageStreamMismatch,
 }
 
 /// <summary>Backing storage for <see cref="RepaintDamageRegion"/>'s rects — one [InlineArray] so the whole region is a

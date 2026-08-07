@@ -268,6 +268,19 @@ static class Program
             return;
         }
 
+        // Repaint-identity mode: the PIXEL check for §13.1 damage-scissored partial repaint. Renders each of six
+        // scenarios twice from the SAME scene state — once through the partial route, once through a forced full
+        // repaint — and requires the two back buffers to be byte-identical. Nonzero exit on any mismatch (or on a
+        // scenario that never reached the partial route, which has stopped testing what it claims). GPU required.
+        // `--repaint-identity [outDir]`; mismatches write partial/full/diff PNGs there.
+        int ident = Array.IndexOf(args, "--repaint-identity");
+        if (ident >= 0)
+        {
+            string? identOut = ident + 1 < args.Length && !args[ident + 1].StartsWith("--") ? args[ident + 1] : null;
+            Environment.Exit(RepaintIdentityProbe.Run(identOut));
+            return;
+        }
+
         // Screenshot mode: render a single deterministic scene then exit. Opaque by default; --mica for the composited path.
         if (screenshot != null)
         {

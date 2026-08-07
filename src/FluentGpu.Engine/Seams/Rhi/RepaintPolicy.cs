@@ -31,8 +31,39 @@ internal struct ReplayRectBuffer
     private RectF _e0;
 }
 
+/// <summary>An integer DEVICE-PIXEL rect, HALF-OPEN on both axes (<c>[Left,Right) × [Top,Bottom)</c>) — the exact shape
+/// D3D12's <c>RSSetScissorRects</c> / <c>ClearRenderTargetView(…, NumRects, …)</c> consume. This is the space replay
+/// rects must be disjoint in: float-DIP disjointness does NOT survive <see cref="RepaintPolicy.ToPixel"/>'s independent
+/// round-OUT (two rects 0.4 DIP apart both claim the pixel column between them), and a shared column that is cleared
+/// once and replayed twice is a permanent double-blend hairline in the retained canvas.</summary>
+public struct PixelRect : IEquatable<PixelRect>
+{
+    public int Left, Top, Right, Bottom;
+
+    public PixelRect(int left, int top, int right, int bottom)
+    { Left = left; Top = top; Right = right; Bottom = bottom; }
+
+    /// <summary>No pixels at all (half-open ⇒ an empty span on either axis).</summary>
+    public readonly bool IsEmpty => Right <= Left || Bottom <= Top;
+
+    /// <summary>Shares at least one PIXEL with <paramref name="o"/>. Strict (half-open) — two rects that merely ABUT
+    /// (<c>a.Right == b.Left</c>) cover disjoint pixel sets and are deliberately NOT merged: keeping them apart costs
+    /// less fill than their union and is equally correct.</summary>
+    public readonly bool Overlaps(in PixelRect o)
+        => Left < o.Right && o.Left < Right && Top < o.Bottom && o.Top < Bottom;
+
+    public static PixelRect Union(in PixelRect a, in PixelRect b)
+        => new(Math.Min(a.Left, b.Left), Math.Min(a.Top, b.Top), Math.Max(a.Right, b.Right), Math.Max(a.Bottom, b.Bottom));
+
+    public readonly bool Equals(PixelRect o) => Left == o.Left && Top == o.Top && Right == o.Right && Bottom == o.Bottom;
+    public readonly override bool Equals(object? obj) => obj is PixelRect p && Equals(p);
+    public readonly override int GetHashCode() => HashCode.Combine(Left, Top, Right, Bottom);
+    public readonly override string ToString() => $"[{Left},{Top} → {Right},{Bottom})";
+}
+
 /// <summary>The ≤ <see cref="RepaintPolicy.MaxReplayRects"/> rects a <see cref="RepaintRoute.Partial"/> frame clears and
-/// replays, in world-space float DIPs (the DIP→device rounding-OUT happens at the RHI leaf). Pairwise DISJOINT, so
+/// replays, in world-space float DIPs (the DIP→device rounding-OUT happens at the RHI leaf, via
+/// <see cref="RepaintPolicy.ToPixelRects"/>, which re-establishes disjointness in PIXEL space). Pairwise DISJOINT, so
 /// <see cref="SummedArea"/> is an exact area and no pixel is painted twice.</summary>
 public struct ReplayRects
 {
@@ -152,6 +183,84 @@ public static class RepaintPolicy
         if (!canvasValid) { rects = default; return RepaintRoute.FullIntoCanvas; }
         return RepaintRoute.Partial;
     }
+
+    /// <summary>
+    /// DIP → DEVICE PIXELS, rounding OUT (floor/ceil) and clamping to the target. The ONE conversion — the backend's
+    /// scissor helper, the per-rect clear list and the decode-time cull rect all go through it, so "cleared box",
+    /// "scissored box" and "culled box" describe the same pixels BY CONSTRUCTION rather than by two matching copies of
+    /// the same arithmetic.
+    /// </summary>
+    public static PixelRect ToPixel(in RectF r, float scale, int targetW, int targetH)
+    {
+        float s = scale <= 0f ? 1f : scale;
+        int left = (int)MathF.Floor(r.X * s);
+        int top = (int)MathF.Floor(r.Y * s);
+        int right = (int)MathF.Ceiling((r.X + r.W) * s);
+        int bottom = (int)MathF.Ceiling((r.Y + r.H) * s);
+        if (targetW < 0) targetW = 0;
+        if (targetH < 0) targetH = 0;
+        left = Math.Clamp(left, 0, targetW);
+        top = Math.Clamp(top, 0, targetH);
+        right = Math.Clamp(right, left, targetW);
+        bottom = Math.Clamp(bottom, top, targetH);
+        return new PixelRect(left, top, right, bottom);
+    }
+
+    /// <summary>
+    /// Convert the replay set to device pixels and RE-ESTABLISH pairwise disjointness <b>in pixel space</b>. Returns the
+    /// live count written into <paramref name="dst"/>.
+    /// <para>
+    /// This is load-bearing, not hygiene. <see cref="Coalesce"/> guarantees disjointness on CLOSED FLOAT intervals, and
+    /// <see cref="ToPixel"/> then rounds each rect OUT independently: any gap in <c>(0, 1)</c> device pixels collapses
+    /// (A ending at 100.3 → <c>right = 101</c>; B starting at 100.7 → <c>left = 100</c>), leaving column 100 in BOTH.
+    /// The partial frame clears that column ONCE and replays over it TWICE, so every translucent coat in it blends
+    /// twice — a 1-device-pixel dark hairline written into the retained canvas and reproduced every frame the same
+    /// damage geometry recurs, with no self-heal. Merging the pair here removes the case entirely; the merged rect
+    /// drives the clear, the scissor and the cull alike.
+    /// </para>
+    /// </summary>
+    public static int ToPixelRects(ReadOnlySpan<RectF> rectsDip, float scale, int targetW, int targetH, Span<PixelRect> dst)
+    {
+        int n = 0;
+        for (int i = 0; i < rectsDip.Length && n < dst.Length; i++)
+        {
+            PixelRect p = ToPixel(in rectsDip[i], scale, targetW, targetH);
+            if (p.IsEmpty) continue;      // clamped away entirely (off-target, or thinner than a pixel at the edge)
+            dst[n++] = p;
+        }
+        // Fold every OVERLAPPING pair and restart: a merge grows a rect, which can bring a third into contact. n ≤ 4,
+        // so this is a couple of dozen integer compares in the worst case.
+        bool merged = true;
+        while (merged)
+        {
+            merged = false;
+            for (int i = 0; i < n && !merged; i++)
+                for (int j = i + 1; j < n; j++)
+                {
+                    if (!dst[i].Overlaps(in dst[j])) continue;
+                    dst[i] = PixelRect.Union(in dst[i], in dst[j]);
+                    dst[j] = dst[n - 1];
+                    n--;
+                    merged = true;
+                    break;
+                }
+        }
+        return n;
+    }
+
+    /// <summary>
+    /// The ZERO-RECT (blit-only) route's self-check: "the canvas still holds this exact stream". A <c>Partial</c> frame
+    /// with no replay rects paints NOTHING and blits the retained canvas, which is correct exactly while
+    /// <em>DrawList bytes differ ⇒ the damage region is non-empty</em> — an invariant nothing in the engine enforces (a
+    /// future byte-changing patch that carries neither <c>RecordDirtyContent</c> nor <c>TransformDirty</c> silently
+    /// breaks it). Without this check the failure is PERMANENT, not transient: the stale canvas is blitted, the stream
+    /// then stabilises, and the host's skip-submit hash elides every later frame, so the change never appears at all.
+    /// With it, the same bug costs one named full frame.
+    /// <para>Returns true (no mismatch) when either hash is unknown — a backend/host that does not stamp a content
+    /// fingerprint keeps today's behaviour rather than surrendering every blit-only frame.</para>
+    /// </summary>
+    public static bool BlitOnlyStreamMatches(ulong frameHash, ulong canvasHash)
+        => frameHash == 0UL || canvasHash == 0UL || frameHash == canvasHash;
 
     // Clamp the accumulated rects to the target, fold every overlap/abutment, then merge the least-wasteful pair until
     // at most `cap` remain. Merging can create fresh overlaps, so every merge is followed by a re-normalize; the result
@@ -307,9 +416,22 @@ public static class RepaintCull
     /// GradientPipeline VS: <c>margin = stroke/2 + 2</c>). Also the floor for every other kind.</summary>
     public const float AaHaloDip = 2f;
 
-    /// <summary>Glyph halo floor: a run's declared <c>Bounds</c> is the node box, and ascenders/descenders/italic
-    /// overhang/wipe lift can reach outside it. Canon R2: <c>max(4px, em/2)</c>.</summary>
-    public const float GlyphHaloMinDip = 4f;
+    /// <summary>Glyph halo floor. A run's declared <c>Bounds</c> is the NODE BOX, not an ink box, and the rasterized
+    /// quads can reach outside it.</summary>
+    public const float GlyphHaloMinDip = 8f;
+
+    /// <summary>Multiple of the em the glyph halo allows past the run's node box, on every side.
+    /// <para>Unlike the five geometric halos, this is NOT derived from a vertex shader — <c>GlyphRenderer</c> places
+    /// quads from shaped advances + atlas bearings, so the true bound is data, not a formula. The old <c>em/2</c>
+    /// survives ordinary Latin text (descender ≈ 0.2 em, italic overhang ≈ 0.2 em) but three real classes exceed it: an
+    /// oversized COLR/CBDT colour-emoji fallback, a tight <c>LineStacking</c>/<c>LineBounds</c> line box narrower than
+    /// the font's ascent+descent, and a run measured with trimming whose shaped form overflows. Each under-cover chops
+    /// a glyph at a replay-rect edge and freezes the half-letter into the canvas. Culling is a one-sided bet — keeping
+    /// a straddler costs one scissored draw, dropping one is a visible defect — so the floor is set well past any
+    /// plausible overhang and the actual quads are measured against it at decode time (the device's
+    /// <c>glyphHaloBreach</c> counter, DEBUG/FLUENTGPU_DIAG only), which turns the heuristic into a monitored
+    /// bound.</para></summary>
+    public const float GlyphHaloEmScale = 1.5f;
 
     /// <summary>An outline band straddles the edge by <c>width/2</c>, plus the AA feather.</summary>
     public static float StrokeHalo(float strokeWidth)
@@ -322,9 +444,11 @@ public static class RepaintCull
     public static float ShadowHalo(float spread, float blur)
         => MathF.Max(spread, 0f) + 3f * MathF.Max(blur, 0.5f) + AaHaloDip;
 
-    /// <summary>Glyph-run halo: <c>max(GlyphHaloMinDip, fontSize/2)</c>, plus any per-glyph vertical lift.</summary>
+    /// <summary>Glyph-run halo: <c>max(<see cref="GlyphHaloMinDip"/>, |fontSize| × <see cref="GlyphHaloEmScale"/>)</c>,
+    /// plus any per-glyph vertical wipe lift. See <see cref="GlyphHaloEmScale"/> for why this one is a monitored bound
+    /// rather than a shader derivation.</summary>
     public static float GlyphHalo(float fontSize, float lift = 0f)
-        => MathF.Max(GlyphHaloMinDip, MathF.Abs(fontSize) * 0.5f) + MathF.Abs(lift);
+        => MathF.Max(GlyphHaloMinDip, MathF.Abs(fontSize) * GlyphHaloEmScale) + MathF.Abs(lift);
 
     /// <summary>Device-space AABB of a local rect under a 2×3 affine — all four corners, so rotation/skew are handled
     /// (canon §13.1 says the damage AABBs come from all four transformed corners; the cull test must agree).</summary>

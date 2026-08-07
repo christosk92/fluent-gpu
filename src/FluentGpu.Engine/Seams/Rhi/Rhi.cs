@@ -25,8 +25,17 @@ namespace FluentGpu.Rhi;
 // direct SubmitDrawList). A consumer that sees a jump of more than one since the frame it last consumed missed logical
 // frames; the publisher already unions the skipped frames' RepaintDamage forward, and this is the backstop that lets the
 // consumer notice anyway.
+// CarriedFromSeq = the OLDEST publish seq whose RepaintDamage is folded into this frame's region (== PublishSequence when
+// nothing was dropped). It is what makes a publish-gap answerable: the question a consumer must ask is not "was the gap
+// zero?" (DropOldest makes gaps normal under load, and the publisher's carry already covers them) but "was the gap's
+// damage carried?", i.e. CarriedFromSeq <= lastConsumedSeq + 1. Treating a gap itself as a correctness event turns every
+// dropped frame into a full repaint exactly when partial repaint matters most.
+// DrawListHash = a content fingerprint of the command stream + sort keys this frame publishes (0 = not stamped). The
+// backend's retained canvas remembers the hash it was last painted from, so a frame that claims "nothing changed" can be
+// CHECKED rather than trusted: a mismatch means a damage source is missing, and one named full frame beats a permanent
+// ghost. Reuses the host's existing skip-submit hash — never a second walk of the stream.
 public readonly record struct FrameInfo(Size2 SizePx, float Scale, ColorF Clear, RectF Damage = default, float ImageClockMs = 0f, ulong FrameEpoch = 0, bool ScrollHold = false,
-    RepaintDamageRegion RepaintDamage = default, ulong PublishSequence = 0);
+    RepaintDamageRegion RepaintDamage = default, ulong PublishSequence = 0, ulong CarriedFromSeq = 0, ulong DrawListHash = 0);
 
 /// <summary><paramref name="DesktopAcrylic"/> = back this composited popup with a true desktop-sampling acrylic
 /// (Windows.UI.Composition host backdrop) tinted by <paramref name="AcrylicTint"/> — the WinUI MenuFlyout material,

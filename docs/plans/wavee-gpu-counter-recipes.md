@@ -42,10 +42,33 @@ Same counter recipe while scrolling the artist/album detail list maximized.
 
 **B4 eyeball:** content plate opaque; titlebar/sidebar/player bar still show live Mica; TL corner cut-away preserved.
 
+## Reading counters across §5.1 (damage-scissored partial repaint)
+
+§5.1 Phase B changed what a per-frame device counter MEANS, so any recipe comparing pre-/post-§5.1 numbers has to
+account for two effects or it will read a win as a regression.
+
+**1. Per-frame counters multiply by the replay count.** A partial frame walks the DrawList once per replay rect, so
+`rects`, `glyphInstances`, `scissorSets`, `segments` and `imagesSkipped` count each surviving primitive once PER RECT.
+A 3-rect frame can report ~3× the instances of the equivalent pre-§5.1 frame while doing a fraction of the fill — the
+point of the feature is that decode-time culling drops nearly everything outside each rect, which these counters do not
+show. Read them against `dmgReplayRects`, never on their own.
+
+**2. The `dmg` tokens are the actual §5.1 readout.** On the `[fps]` line: `dmgRoute` (0 FullDirect / 1 FullIntoCanvas /
+2 Partial), `dmgPartialFrames` vs `dmgFullFrames` (the ratio that says whether the feature engages at all),
+`dmgReplayRects`, `dmgCoveragePct`, and `dmgFullReason` — why a frame surrendered. `EmptyDamageStreamMismatch` there
+means a patch is changing DrawList bytes without dirtying a node; `PublishGap` means the publisher's carry did not
+cover a dropped frame. A capture with **no `dmg` token at all** means the build predates Phase B, not that the path is
+idle.
+
+**3. `dmgPublishGap` is attribution, not an error.** DropOldest makes sequence gaps normal under exactly the load this
+feature exists for, and the publisher unions the dropped damage forward. The counter says a gap happened, not that
+anything was lost.
+
 ## Gates (agent)
 
 ```powershell
 dotnet build src/FluentGpu.slnx
 dotnet build src/FluentGpu.slnx -c Release
 dotnet run --project src/FluentGpu.VerticalSlice
+dotnet run --project src/FluentGpu.WindowsApp -- --repaint-identity   # GPU: 6/6 partial-vs-full pixel identity
 ```

@@ -39,6 +39,7 @@ public sealed class SceneFramePublisher
     // Over-inclusion is the safe direction (a rect repainted twice costs fill; one missed leaves a ghost).
     private RepaintDamageRegion _pendingRepaint;
     private ulong _pendingRepaintSeq;
+    private ulong _pendingCarriedFrom;   // oldest seq folded into _pendingRepaint (== _pendingRepaintSeq when nothing was dropped)
 
     public SceneFramePublisher(int cmdCap = 1 << 16, int sortCap = 1 << 12)
     {
@@ -74,10 +75,17 @@ public sealed class SceneFramePublisher
         // acknowledged _pendingRepaintSeq (or anything newer) the carry is discharged. Racing a concurrent TryAcquire can
         // only make us re-carry an already-consumed region — the safe direction.
         var region = submit.RepaintDamage;
+        // The oldest seq this frame's region speaks for. A consumer compares it against the seq it last consumed: the
+        // property that matters is "the gap's damage rode forward", not "there was no gap" (see FrameInfo.CarriedFromSeq).
+        ulong carriedFrom = seq;
         if (_pendingRepaintSeq != 0 && Volatile.Read(ref _lastConsumedSeq) < _pendingRepaintSeq)
+        {
             region.Union(in _pendingRepaint);
+            carriedFrom = _pendingCarriedFrom;
+        }
         _pendingRepaint = region;
         _pendingRepaintSeq = seq;
+        _pendingCarriedFrom = carriedFrom;
         _slots[free] = new RenderFrame
         {
             PublishSeq = seq,
@@ -86,7 +94,7 @@ public sealed class SceneFramePublisher
             SortLen = sort.Length,
             // The seq is stamped INSIDE Publish (the counter lives here) so a consumer can detect skipped logical frames
             // from the FrameInfo alone, without reaching back into the header.
-            Submit = submit with { RepaintDamage = region, PublishSequence = seq },
+            Submit = submit with { RepaintDamage = region, PublishSequence = seq, CarriedFromSeq = carriedFrom },
             SuppressVsync = suppressVsync,
             InteractivePresent = interactivePresent,
         };
@@ -100,7 +108,21 @@ public sealed class SceneFramePublisher
     {
         int idx = Volatile.Read(ref _publishedIdx);                 // ACQUIRE — pairs with the Publish release
         if (idx < 0) { frame = default; return false; }
+        // R9's seq RE-VERIFY. The header is a ~300 B non-atomic copy (it grew ~8× when RepaintDamageRegion joined it) and
+        // _consumeIdx is published only AFTER the copy, so two Publishes inside the copy window can recycle this very slot
+        // under the reader — PickFreeSlot protects the PUBLISHED and CONSUMING slots, and this one is neither yet. Nothing
+        // unsafe results (_count is a byte a publisher never lets exceed MaxRects, and AsSpan is bounded by it) but a torn
+        // RepaintDamageRegion would yield arbitrary-but-in-range replay rects for one frame. Re-read the seq after the
+        // copy and take the newest slot again; the window is a memcpy wide, so the bounded retry always converges.
         frame = _slots[idx];                                        // POD header copy
+        for (int attempt = 0; attempt < 4; attempt++)
+        {
+            int nowIdx = Volatile.Read(ref _publishedIdx);
+            if (nowIdx == idx && frame.PublishSeq == Volatile.Read(ref _slots[idx].PublishSeq)) break;
+            if (attempt == 3) { frame = default; return false; }    // pathological churn: skip a turn (DropOldest already allows it)
+            idx = nowIdx;
+            frame = _slots[idx];
+        }
         // DropOldest-with-dedup: if the latest published frame is the one we already consumed, there is nothing new — a
         // bare wake (no intervening Publish) must NOT re-submit/re-present the last frame. This makes the consumer
         // idempotent across wakes, which the detached-window routing relies on (a child's wake carries no parent Publish,

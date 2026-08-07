@@ -129,7 +129,45 @@ public static class SceneRecorder
     // self-blur's ±3σ OutputBounds (see `visualBounds`) as they are recorded. Sized to the engine's largest stock
     // elevation (Elevation.CardHover — blur 16, offset 8 ⇒ 8 + 3·8 = 32), same conservative-bound reasoning as
     // HoverElevateHoistSlackDip.
+    // It is an EFFECT-HALO bound and nothing else. It deliberately does NOT stand in for an ancestor's accumulated
+    // TRANSLATION delta, which is unbounded — that case (§13.1 I3) resolves through AncestorTranslatedSince /
+    // TryFreshAncestorExtent instead, because no constant can bound it.
     private const float RepaintUnknownHaloDip = 32f;
+
+    // How far up a parent chain the I3 fallback walks before giving up. A UI tree deeper than this in a single chain is
+    // pathological; the bound is what keeps the (rare) walk O(1) in the worst case rather than O(depth) unbounded.
+    private const int PriorExtentAncestorWalkCap = 64;
+
+    /// <summary>§13.1 I3: did any ancestor re-base its span with a TRANSLATED copy since this node was last recorded? If
+    /// so the node's stored extent describes a position its pixels no longer occupy, by an amount nothing bounds (a
+    /// scroll is hundreds of DIP per frame). Only reached for a MOVED node whose prior extent is stale.</summary>
+    private static bool AncestorTranslatedSince(SceneStore scene, SpanTable spans, NodeHandle node)
+    {
+        uint nodeFrame = spans.StoredFrameOf((int)node.Raw.Index, node.Raw.Gen);
+        NodeHandle p = scene.Parent(node);
+        for (int i = 0; i < PriorExtentAncestorWalkCap && !p.IsNull; i++, p = scene.Parent(p))
+            if (spans.TranslatedFrameOf((int)p.Raw.Index, p.Raw.Gen) > nodeFrame) return true;
+        return false;
+    }
+
+    /// <summary>§13.1 I3: the nearest ancestor whose span WAS refreshed on the previous frame. Its stored
+    /// <c>SubtreeBounds</c> covers everything it drew — including this descendant, wherever the translated copy put it —
+    /// so it is a sound (over-inclusive) stand-in for the vacated band. False ⇒ nothing on the chain can place it.</summary>
+    private static bool TryFreshAncestorExtent(SceneStore scene, SpanTable spans, NodeHandle node, uint spanFrame, out RectF extent)
+    {
+        NodeHandle p = scene.Parent(node);
+        for (int i = 0; i < PriorExtentAncestorWalkCap && !p.IsNull; i++, p = scene.Parent(p))
+        {
+            if (spans.TryGetPriorExtent((int)p.Raw.Index, p.Raw.Gen, spanFrame, out RectF pe, out bool pFresh)
+                && pFresh && pe.W > 0f && pe.H > 0f)
+            {
+                extent = pe;
+                return true;
+            }
+        }
+        extent = default;
+        return false;
+    }
 
     /// <summary>The repaint band for an extent: the AA/ink floor, plus <paramref name="extraHalo"/> for extents whose
     /// per-kind effect halo is NOT already folded in. The ONE place repaint rects are padded.</summary>
@@ -1010,6 +1048,11 @@ public static class SceneRecorder
                         RectF translatedBounds = TranslateBounds(span.SubtreeBounds, dx, dy);
                         var currentSpan = span with { ByteStart = copiedByteStart, SortStart = copiedSortStart, World = world, SubtreeBounds = translatedBounds, ClipComplete = true };
                         spans.Store((int)node.Raw.Index, node.Raw.Gen, spanFrame, spanInputSig, spanMoveSig, in currentSpan);
+                        // §13.1 I3: this shifted the WHOLE subtree without walking a single descendant, so every
+                        // descendant's stored extent is now stale by (dx,dy) — and by however much more this ancestor
+                        // moves before that descendant is next recorded. Stamp it so a descendant that later moves on its
+                        // own can tell "my prior extent was translated out from under me" from the benign exact-copy case.
+                        spans.NoteTranslatedCopy((int)node.Raw.Index, node.Raw.Gen, spanFrame);
                         if ((flags & NodeFlags.TransformDirty) != 0)
                         {
                             var dmgParent = scene.Parent(node);
@@ -1957,7 +2000,23 @@ public static class SceneRecorder
                         if (movedNode) stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
                     }
                     else if (spans.TryGetPriorExtent((int)node.Raw.Index, node.Raw.Gen, spanFrame, out RectF priorExtent, out bool fresh))
-                        stats.AddRepaint(RepaintBand(in priorExtent, fresh ? 0f : RepaintUnknownHaloDip));
+                    {
+                        // A stale prior extent is only a LIE when an ancestor's translated copy moved this node's pixels
+                        // without re-recording it (§13.1 I3). Everything else — an exact-copy chain, a paint-only change —
+                        // leaves the stored extent exactly where the pixels are; padding those by a constant would be
+                        // over-inclusion at best, and re-tightening the `fresh` rule regresses the very frames this
+                        // campaign exists for (gate.damage.record-moved-node-old-union-new).
+                        if (fresh || !movedNode || !AncestorTranslatedSince(scene, spans, node))
+                            stats.AddRepaint(RepaintBand(in priorExtent, fresh ? 0f : RepaintUnknownHaloDip));
+                        else if (TryFreshAncestorExtent(scene, spans, node, spanFrame, out RectF ancestorExtent))
+                            // The nearest ancestor with a FRESH span is a proven superset of this node's true
+                            // last-presented extent: the very translated copy that moved it also refreshed that ancestor's
+                            // stored SubtreeBounds. O(depth) on a rare path, over-inclusive, never a surrendered frame.
+                            stats.AddRepaint(RepaintBand(in ancestorExtent));
+                        else
+                            // Nothing on the chain can place the vacated band. One named full frame beats a ghost.
+                            stats.Repaint.ForceFull(RepaintFullReason.MissingPriorExtent);
+                    }
                 }
             }
         }
