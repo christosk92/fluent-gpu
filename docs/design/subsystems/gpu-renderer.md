@@ -1090,23 +1090,77 @@ public sealed class TextureStagingRing { /* MB-sized, fence-gated; backs CopyBuf
 ### 13.1 Damage / partial present — persistent canvas RT
 
 **MADE: v1 = engine-owned persistent canvas RT** (folds the partial-present MAJOR; the original's `OQ-7`
-is now decided):
+is now decided). **LANDED (2026-08)** — this subsection is AS-BUILT, not a plan. The four numbered points
+below stand; each carries the delta the implementation settled on, and §13.1a states the contracts §13.1
+now owns.
+
 1. **Incremental record** (P8): dirty subtrees re-record into the front arena; clean spans memcpy from the
    render-thread-private back arena (per §11.1). Recording cost ∝ changed subtree.
-2. **Damage region** (`DamageAccumulator`, ≤16 merged `IntRect`): old∪new **world AABBs from all four
+2. **Damage region** (`RepaintDamageRegion`, ≤16 accumulated rects): old∪new **world AABBs from all four
    transformed corners** (handles rotation/skew); each node's damage **inflated by its effect extent**
    (shadow blur radius, backdrop margin); repaint includes **all nodes intersecting that region in
-   z-order** (not just the dirty node).
-3. **Partial repaint:** damaged regions scissor-repainted into the **persistent canvas RT** with
-   `LoadOp.Load` (valid because WE own the RT, unlike a `FLIP_DISCARD` back buffer), then DComp-composited
+   z-order** (not just the dirty node). **AS-BUILT:** the accumulator is a POD value on `FrameInfo`
+   (`pal-rhi.md` owns the seam type; §13.1a owns the payload contract) carrying world-space **float DIP**
+   rects, not `IntRect` — the DIP→device conversion is at the RHI leaf, per point 3. At capacity it merges
+   the **least-waste** pair rather than surrendering, and a forced-full region names its cause
+   (`RepaintFullReason`) instead of being an untyped flag.
+3. **Partial repaint:** damaged regions scissor-repainted into the **persistent canvas RT**, then composited
    to the back buffer. `Present1` dirty-rects are a **pure DWM hint layered on top, NOT the correctness
    mechanism**. World-space float damage converts to integer back-buffer pixels **at the RHI leaf,
-   rounding OUT** (DPI applied once, Windows-side).
-4. **Full-redraw fallback:** >16 rects, >~60% window coverage, layer resize, DPI/swapchain resize, or
-   first frame.
+   rounding OUT** (DPI applied once, Windows-side). **AS-BUILT, three deltas:**
+   - The ≤16 accumulated rects **coalesce to ≤4 replay rects** (least-waste merge again, clamped to the
+     target); each is replayed as its own full pass over the stream under a root scissor clamp.
+   - The damaged region is **CLEARED per rect**, not `LoadOp.Load`-preserved. The DrawList assumes a
+     cleared base — the clear is not an opcode — so replaying translucent fills, AA edges and glyphs over
+     last frame's final pixels would double-blend and darken progressively. `LoadOp.Load` describes the
+     **undamaged** region only, which is exactly what a per-rect clear leaves alone. Whole-target clears
+     keep `NumRects = 0` so the fast-clear path survives.
+   - The replay rects are re-disjointed **on the device pixel grid**, after the round-OUT, not only in float
+     DIP space. Two rects with a sub-pixel gap round out into a shared device column that one clear covers
+     once and two replays blend twice — a permanent hairline. After the fold, the clear list, the scissor
+     and the cull describe **one** pixel set by construction.
+4. **Full-redraw fallback → `FullDirect`:** >16 accumulated rects, >60 % window coverage (checked both
+   before and after the merge), layer resize, DPI/swapchain resize, first frame, or a stream the replay
+   cannot reproduce (§13.1a). **AS-BUILT:** the fallback is `FullDirect` — today's straight-to-back-buffer
+   path, byte for byte — **not** a full redraw into the canvas. It is the permanent safe harbor and the
+   cheapest full frame available (no canvas, no blit); scroll lands here by policy and therefore costs
+   exactly what it did. The canvas is only rebuilt (`FullIntoCanvas`) when partial repaint is otherwise
+   eligible and the canvas alone is stale — i.e. when the rebuild pays for the *next* frame.
 
 The canvas RT is also the natural sample source for in-app Acrylic (§7.2). Animated transforms dirty only
 old∪new bounds → a spinner repaints a tiny region.
+
+#### 13.1a Contracts this section owns (as-built)
+
+| Contract | Rule |
+|---|---|
+| `RepaintRoute` | `FullDirect` (point 4 — the safe harbor) / `FullIntoCanvas` (canvas rebuild) / `Partial` (per-rect clear + N scissored replays; **0 rects = blit the retained canvas**, the "nothing changed" frame). Route is decided per PRIMARY submit only. |
+| `RepaintDamageRegion` | ≤16 accumulated float-DIP rects, pairwise disjoint, least-waste merge at capacity; `IsEmpty` is *count 0 **and** no forced-full reason*, so a `ForceFull` can never be mistaken for "nothing changed"; `RepaintFullReason` names the surrender. Rides `FrameInfo` (seam type: `pal-rhi.md`). |
+| `ReplayRects` | ≤4 rects, clamped to the target, disjoint **on the device pixel grid**. The layered route is capped at **exactly 1** (a group RT is pool-leased, so the stream can only be walked once). |
+| Decode-time culling | **A correctness requirement, not an optimization.** Every primitive-producing op is AABB-tested against the replay rect at decode time with a **per-kind halo derived from what its vertex shader actually rasterizes** — AA margin, stroke half-width, shadow offset/spread/blur, glyph overhang — plus a 1-DIP safety pad covering the scissor's round-OUT. Under-covering a halo drops a boundary primitive and leaves a chopped shape in the canvas; over-covering costs one scissored draw. |
+| Replay-unsafe streams (v1) | Acrylic layers, `LayerKind.Blur`, **both** `LayerKind.EdgeFade` classes (the blurred one *and* the plain σ=0 strip fade), any unrecognized opcode, any truncated payload → `FullDirect`. These sample the target, so a scissored replay would read texels the clamp did not write. Plain `LayerKind.Opacity` is safe (its pooled RT is written and composited entirely inside the clamp). |
+| Publish-sequence carry | `SceneFramePublisher` unions a dropped frame's region forward, and `FrameInfo.CarriedFromSeq` records how far back the carry reaches. A sequence **gap is not a correctness event** — `DropOldest` makes gaps normal under exactly the load partial repaint exists for; the question is whether the gap's damage rode forward. A bare gap is a diagnostic counter. |
+| `canvasValid` ledger | ONE ledger for the ONE canvas (never a per-back-buffer pair). Cleared by: any `FullDirect` primary submit, a canvas size/scale/clear-colour change, a carry that did not cover a gap, an instance-bank overflow this frame (`DroppedInstanceCount != 0`), and device re-init / resize / recovery. Every one of these is a **one-frame** self-heal — the next frame rebuilds into the canvas. |
+| Blit-only self-check | The 0-rect route rests on *bytes differ ⇒ region non-empty*, which nothing structurally enforces. The canvas therefore remembers the `FrameInfo.DrawListHash` it was last painted from; a mismatch invalidates the canvas and takes one named full frame. This converts the whole "missed damage source" class from a **permanent** ghost into a transient one plus a diagnostic that points at the source. |
+| Route parity | A canvas frame must be **bit-identical** to the `FullDirect` render of the same scene state. §13.1 makes canvas frames the normal case, so any delta is a visible difference between an idle window and a scrolling one. As built, canvas and back buffer are the same size, the same buffer format and carry the same view, so the canvas→back-buffer blit must be an exact texel copy — an integer fetch, never a filtered sample (a 1:1 bilinear sample is *not* exact: fp interpolation error quantises the sub-texel weight to 255/256 and folds in ±1 LSB at high-contrast edges). §8's colour contract is the designed-to for the underlying spaces and is unchanged by this. |
+
+**Verification mechanism.** The policy arithmetic is gated headlessly in `FluentGpu.VerticalSlice`
+(`gate.repaint.*` / `gate.damage.*`), but pixels are not — that harness is headless by contract. The pixel
+check is **`FluentGpu.WindowsApp --repaint-identity`** (`validation.md` scope): per scenario it reaches one
+scene state twice, once by a full replay into the canvas and once through partial replays (each mutation is
+an involution), and asserts the two captures are byte-identical; a second gate compares the canvas route
+against the `FullDirect` render of the same state and requires **0 px**. Scenario coverage is deliberately
+adversarial — sub-pixel-gap twin animators, a glyph run straddling a rect edge, a stale prior extent after
+an ancestor rebase, an opacity group straddling the rect, a `DrawVideo` hole, and a genuine 3-rect frame.
+
+**Cost, honestly.** The floor is the **full-surface blit** — partial repaint saves scene raster, never the
+composite. On a tiler the win also depends on the driver's ability to skip untouched tiles behind a
+`ClearRenderTargetView` with `NumRects > 0` on a retained RT, which D3D12 cannot *declare* without
+`ID3D12GraphicsCommandList4::BeginRenderPass`; the conservative lowering loads and stores the whole canvas,
+which would put the saving nearer 2× than the ~3.7× the arithmetic suggests. **No multiplier is claimed
+here: field measurement (GPU-timed `CatComposite`/scene split on real hardware) is pending**, and
+`CoverageCutoff`'s 60 % remains a chosen constant awaiting that measurement. `BeginRenderPass` with
+PRESERVE/PRESERVE is the identified next lever.
 
 **Structural-track cancellation damages the last-presented extent.** A layout transition (FLIP translate/scale,
 or a `SizeMode.Reveal` presented-size) draws a node at a translated / size-inflated extent that lies OUTSIDE its

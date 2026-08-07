@@ -233,6 +233,30 @@ the golden corpus and the perceptual metric.
 Runs against both `FluentGpu.Engine` (Headless/Rhi/) (WARP, deterministic, the CI default) and, nightly, real D3D12 hardware to
 characterize the WARP-vs-hardware delta.
 
+### 2.3a `repaint-identity` — partial repaint is indistinguishable from full repaint
+
+**The unknown it retires** ([gpu-renderer.md §13.1](./gpu-renderer.md)): damage-scissored partial repaint is
+the one renderer feature whose *entire* claim is a negative — that nothing is lost. The headless
+`gate.repaint.*` / `gate.damage.*` set is pure policy arithmetic (route selection, coalescing, the pixel-grid
+fold, cull halos, stream safety); by contract it cannot touch a device, a clear/scissor/cull agreement, or a
+pixel. The `--screenshot` golden only ever exercises the first frame, which is always a full one.
+
+- **Host:** `FluentGpu.WindowsApp --repaint-identity` — a command-line arm, **not** a behaviour switch (the
+  default path is unchanged, per the standing no-`FG_*`-for-new-behaviour ruling). GPU required, so it cannot
+  live in the headless `FluentGpu.VerticalSlice`.
+- **Method:** reach ONE scene state twice — once by a full replay into the canvas, once through partial
+  replays (every scripted mutation is an **involution**, so applying it twice restores the scene exactly) —
+  and require the two captures to be **byte-identical**. A scenario that fails to actually take the partial
+  route is reported INCONCLUSIVE and counts as a **failure**, not a pass.
+- **Second gate — route parity:** the same loop passes through the state a `FullDirect` frame was captured
+  at, so the two ROUTES are compared at identical scene state and required to agree at **0 px**.
+- **Evidence on failure:** partial/full/amplified-diff PNGs plus the differing region's bounding box, which is
+  what identifies the *class* — a one-pixel column ⇒ the pixel-grid fold, a missing glyph fragment ⇒ a cull
+  halo, a rectangular block at a stale position ⇒ a missed vacated band, a sparse ±1 LSB scatter at
+  high-contrast edges ⇒ a resample in the canvas→back-buffer blit.
+- **Free riders:** peak replay-rect count and per-frame dropped-instance count are asserted in the same arm,
+  so instance-bank pressure under a multi-rect replay is bounded by *measurement* rather than by argument.
+
 ### 2.4 `seam.race` — concurrency soak with SWEPT params (gates `Seam.Quarantine`, `Seam.RetireFence`)
 
 **The unknown it retires** ([hardened-v1 §4.1, §4.5, §5, §6 build steps 4–5](../hardened-v1-plan.md)): the

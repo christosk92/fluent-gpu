@@ -64,6 +64,28 @@ idle.
 feature exists for, and the publisher unions the dropped damage forward. The counter says a gap happened, not that
 anything was lost.
 
+**4. The §5.1 SPEED-UP IS STILL UNMEASURED — this is the recipe that closes it.** No multiplier is claimed anywhere in
+the canon or the reports, deliberately: the floor is the full-surface canvas blit, and on a tiler the saving also
+depends on whether the driver skips tiles behind a `ClearRenderTargetView` with `NumRects > 0` on a retained RT — which
+D3D12 cannot *declare* without `BeginRenderPass`. The modelled ≈3.7× and the pessimistic ≈1.9× are both defensible
+arithmetic; only the device can decide between them. To settle it, at ONE pinned window size, settled, playing,
+untouched:
+
+```powershell
+Get-Process Wavee -EA SilentlyContinue | Stop-Process -Force
+$env:FG_GPU_TIMING='1'; $env:FG_FPS_LOG='1'
+# ...launch, discard the first ~8 s, then read from the [fps] line:
+#   dmgRoute / dmgPartialFrames vs dmgFullFrames   → is the partial path even engaging?
+#   the CatComposite GPU slice vs the scene slice  → how much of the frame is the blit floor?
+#   per-PID engtype_3d via Get-Counter (never Task Manager)
+```
+
+Compare a **playing + EQ** arm (should be mostly `dmgRoute 2`, low `dmgCoveragePct`) against a **scroll** arm (should be
+mostly `dmgRoute 0` — the fallback is today's path verbatim, so scroll must be UNCHANGED, and a scroll regression is the
+first thing to look for). The same run also settles `RepaintPolicy.CoverageCutoff`'s 60 %, which is a chosen constant,
+not a measured one; near-cutoff hysteresis is deliberately not implemented until this measurement exists, because
+guessing a second constant on top of the first is how the first one stopped being questioned.
+
 ## Gates (agent)
 
 ```powershell

@@ -109,8 +109,28 @@ page content still rounds.
 
 Skip-submit stays the default strategy on **all** GPUs. No `FLIP_SEQUENTIAL` tiled partial present as
 default — measured regression on Adreno TBDR (preserving the back buffer forces tile loads that cancel
-the skipped redraw). Acrylic `Damage` stays blur-cache-only. `Present1` dirty rects remain a possible
-future **discrete/IMR-only** capability, never a fork or a per-vendor branch.
+the skipped redraw). `Present1` dirty rects remain a possible future **discrete/IMR-only** capability,
+never a fork or a per-vendor branch.
+
+> **SUPERSEDED IN PART (2026-08).** Two statements above have been overtaken by the §5.1 campaign; the
+> `FLIP_SEQUENTIAL` and `Present1` rulings still stand exactly as written.
+>
+> - *"Acrylic `Damage` stays blur-cache-only"* — no longer true, and the distinction it drew has a name now.
+>   `FrameInfo.Damage` (the acrylic blur-cache union: transform-moved nodes only) is **unchanged** and is
+>   still blur-cache-only. What landed is a **separate, deliberately different** set,
+>   `FrameInfo.RepaintDamage`, which drives damage-scissored repaint into the engine-owned persistent
+>   canvas. The two answer different questions and must never be substituted for one another.
+> - *"partial present is a future, discrete/IMR-only capability"* — true of **`Present1` dirty rects**, which
+>   is what that sentence is about, and still the ruling. It is **not** true of partial *repaint*: the landed
+>   mechanism never touches the present call. The frame is scissor-repainted into an RT **we own** (so
+>   retaining its contents is legal, unlike a `FLIP_DISCARD` back buffer) and then blitted whole to the back
+>   buffer, so the present path is byte-for-byte what it was — which is precisely why the Adreno regression
+>   above does not apply. The floor is that full-surface blit, and the high-coverage / replay-unsafe fallback
+>   is today's straight-to-back-buffer path verbatim.
+>
+> Contracts and route policy: [`docs/design/subsystems/gpu-renderer.md` §13.1/§13.1a](../design/subsystems/gpu-renderer.md).
+> No speed multiplier is claimed — the hardware measurement is still pending (see
+> [`wavee-gpu-counter-recipes.md`](./wavee-gpu-counter-recipes.md) for the recipe).
 
 ## D — Beauty constraints
 
