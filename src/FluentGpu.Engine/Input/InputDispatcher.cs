@@ -4654,6 +4654,32 @@ public sealed class InputDispatcher
         return _hitAbs.X >= pr.X && _hitAbs.X < pr.X + pr.W && _hitAbs.Y >= pr.Y && _hitAbs.Y < pr.Y + pr.H;
     }
 
+    /// <summary>The INPUT dual of the STICKY viewport cut (<c>ScrollBindDsl.ClipTopAtViewport</c>): a point above the
+    /// cut is outside every pixel this node and its subtree drew, so it takes no hit — exactly what
+    /// <see cref="NodeFlags.ClipsToBounds"/> already does for the box.
+    ///
+    /// <para><b>Why it must exist.</b> That clip is what puts a page's real ground behind a pinned band that paints
+    /// NOTHING, and the guillotined content is by construction a LATER sibling than the chrome pinned on that line
+    /// (both hit walks keep the LAST matching child). Without this gate the invisible rows above the cut won every
+    /// click aimed at the band — the artist page's section pivot and the album/show band's actions were dead across
+    /// their whole width. This is not paint-derived hit-testing (which stays deliberately absent): a clip is a
+    /// SCISSOR the recorder hands to the whole subtree, and input has always followed scissors.</para>
+    ///
+    /// <para><b>Why only that clip.</b> A FINITE ClipRect box is a reveal/flight presentation — an
+    /// <c>AnimChannel.ClipL/T/R/B</c> ComboBox dropdown splitting open, a connected-animation flight — over a surface
+    /// that is already logically live and whose clip is mid-flight for a couple of frames; gating input there makes an
+    /// opening menu reject the click that opened it. The sticky cut identifies itself by its sentinel sides
+    /// (<see cref="NodePaint.StickyClipSpan"/>): a LINE across the node, not a box.</para>
+    ///
+    /// <para><paramref name="local"/> is the point in the node's own untransformed local space — the same space
+    /// <c>ClipRect</c> is authored in (the recorder maps it with the node's world transform).</para></summary>
+    private static bool ClipRectAdmits(in NodePaint np, Point2 local)
+    {
+        var c = np.ClipRect;
+        if (c.IsInfinite || c.X > -NodePaint.StickyClipSpan) return true;
+        return local.Y >= c.Y;
+    }
+
     // Both walks descend the POINT through each node's inverse transform (scale-aware — WinUI hit-tests the rendered
     // geometry, so a button inside a 2× Viewbox is clickable across its whole rendered extent), mirroring the
     // recorder's world composition exactly. q is the point in the node's PARENT-content space.
@@ -4683,6 +4709,7 @@ public sealed class InputDispatcher
         float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
+        if (!ClipRectAdmits(in np, local)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;
@@ -4736,6 +4763,7 @@ public sealed class InputDispatcher
         float hitH = float.IsNaN(np.PresentedH) ? b.H : np.PresentedH;
         bool inside = local.X >= 0f && local.X < hitW && local.Y >= 0f && local.Y < hitH;
         if ((flags & NodeFlags.ClipsToBounds) != 0 && !inside) return NodeHandle.Null;
+        if (!ClipRectAdmits(in np, local)) return NodeHandle.Null;
 
         var childLocal = new Point2(local.X - np.ChildShiftX, local.Y - np.ChildShiftY);
         NodeHandle result = NodeHandle.Null;

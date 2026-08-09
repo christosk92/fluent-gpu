@@ -29,6 +29,9 @@ sealed partial class ArtistPage : Component
     // from OnRealized, read by ContextPivot's scroll effect — never an ancestor relationship, so the band can live
     // inside the pinned hero while the sections live in the magazine body.
     readonly SectionAnchors _anchors = new();
+    // The route the registry above currently holds nodes FOR. Compared (and the registry dropped) inside Render — see
+    // the reset note there for why this edge cannot be an effect.
+    string? _anchorsRoute;
     // Cover-extracted page CHROME accent for accent-filled controls; null keeps the semantic default live.
     // WASH accent lives in CoverPaletteLeaves (veil / blend wash) — not a page field.
     ColorF? _paletteAccent;
@@ -102,15 +105,26 @@ sealed partial class ArtistPage : Component
             paletteUrl, artistReady, colorWashesDisabled, apply: true, _tintOwner, shellMaterial,
             key: "artist-tint:" + routeKey);
 
+        // A new artist is a new set of sections in a REUSED slot, so the band's registry must drop the old nodes. That
+        // edge is taken HERE, in Render, and NOT in the effect below — the ordering is the whole point:
+        // OnRealized fires during the RECONCILE of this render (Reconciler.Realize), while UseEffect bodies run after
+        // PRESENT. A reset in the effect therefore wiped the registrations the same frame's realization had just made,
+        // and nothing re-registers afterwards (a node realizes once). The band was left with a null viewport — the spy
+        // bailed at its `vp.IsNull` guard and the active index stayed 0 forever, while every pivot click resolved a
+        // null node and did nothing. Resetting on the render that changes identity runs BEFORE the new nodes realize,
+        // which is the only correct edge for a registry the reconciler fills.
+        if (!string.Equals(_anchorsRoute, routeKey, StringComparison.Ordinal))
+        {
+            _anchors.Reset();
+            _anchorsRoute = routeKey;
+        }
+
         var compactInteractive = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
         UseEffect(() =>
         {
             compactInteractive.Value = false;
             pageScroll.Value = 0f;
-            // A new artist is a new set of sections in a REUSED slot. Dropping the registrations here means a pivot
-            // click during the first frames of the new artist can never land on the previous artist's node.
-            _anchors.Reset();
         }, routeKey);
         // One tree: the boundary renders Body with the resource's pending value, derives its loading paint, then fills
         // the same Body with the loaded artist. The page does not author or pass a separate skeleton subtree.

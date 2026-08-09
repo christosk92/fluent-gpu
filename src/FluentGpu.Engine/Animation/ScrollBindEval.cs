@@ -229,7 +229,10 @@ public static class ScrollBindEval
     /// that line is guillotined there, so the page's real backdrop (Mica/tint) shows behind the chrome instead of the
     /// content sliding through it. Same content-space geometry + device-grid snap as the pin. While the line sits
     /// at/above the node's top the clip is RELEASED back to <see cref="RectF.Infinite"/> (never left stale); engaged
-    /// clips keep their sides at ±1e8 — inside the sentinel band, since <see cref="RectF.IsInfinite"/> keys off X.
+    /// clips keep their sides at ±<see cref="NodePaint.StickyClipSpan"/> — inside the sentinel band, since
+    /// <see cref="RectF.IsInfinite"/> keys off X. Those sides are also what marks this cut as the one clip class that
+    /// gates INPUT as well as paint (see <c>InputDispatcher.ClipRectAdmits</c>): a band that paints nothing is only a
+    /// band if the content cut away at its edge stops taking its clicks too.
     /// This bind owns the node's whole ClipRect (documented in the DSL). OnFlag fires per engage/release edge.</summary>
     static void ApplyStickyClip(SceneStore scene, ref ScrollBind b, in ScrollState sc, NodeHandle vp)
     {
@@ -257,7 +260,9 @@ public static class ScrollBindEval
         float cur = p.ClipRect.IsInfinite ? -1e9f : p.ClipRect.Y;
         if (MathF.Abs(applied - cur) > 0.01f)
         {
-            p.ClipRect = clipping ? RectF.FromLTRB(-1e8f, applied, 1e8f, 1e8f) : RectF.Infinite;
+            p.ClipRect = clipping
+                ? RectF.FromLTRB(-NodePaint.StickyClipSpan, applied, NodePaint.StickyClipSpan, NodePaint.StickyClipSpan)
+                : RectF.Infinite;
             scene.Mark(n, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             if (PerfEnabled) StickyClipDirties++;
         }

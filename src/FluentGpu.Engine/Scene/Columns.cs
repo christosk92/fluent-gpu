@@ -109,6 +109,19 @@ public struct NodePaint
     // Authored clip-rect (node-local space): when not Infinite, the recorder intersects the child clip with it (composes
     // with ClipsToBounds). Animated by AnimEngine ClipL/T/R/B (e.g. an Expander/CommandBarFlyout reveal). Default Infinite.
     public RectF ClipRect;
+
+    /// <summary>The half-extent the STICKY viewport cut (<c>ScrollBindDsl.ClipTopAtViewport</c>, written by
+    /// <c>ScrollBindEval.ApplyStickyClip</c>) puts on the three edges it does not own, and therefore the SIGNATURE that
+    /// tells a sticky cut apart from every other <see cref="ClipRect"/> writer.
+    ///
+    /// <para>The distinction is load-bearing beyond paint: <c>InputDispatcher</c> gates INPUT on a sticky cut (content
+    /// guillotined at an unpainted pinned band's edge must not keep taking that band's clicks — it is not merely
+    /// invisible there, it is not there), and deliberately does NOT gate input on a finite reveal/flight box (a
+    /// ComboBox dropdown splitting open, a connected-animation flight), where the clip is a transient presentation
+    /// over a surface that is already logically live. Big enough to be unreachable as a real coordinate, small enough
+    /// that it can never be mistaken for <see cref="RectF.Infinite"/> (whose sentinel is 1e9).</para></summary>
+    public const float StickyClipSpan = 1e8f;
+
     // Child-group offset (a SizeMode.Reflow Trailing anchor): when non-zero, the recorder shifts every CHILD's origin
     // by this amount while the node's own fill/border/clip stay put — so the content's end edge rides the animated
     // layout edge (the Expander slide-from-under-the-header). Written by the reflow re-solve each tick; 0 at rest.

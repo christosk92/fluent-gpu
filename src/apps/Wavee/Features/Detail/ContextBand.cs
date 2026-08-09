@@ -33,7 +33,13 @@ sealed class SectionAnchors
     public NodeHandle Get(string key) => _nodes.TryGetValue(key, out var n) ? n : default;
 
     /// <summary>Drop every registration — called when the page swaps identity (artist → artist in the reused slot),
-    /// so a stale node from the previous artist can never answer a pivot click.</summary>
+    /// so a stale node from the previous artist can never answer a pivot click.
+    ///
+    /// <para><b>Call this from RENDER, never from an effect.</b> The registry is filled by <c>OnRealized</c>, which
+    /// the reconciler fires while committing the tree this render returned; <c>UseEffect</c> bodies run after PRESENT,
+    /// i.e. AFTER that. A reset scheduled as an effect therefore erases the registrations of the very frame that made
+    /// them — and since a node realizes exactly once, nothing ever puts them back (D40: the spy stuck on item 0 and
+    /// every pivot click dead, on the FIRST mount, not just on a re-route).</para></summary>
     public void Reset() { _nodes.Clear(); Viewport = default; }
 }
 
@@ -315,7 +321,11 @@ sealed class ContextPivot : Component
     {
         if ((uint)index >= (uint)_items.Length) return;
         var node = _anchors.Get(_items[index].Key);
-        if (node.IsNull) return;
+        // LIVENESS, not just non-null: a registration outlives its node whenever the page reuses its slot, and
+        // BringInto against a reclaimed handle would read another node's rect. Same guard the spy's Resolve applies.
+        var scene = Context.Scene;
+        if (node.IsNull || _anchors.Viewport.IsNull || scene is null
+            || !scene.IsLive(node) || !scene.IsLive(_anchors.Viewport)) return;
         ScrollIntoView.BringInto(Context, _anchors.Viewport, node,
             margin: _bandBottom, alignmentRatio: 0f, animate: !Motion.ReducedMotion);
     }

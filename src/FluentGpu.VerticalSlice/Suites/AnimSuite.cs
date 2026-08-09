@@ -1910,6 +1910,83 @@ static class AnimSuite
                 $"frozenA={frozenA:0.#} frozenB={frozenB:0.#} stayedClean={stayedClean}");
         }
 
+        // 23u3c — the sticky clip's INPUT dual. The clip is what lets a pinned band paint NOTHING and show the page's
+        // real ground; the guillotined content is by construction a LATER sibling than the band (both hit walks keep
+        // the LAST matching child), so without an input gate the invisible rows above the cut win every click aimed at
+        // the chrome. A point inside the band must resolve the band's own button; a point below the cut must still
+        // resolve the row it is over.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sticky-clip-input", new Size2(320, 200), 1f));
+            window.Show();
+            var device = new HeadlessGpuDevice();
+            var fonts = new HeadlessFontSystem(strings);
+            int bandClicks = 0, rowClicks = 0;
+            NodeHandle bandBtn = NodeHandle.Null, rowN = NodeHandle.Null;
+            var root = new W0fStaticProbe
+            {
+                Build = () => ScrollView(new BoxEl
+                {
+                    Direction = 1,
+                    Children =
+                    [
+                        // The pinned band — FIRST sibling, exactly like ArtistPage's hero and DetailTracks' chrome.
+                        new BoxEl
+                        {
+                            Height = 40f, ScrollBinds = [ new() { PinTop = 0f } ],
+                            Children = [ new BoxEl { Height = 40f, Width = 320f, OnClick = () => bandClicks++,
+                                                     OnRealized = h => bandBtn = h } ],
+                        },
+                        // The scrolled body — LAST sibling, clipped at the band's lower edge.
+                        new BoxEl
+                        {
+                            Direction = 1,
+                            ScrollBinds = [ new() { ClipTopAtViewport = 40f } ],
+                            Children =
+                            [
+                                new BoxEl { Height = 300f, Width = 320f, OnClick = () => rowClicks++,
+                                            OnRealized = h => rowN = h },
+                                new BoxEl { Height = 600f },
+                            ],
+                        },
+                    ],
+                }),
+            };
+            using var host = new AppHost(app, window, device, fonts, strings, root);
+            host.RunFrame();
+            var s = host.Scene;
+            NodeHandle FindScrollable(NodeHandle n)
+            {
+                if (n.IsNull) return NodeHandle.Null;
+                if (s.HasScroll(n)) return n;
+                for (var c = s.FirstChild(n); !c.IsNull; c = s.NextSibling(c))
+                {
+                    var r = FindScrollable(c);
+                    if (!r.IsNull) return r;
+                }
+                return NodeHandle.Null;
+            }
+            var vp = FindScrollable(s.Root);
+            var content = s.ScrollRef(vp).ContentNode;
+            void ScrollTo(float y)
+            {
+                ref ScrollState st = ref s.ScrollRef(vp);
+                st.OffsetY = y; st.TargetY = y;
+                s.Paint(content).LocalTransform = Affine2D.Translation(0f, -y);
+                s.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+                host.RunFrame();
+            }
+            ScrollTo(120f);                                    // body top (40) is well above the line (40) → clipped
+            var disp = new InputDispatcher(s);
+            var inBand = disp.HitTest(new Point2(160f, 20f));  // over the band, and over the (clipped) first row
+            var belowCut = disp.HitTest(new Point2(160f, 80f)); // under the cut — the row is live there
+            bool clipEngaged = !s.Paint(s.Parent(rowN)).ClipRect.IsInfinite;
+            Check("23u3c. the sticky clip gates INPUT as well as paint — a pinned band's clicks are not stolen by the content guillotined above the cut",
+                clipEngaged && inBand.Raw.Index == bandBtn.Raw.Index && belowCut.Raw.Index == rowN.Raw.Index,
+                $"clipEngaged={clipEngaged} inBand={inBand.Raw.Index} band={bandBtn.Raw.Index} belowCut={belowCut.Raw.Index} row={rowN.Raw.Index}");
+        }
+
         // 23u2 — trailing-anchored presented height: a pinned hero collapses without relayout, its bottom-authored
         // child + edge stay attached to the live reveal edge, the following content meets that edge through normal
         // scrolling, and hit-testing follows the child-group shift.

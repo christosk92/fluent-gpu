@@ -167,13 +167,19 @@ public static class ContextBandLayout
     /// behind the very bar that names it.
     ///
     /// <para>Returns 0 while the page is at the top (the first section is the answer before anything has crossed:
-    /// a pivot with no mark reads as broken, and the visitor IS looking at the first section), and −1 only for an
-    /// empty pivot. A <see cref="float.NaN"/> top means "not realized yet" and STOPS the scan — an unmeasured section
-    /// cannot be behind the band, and treating NaN as arrived would jump the mark to the end of a page whose lower
-    /// sections have not laid out.</para></summary>
+    /// a pivot with no mark reads as broken, and the visitor IS looking at the first section). A
+    /// <see cref="float.NaN"/> top means "not realized yet" and STOPS the scan — an unmeasured section cannot be
+    /// behind the band, and treating NaN as arrived would jump the mark to the end of a page whose lower sections have
+    /// not laid out.</para>
+    ///
+    /// <para>Returns −1 — "NO ANSWER, hold whatever the caller already had" — for an empty pivot AND for the case
+    /// where not even the FIRST section has a measurement. The second arm is the honest reading of a scan that learned
+    /// nothing, and it is load-bearing: returning 0 there publishes "you are in section one" as a positive fact
+    /// derived from zero evidence, which is exactly how a spy whose registry had been emptied (D40) looked like a
+    /// working spy stuck on the first item rather than a dead one.</para></summary>
     public static int ActiveSection(ReadOnlySpan<float> viewportRelativeTops, float bandBottom)
     {
-        if (viewportRelativeTops.Length == 0) return -1;
+        if (viewportRelativeTops.Length == 0 || float.IsNaN(viewportRelativeTops[0])) return -1;
         int active = 0;
         for (int i = 0; i < viewportRelativeTops.Length; i++)
         {

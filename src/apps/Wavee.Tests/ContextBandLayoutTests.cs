@@ -272,7 +272,23 @@ public class ContextBandLayoutTests
     public void AnUnrealizedSection_StopsTheScan()
     {
         Assert.Equal(1, ContextBandLayout.ActiveSection([-900f, -100f, float.NaN, float.NaN], ContextBandLayout.Height));
-        Assert.Equal(0, ContextBandLayout.ActiveSection([float.NaN, float.NaN], ContextBandLayout.Height));
+    }
+
+    /// <summary>A scan that learned NOTHING (not even the first section has a measurement) reports −1 — "no answer,
+    /// hold what you had" — rather than 0.
+    ///
+    /// <para>This is D40's tell, promoted to a contract. The spy's registry was being emptied after the frame that
+    /// filled it, so every scan saw an all-unrealized page; answering 0 there published "you are in section one" as a
+    /// positive fact derived from zero evidence, which made a DEAD spy look exactly like a working spy that was stuck
+    /// on the first item. −1 is the honest answer and the live caller ignores it, so the mark holds instead of
+    /// snapping home.</para></summary>
+    [Fact]
+    public void AScanThatLearnedNothing_HoldsTheLastAnswerInsteadOfSnappingToTheFirst()
+    {
+        Assert.Equal(-1, ContextBandLayout.ActiveSection([float.NaN, float.NaN], ContextBandLayout.Height));
+        Assert.Equal(-1, ContextBandLayout.ActiveSection([float.NaN, -900f], ContextBandLayout.Height));
+        // …but ONE realized section is evidence, and it answers normally.
+        Assert.Equal(0, ContextBandLayout.ActiveSection([-900f, float.NaN], ContextBandLayout.Height));
     }
 
     [Fact]
@@ -371,6 +387,63 @@ public class ContextBandLayoutTests
         Assert.Contains("ItemClipTopInset = stickyInset", tracks);
         Assert.Contains("ItemClipTopFadeBand = DetailVerticalLayout.StickyFadeBand", tracks);
         Assert.Contains("EdgeCues = ScrollEdgeCues.None", tracks);
+    }
+
+    /// <summary>THE REGISTRY EDGE (D40). The band's anchor registry is filled by <c>OnRealized</c>, which the
+    /// reconciler fires while committing the tree a render returned; <c>UseEffect</c> bodies run after PRESENT — i.e.
+    /// AFTER that. So the reset that drops a previous artist's nodes must be taken in RENDER, never scheduled as an
+    /// effect: as an effect it erased the registrations of the very frame that made them, and since a node realizes
+    /// exactly once nothing ever put them back. On the FIRST mount that left the band with a null viewport (the spy
+    /// bailed at its guard, the underline never left "Top tracks") and every pivot click resolving a null node
+    /// (nothing happened) — one cause, both symptoms.</summary>
+    [Fact]
+    public void TheAnchorRegistry_IsResetDuringRender_NotFromAnEffect()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+        string artist = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ArtistPage.cs"));
+
+        int reset = artist.IndexOf("_anchors.Reset()", StringComparison.Ordinal);
+        Assert.True(reset >= 0, "the registry must still be dropped when the page changes identity");
+        Assert.Equal(reset, artist.LastIndexOf("_anchors.Reset()", StringComparison.Ordinal));   // exactly one edge
+
+        // It is guarded by the route the registry currently holds nodes for — a render-time compare, not a dep list.
+        int guard = artist.LastIndexOf("_anchorsRoute", 0 + reset, StringComparison.Ordinal);
+        Assert.True(guard >= 0 && reset - guard < 200, "the reset must be guarded by the _anchorsRoute compare");
+
+        // And it is NOT inside any UseEffect/UseLayoutEffect body: no effect opener may precede it without its
+        // closing `}, ` dep tail in between.
+        foreach (string hook in new[] { "UseEffect(", "UseLayoutEffect(" })
+        {
+            int open = artist.LastIndexOf(hook, reset, StringComparison.Ordinal);
+            if (open < 0) continue;
+            Assert.Contains("}, ", artist[open..reset]);
+        }
+    }
+
+    /// <summary>THE HIT EDGE (D40). The offset model's clip is not merely a paint: content guillotined at an unpainted
+    /// band's lower edge is a LATER sibling than the band (the page column is hero → sentinel → body, and both hit
+    /// walks keep the LAST matching child), so without an input dual those invisible rows win every click aimed at the
+    /// band. The engine now gates the sticky cut in <c>InputDispatcher</c> — this pins that the app's whole band
+    /// depends on it, in both walks, because the app-side symptom (a pivot that scrolls nothing, a Play that plays
+    /// nothing) is silent.</summary>
+    [Fact]
+    public void TheStickyClip_GatesInputAsWellAsPaint()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+        string engine = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(root)!)!, "FluentGpu.Engine");
+        if (!Directory.Exists(engine)) { Assert.Skip("engine sources not present"); return; }
+
+        string dispatcher = File.ReadAllText(Path.Combine(engine, "Input", "InputDispatcher.cs"));
+        // The gate exists and is applied by BOTH walks — the handler-gated Hit and the handler-less HitAny (which
+        // resolves wheel / drop targets, so a miss there sends the scroll to the wrong scroller).
+        Assert.Contains("private static bool ClipRectAdmits", dispatcher);
+        Assert.Equal(3, Regex.Matches(dispatcher, @"ClipRectAdmits\b").Count);   // the definition + the two call sites
+        // It keys off the sticky cut's sentinel sides, so a finite reveal/flight clip stays paint-only.
+        Assert.Contains("NodePaint.StickyClipSpan", dispatcher);
+        Assert.Contains("NodePaint.StickyClipSpan",
+            File.ReadAllText(Path.Combine(engine, "Animation", "ScrollBindEval.cs")));
     }
 
     /// <summary>NO SHADOW anywhere in the band. Zune chrome carries none, an opaque surface needs none to be a
