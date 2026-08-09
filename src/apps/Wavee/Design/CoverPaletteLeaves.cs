@@ -21,13 +21,13 @@ static class CoverPaletteLeaves
     /// both hero arms, carrying the blurred background extension and — in hero-only mode — the fade back to the neutral
     /// surface below the hero. It replaces the stack of top-anchored alpha washes the two arms used to paint.
     ///
-    /// <para><paramref name="tone"/> is a mount-stable box the leaf PUBLISHES the resolved tone into (from an effect,
-    /// never from Render), so surfaces that must sit ON the tone — the sticky context band's material — can bind to it
-    /// without the page taking a <c>Watch</c> subscription of its own.</para></summary>
+    /// <para>The tone never leaves this leaf. It briefly had to: the sticky context band flattened its opaque material
+    /// over the page's ground and needed to know what that ground was. The band paints NOTHING now — scrolled content
+    /// is clipped at its lower edge and this plane simply shows through it — so the publication, and the signal it
+    /// wrote, are gone.</para></summary>
     public static Element PageTonePlane(string? url, string? fallbackUrl, bool disabled, float heroBand,
-                                        float pageHeight, bool heroOnly, Image? cover,
-                                        Signal<ColorF?>? tone, string key)
-        => Embed.Comp(new CoverPageTonePlane.Props(url, fallbackUrl, disabled, heroBand, pageHeight, heroOnly, cover, tone),
+                                        float pageHeight, bool heroOnly, Image? cover, string key)
+        => Embed.Comp(new CoverPageTonePlane.Props(url, fallbackUrl, disabled, heroBand, pageHeight, heroOnly, cover),
                       () => new CoverPageTonePlane()) with { Key = key };
 
     /// <summary>Artist page blend wash (height follows the hero layout for the current width).</summary>
@@ -49,10 +49,12 @@ static class CoverPaletteLeaves
 
 /// <summary>The detail page's opaque art-derived ground. The <c>CoverColorPlane.Watch</c> subscription lives HERE, in
 /// a leaf, never in a page <c>Render</c> — so a grading arriving mid-scroll re-renders this one node and nothing else;
-/// the rail, the hero and the virtualized track list are untouched. (The leaf HAS to re-render rather than merely
-/// re-paint, because it also PUBLISHES the resolved tone for the sticky band to flatten its material over. The bound
-/// <c>Fill</c> below keeps the brush itself on the compositor, and <c>BrushTransitionMs</c> is what turns a grading
-/// arrival into a cross-fade rather than a snap.)
+/// the rail, the hero and the virtualized track list are untouched. The bound <c>Fill</c> keeps the brush itself on
+/// the compositor, and <c>BrushTransitionMs</c> is what turns a grading arrival into a cross-fade rather than a snap.
+///
+/// <para>This plane is a PAGE-ROOT sibling of the scrolling page, never a child of it, which is what makes the sticky
+/// context band's offset model work: the band paints nothing, content is clipped at its lower edge, and what shows in
+/// that gap is this node — the record's own tone, with the blurred backdrop below at the top of the page.</para>
 ///
 /// <para><b>The background extension</b> (the art melting into the surface) is the same node: a scaled, blurred copy of
 /// the cover masked away over the hero band. It uses <c>ImageEl.BakedBlur</c> — the blur is baked ONCE per (source,
@@ -62,7 +64,7 @@ static class CoverPaletteLeaves
 sealed class CoverPageTonePlane : Component
 {
     internal sealed record Props(string? Url, string? FallbackUrl, bool Disabled, float HeroBand, float PageHeight,
-                                 bool HeroOnly, Image? Cover, Signal<ColorF?>? Tone);
+                                 bool HeroOnly, Image? Cover);
 
     /// <summary>Blur radius of the background extension, and the resolution it is baked at. Large sigma at half
     /// resolution is the cheap end of the bake and the only honest one at this scale — a lightly blurred cover reads as
@@ -76,22 +78,15 @@ sealed class CoverPageTonePlane : Component
         var p = UseProps<Props>();
 
         // The Watch subscriptions, resolved ONCE per render and read here. Hoisting them out of the Fill closure
-        // matters: Watch takes the plane's lock, and a bound brush is re-evaluated on the paint path.
+        // matters: Watch takes the plane's lock, and a bound brush is re-evaluated on the paint path. Render still has
+        // to subscribe (not just the brush) because the ARRIVAL of a grading is what decides whether this node exists
+        // at all — a page with no tone paints nothing and mounts no backdrop.
         var plane = SpotifyLive.CoverColorPlane.Current;
         _ = plane.Watch(p.Url).Value;
         if (p.FallbackUrl is { Length: > 0 } fb && !string.Equals(fb, p.Url, StringComparison.Ordinal))
             _ = plane.Watch(fb).Value;
 
-        // The published tone is what the sticky band flattens its material over. Resolved here (this leaf is the one
-        // node allowed to observe the plane) and written from an EFFECT — a signal write during Render is never legal.
         ColorF? resolved = p.Disabled ? null : Resolve(p);
-        var tone = p.Tone;
-        UseEffect(() =>
-        {
-            if (tone is not null) tone.Value = resolved;
-        }, DepKey.From(HashCode.Combine(resolved.HasValue, resolved.GetValueOrDefault(), p.Disabled)));
-        UseEffect(() => (Action?)(() => { if (tone is not null) tone.Value = null; }), DepKey.Empty);
-
         if (p.Disabled || resolved is null)
             return new BoxEl { Grow = 1f, HitTestVisible = false };
 

@@ -72,7 +72,6 @@ sealed class TrackList : Component
                                                                // so the rows ARE the scroller — the tier system still drops columns to fit.
     readonly bool _verticalHeader;                              // narrow detail mode: hero + chrome are measured rows in this list's scroller
     readonly Signal<float>? _verticalHeroHeightOut;             // published UP to DetailShell: the tone plane's backdrop band
-    readonly IReadSignal<ColorF?> _pageTone;                    // published DOWN from DetailShell's tone plane: the sticky band's ground
     readonly Signal<bool> _verticalCompactInteractive = new(false); // pin-edge only: enable compact Play hit target
     readonly Signal<bool> _verticalBodyClipEngaged = new(false);     // trailing page only: fade exactly while the sticky cut is active
     readonly Signal<float> _verticalHeaderHeight = new(0f);
@@ -233,19 +232,13 @@ sealed class TrackList : Component
     public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h,
                      bool showToolbar = true, bool embedded = false, bool verticalHeader = false,
                      Signal<float>? verticalHeroHeight = null,
-                     IReadSignal<ColorF?>? pageTone = null,
                      IReadSignal<DetailHandlers?>? liveHandlers = null)
     {
         _route = route; _full = full; _bridge = bridge; _initialH = _h = h; _liveHandlers = liveHandlers;
         _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
         _verticalHeroHeightOut = verticalHeroHeight;
-        _pageTone = pageTone ?? NoPageTone;
     }
-
-    /// <summary>The constant "this page paints no art-derived ground" answer, so the hero's band-fill bind is a plain
-    /// signal read on every construction (LibraryPage's embedded list included) rather than a null check per frame.</summary>
-    static readonly Signal<ColorF?> NoPageTone = new(null);
 
     int TrackStart => _verticalHeader && !_cfg.HasTrailing ? VerticalTrackStart : 0;
 
@@ -1212,6 +1205,13 @@ sealed class TrackList : Component
                 {
                     ScrollKey = _route.Value.Name + ":r" + _resetEpoch,
                     AutoEdgeFade = false,
+                    // NO surface-colour scroll-edge cue. It paints an OPAQUE gradient band at the top of the viewport
+                    // once the list is scrolled — i.e. straight over the unpainted context band — and the colour it
+                    // fades toward is resolved by an ANCESTOR walk (SceneRecorder.TryResolveCueSurface). This page's
+                    // ground is the art-derived tone PLANE, a ZStack SIBLING, so the walk sails past it to the shell's
+                    // neutral ground and lands a one-rung-off slab over the band. Exactly the reason ArtistPage's own
+                    // ScrollView already opts out. The band's clip + its feather is the "more content" cue here.
+                    EdgeCues = ScrollEdgeCues.None,
                     ItemClipTopInset = stickyInset,
                     ItemClipTopFadeBand = DetailVerticalLayout.StickyFadeBand,
                     OnScrollGeometryChanged = SwipeCloseObserver(),
@@ -1416,7 +1416,7 @@ sealed class TrackList : Component
             OnBoundsChanged = MeasureVerticalHeader,
             Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, rowFlow, availW,
                 compactLeft, collapseDistance, _verticalCompactInteractive,
-                _searchExpanded, _selectionCommandsVisible!, _pageTone,
+                _searchExpanded, _selectionCommandsVisible!,
                 toolbar, compactSearch, compactActions, compactSelection, _acts)],
         };
         return new BoxEl
@@ -1482,6 +1482,10 @@ sealed class TrackList : Component
         }) with
         {
             Grow = 1f,
+            // Same opt-out, same reason as the virtual path's (see VerticalList): the surface-colour top cue would
+            // paint an opaque, ancestor-resolved slab over the unpainted context band. Only the vertical/hero system
+            // has a band, so the two-column trailing scroller keeps the stock cue.
+            EdgeCues = _verticalHeader ? ScrollEdgeCues.None : ScrollEdgeCues.Auto,
             OnScrollGeometryChanged = SwipeCloseObserver(),
         };
     }
@@ -1539,25 +1543,17 @@ sealed class TrackList : Component
             Children = chromeChildren,
         };
 
-        if (!_verticalHeader) return content;
-
         // THE MERGED BAND'S LOWER STRATUM. This node pins at exactly the identity row's height, so once both are stuck
-        // the page shows ONE surface: identity row (56) + this column row, with this row's own bottom divider (see
-        // Header) as the band's single hairline. There is deliberately no drop shadow — the previous 8-DIP scroll-ramped
-        // Elevation.Card strip under the chrome was compensating for a TRANSLUCENT bar that content ghosted through;
-        // an opaque band needs no elevation to be a boundary, and Zune chrome carries none.
+        // the page shows ONE band: identity row (56) + this column row, with this row's own bottom divider (see
+        // Header) as the band's single hairline. No drop shadow and — now — no FILL either: the band is an unpainted
+        // omission and the rows are clipped at its lower edge instead of sliding under it (the OFFSET model, see
+        // ContextBand). The clip is DetailVerticalLayout.StickyClipInset, which is exactly 56 + this row + the
+        // hairline, so this stratum and the cut are the same line by construction.
         //
-        // The fill is BOUND to the pin flag rather than read during render: a bound colour is a compositor write, so
-        // sticking and unsticking never re-renders this list. It snaps rather than cross-fades (a bound channel is
-        // excluded from BrushTransition per-channel, by contract) — which is the behaviour we want anyway: the surface
-        // must be opaque the instant a row is capable of sliding under it, not 167 ms later.
-        var pinned = _verticalCompactInteractive;
-        return new BoxEl
-        {
-            Key = "chrome-band", Direction = 1,
-            Fill = Prop.Of(() => pinned.Value ? ContextBand.Fill : ColorF.Transparent),
-            Children = [content],
-        };
+        // What went with the fill: a bound `pinned ? ContextBand.Fill : Transparent` brush. It was a compositor write
+        // rather than a re-render, which was the right shape for the wrong idea — the colour it wrote was an opaque
+        // approximation of a live-Mica surface, and on a dark wallpaper it read as a black slab.
+        return content;
     }
 
     Element Toolbar(bool labeled, int tier) =>

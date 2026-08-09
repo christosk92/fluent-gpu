@@ -93,13 +93,14 @@ static class ArtistCompactBar
                 actions,
             ]);
 
-        // The band is centred at the page's 1600 measure like the magazine body under it, but its SURFACE is
-        // full-bleed: an opaque band that stopped at the content measure would leave two transparent shoulders with
-        // live rows sliding through them.
+        // The band's CONTENT is centred at the page's 1600 measure like the magazine body under it, while the band's
+        // extent stays full-bleed. It used to need that distinction because it was a painted surface and an opaque
+        // plate stopping at the content measure would have left two transparent shoulders with live rows sliding
+        // through them. It paints nothing now (the OFFSET model — see ContextBand), and the shoulders are covered by
+        // the same thing the rest of the band is: the clip in ArtistPage.Body, which is full-bleed by construction.
         Element surface = new BoxEl
         {
             Direction = 0, Width = width, Height = ContextBandLayout.Height, Justify = FlexJustify.Center,
-            Fill = ContextBand.Fill,
             Children = [row],
         };
 

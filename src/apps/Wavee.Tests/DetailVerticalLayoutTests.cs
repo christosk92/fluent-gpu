@@ -405,8 +405,10 @@ public class DetailVerticalLayoutTests
         Assert.Contains("WaveeCta.Play(", hero);
         Assert.Contains("WaveeEntrance.Row(", hero);
         Assert.Contains("WaveeCta.IconButtonSize", hero);
-        // …and the band's material follows the page's ground.
-        Assert.Contains("WaveeColors.ContextBandOver", hero);
+        // …and the band it carries paints NOTHING (the offset model): no fill anywhere in the hero file, so the
+        // page's own art-derived ground is what shows through the stuck band.
+        Assert.DoesNotContain("ContextBandOver", hero);
+        Assert.DoesNotContain("ContextBand.Fill", hero);
     }
 
     static string AppSourceRoot([CallerFilePath] string here = "")

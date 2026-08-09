@@ -45,6 +45,19 @@ public static class ContextBandLayout
     /// it has joined the band — so a scrolled page never shows two sticky strata with raw rows between them.</summary>
     public const float HairlineHeight = 1f;
 
+    /// <summary>THE OFFSET MODEL'S OTHER HALF. The band paints no fill (see <c>ContextBand</c>), so the page owes it a
+    /// CLIP: nothing may render into these DIP, and what shows there is the page's own ground.
+    ///
+    /// <para>This is the ARTIST arm's inset, where the band is the identity row and nothing else. The track-detail
+    /// pages pin a second stratum under it — the tracklist's column row plus the shared hairline — so they clip at
+    /// <c>DetailVerticalLayout.StickyClipInset</c> instead, which sums exactly this height plus that row. Two numbers,
+    /// one rule.</para></summary>
+    public const float ClipInset = Height;
+
+    /// <summary>The feather at the clip edge, so content dissolves into the band instead of being guillotined by it.
+    /// The same band the detail pages' item clip already uses, so every surface cuts identically.</summary>
+    public const float ClipFadeBand = DetailVerticalLayout.StickyFadeBand;
+
     /// <summary>Gap between the three clusters (title | pivot | actions).</summary>
     public const float ClusterGap = 24f;      // Spacing.XXL
 

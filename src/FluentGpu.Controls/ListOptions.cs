@@ -16,6 +16,15 @@ public sealed record ScrollOptions
     public string? ScrollKey { get; init; }
     /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its pager).</summary>
     public bool SuppressScrollBar { get; init; }
+    /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — the surface-colour fade at an
+    /// overflowing edge. <see cref="ScrollEdgeCues.Auto"/> (default) resolves to the app default;
+    /// <see cref="ScrollEdgeCues.None"/> opts out. Forwarded onto the built viewport exactly like the
+    /// <see cref="AutoEdgeFade"/> pair beside it — <c>ItemsView</c> already exposed this knob on its own builder
+    /// surface, and this is the <c>CreateBound</c>/<c>Create</c> path's spelling of the same one.
+    /// <para>A surface whose opaque ground is a ZStack SIBLING rather than an ANCESTOR must opt out: the cue resolves
+    /// its colour by walking ancestors (<c>SceneRecorder.TryResolveCueSurface</c>), so it would sail past that ground,
+    /// fade toward the wrong plate, and paint an opaque band the surface never asked for.</para></summary>
+    public ScrollEdgeCues EdgeCues { get; init; } = ScrollEdgeCues.Auto;
     /// <summary>Premium alpha-mask edge fade: feather the content's own alpha at the overflowing edges (one offscreen RT).</summary>
     public bool AutoEdgeFade { get; init; }
     /// <summary>Feather WIDTH in DIP for <see cref="AutoEdgeFade"/>; 0 (default) = the engine's standard band. Forwarded

@@ -264,12 +264,51 @@ sealed partial class ArtistPage : Component
         // Cover-keyed leaf: a late grading re-renders only the wash box, not this Body / magazine sections.
         Element washLayer = CoverPaletteLeaves.ArtistBlendWash(
             paletteUrl, heroWidth, colorWashesDisabled, key: "artist-wash:" + uri);
+
+        // ── THE BAND'S CLIP (the offset model — see ContextBand) ──────────────────────────────────────────────────
+        // The pinned band paints nothing, so nothing may render into its 56 DIP. Everything that scrolls UNDER it is
+        // cut at that line by the engine's sticky clip, and the page's real ground (the shell's live Mica smoke, which
+        // no constant could ever have matched) shows through.
+        //
+        // TWO nodes carry it, because two independent things scroll under the band: the magazine column, and the blend
+        // WASH — which lives in this ZStack behind everything and would otherwise slide its strongest (top) alpha
+        // straight through the band. Both binds are self-gating: ClipTopAtViewport releases to RectF.Infinite while
+        // the line is at or above the node's top, so at scroll 0 neither clips anything, and engaging is a paint write
+        // rather than a re-render. The magazine's leg also feathers its cut so content dissolves into the band instead
+        // of being guillotined by it; the wash is a soft gradient and needs no feather.
+        //
+        // The feather's gate is `compactInteractive` — NOT a second signal. That flag is the sentinel's PinTop(56)
+        // edge, and the sentinel sits at exactly the magazine's top, so it flips on precisely the frame the clip
+        // engages. Reusing it means the feather costs no additional page re-render: this Render already reads it.
+        ScrollBindDsl BandClip() => new() { ClipTopAtViewport = ContextBand.ClipInset };
+        Element magazine = new BoxEl
+        {
+            Key = "artist-under-band",
+            Direction = 1,
+            ScrollBinds = [BandClip()],
+            // The feather is measured off the VISIBLE boundary (the sticky ClipRect), not the element box — see
+            // SceneRecorder's EdgeFade note — so it rides exactly on the cut. Mounted only while engaged: an
+            // always-on top fade would feather the divider under the hero at rest.
+            EdgeFade = compactInteractive.Value
+                ? new EdgeFadeSpec(EdgeMask.Top, ContextBand.ClipFadeBand)
+                : null,
+            Children =
+            [
+                new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false },
+                new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },
+            ],
+        };
         return new BoxEl
         {
             ZStack = true,
             Children =
             [
-                washLayer,
+                new BoxEl
+                {
+                    Key = "artist-wash-clip", Direction = 1, HitTestVisible = false,
+                    ScrollBinds = [BandClip()],
+                    Children = [washLayer],
+                },
                 new BoxEl
                 {
                     Direction = 1,
@@ -277,8 +316,7 @@ sealed partial class ArtistPage : Component
                     [
                         Banner(a, uri, Play, Shuffle, Radio, compactInteractive.Value, pivot.ToArray(), pageScroll),
                         sentinel,
-                        new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false },
-                        new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },
+                        magazine,
                     ],
                 },
             ],

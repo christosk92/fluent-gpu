@@ -47,14 +47,13 @@ sealed class SectionAnchors
 /// replacing, which is the one thing a collapsed header must not be. The track-detail pages had three FLOATING
 /// objects instead of a header at all: a shadowed bordered capsule holding a cover and a title, a pair of bare glyph
 /// buttons, and an accent circle play FAB, all hovering over live scrolling rows with nothing behind them. Both are
-/// gone. This band is a single opaque surface (<see cref="WaveeColors.ContextBand"/>), ONE hairline, NO shadow, no
-/// thumbnail and no plates: the chrome is typography, which is the Zune pivot idiom the app's type ramp was already
-/// aimed at.</para>
+/// gone. This band is ONE hairline, NO shadow, no thumbnail, no plates and — see the offset-model note below — no
+/// SURFACE either: the chrome is typography, which is the Zune pivot idiom the app's type ramp was already aimed at.</para>
 ///
 /// <para><b>The parts are separate on purpose.</b> The artist band pins as one node inside the hero's own collapse
 /// ZStack; the detail band pins as the identity row while the tracklist's column header pins directly under it as a
-/// second node. Both must read as ONE surface, so this class publishes the material, the hairline and the row
-/// scaffolding as pieces either page can assemble, rather than one Build() that would have to grow a mode flag for
+/// second node. Both must read as ONE band, so this class publishes the hairline, the row scaffolding and the clip
+/// contract as pieces either page can assemble, rather than one Build() that would have to grow a mode flag for
 /// the difference.</para>
 ///
 /// <para>Arithmetic (what fits, what the pivot drops, which section is active) lives in the engine-free
@@ -62,15 +61,32 @@ sealed class SectionAnchors
 /// </summary>
 static class ContextBand
 {
-    /// <summary>The band's opaque material. See <see cref="WaveeColors.ContextBand"/> for why it is opaque and why it
-    /// is that particular flatten.
-    ///
-    /// <para>A page that paints its OWN opaque ground under the band (the detail pages' art-derived
-    /// <c>WaveePalette.PageTone</c> plane) must not use this constant: it is solved against the neutral Mica reference,
-    /// and on a tinted page that reads as a grey plate. Those callers pass a live fill through
-    /// <see cref="Row(float,float,Element[],Func{ColorF})"/> instead, which resolves
-    /// <see cref="WaveeColors.ContextBandOver"/> on the compositor.</para></summary>
-    public static ColorF Fill => WaveeColors.ContextBand;
+    // ── THE OFFSET MODEL: THE BAND PAINTS NO FILL ────────────────────────────────────────────────────────────────
+    //
+    // The band has NO material. Not a translucent one, not an opaque one — none. Scrolled content is CLIPPED at the
+    // band's lower edge instead of sliding under it, so the band's 56 (or 93) DIP are an unpainted OMISSION and what
+    // shows there is whatever the page's real ground already is: the shell's live Mica smoke on the artist page, the
+    // art-derived PageTone plane plus its blurred backdrop on the track-detail pages.
+    //
+    // WHY THE FILL HAD TO GO. Every fill this band ever wore was an APPROXIMATION of a surface it could not observe.
+    // The last one was the honest version of that mistake — ColorContrast.Flatten(FileArea, MicaRef.*Default), the
+    // content layer composited onto a no-wallpaper reference tone — and it still could not follow live Mica, which
+    // takes its colour from the user's desktop. On a dark wallpaper the reference tone read as a SOLID BLACK SLAB
+    // parked across the page (user report, screenshots). Parameterising the flatten over the detail pages' art tone
+    // fixed one of the two consumers and left the artist page exactly as wrong; the offset model fixes both, for
+    // free, and can never drift — there is no constant left to drift.
+    //
+    // THE CLIP IS THE CONTRACT. A band with no fill is only a band if nothing renders into its region:
+    //   · artist page      — ONE ClipTopAtViewport bind at ContextBandLayout.Height on the magazine body + the blend
+    //                        wash (ArtistPage.Body).
+    //   · album / show     — the trailing scroller's ClipTopAtViewport at DetailVerticalLayout.StickyClipInset
+    //                        (56 identity row + 36 column row + 1 hairline), already in place (DetailTracks.TrailingBody).
+    //   · playlist / liked — the virtual list's ItemClipTopInset at the same inset, already in place
+    //                        (DetailTracks.ApplyVerticalItemBand). Its ItemClipTopFadeBand feathers the cut.
+    // Both engine mechanisms self-gate: the clip engages only once content actually reaches the line and releases
+    // when it leaves, so there is no state to keep in sync with the band's reveal ramp.
+    //
+    // WHAT STILL PAINTS: the hairline under the band, the pivot's active underline, and the text ink. That is all.
 
     /// <summary>The band's single lower edge — a low-alpha SEPARATOR token, never the accent. The accent in this band
     /// is spent entirely on the two things that earn it: the primary action and the active-section underline.</summary>
@@ -111,20 +127,31 @@ static class ContextBand
         Children = [Hairline()],
     };
 
-    /// <summary>The identity row: <see cref="ContextBandLayout.Height"/> tall, gutter-padded, opaque, and carrying no
-    /// edge of its own — the caller decides where the band's ONE hairline goes (overlaid on the artist page, in flow
-    /// under the tracklist's column header on the detail pages).</summary>
-    public static Element Row(float width, float gutter, Element[] children, Func<ColorF>? fill = null) => new BoxEl
+    /// <summary>The identity row: <see cref="ContextBandLayout.Height"/> tall, gutter-padded, UNPAINTED, and carrying
+    /// no edge of its own — the caller decides where the band's ONE hairline goes (overlaid on the artist page, in
+    /// flow under the tracklist's column header on the detail pages).
+    ///
+    /// <para>No <c>Fill</c> at all (see the offset-model note above). <c>HitTestVisible</c> is still true — the
+    /// engine's hit test is geometric, not paint-derived, so an unpainted box with handlers is a live target exactly
+    /// like the title bar's unpainted caption islands. The row must stay hittable so its actions work AND so the band
+    /// keeps swallowing wheel/click that would otherwise reach the rows scrolling behind it.</para></summary>
+    public static Element Row(float width, float gutter, Element[] children) => new BoxEl
     {
         Direction = 0, Width = width, Height = ContextBandLayout.Height,
         Padding = new Edges4(gutter, 0f, gutter, 0f),
         Gap = ContextBandLayout.ClusterGap,
         AlignItems = FlexAlign.Center,
-        // BOUND when the caller supplies one: a page whose ground is art-derived re-solves this brush on the
-        // compositor as gradings land, instead of re-rendering the band (and its pivot, and its actions) for a colour.
-        Fill = fill is null ? Fill : Prop.Of(fill),
+        HitTestVisible = true,
         Children = children,
     };
+
+    /// <summary>The clip inset each page owes the band, and the feather at that cut — both pure geometry, so both live
+    /// in <see cref="ContextBandLayout"/> where the tests drive them. Re-exposed here only so a band call site does not
+    /// have to know which of the two files owns which half of the contract.</summary>
+    public const float ClipInset = ContextBandLayout.ClipInset;
+
+    /// <inheritdoc cref="ClipInset"/>
+    public const float ClipFadeBand = ContextBandLayout.ClipFadeBand;
 
     /// <summary>The band's arrival: opacity 0→1 with a small upward settle, ramped over the final collapse band so it
     /// is reversible and tracks the finger rather than snapping at a threshold.

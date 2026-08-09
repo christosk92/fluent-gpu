@@ -58,10 +58,10 @@ sealed class DetailShell : Component
     // The vertical hero's MEASURED height, published back up by TrackList (which owns the measurement). The page-tone
     // plane needs it: it is the band the blurred background extension occupies and where hero-only mode fades out.
     readonly Signal<float> _verticalHeroHeight = new(0f);
-    // The live page tone, PUBLISHED BY the tone plane's leaf (the one node allowed to observe the colour plane) and
-    // consumed by the sticky context band, which must flatten its opaque material over this ground rather than over
-    // the neutral Mica reference. Mount-stable, so it rides constructor arguments safely.
-    readonly Signal<ColorF?> _pageTone = new(null);
+    // (There is no page-tone signal any more. The sticky band used to consume one so it could flatten its opaque
+    // material over this page's art-derived ground instead of over the neutral Mica reference; the band paints
+    // NOTHING now — content is clipped at its lower edge and the tone plane simply shows through — so the tone never
+    // has to leave the leaf that resolves it. The hero-only fade needs the plane's own geometry, not its colour.)
     float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
     float _measuredH;                     // last measured page height — the tone plane's hero-only fade is a fraction of it
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
@@ -394,7 +394,6 @@ sealed class DetailShell : Component
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
                         verticalHeader: verticalTracks,
                         verticalHeroHeight: _verticalHeroHeight,
-                        pageTone: _pageTone,
                         liveHandlers: _liveHandlers)) with
                     {
                         // A route is a new scroll/hero identity. Remounting prevents an album→album swap from painting
@@ -422,8 +421,11 @@ sealed class DetailShell : Component
         float heroBand = mode == Vertical && verticalTracks
             ? _verticalHeroHeight.Value                          // subscribe → the band settles with the hero's measure
             : pageH * TwoColumnHeroBandFraction;
+        // Mounted BEHIND the page in the root ZStack (index 1, before the page at index 2), and it is NOT inside any
+        // scroller — so it is exactly what the sticky band's clip exposes: the band's unpainted region shows this
+        // plane's tone and, at the top of the page, its blurred artwork backdrop.
         Element tonePlane = CoverPaletteLeaves.PageTonePlane(
-            paletteUrl, liveUrl, colorWashesDisabled, heroBand, pageH, heroOnly, m.Cover, _pageTone,
+            paletteUrl, liveUrl, colorWashesDisabled, heroBand, pageH, heroOnly, m.Cover,
             key: "detail-tone:" + route.Name + ":" + Tok.Theme);
 
         // HERO SYSTEM: item 0 owns the expanded identity and the custom retained shy-header morph; the chrome pins below

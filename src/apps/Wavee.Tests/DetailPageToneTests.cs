@@ -135,18 +135,33 @@ public class DetailPageToneTests
         }
     }
 
-    /// <summary>The sticky context band's material is solved over the PAGE'S ground, not over the neutral Mica
-    /// reference: on a tinted page the constant flatten reads as a grey plate. The two must differ for a live tone and
-    /// must agree when there is none.</summary>
+    /// <summary>The sticky band does not FLATTEN over this tone — it SHOWS it. The band paints nothing and the page's
+    /// content is clipped at its lower edge, so the plane (a page-root, non-scrolling sibling of the scroller) is
+    /// literally what is visible in the band region. That makes the tone the band's colour with no plumbing at all,
+    /// which is why the tone signal this page used to publish is gone.</summary>
     [Fact]
-    public void ContextBandMaterial_FollowsTheLiveTone()
+    public void TheBandShowsTheTone_RatherThanApproximatingIt()
     {
-        Assert.Equal(WaveeColors.ContextBand, WaveeColors.ContextBandOver(null));
-        var tone = WaveePalette.PageTone(SaturatedRed, ThemeKind.Dark)!.Value;
-        var over = WaveeColors.ContextBandOver(tone);
-        Assert.NotEqual(WaveeColors.ContextBand, over);
-        // It is still a FLATTEN — opaque, and pulled toward the ground it sits on rather than replaced by it.
-        Assert.Equal(1f, over.A);
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        // No tone hand-down survives: not the signal, not the band-fill bind, not the flatten-over helper.
+        foreach (string rel in new[] { "Features/Detail/DetailShell.cs", "Features/Detail/DetailTracks.cs",
+                                       "Features/Detail/DetailVerticalHero.cs", "Design/CoverPaletteLeaves.cs" })
+        {
+            string text = File.ReadAllText(Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)));
+            Assert.DoesNotContain("ContextBandOver", text);
+            Assert.DoesNotContain("_pageTone", text);
+        }
+
+        // The plane is still mounted BEHIND the page in the shell root's ZStack — that ordering is what the band's
+        // unpainted region relies on.
+        string shell = File.ReadAllText(Path.Combine(root, "Features", "Detail", "DetailShell.cs"));
+        int zstack = shell.IndexOf("tintBinder,", StringComparison.Ordinal);
+        Assert.True(zstack >= 0);
+        int plane = shell.IndexOf("tonePlane,", zstack, StringComparison.Ordinal);
+        int page = shell.IndexOf("verticalPage,", zstack, StringComparison.Ordinal);
+        Assert.True(plane > zstack && page > plane, "the tone plane must precede (paint behind) the page");
     }
 
     /// <summary>The tone is mounted for BOTH page arms from ONE leaf, the washes it replaced are gone, and the leaf

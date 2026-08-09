@@ -288,25 +288,89 @@ public class ContextBandLayoutTests
 
     // ── source gates: the band's material and grammar ────────────────────────────────────────────────────────────
 
-    /// <summary>The band is OPAQUE and it is opaque the sanctioned way — the FLATTEN of the content layer, not a
-    /// hand-mixed grey and not the raw translucent layer token. The translucent bar is what let track rows and shelf
-    /// cards ghost through the old sticky headers, which is the whole defect this campaign closes.</summary>
+    /// <summary>THE OFFSET MODEL, pinned. The band paints NO fill — not an opaque one, not a translucent one — and
+    /// there is no band colour left in the token layer to reach for.
+    ///
+    /// <para>This inverts the gate that used to live here. The band WAS an opaque flatten of the content layer
+    /// (<c>ColorContrast.Flatten(FileArea, MicaRef.*Default)</c>), which is the most honest constant available and was
+    /// still an APPROXIMATION of a surface it could not observe: live Mica takes its colour from the user's desktop,
+    /// so on a dark wallpaper the reference tone rendered as a solid black slab across the page. Scrolled content is
+    /// clipped at the band's lower edge now, so the band region shows the page's real ground and there is nothing left
+    /// to drift.</para></summary>
     [Fact]
-    public void BandMaterial_IsAnOpaqueFlattenOfTheContentLayer()
+    public void BandMaterial_IsNothing_TheBandPaintsNoFill()
     {
         string root = AppSourceRoot();
         if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
+        // The token is GONE, not merely unused — a colour named for the band is an invitation to paint it.
         string tokens = File.ReadAllText(Path.Combine(root, "Design", "WaveeTokens.cs"));
-        int at = tokens.IndexOf("public static ColorF ContextBand", StringComparison.Ordinal);
-        Assert.True(at >= 0, "WaveeColors.ContextBand — the band's material — is gone");
-        string decl = tokens[at..Math.Min(tokens.Length, at + 400)];
-        Assert.Contains("ColorContrast.Flatten", decl);
-        Assert.Contains("FileArea", decl);
-        Assert.Contains("MicaRef", decl);
+        Assert.DoesNotContain("ColorF ContextBand", tokens);
+        Assert.DoesNotContain("ContextBandOver", tokens);
 
-        string band = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ContextBand.cs"));
-        Assert.Contains("WaveeColors.ContextBand", band);
+        // …and neither band arm assigns a Fill anywhere. The hairline (a child BoxEl) is the band's only paint, and it
+        // is asserted separately below.
+        foreach (string file in new[] { "ContextBand.cs", "ArtistCompactBar.cs" })
+        {
+            string text = File.ReadAllText(Path.Combine(root, "Features", "Detail", file));
+            Assert.DoesNotContain("Fill = ContextBand", text);
+            Assert.DoesNotContain("WaveeColors.ContextBand", text);
+        }
+        string bandSrc = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ContextBand.cs"));
+        // The row is unpainted AND still a hit target — the engine's hit test is geometric, never paint-derived.
+        int row = bandSrc.IndexOf("public static Element Row(", StringComparison.Ordinal);
+        Assert.True(row >= 0);
+        string rowDecl = bandSrc[row..Math.Min(bandSrc.Length, row + 600)];
+        Assert.DoesNotContain("Fill =", rowDecl);
+        Assert.Contains("HitTestVisible = true", rowDecl);
+    }
+
+    /// <summary>The other half of the contract: if the band paints nothing, the page owes it a CLIP, and that clip
+    /// must cover the band's WHOLE height or content shows through the gap.
+    ///
+    /// <para>The artist band is the identity row alone (56). The detail band is the identity row PLUS the tracklist's
+    /// column row and the shared hairline, which is exactly what <c>StickyClipInset</c> already sums — so the two
+    /// pages clip at two different numbers for one reason, and that reason is arithmetic rather than taste.</para></summary>
+    [Fact]
+    public void TheClipInset_CoversTheWholeBand()
+    {
+        // The artist arm: the band IS the identity row.
+        Assert.Equal(ContextBandLayout.Height, ContextBandLayout.ClipInset);
+
+        // The detail arm: identity row + column header + the band's one hairline, with nothing left over.
+        Assert.Equal(ContextBandLayout.Height + ContextBandLayout.HairlineHeight
+                     + DetailVerticalLayout.ChromeHeaderHeight,
+                     DetailVerticalLayout.StickyClipInset());
+        Assert.True(DetailVerticalLayout.StickyClipInset() > ContextBandLayout.ClipInset);
+
+        // …and it grows with the optional Liked filter rail, which is part of the same pinned plate.
+        Assert.Equal(DetailVerticalLayout.StickyClipInset() + 48f,
+                     DetailVerticalLayout.StickyClipInset(contentFilterExtent: 48f));
+
+        // The cut is feathered, not guillotined, and both paths use the SAME band so they dissolve identically.
+        Assert.Equal(DetailVerticalLayout.StickyFadeBand, ContextBandLayout.ClipFadeBand);
+        Assert.True(ContextBandLayout.ClipFadeBand > 0f);
+    }
+
+    /// <summary>Every surface that pins the band owes the clip, and the surface-colour scroll-edge cue must be OFF
+    /// there: that cue paints an opaque gradient at the viewport's top edge in a colour resolved by an ANCESTOR walk,
+    /// which on these pages sails past the ground (a ZStack sibling) and lands a wrong-tone slab over the band.</summary>
+    [Fact]
+    public void EveryBandSurface_ClipsItsContentAndOptsOutOfTheEdgeCue()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string artist = File.ReadAllText(Path.Combine(root, "Features", "Detail", "ArtistPage.cs"));
+        Assert.Contains("ClipTopAtViewport = ContextBand.ClipInset", artist);
+        Assert.Contains("ScrollEdgeCues.None", artist);
+
+        string tracks = File.ReadAllText(Path.Combine(root, "Features", "Detail", "DetailTracks.cs"));
+        // The trailing (album / show) path and the virtual (playlist / liked) path, each with its own mechanism.
+        Assert.Contains("ClipTopAtViewport = stickyInset", tracks);
+        Assert.Contains("ItemClipTopInset = stickyInset", tracks);
+        Assert.Contains("ItemClipTopFadeBand = DetailVerticalLayout.StickyFadeBand", tracks);
+        Assert.Contains("EdgeCues = ScrollEdgeCues.None", tracks);
     }
 
     /// <summary>NO SHADOW anywhere in the band. Zune chrome carries none, an opaque surface needs none to be a

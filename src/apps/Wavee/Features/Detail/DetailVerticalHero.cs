@@ -62,7 +62,6 @@ static class DetailVerticalHero
                                 float compactLeft, float collapseDistance,
                                 IReadSignal<bool> compactInteractive,
                                 IReadSignal<bool> searchExpanded, IReadSignal<bool> selectionCommandsVisible,
-                                IReadSignal<ColorF?> pageTone,
                                 Element toolbar, Element compactSearch, Element compactActions, Element compactSelection,
                                 ActionServices? acts = null)
     {
@@ -236,13 +235,12 @@ static class DetailVerticalHero
         };
 
         // ── THE STUCK BAND: the shared text-chrome context bar (ContextBand) ─────────────────────────────────────
-        // One opaque band, typography only, whose lower stratum is the tracklist's own column header (pinned directly
-        // under this by VerticalChromeRoot), sharing this surface and carrying the band's single hairline.
-        //
-        // Its MATERIAL is bound to the live page tone: the band's constant flatten assumes the content region over
-        // bare Mica, and this page now paints an opaque art-derived ground instead — so a grading arrival re-solves
-        // the band's brush on the compositor (no re-render) and the band never reads as a grey plate on a tinted page.
-        Func<ColorF> bandFill = () => WaveeColors.ContextBandOver(pageTone.Value);
+        // Typography only, and — since the offset model landed — NO MATERIAL: the band is an unpainted omission and
+        // the rows are clipped at its lower edge (DetailVerticalLayout.StickyClipInset) rather than sliding under it,
+        // so what shows behind this text is the page's own art-derived tone plane and its blurred backdrop. The band
+        // inherits the record's colour for free, and there is no opaque constant left to read as a black slab on a
+        // dark wallpaper. Its lower stratum is the tracklist's own column header (pinned directly under this by
+        // VerticalChromeRoot), which carries the band's single hairline.
 
         // The byline is owner AND the meta line where both exist — "Spotify · 50 songs, 3 hr 12 min" — because the
         // band has a full row of width where the old capsule had a 480-DIP cap it was already ellipsizing inside.
@@ -279,7 +277,9 @@ static class DetailVerticalHero
                 compactLeadSlot,
                 new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
                 compactActions,
-            ], bandFill);
+            ]);
+        // The selection arm swaps the band's CONTENT (a batch command bar) for the same 56 DIP. Unpainted like the
+        // normal arm — it is the same band in another mode, not a plate that appears on top of one.
         Element selectionCompactIdentity = new BoxEl
         {
             Direction = 1,
@@ -287,7 +287,7 @@ static class DetailVerticalHero
             Height = DetailVerticalLayout.CompactIdentityHeight,
             Padding = new Edges4(compactLeft, 4f, compactLeft, 4f),
             Justify = FlexJustify.Center,
-            Fill = Prop.Of(bandFill),
+            HitTestVisible = true,
             Children = [compactSelection],
         };
         Element compactIdentityContent = new BoxEl
