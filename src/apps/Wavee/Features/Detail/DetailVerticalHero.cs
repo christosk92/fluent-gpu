@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -115,21 +115,25 @@ static class DetailVerticalHero
         if (side && eyebrow.Length > 0)
             infoKids.Add(Fade(DetailRail.EyebrowRun(eyebrow)));
 
-        // Immersive type is Apple Music display hierarchy — NOT the Fluent Title ramp (Semibold + 36 LH). Short titles
-        // punch larger; long titles stay Bold but step down so two lines still read as one cluster. Tracking is slight
-        // negative (1/1000 em). Side-by-side keeps Wavee's desktop Title voice.
+        // Every arm is a RUNG of the type ramp — the display face and the negative tracking carry the "Apple Music hero"
+        // voice, the metrics do not get to invent their own. Compact: BodyLarge 18/24 at the minimal artwork size, else
+        // Subtitle 20/28 (was an off-ramp 22). Immersive: TitleLarge 40/52 with one Title 28/36 step for very long
+        // names (see ImmersiveTitleSize). Side-by-side: Title 28/36 (was an off-ramp 32).
         float titleSize = compact
-            ? artSize <= DetailVerticalLayout.MinimalHeroArtworkSize ? 18f : 22f
-            : immersive ? ImmersiveTitleSize(m.Title) : 32f;
-        ushort titleWeight = immersive || compact ? (ushort)700 : (ushort)600;
+            ? artSize <= DetailVerticalLayout.MinimalHeroArtworkSize ? 18f : 20f
+            : immersive ? ImmersiveTitleSize(m.Title) : 28f;
+        float titleLineHeight = titleSize switch { >= 40f => 52f, >= 28f => 36f, >= 20f => 28f, _ => 24f };
+        // 600 everywhere: the ramp publishes 400 and 600 only, and 700 lives exclusively behind the WaveeType display
+        // aliases. The display FACE (below) is what keeps the immersive/compact hero from reading as a UI label.
+        const ushort titleWeight = 600;
         Element title = editable
-            ? PlaylistInlineEdit.Title(full, contentW, titleSize, titleWeight, onMedia: immersive)
+            ? PlaylistInlineEdit.Title(full, contentW, titleSize, titleWeight, onMedia: immersive, lineHeight: titleLineHeight)
             : compact
                 ? new TextEl(m.Title)
                 {
                     FontFamily = "Segoe UI Variable Display",
                     Size = titleSize, Weight = titleWeight,
-                    LineHeight = titleSize * 1.08f, CharSpacing = -12f,
+                    LineHeight = titleLineHeight, CharSpacing = -12f,
                     MaxWidth = contentW,
                     Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
                     Color = Tok.TextPrimary,
@@ -140,14 +144,14 @@ static class DetailVerticalHero
                     // Display optical size when available (SF Pro Display analogue on Windows).
                     FontFamily = "Segoe UI Variable Display",
                     Size = titleSize, Weight = titleWeight,
-                    LineHeight = titleSize * 1.08f, CharSpacing = titleSize >= 34f ? -28f : -16f,
+                    LineHeight = titleLineHeight, CharSpacing = titleSize >= 34f ? -28f : -16f,
                     MaxWidth = contentW,
                     Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
                     Color = Tok.OnMediaPrimary,
                 }
                 : WaveeType.PageHero(m.Title) with
                 {
-                    Size = titleSize, MinSize = 18f, Weight = titleWeight, LineHeight = float.NaN,
+                    Size = titleSize, MinSize = 18f, Weight = titleWeight, LineHeight = titleLineHeight,
                     Width = contentW, MaxWidth = contentW,
                     Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
                     Color = Tok.TextPrimary,
@@ -401,13 +405,15 @@ static class DetailVerticalHero
             Width = DetailVerticalLayout.ImmersiveIdentityTokenSize,
             Height = DetailVerticalLayout.ImmersiveIdentityTokenSize,
             Shrink = 0f, ClipToBounds = true,
-            Corners = CornerRadius4.All(6f), Shadow = Elevation.Card,
-            BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255) with { A = 0.20f },
+            // A 44-DIP art token: Radii.Control (4), not an off-ramp 6. The stroke is the app's card hairline token —
+            // a hand-mixed white@0.20 is the same value the token already resolves to on media, minus the theme.
+            Corners = Radii.ControlAll, Shadow = Elevation.Card,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             HitTestVisible = false,
             Children =
             [
                 DetailRail.HeroArtwork(m, DetailVerticalLayout.ImmersiveIdentityTokenSize,
-                    radius: 6f, connected: false, morphKey: null, decodePx: 256)
+                    radius: Radii.Control, connected: false, morphKey: null, decodePx: 256)
             ],
         };
         Element immersiveTokenLayer = new BoxEl
@@ -455,7 +461,7 @@ static class DetailVerticalHero
                     Corners = CornerRadius4.All(DetailVerticalLayout.CompactPlaySize * 0.5f),
                     HitTestVisible = compactCanHit,
                     Cursor = CursorId.Hand, Role = AutomationRole.Button, OnClick = h.PlayAll,
-                    HoverScale = 1.06f, PressScale = 0.94f,
+                    HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
                 },
             ],
         };
@@ -486,14 +492,15 @@ static class DetailVerticalHero
                     Direction = 1, MinWidth = 0f, MaxWidth = compactTextMax, Shrink = 1f, Gap = 0f,
                     Children =
                     [
-                        new TextEl(m.Title)
+                        // BodyStrong (14/20/600) over Caption (12/16/400) — the same title/meta pair every track row in
+                        // the app uses. Was 13/650 over 10/450: three values, none of them on the ramp.
+                        Ui.BodyStrong(m.Title) with
                         {
-                            Size = 13f, Weight = 650, Color = Tok.TextPrimary,
                             MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         },
-                        new TextEl(compactMeta)
+                        Ui.Caption(compactMeta) with
                         {
-                            Size = 10f, Weight = 450, Color = Tok.TextTertiary,
+                            Color = Tok.TextTertiary,
                             MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         },
                     ],
@@ -587,16 +594,16 @@ static class DetailVerticalHero
     static ColorF ImmersiveGlassPress => DetailHeroImmersiveGlass.Press;
     static ColorF ImmersiveGlassStroke => DetailHeroImmersiveGlass.Stroke;
 
-    /// <summary>Apple Music scales the immersive title with string length — short punches (SOS/GUTS) sit near display
-    /// size; long album names step down so a 2-line wrap still feels like one title, not a Fluent Title block.</summary>
-    static float ImmersiveTitleSize(string title)
-    {
-        int n = title.Length;
-        if (n <= 6) return 42f;
-        if (n <= 14) return 34f;
-        if (n <= 28) return 28f;
-        return 24f;
-    }
+    // Past this many characters even a 2-line 40px block overruns the hero on a narrow window.
+    const int ImmersiveTitleStepDownChars = 40;
+
+    /// <summary>The immersive hero title's rung. It is TitleLarge (40/52) — one size, so every album's hero opens at the
+    /// same typographic weight instead of at one of four length-derived off-ramp sizes (42/34/28/24, none of which was a
+    /// rung of anything). The wrap cap (2 lines) + character ellipsis on the run is what keeps a long name from
+    /// swallowing the hero, which is the job the old step-down was doing badly.
+    /// <para>ONE fallback survives: a very long name steps to Title (28/36) — the ADJACENT rung, not a new size.</para></summary>
+    static float ImmersiveTitleSize(string title) =>
+        title.Length <= ImmersiveTitleStepDownChars ? 40f : 28f;
 
     static Element? Attribution(DetailModel m, DetailHandlers h, float maxWidth, bool onMedia, Loadable<DetailModel>? full = null)
     {
@@ -653,11 +660,11 @@ static class DetailVerticalHero
             Corners = CornerRadius4.All(size * 0.5f), Fill = fill,
             HoverFill = hoverFill ?? ColorF.Transparent,
             PressedFill = pressedFill ?? ColorF.Transparent,
-            BrushTransitionMs = hoverFill.HasValue ? 100f : 0f,
+            BrushTransitionMs = hoverFill.HasValue ? WaveeMotion.Faster : 0f,
             BorderWidth = subtleBorder ? 1f : 0f,
             BorderColor = hairline ? ImmersiveGlassStroke : Tok.StrokeControlDefault,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button, OnClick = onClick,
-            HoverScale = 1.03f, PressScale = 0.97f,
+            HoverScale = WaveeMotion.ScaleStandard.Hover, PressScale = WaveeMotion.ScaleStandard.Press,
             Children = [Icon(glyph, 14f, fg)],
         };
         return ToolTip.Wrap(button, label);
@@ -690,10 +697,10 @@ sealed class DetailHeroSaveButton : Component
             HoverFill = DetailHeroImmersiveGlass.Hover,
             PressedFill = DetailHeroImmersiveGlass.Press,
             BorderWidth = 1f, BorderColor = DetailHeroImmersiveGlass.Stroke,
-            BrushTransitionMs = 100f,
+            BrushTransitionMs = WaveeMotion.Faster,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
             OnClick = () => lib.ToggleSaved(_uri, _name),
-            HoverScale = 1.06f, PressScale = 0.92f,
+            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Children = [Icon(saved ? Icons.Accept : Icons.Add, 15f, Tok.OnMediaPrimary)],
         };
         return ToolTip.Wrap(button, label);
@@ -766,8 +773,8 @@ sealed class DetailHeroMoreButton : Component
             PressedFill = _onMedia ? DetailHeroImmersiveGlass.Press : ColorF.Transparent,
             BorderWidth = _onMedia ? 1f : 0f,
             BorderColor = _onMedia ? DetailHeroImmersiveGlass.Stroke : ColorF.Transparent,
-            BrushTransitionMs = _onMedia ? 100f : 0f,
-            HoverScale = 1.06f, PressScale = 0.94f,
+            BrushTransitionMs = _onMedia ? WaveeMotion.Faster : 0f,
+            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Cursor = CursorId.Hand, Role = AutomationRole.Button,
             OnClick = Toggle,
             OnRealized = h => anchor.Value = h,

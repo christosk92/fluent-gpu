@@ -170,7 +170,7 @@ sealed class ArtistSchedulePage : Component
         {
             Caption(Loc.Get(Strings.Concerts.Schedule.OnTour).ToUpper(CultureInfo.CurrentCulture)) with
             {
-                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f,
+                Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f,
                 MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
             WaveeType.PageHero(artistName) with
@@ -193,12 +193,12 @@ sealed class ArtistSchedulePage : Component
                     ConcertUi.DateBlock(next.Date),
                     new BoxEl
                     {
-                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 3f,
+                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XS,
                         Children =
                         [
                             Caption(caption) with
                             {
-                                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 30f,
+                                Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 30f,
                                 MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                             },
                             WaveeType.TrackTitle(text.Primary) with
@@ -275,7 +275,9 @@ sealed class ArtistSchedulePage : Component
                     Children =
                     [
                         new TextEl(Loc.Get(Strings.Concerts.Schedule.TourDates))
-                        { Size = 24f, Weight = 650, Color = Tok.TextPrimary, MaxLines = 1 },
+                        // Title (28/36/600) - the page-level heading over the month board, whose own month
+                        // headers take the rung below it (Subtitle 20/28). Was an off-ramp 24/650.
+                        { Size = 28f, LineHeight = 36f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1 },
                         selector,
                     ],
                 },

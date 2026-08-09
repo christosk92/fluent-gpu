@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -91,9 +91,9 @@ static class ContentFilterChips
         BorderWidth = 1f,
         BorderColor = selected ? ColorF.Transparent : Tok.StrokeControlDefault,
         HoverBorderColor = !available ? Tok.StrokeControlDefault : selected ? ColorF.Transparent : Tok.AccentDefault,
-        HoverScale = Motion.ReducedMotion || !available ? 1f : 1.03f,
-        HoverDurationMs = 140f, HoverEasing = Easing.FluentDecelerate,
-        PressScale = Motion.ReducedMotion || !available ? 1f : 0.98f,
+        HoverScale = WaveeMotion.ScaleSubtle.HoverIf(available),
+        HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+        PressScale = WaveeMotion.ScaleSubtle.PressIf(available),
         OnClick = onClick,
         Children =
         [

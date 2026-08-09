@@ -64,6 +64,17 @@ static class SidebarPaneRail
             kids.Add(SidebarLayoutMenu.Button(prefs, owner.Navigate, box: SidebarRailItem.Box));
         }
 
+        // O3 — the shortcut band's rail form, PREPENDED (the mirror of the RailFooter append above): the app's navigation
+        // band sits above the document's own tiles, exactly as it does in the expanded pane. Inserted AFTER the loop
+        // rather than before it on purpose — the "pending + nothing resolved ⇒ shimmer" fallback tests `kids.Count == 0`,
+        // and a head tile pushed in first would make an unresolved rail look resolved. A null head (an emptied band)
+        // costs neither tiles nor a rule.
+        if (owner.Config.RailHead?.Invoke() is { } head)
+        {
+            kids.Insert(0, SidebarRailItem.Divider());
+            kids.Insert(0, head);
+        }
+
         return new BoxEl
         {
             // Grow fills the rail's WIDTH so AlignItems=Center actually centres the 40-DIP tiles in the 56-DIP strip

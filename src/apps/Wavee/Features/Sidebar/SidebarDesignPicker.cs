@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -171,7 +171,7 @@ sealed class SidebarDesignPicker : Component
             Fill = Tok.FillSubtleSecondary,
             BorderWidth = on ? 2f : 1f,
             BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
-            HoverScale = 1.02f, PressScale = 0.98f,
+            HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
             // A11y honesty (§C6.1): Element has no radio-GROUP role and no arrow-key group traversal, so each card is a
             // tab stop with visible text as its accessible name, activated by Enter/Space through Focusable + OnClick,
             // and the selected one is distinguishable by the "Active" tag as well as by colour. Group semantics are an

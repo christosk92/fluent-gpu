@@ -344,6 +344,77 @@ public class StoreLibrarySourceTests
         Assert.Equal(CollectionKind.Albums, seen);
     }
 
+    // ── Home: the degraded-session library tail ───────────────────────────────────────────────────────────────
+    // Offline (LiveHomeFetch null) or on a live fetch that fails, Home has nothing but the nine quick-pick tiles unless
+    // the synced library re-contributes its three shelves. Online they must NOT be appended — that second library tail
+    // is what the section-owned Home replaced.
+    static InMemoryStore LibraryStore()
+    {
+        var store = new InMemoryStore();
+        store.UpsertPlaylist(new Playlist("p1", "spotify:playlist:p1", "One", null, "Me", null, 0));
+        store.SetRootlist(new[] { new RootlistEntry(0, 0, "spotify:playlist:p1", null, 0) });
+        store.UpsertAlbum(new Album("a1", "spotify:album:a1", "Album1", null, [], 2020, 1));
+        store.SetSaved("albums", "spotify:album:a1", true, SyncState.Confirmed);
+        store.UpsertArtist(new Artist("ar1", "spotify:artist:ar1", "Artist1", null));
+        store.SetSaved("artists", "spotify:artist:ar1", true, SyncState.Confirmed);
+        return store;
+    }
+
+    static HomeGroup[] Shelves(HomeContribution home)
+        => home.Groups.Where(g => g.Kind == HomeGroupKind.Shelf).ToArray();
+
+    [Fact]
+    public async Task GetHome_Offline_ContributesTheThreeLibraryShelves()
+    {
+        var src = new StoreLibrarySource(LibraryStore());          // LiveHomeFetch left null → offline
+        var home = await src.GetHomeAsync();
+
+        Assert.Contains(home.Groups, g => g.Kind == HomeGroupKind.QuickGrid);
+        var shelves = Shelves(home);
+        Assert.Equal(3, shelves.Length);
+        Assert.Equal(
+            new[]
+            {
+                FluentGpu.Localization.Loc.Get(Strings.Home.YourPlaylists),
+                FluentGpu.Localization.Loc.Get(Strings.Home.YourAlbums),
+                FluentGpu.Localization.Loc.Get(Strings.Home.YourArtists),
+            },
+            shelves.Select(s => s.Title!).ToArray());
+        Assert.Equal("spotify:playlist:p1", Assert.Single(shelves[0].Cards).Uri);
+        Assert.Equal(HomeCardKind.Playlist, shelves[0].Cards[0].Kind);
+        Assert.Equal("spotify:album:a1", Assert.Single(shelves[1].Cards).Uri);
+        Assert.Equal(HomeCardKind.Album, shelves[1].Cards[0].Kind);
+        Assert.Equal("spotify:artist:ar1", Assert.Single(shelves[2].Cards).Uri);
+        Assert.Equal(HomeCardKind.Artist, shelves[2].Cards[0].Kind);
+    }
+
+    [Fact]
+    public async Task GetHome_LiveFetchThrows_StillContributesTheLibraryShelves()
+    {
+        var src = new StoreLibrarySource(LibraryStore())
+        {
+            LiveHomeFetch = _ => throw new System.InvalidOperationException("pathfinder is down"),
+        };
+
+        Assert.Equal(3, Shelves(await src.GetHomeAsync()).Length);
+    }
+
+    [Fact]
+    public async Task GetHome_LiveModulesLanded_DoesNotAppendASecondLibraryTail()
+    {
+        var live = new HomeGroup(HomeGroupKind.MixBand, "Made for you",
+            new[] { new HomeCard("spotify:playlist:mix", "Daily Mix 1", null, null, HomeCardKind.Playlist) });
+        var src = new StoreLibrarySource(LibraryStore())
+        {
+            LiveHomeFetch = _ => Task.FromResult(new LiveHomeResult(new[] { live }, null)),
+        };
+
+        var home = await src.GetHomeAsync();
+
+        Assert.Empty(Shelves(home));
+        Assert.Contains(home.Groups, g => g.Kind == HomeGroupKind.MixBand);
+    }
+
     sealed class Obs(System.Action<CollectionKind> onNext) : System.IObserver<CollectionKind>
     {
         public void OnNext(CollectionKind v) => onNext(v);

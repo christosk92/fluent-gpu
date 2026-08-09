@@ -65,7 +65,7 @@ sealed class SidebarTopBarCard : Component
             content.Add(Strip(reorder, band));
 
         if (full)
-            content.Add(new TextEl(Loc.Get(TopBarLoc.CapReached))
+            content.Add(new TextEl(Loc.Get(SidebarNavBandLoc.CapReached))
             {
                 Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 2,
             });
@@ -222,7 +222,7 @@ sealed class TopBarAddButton : Component
             Children = [Icon(Icons.Add, 14f, _enabled ? Tok.TextSecondary : Tok.TextDisabled)],
         };
         return ToolTip.Wrap(_enabled ? button.Interactive(Interaction.Subtle) : button,
-            Loc.Get(_enabled ? CzLoc.ItemAdd : TopBarLoc.CapReached));
+            Loc.Get(_enabled ? CzLoc.ItemAdd : SidebarNavBandLoc.CapReached));
     }
 
     IReadOnlyList<MenuFlyoutItem> Items()

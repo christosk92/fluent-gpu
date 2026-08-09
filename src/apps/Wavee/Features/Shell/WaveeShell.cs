@@ -33,10 +33,12 @@ sealed class WaveeShell : Component
     readonly List<Route> _forwardHistory = new();
     readonly HistoryStore _historyStore = new();
     readonly NavPreviewStore _navPreview = new();   // click→detail handoff: the card stashes its known cover/title/artist
-    // Page-scoped Mica tint: a detail page writes its art colour here while active; the shell paints it as a low-alpha
-    // scrim BEHIND the chrome (which is translucent over Mica), so the window material carries the colour. Null ⇒ plain
-    // Mica. Owner-gated writes (ShellTintState) make A→B navigation race-free. Provided at the root via ShellTint.Slot.
-    readonly Signal<ShellTintState> _shellTint = new(default);
+    readonly HomeSectionPreviewStore _homeSectionPreview = new(); // Home source section → seeded drill page
+    // Page-scoped shell MATERIAL: a page writes its art colour (flat tint) or Home's three washes here while active; the
+    // shell paints it as the one layer between the window's base layer (live Mica) and the chrome column. Null tint +
+    // null wash ⇒ the bare base. Owner-gated writes (ShellMaterialState) make A→B navigation race-free. Provided at the root via
+    // ShellMaterial.Slot; rendered by ShellMaterialLayer.
+    readonly Signal<ShellMaterialState> _shellMaterial = new(default);
 
     // Right-rail (lyrics / queue / now-playing panels) UI state — created here, provided via ShellUi.Slot, and
     // toggled from the player bar. The rail reserves inline width when it fits; otherwise it floats over the content.
@@ -59,6 +61,24 @@ sealed class WaveeShell : Component
     readonly List<OpenTab> _open = new() { new OpenTab(0, "home", Loc.Get(Strings.Nav.Home), Icons.Home, null) };
     readonly Signal<int> _tabsVersion = new(0);
     readonly Signal<int> _selectedTab = new(0);
+
+    // ── the MERGED chrome row (one 48-DIP TitleBar: nav + tabs · window-centred search · identity) ────────────────────
+    // The row is priority-collapsed by a pure ladder (MergedChromeLayout) held here as a band-gated signal: it is
+    // recomputed on every viewport move but only PUBLISHED when a stage flips, exactly like the two-row toolbar's old
+    // ToolbarLayout. Everything the bar's islands read comes from these signals, never from a frozen ctor arg.
+    readonly Signal<MergedChromeLayout> _chromeLayout = new(MergedChromeLayout.FromWidth(0f, 1));
+    readonly Signal<bool> _searchExpanded = new(false);     // the icon-mode search's click-expand latch
+    readonly Signal<int> _searchFocusRequest = new(0);      // Ctrl+K → put the caret in the field (a monotonic ticket)
+    // The strip shows only the KeepTabs tabs the ladder allows, so it has its OWN index space (the visible slice). The
+    // projection effect in Render derives both from _selectedTab / _tabMru / KeepTabs; nothing else writes them.
+    readonly Signal<int> _stripSelected = new(0);
+    readonly Signal<int> _tabStripVersion = new(0);         // bumped when the visible SLICE changes, not just the tab set
+    readonly List<int> _visibleTabs = new();                // open-list indices in the strip, in OPEN order
+    readonly List<int> _tabMru = new();                     // tab IDs, most-recently-used first — who survives a squeeze
+    readonly HashSet<int> _keepIds = new();                 // RebuildVisibleTabs scratch (cold path, reused)
+    readonly List<ChromeTabRef> _hiddenScratch = new();     // HiddenTabs scratch — copied out by the chevron immediately
+    MergedChromeRow? _chrome;
+    TabStrip? _strip;                                       // the MOUNTED strip: its Min/MaxTabWidth track the ladder
 
     readonly Signal<string> _searchText = new("");
     // Sidebar state. Collapsed and (once pinned by a drag) width are seeded by SidebarPreferences' own constructor, from
@@ -108,6 +128,33 @@ sealed class WaveeShell : Component
     const string ContentRowMorphId = "shell.content-row";
     /// <summary>The one main-page silhouette. Route content may paint through it, but may not author another shape.</summary>
     internal static readonly CornerRadius4 ContentPaneCorners = new(Radii.Card, 0f, 0f, 0f);
+
+    /// <summary>HOW A LEFT+TOP-ONLY BORDER IS DRAWN. The engine's <c>BorderWidth</c> is a single uniform SDF ring
+    /// (<c>SceneRecorder.EmitBorderRing</c>) — there is no per-side thickness, and two 1-DIP strips cannot follow the
+    /// 8-DIP top-left arc (they leave a visible notch exactly at the corner). So the bordered box is made ONE DIP LARGER
+    /// on its right and bottom edges with this negative margin and parked inside a <c>ClipToBounds</c> parent of the real
+    /// geometry: the ring is inset (it spans [0,bw] INSIDE the bounds), so the right and bottom strokes land entirely in
+    /// the clipped-away DIP while the left and top strokes — and the full rounded corner between them — survive intact.
+    /// One node, no notch, and the arc is the renderer's own.</summary>
+    static readonly Edges4 StrokeOverhang = new(0f, 0f, -1f, -1f);
+
+    /// <summary>The content region's stock separating stroke: 1px <c>Tok.StrokeCardDefault</c> on LEFT + TOP only, over
+    /// the given silhouette. Paint-only and STATIC final geometry — it must not ride the content card's FLIP, or the
+    /// region's edge would slide away from the sidebar it separates from.</summary>
+    static Element ContentRegionStroke(CornerRadius4 corners) => new BoxEl
+    {
+        ZStack = true, ClipToBounds = true, HitTestVisible = false,
+        Children =
+        [
+            new BoxEl
+            {
+                Margin = StrokeOverhang,
+                BorderWidth = 1f,
+                BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
+                Corners = corners,
+            },
+        ],
+    };
 
     // The sidebar collapse (56↔expanded) AND the content card's FLIP share ONE transition, so the pane's animating edge
     // and the card's left edge ease on identical dynamics (edge coherence). Reveal lays the subtree out at its FINAL size
@@ -453,6 +500,40 @@ sealed class WaveeShell : Component
             _shellUi.RailFits.SetIfChanged(fits);
         });
 
+        // ── the merged chrome row's two derivations ──────────────────────────────────────────────────────────────────
+        // (1) The priority ladder. Band-gated exactly like the retired ToolbarLayout: it reads the HOT viewport width
+        //     but only publishes when a stage actually flips, so a resize does not re-render the bar per pixel. The tab
+        //     count is a dependency because KeepTabs is clamped to it.
+        UseSignalEffect(() =>
+        {
+            float w = vpSig.Value.Width;
+            _ = _tabsVersion.Value;
+            _chromeLayout.SetIfChanged(MergedChromeLayout.Resolve(w, _open.Count, _chromeLayout.Peek()));
+        });
+        // (2) The visible-tab projection — the ONE place the strip's index space is derived, and deliberately OFF-render
+        //     (computing it inside ItemsSource would mean writing _stripSelected from inside a render: a backwards
+        //     write). Re-runs on a tab-set change, a selection change and a KeepTabs change.
+        UseSignalEffect(() =>
+        {
+            int keep = _chromeLayout.Value.KeepTabs;
+            int sel = _selectedTab.Value;
+            _ = _tabsVersion.Value;
+            RebuildVisibleTabs(keep, sel);
+            _stripSelected.SetIfChanged(Math.Max(0, _visibleTabs.IndexOf(sel)));
+            _tabStripVersion.Value = _tabStripVersion.Peek() + 1;
+        });
+        // The row's island builders. Constructed once (it owns the measured-extent signals behind the centring guard);
+        // its three ambient services are PLAIN FIELDS refreshed per render — a slot builder runs inside the BAR's render
+        // and can never call UseContext itself, so the shell resolves them here.
+        var chrome = _chrome ??= new MergedChromeRow(
+            _canBack, _canForward, GoNav, Back, Forward,
+            _searchText, ToggleTheme, _history, _forwardHistory,
+            _chromeLayout, _searchExpanded, _searchFocusRequest,
+            TabStripHost, TabStripItemsVersion, HiddenTabs, ActivateTab);
+        chrome.Bridge = _actions.Playback;
+        chrome.Ui = _shellUi;
+        chrome.Acts = _actions;
+
         var column = new BoxEl
         {
             Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
@@ -461,14 +542,52 @@ sealed class WaveeShell : Component
                 // Zero-size, renders nothing: owns the ambient-cadence policy's two subscriptions (window activation +
                 // the debounced power poll). It lives here because the shell is the one always-mounted host in the tree.
                 Embed.Comp(() => new AmbientPowerPolicy.Watcher()),
-                Embed.Comp(() => new TitleBar
+                // Shell-wide chords. InputHooks.KeyPreview is modifier-BLIND (Func<int,bool>), so the two shell verbs
+                // ride the engine's KeyAccelerator seam instead — the dispatcher matches key+mods against any live,
+                // visible, enabled node AFTER focused routing declines it (the WinUI ProcessKeyboardAccelerators
+                // order). Zero-size + hit-test-free ⇒ pure keyboard surface, and it composes with the narrow drawer's
+                // own Escape KeyPreview rather than fighting it for the single preview slot.
+                new BoxEl
                 {
-                    IconGlyph = "", ShowPaneToggle = false, ShowCaptionButtons = true,
-                    Tabs = () => Embed.Comp(BuildTabStrip),
-                    TabsVersion = TitleBarTabsVersion,
+                    Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
+                    Accelerator = NewTabChord, OnClick = () => OpenNewTab("home"),
+                },
+                new BoxEl
+                {
+                    Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
+                    Accelerator = FocusSearchChord, OnClick = FocusSearch,
+                },
+                // THE chrome row. One 48-DIP TitleBar in merged mode: the tabs island carries Wavee's nav cluster and
+                // the text-first strip, the flexible centre column carries the window-centred omnibar, and the trailing
+                // island carries identity. ContentVersion is mandatory here — see MergedChromeRow.ContentVersion.
+                Embed.Comp(() =>
+                {
+                    var bar = new TitleBar
+                    {
+                        IconGlyph = "", ShowBackButton = false, ShowCaptionButtons = true,
+                        // The HAMBURGER is the bar's own pane-toggle built-in, not a child of the tabs island. Two
+                        // reasons, both from the first feel pass: it lands in the fixed lead column (centred where the
+                        // 56-DIP compact rail's icons are, which a child of the island cannot reach — the island starts
+                        // after a 16-DIP lead and clips anything shifted left of it), and it is reported as its OWN
+                        // Client region, so the header pad between it and the tabs island stays real window-drag band.
+                        ShowPaneToggle = true, OnPaneToggle = ToggleSidebar,
+                        Parts = ChromeParts,               // the four-DIP nudge that lines it up with the rail's icons
+                        ShowRailBaseline = false,          // this chrome has no rail; the seam below is the app's own
+                        Tabs = chrome.Tabs,
+                        TabsVersion = TitleBarTabsVersion,
+                        Trailing = chrome.Trailing,
+                        ContentVersion = chrome.ContentVersion,
+                    };
+                    // Hand the island the bar's LIVE centre-column measurement (the merged-mode mirror of ContentAvail)
+                    // so an expanding field can clamp itself without the bar re-rendering.
+                    bar.CenterContent = _ => chrome.Center(bar.CenterAvail);
+                    return bar;
                 }),
-                Embed.Comp(() => new ShellToolbar(_route, _canBack, _canForward, GoNav, Back, Forward, Home,
-                    _searchText, ToggleSidebar, ToggleTheme, _history, _forwardHistory)),
+                // NO chrome↔content seam hairline here. Stock Win11 (WinUI NavigationView + the WinUI-Gallery shell) draws
+                // no bar-wide divider under the title bar: the separation IS the content region's own left+top stroke
+                // (see ContentRegionStroke below), which starts exactly where the page starts. A full-width hairline
+                // stacked a SECOND rule against that stroke over the page, ran straight across the sidebar band (which
+                // owns no such edge in stock), and put the tab underline 6 DIP above a line it never belonged to.
                 Ui.ZStack(
                     // The sidebar + content row. The sidebar PANE (SidebarPane) is the row's DIRECT child, so ITS width
                     // is what the row distributes — the content column re-solves and tiles against it gap-free. The width
@@ -495,7 +614,12 @@ sealed class WaveeShell : Component
                         // Reflow animates the collapse toggle but is null mid-drag so the pane tracks the cursor 1:1.
                         new BoxEl
                         {
-                            Direction = 1, Shrink = 0f, ClipToBounds = true, Fill = Prop.Of(() => WaveeColors.Sidebar),
+                            // NO fill: the sidebar band is a paint-site OMISSION over the window's BASE LAYER (live
+                            // Mica), exactly like the merged chrome row and the player dock. One uninterrupted base
+                            // under all chrome is what kills the title-bar-vs-toolbar seam the translucent plate
+                            // produced — and the reason the content region needs a stroke rather than a fill step to
+                            // separate itself from this band.
+                            Direction = 1, Shrink = 0f, ClipToBounds = true,
                             OnRealized = h => _sidebarPaneNode = h,
                             Width = Prop.Of(() => presentedCompact.Value
                                 ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value),
@@ -528,7 +652,11 @@ sealed class WaveeShell : Component
                                 },
                             ],
                         },
-                            // Content side: an inset, rounded, shadowed "page" over the Toolbar-chrome backing.
+                            // Content side: the STOCK Win11 content region — ONE rectangle, flush on all four sides, filled
+                            // with the LayerFillColorDefault rung and PAIRED with a 1px stroke on LEFT+TOP only, corner
+                            // 8,0,0,0, and NO shadow. That triple (flush · one corner · stroke, no shadow) is what WinUI's
+                            // own NavigationView content grid and the WinUI-Gallery shell paint over bare Mica; the
+                            // separation comes from the stroke, never from a gutter or an elevation.
                             new BoxEl
                             {
                                 // MinHeight=0 at every flex level of the content chain (see the card below) so a tall page
@@ -543,47 +671,29 @@ sealed class WaveeShell : Component
                                 Direction = 1, ZStack = true, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Basis = 0f,
                                 Children =
                                 [
-                                    // The app-body PLATE (rung 1 = LayerOnMicaBaseAlt, the same bound fill as the
-                                    // toolbar / nav pane / player dock) — kept ONLY where the content pane does not
-                                    // cover it (the rounded top-left cut-away + the trailing gap), so those still show
-                                    // the plate and not bare Mica. UNDER the pane the plate is folded INTO the pane's own
-                                    // fill (WaveeColors.ContentPaneMerged): source-over is associative, so pane-over-plate
-                                    // painted as ONE translucent rect composites pixel-identically over live Mica, and the
-                                    // content region (~95% of the viewport) pays ONE blended full-region SDF pass instead
-                                    // of two — neither rung can ever take the opaque no-blend PSO (α < 1 is the ladder
-                                    // contract), so the second pass was pure bandwidth. Do not add a sidebar-colored seam
-                                    // strip here: it remains visible through the page surface as a full-height opaque rail
+                                    // Static final-geometry underlay — the CONTENT LAYER of the Windows 11 Mica model
+                                    // (learn.microsoft.com system-backdrops: Base Layer = bare Mica chrome, Content
+                                    // Layer = a translucent smoke OVER the base). This is the stock WinUI
+                                    // LayerFillColorDefault rung (WaveeColors.FileArea: #4C3A3A3A dark / #80FFFFFF
+                                    // light) — it LIGHTENS the content region over live Mica so the page always reads
+                                    // one step ABOVE the base, never darker (an opaque #282828 pane inverted the model
+                                    // on light-tinted wallpapers: the page read as a black slab inside brighter
+                                    // chrome). It is the only FILL painted in this region: the rounded top-left
+                                    // cut-away is a paint-site omission that shows the base. Do not add a
+                                    // sidebar-coloured seam strip here: it reads through the page as a full-height rail
                                     // and squares off the corner.
                                     //
-                                    // (a) the top-left CORNER CELL — one Radii.Card square under the pane's 8,0,0,0 corner.
-                                    // This is the one place the plate must still sit UNDER the merged pane: the cut-away is
-                                    // a square MINUS a quarter disc (concave — no rect can express it), so the cell pays one
-                                    // extra plate layer inside the arc (Δ ≈ 4/255 over ~50 DIP², at the pane's own corner)
-                                    // to keep the cut-away itself exact.
-                                    new BoxEl { Width = Radii.Card, Height = Radii.Card, Fill = Prop.Of(() => WaveeColors.Toolbar) },
-                                    // (b) the TRAILING GAP strip — the pane's Spacing.S inset, full height, abutting the
-                                    // pane's trailing edge (JustifySelf.End parks it on the ZStack's right edge; AlignItems
-                                    // stretch gives it the full height). It also receives the pane's Elevation.Card shadow,
-                                    // exactly as the full-region plate did.
-                                    new BoxEl { Width = Spacing.S, JustifySelf = FlexAlign.End, Fill = Prop.Of(() => WaveeColors.Toolbar) },
-                                    // Static final-geometry underlay — rungs 1+2 MERGED into ONE TRANSLUCENT surface, so
-                                    // live Mica still reads through the content region.
-                                    //
-                                    // REVERTED from the opaque `FloatingPane` plate (the WinUI "opaque Window.Content hides
-                                    // the backdrop" policy). It was measured worthless HERE: `rq` stayed at 2 opaque against
-                                    // 98→138 blended rect instances, i.e. it converted ~1.4% of the frame while costing the
-                                    // whole Mica show-through. The opaque no-blend PSO needs the ROW chrome (square corners,
-                                    // α=1 zebra/hover) to qualify too — until that lands, an opaque plate buys nothing and
-                                    // the entire measured GPU win (56% → ~19%) came from cutting the frame RATE instead.
+                                    // NO SHADOW (stock). A drop shadow cast under a ~30%-alpha fill bleeds THROUGH it
+                                    // and muddies the top and left of the page; zero stock Win11 shells elevate the
+                                    // content layer. The region's separation is ContentRegionStroke below.
+                                    // NO MARGIN either — the permanent trailing Spacing.S gutter is gone; the rail's
+                                    // 8-DIP breathing room is now the bound gap box below, which exists only while the
+                                    // rail is inline. A closed rail leaves the page flush to the window edge.
                                     new BoxEl
                                     {
-                                        Grow = 1f, Margin = new Edges4(0f, 0f, Spacing.S, 0f),
-                                        Fill = Prop.Of(() => WaveeColors.ContentPaneMerged),
+                                        Grow = 1f,
+                                        Fill = Prop.Of(() => WaveeColors.FileArea),
                                         Corners = ContentPaneCorners,
-                                        // Wino/WinUI content zones sit one elevation step above commanding chrome.
-                                        // Keep the shadow on this STATIC final-geometry pane: putting it on the animated
-                                        // transparent card would make the elevation itself slide during sidebar FLIP.
-                                        Shadow = Elevation.Card,
                                     },
                                     new BoxEl
                                     {
@@ -594,21 +704,22 @@ sealed class WaveeShell : Component
                                         // navigation — the "player bar animates away then back" glitch. With it the card
                                         // shrinks to the available space and clips/scrolls, so the player bar stays docked.
                                         Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
-                                        // Flush against the navigation pane and player dock; only the trailing edge is inset.
-                                        Margin = new Edges4(0f, 0f, Spacing.S, 0f),
+                                        // Flush on ALL FOUR sides (stock): against the navigation pane, the chrome row,
+                                        // the player dock and — when it is open — the rail's own reservation gap.
                                         // NO fill: the static underlay above owns the pane surface. This card and that
-                                        // underlay are coincident at rest (both Grow=1, same trailing margin, same
-                                        // corner), so a fill here composited the translucent FileArea TWICE — the pane
+                                        // underlay are coincident at rest (both Grow=1, both flush, same corner), so a
+                                        // fill here composited the translucent FileArea TWICE — the pane
                                         // read a rung too light (#333333 instead of #303030 dark) and mid-slide the
-                                        // moving card banded against the static surface. The card keeps the stroke, the
-                                        // corner, the clip and the FLIP; only the paint moved down one node.
+                                        // moving card banded against the static surface. The card keeps the corner,
+                                        // the clip and the FLIP; the paint and the stroke are both static siblings now.
                                         // (Regression tell: a dark pane sampling #333333 means this fill came back.)
                                         Fill = ColorF.Transparent,
-                                        BorderWidth = 1f,
-                                        BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
+                                        // NO border here either. The region's stroke is a STATIC final-geometry overlay
+                                        // (ContentRegionStroke below) so the edge does not slide with the FLIPping card,
+                                        // and so it can be LEFT+TOP only — a uniform ring on this node drew a stroke
+                                        // along the player-dock seam and the rail seam that stock has no line on.
                                         // Stock NavigationViewContentGridCornerRadius = 8,0,0,0: only the corner facing
-                                        // the nav pane rounds. (The seam stroke is uniform 1px — per-side borders are
-                                        // unsupported, so the ring is an accepted deviation from the top+left-only rule.)
+                                        // the nav pane rounds.
                                         Corners = ContentPaneCorners,
                                         ClipToBounds = true,
                                         // Layout firewall (#5): this card is Grow=1 (its size is the shell's content region,
@@ -634,7 +745,19 @@ sealed class WaveeShell : Component
                                         RelativeTo = s_railBaseline ? null : ContentRowMorphId,
                                         Children = [ Embed.Comp(() => new ContentHost(_route, _navMotion, ActiveTabId, _settings)) ],
                                     },
+                                    // The region's ONE separating treatment, topmost so a page can never paint over it:
+                                    // a 1px Tok.StrokeCardDefault on LEFT + TOP only, following the 8-DIP top-left arc.
+                                    ContentRegionStroke(ContentPaneCorners),
                                 ],
+                            },
+                            // The rail's breathing room, and the ONLY gap in the row. It is part of the rail's
+                            // RESERVATION, not a permanent trailing gutter on the page: with the rail closed the page
+                            // runs flush to the window edge (stock), and opening the rail widens this from 0 to 8 in the
+                            // same commit as the spacer below (both snap; the content card's FLIP absorbs the shift).
+                            new BoxEl
+                            {
+                                Shrink = 0f, HitTestVisible = false,
+                                Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? Spacing.S : 0f),
                             },
                             // Right rail RESERVATION spacer — the WaveeMusic-style lyrics / now-playing band. A literal row
                             // child (Shrink=0, bound width) so the content card re-tiles against it. Projected motion: this
@@ -643,26 +766,41 @@ sealed class WaveeShell : Component
                             // the reserved band. (Animating both the spacer AND the overlay was the old double width track.)
                             new BoxEl
                             {
+                                // NO fill on the spacer itself: the rail's rounded top-left wedge (and the 8-DIP gap
+                                // before it) read against the window's BASE LAYER — live Mica — like every other
+                                // paint-site omission in the chrome. The band's own rung is painted by its child below.
                                 Shrink = 0f,
-                                // CHROME backing: the rail's rounded top-left wedge (underlay + overlay above) reads against this.
-                                Fill = Prop.Of(() => WaveeColors.Toolbar),
                                 Width = Prop.Of(() => _shellUi.RailOpen.Value && _shellUi.RailFits.Value ? _shellUi.RailWidth.Value : 0f),
                                 Animate = RailSpacerAnim,   // null (snap) in the projected path; Reflow spring in the baseline
                                 Children =
                                 [
                                     // Static final-geometry underlay — the rail-side twin of the content card's underlay
                                     // above. The reserved width SNAPS at commit while RightRail translates its panel in
-                                    // over 300ms; without this, that band is raw Toolbar chrome for the whole slide and
+                                    // over 300ms; without this, that band is bare Mica for the whole slide and
                                     // the open reads as "the content jumps away from a dark hole, then a panel arrives".
                                     // Painting the rail's own surface here (same Fill + same top-left card corner as
                                     // RightRail's surface) means the band IS the rail from frame 0 and only the panel's
                                     // CONTENT is seen to arrive. Paint-only: never a hit target, no opacity track (a
                                     // fading full-height rail surface is what produced the old "ghost rail").
+                                    // The same Mica CONTENT-LAYER rung as the content card's underlay above — the rail
+                                    // band and the page must be the SAME rung, or the seam between them reappears the
+                                    // moment one composites over Mica and the other over flat paint. It also carries the
+                                    // SAME stock treatment (left+top 1px stroke, one corner, no shadow), so the band and
+                                    // RightRail's own panel read as one rung and one edge rather than two cards.
                                     new BoxEl
                                     {
-                                        Grow = 1f, HitTestPassThrough = true,
-                                        Fill = Prop.Of(() => WaveeColors.FileArea),
-                                        Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                        Grow = 1f, HitTestPassThrough = true, ClipToBounds = true, ZStack = true,
+                                        Children =
+                                        [
+                                            new BoxEl
+                                            {
+                                                Margin = StrokeOverhang,
+                                                Fill = Prop.Of(() => WaveeColors.FileArea),
+                                                Corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f),
+                                                BorderWidth = 1f,
+                                                BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
+                                            },
+                                        ],
                                     },
                                 ],
                             },
@@ -705,10 +843,10 @@ sealed class WaveeShell : Component
                                 HitTestPassThrough = true,
                                 Children =
                                 [
-                                    // Opaque backing band for the FLOATING overlay only — FloatingChrome (plate), not
-                                    // FloatingPane: RightRail paints FileArea on top, and FloatingPane-then-FileArea was a
-                                    // double-coat that made the floating rail one rung darker than docked. Docked stays
-                                    // transparent so the rail's rounded TL wedge shows chrome behind it.
+                                    // Backing band for the FLOATING overlay only — FloatingChrome (the shell GROUND), not
+                                    // FloatingPane: RightRail paints the content surface on top, and pane-then-surface was
+                                    // a double-coat that made the floating rail one rung darker than docked. Docked stays
+                                    // transparent so the rail's rounded TL wedge shows the ground behind it.
                                     new BoxEl
                                     {
                                         // Paint-only closed-rail backing: never become the deepest hit in this retained
@@ -746,8 +884,8 @@ sealed class WaveeShell : Component
                 // SHRINKING element itself — the engine otherwise floors a flex item at its CONTENT's natural min) is what
                 // actually lets it yield below a tall page (a Detail rail is ~600px and does not scroll); without it the
                 // region overflows the column and shoves the fixed PlayerBar ~67px off the bottom for a frame on nav (the
-                // "player bar disappears then slides back" glitch). The chrome rows (TitleBar, ShellToolbar) and the
-                // PlayerBar host keep the default Shrink=0, so the player bar stays a fixed 72px slot docked at the
+                // "player bar disappears then slides back" glitch). The merged chrome row (one TitleBar + its 1px seam)
+                // and the PlayerBar host keep the default Shrink=0, so the player bar stays a fixed 72px slot docked at the
                 // window bottom and only the middle gives — its bounded height then lets the sidebar ScrollView scroll.
                 //
                 // ClipToBounds: this region's OWN box is clamped to the dock every frame (Shrink=1 yields → the player bar
@@ -772,9 +910,6 @@ sealed class WaveeShell : Component
             ],
         };
 
-        // The Mica-tint scrim: a full-bleed layer BEHIND the 4-row chrome whose Fill is the (bound) page tint. The root
-        // stays Mica-passthrough when the tint is null (Transparent); when a detail page sets it, the low-alpha colour
-        // sits between DWM Mica and the translucent chrome, so the visible Mica regions carry the album/playlist hue.
         _fileDrop ??= new DropTargetSpec(
             [DropKinds.Files],
             OnEnter: _ => _fileDropOver.Value = true,
@@ -784,12 +919,32 @@ sealed class WaveeShell : Component
                 _fileDropOver.Value = false;
                 if (s.Payload is FileDropData { Count: > 0 } files) LocalFileActions.PlayDropped(_actions, files.Paths);
             });
+        // The shell BACKDROP — the material stack the whole authenticated shell sits on, bottom-up:
+        //   1. LIVE MICA — the DWM window material itself (Program.cs asks for it: CustomFrame + MicaAlt). This box
+        //      paints NOTHING, so the backdrop reads straight through every paint-site omission in the chrome (the
+        //      title-bar drag bands, the sidebar band, the player dock).
+        //   2. MATERIAL — ShellMaterialLayer, driven by the page-published signal: a flat tint (detail/artist pages
+        //      publish their art colour at A=0.14) or Home's three clipped radial washes. A LOW-ALPHA scrim between
+        //      Mica and the chrome, so the window material carries the album/artist hue instead of replacing it.
+        //   3. the chrome column itself.
+        // A ZStack, not a fill + one child: the material has to sit BETWEEN the backdrop and the column. The column
+        // keeps its Grow=1 + viewport-bound height, so it fills the stack exactly as it filled the old parent.
+        //
+        // NOTE — the WINDOWS 11 MICA LAYERING (learn.microsoft.com system-backdrops + style/mica, explicit product
+        // decision after two rejected alternatives). BASE LAYER: this root paints NOTHING — the merged row / sidebar /
+        // player bands are paint-site omissions over live Mica, and a page's low-alpha tint composites over the
+        // material. CONTENT LAYER: the content pane and rail band paint the stock WinUI LayerFillColorDefault rung
+        // (WaveeColors.FileArea), a translucent smoke that keeps the page one step ABOVE the base on any wallpaper —
+        // an opaque pane (both the deterministic #282828 and the "Files hybrid") inverted the model on light-tinted
+        // wallpapers and read as a black slab. The merged single-row chrome is what makes bare Mica safe: no plates
+        // remain, so the two-material seam the deterministic ground was invented for (D19) cannot recur.
+        // ShellGround/#EDEDED and ContentSurface survive as the no-Mica fallbacks and floating-surface flatten bases.
         var tinted = new BoxEl
         {
-            Grow = 1f, Direction = 1,
-            Fill = Prop.Of(() => _shellTint.Value.Color ?? ColorF.Transparent),
+            Grow = 1f, ZStack = true,
+            Fill = ColorF.Transparent,
             DropTarget = _fileDrop,
-            Children = [column],
+            Children = [Embed.Comp(() => new ShellMaterialLayer(_shellMaterial, vpSig)), column],
         };
 
         // Transient toasts are now the engine's auto-mounted Toast host (a top-Z lane inside OverlayHost, InfoBar-chromed,
@@ -803,7 +958,7 @@ sealed class WaveeShell : Component
         {
             Grow = 1f, HitTestPassThrough = true,
             Direction = 1, Justify = FlexJustify.Start, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(0f, 48f + 48f + 8f, 0f, 0f),   // clear the TitleBar (48) + ShellToolbar (48) rows
+            Padding = new Edges4(0f, 48f + 8f, 0f, 0f),   // clear the ONE merged chrome row (48) + a breathing gap
             Children =
             [
                 new BoxEl { MaxWidth = 560f, Children = [ Embed.Comp(() => new PlaybackRuntimeChrome(_settings)) ] },
@@ -866,47 +1021,167 @@ sealed class WaveeShell : Component
             DragPreviewLayer.Of(WaveeResourceDrag.Preview)) with { Grow = 1f };
 
         return Ctx.Provide(ShellUi.Slot, _shellUi,
-               Ctx.Provide(ShellTint.Slot, _shellTint,
+               Ctx.Provide(ShellMaterial.Slot, _shellMaterial,
                Ctx.Provide(HistoryStore.BackCtx, (Action)Back,
                Ctx.Provide(HistoryStore.NavCtx, (Action<string, string?>)GoNav,
                Ctx.Provide(HistoryStore.Slot, _historyStore,
                Ctx.Provide(NavPreviewStore.Slot, _navPreview,
+               Ctx.Provide(HomeSectionPreviewStore.Slot, _homeSectionPreview,
                Ctx.Provide(SearchQuery.Slot, _searchText,
                Ctx.Provide(ActionServices.Slot, _actions,
                Ctx.Provide(WaveeExtensionRegistry.Slot, _actions.Extensions,
-               OverlayHost.Create(shellWithOverlays))))))))));
+               OverlayHost.Create(shellWithOverlays)))))))))));
     }
 
-    TabStrip BuildTabStrip() => new TabStrip
+    /// <summary>The strip, plus the per-render push of the ladder's tab metrics onto the MOUNTED instance. A component's
+    /// plain fields freeze at mount, so <c>MinTabWidth</c>/<c>MaxTabWidth</c> cannot be re-passed through the factory;
+    /// this host runs inside the TITLE BAR's render — i.e. before the strip's own — so the mutation always lands in the
+    /// same frame as the <see cref="TabStripItemsVersion"/> bump that makes the strip re-read them.</summary>
+    Element TabStripHost()
     {
-        ItemsSource = BuildTabItems,
-        ItemsVersion = () => _tabsVersion.Value,
-        SelectedIndex = _selectedTab,
-        OnSelectionChanged = i => { if ((uint)i < (uint)_open.Count) Go(_open[i].Key, _open[i].Arg, NavTransitionKind.Neutral); },
-        OnTabCloseRequested = CloseTab,
-        OnAddTabButtonClick = () => { OpenNewTab("home"); return null; },
-        IsAddTabButtonVisible = true,
-        // Wavee's commanding plate is translucent over live Mica. Using that RAW material here (rather than an opaque
-        // reference-Mica flatten) makes the tab and toolbar follow the same wallpaper hue/luminance and fuse exactly.
-        SelectedFill = Prop.Of(() => WaveeColors.Toolbar), TabWidth = 200f, MinTabWidth = 120f, MaxTabWidth = 240f,
-    };
+        if (_strip is { } s)
+        {
+            float cap = _chromeLayout.Peek().TabMaxWidth;
+            s.MaxTabWidth = cap;
+            s.MinTabWidth = MathF.Min(ShellResponsiveLayout.ChromeTabMinW, cap);
+        }
+        return Embed.Comp(BuildTabStrip);
+    }
+
+    TabStrip BuildTabStrip()
+    {
+        var strip = new TabStrip
+        {
+            // TEXT-FIRST (Zune) tabs: no plate, no flare, no separators, no rail — weight + opacity carry selection and
+            // one strip-owned sliding 2-DIP accent underline marks it. That is what lets the tab strip share a 48-DIP
+            // row with the search and the identity cluster; SelectedFill/TabWidth are Chrome-grammar and ignored here.
+            Appearance = TabStripAppearance.Text,
+            TextFontSize = 13f,
+            // The "+" is back, but HOVER-ONLY: at rest it paints nothing (Ctrl+T stays the power affordance), and it
+            // cross-fades in whenever the pointer is over the strip. Its 32-DIP slot is RESERVED at every moment
+            // regardless — the strip hugs, and TitleBar reports that hug wholesale as one TitleBarHit.Client region, so
+            // a mount-on-hover would move the reported rect on every pointer entry and would have to join
+            // MergedChromeRow.ContentVersion. A permanently reserved slot inside an island that is already entirely
+            // client-hit-tested keeps the region rect (and this fold) completely still.
+            IsAddTabButtonVisible = true,
+            AddButtonVisibility = TabStripAddButtonVisibility.OnStripPointerOver,
+            OnAddTabButtonClick = () => { OpenNewTab("home"); return null; },
+            IndicatorFill = Prop.Of(() => Tok.AccentDefault),
+            MinTabWidth = ShellResponsiveLayout.ChromeTabMinW,
+            MaxTabWidth = ShellResponsiveLayout.ChromeTabMaxW,
+            ItemsSource = BuildTabItems,
+            ItemsVersion = TabStripItemsVersion,
+            // STRIP index space (the visible slice), not the open list — both handlers map back through _visibleTabs.
+            SelectedIndex = _stripSelected,
+            OnSelectionChanged = i =>
+            {
+                if ((uint)i >= (uint)_visibleTabs.Count) return;
+                int open = _visibleTabs[i];
+                if ((uint)open >= (uint)_open.Count) return;
+                TouchTab(open);
+                _selectedTab.SetIfChanged(open);
+                Go(_open[open].Key, _open[open].Arg, NavTransitionKind.Neutral);
+            },
+            OnTabCloseRequested = i => { if ((uint)i < (uint)_visibleTabs.Count) CloseTab(_visibleTabs[i]); },
+        };
+        // Embed.Comp runs its factory once and the reconciler mounts THAT instance, so the first one built is the live
+        // one (and a defensive extra call still leaves this pointing at the mounted instance).
+        _strip ??= strip;
+        return strip;
+    }
 
     int TitleBarTabsVersion()
     {
         int version = _tabsVersion.Value;
         int selected = _selectedTab.Value;
-        return unchecked(version * 397 ^ selected);
+        int slice = _tabStripVersion.Value;
+        return unchecked((version * 397 ^ selected) * 397 ^ slice);
+    }
+
+    /// <summary>The strip's own revision: the tab set, the visible SLICE, and the ladder's per-tab cap (which the strip
+    /// re-reads off its mutated fields). Read from the strip's render, so each of these subscribes it.</summary>
+    int TabStripItemsVersion()
+    {
+        int version = _tabsVersion.Value;
+        int slice = _tabStripVersion.Value;
+        int cap = (int)_chromeLayout.Value.TabMaxWidth;
+        return unchecked((version * 397 ^ slice) * 397 ^ cap);
+    }
+
+    /// <summary>Which open tabs are in the strip right now. The ACTIVE tab never leaves; the remaining slots go to the
+    /// most-recently-used tabs, and any slot the (short) MRU cannot fill goes in open order. Pure — it writes only the
+    /// plain scratch lists, so the off-render projection effect and the ItemsSource fallback can both call it.</summary>
+    void RebuildVisibleTabs(int keep, int selected)
+    {
+        _visibleTabs.Clear();
+        int n = _open.Count;
+        if (n == 0) return;
+        if (keep >= n) { for (int i = 0; i < n; i++) _visibleTabs.Add(i); return; }
+        if (keep < 1) keep = 1;
+        if ((uint)selected >= (uint)n) selected = 0;
+
+        _keepIds.Clear();
+        _keepIds.Add(_open[selected].Id);
+        for (int i = 0; i < _tabMru.Count && _keepIds.Count < keep; i++)
+            if (IndexOfTabId(_tabMru[i]) >= 0) _keepIds.Add(_tabMru[i]);
+        for (int i = 0; i < n && _keepIds.Count < keep; i++) _keepIds.Add(_open[i].Id);
+        for (int i = 0; i < n; i++) if (_keepIds.Contains(_open[i].Id)) _visibleTabs.Add(i);
+    }
+
+    /// <summary>The tabs the ladder folded out of the strip, MOST-RECENTLY-USED first (the order the user thinks in),
+    /// with anything the MRU has not seen appended in open order. Returns a reused list — callers copy out at once.</summary>
+    List<ChromeTabRef> HiddenTabs()
+    {
+        _hiddenScratch.Clear();
+        int n = _open.Count;
+        if (_visibleTabs.Count == 0) RebuildVisibleTabs(_chromeLayout.Peek().KeepTabs, _selectedTab.Peek());
+        if (_visibleTabs.Count >= n) return _hiddenScratch;
+        for (int i = 0; i < _tabMru.Count; i++)
+        {
+            int idx = IndexOfTabId(_tabMru[i]);
+            if (idx >= 0 && !_visibleTabs.Contains(idx)) AddHidden(idx);
+        }
+        for (int i = 0; i < n; i++) if (!_visibleTabs.Contains(i)) AddHidden(i);
+        return _hiddenScratch;
+
+        void AddHidden(int idx)
+        {
+            for (int k = 0; k < _hiddenScratch.Count; k++) if (_hiddenScratch[k].Index == idx) return;
+            var t = _open[idx];
+            _hiddenScratch.Add(new ChromeTabRef(idx, t.Label, t.Glyph));
+        }
+    }
+
+    int IndexOfTabId(int id)
+    {
+        for (int i = 0; i < _open.Count; i++) if (_open[i].Id == id) return i;
+        return -1;
+    }
+
+    /// <summary>Mark a tab as just-used. The LRU squeeze reads this list, so every path that CHANGES which tab is
+    /// active has to go through it (strip click, spring-load, overflow pick, new tab, close).</summary>
+    void TouchTab(int index)
+    {
+        if ((uint)index >= (uint)_open.Count) return;
+        int id = _open[index].Id;
+        _tabMru.Remove(id);
+        _tabMru.Insert(0, id);
     }
 
     IReadOnlyList<TabViewItem> BuildTabItems()
     {
-        var items = new TabViewItem[_open.Count];
-        for (int i = 0; i < items.Length; i++)
+        // Fallback for the very first pass, before the projection effect has run: never render an empty strip.
+        if (_visibleTabs.Count == 0) RebuildVisibleTabs(_chromeLayout.Peek().KeepTabs, _selectedTab.Peek());
+        var items = new TabViewItem[_visibleTabs.Count];
+        for (int k = 0; k < items.Length; k++)
         {
+            int i = _visibleTabs[k];
             var tab = _open[i];
             var destination = DestinationOf(tab);
+            // The closures below capture the OPEN-list index, so the drag payload, the spring-load activation and the
+            // context menu keep pointing at the right tab even though the strip's own index is `k`.
             int index = i;
-            items[i] = new TabViewItem
+            items[k] = new TabViewItem
             {
                 Header = tab.Label,
                 Icon = tab.Glyph,
@@ -1077,6 +1352,7 @@ sealed class WaveeShell : Component
     void ActivateTab(int i)
     {
         if ((uint)i >= (uint)_open.Count || _selectedTab.Peek() == i) return;
+        TouchTab(i);
         _selectedTab.Value = i;
         var t = _open[i];
         Go(t.Key, t.Arg, NavTransitionKind.Neutral);
@@ -1087,6 +1363,7 @@ sealed class WaveeShell : Component
         var (title, glyph) = ShellNav.Dest(key, null);
         _open.Add(new OpenTab(_nextTabId++, key, title, glyph, null));
         _selectedTab.Value = _open.Count - 1;
+        TouchTab(_open.Count - 1);
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
         Go(key, null, NavTransitionKind.Neutral);
     }
@@ -1094,15 +1371,45 @@ sealed class WaveeShell : Component
     void CloseTab(int i)
     {
         if (_open.Count <= 1 || (uint)i >= (uint)_open.Count) return;
+        _tabMru.Remove(_open[i].Id);
         _open.RemoveAt(i);
         int sel = _selectedTab.Peek();
         if (i < sel) sel--;
         else if (i == sel) sel = Math.Min(i, _open.Count - 1);
         sel = Math.Clamp(sel, 0, _open.Count - 1);
         _selectedTab.Value = sel;
+        TouchTab(sel);
         _tabsVersion.Value = _tabsVersion.Peek() + 1;
         var t = _open[sel];
         Go(t.Key, t.Arg, NavTransitionKind.Neutral);
+    }
+
+    /// <summary>Template overrides for the merged chrome row. The bar lays its pane toggle out at x=4 (root padding 2 +
+    /// the button's own margin 2) and it is 40 wide, so its centre lands at 24 — while the 56-DIP compact rail centres
+    /// the sidebar's icon column at 28. Nudge the painted slot four DIP right and take the four back on the trailing
+    /// side, so the hamburger lines up with the icons directly beneath it and NOTHING after it moves (the idiom the
+    /// two-row toolbar used on the same button, restored now that the button lives in the bar's own lead column).
+    /// <para>Margin is not an owned property of <c>PartPaneToggle</c> (the control owns OnClick/Role/OnRealized/Children
+    /// and re-applies exactly those after the part function), so overriding it here is inside the template contract.
+    /// Built ONCE: mutating a TemplateParts bumps its Epoch and invalidates the engine's apply-once prototype cache.</para></summary>
+    static readonly TemplateParts ChromeParts = BuildChromeParts();
+
+    static TemplateParts BuildChromeParts()
+    {
+        var parts = new TemplateParts();
+        parts[TitleBar.PartPaneToggle] = b => b with { Margin = new Edges4(6f, 2f, -2f, 2f) };
+        return parts;
+    }
+
+    // Shell-wide keyboard chords (see the accelerator hosts in the column). Ctrl+T opens a new Home tab; Ctrl+K puts the
+    // caret in the omnibar, EXPANDING it first when the ladder has collapsed it to the magnifier.
+    static readonly KeyAccelerator NewTabChord = new(Keys.T, KeyModifiers.Ctrl);
+    static readonly KeyAccelerator FocusSearchChord = new(Keys.K, KeyModifiers.Ctrl);
+
+    void FocusSearch()
+    {
+        if (_chromeLayout.Peek().SearchMode == MergedSearchMode.Icon) _searchExpanded.SetIfChanged(true);
+        _searchFocusRequest.Value = _searchFocusRequest.Peek() + 1;
     }
 
     void ToggleTheme()
@@ -1248,13 +1555,18 @@ sealed class ShellNarrowDrawerPane : Component
                 0f)),
             Width = Prop.Of(() => ShellResponsiveLayout.DrawerWidth(
                 _viewport.Value.Width, _expandedWidth.Value)),
-            // FloatingChrome, not Sidebar: the docked pane's fill is the TRANSLUCENT plate, but this drawer slides OVER
-            // the page — a translucent fill would let the content read through it. FloatingChrome is that same plate
-            // made opaque (rung 1), so the drawer matches the docked pane it stands in for rather than the content pane.
-            Fill = Prop.Of(() => WaveeColors.FloatingChrome),
+            // A stock OVERLAY PANE, not a dialog: in-app ACRYLIC + flyout elevation, exactly what WinUI's own
+            // NavigationView paints for its minimal-mode pane (NavigationViewDefaultPaneBackground =
+            // AcrylicInAppFillColorDefault, Shadow = Flyout — see NavigationView.cs "Overlay pane"). The old
+            // dead-opaque FloatingChrome plate + Elevation.Dialog (blur 64) read as a modal slab dropped on the
+            // window; the drawer is a transient light-dismiss surface and has to say so. Fill stays transparent —
+            // the acrylic layer IS the surface (the OverlayHost popup-chrome idiom), and its own FallbackColor
+            // covers the no-blur path, so this never degrades to a hole.
+            Fill = ColorF.Transparent,
+            Acrylic = Tok.AcrylicFlyout,
             BorderWidth = 1f, BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
             Corners = new CornerRadius4(0f, Radii.Card, Radii.Card, 0f),
-            Shadow = Elevation.Dialog, HitTestVisible = open,
+            Shadow = Elevation.Flyout, HitTestVisible = open,
             // A SECOND, independent SidebarHost mount (its own hooks / scroll / mode-component instance) sharing the same
             // width signal and the same SidebarPreferences — one mode, one state, two mounts.
             Children = [Embed.Comp(() => new SidebarHost(_route, _go, _drawerCompact, _expandedWidth, inDrawer: true))],

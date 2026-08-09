@@ -5,16 +5,83 @@ namespace Wavee;
 
 // Semantic type aliases so call sites read INTENT, not raw sizes. Every alias maps to the engine's WinUI type ramp
 // (Ui.Caption/Body/BodyStrong/Subtitle/Title/Display in Dsl/Typography.cs). Never author a raw `TextEl { Size = … }`.
+//
+// THE THREE-PART CONTRACT. Every alias below resolves a SIZE, a LINE HEIGHT and a WEIGHT — never a size alone. That is
+// the whole reason to go through an alias rather than `with { Size = 13f }`: a bare size override keeps whatever line
+// height the previous rung published, and a page of hand-picked sizes therefore has no vertical rhythm at all. The
+// engine ramp carries the pair (12/16 · 14/20 · 14/20-600 · 18/24 · 20/28-600 · 28/36-600 · 40/52-600 · 68/92-600), so
+// repointing a call site at an alias brings the line height with it.
+//
+// WEIGHT POLICY: 400 and 600 only. The three DISPLAY-FACE identity aliases (ArtistDisplay / ArtistTitle /
+// ArtistCompactTitle) keep their documented 700 — that is the ONE sanctioned editorial divergence, and it is sanctioned
+// because those three are the app's masthead voice, not UI labels.
 public static class WaveeType
 {
-    /// <summary>Track / album / playlist titles in lists. → Ui.BodyStrong (14/20 Semibold).</summary>
+    /// <summary>Track / album / playlist titles in lists. → Ui.BodyStrong (14 / 20 / 600).</summary>
     public static TextEl TrackTitle(string s) => Ui.BodyStrong(s);
 
-    /// <summary>Artist · duration · metadata. → Ui.Caption secondary (12/16).</summary>
+    /// <summary>A media CARD's headline (a playlist tile, a mix card, a feed card, a shelf cell) — the same rung as
+    /// <see cref="TrackTitle"/>, named for the surface it actually sits on so a card body does not have to claim it is
+    /// rendering a track. → Ui.BodyStrong (14 / 20 / 600).</summary>
+    public static TextEl CardTitle(string s) => Ui.BodyStrong(s);
+
+    /// <summary>Artist · duration · metadata. → Ui.Caption secondary (12 / 16 / 400).</summary>
     public static TextEl TrackMeta(string s) => Ui.Caption(s).Secondary();
 
-    /// <summary>"Because you played…" section / rail headers. → Ui.Subtitle (20/28 Semibold).</summary>
+    /// <summary>An EYEBROW — the small label that names what a card/section IS ("Editorial", "Daily Mix", "Video",
+    /// "Release", the hero's greeting). One rung, one weight, everywhere: → Ui.Caption at 600 (12 / 16 / 600).
+    /// <para>Deliberately carries NO colour, no casing and no tracking: those are the label's VOICE and belong to the
+    /// call site (an accent reason, a tertiary kind tag and an on-accent badge are the same type at three different
+    /// jobs). This alias owns the metrics only.</para>
+    /// <para>Text that merely wants this RUNG without being an eyebrow — a rank numeral, a podium tile's artist name, a
+    /// day heading — reads <c>Ui.Caption(x) with { Weight = 600 }</c> straight off the factory (same metrics, same line
+    /// height) rather than claiming to be a label it is not. One alias per ROLE, not one per rung.</para></summary>
+    public static TextEl Eyebrow(string s) => Ui.Caption(s) with { Weight = 600 };
+
+    /// <summary>"Because you played…" section / rail headers. → Ui.Subtitle (20 / 28 / 600).</summary>
     public static TextEl RailHeader(string s) => Ui.Subtitle(s);
+
+    /// <summary>A Home MODULE header — the same 20/28 Semibold metrics as <see cref="RailHeader"/> but set in the
+    /// DISPLAY face with a hair of negative tracking. That is the whole difference between a shelf label and a module
+    /// title: at 20px the display face's tighter fit and optical sizing make a stack of thirteen headings read as
+    /// typography rather than as thirteen repeated UI labels.</summary>
+    public static TextEl ModuleHeader(string s) => Ui.Subtitle(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        CharSpacing = -6f,
+    };
+
+    /// <summary>A module header plus its subdued fact ("Radio · 20 stations"), shaped as ONE paragraph so the 12px run
+    /// sits on the 20px run's real baseline. Two separate text nodes cannot do this — the engine's FlexAlign has no
+    /// Baseline member, so side-by-side nodes can only be bottom-aligned, which puts the small run a couple of pixels
+    /// low and reads as a mistake at this size. Same construction as <see cref="RailHeader(string,string)"/>, in the
+    /// display face.</summary>
+    public static SpanTextEl ModuleHeader(string title, string meta)
+    {
+        var heading = Ui.Subtitle("");
+        var caption = Ui.Caption("");
+        return new SpanTextEl(
+        [
+            new TextSpan(title),
+            // Two spaces, not a separator glyph: the prototype's 12px gap between the title and its subtitle. A run
+            // break cannot carry margin, so the space IS the gap.
+            new TextSpan("  " + meta, Weight: caption.ResolvedWeight, Color: Tok.TextTertiary, Size: caption.Size),
+        ])
+        {
+            FontFamily = "Segoe UI Variable Display",
+            CharSpacing = -6f,
+            Size = heading.Size,
+            Weight = heading.ResolvedWeight,
+            LineHeight = heading.LineHeight,
+            LineStacking = heading.LineStacking,
+            LineBounds = heading.LineBounds,
+            Wrap = TextWrap.NoWrap,
+            Trim = TextTrim.CharacterEllipsis,
+            MaxLines = 1,
+            MinWidth = 0f,
+            Shrink = 1f,
+        };
+    }
 
     /// <summary>A rail heading plus baseline-aligned compact metadata. Both runs shape as one paragraph, so the smaller
     /// suffix shares the heading's baseline instead of bottom-aligning two unrelated line boxes.</summary>
@@ -42,10 +109,11 @@ public static class WaveeType
         };
     }
 
-    /// <summary>Page hero (playlist / album name). → Ui.Title (28/36 Semibold).</summary>
+    /// <summary>Page hero (playlist / album name). → Ui.Title (28 / 36 / 600).</summary>
     public static TextEl PageHero(string s) => Ui.Title(s);
 
-    /// <summary>Wide artist identity display: a larger, tightly tracked Display face for editorial heroes.</summary>
+    /// <summary>Wide artist identity display: a larger, tightly tracked Display face for editorial heroes.
+    /// 84 / 96 / <b>700</b> — one of the three sanctioned display-face divergences (see the class header).</summary>
     public static TextEl ArtistDisplay(string s) => Ui.Display(s) with
     {
         FontFamily = "Segoe UI Variable Display",
@@ -56,7 +124,8 @@ public static class WaveeType
         MinSize = 68f,
     };
 
-    /// <summary>Medium artist identity title retaining the display face and weight under pressure.</summary>
+    /// <summary>Medium artist identity title retaining the display face and weight under pressure.
+    /// 48 / 60 / <b>700</b> — sanctioned display-face divergence.</summary>
     public static TextEl ArtistTitle(string s) => Ui.TitleLarge(s) with
     {
         FontFamily = "Segoe UI Variable Display",
@@ -67,7 +136,8 @@ public static class WaveeType
         MinSize = 40f,
     };
 
-    /// <summary>Compact artist identity title with the same bold, tightly tracked voice.</summary>
+    /// <summary>Compact artist identity title with the same bold, tightly tracked voice.
+    /// 32 / 40 / <b>700</b> — sanctioned display-face divergence.</summary>
     public static TextEl ArtistCompactTitle(string s) => Ui.Title(s) with
     {
         FontFamily = "Segoe UI Variable Display",
@@ -78,6 +148,6 @@ public static class WaveeType
         MinSize = 28f,
     };
 
-    /// <summary>Now-playing track title. → Ui.Subtitle.</summary>
+    /// <summary>Now-playing track title. → Ui.Subtitle (20 / 28 / 600).</summary>
     public static TextEl NowPlayingTitle(string s) => Ui.Subtitle(s);
 }

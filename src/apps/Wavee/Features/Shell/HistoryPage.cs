@@ -237,7 +237,7 @@ sealed class HistoryPage : Component
                 ScrollView(new BoxEl
                 {
                     Direction = 1, Gap = Spacing.L,
-                    Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.XXL),
+                    Padding = new Edges4(Spacing.PageWide, Spacing.M, Spacing.PageWide, Spacing.XXL),
                     Children = [ body ],
                 }) with { Grow = 1f },
             ],
@@ -330,13 +330,13 @@ sealed class HistoryPage : Component
                     Margin = new Edges4(0f, 0f, 0f, 4f),
                     Children =
                     [
-                        new TextEl(label.ToUpperInvariant()) { Size = 11f, Weight = 700, Color = Tok.TextSecondary, CharSpacing = 60f },
+                        new TextEl(label.ToUpperInvariant()) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, CharSpacing = 60f },
                         new BoxEl { Grow = 1f, Height = 1f, Margin = new Edges4(4f, 0f, 4f, 0f), Fill = Tok.StrokeDividerDefault },
                         new BoxEl
                         {
-                            Padding = new Edges4(8f, 2f, 8f, 2f), Corners = CornerRadius4.All(Radii.Full),
+                            Padding = new Edges4(Spacing.S, Spacing.XXS, Spacing.S, Spacing.XXS), Corners = Radii.FullAll,
                             Fill = Tok.FillSubtleSecondary,
-                            Children = [ new TextEl(Strings.Nav.History.VisitCount(count)) { Size = 11f, Color = Tok.TextSecondary } ],
+                            Children = [ new TextEl(Strings.Nav.History.VisitCount(count)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary } ],
                         },
                     ],
                 },
@@ -377,7 +377,7 @@ sealed class HistoryPage : Component
                     Margin = new Edges4(0f, 0f, 0f, 4f),
                     Children =
                     [
-                        new TextEl(Loc.Get(Strings.Nav.History.MostVisited)) { Size = 11f, Weight = 700, Color = Tok.TextSecondary, CharSpacing = 60f },
+                        new TextEl(Loc.Get(Strings.Nav.History.MostVisited)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, CharSpacing = 60f },
                         new BoxEl { Grow = 1f, Height = 1f, Margin = new Edges4(4f, 0f, 4f, 0f), Fill = Tok.StrokeDividerDefault },
                     ],
                 },
@@ -438,7 +438,7 @@ sealed class HistoryPage : Component
                 ],
             },
             // Timestamp
-            new TextEl(ts) { Size = 12f, Color = Tok.TextTertiary },
+            new TextEl(ts) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
         };
 
         // Visit-count badge (only shown in MostVisited mode when visitCount > 0)
@@ -446,9 +446,9 @@ sealed class HistoryPage : Component
         {
             rowChildren.Add(new BoxEl
             {
-                Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(Radii.Full),
+                Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
                 Fill = Tok.FillSubtleSecondary,
-                Children = [ new TextEl(Strings.Nav.History.VisitMultiplier(visitCount)) { Size = 11f, Color = Tok.TextSecondary } ],
+                Children = [ new TextEl(Strings.Nav.History.VisitMultiplier(visitCount)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary } ],
             });
         }
 
@@ -460,7 +460,7 @@ sealed class HistoryPage : Component
             Corners = CornerRadius4.All(Radii.Control),
             Opacity = 0.5f,
             OnClick = () => store.Remove(e),
-            Children = [ Icon(Icons.Cancel, 10f, Tok.TextSecondary) ],
+            Children = [ Icon(Icons.Cancel, 12f, Tok.TextSecondary) ],
         }.Interactive(Interaction.Subtle));
 
         Element row = new BoxEl
@@ -488,12 +488,12 @@ sealed class HistoryPage : Component
     {
         var items = new List<Element>
         {
-            new TextEl(kindLabel) { Size = 12f, Color = Tok.TextTertiary },
+            new TextEl(kindLabel) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
         };
         if (e.Route.Arg is { Length: > 0 } arg)
         {
-            items.Add(new TextEl("·") { Size = 12f, Color = Tok.TextTertiary });
-            items.Add(new TextEl(arg) { Size = 12f, Color = Tok.TextTertiary, Trim = TextTrim.CharacterEllipsis, MaxLines = 1 });
+            items.Add(new TextEl("·") { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary });
+            items.Add(new TextEl(arg) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, Trim = TextTrim.CharacterEllipsis, MaxLines = 1 });
         }
         return items.ToArray();
     }
@@ -531,7 +531,7 @@ sealed class HistoryPage : Component
         return new BoxEl
         {
             Direction = 1, Gap = Spacing.M,
-            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.M),
+            Padding = new Edges4(Spacing.PageWide, Spacing.L, Spacing.PageWide, Spacing.M),
             // No Fill — inherits the content card background so it doesn't conflict in light theme
             BorderColor = Tok.StrokeDividerDefault, BorderWidth = 0f,
             Children =
@@ -587,12 +587,12 @@ sealed class HistoryPage : Component
         new BoxEl
         {
             Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(Radii.Full),
+            Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
             Fill = Tok.FillSubtleSecondary,
             Children =
             [
-                new TextEl(value) { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
-                new TextEl(label) { Size = 12f, Color = Tok.TextSecondary },
+                new TextEl(value) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary },
+                new TextEl(label) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary },
             ],
         };
 }

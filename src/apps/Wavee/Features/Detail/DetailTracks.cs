@@ -2002,7 +2002,7 @@ sealed class TrackList : Component
             Direction = 1, ClipToBounds = true,
             Padding = new Edges4(checkInset ? 28f : 0f, 0f, 0f, 0f),
             Animate = new LayoutTransition(TransitionChannels.Position,
-                TransitionDynamics.Tween(333f, Easing.FluentDecelerate)),
+                TransitionDynamics.Tween(MotionTok.DisclosureExpand.DurationMs, Easing.FluentDecelerate)),
             Children = [grid, new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault }],
         };
         return headerGrid;
@@ -2464,9 +2464,9 @@ sealed class TrackList : Component
                 Padding = new Edges4(TrackRow.PadX, 0f, TrackRow.PadX, 0f),
                 Children =
                 [
-                    new TextEl("Recommended songs")
+                    // BodyStrong (14/20/600) — a list-section label, the same rung as the track titles under it. Was 15/700.
+                    Ui.BodyStrong("Recommended songs") with
                     {
-                        Size = 15f, Weight = 700, Color = Tok.TextPrimary,
                         Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                     },
                     .. trailing,
@@ -2478,7 +2478,7 @@ sealed class TrackList : Component
         {
             Width = 32f, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(16f),
-            HoverScale = 1.06f, PressScale = 0.94f, Cursor = CursorId.Hand,
+            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, Cursor = CursorId.Hand,
             Role = AutomationRole.Button, OnClick = onClick,
             Children = [Icon(Icons.Refresh, 14f, Tok.TextSecondary)],
         }.Interactive(Interaction.Subtle);
@@ -2922,7 +2922,7 @@ sealed class TrackList : Component
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowHoverZebra : WaveeColors.RowHover),
             PressedFill = plainRows ? WaveeColors.RowPressed
                 : Prop.Of(() => DisplayIndex() % 2 != 0 ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed),
-            PressScale = 0.985f,   // subtle push-down on press (a depth cue so the row isn't flat)
+            PressScale = WaveeMotion.ScaleSubtle.Press,   // subtle push-down on press (a depth cue so the row isn't flat)
             // Stationary lift: the row stays in its slot at 0.4 (Atlassian's "it's in the chip" dim) while the chip
             // follows the pointer — the full-width lifted row snapshot was the S1 ghost failure.
             Draggable = Drag.Source(WaveeDragKinds.Resource, () => TrackDragPayload(index.Peek(), trackStart)),
@@ -2973,7 +2973,7 @@ sealed class TrackList : Component
                 {
                     Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center,
                     Animate = new LayoutTransition(TransitionChannels.Position,
-                        TransitionDynamics.Tween(333f, Easing.FluentDecelerate)),
+                        TransitionDynamics.Tween(MotionTok.DisclosureExpand.DurationMs, Easing.FluentDecelerate)),
                     Children =
                     [
                         SelectorVisualsBound.BoundCheckLane(_checksVisibleRead, isSel, onInteraction, leftMargin: 4f),
@@ -3239,10 +3239,9 @@ sealed class PlaylistTuneButton : Component
                                 Basis = 0f,
                                 Children =
                                 [
-                                    new TextEl(Loc.Get(Strings.Detail.Tuning.FlyoutTitle))
-                                    { Size = 14f, Weight = 650, Color = Tok.TextPrimary },
-                                    new TextEl(Loc.Get(Strings.Detail.Tuning.FlyoutSubtitle))
-                                    { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap },
+                                    // BodyStrong / Caption — the flyout's title+subtitle pair on the ramp (was 14/650).
+                                    Ui.BodyStrong(Loc.Get(Strings.Detail.Tuning.FlyoutTitle)),
+                                    Ui.Caption(Loc.Get(Strings.Detail.Tuning.FlyoutSubtitle)) with { Wrap = TextWrap.Wrap },
                                 ],
                             },
                         ],
@@ -3818,8 +3817,9 @@ sealed class DensityPanel : Component
                         Direction = 0, AlignItems = FlexAlign.Center,
                         Children =
                         [
-                            new TextEl(Loc.Get(Strings.Detail.Density.RowSize)) { Size = 13f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f },
-                            new TextEl(ListButton.Label(d)) { Size = 12f, Color = Tok.TextSecondary },
+                            // BodyStrong label + Caption value — the ramp's control-label pair (was 13/700).
+                            Ui.BodyStrong(Loc.Get(Strings.Detail.Density.RowSize)) with { Grow = 1f },
+                            Ui.Caption(ListButton.Label(d)),
                         ],
                     },
                     Slider.Create(dv, v => _setDensity(Math.Clamp((int)MathF.Round(v), 0, 3)),

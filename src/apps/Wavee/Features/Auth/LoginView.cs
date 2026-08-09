@@ -91,9 +91,9 @@ sealed class LoginView : Component
     {
         Direction = 1, Width = 440f, MaxWidth = 440f, AlignItems = FlexAlign.Center, Gap = Spacing.L,
         Padding = Edges4.All(32f), Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-        // FloatingPane, not Content: the login view REPLACES the whole shell, so there is no plate behind this card —
-        // a translucent pane fill would let bare Mica read straight through it. FloatingPane is the same content-pane
-        // surface flattened through the plate, i.e. opaque and identical to what the docked pane shows.
+        // FloatingPane, not Content: the login view REPLACES the whole shell, so nothing is painted behind this card —
+        // a translucent pane fill would let bare Mica read straight through it (login is the one surface that still
+        // sits directly on the DWM backdrop). FloatingPane IS ContentSurface: opaque, identical to the docked pane.
         // Kept a STATIC read (not Prop.Of): a static token read inside Render() gets the theme cross-fade, whereas a
         // bind snaps.
         Fill = WaveeColors.FloatingPane, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
@@ -239,7 +239,7 @@ sealed class TwoPaneLogin : Component
             Direction = 1, Width = CardW, MaxWidth = CardW, AlignItems = FlexAlign.Stretch,
             Padding = new Edges4(36f, 32f, 36f, 24f), Gap = 0f,
             Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-            // FloatingPane (see LoginView.Card): no shell plate behind the login view, so the card must be opaque.
+            // FloatingPane (see LoginView.Card): no shell behind the login view — just Mica — so the card must be opaque.
             Fill = WaveeColors.FloatingPane, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Enter = new EnterExit(Dy: 8f, Opacity: 0f, Active: true),
             Exit = new EnterExit(Dy: -6f, Sx: 0.98f, Sy: 0.98f, Opacity: 0f, Active: true),   // success: dissolve out as the shell rises in

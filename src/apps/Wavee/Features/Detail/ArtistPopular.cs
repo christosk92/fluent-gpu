@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -298,7 +298,7 @@ sealed class ArtistPopular : Component
             Fill = ColorF.Transparent,
             HoverFill = WaveeColors.RowHover,
             PressedFill = WaveeColors.RowPressed,
-            PressScale = 0.985f, BorderWidth = 1f,
+            PressScale = WaveeMotion.ScaleSubtle.Press, BorderWidth = 1f,
             BorderColor = ColorF.Transparent,
             HoverBorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, OnClick = onPlay,
@@ -403,7 +403,7 @@ sealed class ArtistPopular : Component
     {
         Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(14f), HoverFill = enabled ? Tok.FillSubtleSecondary : default,
-        HoverScale = enabled ? 1.06f : 1f, OnClick = enabled ? onClick : null,
+        HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), OnClick = enabled ? onClick : null,
         Children = [Icon(glyph, 12f, enabled ? Tok.TextSecondary : Tok.TextTertiary)],
     };
 

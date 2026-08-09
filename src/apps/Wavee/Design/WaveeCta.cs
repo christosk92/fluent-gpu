@@ -30,8 +30,10 @@ static class WaveeCta
     /// the page's dominant action; also the height of the Follow pill it shares hero rows with.</summary>
     public const float PillHeight = 36f;
 
-    const float PillHoverScale = 1.04f;
-    const float PillPressScale = 0.97f;
+    // The pill's scale cue is no longer authored here: this skin's 1.04 hover IS the Standard rung of
+    // WaveeMotion.ScaleStandard (a labeled media primary is the canonical "discrete aim target"), and its press
+    // deepened 0.97 -> the rung's 0.96 so the ladder has one press value per tier. Reading the tier also makes the
+    // pill reduced-motion-safe, which the two local consts never were.
 
     /// <summary>The primary Play CTA on an artwork-derived <paramref name="accent"/>. <paramref name="label"/> defaults
     /// to the shared detail-surface "Play" string; surfaces with their own wording pass it.</summary>
@@ -65,8 +67,8 @@ static class WaveeCta
                 Bold = true,
             }) with
         {
-            HoverScale = PillHoverScale,
-            PressScale = PillPressScale,
+            HoverScale = WaveeMotion.ScaleStandard.Hover,
+            PressScale = WaveeMotion.ScaleStandard.Press,
             Cursor = CursorId.Hand,
         };
 

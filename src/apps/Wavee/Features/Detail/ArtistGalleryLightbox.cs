@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -338,7 +338,7 @@ sealed class ArtistGalleryLightbox : Component
                 Opacity = active ? 1f : 0.55f,
                 Transition = MotionTok.ControlFast,
                 OnClick = () => setSelected(idx),
-                Cursor = CursorId.Hand, HoverScale = 1.05f,
+                Cursor = CursorId.Hand, HoverScale = WaveeMotion.ScaleStandard.Hover,
                 Children = [ Surfaces.Artwork(_photos[idx], idx, Thumb, Thumb, Radii.Control, decodePx: 128) ],
             };
         }

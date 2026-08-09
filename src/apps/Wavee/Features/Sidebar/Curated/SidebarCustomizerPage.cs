@@ -468,9 +468,9 @@ sealed class SidebarCustomizerPage : Component
         {
             Key = "body:" + (int)tier, Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
             Gap = RegionGap,
-            // NO page-level Fill: the wash under these cards is the shell's own content-pane plate (WaveeColors.FileArea),
-            // and painting a second translucent layer over it double-composites — the documented regression at
-            // WaveeShell.cs's "rung 2". The Settings page paints no background either; its cards float on the same plate.
+            // NO page-level Fill: the surface under these cards is the shell's own content pane
+            // (WaveeColors.ContentSurface), and painting a second layer over it just repaints the same rung. The
+            // Settings page paints no background either; its cards float on the same surface.
             Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
             Children = [.. kids],
         };
@@ -618,7 +618,7 @@ sealed class SidebarCustomizerPage : Component
     /// than staying quiet, so they stay silent and are recorded in the wave's HANDOFF.</summary>
     static string? RejectLocKey(SidebarRejectReason reason, bool topBar) => reason switch
     {
-        SidebarRejectReason.SectionCapReached when topBar => TopBarLoc.CapReached,
+        SidebarRejectReason.SectionCapReached when topBar => SidebarNavBandLoc.CapReached,
         SidebarRejectReason.DuplicateItem when topBar => CzLoc.TopBarDuplicate,
         SidebarRejectReason.InvalidIcon when topBar => CzLoc.TopBarInvalidIcon,
         SidebarRejectReason.UnknownItem when topBar => CzLoc.TopBarUnknownItem,

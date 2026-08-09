@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using FluentGpu.Animation;
@@ -278,7 +278,7 @@ public static class ConcertUi
             Height = wide ? metrics.Height : float.NaN,
             ClipToBounds = true, Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Shadow = Elevation.Card,
+
             Children = wide ? [ groundedCopy, media ] : [ media, groundedCopy ],
         };
     }
@@ -462,7 +462,7 @@ public static class ConcertUi
             Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
             Corners = CornerRadius4.All(Radii.Card),
             Fill = fill, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card, ClipToBounds = true,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, ClipToBounds = true,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand, OnClick = onOpen,
             Children =
@@ -545,14 +545,14 @@ public static class ConcertUi
             TransitionDynamics.Tween(220f, Easing.SmoothOut),
             Size: SizeMode.Reflow, Axes: SizeAxes.Width),
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 6f,
-        Padding = new Edges4(selected ? 10f : 14f, 5f, 14f, 5f),
+        Padding = new Edges4(14f, 5f, 14f, 5f),
         Corners = CornerRadius4.All(Radii.Full),
         Fill = selected ? Tok.AccentDefault : Tok.FillControlDefault,
         HoverFill = selected ? Tok.AccentSecondary : Tok.FillControlSecondary,
         PressedFill = selected ? Tok.AccentTertiary : Tok.FillControlTertiary,
         BorderWidth = 1f,
         BorderColor = selected ? Tok.AccentDefault : Tok.StrokeControlDefault,
-        BrushTransitionMs = 180f,
+        BrushTransitionMs = WaveeMotion.Fast,
         Role = AutomationRole.ToggleButton, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
         Children = selected
             ?
@@ -640,7 +640,7 @@ public static class ConcertUi
         Padding = new Edges4(3f, 3f, 12f, 3f),
         Corners = CornerRadius4.All(Radii.Full),
         Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
-        Shadow = Elevation.Card,
+
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
         Children =
         [
@@ -724,7 +724,7 @@ public static class ConcertUi
             Height = metrics.Height, MinWidth = 0f, ZStack = true, ClipToBounds = true,
             Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary, PressedFill = Tok.FillControlTertiary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Role = AutomationRole.Button, Focusable = true, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             Cursor = CursorId.Hand, OnClick = onClick,
             Children =

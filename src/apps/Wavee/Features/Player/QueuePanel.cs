@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -161,8 +161,8 @@ sealed class QueuePanel : Component
         if (track is null && userQueue.Count == 0 && ctxUp.Count == 0)
             content.Add(new BoxEl
             {
-                Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Padding = Edges4.All(22f),
-                Children = [new TextEl(Loc.Get(Strings.Player.NothingPlaying)) { Size = 13f, Color = Tok.TextSecondary }],
+                Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Padding = Edges4.All(Spacing.XXL),
+                Children = [new TextEl(Loc.Get(Strings.Player.NothingPlaying)) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary }],
             });
 
         Element body = new BoxEl
@@ -279,9 +279,9 @@ sealed class QueuePanel : Component
     static Element PlayingFrom(string source, string? href, Action<string, string?>? go) => new BoxEl
     {
         Key = "qp:ctx",
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, MinHeight = 26f,
-        Padding = new Edges4(6f, 2f, 6f, 6f),
-        Corners = CornerRadius4.All(4f),
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinHeight = 28f,
+        Padding = new Edges4(Spacing.S, Spacing.XXS, Spacing.S, Spacing.S),
+        Corners = Radii.ControlAll,
         HoverFill = href is { Length: > 0 } ? WaveeColors.RowHover : ColorF.Transparent,
         Cursor = href is { Length: > 0 } ? CursorId.Hand : CursorId.Arrow,
         OnClick = href is { Length: > 0 } && go is not null ? () => go(href, source) : null,
@@ -291,8 +291,8 @@ sealed class QueuePanel : Component
             [
                 new TextSpan(Strings.Player.PlayingFrom(""), Color: Tok.TextSecondary),
                 new TextSpan(source, Color: Tok.TextPrimary, Weight: 700),
-            ]) { Size = 12f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f, MinWidth = 0f },
-            new TextEl(Icons.ChevronRightMed) { Size = 10f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
+            ]) { Size = 12f, LineHeight = 16f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Grow = 1f, MinWidth = 0f },
+            new TextEl(Icons.ChevronRightMed) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
         ],
     };
 
@@ -318,10 +318,10 @@ sealed class QueuePanel : Component
                 new BoxEl
                 {
                     Width = 44f, Height = 44f, Shrink = 0f, ZStack = true, ClipToBounds = true,
-                    Corners = CornerRadius4.All(5f),
+                    Corners = Radii.ControlAll,
                     Children =
                     [
-                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, 44f, 44f, 5f, decodePx: 96),
+                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, 44f, 44f, Radii.Control, decodePx: 96),
                         Embed.Comp(() => new NowPlayingOverlay(t.Uri, () => { }, 28f, cover: true, 44f, centered: true))
                             .Skeletonized(false),
                     ],
@@ -333,12 +333,12 @@ sealed class QueuePanel : Component
                     [
                         new TextEl(t.Title)
                         {
-                            Size = 14f, Weight = 700, Color = Tok.AccentTextPrimary,
+                            Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.AccentTextPrimary,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         go is null
                             ? new TextEl(DetailFormat.ArtistNames(t.Artists))
-                            { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                            { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
                             : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
                     ],
                 },
@@ -356,32 +356,33 @@ sealed class QueuePanel : Component
     {
         var top = new List<Element>(4)
         {
+            // Caption (12/16/600). Caps + the 120/1000 tracking are the header's voice and stay untouched.
             new TextEl(title.ToUpperInvariant())
             {
-                Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 120f,
+                Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 120f,
                 MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
         };
-        if (count >= 0) top.Add(new TextEl(count.ToString()) { Size = 11f, Weight = 600, Color = Tok.TextTertiary });
+        if (count >= 0) top.Add(new TextEl(count.ToString()) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary });
         top.Add(new BoxEl { Grow = 1f, MinWidth = 0f });
         if (clear is not null)
             top.Add(new BoxEl
             {
-                Padding = new Edges4(6f, 2f, 6f, 2f), Corners = CornerRadius4.All(4f),
+                Padding = new Edges4(Spacing.S, Spacing.XXS, Spacing.S, Spacing.XXS), Corners = Radii.ControlAll,
                 HoverFill = WaveeColors.RowHover, PressedFill = WaveeColors.RowPressed,
                 Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = clear,
-                Children = [new TextEl(Loc.Get(Strings.Player.Clear)) { Size = 11f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
+                Children = [new TextEl(Loc.Get(Strings.Player.Clear)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
             });
 
-        var kids = new List<Element>(2) { new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f, Children = top.ToArray() } };
+        var kids = new List<Element>(2) { new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Children = top.ToArray() } };
         if (sub is { Length: > 0 })
-            kids.Add(new TextEl(sub) { Size = 11f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            kids.Add(new TextEl(sub) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
         return new BoxEl
         {
             Key = "hdr:" + title,
-            Direction = 1, Gap = 1f,
-            Padding = new Edges4(6f, 12f, 6f, 4f),
+            Direction = 1, Gap = Spacing.XXS,
+            Padding = new Edges4(Spacing.S, Spacing.M, Spacing.S, Spacing.XS),
             Layout = LayoutTransition.Slide,
             Children = kids.ToArray(),
         };
@@ -422,18 +423,18 @@ sealed class QueuePanel : Component
     static Element ShowMore(string sectionTag, int nextPage, int remaining, Action more) => new BoxEl
     {
         Key = "more:" + sectionTag,
-        Direction = 0, MinHeight = 38f, Gap = 7f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Margin = new Edges4(0f, 4f, 0f, 2f),
-        Corners = CornerRadius4.All(6f),
+        Direction = 0, MinHeight = 40f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Margin = new Edges4(0f, Spacing.XS, 0f, Spacing.XXS),
+        Corners = Radii.ControlAll,
         Fill = Tok.FillCardSecondary,
         HoverFill = WaveeColors.RowHover, PressedFill = WaveeColors.RowPressed,
         Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = more,
         Layout = LayoutTransition.Slide,
         Children =
         [
-            new TextEl(Icons.ChevronDown) { Size = 10f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
-            new TextEl($"Show next {nextPage}") { Size = 12f, Weight = 600, Color = Tok.TextPrimary },
-            new TextEl($"·  {remaining} more") { Size = 12f, Color = Tok.TextTertiary },
+            new TextEl(Icons.ChevronDown) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary },
+            new TextEl($"Show next {nextPage}") { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary },
+            new TextEl($"·  {remaining} more") { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
         ],
     };
 
@@ -470,12 +471,12 @@ sealed class QueuePanel : Component
                 ? Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t))
                 : null,
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 44f,
-            Padding = new Edges4(6f, 0f, 4f, 0f),
-            Corners = CornerRadius4.All(6f),
+            Padding = new Edges4(Spacing.S, 0f, Spacing.XS, 0f),
+            Corners = Radii.ControlAll,
             Fill = zebra ? WaveeColors.RowZebra : ColorF.Transparent,
             HoverFill = zebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
             PressedFill = zebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
-            PressScale = 0.985f,
+            PressScale = WaveeMotion.ScaleSubtle.Press,
             Opacity = dim ? 0.72f : 1f,
             Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
             OnClick = () => PlayQueueEntry(b, entry),
@@ -493,10 +494,10 @@ sealed class QueuePanel : Component
                 new BoxEl
                 {
                     Width = QueueArt, Height = QueueArt, Shrink = 0f, ZStack = true, ClipToBounds = true,
-                    Corners = CornerRadius4.All(5f),
+                    Corners = Radii.ControlAll,
                     Children =
                     [
-                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, QueueArt, QueueArt, 5f, decodePx: 72),
+                        Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, QueueArt, QueueArt, Radii.Control, decodePx: 72),
                         // Fluent now-playing cue (EQ / play-pause) — same overlay as RecRow / Next-up ArtCards.
                         Embed.Comp(() => new NowPlayingOverlay(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, QueueArt, centered: true))
                             .Skeletonized(false),
@@ -507,15 +508,16 @@ sealed class QueuePanel : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Justify = FlexJustify.Center,
                     Children =
                     [
+                        // BodyStrong (14/20/600) — the app's track-title rung. Was a fractional 13.5.
                         new TextEl(t.Title)
                         {
-                            Size = 13.5f, Weight = 600,
+                            Size = 14f, LineHeight = 20f, Weight = 600,
                             Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
                             Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         go is null
                             ? new TextEl(DetailFormat.ArtistNames(t.Artists))
-                            { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                            { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
                             : TrackRow.ArtistLinks(t.Artists, (r, n) => go(r, n)),
                     ],
                 },
@@ -531,8 +533,8 @@ sealed class QueuePanel : Component
                         [
                             new BoxEl
                             {
-                                Width = 26f, Height = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                                Corners = CornerRadius4.All(13f),
+                                Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                                Corners = Radii.Circle(28f),
                                 HoverFill = WaveeColors.RowPressed,
                                 Role = AutomationRole.Button, Cursor = CursorId.Hand,
                                 ClickRequestsContext = true,
@@ -544,15 +546,18 @@ sealed class QueuePanel : Component
                 removable && !entry.ItemId.IsNone
                     ? new BoxEl
                     {
-                        Width = 26f, Height = 26f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Corners = CornerRadius4.All(13f),
+                        // 28, not 26, so a 12-DIP glyph (the smallest legible icon rung — 9 was below it) still keeps an
+                        // 8-DIP ring of target around it. Radii.Circle derives the pill from the box instead of
+                        // hand-halving it.
+                        Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Corners = Radii.Circle(28f),
                         HoverFill = WaveeColors.RowPressed,
                         Role = AutomationRole.Button, Cursor = CursorId.Hand,
                         BlocksDragArm = true,
                         OnClick = Remove,
-                        Children = [new TextEl(Icons.ChromeClose) { Size = 9f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
+                        Children = [new TextEl(Icons.ChromeClose) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
                     }
-                    : new BoxEl { Width = 26f, Shrink = 0f },
+                    : new BoxEl { Width = 28f, Shrink = 0f },
             ],
         };
         bool canRemove = removable && !entry.ItemId.IsNone;
@@ -606,15 +611,16 @@ sealed class QueuePanel : Component
     {
         Direction = 0, Height = 32f, Gap = 6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Padding = new Edges4(12f, 0f, 12f, 0f),
-        Corners = CornerRadius4.All(16f),
+        Corners = Radii.PillAll,
         Fill = on ? accent : Tok.FillCardSecondary,
         HoverFill = on ? accent with { A = 0.88f } : Tok.FillSubtleSecondary,
         PressedFill = on ? accent with { A = 0.78f } : Tok.FillSubtleTertiary,
         Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = click,
         Children =
         [
-            new TextEl("∞") { Size = 15f, Weight = 800, Color = on ? Tok.TextOnAccentPrimary : Tok.TextSecondary },
-            new TextEl(Loc.Get(Strings.Player.Autoplay)) { Size = 12f, Weight = 600, Color = on ? Tok.TextOnAccentPrimary : Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            // The ∞ glyph rides the label's own rung (14/600) instead of an off-ramp 15/800.
+            new TextEl("∞") { Size = 14f, LineHeight = 20f, Weight = 600, Color = on ? Tok.TextOnAccentPrimary : Tok.TextSecondary },
+            new TextEl(Loc.Get(Strings.Player.Autoplay)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = on ? Tok.TextOnAccentPrimary : Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         ],
     };
 
@@ -622,15 +628,15 @@ sealed class QueuePanel : Component
     {
         Direction = 0, Height = 32f, Gap = 6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Padding = new Edges4(12f, 0f, 12f, 0f),
-        Corners = CornerRadius4.All(16f),
+        Corners = Radii.PillAll,
         Fill = on ? accent : Tok.FillCardSecondary,
         HoverFill = on ? accent with { A = 0.88f } : Tok.FillSubtleSecondary,
         PressedFill = on ? accent with { A = 0.78f } : Tok.FillSubtleTertiary,
         Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = click,
         Children =
         [
-            new TextEl(glyph) { Size = 13f, FontFamily = Theme.IconFont, Color = on ? Tok.TextOnAccentPrimary : Tok.TextSecondary },
-            new TextEl(label) { Size = 12f, Weight = 600, Color = on ? Tok.TextOnAccentPrimary : Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            new TextEl(glyph) { Size = 12f, FontFamily = Theme.IconFont, Color = on ? Tok.TextOnAccentPrimary : Tok.TextSecondary },
+            new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = 600, Color = on ? Tok.TextOnAccentPrimary : Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         ],
     };
 

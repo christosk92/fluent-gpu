@@ -3,6 +3,7 @@ using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Scene;
 using Wavee.Core;
 using Wavee.Features.Detail;
@@ -10,15 +11,17 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// Surface helpers. The shell is a dark canvas with a FLOATING rounded content card (soft shadow) and a SUBTLE,
-// edge-transparent accent band tint over it — the WaveeMusic "Files-style" look, not edge-to-edge Mica. Kept here: the
+// Surface helpers. The shell is live Mica with a FLUSH content region over it — the stock Win11 recipe: the
+// LayerFillColorDefault smoke, one rounded corner facing the nav pane, a 1px left+top stroke, and NO shadow (it is not
+// a floating card, and it never was an opaque canvas). Over that sits a SUBTLE, edge-transparent accent band tint —
+// the WaveeMusic look, not an edge-to-edge colour flood. Kept here: the
 // accent hero wash for page headers, and the album-art SHIMMER placeholder (a neutral, breathing skeleton tile —
 // identical to the app's other loading skeletons) so an art slot with no bitmap yet reads as "loading", not a coloured
 // hole. Used by cards, rows, the rail cover and the bar.
 public static class Surfaces
 {
     // Artwork is opaque content. Theme card brushes are intentionally translucent, so placeholders use explicit opaque
-    // neutrals instead of allowing the Mica/chrome below to wash through the image slot.
+    // neutrals instead of allowing the surface below to wash through the image slot.
     internal static ColorF ArtworkPlaceholder =>
         Tok.Theme == ThemeKind.Dark ? ColorF.FromRgba(0x2A, 0x2A, 0x2A) : ColorF.FromRgba(0xF2, 0xF2, 0xF2);
 
@@ -47,7 +50,7 @@ public static class Surfaces
     }
 
     /// <summary>The full graded roles behind a cover — for PAGE chrome (hero washes, accent bars, the Play button, the
-    /// shell's Mica tint) rather than a placeholder tile. Null until the plane has a grading for this theme; a caller
+    /// shell's published material tint) rather than a placeholder tile. Null until the plane has a grading for this theme; a caller
     /// that wants the wash to appear the moment it lands should also read <c>CoverColorPlane.Current.Epoch</c>. That is
     /// safe at page scope (one subscriber) but deliberately NOT done per card — see <c>CoverShimmer</c>.</summary>
     internal static SpotifyLive.CoverColorPlane.Scheme? SchemeFor(string? url) =>
@@ -81,7 +84,7 @@ public static class Surfaces
     const float HeroWashLightA = 0.16f;   // peak at the top edge; was 0.10 (and before that 38f/255f ≈0.149 solid)
     const float HeroWashFade = 0.55f;     // top→transparent by this fraction of the page; nothing below it
 
-    /// <summary>Page wash over Mica — a soft top-anchored accent fade (not an edge-to-edge fill).</summary>
+    /// <summary>Page wash over the content surface — a soft top-anchored accent fade (not an edge-to-edge fill).</summary>
     public static GradientSpec HeroWash(ColorF accent)
     {
         float a = Tok.Theme == ThemeKind.Light ? HeroWashLightA : HeroWashDarkA;
@@ -92,24 +95,28 @@ public static class Surfaces
     }
 
     /// <summary>Semantic copy protection over full-bleed artist photography. Both axes use exactly four stops (the
-    /// recorder limit) and release to alpha zero at the hero seam.</summary>
+    /// recorder limit) and release to alpha zero at the hero seam. Peak alphas match the immersive detail hero
+    /// (<see cref="DetailHeroWash"/>) rather than a near-opaque plate: the photography must stay READ as photography —
+    /// a 0.96 peak flattened the hero into what read as a solid painted band, the opposite of the album pages.</summary>
     public static GradientSpec ArtistHeroVeil(ColorF accent, ArtistHeroVeilAxis axis)
     {
         ColorF layer = Tok.FillLayerDefault;
         float pull = Tok.Theme == ThemeKind.Light ? 0.16f : 0.24f;
         ColorF veil = ColorF.Lerp(layer, accent, pull);
+        float top = Tok.Theme == ThemeKind.Light ? 0.42f : 0.78f;
+        float mid = Tok.Theme == ThemeKind.Light ? 0.28f : 0.55f;
         if (axis == ArtistHeroVeilAxis.Vertical)
         {
             return GradientDown(
                 new GradientStop(0f, veil with { A = 0f }),
                 new GradientStop(0.45f, veil with { A = 0.35f }),
-                new GradientStop(0.82f, veil with { A = 0.96f }),
+                new GradientStop(0.82f, veil with { A = top }),
                 new GradientStop(1f, veil with { A = 0f }));
         }
         return GradientRight(
-            new GradientStop(0f, veil with { A = 0.96f }),
-            new GradientStop(0.30f, veil with { A = 0.92f }),
-            new GradientStop(0.62f, veil with { A = 0.35f }),
+            new GradientStop(0f, veil with { A = top }),
+            new GradientStop(0.30f, veil with { A = mid }),
+            new GradientStop(0.62f, veil with { A = 0.22f }),
             new GradientStop(1f, veil with { A = 0f }));
     }
 
@@ -141,10 +148,11 @@ public static class Surfaces
         // Small thumbnails (track rows, sidebar, chips) get a CHEAP static neutral tile — no component, no image-epoch
         // subscription, no breathe — so a 50k-row virtualized list pays nothing per item. A url-less slot is static too.
         if (url is not { Length: > 0 } u || MathF.Min(width, height) < ShimmerMinEdge)
-            // OPAQUE tile (forced A=1, not the translucent card fill): a small thumb sits over the translucent
-            // sidebar/chrome, so a see-through placeholder lets the dark Mica bleed through — the cover reads as a
-            // washed, low-contrast smear while it loads (or a dark hole when it has no art / fails). Album art is opaque
-            // content; back it with an opaque neutral so it always reads as a solid tile, never the backdrop.
+            // OPAQUE tile (forced A=1, not the translucent card fill): a small thumb sits over the sidebar/chrome band,
+            // which is an unpainted omission over the window's BASE LAYER (live Mica), so a see-through placeholder lets
+            // the desktop read through — the cover becomes a washed, low-contrast smear while it loads (or a dark hole
+            // when it has no art / fails). Album art is opaque content; back it with an opaque neutral so it always
+            // reads as a solid tile regardless of what is behind the window.
             // Tinted from the cover's own graded colour when the plane has one, else the neutral opaque tile.
             // This is the difference between a track list of blank grey squares and one that paints its covers at once.
             return new BoxEl { Width = width, Height = height, Corners = CornerRadius4.All(corners), Fill = PlaceholderFor(url) };
@@ -241,21 +249,55 @@ public static class Surfaces
                 Direction = 1, Gap = 2f, MinWidth = 0f, Grow = 1f, Basis = 0f,
                 Children =
                 [
-                    new TextEl(eyebrow) { Size = 11f, Weight = 700, CharSpacing = 40f, Color = accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    // Caption (12/16/600) — the app's one caps-eyebrow rung. Caps and the 40/1000 tracking are the
+                    // eyebrow's voice and stay; the 11/700 metrics were on no ramp.
+                    new TextEl(eyebrow) { Size = 12f, LineHeight = 16f, Weight = 600, CharSpacing = 40f, Color = accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ],
             }
             : WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
         return new BoxEl
         {
-            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
             Children =
             [
-                new BoxEl { Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(1.5f), Fill = accent },
+                // A 3-DIP capsule: Radii.Circle derives the radius from the bar's own width instead of hand-halving it.
+                new BoxEl { Width = 3f, MinHeight = Spacing.XXL, AlignSelf = FlexAlign.Stretch, Corners = Radii.Circle(3f), Fill = accent },
                 label,
             ],
         };
     }
+
+    /// <summary>A module header — a title, an optional subdued subtitle on the same BASELINE, and an optional trailing
+    /// tools slot. No accent bar: the accent-bar variant (<see cref="AccentHeader"/>) reads as a region marker, which is
+    /// right for a handful of distinct page sections (ArtistPage) and wrong for a dozen stacked modules, where it turns
+    /// the page into a column of coloured rules.
+    ///
+    /// <para>The title deliberately carries <c>Grow = 1f</c> and NO <c>Basis</c>. That is not a style choice — a
+    /// <c>Basis = 0f</c> here collapsed every header inside a <c>PagedShelf</c> to a single ellipsised letter: a shelf
+    /// inserts a custom header raw into a <c>Direction = 0</c> row whose only growable child is a trailing spacer, and in
+    /// a definite-width row <c>Basis = 0</c> suppresses intrinsic width entirely (FlexLayout's flex-base rule). With
+    /// Basis left at NaN the intrinsic width is the real text width, and Grow still lets it fill and ellipsise when the
+    /// row is genuinely tight. <c>BrowsePage</c>'s shelf header is the same shape.</para>
+    ///
+    /// <para>Deliberately a separate method rather than a flag on <see cref="AccentHeader"/>: that one has live callers
+    /// whose look must not change. Note the engine also has a <c>Ui.SectionHeader</c> — call this one qualified.</para></summary>
+    public static BoxEl SectionHeader(string title, string? subtitle = null, Element? tools = null)
+        => new()
+        {
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, MinWidth = 0f,
+            Children =
+            [
+                // Title + subtitle as ONE paragraph so the small run shares the heading's baseline (the engine has no
+                // FlexAlign.Baseline). Shrink, never Grow: a SPACER — not the heading — pushes the tools to the
+                // trailing edge, which is what keeps the subtitle sitting right next to the title.
+                subtitle is { Length: > 0 } s
+                    ? WaveeType.ModuleHeader(title, s)
+                    : WaveeType.ModuleHeader(title) with { Shrink = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                new BoxEl { Grow = 1f, MinWidth = 0f },
+                tools ?? new BoxEl(),
+            ],
+        };
 
     /// <summary>A "section band" as a Fluent MATERIAL surface (the WinUI grouped-content look), not a painted color
     /// region: a neutral rounded card (<see cref="Tok.FillCardDefault"/> fill + hairline border) with
@@ -280,6 +322,18 @@ public static class Surfaces
                 new GradientStop(1f, card)),
             Children = [content],
         };
+    }
+
+    /// <summary>The material layer for Home's integrated-cover hero. It keeps the translucent card alpha intact while
+    /// kissing only the upper hue toward the cover accent.</summary>
+    public static GradientSpec HomeHeroBackdrop(ColorF accent)
+    {
+        ColorF card = Tok.FillCardDefault;
+        ColorF top = ColorF.Lerp(card, accent, Tok.Theme == ThemeKind.Dark ? 0.10f : 0.06f) with { A = card.A };
+        return GradientDown(
+            new GradientStop(0f, top),
+            new GradientStop(0.45f, card),
+            new GradientStop(1f, card));
     }
 }
 

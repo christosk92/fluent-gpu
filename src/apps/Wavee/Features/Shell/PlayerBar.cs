@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -126,7 +126,8 @@ sealed class PlayerBarContent : Component
                 ]);
 
         if (b is null)
-            return new BoxEl { Height = WaveeSize.PlayerBarH, Fill = Prop.Of(() => WaveeColors.PlayerBar) };
+            // NO fill — the dock is a paint-site omission over the window's base layer, like every other chrome band.
+            return new BoxEl { Height = WaveeSize.PlayerBarH };
 
         // ── state derivation (low-frequency signals only) ──────────────────────────────────────────
         var track = b.CurrentTrack.Value;
@@ -551,11 +552,14 @@ sealed class PlayerBarContent : Component
         };
 
         // ── assemble: top activity edge + the single centered row ───────────────────────────────────
-        // The dock's top seam, drawn on the translucent body plate. Dark keeps the stock divider (#15FFFFFF): white-alpha,
-        // so the plate and the Mica behind it still read through, where a black card stroke would be a dark scar. Light
-        // uses the black@6% ALPHA literal rather than StrokeCardDefault: that token is #0F000000 only in the stock
-        // palette — every seeded light preset derives it as an OPAQUE gray (warm #DCDAD4; slate/accent Darken(page,
-        // 0.08)), and an opaque gray line across a translucent plate is its own small disjoint slab. Same reasoning as
+        // The dock's top seam, and the ONLY treatment on this edge. The dock body is a paint-site OMISSION over the
+        // window's base layer (live Mica; no plate), so the seam is the only thing drawn here — the content region above
+        // deliberately carries no bottom stroke, and the dock itself no longer casts a shadow up into it (stock is one
+        // hairline per seam, not a hairline plus a ring plus an elevation). Dark keeps the stock divider (#15FFFFFF):
+        // white-alpha, so the base still reads through it, where a black card stroke would be a dark scar. Light uses the black@6% ALPHA literal
+        // rather than StrokeCardDefault: that token is #0F000000 only in the stock palette — every seeded light preset
+        // derives it as an OPAQUE gray (warm #DCDAD4; slate/accent Darken(page, 0.08)), and an opaque gray line across
+        // an otherwise unpainted band is its own small disjoint slab. Same reasoning as
         // TabStrip's baseline hairline and separators.
         Element topEdge = (loading || buffering || reconnecting)
             ? ProgressBar.Indeterminate(L.TopEdgeWidth)
@@ -579,16 +583,16 @@ sealed class PlayerBarContent : Component
 
         return new BoxEl
         {
-            // BOUND fill (not a static read): the dock is a long-lived literal, so only a bind is re-fired by the host's
-            // live re-theme (RethemeAll) and cross-fades with the rest of the shell.
-            Direction = 1, Height = WaveeSize.PlayerBarH, Fill = Prop.Of(() => WaveeColors.PlayerBar), ClipToBounds = true,
-            Shadow = Elevation.DockTop,
+            // NO fill: the dock is a paint-site OMISSION over the window's base layer (the merged chrome row, the nav
+            // pane and this dock all share it), so the chrome reads as one continuous material.
+            // NO SHADOW either. Elevation.DockTop cast a third treatment onto a seam that already had the content
+            // region's ring above it and this dock's own 1px topEdge — stock Win11 puts exactly ONE line there.
+            Direction = 1, Height = WaveeSize.PlayerBarH, ClipToBounds = true,
             // LAYOUT FIREWALL. The dock is a fixed-height slot whose width cross-stretches from the shell column, so it
             // can never be content-sized by a descendant — the boundary contract. Without it every re-render in here
             // (the track title, the position text, a tooltip) marks a layout-dirty node that escapes to a full-tree
             // relayout from the scene root. Placed on the box that ALREADY clips, so Boundary() contributes only
-            // IsolateLayout and cannot change a pixel; the DockTop shadow is the node's own paint, not a child's, and
-            // is unaffected by the clip that is already here.
+            // IsolateLayout and cannot change a pixel.
             IsolateLayout = true,
             Children = [topEdge, row],
         };
@@ -877,7 +881,7 @@ sealed class PlayerBarContent : Component
         {
             Width = box, Height = height, ZStack = true,
             Fill = ColorF.Transparent, HoverFill = ColorF.Transparent, PressedFill = ColorF.Transparent,
-            HoverScale = enabled ? 1.06f : 1f, PressScale = enabled ? 0.92f : 1f,
+            HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), PressScale = WaveeMotion.ScaleEmphatic.PressIf(enabled),
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             OnRealized = onRealized,
             IsEnabled = enabled, OnClick = onClick, Cursor = enabled ? CursorId.Hand : (CursorId?)null,
@@ -982,7 +986,7 @@ sealed class PlayerBarContent : Component
             {
                 Width = _box, Height = _box, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Fill = ColorF.Transparent, HoverFill = ColorF.Transparent, PressedFill = ColorF.Transparent,
-                HoverScale = 1.06f, PressScale = 0.92f,
+                HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
                 Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
                 OnClick = Toggle, Cursor = CursorId.Hand, OnRealized = h => anchor.Value = h,
                 Children = [new TextEl(Icons.More) { Size = _glyph, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
@@ -1004,7 +1008,7 @@ sealed class PlayerBarContent : Component
         {
             Width = box, Height = box, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Fill = ColorF.Transparent, HoverFill = ColorF.Transparent, PressedFill = ColorF.Transparent,
-            HoverScale = enabled ? 1.07f : 1f, PressScale = enabled ? 0.9f : 1f,
+            HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), PressScale = WaveeMotion.ScaleEmphatic.PressIf(enabled),
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             IsEnabled = enabled, OnClick = onClick, Cursor = enabled ? CursorId.Hand : (CursorId?)null,
             Children = [inner],
@@ -1157,7 +1161,7 @@ sealed class RemoteDeviceLine : Component
             OnClick = Toggle, OnRealized = h => anchor.Value = h, ClipToBounds = true,
             Children =
             [
-                new TextEl(Icons.Devices) { Size = 10f, FontFamily = Theme.IconFont, Color = accent with { A = 0.88f }, HoverColor = accent },
+                new TextEl(Icons.Devices) { Size = 12f, FontFamily = Theme.IconFont, Color = accent with { A = 0.88f }, HoverColor = accent },
                 new BoxEl
                 {
                     Shrink = 1f, MinWidth = 0f, ClipToBounds = true,
@@ -1165,7 +1169,7 @@ sealed class RemoteDeviceLine : Component
                     [
                         new TextEl(Strings.Player.PlayingOn(remote.Name))
                         {
-                            Size = 10.5f, Weight = 700, Color = accent with { A = 0.88f }, HoverColor = accent,
+                            Size = 12f, LineHeight = 16f, Weight = 600, Color = accent with { A = 0.88f }, HoverColor = accent,
                             MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
                         },
                     ],

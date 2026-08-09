@@ -131,6 +131,11 @@ sealed class LibraryV3Sidebar : Component
             // binder folds in — the pane's pinned search head would be a second, competing query.
             SearchHead = false,
             Head = ChromeHead,
+            // O3 — the customizable shortcut band, at its new render site. Set IDENTICALLY by all three modes: it is the
+            // app's navigation band, so it sits ABOVE V3's own chrome (header band / toolbar / chips) rather than
+            // inside it — V3 owns its library surface, not the app's navigation.
+            NavBand = () => SidebarNavBand.Head(_prefs, _route, _go),
+            RailHead = () => SidebarNavBand.RailHead(_prefs, _route, _go),
             // §3.2.3 keeps the design switch in V3's own overflow menu (it embeds SidebarLayoutMenu.Rows as a sub-menu), so
             // the pane must not hang a second layout button off a header. The RAIL keeps its copy: a collapsed pane has no
             // overflow menu to reach.

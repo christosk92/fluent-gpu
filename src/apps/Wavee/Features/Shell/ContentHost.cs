@@ -109,6 +109,10 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:home", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HomePage()) ] };
 
+        if (HomeSectionRoutes.Is(r.Name))
+            return new BoxEl { Key = "page:home-section", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new HomeSectionPage(r)) ] };
+
         if (r.Name == "history")
             return new BoxEl { Key = "page:history", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HistoryPage()) ] };

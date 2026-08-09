@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 using Wavee.SpotifyLive;
 using Xunit;
 
@@ -378,5 +379,27 @@ public class CoverAccentDerivationTests
         // no-grading-yet fallback scheme.
         Assert.Equal(Tok.AccentDefault, WaveePalette.ChromeAccent(WireLight));
         Assert.Equal(Tok.AccentDefault, WaveePalette.ChromeAccent(WaveePalette.Neutral));
+    }
+
+    [Theory]
+    [InlineData(217, 63, 49)]
+    [InlineData(58, 92, 180)]
+    [InlineData(230, 180, 42)]
+    public void Hairline_IsQuietButLegible_InBothThemes(byte r, byte g, byte b)
+    {
+        var seed = ColorF.FromRgba(r, g, b);
+        foreach (var palette in Tok.Presets)
+        foreach (var theme in new[] { ThemeKind.Dark, ThemeKind.Light })
+        {
+            var tokens = theme == ThemeKind.Dark ? palette.Dark : palette.Light;
+            var shell = theme == ThemeKind.Dark ? palette.DarkShell : palette.LightShell;
+            var mica = theme == ThemeKind.Dark ? MicaRef.DarkDefault : MicaRef.LightDefault;
+            var pane = ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, mica));
+            var card = ColorContrast.Flatten(tokens.FillCardDefault, pane);
+            var line = WaveePalette.Hairline(seed, theme, card);
+
+            Assert.InRange(ColorContrast.Ratio(line, card), 3.24f, 3.26f);
+            Assert.True(line.ToHsv().S <= 0.5001f);
+        }
     }
 }

@@ -95,6 +95,17 @@ public sealed class PathfinderResource : IConcertPathfinder
         return loaded.IsReady ? loaded.Value.Bytes : null;
     }
 
+    /// <summary>Drop one exact operation/body/locale cache entry so the next query performs a network read. The
+    /// variables are serialized through the same key builder as <see cref="UseQueryAsync"/>; callers therefore cannot
+    /// accidentally invalidate a neighbouring facet or platform entry.</summary>
+    public void Invalidate(string operationName, string sha256Hash,
+        Action<Utf8JsonWriter>? writeVariables, PathfinderClient.Platform platform = PathfinderClient.Platform.Desktop)
+    {
+        var key = BuildKey(SpotifyHeaders.NormalizeLanguage(_ctx().Locale), operationName, sha256Hash,
+            writeVariables, platform, out _);
+        _resource.Invalidate(key);
+    }
+
     async Task<CachedJson> FetchAsync(PathfinderKey key, SessionContext ctx)
     {
         _ = ctx;
@@ -133,6 +144,9 @@ public sealed class PathfinderResource : IConcertPathfinder
         PathfinderOps.QueryNpvArtist => TimeSpan.FromMinutes(30),
         PathfinderOps.QueryArtistOverview => TimeSpan.FromMinutes(30),
         PathfinderOps.QueryWhatsNewFeed => TimeSpan.FromMinutes(5),
+        // Affinity over a 4-week window: it cannot meaningfully change within a session, so this is the transport cache
+        // that keeps Home's top-artist row from re-asking on every navigation back.
+        PathfinderOps.UserTopContent => TimeSpan.FromMinutes(30),
         // Browse is editorial and turns over on a daily-ish cadence, so it caches hard. browseAll especially: it is the
         // directory backing a whole tab, and re-fetching 70 categories on every open would be pure waste.
         PathfinderOps.BrowseAll => TimeSpan.FromHours(6),

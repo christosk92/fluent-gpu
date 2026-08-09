@@ -111,8 +111,8 @@ sealed partial class ArtistPage : Component
 
         return new BoxEl
         {
-            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
-            Padding = Edges4.All(10f), Corners = CornerRadius4.All(Radii.Card),
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = Edges4.All(Spacing.M), Corners = CornerRadius4.All(Radii.Card),
             // A FULL card, on the bare page surface: this is a discrete promoted object (one announced record) — exactly
             // what a Fluent card is FOR — and the announcement is this page's one piece of news, so it earns the chrome.
             // The stroke is safe because nothing encloses it any more; there is no second hairline to double up with.
@@ -133,21 +133,22 @@ sealed partial class ArtistPage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
+                        // Caption (12/16/600) for the caps eyebrow — caps and tracking untouched, only the off-ramp
+                        // 10/700 metrics move. Title is BodyStrong (14/20/600), the app's card-title rung.
                         new TextEl(eyebrow)
                         {
-                            Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
+                            Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
                         },
-                        new TextEl(p.Name)
+                        Ui.BodyStrong(p.Name) with
                         {
-                            Size = 15f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                            MinWidth = 0f,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         meta.Length > 0
-                            ? new TextEl(meta) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+                            ? Ui.Caption(meta) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
                             : new BoxEl(),
                         new BoxEl
                         {
-                            Direction = 0, Gap = Spacing.S, Margin = new Edges4(0f, 6f, 0f, 0f),
+                            Direction = 0, Gap = Spacing.S, Margin = new Edges4(0f, Spacing.S, 0f, 0f),
                             Children =
                             [
                                 // NO Play button, and there must never be one: a prerelease uri must never reach
@@ -209,14 +210,16 @@ sealed partial class ArtistPage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
+                        // Caption caps eyebrow over a Subtitle (20/28/600) headline — this is the page's one "news"
+                        // banner, so it takes the shelf-header rung rather than an off-ramp 17. Eyebrow 16 + gap 4 +
+                        // subtitle 28 = 48, comfortably inside the 72-DIP cover beside it.
                         new TextEl(eyebrow)
                         {
-                            Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
+                            Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
                         },
-                        new TextEl(al.Name)
+                        Ui.Subtitle(al.Name) with
                         {
-                            Size = 17f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1,
-                            Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                     ],
                 },

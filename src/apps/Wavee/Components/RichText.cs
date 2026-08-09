@@ -24,7 +24,7 @@ public static class RichText
         if (spans.Count == 0) return new BoxEl();
         return new SpanTextEl(spans.ToArray())
         {
-            Size = size, Color = color, LineHeight = size <= 12f ? 16f : float.NaN,
+            Size = size, Color = color, LineHeight = size <= 12f ? 16f : size <= 14f ? 20f : float.NaN,
             Width = width, MaxLines = maxLines, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis,
         };
     }
@@ -39,7 +39,7 @@ public static class RichText
         if (spans.Count == 0) return new BoxEl();
         return new SpanTextEl(spans.ToArray())
         {
-            Size = size, Color = color, LineHeight = size <= 12f ? 16f : float.NaN,
+            Size = size, Color = color, LineHeight = size <= 12f ? 16f : size <= 14f ? 20f : float.NaN,
             Grow = 1f, Basis = 0f, MaxLines = maxLines, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis,
         };
     }
@@ -68,7 +68,7 @@ public static class RichText
         if (spans.Count == 0) return new BoxEl();
         return new SpanTextEl(spans.ToArray())
         {
-            Size = size, Color = color, LineHeight = size <= 12f ? 16f : float.NaN,
+            Size = size, Color = color, LineHeight = size <= 12f ? 16f : size <= 14f ? 20f : float.NaN,
             Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
         };
     }
@@ -172,7 +172,7 @@ public static class RichText
             {
                 Size = _size,
                 Color = _color,
-                LineHeight = _size <= 12f ? 16f : float.NaN,
+                LineHeight = _size <= 12f ? 16f : _size <= 14f ? 20f : float.NaN,
                 Width = _flex ? float.NaN : _width,
                 Grow = _flex ? 1f : 0f,
                 Basis = _flex ? 0f : float.NaN,

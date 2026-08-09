@@ -553,18 +553,24 @@ public sealed class ImageCache
     /// recreated by RecoverDevice). Re-decode every resident (Ready) image from its retained source so it re-uploads
     /// through the Step-1 handoff to the fresh store. UI thread (invoked on the recover-done frame). Ready→Pending, which
     /// keeps the frame loop awake until the re-uploads land. Safe to iterate: Entry is a class (mutated in place, no
-    /// structural dictionary change) and RestartDecode only calls the decoder (never adds/removes _byId keys).</summary>
+    /// structural dictionary change) and RestartDecode only calls the decoder (never adds/removes _byId keys).
+    /// <para>Also restarts <see cref="ImageFailureKind.GpuResourceExhausted"/> entries. The dying device's last drain
+    /// REJECTS every upload it was handed (the store soft-fails its creates rather than throwing past the render seam),
+    /// so a device-loss window leaves a batch of entries Failed-exhausted, not Ready — without this they would stay blank
+    /// until something remounted them, and a PINNED one never retries at all (ShouldRestart requires Refs == 0). The
+    /// rebuilt device has a fresh, empty texture store, so "GPU could not admit it" is by construction no longer true.
+    /// Their Bytes are already 0, so the byte-accounting undo is a no-op for them.</para></summary>
     public void ReRealizeAllResident()
     {
         foreach (var (id, e) in _byId)
-            if (!e.Derived && e.State == ImageState.Ready)
+            if (!e.Derived && (e.State == ImageState.Ready || IsGpuExhausted(e)))
             {
                 UsedBytes -= e.Bytes;   // the texture is gone; RestartDecode re-adds the bytes when the fresh decode completes
                 RestartDecode(id, e, e.Refs > 0 ? ImagePriority.Visible : ImagePriority.Prefetch);
                 NotifyStatus(e);
             }
         foreach (var (id, e) in _byId)
-            if (e.Derived && e.State == ImageState.Ready)
+            if (e.Derived && (e.State == ImageState.Ready || IsGpuExhausted(e)))
             {
                 UsedBytes -= e.Bytes;
                 DerivedUsedBytes -= e.Bytes;
@@ -572,6 +578,9 @@ public sealed class ImageCache
                 NotifyStatus(e);
             }
     }
+
+    static bool IsGpuExhausted(Entry e)
+        => e.State == ImageState.Failed && e.Failure == ImageFailureKind.GpuResourceExhausted;
 
     private void RestartDerived(int id, Entry e)
     {

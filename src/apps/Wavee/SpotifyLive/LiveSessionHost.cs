@@ -454,7 +454,8 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // cards, track rows — resolves its colour from the plane, and a miss enqueues the IMAGE here, so no surface
             // has to remember to prefetch its own tints. Kind 179 fills the same plane for free from the row bundle.
             CoverColorPlane.Current.Filler = CoverColorFiller.Create(pathfinderResource, spclientLog);
-            var homeCache = new LiveHomeCache(pathfinderResource, () => svc.HomeFacet.Peek());
+            var homeCache = new LiveHomeCache(pathfinderResource, () => svc.HomeFacet.Peek(), store,
+                fetcher.FetchPlaylistHeaderAsync);
             // Featured-card hover peek: the batched feedBaselineLookup preview-track cache (display-only, no Store).
             HomeBaselinePreviews.Install(pathfinderResource);
             // "What's New" feed (queryWhatsNewFeed) — display-only, rides the PathfinderResource TTL. Seeded now so the
@@ -475,6 +476,10 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // rather than pinning the chart at 10 rows forever.
             var popularTracks = new SpotifyArtistPopularTracksService(live.Pipeline, () => live.BaseUrl, md, store, artistLog);
             svc.ArtistPopularTracks.SetInner(popularTracks);
+            // The account's OWN 4-week affinity ranking (userTopContent) — Home's top-artist row. A ME query, so it is
+            // session-scoped and cleared in GoOffline; the row's expander pane reuses ArtistStats above rather than
+            // asking for a second endpoint.
+            svc.UserTop.SetInner(new SpotifyUserTopService(pathfinderResource, store, spclientLog.With("home.usertop")));
             svc.PlaylistPopcount.SetInner(new SpotifyPlaylistPopcountService(live.Pipeline, () => live.BaseUrl, artistLog));
             svc.ContentFilters.SetInner(new SpotifyContentFilterService(live.Pipeline, () => live.BaseUrl, artistLog));
             // Upcoming-release identity (kind 138) — shared extended-metadata source + etag cache, like the video detector.
@@ -1112,39 +1117,74 @@ public sealed class LiveSessionHost : IAsyncDisposable
     // The editorial/personalized home via Pathfinder → the existing composer (data.home.sectionContainer.sections).
     // The desktop query embeds recently-played inline, so the composer builds the recents shelf too — no extra call.
     // facet: a homeChips[].id ("music-chip", "podcasts-following-chip", …) or null/"" for the unfiltered feed.
-    static async Task<LiveHomeResult> FetchHomeAsync(PathfinderResource pf, string? facet, CancellationToken ct)
+    static async Task<LiveHomeResult> FetchHomeAsync(PathfinderResource pf, string? facet, CancellationToken ct,
+        bool invalidate = false)
     {
         // The real local zone, as IANA. "Etc/UTC" used to be hardcoded here, which asked Spotify for someone else's
         // afternoon: the zone drives the greeting bucket and the time-of-day shelves.
         string tz = Wavee.Backend.Spotify.SpotifyTimeZone.LocalIana;
-        using var doc = await pf.UseQueryAsync(PathfinderOps.Home, PathfinderOps.HomeHash,
-            w =>
-            {
-                w.WriteString("homeEndUserIntegration", "INTEGRATION_DESKTOP");
-                w.WriteString("timeZone", tz);
-                w.WriteString("sp_t", "");
-                w.WriteString("facet", facet ?? "");
-                w.WriteNumber("sectionItemsLimit", 10);
-                w.WriteBoolean("includeEpisodeContentRatingsV2", true);
-            }, PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
+        Action<Utf8JsonWriter> variables = w => WriteHomeVariables(w, tz, facet);
+        if (invalidate)
+            pf.Invalidate(PathfinderOps.Home, PathfinderOps.HomeHash, variables, PathfinderClient.Platform.Desktop);
+        using var doc = await pf.UseQueryAsync(PathfinderOps.Home, PathfinderOps.HomeHash, variables,
+            PathfinderClient.Platform.Desktop, ct).ConfigureAwait(false);
         if (doc is null) return LiveHomeResult.Empty;
         var homeRoot = Wavee.Core.SpotifyExportMapper.Dig(doc.RootElement, "data", "home");
         var contribution = Wavee.Core.SpotifyHomeComposer.Compose(homeRoot, System.Array.Empty<Wavee.Core.PlaylistSummary>(),
-            Loc.Get(Strings.Home.MadeForYou), Loc.Get(Strings.Home.MoreForYou), Loc.Get(Strings.Home.RecentlyPlayed));
-        return new LiveHomeResult(contribution.Groups, contribution.Chips);
+            HomeModuleCopy.Titles);
+        // The greeting rides along: it is part of the SAME response (home.greeting), already localized for the account
+        // by the server that also picked the time-of-day shelves for `tz` above.
+        return new LiveHomeResult(contribution.Groups, contribution.Chips, contribution.Greeting, contribution.Sections);
+    }
+
+    static void WriteHomeVariables(Utf8JsonWriter w, string timeZone, string? facet)
+    {
+        w.WriteString("homeEndUserIntegration", "INTEGRATION_DESKTOP");
+        w.WriteString("timeZone", timeZone);
+        w.WriteString("sp_t", "");
+        w.WriteString("facet", facet ?? "");
+        w.WriteNumber("sectionItemsLimit", 10);
+        w.WriteBoolean("includeEpisodeContentRatingsV2", true);
     }
 
     sealed class LiveHomeCache
     {
         readonly PathfinderResource _pf;
         readonly Func<string?> _facet;
+        readonly IStore _store;
+        // ONE hydrator for the cache's lifetime. It remembers which daylist identities already cost an invalidating Home
+        // requery; a per-read hydrator would forget that and make every 60 s Home poll an uncached network fetch.
+        readonly HomeDaylistHydrator _hydrator;
 
-        public LiveHomeCache(PathfinderResource pf, Func<string?> facet) { _pf = pf; _facet = facet; }
+        public LiveHomeCache(PathfinderResource pf, Func<string?> facet, IStore store,
+            Func<string, CancellationToken, Task> fetchHeader)
+        {
+            _pf = pf;
+            _facet = facet;
+            _store = store;
+            _hydrator = new HomeDaylistHydrator(ReadHeader, fetchHeader,
+                c => FetchHomeAsync(_pf, _facet(), c, invalidate: true));
+        }
 
         // The facet is read at FETCH time, not at construction: the chip row writes Services.HomeFacet and asks for a
         // refresh, and PathfinderResource keys its TTL cache on the request body — so a facet change is a distinct
-        // cache entry rather than a stale hit.
-        public Task<LiveHomeResult> GetAsync(CancellationToken ct) => FetchHomeAsync(_pf, _facet(), ct);
+        // cache entry rather than a stale hit. The requery closure above re-reads it for the same reason: it must
+        // invalidate the key the read it is repairing actually used, and a chip switch mid-read simply re-enters here.
+        public async Task<LiveHomeResult> GetAsync(CancellationToken ct)
+        {
+            var source = await FetchHomeAsync(_pf, _facet(), ct).ConfigureAwait(false);
+            return await _hydrator.ResolveAsync(source, ct).ConfigureAwait(false);
+        }
+
+        HomePlaylistHeader? ReadHeader(string uri)
+        {
+            var playlist = _store.GetPlaylist(uri);
+            if (playlist is null) return null;
+            return new HomePlaylistHeader(playlist.Name,
+                string.IsNullOrWhiteSpace(playlist.Description) ? null : playlist.Description,
+                string.IsNullOrWhiteSpace(playlist.OwnerName) ? null : playlist.OwnerName,
+                playlist.Cover, playlist.TrackCount);
+        }
     }
 
     // V4-first album ensure: AlbumV4 (usually already resident from the prefetch) + TrackV4 enrichment for gid-only rows,

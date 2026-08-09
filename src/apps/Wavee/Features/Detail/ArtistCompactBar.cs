@@ -12,12 +12,8 @@ namespace Wavee;
 static class ArtistCompactBar
 {
     const float AvatarSize = 36f;
-    const float DarkTintPull = 0.42f;
-    const float LightTintPull = 0.24f;
     const float DarkFallbackPull = 0.18f;
     const float LightFallbackPull = 0.10f;
-    const float DarkTintOpacity = 0.28f;
-    const float LightTintOpacity = 0.18f;
 
     public static Element Build(Artist artist, string uri, float width, ArtistHeroTier tier, float collapseDistance,
                                 ColorF accent, Action play, bool canHit)
@@ -75,7 +71,11 @@ static class ArtistCompactBar
         Element surface = new BoxEl
         {
             Width = width, Height = ArtistHeroLayout.CompactIdentityHeight, ZStack = true,
-            Acrylic = ArtistAcrylic(accent),
+            // A SOLID accent-pulled surface, not acrylic: the acrylic composite clips by scissor only (the engine's
+            // tier-2 rounded clip covers rects/images/gradients, never the frosted layer), so the frosted band painted
+            // the full square at the content pane's rounded top-left — a lighter notch OUTSIDE the pane contour. A rect
+            // fill takes the rounded clip for free, and over today's opaque non-Mica ladder the blur bought nothing.
+            Fill = CompactSurface(accent),
             Children =
             [
                 content,
@@ -104,17 +104,13 @@ static class ArtistCompactBar
         };
     }
 
-    static AcrylicSpec ArtistAcrylic(ColorF accent)
+    /// <summary>The bar's opaque surface: the old acrylic recipe's FALLBACK arm — the colour the acrylic already
+    /// resolved to wherever compositing was unavailable — so the look survives the acrylic's removal unchanged.</summary>
+    static ColorF CompactSurface(ColorF accent)
     {
         var recipe = Tok.AcrylicFlyout;
         bool dark = Tok.Theme == ThemeKind.Dark;
-        return recipe with
-        {
-            Tint = ColorF.Lerp(recipe.Tint, accent, dark ? DarkTintPull : LightTintPull),
-            TintOpacity = dark ? DarkTintOpacity : LightTintOpacity,
-            Fallback = ColorF.Lerp(recipe.Fallback, accent,
-                dark ? DarkFallbackPull : LightFallbackPull),
-        };
+        return ColorF.Lerp(recipe.Fallback, accent, dark ? DarkFallbackPull : LightFallbackPull);
     }
 
 }

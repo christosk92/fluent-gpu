@@ -195,14 +195,21 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         foreach (var s in _reg.CatalogSources)
         {
             var c = await s.GetHomeAsync(ct).ConfigureAwait(false);
-            if (c.Groups.Count > 0) contribs.Add(c);
+            if (c.Groups.Count > 0 || c.Sections is { Count: > 0 }) contribs.Add(c);
         }
         contribs.Sort((a, b) => a.Priority.CompareTo(b.Priority));
         var groups = contribs.SelectMany(c => c.Groups).ToList();
+        var sections = contribs.Where(c => c.Sections is { Count: > 0 }).SelectMany(c => c.Sections!).ToList();
         // The facet row belongs to whichever source actually publishes one (only the streaming source does). First
         // non-empty wins by priority order, so a local-library contribution can never blank out Spotify's chips.
         var chips = contribs.FirstOrDefault(c => c.Chips is { Count: > 0 })?.Chips;
-        return new HomeFeed(Greeting(), groups, chips);
+        // The greeting is the SERVER's, by the same first-non-empty-wins rule as the chips: it arrives already localized
+        // for the account, so it is right even when the machine clock and the account locale disagree. Sources that
+        // publish none (local library, fakes) leave it empty and the view shows the bare page — deliberately NOT a
+        // client-side one synthesised from DateTime.Now, which is what this used to do and got wrong for anyone
+        // travelling or running a differently-localized OS.
+        var greeting = contribs.FirstOrDefault(c => c.Greeting is { Length: > 0 })?.Greeting ?? "";
+        return new HomeFeed(greeting, groups, chips, sections);
     }
 
     // ── podcasts: federated to the Podcasts-capable sources (route single-show reads to the owner; merge the grid) ──
@@ -219,13 +226,6 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         foreach (var s in _reg.OfCapability(SourceCapabilities.Podcasts).OfType<IPodcastSource>())
             if (s.Owns(uri) && await s.GetShowAsync(uri, ct).ConfigureAwait(false) is { } show) return show;
         return null;
-    }
-
-    /// <summary>A live, time-of-day greeting (the export's is a snapshot; compute it fresh so it's always right).</summary>
-    static string Greeting()
-    {
-        int h = System.DateTime.Now.Hour;
-        return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening";
     }
 
     static async IAsyncEnumerable<TrackPage> EmptyPages([EnumeratorCancellation] CancellationToken ct = default)

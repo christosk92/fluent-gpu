@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -205,7 +205,7 @@ sealed class V3SortViewPanel : Component
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = CornerRadius4.All(5f),
                 Fill = on ? Tok.AccentDefault : Tok.FillSubtleSecondary,
                 HoverFill = on ? Tok.AccentSecondary : Tok.FillSubtleTertiary,
-                BrushTransitionMs = 150f,
+                BrushTransitionMs = WaveeMotion.Fast,
                 Role = AutomationRole.RadioButton, Cursor = CursorId.Hand, Focusable = true,
                 OnClick = () => prefs.SetV3View(idx),
                 Children = [Icon(defs[i].Glyph, defs[i].Size, on ? Tok.TextOnAccentPrimary : Tok.TextSecondary)],

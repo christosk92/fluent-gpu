@@ -13,57 +13,10 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// ── The toolbar bell → notification center ────────────────────────────────────────────────────────────────────────────
-// Replaces the dead BellButton: an unread badge over the bell, opening an anchored flyout (ProfileMenu / NavHistoryButton
-// pattern) with the four-category notification panel. Reads NotificationCenterBridge for the reactive snapshot + badge.
-sealed class NotificationBell : Component
-{
-    public override Element Render()
-    {
-        var nc = UseContext(NotificationCenterBridge.Slot);
-        var overlay = UseContext(Overlay.Service);
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-
-        int unread = nc?.UnreadCount.Value ?? 0;   // subscribe → badge tracks the count
-
-        void Open()
-        {
-            if (nc is null) return;
-            if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
-            handle.Value = overlay.Open(
-                () => anchor.Value,
-                () => Embed.Comp(() => new NotificationPanel(() => handle.Value?.Close())),
-                FlyoutPlacement.BottomEdgeAlignedRight,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
-                {
-                    ConstrainToRootBounds = false,
-                });
-            handle.Value.ClosedAction = () => handle.Value = null;
-            nc.OnPanelOpened();
-        }
-
-        var button = IconButton.Create(Icons.Bell, Open, ShellToolbar.NavStyle) with { OnRealized = h => anchor.Value = h };
-        if (unread <= 0) return button;
-
-        return new BoxEl
-        {
-            ZStack = true, Width = 36f, Height = 32f,
-            Children =
-            [
-                button,
-                // full-size overlay so the unread pill floats at the top-right of the button (the original shape)
-                new BoxEl
-                {
-                    Width = 36f, Height = 32f, Direction = 1, Justify = FlexJustify.Start, HitTestVisible = false,
-                    Children = [ new BoxEl { Direction = 0, Justify = FlexJustify.End, Children = [ InfoBadge.Count(unread) ] } ],
-                },
-            ],
-        };
-    }
-}
-
-// ── The panel content (flyout body) ──────────────────────────────────────────────────────────────────────────────────
+// ── The notification center's panel ───────────────────────────────────────────────────────────────────────────────────
+// There is no standalone bell any more. The unread badge rides the PROFILE CHIP's avatar and a "Notifications" row in
+// the profile flyout opens this panel anchored to that chip (ProfileMenu.OpenNotifications, which marks unread-seen via
+// NotificationCenterBridge.OnPanelOpened exactly as the bell did). This component is the body it shows.
 sealed class NotificationPanel : Component
 {
     const float Width = 380f;

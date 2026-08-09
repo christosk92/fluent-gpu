@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -39,10 +39,16 @@ sealed class LibraryPage : Component
     readonly Signal<bool> _aDesc;
     readonly Signal<string> _aFilter = new("");        // NOT persisted
     readonly SelectionModel _navSel = new();           // master list/grid single-selection (the WinUI ItemsView selection)
+    // The imperative handle beside it, for ONE thing: scrolling a programmatically-moved selection back into view
+    // (WinUI SetCurrentElementIndex → StartBringIntoView). Load-bearing for search select-in-place, where the committed
+    // item is usually far outside the viewport the browse list was left at.
+    readonly ItemsViewController _navCtl = new();
     // Search-mode drill-down selection — INDEPENDENT of the browse selection so clearing the query restores browse.
     readonly Signal<string> _sArtist = new("");        // selected matched-artist uri (artists view)
     readonly Signal<string> _sAlbum = new("");         // selected matched-album uri
-    readonly Signal<SearchSnapshot> _searchSnapshot = new(new("", LibrarySearchResults.Empty));
+    // One reveal group for THIS page's search columns (left | discography | tracks): the engine settles all three in a
+    // single window instead of three unsynchronized blur-reveals. Per instance, so two library tabs never couple.
+    readonly object _skelGroup = new();
     Services? _svcRef;                                 // cached in Render → play a track from the search facets
     ActionServices? _actsRef;                          // cached in Render → the library items' drag payloads (resolver + rootlist)
     // Responsive collapse (F2): under a narrow content area the multi-column row becomes a single-column breadcrumb
@@ -50,10 +56,26 @@ sealed class LibraryPage : Component
     // `_depth` is the visible level (0 master · 1 discography/detail · 2 tracks). Both are ignored in the wide layout.
     readonly Signal<bool> _collapsed = new(false);
     readonly Signal<int> _depth = new(0);
-    Action<string, string?>? _goRef;
+    // Guards the PROGRAMMATIC selection writes in SyncNav/SyncDisco. ItemsView forwards every SelectionModel mutation —
+    // including one this page just made itself — to the change handler, so a plain re-sync re-entered the USER-pick path
+    // and did its side effects: Select() wiped the persisted _albumKey (the saved release never survived a launch) and
+    // the discography sync fired onDrill, skipping the collapsed discography level entirely. A programmatic sync is a
+    // VIEW update, never a preference.
+    bool _syncingSel;
 
     static readonly string[] NoSuggest = Array.Empty<string>();
-    readonly record struct SearchSnapshot(string Query, LibrarySearchResults Results);
+    // Full-text search is the only debounced read (see Render): a fast typist fires ONE library search, not one per
+    // keystroke. Deliberately shorter than the omnibar's 250ms — this corpus is local/cache-only.
+    const float SearchDebounceMs = 180f;
+    // The search resource keeps the PREVIOUS query's results mounted while the next one loads (stale-while-revalidate),
+    // which is what replaced the hand-rolled snapshot signal this page used to carry.
+    static readonly ResourceOptions KeepPrevious = new() { KeepPreviousData = true };
+    // Shimmer stand-ins: the row builders below are the ONE row definition, so the skeleton is derived from them with a
+    // blank item rather than from a second hand-authored tree. They are real (non-null) instances because those builders
+    // read .Uri/.Name/.Match unconditionally.
+    static readonly LibraryArtistGroup SkelArtist = new("", "", null, 0, 0, Array.Empty<LibraryAlbumGroup>());
+    static readonly LibraryAlbumGroup SkelAlbum = new("", "", null, 0, AlbumKind.Album, 0, 0, Array.Empty<LibraryTrackHit>());
+    static readonly LibraryTrackHit SkelTrack = new("", "", null, 0, 0, 0);
     // Immediate typeahead with small, local row motion. Stable URI keys let retained hits stay put; only actual
     // insert/remove/reorder changes animate, so fast typing never pulses the entire three-pane surface.
     static readonly LayoutTransition SearchRowChange = new(
@@ -101,7 +123,6 @@ sealed class LibraryPage : Component
         var store = UseContext(LibraryStore.Slot);
         var bridge = UseContext(PlaybackBridge.Slot);
         var ui = UseContext(ShellUi.Slot);   // rail state (Task B4): the 3-column artist layout tightens its mid pane when the rail is open
-        _goRef = UseContext(HistoryStore.NavCtx);
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
         _svcRef = svc;
         var shown = Filtered(Project(store));
@@ -116,15 +137,19 @@ sealed class LibraryPage : Component
         // followed artists ▸ their albums ▸ tracks (artists view) or saved albums ▸ tracks (albums view), grouped +
         // highlighted. Podcasts keep the plain title filter. Cache-only + off-thread; keyed on kind+query so it re-drives
         // per query only. Placed with the other loads below (fixed hook order); the flag/query are computed here.
-        string query = _filter.Value.Trim();   // subscribe
+        string raw = _filter.Value.Trim();   // subscribe — the RAW box text
+        // TWO reads of one box, on purpose. The browse title-filter (`Filtered` above) narrows a list already in memory,
+        // so it must stay INSTANT on the raw text. The full-text search hits the store-backed catalog, so it rides a
+        // trailing-edge debounce: one search per pause, not one per keystroke. UNCONDITIONAL and in a fixed position —
+        // all three kinds are the same LibraryPage type (see the hook-order note below), so this must never be branched.
+        string query = UseDebouncedValue(() => _filter.Value.Trim(), SearchDebounceMs).Value;   // subscribe
         // Full search needs the persistent store-backed catalog (its cached discographies + tracklists). On the fake/demo
         // backend (RealStore null) it has no corpus, so we keep the plain browse title-filter there instead of a dead
         // "Nothing matches". Podcasts always keep the title filter.
-        bool fullSearch = query.Length > 0 && _kind != "podcasts" && svc.RealStore is not null;
-        UseEffect(() =>
-        {
-            if (!fullSearch) _searchSnapshot.Value = new SearchSnapshot("", LibrarySearchResults.Empty);
-        }, fullSearch);
+        // The MODE flips on the RAW text, not the debounced one: a cleared box must restore the browse panes on the same
+        // frame (select-in-place clears the filter as part of its commit, and a 180ms limbo there reads as a dead click).
+        // The un-answered window that the debounce opens is covered by `awaiting` below, which drives the shimmer.
+        bool fullSearch = raw.Length > 0 && _kind != "podcasts" && svc.RealStore is not null;
 
         // Keep the ItemsView SelectionModel pointed at the selected item across load/filter/sort/view + auto-select first.
         // Skips while the search results view is up — selection there is driven by result clicks. Includes fullSearch in
@@ -145,26 +170,25 @@ sealed class LibraryPage : Component
         var detail = UseResource(ct => LoadDetail(svc, artists ? "" : sel, ct), DetailModel.Empty, artists ? "" : sel).Loadable;
         var artist = UseResource(ct => LoadArtist(svc, artists ? sel : "", ct), EmptyArtist(""), artists ? sel : "").Loadable;
         var albumTracks = UseResource(ct => LoadDetail(svc, artists ? albumKey : "", ct), DetailModel.Empty, artists ? albumKey : "").Loadable;
-        var search = UseResource(ct => SearchLib(svc, _kind, fullSearch ? query : "", ct), LibrarySearchResults.Empty,
-            fullSearch ? _kind + "|" + query : "").Loadable;
-
-        // Stale-while-revalidate: publish only complete results. The previous rows stay mounted while the next query is
-        // pending, avoiding the three-pane rows -> ellipsis -> rows flash on every keystroke.
-        bool completedSearch = fullSearch && query.Length > 0 && (LoadState)search.State.Value == LoadState.Ready;
-        var completedResults = completedSearch ? search.Value.Value : LibrarySearchResults.Empty;
-        UseEffect(() =>
-        {
-            if (completedSearch) _searchSnapshot.Value = new SearchSnapshot(query, completedResults);
-        }, DepKey.From(HashCode.Combine(completedSearch, query, completedResults)));
+        // KeepPreviousData IS the stale-while-revalidate this page used to hand-roll with a `_searchSnapshot` signal +
+        // two effects: on a query change the resource holds the previous Ready results while the next ones load, so the
+        // three panes never flash rows → ellipsis → rows. The snapshot is gone; the resource owns the kept value.
+        var searchRes = UseResource(ct => SearchLib(svc, _kind, fullSearch ? query : "", ct), LibrarySearchResults.Empty,
+            fullSearch ? _kind + "|" + query : "", KeepPrevious);
+        var search = searchRes.Loadable;
+        // "No answer for what is on screen yet": either a fetch is in flight, or the debounce has not caught up with the
+        // typed text. Drives the shimmer (only when there is nothing worth keeping) and the refining cue on the counts.
+        bool awaiting = searchRes.IsFetching.Value || query != raw;   // subscribe
+        var searchValue = search.Value.Value;   // subscribe — the column Content closures capture this
 
         // Resolve the hierarchical results once (subscribes). They drive a DRILL-DOWN across the master-detail columns:
         // matched artists (left) ▸ the selected artist's matched albums (middle) ▸ the selected album's matched tracks
-        // (right). Auto-select the first artist/album so results appear immediately. Browse selection is untouched (only
-        // an explicit click commits into it), so clearing the query restores wherever the user was.
-        var searchSnapshot = _searchSnapshot.Value;
-        bool searchReady = fullSearch && searchSnapshot.Query.Length > 0;
-        var sr = fullSearch ? searchSnapshot.Results : LibrarySearchResults.Empty;
-        string rhash = sr.Artists.Count + ":" + sr.Albums.Count + ":" + searchSnapshot.Query;
+        // (right). Auto-select the first artist/album so results appear immediately. Browse selection is untouched until
+        // a hit is explicitly clicked (SelectArtist/SelectAlbum commit into it), so clearing the query restores the user.
+        var sr = fullSearch ? searchValue : LibrarySearchResults.Empty;
+        // The shimmer gate, threaded to every search column so all three share ONE boundary shape and ONE reveal group.
+        var skel = new SearchSkelState(search, awaiting && searchValue.IsEmpty, _skelGroup, awaiting);
+        string rhash = sr.Artists.Count + ":" + sr.Albums.Count + ":" + query;
         string sArtist = _sArtist.Value;   // subscribe
         string sAlbum = _sAlbum.Value;     // subscribe
 
@@ -178,17 +202,17 @@ sealed class LibraryPage : Component
 
         Element inner;
         if (collapsed)
-            inner = CollapsedLayout(shown, sr, searchReady, fullSearch, sArtist, sAlbum, svc, bridge, artist, albumTracks, detail);
+            inner = CollapsedLayout(shown, sr, skel, fullSearch, sArtist, sAlbum, svc, bridge, artist, albumTracks, detail);
         else
         {
             Element right = fullSearch
-                ? (artists ? SearchArtistColumns(sr, searchReady, sArtist, sAlbum, railOpen) : SearchAlbumDetail(sr, searchReady, sAlbum))
+                ? (artists ? SearchArtistColumns(sr, skel, sArtist, sAlbum, railOpen) : SearchAlbumDetail(sr, skel, sAlbum))
                 : (artists ? ArtistColumns(artist, albumTracks, svc, bridge, sel.Length > 0, railOpen)
                            : DetailColumn(detail, svc, bridge, sel.Length > 0));
             inner = new BoxEl
             {
                 Direction = 0, Grow = 1f, AlignItems = FlexAlign.Stretch,
-                Children = [LeftColumn(shown, sr, searchReady, fullSearch, sArtist, sAlbum), Grip(_leftW, 240f, 560f, () => _settings?.Set(LibraryStateKeys.LeftW(_kind), _leftW.Peek())), right],
+                Children = [LeftColumn(shown, sr, skel, fullSearch, sArtist, sAlbum), Grip(_leftW, 240f, 560f, () => _settings?.Set(LibraryStateKeys.LeftW(_kind), _leftW.Peek())), right],
             };
         }
 
@@ -210,7 +234,7 @@ sealed class LibraryPage : Component
     void DrillToTracks() { if (_collapsed.Peek()) _depth.Value = 2; }
 
     // ── F2: collapsed single-column drill-in (master ▸ discography/detail ▸ tracks) with breadcrumbs ──
-    Element CollapsedLayout(NavItem[] shown, LibrarySearchResults sr, bool searchReady, bool fullSearch,
+    Element CollapsedLayout(NavItem[] shown, LibrarySearchResults sr, SearchSkelState skel, bool fullSearch,
         string sArtist, string sAlbum, Services svc, PlaybackBridge? bridge,
         Loadable<Artist> artist, Loadable<DetailModel> albumTracks, Loadable<DetailModel> detail)
     {
@@ -230,11 +254,11 @@ sealed class LibraryPage : Component
         if (depth >= 2) crumbs.Add(level2);
 
         Element body = depth == 0
-            ? new BoxEl { Direction = 1, Grow = 1f, Children = [Toolbar(), fullSearch ? LeftSearchBody(sr, searchReady, sArtist, sAlbum) : ListBody(shown)] }
+            ? new BoxEl { Direction = 1, Grow = 1f, Children = [Toolbar(), fullSearch ? LeftSearchBody(sr, skel, sArtist, sAlbum) : ListBody(shown)] }
             : depth == 1
-                ? (IsArtists ? CollapsedDiscography(sr, searchReady, fullSearch, sArtist, sAlbum, artist)
-                             : CollapsedDetail(sr, searchReady, fullSearch, sAlbum, detail, svc, bridge))
-                : CollapsedTracks(sr, searchReady, fullSearch, sArtist, sAlbum, albumTracks, svc, bridge);
+                ? (IsArtists ? CollapsedDiscography(sr, skel, fullSearch, sArtist, sAlbum, artist)
+                             : CollapsedDetail(sr, skel, fullSearch, sAlbum, detail, svc, bridge))
+                : CollapsedTracks(sr, skel, fullSearch, sArtist, sAlbum, albumTracks, svc, bridge);
 
         return new BoxEl
         {
@@ -255,16 +279,16 @@ sealed class LibraryPage : Component
     };
 
     // Artists view, depth 1 — the selected artist's discography (browse) or matched albums (search).
-    Element CollapsedDiscography(LibrarySearchResults sr, bool ready, bool fullSearch, string sArtist, string sAlbum, Loadable<Artist> artist) => Pane with
+    Element CollapsedDiscography(LibrarySearchResults sr, SearchSkelState skel, bool fullSearch, string sArtist, string sAlbum, Loadable<Artist> artist) => Pane with
     {
         Key = "col:disco", Grow = 1f, Basis = 0f,
         Children = [ fullSearch
-            ? (ready ? SearchScroll(FindArtist(sr, sArtist)?.Albums ?? Array.Empty<LibraryAlbumGroup>(), a => AlbumRow(a, a.Uri == sAlbum)) : SearchMessage("…"))
+            ? SearchSkel(skel, SkelAlbumRow, () => SearchScroll(FindArtist(sr, sArtist)?.Albums ?? Array.Empty<LibraryAlbumGroup>(), a => AlbumRow(a, a.Uri == sAlbum)))
             : Embed.Comp(() => new LibraryArtistPane(artist, _albumKey, _aSort, _aDesc, _aView, _aSize, _aFilter, onDrill: DrillToTracks)) ],
     };
 
     // Artists view, depth 2 — the selected album's tracks (browse detail pane) or matched tracks (search).
-    Element CollapsedTracks(LibrarySearchResults sr, bool ready, bool fullSearch, string sArtist, string sAlbum,
+    Element CollapsedTracks(LibrarySearchResults sr, SearchSkelState skel, bool fullSearch, string sArtist, string sAlbum,
         Loadable<DetailModel> albumTracks, Services svc, PlaybackBridge? bridge)
     {
         if (fullSearch)
@@ -273,14 +297,14 @@ sealed class LibraryPage : Component
             var tracks = albG?.Tracks ?? Array.Empty<LibraryTrackHit>();
             string albumUri = albG?.Uri ?? "";
             return Pane with { Key = "col:tracks", Grow = 1f, Basis = 0f,
-                Children = [ ready ? SearchScroll(tracks, t => TrackHitRow(t, albumUri)) : SearchMessage("…") ] };
+                Children = [ SearchSkel(skel, SkelTrackRow, () => SearchScroll(tracks, t => TrackHitRow(t, albumUri))) ] };
         }
         return Pane with { Key = "col:tracks", Grow = 1f, Basis = 0f,
             Children = [Embed.Comp(() => new LibraryDetailPane(albumTracks, false, svc, bridge))] };
     }
 
     // Albums/podcasts view, depth 1 — the album/show detail (browse) or the album's matched tracks (search).
-    Element CollapsedDetail(LibrarySearchResults sr, bool ready, bool fullSearch, string sAlbum,
+    Element CollapsedDetail(LibrarySearchResults sr, SearchSkelState skel, bool fullSearch, string sAlbum,
         Loadable<DetailModel> detail, Services svc, PlaybackBridge? bridge)
     {
         if (fullSearch)
@@ -289,7 +313,7 @@ sealed class LibraryPage : Component
             var tracks = albG?.Tracks ?? Array.Empty<LibraryTrackHit>();
             string albumUri = albG?.Uri ?? "";
             return Pane with { Key = "col:detail", Grow = 1f, Basis = 0f,
-                Children = [ ready ? SearchScroll(tracks, t => TrackHitRow(t, albumUri)) : SearchMessage("…") ] };
+                Children = [ SearchSkel(skel, SkelTrackRow, () => SearchScroll(tracks, t => TrackHitRow(t, albumUri))) ] };
         }
         return Pane with { Key = "col:detail", Grow = 1f, Basis = 0f,
             Children = [Embed.Comp(() => new LibraryDetailPane(detail, _kind == "podcasts", svc, bridge))] };
@@ -380,12 +404,12 @@ sealed class LibraryPage : Component
     }
 
     // ── left navigator ──
-    Element LeftColumn(NavItem[] shown, LibrarySearchResults sr, bool searchReady, bool fullSearch, string sArtist, string sAlbum) => NavPanel with
+    Element LeftColumn(NavItem[] shown, LibrarySearchResults sr, SearchSkelState skel, bool fullSearch, string sArtist, string sAlbum) => NavPanel with
     {
         Width = _leftW.Value, Shrink = 0f,
         // Searching swaps the browse list for the top-level matches — matched artists (artists view) or matched albums
         // (albums view); the detail columns drill into the selection. Otherwise the normal self-scrolling ItemsView.
-        Children = [Toolbar(), fullSearch ? LeftSearchBody(sr, searchReady, sArtist, sAlbum) : ListBody(shown)],
+        Children = [Toolbar(), fullSearch ? LeftSearchBody(sr, skel, sArtist, sAlbum) : ListBody(shown)],
     };
 
     Element Toolbar() => new BoxEl
@@ -394,7 +418,7 @@ sealed class LibraryPage : Component
         Children =
         [
             new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [Embed.Comp(() => new LibrarySortView(_sort, _desc, _view, _size, HasCreator, HasRelease)), new BoxEl { Grow = 1f }] },
-            AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _filter, queryIcon: Icons.Search, grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: 8f),
+            AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _filter, queryIcon: Icons.Search, grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: Radii.Control),
         ],
     };
 
@@ -406,7 +430,7 @@ sealed class LibraryPage : Component
     {
         int view = _view.Value; int size = _size.Value;   // subscribe
         if (shown.Length == 0)
-            return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL), Children = [new TextEl(_filter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 13f, Color = Tok.TextTertiary }] };
+            return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL), Children = [new TextEl(_filter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }] };
 
         bool grid = view >= 2; bool compact = view == 0 || view == 2;
         string key = "nav:" + view + ":" + size + ":" + NavHash(shown);
@@ -417,7 +441,7 @@ sealed class LibraryPage : Component
                 Key = key, Grow = 1f, Direction = 1, Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, 0f),
                 Children = [ItemsView.Create(shown.Length, i => NavCardContent(shown[i], compact),
                     RepeatLayout.GridFit((compact ? 88f : 116f) + size * (compact ? 16f : 24f), 8f),
-                    new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _navSel, Selector = SelectorVisual.Border, OnChange = () => OnNavSel(shown), Grow = 1f })],
+                    new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _navSel, Selector = SelectorVisual.Border, OnChange = () => OnNavSel(shown), Controller = _navCtl, Grow = 1f })],
             };
 
         return new BoxEl
@@ -425,16 +449,32 @@ sealed class LibraryPage : Component
             Key = key, Grow = 1f, Direction = 1,
             Children = [ItemsView.List(shown.Length, i => NavRowContent(shown[i], compact),
                 selectionMode: ItemsSelectionMode.Single, selection: _navSel,
-                onSelectionIndexChanged: i => OnNavSelIdx(shown, i), itemExtent: compact ? 40f : 60f, grow: 1f)],
+                onSelectionIndexChanged: i => OnNavSelIdx(shown, i), controller: _navCtl,
+                itemExtent: compact ? 40f : 60f, grow: 1f)],
         };
     }
 
     void OnNavSel(NavItem[] shown) => OnNavSelIdx(shown, _navSel.FirstSelectedIndex);
     void OnNavSelIdx(NavItem[] shown, int i)
     {
-        if (i < 0 || i >= shown.Length) return;
+        // ItemsView reports EVERY SelectionModel mutation, including the re-sync SyncNav performs itself. Only a genuine
+        // user pick may reset the discography key or drill the collapsed view (see _syncingSel).
+        if (_syncingSel || i < 0 || i >= shown.Length) return;
         Select(shown[i]);
         if (_collapsed.Peek()) _depth.Value = 1;   // collapsed: tapping a master item drills into it
+    }
+
+    /// <summary>Move the model to <paramref name="idx"/> WITHOUT re-entering the user-pick handler, then scroll it into
+    /// view. The bring-into-view is MINIMAL (alignmentRatio NaN, the default BringIntoViewOptions), so a row already on
+    /// screen never moves; it only acts when the selection jumped somewhere the viewport isn't — the launch restore and
+    /// the search select-in-place commit. Unanimated on purpose: a smooth scroll across a 10k-row library is not a cue,
+    /// it's a journey. A no-op before the viewport realizes.</summary>
+    void SyncSelect(SelectionModel model, int idx)
+    {
+        _syncingSel = true;
+        try { if (idx < 0) model.DeselectAll(); else model.Select(idx); }
+        finally { _syncingSel = false; }
+        if (idx >= 0) _navCtl.StartBringItemIntoView(idx);
     }
 
     void SyncNav(NavItem[] shown, bool fullSearch)
@@ -448,15 +488,17 @@ sealed class LibraryPage : Component
             {
                 _selectedKey.Value = "";
                 if (IsArtists) _albumKey.Value = "";
-                if (_navSel.SelectedCount > 0) _navSel.DeselectAll();
+                if (_navSel.SelectedCount > 0) SyncSelect(_navSel, -1);
             }
             return;
         }
         string key = _selectedKey.Peek();
         int idx = key.Length == 0 ? 0 : Array.FindIndex(shown, it => it.RouteKey == key);
-        if (idx < 0) idx = 0;
-        if (key.Length == 0) Select(shown[idx]);
-        if (_navSel.FirstSelectedIndex != idx) _navSel.Select(idx);
+        // No selection, or a key this set no longer contains (an unfollowed item, a not-yet-streamed list) → adopt the
+        // first row. Written out explicitly because the re-sync below no longer round-trips through the user-pick
+        // handler to do it as a side effect (see _syncingSel); the outcome is the same one this always produced.
+        if (idx < 0 || key.Length == 0) { idx = 0; Select(shown[0]); }
+        if (_navSel.FirstSelectedIndex != idx) SyncSelect(_navSel, idx);
     }
 
     // ── search-mode selection (drill-down) ──
@@ -484,18 +526,35 @@ sealed class LibraryPage : Component
         if (FindAlbum(albums, _sAlbum.Peek()) is null) _sAlbum.Value = albums[0].Uri;
     }
 
-    // Search hits are destinations: route through the shell so Back returns to this query and the destination/tab label
-    // uses the matched display name.
-    void SelectArtist(string uri, string name)
+    // Search hits are SELECT-IN-PLACE, not destinations. "Your Library" is a master–detail BROWSER (see the class note
+    // above): its entire job is to keep you in the panes you are browsing. Routing an artist/album hit through the shell
+    // ejected the user onto a full page — losing the three-column context, the resized columns and the query they were
+    // refining — for what is structurally the same act as clicking a row in the left navigator. Song hits already play
+    // in place (PlayTrack below); artist/album hits now COMMIT into the persisted browse selection instead, clear the
+    // filter so the browse panes come back, and let SyncNav / SyncDisco point the ItemsView selections at the result.
+    // The real page is still one click away from the pane the user lands in: its hero title and "Go to artist" navigate.
+    // The commit RULE (which keys move, and the collapsed drill level) is the pure LibrarySelectionCommit; this half is
+    // only the signal writes.
+    void SelectArtist(string uri)
     {
-        _sArtist.Value = uri; _sAlbum.Value = ""; _selectedKey.Value = "artist:" + uri; _albumKey.Value = "";
-        _goRef?.Invoke("artist:" + uri, name);
+        _sArtist.Value = uri; _sAlbum.Value = "";
+        Apply(LibrarySelectionCommit.ForArtist(IsArtists, _collapsed.Peek(), uri));
     }
-    void SelectAlbum(string uri, string name)
+    void SelectAlbum(string uri)
     {
         _sAlbum.Value = uri;
-        if (IsArtists) _albumKey.Value = "album:" + uri; else _selectedKey.Value = "album:" + uri;
-        _goRef?.Invoke("album:" + uri, name);
+        // In the artists view the owning artist is whatever the results column has selected — a hit is reachable without
+        // ever clicking that artist row (the first match auto-selects), so the commit carries it explicitly.
+        Apply(LibrarySelectionCommit.ForAlbum(IsArtists, _collapsed.Peek(), uri, _sArtist.Peek()));
+    }
+
+    // A null field means "leave that signal alone" — see LibrarySelectionCommit.
+    void Apply(in LibrarySelectionCommit c)
+    {
+        if (c.SelectedKey is { } sk) _selectedKey.Value = sk;
+        if (c.AlbumKey is { } ak) _albumKey.Value = ak;
+        if (c.ClearFilter && _filter.Peek().Length > 0) _filter.Value = "";
+        if (c.Depth is { } d) _depth.Value = d;
     }
     void PlayTrack(string albumUri, int index)
     {
@@ -516,18 +575,16 @@ sealed class LibraryPage : Component
     }
 
     // Left column while searching: the top-level matches (artists, or albums in the albums view).
-    Element LeftSearchBody(LibrarySearchResults sr, bool ready, string sArtist, string sAlbum)
-    {
-        if (!ready) return SearchMessage("…");
-        if (IsArtists)
-            return sr.Artists.Count == 0 ? SearchMessage(Loc.Get(Strings.Library.NoMatch))
-                : SearchScroll(sr.Artists, g => ArtistRow(g, g.Uri == sArtist));
-        return sr.Albums.Count == 0 ? SearchMessage(Loc.Get(Strings.Library.NoMatch))
-            : SearchScroll(sr.Albums, g => AlbumRow(g, g.Uri == sAlbum, explainMatch: true));
-    }
+    Element LeftSearchBody(LibrarySearchResults sr, SearchSkelState skel, string sArtist, string sAlbum) => IsArtists
+        ? SearchSkel(skel, SkelArtistRow, () => sr.Artists.Count == 0
+            ? SearchMessage(Loc.Get(Strings.Library.NoMatch))
+            : SearchScroll(sr.Artists, g => ArtistRow(g, g.Uri == sArtist)))
+        : SearchSkel(skel, SkelAlbumRow, () => sr.Albums.Count == 0
+            ? SearchMessage(Loc.Get(Strings.Library.NoMatch))
+            : SearchScroll(sr.Albums, g => AlbumRow(g, g.Uri == sAlbum, explainMatch: true)));
 
     // Artists-view detail columns while searching: the selected artist's albums | grip | the selected album's tracks.
-    Element SearchArtistColumns(LibrarySearchResults sr, bool ready, string sArtist, string sAlbum, bool railOpen)
+    Element SearchArtistColumns(LibrarySearchResults sr, SearchSkelState skel, string sArtist, string sAlbum, bool railOpen)
     {
         var albums = FindArtist(sr, sArtist)?.Albums ?? Array.Empty<LibraryAlbumGroup>();
         var albG = FindAlbum(albums, sAlbum);
@@ -537,14 +594,14 @@ sealed class LibraryPage : Component
         Element albumPane = Pane with
         {
             Key = "s:albums", Basis = _midW.Value, MinWidth = railOpen ? 220f : 300f, MaxWidth = _midW.Value, Shrink = 1f, Grow = 0f,
-            Children = [FacetHeader(Loc.Get(Strings.Search.Albums), ready ? albums.Count : -1),
-                        ready ? SearchScroll(albums, a => AlbumRow(a, a.Uri == sAlbum)) : SearchMessage("…")],
+            Children = [FacetHeader(Loc.Get(Strings.Search.Albums), skel.Shimmer ? -1 : albums.Count, skel.Refining),
+                        SearchSkel(skel, SkelAlbumRow, () => SearchScroll(albums, a => AlbumRow(a, a.Uri == sAlbum)))],
         };
         Element trackPane = Pane with
         {
             Key = "s:tracks", Grow = 1f, Basis = 0f, MinWidth = 220f, Shrink = 1f,
-            Children = [FacetHeader(Loc.Get(Strings.Search.Songs), ready ? tracks.Count : -1),
-                        ready ? SearchScroll(tracks, t => TrackHitRow(t, albumUri)) : SearchMessage("…")],
+            Children = [FacetHeader(Loc.Get(Strings.Search.Songs), skel.Shimmer ? -1 : tracks.Count, skel.Refining),
+                        SearchSkel(skel, SkelTrackRow, () => SearchScroll(tracks, t => TrackHitRow(t, albumUri)))],
         };
         return new BoxEl
         {
@@ -554,7 +611,7 @@ sealed class LibraryPage : Component
     }
 
     // Albums-view single right pane while searching: the selected album's matched tracks.
-    Element SearchAlbumDetail(LibrarySearchResults sr, bool ready, string sAlbum)
+    Element SearchAlbumDetail(LibrarySearchResults sr, SearchSkelState skel, string sAlbum)
     {
         var albG = FindAlbum(sr.Albums, sAlbum);
         var tracks = albG?.Tracks ?? Array.Empty<LibraryTrackHit>();
@@ -562,8 +619,64 @@ sealed class LibraryPage : Component
         return Pane with
         {
             Key = "s:detail", Grow = 1f, Basis = 0f,
-            Children = [FacetHeader(Loc.Get(Strings.Search.Songs), ready ? tracks.Count : -1),
-                        ready ? SearchScroll(tracks, t => TrackHitRow(t, albumUri)) : SearchMessage("…")],
+            Children = [FacetHeader(Loc.Get(Strings.Search.Songs), skel.Shimmer ? -1 : tracks.Count, skel.Refining),
+                        SearchSkel(skel, SkelTrackRow, () => SearchScroll(tracks, t => TrackHitRow(t, albumUri)))],
+        };
+    }
+
+    // ── the search columns' skeleton boundary ──
+    /// <summary>Per-render skeleton inputs, threaded to every search column. <paramref name="Shimmer"/> is the decided
+    /// "there is nothing worth keeping on screen" gate; <paramref name="Refining"/> is the softer "a newer answer is
+    /// coming" cue for the facet counts.</summary>
+    readonly record struct SearchSkelState(Loadable<LibrarySearchResults> Search, bool Shimmer, object Group, bool Refining);
+
+    // How many placeholder rows a pending column stands up. Enough to fill a short column without pretending to know
+    // the result count.
+    const int SkelRows = 6;
+
+    Element SkelArtistRow() => ArtistRow(SkelArtist, false);
+    Element SkelAlbumRow() => AlbumRow(SkelAlbum, false);
+    Element SkelTrackRow() => TrackHitRow(SkelTrack, "");
+
+    /// <summary>
+    /// The engine's skeleton boundary over a search column: shimmer rows DERIVED from the same row builder the real
+    /// rows use (one row definition, never a hand-authored second tree), a staggered blur-reveal on load, and one shared
+    /// group token so the three columns settle together.
+    /// <para>The pending test is widened past <c>Skel.Region</c>'s built-in one on purpose. That one reads the loadable's
+    /// state alone, and <c>KeepPreviousData</c> deliberately holds it at Ready across a re-query — correct for a REFINE
+    /// (the previous rows stay put, which is the whole point) but wrong for the first query of a session, where the value
+    /// being kept is the empty seed and Content would paint "Nothing matches" for the length of the fetch. So: shimmer
+    /// while Pending, or while the answer in hand is EMPTY and a newer one is still coming (fetch in flight, or the
+    /// debounce not yet caught up with the typed text). Non-empty results are never replaced by a shimmer.</para>
+    /// </summary>
+    static Element SearchSkel(SearchSkelState skel, Func<Element> rowTemplate, Func<Element> content)
+    {
+        var loadable = skel.Search;
+        bool shimmer = skel.Shimmer;
+        return new SkelRegionEl(
+            Pending: () => loadable.State.Value == (byte)LoadState.Pending || shimmer,
+            Failed: () => loadable.State.Value == (byte)LoadState.Failed,
+            Content: content,
+            ShimmerSource: () => ShimmerStack(rowTemplate),
+            // Rare (KeepPreviousData keeps a prior Ready value through a failed refetch, so only a cold failure lands
+            // here) — but a blank column is not an answer, so say so rather than leaving the pane empty.
+            OnFailed: () => ErrorState.Build(loadable.Error),
+            Reveal: SkelReveal.StaggerRows,
+            Style: SkeletonStyle.Default,
+            Group: skel.Group);
+    }
+
+    // Rows are keyed apart: the row builders carry a per-uri Key that the deriver preserves, and N identical keys among
+    // siblings is not a shape the reconciler should ever be handed.
+    static Element ShimmerStack(Func<Element> row)
+    {
+        var kids = new Element[SkelRows];
+        for (int i = 0; i < SkelRows; i++) kids[i] = row() with { Key = "skel:" + i };
+        return new BoxEl
+        {
+            Direction = 1, Gap = 2f,
+            Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+            Children = kids,
         };
     }
 
@@ -579,34 +692,43 @@ sealed class LibraryPage : Component
         }) with { Grow = 1f };
     }
 
-    static Element FacetHeader(string label, int count) => new BoxEl
+    // `refining` = a newer answer is on its way while these (kept) results stay on screen. The count is the one thing on
+    // the header that is about to change, so it — and only it — fades back. No spinner, no bar: the rows are still true.
+    static Element FacetHeader(string label, int count, bool refining = false) => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
         Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.S),
         Children =
         [
-            new TextEl(label) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 50f },
-            count >= 0 ? new TextEl(count.ToString()) { Size = 11f, Weight = 700, Color = Tok.TextTertiary } : new BoxEl(),
+            // Caption (12/16/600) - caps and the 50/1000 tracking are the header's voice and stay.
+            new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 50f },
+            count >= 0
+                ? new TextEl(count.ToString())
+                  {
+                      Size = 12f, LineHeight = 16f, Weight = 600, BrushTransitionMs = WaveeMotion.Faster,
+                      Color = refining ? Tok.TextTertiary with { A = Tok.TextTertiary.A * 0.4f } : Tok.TextTertiary,
+                  }
+                : new BoxEl(),
         ],
     };
 
     static Element SearchMessage(string text) => new BoxEl
     {
         Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL),
-        Children = [new TextEl(text) { Size = 13f, Color = Tok.TextTertiary }],
+        Children = [new TextEl(text) { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }],
     };
 
     // ── search-mode rows ──
     // Artists are always top-level results, so an artist that matched through one of its albums/tracks (name unmatched)
     // always carries its "why" caption.
     Element ArtistRow(LibraryArtistGroup g, bool selected) =>
-        SelectableRow(g.Image, g.Uri, g.Name, "", circular: true, selected, g.MatchStart, g.MatchLen, () => SelectArtist(g.Uri, g.Name),
+        SelectableRow(g.Image, g.Uri, g.Name, "", circular: true, selected, g.MatchStart, g.MatchLen, () => SelectArtist(g.Uri),
             eyebrow: MatchEyebrow(g.Match));
 
     // The "why" caption shows ONLY when this album stands as a top-level result (explainMatch) — never in the artists-
     // view drill-down column, where the album is browse context under an already-explained matched artist.
     Element AlbumRow(LibraryAlbumGroup g, bool selected, bool explainMatch = false) =>
-        SelectableRow(g.Cover, g.Uri, g.Name, (g.Year > 0 ? g.Year + " · " : "") + KindLabelOf(g.Kind), circular: false, selected, g.MatchStart, g.MatchLen, () => SelectAlbum(g.Uri, g.Name),
+        SelectableRow(g.Cover, g.Uri, g.Name, (g.Year > 0 ? g.Year + " · " : "") + KindLabelOf(g.Kind), circular: false, selected, g.MatchStart, g.MatchLen, () => SelectAlbum(g.Uri),
             eyebrow: explainMatch ? MatchEyebrow(g.Match) : null);
 
     // The WinUI eyebrow: the reason a non-exact hit appeared, quoted from the field that actually matched. Rendered only
@@ -630,36 +752,47 @@ sealed class LibraryPage : Component
         // The eyebrow sits ABOVE the title (WinUI caption/eyebrow order): a small, secondary-color line naming the match
         // reason. Only present for non-name hits with an attributable reason.
         if (!string.IsNullOrEmpty(eyebrow))
-            textKids.Add(new TextEl(eyebrow!) { Size = 11f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis });
+            textKids.Add(new TextEl(eyebrow!) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis });
         textKids.Add(HighlightRow(title, matchStart, matchLen, 14f, 600, Tok.TextPrimary));
         if (subtitle.Length > 0)
-            textKids.Add(new TextEl(subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            textKids.Add(new TextEl(subtitle) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         return new BoxEl
         {
             Key = "search:" + uri, Animate = SearchRowChange,
             Direction = 0, Height = 56f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
-            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
             Fill = selected ? Tok.AccentSubtle : ColorF.Transparent,
             HoverFill = selected ? Tok.AccentSubtle : Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             OnClick = onClick,
             Children =
             [
-                new BoxEl { Width = 44f, Height = 44f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 22f : 5f), ClipToBounds = true,
-                    Children = [Surfaces.Artwork(cover, uri.GetHashCode() & 0x7fffffff, 44f, 44f, circular ? 22f : 5f)] },
+                new BoxEl { Width = 44f, Height = 44f, Shrink = 0f, Corners = CornerRadius4.All(circular ? Radii.Full : Radii.Control), ClipToBounds = true,
+                    SkeletonOverride = CoverSkeleton(44f, circular ? Radii.Full : Radii.Control),
+                    Children = [Surfaces.Artwork(cover, uri.GetHashCode() & 0x7fffffff, 44f, 44f, circular ? Radii.Full : Radii.Control)] },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f, ClipToBounds = true, Children = textKids.ToArray() },
             ],
         };
     }
 
+    // Artwork's inner CoverShimmer is an opaque component boundary to the skeleton deriver, which would emit ONE default
+    // 160px bar inside the cover square. The slot IS the honest placeholder here, so declare it: a same-sized tile in the
+    // shimmer's own bar colour, matching every other cover placeholder in the app. Consulted only while deriving.
+    static Element CoverSkeleton(float size, float corners) => new BoxEl
+    {
+        Width = size, Height = size, Shrink = 0f, Corners = CornerRadius4.All(corners),
+        Fill = SkeletonStyle.Default.BarColor, IsEnabled = false, HitTestVisible = false,
+    };
+
     Element TrackHitRow(LibraryTrackHit t, string albumUri) => new BoxEl
     {
         Key = "search:" + t.Uri, Animate = SearchRowChange,
         Direction = 0, Height = 44f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
-        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
         OnClick = () => PlayTrack(albumUri, t.AlbumIndex),
         Children =
         [
             new BoxEl { Width = 36f, Height = 36f, Shrink = 0f, Corners = CornerRadius4.All(4f), ClipToBounds = true,
+                SkeletonOverride = CoverSkeleton(36f, 4f),
                 Children = [Surfaces.Artwork(t.Cover, t.Uri.GetHashCode() & 0x7fffffff, 36f, 36f, 4f)] },
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, ClipToBounds = true,
                 Children = [HighlightRow(t.Title, t.MatchStart, t.MatchLen, 13f, 600, Tok.TextPrimary)] },
@@ -709,8 +842,8 @@ sealed class LibraryPage : Component
         children.Add(new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
             Children =
             [
-                new TextEl(it.Title) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                compact ? new BoxEl() : new TextEl(it.Subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                new TextEl(it.Title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                compact ? new BoxEl() : new TextEl(it.Subtitle) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ] });
         return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Draggable = NavDrag(it), Children = children.ToArray() };
     }
@@ -721,15 +854,19 @@ sealed class LibraryPage : Component
     {
         float pad = it.Circular ? 16f : Spacing.S;
         var children = new List<Element>(2) { Surfaces.ArtworkFill(it.Cover, it.Circular ? Radii.Full : 6f) };
-        if (!compact) children.Add(new TextEl(it.Title) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, AlignSelf = it.Circular ? FlexAlign.Center : FlexAlign.Start });
+        if (!compact) children.Add(new TextEl(it.Title) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, AlignSelf = it.Circular ? FlexAlign.Center : FlexAlign.Start });
         return new BoxEl { Direction = 1, Gap = Spacing.S, ClipToBounds = true, Padding = new Edges4(pad, pad, pad, pad), Draggable = NavDrag(it), Children = children.ToArray() };
     }
 
     /// <summary>A library item is a DRAG SOURCE only — this list has Single selection and no reorder, so there is
     /// nothing to drop INTO it. The kind comes from the item's own route key (the list is per-kind, but the search
-    /// facets mix them), which is the one value that is authoritative on every branch.</summary>
+    /// facets mix them), which is the one value that is authoritative on every branch.
+    /// <para>CLICK-PRIMARY (×2 mouse drag box, WinUI's LISTVIEWBASEITEM_MOUSE_DRAG_THRESHOLD_MULTIPLIER): selecting a
+    /// row/card is the constant intent here and dragging one out the exception, so a click landed while the pointer is
+    /// still travelling must not be eaten by a drag promotion.</para></summary>
     DragSource NavDrag(NavItem it) => Drag.Source(WaveeDragKinds.Resource,
-        () => WaveeResourceDragPayload.ForEntity(KindOfRoute(it.RouteKey), it.Uri, it.Title, it.Cover, _actsRef));
+        () => WaveeResourceDragPayload.ForEntity(KindOfRoute(it.RouteKey), it.Uri, it.Title, it.Cover, _actsRef),
+        thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier);
 
     static WaveeResourceKind KindOfRoute(string routeKey) =>
         routeKey.StartsWith("artist:", StringComparison.Ordinal) ? WaveeResourceKind.Artist
@@ -761,7 +898,7 @@ sealed class LibraryPage : Component
                 Children = [Embed.Comp(() => new LibraryDetailPane(albumTracks, false, svc, bridge))] }
             : Pane with { Key = "lib:tracks:empty", Grow = 1f, Basis = 0f, MinWidth = 220f, Shrink = 1f,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [new TextEl(Loc.Get(Strings.Library.SelectAlbumTracks)) { Size = 13f, Color = Tok.TextTertiary }] };
+                Children = [new TextEl(Loc.Get(Strings.Library.SelectAlbumTracks)) { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }] };
         return new BoxEl
         {
             Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f, AlignItems = FlexAlign.Stretch, ClipToBounds = true,
@@ -772,7 +909,7 @@ sealed class LibraryPage : Component
     static Element Placeholder(string key) => Pane with
     {
         Key = "lib:empty", Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Children = [new TextEl(Loc.Get(key)) { Size = 14f, Color = Tok.TextTertiary }],
+        Children = [new TextEl(Loc.Get(key)) { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }],
     };
 
     // The grip's ColumnGrip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed Width=10 / Shrink=0
@@ -978,6 +1115,7 @@ sealed class LibraryDetailPane : Component
     public override Element Render()
     {
         var go = UseContext(HistoryStore.NavCtx);
+        var navPreview = UseContext(NavPreviewStore.Slot);
         var lib = UseContext(LibraryBridge.Slot);
         var st = (LoadState)_model.State.Value;   // subscribe
         var m = _model.Value.Value;               // subscribe
@@ -998,7 +1136,7 @@ sealed class LibraryDetailPane : Component
         return new BoxEl
         {
             Direction = 1, Grow = 1f, ClipToBounds = true,
-            Children = [Hero(m), Actions(uri, m.Title, Play, Shuffle), body],
+            Children = [Hero(m, go, navPreview), Actions(uri, m.Title, Play, Shuffle), body],
         };
     }
 
@@ -1045,24 +1183,64 @@ sealed class LibraryDetailPane : Component
             a => DetailNav.OpenAlbum(null, go, a), p => DetailNav.OpenPlaylist(null, go, p));
     }
 
-    Element Hero(DetailModel m) => new BoxEl
+    // The pane is a COMPACT panel, so its header carries the pane's only way out: the title opens the album/show's real
+    // page and the artist line opens each billed artist. Both were dead text before — and the library search hits that
+    // used to navigate now select in place, so this header is where "take me to the actual page" lives.
+    Element Hero(DetailModel m, Action<string, string?> go, NavPreviewStore? navPreview)
     {
-        Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.M),
-        Children =
-        [
-            new BoxEl { Width = 104f, Height = 104f, Shrink = 0f, Corners = CornerRadius4.All(8f), ClipToBounds = true, Shadow = Elevation.Card,
-                Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, 104f, 104f, 8f, decodePx: 256)] },
-            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
-                Children =
-                [
-                    new TextEl(m.BadgeType ?? (_show ? Loc.Get(Strings.Podcast.Show) : "")) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 50f },
-                    new TextEl(m.Title) { Size = 23f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(m.Publisher ?? DetailFormat.ArtistNames(m.Artists)) { Size = 13f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(m.MetaLine) { Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                ] },
-        ],
-    };
+        string uri = m.ContextUri ?? "";
+        // Route key by kind — the pane renders shows and albums from the same model.
+        string routeKey = uri.Length > 0 ? (_show ? "show:" : "album:") + uri : "";
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.XL, Spacing.XL, Spacing.XL, Spacing.M),
+            Children =
+            [
+                // Artwork is CONTENT, not a floating card: no static elevation under it (the app's stroke-only content rule).
+                new BoxEl { Width = 104f, Height = 104f, Shrink = 0f, Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
+                    Children = [Surfaces.Artwork(m.Cover, m.Title.GetHashCode() & 0x7fffffff, 104f, 104f, Radii.Card, decodePx: 256)] },
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
+                    Children =
+                    [
+                        new TextEl(m.BadgeType ?? (_show ? Loc.Get(Strings.Podcast.Show) : "")) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 50f },
+                        TitleLink(m, routeKey, go, navPreview),
+                        // A podcast's publisher is a plain name with no uri to open — it stays text. Album artists are
+                        // real entities, so each billed name is its own link (the same span row the track rows use).
+                        m.Publisher is { } pub
+                            ? new TextEl(pub) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+                            : TrackRow.ArtistLinks(m.Artists, go, size: 14f, weight: 600),
+                        new TextEl(m.MetaLine) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    ] },
+            ],
+        };
+    }
+
+    // The clickable title, on the "Go to artist" pill idiom: the text itself carries the hover ink change, the plate
+    // around it carries the hit target, the cursor, focus and the Button role. Negative margin cancels the plate's
+    // padding so the title stays optically flush with the badge and artist lines above/below it.
+    // The FULL DetailModel is stashed as the nav preview (richer than DetailPreview.FromAlbum — this pane already
+    // resolved tracks, meta and release info), so the destination page paints its header from real data on frame one.
+    // No ContextUri ⇒ nothing to open ⇒ plain text, never a dead click target.
+    static Element TitleLink(DetailModel m, string routeKey, Action<string, string?> go, NavPreviewStore? navPreview)
+    {
+        var text = new TextEl(m.Title)
+        {
+            // Title (28/36/600) - the pane header IS a page hero. Was 23/800: neither a ramp size nor a ramp weight.
+            Size = 28f, LineHeight = 36f, Weight = 600, Color = Tok.TextPrimary, HoverColor = Tok.AccentTextPrimary, BrushTransitionMs = WaveeMotion.Faster,
+            MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis,
+        };
+        if (routeKey.Length == 0) return text;
+        return new BoxEl
+        {
+            // Deliberately NOT AlignSelf.Start: the title must keep the full column width it wraps/ellipsizes against.
+            Corners = Radii.ControlAll,
+            Padding = new Edges4(Spacing.S, Spacing.XXS, Spacing.S, Spacing.XXS), Margin = new Edges4(-Spacing.S, -Spacing.XXS, -Spacing.S, -Spacing.XXS),
+            Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
+            OnClick = () => { navPreview?.Set(routeKey, m); go(routeKey, m.Title); },
+            Children = [text],
+        }.Interactive(Interaction.Subtle);
+    }
 
     Element Actions(string uri, string? name, Action play, Action shuffle) => new BoxEl
     {
@@ -1081,8 +1259,8 @@ sealed class LibraryDetailPane : Component
 
     static Element Fab(string glyph, Action onClick) => new BoxEl
     {
-        Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = CornerRadius4.All(20f),
-        HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
+        Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Corners = Radii.Circle(40f),
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = onClick,
         Children = [Icon(glyph, 16f, Tok.TextSecondary)],
     }.Interactive(Interaction.Subtle);
 
@@ -1095,17 +1273,17 @@ sealed class LibraryDetailPane : Component
             rows[i] = new BoxEl
             {
                 Direction = 0, MinHeight = 56f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-                Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S), Corners = CornerRadius4.All(6f),
+                Padding = Edges4.All(Spacing.S), Corners = Radii.ControlAll,
                 OnClick = () => onPlay(idx),
                 Children =
                 [
-                    new BoxEl { Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f), Fill = Tok.FillSubtleSecondary, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    new BoxEl { Width = 32f, Height = 32f, Shrink = 0f, Corners = Radii.Circle(32f), Fill = Tok.FillSubtleSecondary, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                         Children = [Icon(Icons.Play, 12f, Tok.TextSecondary)] },
                     new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
                         Children =
                         [
-                            new TextEl(e.Title) { Size = 13f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
-                            new TextEl(DetailFormat.TrackTime(e.DurationMs)) { Size = 11f, Color = Tok.TextTertiary },
+                            new TextEl(e.Title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis },
+                            new TextEl(DetailFormat.TrackTime(e.DurationMs)) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
                         ] },
                 ],
             }.Interactive(Interaction.Subtle);
@@ -1119,7 +1297,7 @@ sealed class LibraryDetailPane : Component
         Children =
         [
             new BoxEl { Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
-                Children = [new BoxEl { Width = 104f, Height = 104f, Corners = CornerRadius4.All(8f), Fill = Tok.FillCardDefault },
+                Children = [new BoxEl { Width = 104f, Height = 104f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault },
                     new BoxEl { Direction = 1, Grow = 1f, Gap = Spacing.S, Children = [new BoxEl { Width = 80f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 200f, Height = 22f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }, new BoxEl { Width = 140f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault }] }] },
             new BoxEl { Direction = 1, Gap = Spacing.S, Children = Enumerable.Range(0, 6).Select(_ => (Element)new BoxEl { Height = 14f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault, Margin = new Edges4(0f, Spacing.S, 0f, 0f) }).ToArray() },
         ],
@@ -1137,6 +1315,8 @@ sealed class LibraryArtistPane : Component
     readonly Signal<string> _aFilter;
     readonly Action? _onDrill;                   // collapsed drill-in: notify the host when a release is picked (→ tracks level)
     readonly SelectionModel _discoSel = new();   // discography grid single-selection (drives the 3rd column)
+    readonly ItemsViewController _discoCtl = new();   // see SyncSelect: scroll a programmatically-moved pick into view
+    bool _syncingSel;                            // see SyncSelect: a programmatic re-sync must not re-enter Pick
     ActionServices? _actsRef;                    // cached in Render → the discography items' drag payloads
     static readonly string[] NoSuggest = Array.Empty<string>();
 
@@ -1181,7 +1361,7 @@ sealed class LibraryArtistPane : Component
                 new BoxEl { Grow = 1f },
                 a is not null && go is not null ? GoToArtist(a, go) : new BoxEl(),
             ] },
-            AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _aFilter, queryIcon: Icons.Search, grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: 8f),
+            AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _aFilter, queryIcon: Icons.Search, grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: Radii.Control),
         ],
     };
 
@@ -1189,12 +1369,12 @@ sealed class LibraryArtistPane : Component
     static Element GoToArtist(Artist a, Action<string, string?> go) => new BoxEl
     {
         Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
-        Corners = CornerRadius4.All(16f), Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
-        HoverScale = 1.02f, PressScale = 0.98f,
+        Corners = Radii.PillAll, Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+        HoverScale = WaveeMotion.ScaleStandard.Hover, PressScale = WaveeMotion.ScaleStandard.Press,
         OnClick = () => go("artist:" + a.Uri, a.Name),
         Children =
         [
-            new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 12f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
+            new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
             Icon(Icons.OpenInNewWindow, 14f, Tok.TextSecondary),
         ],
     }.Interactive(Interaction.Subtle);
@@ -1224,12 +1404,12 @@ sealed class LibraryArtistPane : Component
     {
         if (albums.Count == 0)
             return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL),
-                Children = [new TextEl(_aFilter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 13f, Color = Tok.TextTertiary }] };
+                Children = [new TextEl(_aFilter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }] };
 
         int view = _aView.Value, size = _aSize.Value;   // subscribe
         bool grid = view >= 2, compact = view == 0 || view == 2;
         string key = "disco:" + view + ":" + size + ":" + albums.Count + ":" + albums[0].Uri;
-        void Pick(int i) { if (i < 0 || i >= albums.Count) return; _albumKey.Value = "album:" + albums[i].Uri; _onDrill?.Invoke(); }
+        void Pick(int i) { if (_syncingSel || i < 0 || i >= albums.Count) return; _albumKey.Value = "album:" + albums[i].Uri; _onDrill?.Invoke(); }
 
         if (grid)
             return new BoxEl
@@ -1238,7 +1418,7 @@ sealed class LibraryArtistPane : Component
                 Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
                 Children = [ItemsView.Create(albums.Count, i => DiscoCardContent(albums[i], compact),
                     RepeatLayout.GridFit((compact ? 84f : 100f) + size * (compact ? 16f : 24f), 8f),
-                    new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _discoSel, Selector = SelectorVisual.Border, OnChange = () => Pick(_discoSel.FirstSelectedIndex), Grow = 1f })],
+                    new ListOptions { SelectionMode = ItemsSelectionMode.Single, Selection = _discoSel, Selector = SelectorVisual.Border, OnChange = () => Pick(_discoSel.FirstSelectedIndex), Controller = _discoCtl, Grow = 1f })],
             };
 
         return new BoxEl
@@ -1246,18 +1426,48 @@ sealed class LibraryArtistPane : Component
             Key = key, Grow = 1f, Basis = 0f, MinHeight = 0f, Direction = 1,
             Children = [ItemsView.List(albums.Count, i => DiscoRowContent(albums[i], compact),
                 selectionMode: ItemsSelectionMode.Single, selection: _discoSel,
-                onSelectionIndexChanged: Pick, itemExtent: compact ? 44f : 60f, grow: 1f)],
+                onSelectionIndexChanged: Pick, controller: _discoCtl,
+                itemExtent: compact ? 44f : 60f, grow: 1f)],
         };
     }
 
+    /// <summary>
+    /// Point the discography grid at <c>_albumKey</c>.
+    /// <para>SNAP-TO-FIRST IS AN AUTO-SELECT, NOT A CORRECTION. It fires only when <c>_albumKey</c> is EMPTY — which is
+    /// exactly the state <c>LibraryPage.Select</c> puts it in on every artist change, so "pick an artist, get their
+    /// first release" is unchanged. It used to fire whenever the key was missing from this list, and that clobbered any
+    /// release chosen deliberately: a library-search hit committed in place, or a key restored from settings, was
+    /// overwritten by whatever happened to sort first the moment the discography landed.</para>
+    /// <para>A key that is set but absent from the SHOWN list simply leaves the grid with no highlighted row. That list
+    /// is filtered and sorted, and an artist's cached TopAlbums need not carry every release — while <c>_albumKey</c>
+    /// drives its own loadable, so the tracks column still resolves the release regardless of what this grid shows.
+    /// Nothing here is authoritative over the key; it only renders it.</para>
+    /// </summary>
     void SyncDisco(IReadOnlyList<Album> albums)
     {
         string ak = _albumKey.Peek();
+        if (ak.Length == 0)
+        {
+            if (albums.Count > 0) _albumKey.Value = "album:" + albums[0].Uri;
+            else if (_discoSel.SelectedCount > 0) SyncSelect(-1);
+            return;
+        }
         int idx = -1;
-        if (ak.Length > 0) for (int i = 0; i < albums.Count; i++) if ("album:" + albums[i].Uri == ak) { idx = i; break; }
-        if (idx < 0 && albums.Count > 0) _albumKey.Value = "album:" + albums[0].Uri;
-        else if (idx < 0) { if (_discoSel.SelectedCount > 0) _discoSel.DeselectAll(); }
-        else if (_discoSel.FirstSelectedIndex != idx) _discoSel.Select(idx);
+        for (int i = 0; i < albums.Count; i++) if ("album:" + albums[i].Uri == ak) { idx = i; break; }
+        if (idx < 0) { if (_discoSel.SelectedCount > 0) SyncSelect(-1); }
+        else if (_discoSel.FirstSelectedIndex != idx) SyncSelect(idx);
+    }
+
+    // ItemsView forwards EVERY SelectionModel mutation — including this re-sync — to Pick, whose side effect is
+    // onDrill. Collapsed, that meant the discography level was skipped entirely: tapping an artist landed on depth 1,
+    // SyncDisco immediately selected the auto-picked release, and Pick drilled straight through to the tracks.
+    // …and, like the navigator's, scroll the moved pick back into view (minimal + unanimated: a visible tile never moves).
+    void SyncSelect(int idx)
+    {
+        _syncingSel = true;
+        try { if (idx < 0) _discoSel.DeselectAll(); else _discoSel.Select(idx); }
+        finally { _syncingSel = false; }
+        if (idx >= 0) _discoCtl.StartBringItemIntoView(idx);
     }
 
     // Grid card: cover + title, plus a "year · KIND" subtitle in non-compact grids (compact drops it, like the picker).
@@ -1266,10 +1476,10 @@ sealed class LibraryArtistPane : Component
         var children = new List<Element>(3)
         {
             Surfaces.ArtworkFill(al.Cover, 6f),
-            new TextEl(al.Name) { Size = 12f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            new TextEl(al.Name) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         };
         if (!compact)
-            children.Add(new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 11f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            children.Add(new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         return new BoxEl { Direction = 1, Gap = Spacing.XS, ClipToBounds = true, Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS), Draggable = AlbumDrag(al), Children = children.ToArray() };
     }
 
@@ -1278,19 +1488,22 @@ sealed class LibraryArtistPane : Component
     {
         var children = new List<Element>(2);
         if (!compact)
-            children.Add(new BoxEl { Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(5f), ClipToBounds = true,
+            children.Add(new BoxEl { Width = 40f, Height = 40f, Shrink = 0f, Corners = Radii.ControlAll, ClipToBounds = true,
                 Children = [Surfaces.Artwork(al.Cover, al.Uri.GetHashCode() & 0x7fffffff, 40f, 40f, 5f)] });
         children.Add(new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
             Children =
             [
-                new TextEl(al.Name) { Size = compact ? 13f : 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                compact ? new BoxEl() : new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                new TextEl(al.Name) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                compact ? new BoxEl() : new TextEl((al.Year > 0 ? al.Year + " · " : "") + KindLabel(al.Kind)) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ] });
         return new BoxEl { Direction = 0, Grow = 1f, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Draggable = AlbumDrag(al), Children = children.ToArray() };
     }
 
+    // Click-primary, same as the left navigator's rows: picking the release (which drives the 3rd column) is the constant
+    // intent, dragging it out the exception — so the mouse drag box gets WinUI's ×2 list-item multiplier.
     DragSource AlbumDrag(Album al) => Drag.Source(WaveeDragKinds.Resource,
-        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover, _actsRef));
+        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, al.Uri, al.Name, al.Cover, _actsRef),
+        thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier);
 
     static string KindLabel(AlbumKind k) => k switch
     {
@@ -1303,6 +1516,6 @@ sealed class LibraryArtistPane : Component
     static Element Skeleton() => new BoxEl
     {
         Direction = 1, Grow = 1f, Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.M), Gap = Spacing.S,
-        Children = Enumerable.Range(0, 8).Select(_ => (Element)new BoxEl { Height = 148f, Corners = CornerRadius4.All(6f), Fill = Tok.FillCardDefault }).ToArray(),
+        Children = Enumerable.Range(0, 8).Select(_ => (Element)new BoxEl { Height = 148f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault }).ToArray(),
     };
 }

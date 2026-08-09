@@ -17,7 +17,7 @@ sealed partial class SettingsPage : Component
     const int TabGeneral = 0, TabPlayback = 1, TabStorage = 2, TabDiagnostics = 3, TabAbout = 4;
     const float SettingsContentMaxWidth = 1000f;
     const float SettingsCardSpacing = 4f;
-    static readonly Edges4 SettingsSectionHeaderMargin = new(1f, 30f, 0f, 6f);
+    static readonly Edges4 SettingsSectionHeaderMargin = new(0f, Spacing.XXXL, 0f, Spacing.S);
     static readonly string[] s_tabKeys = ["general", "playback", "storage", "diagnostics", "about"];
 
     readonly Signal<int> _tab = new(0);
@@ -128,13 +128,13 @@ sealed partial class SettingsPage : Component
             ? new BoxEl
             {
                 Grow = 1f, Shrink = 1f, MinHeight = 0f, Direction = 1,
-                Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
+                Padding = new Edges4(Spacing.PageWide, Spacing.L, Spacing.PageWide, Spacing.L),
                 Children = [body],
             }
             : ScrollView(new BoxEl
             {
                 Direction = 1,
-                Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.XXL),
+                Padding = new Edges4(Spacing.PageWide, Spacing.L, Spacing.PageWide, Spacing.PageWide),
                 Children = [SettingsContentColumn(body)],
             }) with { Grow = 1f, ScrollKey = "settings:" + s_tabKeys[tab], Key = "settings:scroll:" + s_tabKeys[tab] };
 
@@ -146,7 +146,7 @@ sealed partial class SettingsPage : Component
                 Header(),
                 new BoxEl
                 {
-                    Direction = 1, Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f),
+                    Direction = 1, Padding = new Edges4(Spacing.PageWide, 0f, Spacing.PageWide, 0f),
                     Children =
                     [
                         SelectorBar.Create(TabLabels(), _tab),
@@ -186,10 +186,10 @@ sealed partial class SettingsPage : Component
     static Element Header() => new BoxEl
     {
         Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.M),
+        Padding = new Edges4(Spacing.PageWide, Spacing.L, Spacing.PageWide, Spacing.M),
         Children =
         [
-            Icon(Icons.Settings, 22f, Tok.TextPrimary),
+            Icon(Icons.Settings, 24f, Tok.TextPrimary),
             WaveeType.PageHero(Loc.Get(Strings.Settings.Title)) with { Grow = 1f },
         ],
     };
@@ -219,7 +219,7 @@ sealed partial class SettingsPage : Component
     static Element StatPill(string value, string label) => new BoxEl
     {
         Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center,
-        Padding = new Edges4(8f, 3f, 8f, 3f), Corners = CornerRadius4.All(Radii.Full),
+        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
         Fill = Tok.FillSubtleSecondary,
         Children =
         [

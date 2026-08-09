@@ -31,7 +31,12 @@ using static FluentGpu.VerticalSlice.Harness.Gate;
 using static FluentGpu.VerticalSlice.Harness.Asserts;
 
 
-    enum DeviceLossProbeFailure { Submit, Present, PresentNonDevice }
+    // ImageUploadReject = the SOFT-FAIL shape the D3D12 ImageTextureStore now has: a staging create/map that fails on a
+    // removed device returns a rejection (ResourceExhausted) instead of throwing past the render-thread seam, and the
+    // device's next present fails too (the on-hardware sequence).
+    // ImageUploadThrow  = the raw crash shape ("Image.CreateUpload failed: 0x887A0005"): the upload sink THROWS out of
+    // ImageCache.Pump at frame phase 7.5, which sits outside the submit/present try.
+    enum DeviceLossProbeFailure { Submit, Present, PresentNonDevice, ImageUploadReject, ImageUploadThrow }
 
     sealed class DeviceLossProbeDevice : IGpuDevice
     {
@@ -59,6 +64,25 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
             => SubmitDrawList(drawList, sortKeys, in ctx);
 
         public void UploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h) => Inner.UploadImage(imageId, pbgra8, w, h);
+
+        public ImageUploadResult TryUploadImage(int imageId, ReadOnlySpan<byte> pbgra8, int w, int h)
+        {
+            UploadAttempts++;
+            if (_armed && _failure == DeviceLossProbeFailure.ImageUploadReject)
+            {
+                _armed = false; _lost = true;
+                return ImageUploadResult.ResourceExhausted;
+            }
+            if (_armed && _failure == DeviceLossProbeFailure.ImageUploadThrow)
+            {
+                _armed = false; _lost = true;
+                throw new InvalidOperationException("Image.CreateUpload failed: 0x887A0005");
+            }
+            Inner.UploadImage(imageId, pbgra8, w, h);
+            return ImageUploadResult.Accepted;
+        }
+
+        public int UploadAttempts { get; private set; }
         public void EvictImage(int imageId) => Inner.EvictImage(imageId);
         public bool NoteIfDeviceLost() { NoteCount++; return _lost; }
         public int PollDeviceLost() => _lost ? unchecked((int)0x887A0006u) : 0;
@@ -66,9 +90,19 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         public void DumpDeviceLostDiagnostics(Action<string> write) { DumpCount++; write("[probe] device-lost diagnostics"); }
         public void Dispose() { }
 
+        bool _presentFailedOnce;
+
         internal void Present(ISwapchain inner)
         {
             if (_failure is DeviceLossProbeFailure.Present or DeviceLossProbeFailure.PresentNonDevice) ThrowOnce();
+            // A device that rejected a staging upload because it was REMOVED fails its very next present too. That is
+            // what arms the foreground recovery gate on the sync path (the async path is armed by NoteIfDeviceLost
+            // inside DrainImageJobs instead — see D3D12Device).
+            else if (_failure == DeviceLossProbeFailure.ImageUploadReject && _lost && !_presentFailedOnce)
+            {
+                _presentFailedOnce = true;
+                throw new InvalidOperationException("synthetic device lost");
+            }
             inner.Present();
         }
 
@@ -130,12 +164,13 @@ static class LayoutShellSuite
         G3PrimitiveChecks(strings);
     }
 
-    static AppHost DeviceLostHost(StringTable strings, DeviceLossProbeDevice device, out HeadlessPlatformApp app, out HeadlessWindow window)
+    static AppHost DeviceLostHost(StringTable strings, DeviceLossProbeDevice device, out HeadlessPlatformApp app, out HeadlessWindow window,
+                                  ImageCache? images = null)
     {
         app = new HeadlessPlatformApp();
         window = new HeadlessWindow(new WindowDesc("device loss", new Size2(320, 220), 1f));
         window.Show();
-        return new AppHost(app, window, device, new HeadlessFontSystem(strings), strings, new Counter());
+        return new AppHost(app, window, device, new HeadlessFontSystem(strings), strings, new Counter(), images);
     }
 
     static void DeviceLostRecoveryChecks(StringTable strings)
@@ -184,6 +219,59 @@ static class LayoutShellSuite
                 Check("DL4. non-device-loss render exception still propagates",
                     threw && bugDevice.RecoverCount == 0 && bugHost.DeviceLostRecoveryCountForTest == 0 && bugDevice.NoteCount == 1,
                     $"threw={threw} recover={bugDevice.RecoverCount} notes={bugDevice.NoteCount}");
+            }
+
+            // DL5 — an image upload that meets a REMOVED device inside the frame's image pump. The backend soft-fails
+            // (reject, never a throw past the render seam), so the entry lands Failed/GpuResourceExhausted at phase 7.5;
+            // the same device then fails its present, which drives exactly ONE recovery. The recovery must RE-REQUEST
+            // that entry: the rebuilt device has a fresh, empty texture store, so "the GPU could not admit it" is no
+            // longer true — and a PINNED exhausted entry never retries on its own (ShouldRestart needs Refs == 0), which
+            // is precisely the album-art-stays-blank-forever shape. It used to stay Failed; now ReRealizeAllResident
+            // restarts it and the next frame's pump lands it Ready against the rebuilt device.
+            {
+                var cache = new ImageCache(new FakeImageDecoder());
+                var rejectDevice = new DeviceLossProbeDevice(DeviceLossProbeFailure.ImageUploadReject);
+                var rejectHost = DeviceLostHost(strings, rejectDevice, out var rejectApp, out var rejectWindow, cache);
+                using (rejectApp)
+                using (rejectHost)
+                {
+                    var art = cache.Request("device-lost-art", 32, 32);
+                    cache.Pin(art);                       // the visible, pinned case: no unpinned-remount retry to fall back on
+                    var lost = rejectHost.RunFrame();     // pump rejects → present fails → foreground recovery
+                    bool rejectedNotThrown = rejectDevice.UploadAttempts == 1;
+                    bool recovered = rejectDevice.RecoverCount == 1 && rejectHost.DeviceLostRecoveryCountForTest == 1 && !lost.Presented;
+                    bool reRequested = cache.StateOf(art) == ImageState.Pending && cache.UsedBytes == 0;
+                    var back = rejectHost.RunFrame();     // re-upload against the rebuilt device
+                    bool landed = cache.StateOf(art) == ImageState.Ready && cache.FailureOf(art) == ImageFailureKind.None
+                        && rejectDevice.UploadAttempts == 2 && back.Presented;
+                    Check("DL5. a device-removed image upload REJECTS (no throw), drives exactly one recovery, and the image is re-requested and lands after it",
+                        rejectedNotThrown && recovered && reRequested && landed,
+                        $"attempts={rejectDevice.UploadAttempts} recover={rejectDevice.RecoverCount} state={cache.StateOf(art)} fail={cache.FailureOf(art)} used={cache.UsedBytes} presented={back.Presented}");
+                }
+            }
+
+            // DL6 — the belt for the suspenders: even if a staging path DOES throw (a backend that has not been taught
+            // to soft-fail, or a create we don't guard), the throw must not escape the frame. ImageCache.Pump runs at
+            // phase 7.5, OUTSIDE the submit/present try — that is exactly how the shipped
+            // "Image.CreateUpload failed: 0x887A0005" left the render thread and killed the process. It now lands in the
+            // SAME recovery gate: one RecoverDevice, frame dropped, process alive.
+            {
+                var cache = new ImageCache(new FakeImageDecoder());
+                var throwDevice = new DeviceLossProbeDevice(DeviceLossProbeFailure.ImageUploadThrow);
+                var throwHost = DeviceLostHost(strings, throwDevice, out var throwApp, out var throwWindow, cache);
+                using (throwApp)
+                using (throwHost)
+                {
+                    cache.Pin(cache.Request("device-lost-throw", 32, 32));
+                    bool escaped = false;
+                    FrameStats lost = default;
+                    try { lost = throwHost.RunFrame(); }
+                    catch (InvalidOperationException) { escaped = true; }
+                    Check("DL6. a THROWING image upload is routed into the recovery gate instead of escaping the frame (the shipped 0x887A0005 crash)",
+                        !escaped && throwDevice.RecoverCount == 1 && throwHost.DeviceLostRecoveryCountForTest == 1
+                            && !lost.Rendered && !lost.Presented,
+                        $"escaped={escaped} recover={throwDevice.RecoverCount} rendered={lost.Rendered} presented={lost.Presented}");
+                }
             }
         }
         finally

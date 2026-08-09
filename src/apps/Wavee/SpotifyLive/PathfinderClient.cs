@@ -178,6 +178,12 @@ public static class PathfinderOps
     public const string QueryWhatsNewFeed = "queryWhatsNewFeed";
     public const string QueryWhatsNewFeedHash = "d889c8c936ab192af8ced595427f5ba2acdf63478fdc0a181c8d477f8322630e";
 
+    // The signed-in user's own top artists/tracks (Home's top-artist row). ONE document serves both facets; the
+    // include* variables select which run, so both inputs are sent and both result halves are mapped from one response;
+    // omitting an input the document declares is what makes the server reject the call.
+    public const string UserTopContent = "userTopContent";
+    public const string UserTopContentHash = "49ee15704de4a7fdeac65a02db20604aa11e46f02e809c55d9a89f6db9754356";
+
     // Batch preview lookup for home baseline recommendations: variables { uris:[playlist…] } →
     // data.lookup[].{_uri, data.previewItems.items[].data.{name, uri, albumOfTrack.coverArt, previews.audioPreviews}}.
     // Feeds the Featured editorial card's hover peek (HomeBaselinePreviews).

@@ -126,7 +126,7 @@ sealed class ConcertDetailPage : Component
         var headline = new List<Element>(3);
         headline.Add(Caption(Upper(Loc.Get(Strings.Concerts.Detail.Concert))) with
         {
-            Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
+            Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
             Trim = TextTrim.CharacterEllipsis,
         });
         headline.Add(WaveeType.PageHero(title) with
@@ -179,7 +179,7 @@ sealed class ConcertDetailPage : Component
     {
         AlignSelf = FlexAlign.Start, Padding = new Edges4(Spacing.S, 2f, Spacing.S, 2f),
         Corners = CornerRadius4.All(Radii.Full), Fill = Tok.FillSubtleSecondary,
-        Children = [ Caption(status) with { Color = Tok.SystemFillCritical, Weight = 700, MaxLines = 1 } ],
+        Children = [ Caption(status) with { Color = Tok.SystemFillCritical, Weight = 600, MaxLines = 1 } ],
     };
 
     // ── ticket offers ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -336,7 +336,7 @@ sealed class ConcertDetailPage : Component
     // The accent eyebrow caption shared by every section (matches the schedule page's header style).
     static Element SectionCaption(string label) => Caption(label) with
     {
-        Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
+        Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
         Trim = TextTrim.CharacterEllipsis,
     };
 

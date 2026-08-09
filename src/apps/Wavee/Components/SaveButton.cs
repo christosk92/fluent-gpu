@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
@@ -34,7 +34,7 @@ sealed class SaveButton : Component
         {
             Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(_box / 2f),
-            HoverScale = 1.06f, PressScale = 0.9f,
+            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Role = AutomationRole.Button,
             OnClick = () => lib.ToggleSaved(_uri, _name),
             Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],

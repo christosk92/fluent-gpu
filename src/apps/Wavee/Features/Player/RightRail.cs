@@ -56,11 +56,25 @@ sealed class RightRail : Component
                     EasingSpec.CubicBezier(0f, 0.35f, 0.15f, 1f));
             }
         }, DepKey.From(HashCode.Combine(open, railWidth, baseline)));
-        // Flat FileArea surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the content
-        // card's top-right — the two sit as sibling cards across the 4px chrome gap.
+        // Flat CONTENT-LAYER surface (the album-wash gradient read as a muddy smudge), TOP-LEFT rounded like the page's
+        // own silhouette — the rail band and the page are ONE RUNG, painted with the same stock LayerFillColorDefault
+        // smoke over live Mica. It used to paint the OPAQUE WaveeColors.ContentSurface while the shell's reservation
+        // band behind it painted FileArea: two different materials in the same 340-DIP strip, so the band and the panel
+        // read as two cards and the seam between them reappeared the moment the wallpaper was not neutral.
         var corners = new CornerRadius4(Radii.Card, 0f, 0f, 0f);
 
         Element surface = new BoxEl { Grow = 1f, Fill = Prop.Of(() => WaveeColors.FileArea), Corners = corners, ClipToBounds = true };
+        // The stock edge, docked: 1px StrokeCardDefault on LEFT + TOP only (the same left+top-only mechanism the shell's
+        // content region uses — WaveeShell.StrokeOverhang documents it), drawn TOPMOST so panel content cannot cover it.
+        // FLOATING keeps the uniform ring instead: a panel hovering over the page is a flyout-class surface and wants a
+        // closed outline, which is also the only case that keeps a shadow.
+        Element edge = new BoxEl
+        {
+            Margin = new Edges4(0f, 0f, -1f, -1f), HitTestVisible = false,
+            BorderWidth = floating ? 0f : 1f,
+            BorderColor = Prop.Of(() => Tok.StrokeCardDefault),
+            Corners = corners,
+        };
 
         // Lyrics only: promote the panel to the fullscreen immersive surface (WaveeShell mounts it off this signal).
         // The rail is left exactly as it is underneath — the surface covers the shell rather than replacing the panel.
@@ -70,7 +84,9 @@ sealed class RightRail : Component
 
         var header = new BoxEl
         {
-            Direction = 0, Height = 36f, AlignItems = FlexAlign.Center, Gap = 4f,
+            // 44, not 36: the header title is now WaveeType.RailHeader (Subtitle 20/28), and a 28-DIP line box needs a
+            // band that can hold it with a hairline of breathing room. 44 is also the app's NavItemH rung.
+            Direction = 0, Height = WaveeSize.NavItemH, AlignItems = FlexAlign.Center, Gap = 4f,
             Padding = new Edges4(Spacing.M, 0f, Spacing.S, 0f),
             Children = headerKids,
         };
@@ -96,11 +112,14 @@ sealed class RightRail : Component
                 Corners = corners,
                 BorderColor = floating ? Tok.StrokeCardDefault : ColorF.Transparent,
                 BorderWidth = floating ? 1f : 0f,
-                Shadow = floating ? Elevation.Flyout : Elevation.Card,
+                // NO shadow docked (stock): the docked rail is a content-layer sibling of the page, not an elevated
+                // card — and its shadow used to stack against the shell reservation band's own Elevation.Card under it.
+                Shadow = floating ? Elevation.Flyout : null,
                 Children =
                 [
                     surface,
                     new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] },
+                    edge,
                 ],
             };
         }
@@ -111,7 +130,7 @@ sealed class RightRail : Component
             Corners = corners,
             BorderColor = floating ? Tok.StrokeCardDefault : ColorF.Transparent,
             BorderWidth = floating ? 1f : 0f,
-            Shadow = floating ? Elevation.Flyout : Elevation.Card,
+            Shadow = floating ? Elevation.Flyout : null,   // see the now-playing arm above: no elevation docked (stock)
             Children =
             [
                 surface,
@@ -120,6 +139,7 @@ sealed class RightRail : Component
                     Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
                     Children = [header, new BoxEl { Grow = 1f, MinHeight = 0f, ClipToBounds = true, Children = [body] }],
                 },
+                edge,
             ],
         };
     }
@@ -156,9 +176,11 @@ sealed class RightRail : Component
         ];
     }
 
-    static Element TitleText(RailMode mode) => new TextEl(Title(mode))
+    // The rail's own title takes the shared rail-header alias (Subtitle 20/28/600) — the same run NowPlayingPanel's
+    // section headers use, so the panel no longer has a 14/700 title sitting above 14/700 section headers.
+    static Element TitleText(RailMode mode) => WaveeType.RailHeader(Title(mode)) with
     {
-        Size = 14f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f,
+        Grow = 1f, MinWidth = 0f,
         Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
     };
 

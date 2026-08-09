@@ -126,7 +126,8 @@ sealed class ConcertHubPage : Component
         var content = new BoxEl
         {
             Direction = 1, Gap = Spacing.L,
-            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
+            // The standard desktop page frame: PageWide (36) gutters, the 24 top every other page takes.
+            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.PageWide),
             Children = kids.ToArray(),
         };
         var scroll = ScrollView(content) with
@@ -152,15 +153,16 @@ sealed class ConcertHubPage : Component
     {
         return new BoxEl
         {
-            Direction = 1, MinWidth = 0f, Gap = 4f,
+            Direction = 1, MinWidth = 0f, Gap = Spacing.XS,
             Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
             Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            // Stroke OR shadow, never both statically: the hairline is the separation model for a docked surface.
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 Caption(Upper(Loc.Get(Strings.Concerts.LiveMusic))) with
                 {
-                    Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
+                    Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
                     Trim = TextTrim.CharacterEllipsis,
                 },
                 WaveeType.PageHero(Loc.Get(Strings.Concerts.Title)) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
@@ -317,7 +319,7 @@ sealed class ConcertHubPage : Component
 
     static Element SectionCaption(string label) => Caption(label) with
     {
-        Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
+        Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
         Trim = TextTrim.CharacterEllipsis,
     };
 

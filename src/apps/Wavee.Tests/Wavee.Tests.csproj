@@ -86,7 +86,19 @@
     <!-- detail layout breakpoint hysteresis (Wavee.Core + BCL only) — DetailLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailLayoutBreakpoints.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
+    <!-- the merged chrome row's PURE priority ladder (System only, exactly like its sibling above) — MergedChromeLayoutTests -->
+    <Compile Include="..\Wavee\Features\Shell\MergedChromeLayout.cs" />
+    <!-- the shell wash clip solver (System + FluentGpu.Foundation.Point2 only) — ShellWashGeometryTests -->
+    <Compile Include="..\Wavee\Features\Shell\ShellWashGeometry.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellNav.cs" />
+    <!-- Home's landing projection is engine-free: tests pin one authored module per kind while the source ledger stays
+         lossless for the Zune-style section directory. -->
+    <Compile Include="..\Wavee\Features\Home\HomeLandingProjection.cs" />
+    <Compile Include="..\Wavee\Features\Home\HomeHeroLayout.cs" />
+    <!-- Home's shell-wash SOURCE selection: kind+ordinal only, payload-accent-first, never an invented colour. Pure by
+         construction (Wavee.Core + the plane's Scheme + WaveePalette, both already source-included), so HomeWashSourceTests
+         drive the real selection/derivation without a plane, a theme or a window. -->
+    <Compile Include="..\Wavee\Features\Home\HomeWashSource.cs" />
     <!-- the sidebar's engine-free model/data/persistence layer (System + Wavee.Core only). ShellNavDestTests carries
          its own minimal Icons/Route shims; Signal<T> is satisfied by VirtualCollectionSignalShim.cs (see above). -->
     <Compile Include="..\Wavee\Features\Sidebar\SidebarDesign.cs" />
@@ -95,6 +107,12 @@
     <Compile Include="..\Wavee\Features\Sidebar\SidebarPinStore.cs" />
     <Compile Include="..\Wavee\Features\Sidebar\Data\*.cs" />
     <Compile Include="..\Wavee\Features\Sidebar\Persistence\*.cs" />
+    <!-- O3 — the nav band's PURE half: how the customizable shortcut band (SidebarCustomLayout.EffectiveTopBar) shapes
+         into tiles at its new sidebar render site (order, empty-collapse, the four tile shapes, the tile → route rule
+         the selection mark reads, the truncation bound). Engine-free by construction — System + Wavee.Core.Sidebar +
+         the already-included SidebarPinId — so SidebarNavBandTests drives the REAL rules; the band itself
+         (Shared\SidebarNavBand.cs) is engine-bound and is deliberately NOT included, exactly like the rest of Shared\. -->
+    <Compile Include="..\Wavee\Features\Sidebar\Shared\SidebarNavBandModel.cs" />
     <!-- Classic's LOCKED built-in document (R3.0.2). Engine-free by construction (System + Wavee.Core.Sidebar only) — the
          rest of Features\Sidebar\Pane\ is the engine-bound renderer and is deliberately NOT included. This is what lets
          SidebarBuiltInDocumentTests pin Classic's IA and its 44-DIP density intent without a GPU. -->
@@ -149,6 +167,10 @@
     <Compile Include="..\Wavee\Features\Concerts\ConcertHubModel.cs" />
     <!-- library collapse breakpoint hysteresis (BCL only) — LibraryLayoutBreakpointTests -->
     <Compile Include="..\Wavee\Features\Library\LibraryLayoutBreakpoints.cs" />
+    <!-- the library search select-in-place rule: which of the persisted browse keys a hit moves, and the collapsed drill
+         level it lands on. Engine-free by construction (System only), split out of LibraryPage for exactly this
+         reason — LibrarySelectionCommitTests -->
+    <Compile Include="..\Wavee\Features\Library\LibrarySelectionCommit.cs" />
     <!-- vertical track-detail hero layout resolver (BCL only) — DetailVerticalLayoutTests -->
     <Compile Include="..\Wavee\Features\Detail\DetailVerticalLayout.cs" />
     <!-- the pure surface-placement state machine (System only; moves to FluentGpu.Engine/Surfaces/ with SurfaceHost) — PlacementCoreTests -->
@@ -223,6 +245,9 @@
     <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistPopularTracksService.cs" />
     <!-- step ONE of the same chart: queryArtistOverview, the only source of play counts — ArtistStatsPlayCountTests -->
     <Compile Include="..\Wavee\SpotifyLive\SpotifyArtistStatsService.cs" />
+    <!-- one userTopContent response supplies both Home affinity facets — UserTopMapperTests pins the shared request -->
+    <Compile Include="..\Wavee\SpotifyLive\SpotifyUserTopService.cs" />
+    <Compile Include="..\Wavee\SpotifyLive\HomeDaylistHydrator.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderClient.cs" />
     <Compile Include="..\Wavee\SpotifyLive\PathfinderResource.cs" />
     <Compile Include="..\Wavee\SpotifyLive\ConcertPathfinderRequests.cs" />
@@ -239,6 +264,16 @@
          already referenced transitively via FluentGpu.WindowsApi — and WaveeColors, hence the sibling token file. -->
     <Compile Include="..\Wavee\Design\WaveePalette.cs" />
     <Compile Include="..\Wavee\Design\WaveeTokens.cs" />
+    <!-- The two token layers the design-system convergence pins: the semantic TYPE aliases (every alias must resolve a
+         size AND a line height AND an allowed weight) and the ONE on-media colour ladder that replaced 36 hand-rolled
+         MediaCard literals. Both are pure value layers over the engine's Ui/Tok/ColorRamp — no window, no theme state,
+         no GPU — which is exactly why they can be pinned here. -->
+    <Compile Include="..\Wavee\Design\WaveeType.cs" />
+    <Compile Include="..\Wavee\Design\WaveeOnMedia.cs" />
+    <!-- Wave 2's motion vocabulary: the three interaction scale tiers + the duration ladder. Same reasoning as the two
+         above — a pure value layer over FluentGpu.Dsl.Motion (durations + the reduced-motion flag), no window, no
+         animation slab, no GPU — so MotionSystemTests can pin the tiers AND flip Motion.ReducedMotion headlessly. -->
+    <Compile Include="..\Wavee\Design\WaveeMotion.cs" />
     <!-- audio resilience surfaces (all protobuf-free) source-included so the key-resolver / provisioner / IPC-manager
          resilience + error paths are unit-tested without referencing the Windows Wavee assembly. -->
     <Compile Include="..\Wavee\SpotifyLive\Audio\ILicenseClient.cs" />

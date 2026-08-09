@@ -1,9 +1,29 @@
+using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Localization;
 using FluentGpu.Signals;
 
 namespace FluentGpu.Controls;
+
+/// <summary>How a <see cref="TabStrip"/> draws itself. <see cref="Chrome"/> is the MUX TabView rail grammar (plates,
+/// selected flare, separators, the bottom rail). <see cref="Text"/> is the text-first strip a merged title-bar row
+/// wants: no plate, no rail, no separators — weight + opacity carry selection, and one strip-owned sliding underline
+/// marks it. Mount-time (a component's plain fields freeze at mount), so a strip never switches modes in place.</summary>
+public enum TabStripAppearance : byte { Chrome, Text }
+
+/// <summary>When the "+" new-tab button shows, in the <see cref="TabStripAppearance.Text"/> strip. Gated BY
+/// <see cref="TabStrip.IsAddTabButtonVisible"/> (false there means no add button whatever this says), and ignored
+/// entirely by <see cref="TabStripAppearance.Chrome"/>, which keeps the plain bool it always had.
+/// <list type="bullet">
+/// <item><see cref="Never"/> — no button, no slot.</item>
+/// <item><see cref="Always"/> — the standing button (the Chrome behaviour, in the text grammar).</item>
+/// <item><see cref="OnStripPointerOver"/> — the slot is RESERVED at all times (so the strip's laid-out width, and
+/// therefore a title bar's non-client region report, never moves) but the button paints nothing until the pointer is
+/// over the strip, then cross-fades in.</item>
+/// </list></summary>
+public enum TabStripAddButtonVisibility : byte { Never, Always, OnStripPointerOver }
 
 /// <summary>
 /// Header-only WinUI-style tab strip for custom title bars. It shares the <see cref="TabViewItem"/> model and the
@@ -12,6 +32,8 @@ namespace FluentGpu.Controls;
 public sealed class TabStrip : Component
 {
     public const string PartRoot = "Root";
+    /// <summary>Text appearance only: the sliding selection underline. Owned: nothing (pure styling).</summary>
+    public const string PartSelectionIndicator = "SelectionIndicator";
     public const string PartTabItem = "TabItem";
     public const string PartTabLabel = "TabLabel";
     public const string PartTabCloseButton = "TabCloseButton";
@@ -25,6 +47,9 @@ public sealed class TabStrip : Component
     public Action<int>? OnTabCloseRequested;
     public Func<TabViewItem?>? OnAddTabButtonClick;
     public bool IsAddTabButtonVisible = true;
+    /// <summary>Text appearance only: WHEN the "+" shows (see <see cref="TabStripAddButtonVisibility"/>). The default
+    /// reproduces the historical always-on button, so this is purely opt-in. MOUNT-TIME, like <see cref="Appearance"/>.</summary>
+    public TabStripAddButtonVisibility AddButtonVisibility = TabStripAddButtonVisibility.Always;
     public TabViewCloseButtonOverlayMode CloseButtonOverlayMode = TabViewCloseButtonOverlayMode.Auto;
     public float TabWidth = 320f;
     public float MinTabWidth = 100f;
@@ -33,7 +58,56 @@ public sealed class TabStrip : Component
     // theme switch — a raw ColorF here freezes at mount (TabStrip is a long-lived component; its constructor args don't
     // re-read). The default is itself a live semantic thunk so callers that do not style the strip also follow retheme.
     public Prop<ColorF> SelectedFill = Prop.Of(static () => Tok.FillSolidTertiary);
+    /// <summary>Chrome (the MUX rail grammar) or Text (the merged-title-bar, text-first strip). MOUNT-TIME.</summary>
+    public TabStripAppearance Appearance = TabStripAppearance.Chrome;
+    /// <summary>Text appearance: the tab label point size (the hit rect stays 32 DIP tall regardless).</summary>
+    public float TextFontSize = 14f;
+    /// <summary>Text appearance: the sliding underline's ink. A Prop (like <see cref="SelectedFill"/>) so the default is
+    /// a LIVE semantic thunk and a theme switch repaints it in place — the same idiom NavigationView's selection pill
+    /// uses (<c>Tok.AccentDefault</c>).</summary>
+    public Prop<ColorF> IndicatorFill = Prop.Of(static () => Tok.AccentDefault);
     public TemplateParts? Parts;
+
+    /// <summary>Text appearance: the selected tab's strip-local x (X) and width (Y), handed to the underline through
+    /// context — the NavigationView <c>IndicatorTarget</c> idiom, so the indicator retargets its springs without the
+    /// strip writing a signal mid-render (a backwards write).</summary>
+    internal static readonly Context<Point2> IndicatorTarget = new(default);
+
+    // Text appearance geometry.
+    const float TextTabPadX = 12f;        // label inset — also the underline's inset, so the bar tracks the TEXT
+    internal const float TextTabHeight = 32f;   // the hit rect, independent of TextFontSize
+    const float IndicatorThickness = 2f;
+    const float IndicatorMinWidth = 8f;
+
+    /// <summary>Text appearance: the strip-local y of a tab plate's BOTTOM edge — where the selection underline has to
+    /// sit. The tab row is <see cref="TitleBar.ExpandedHeight"/> tall with <c>AlignItems=Center</c>, so a
+    /// <see cref="TextTabHeight"/> plate spans [(H−h)/2, (H+h)/2] and its bottom is (H+h)/2 = 40 in the stock 48-DIP
+    /// row. Derived, never a literal: the underline must follow the plate if either metric is ever re-tuned.
+    /// <para>The indicator used to hang off the strip's own bottom (a 48-tall host with <c>AlignItems=End</c>), which
+    /// floated it 6 DIP BELOW the tab it marks — reading as a rule under the whole bar rather than as that tab's
+    /// underline.</para></summary>
+    internal const float TextTabBaseline = (TitleBar.ExpandedHeight + TextTabHeight) * 0.5f;
+
+    // Text appearance: the selected tab's laid-out rect, harvested per tab through Element.OnBoundsChanged (local to
+    // the strip's row, which is the underline's own coordinate space). Plain arrays because the component instance
+    // outlives every render; the paired handlers are cached so a re-render installs the SAME delegate (an install is a
+    // redelivery, and a fresh closure each render would redeliver every frame).
+    float[] _tabX = [];
+    float[] _tabW = [];
+    Action<RectF>[] _tabBounds = [];
+
+    // ── Text appearance: the hover-revealed "+" ────────────────────────────────────────────────────────────────────
+    /// <summary>No tab (and no add button) is under the pointer — the resting value of the strip's hover signal.</summary>
+    const int NoHover = -1;
+    /// <summary>The add button's sentinel in that SAME signal. Reusing the close-button hover tracker (rather than
+    /// adding a hover handler to the strip ROOT) is deliberate: an interactive ancestor becomes a hover CONTAINER, and
+    /// the scheduler then drives every descendant reveal/opacity affordance in its subtree — which would light all the
+    /// text tabs to their hover tier at once (AnimScheduler.Hover's SetHoverDescendants). A sentinel in the existing
+    /// leaf-level signal has no such reach: "the strip is hovered" is simply <c>hovered != NoHover</c>, and moving
+    /// between a tab and the button is one dispatch (exit then enter), so the reveal never blinks.</summary>
+    const int AddHover = -2;
+    NodeHandle _addNode;        // the realized "+" — the fade's target
+    bool _addFadeArmed;         // false until the first render has settled, so the mount is not itself a fade
 
     // MUX TabViewBorderBrush expressed as an alpha ink over the LIVE Mica rail. Dark's divider token is already the
     // stock white-alpha seam; seeded light palettes publish opaque card/divider colours, so use stock black@6% there.
@@ -66,6 +140,11 @@ public sealed class TabStrip : Component
         var hoveredSig = UseSignal(-1);
         int hovered = hoveredSig.Value;
 
+        // Text appearance: bumped from a tab's arranged-bounds edge so the strip re-renders and re-targets the
+        // underline. Read unconditionally (hook order is per-instance-stable either way); nothing bumps it in Chrome.
+        var geomVer = UseSignal(0);
+        _ = geomVer.Value;
+
         void Select(int index)
         {
             if ((uint)index >= (uint)count) return;
@@ -80,6 +159,36 @@ public sealed class TabStrip : Component
         }
 
         void Add() => OnAddTabButtonClick?.Invoke();
+
+        // The "+" slot is RESERVED (mounted at a fixed width) whenever the mode is not Never, and merely painted or not
+        // painted by `addRevealed`. A conditional MOUNT would have been the smaller diff, but the strip hugs its
+        // content and a title bar reports that hug as one non-client Client region — so mounting on hover would move
+        // the region rect on every pointer entry and force the presence into the host's ContentVersion fold. 32 DIP of
+        // reserved space inside an island that is already wholly client-hit-tested costs nothing by comparison.
+        bool addMounted = IsAddTabButtonVisible
+            && (Appearance != TabStripAppearance.Text || AddButtonVisibility != TabStripAddButtonVisibility.Never);
+        bool addRevealed = Appearance != TabStripAppearance.Text
+            || AddButtonVisibility != TabStripAddButtonVisibility.OnStripPointerOver
+            || hovered != NoHover;
+
+        // The cross-fade. Seeded through a motion TOKEN (never a raw spring) so the reduced-motion policy travels with
+        // it — ControlFast is KeepFade, i.e. an opacity cross-fade survives reduced motion because a fade is not
+        // motion. The RESTING Opacity below equals the terminal, per the settled-track-frees-without-resetting rule.
+        UseLayoutEffect(() =>
+        {
+            if (Context.Anim is not { } anim || _addNode.IsNull) { _addFadeArmed = true; return; }
+            if (_addFadeArmed)
+            {
+                var fade = MotionTok.ControlFast;
+                anim.SeedValue(_addNode, AnimChannel.Opacity, addRevealed ? 1f : 0f, in fade,
+                               from: addRevealed ? 0f : 1f);
+            }
+            _addFadeArmed = true;
+        }, DepKey.From(addRevealed ? 1 : 0));
+
+        if (Appearance == TabStripAppearance.Text)
+            return RenderText(items, count, selected, hovered, hoveredSig, geomVer, menuOverlay, Select, Close, Add,
+                              addMounted, addRevealed);
 
         int tail = IsAddTabButtonVisible ? 1 : 0;
         var children = new Element[count + tail + 2];
@@ -339,34 +448,271 @@ public sealed class TabStrip : Component
         };
     }
 
-    Element AddButton(Action add, bool followsSelected)
+    // ── Text appearance ───────────────────────────────────────────────────────────────────────────────────────────
+    //  No plate, no flare, no separators, no rail: a tab IS its label. Selection reads as weight + full-strength
+    //  foreground; everything else sits at 0.6 and ramps to 0.85 under the pointer (BoxEl.HoverOpacity, so the ramp is
+    //  the engine's own hover fade — never a per-tab state machine). One strip-owned underline slides between tabs.
+
+    /// <summary>Size the per-tab geometry mirror + its CACHED bounds handlers to the current tab count. The handlers are
+    /// equality-gated (no signal write when a re-arrange produced the same rect), so a redelivery is free.</summary>
+    void EnsureTabGeometry(int count, Signal<int> geomVer)
     {
-        var button = new BoxEl
+        if (_tabBounds.Length == count) return;
+        Array.Resize(ref _tabX, count);
+        Array.Resize(ref _tabW, count);
+        var handlers = new Action<RectF>[count];
+        for (int i = 0; i < count; i++)
+        {
+            int index = i;
+            handlers[i] = r =>
+            {
+                if (_tabX[index] == r.X && _tabW[index] == r.W) return;
+                _tabX[index] = r.X;
+                _tabW[index] = r.W;
+                geomVer.Value++;      // written during layout ⇒ the strip re-renders NEXT frame (never re-entrant)
+            };
+        }
+        _tabBounds = handlers;
+    }
+
+    Element RenderText(IReadOnlyList<TabViewItem> items, int count, int selected, int hovered,
+                       Signal<int> hoveredSig, Signal<int> geomVer, IOverlayService menuOverlay,
+                       Action<int> select, Action<int> close, Action add, bool addMounted, bool addRevealed)
+    {
+        EnsureTabGeometry(count, geomVer);
+
+        int tail = addMounted ? 1 : 0;
+        var kids = new Element[count + tail];
+        for (int i = 0; i < count; i++)
+        {
+            int index = i;
+            // Hover-only close for EVERY tab, INCLUDING the selected one (Chrome keeps a standing × on the selected
+            // plate; a text strip has no plate to anchor it, and a permanent × beside bold text reads as noise). Auto
+            // therefore resolves to hover-gated here — only an explicit `Always` pins the button.
+            // The SLOT is reserved whenever the tab is closable, independent of hover: a text tab is content-hug, so a
+            // hover-MOUNTED × changed the tab's width and reflowed everything after it (and slid the underline) on
+            // every hover. Same reserved-slot contract as the '+' button — only the glyph's opacity/hit-test toggles.
+            bool closeSlot = items[index].IsClosable;
+            bool closeVisible = closeSlot &&
+                                (CloseButtonOverlayMode == TabViewCloseButtonOverlayMode.Always ||
+                                 hovered == index);
+            kids[i] = TextTab(index, items[index], index == selected, closeSlot, closeVisible,
+                              () => select(index), () => close(index), hoveredSig, menuOverlay);
+        }
+        if (addMounted) kids[count] = TextAddButton(add, addRevealed, hoveredSig);
+
+        // The strip HUGS (same contract as Chrome): TitleBar reports it wholesale as ONE TitleBarHit.Client island, so
+        // any Grow filler in here would turn caption drag space into dead client area.
+        var row = new BoxEl
         {
             Direction = 0,
-            Width = 32f,
-            Height = 24f,
+            Height = TitleBar.ExpandedHeight,
             AlignItems = FlexAlign.Center,
-            Justify = FlexJustify.Center,
-            Margin = new Edges4(3f, 0f, 0f, 3f),
-            Corners = Radii.ControlAll,
-            Fill = Tok.FillSubtleTransparent,
-            HoverFill = Tok.FillSubtleSecondary,
-            PressedFill = Tok.FillSubtleTertiary,
-            Role = AutomationRole.Button,
-            OnClick = add,
+            Shrink = 1f,
+            JustifySelf = FlexAlign.Start,
+            AlignSelf = FlexAlign.Stretch,
+            Children = kids,
+        };
+
+        // The underline target, in the ROW's coordinate space — which is also the ZStack's, since the row is a
+        // stack child at the origin. Inset by the label padding so the bar tracks the TEXT, not the hit rect.
+        float ux = 0f, uw = 0f;
+        if ((uint)selected < (uint)_tabW.Length && _tabW[selected] > 0f)
+        {
+            ux = _tabX[selected] + TextTabPadX;
+            uw = MathF.Max(_tabW[selected] - 2f * TextTabPadX, IndicatorMinWidth);
+        }
+
+        var stack = new BoxEl
+        {
+            ZStack = true,
+            Height = TitleBar.ExpandedHeight,
+            Shrink = 1f,
+            Justify = FlexJustify.Start,
             Children =
             [
-                new TextEl(Icons.Add)
-                {
-                    Size = 12f,
-                    FontFamily = Theme.IconFont,
-                    Color = Tok.TextPrimary,
-                    PressedColor = Tok.TextSecondary,
-                },
+                row,
+                // Strip-owned, hit-test invisible, and OUT of the row — so it can never disturb tab layout. Its own
+                // box always ends inside the selected tab, so it can never widen the ZStack's hug either.
+                Ctx.Provide(IndicatorTarget, new Point2(ux, uw),
+                    Embed.Comp(() => new TabTextIndicator { Fill = IndicatorFill, Parts = Parts })),
             ],
         };
+        return Parts.Apply(PartRoot, stack) with { Children = stack.Children };
+    }
+
+    Element TextTab(int index, TabViewItem item, bool selected, bool closeSlot, bool closeVisible,
+                    Action select, Action close, Signal<int> hoveredSig, IOverlayService menuOverlay)
+    {
+        var main = new List<Element>(2);
+        if (item.Icon is { Length: > 0 } icon)
+        {
+            main.Add(new TextEl(icon)
+            {
+                Size = 16f,
+                FontFamily = Theme.IconFont,
+                Margin = new Edges4(0f, 0f, 8f, 0f),
+                Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+            });
+        }
+
+        var label = new TextEl(item.Header)
+        {
+            Size = TextFontSize,
+            // Selection is WEIGHT + full-strength foreground; the plate carries the opacity tier (below).
+            Weight = selected ? (ushort)650 : (ushort)0,
+            Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+            Grow = 1f,
+            Shrink = 1f,
+            Trim = TextTrim.CharacterEllipsis,
+        };
+        main.Add(Parts.Apply(PartTabLabel, label));
+
+        var content = new List<Element>(2)
+        {
+            new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Shrink = 1f, MinWidth = 0f,
+                Draggable = item.Drag,
+                Children = main.ToArray(),
+            },
+        };
+
+        if (closeSlot)
+        {
+            // The slot is ALWAYS mounted for a closable tab; only the glyph fades and only a visible × takes hits.
+            // A hover-mounted × changed the content-hug tab's width — layout flicker on every hover (and the underline,
+            // anchored to the tab's measured width, slid with it).
+            var closeButton = new BoxEl
+            {
+                Direction = 0,
+                Width = 20f,
+                Height = 20f,
+                AlignItems = FlexAlign.Center,
+                Justify = FlexJustify.Center,
+                Margin = new Edges4(6f, 0f, 0f, 0f),
+                Corners = Radii.ControlAll,
+                Fill = ColorF.Transparent,
+                HoverFill = Tok.FillSubtleSecondary,
+                PressedFill = Tok.FillSubtleTertiary,
+                Role = AutomationRole.Button,
+                OnClick = close,
+                TabStop = false,
+                Opacity = closeVisible ? 1f : 0f,
+                HitTestVisible = closeVisible,
+                Children =
+                [
+                    new TextEl(Icons.Cancel)
+                    {
+                        Size = 10f,
+                        FontFamily = Theme.IconFont,
+                        Color = Tok.TextPrimary,
+                        PressedColor = Tok.TextSecondary,
+                    },
+                ],
+            };
+            content.Add(Parts.Apply(PartTabCloseButton, closeButton) with { OnClick = close, Role = AutomationRole.Button });
+        }
+
+        var plate = new BoxEl
+        {
+            Direction = 0,
+            Height = TextTabHeight,                                  // the comfortable hit rect, whatever TextFontSize is
+            AlignItems = FlexAlign.Center,
+            Padding = closeSlot
+                ? new Edges4(TextTabPadX, 0f, 6f, 0f)
+                : new Edges4(TextTabPadX, 0f, TextTabPadX, 0f),
+            // No Fill/HoverFill/PressedFill at all: a text strip has no plate. The state tier is OPACITY, ramped by the
+            // engine's own hover fade (BoxEl.HoverOpacity) rather than a hovered-index branch, so it eases both ways.
+            Opacity = selected ? 1f : 0.6f,
+            HoverOpacity = selected ? 1f : 0.85f,
+            Role = AutomationRole.Tab,
+            OnClick = select,
+            // Middle-click close (WinUI TabViewItem.cpp:418-425/:449-462 — the dispatcher delivers Button==2 on a
+            // middle-release over the same node). Text appearance only; Chrome keeps its existing behaviour verbatim.
+            OnPointerPressed = e =>
+            {
+                if (e.Button == 2 && item.IsClosable) { close(); e.Handled = true; }
+            },
+            OnHoverMove = _ => { if (hoveredSig.Peek() != index) hoveredSig.Value = index; },
+            OnPointerExit = () => { if (hoveredSig.Peek() == index) hoveredSig.Value = -1; },
+            Children = content.ToArray(),
+        };
+        plate = Parts.Apply(PartTabItem, plate) with { OnClick = select, Role = AutomationRole.Tab, Children = plate.Children };
+        if (item.ContextMenu is { } menu) plate = plate.WithContextMenu(menuOverlay, menu);
+
+        // Content-hug between the MinTabWidth floor and the MaxTabWidth cap (no fixed Width — that is the Chrome
+        // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline.
+        return new BoxEl
+        {
+            Key = "tab#" + index,
+            ZStack = true,
+            MinWidth = MinTabWidth,
+            MaxWidth = MaxTabWidth,
+            Height = TextTabHeight,
+            Shrink = 1f,
+            DropTarget = item.DropTarget,
+            OnBoundsChanged = (uint)index < (uint)_tabBounds.Length ? _tabBounds[index] : null,
+            Children = [plate],
+        };
+    }
+
+    /// <summary>The shared "+" plate. <paramref name="glyphInk"/> lets the text grammar quiet the glyph without
+    /// duplicating the box (Chrome's "+" is a primary-ink control on a rail; the text strip's is a secondary-ink hint).</summary>
+    BoxEl AddPlate(Action add, Edges4 margin, ColorF glyphInk) => new()
+    {
+        Direction = 0,
+        Width = 32f,
+        Height = 24f,
+        AlignItems = FlexAlign.Center,
+        Justify = FlexJustify.Center,
+        Margin = margin,
+        Corners = Radii.ControlAll,
+        Fill = Tok.FillSubtleTransparent,
+        HoverFill = Tok.FillSubtleSecondary,
+        PressedFill = Tok.FillSubtleTertiary,
+        Role = AutomationRole.Button,
+        OnClick = add,
+        Children =
+        [
+            new TextEl(Icons.Add)
+            {
+                Size = 12f,
+                FontFamily = Theme.IconFont,
+                Color = glyphInk,
+                PressedColor = Tok.TextSecondary,
+            },
+        ],
+    };
+
+    /// <summary>
+    /// The TEXT strip's "+": the same plate, quieted to <c>TextSecondary</c>, keeping the strip's own hover-plate
+    /// idiom (FillSubtleSecondary/Tertiary), tooltipped, and — under
+    /// <see cref="TabStripAddButtonVisibility.OnStripPointerOver"/> — resting at zero opacity.
+    /// <para>It stays HIT-TESTABLE while invisible, on purpose: it is what makes its own reserved slot part of the
+    /// strip's hover area, so approaching the "+" from ANY direction reveals it. (It cannot be clicked blind — the
+    /// pointer has to be over it to press it, and being over it is exactly what reveals it.)</para></summary>
+    Element TextAddButton(Action add, bool revealed, Signal<int> hoverSig)
+    {
+        // No Margin: the last tab's own 12-DIP label padding is the separation (the island contract — a gap between two
+        // island children is dead window-drag space). A ToolTip wrapper mirrors Width/Height but NOT Margin anyway.
+        var button = AddPlate(add, default, Tok.TextSecondary) with
+        {
+            Opacity = revealed ? 1f : 0f,
+            OnHoverMove = _ => { if (hoverSig.Peek() != AddHover) hoverSig.Value = AddHover; },
+            OnPointerExit = () => { if (hoverSig.Peek() == AddHover) hoverSig.Value = NoHover; },
+        };
         var applied = Parts.Apply(PartAddButton, button) with { OnClick = add, Role = AutomationRole.Button };
+        applied = applied with { OnRealized = TemplateParts.Chain<NodeHandle>(h => _addNode = h, applied.OnRealized) };
+        return ToolTip.Wrap(applied, Loc.Get(Strings.TabStrip.NewTab));
+    }
+
+    Element AddButton(Action add, bool followsSelected, bool railed = true)
+    {
+        var button = AddPlate(add, new Edges4(3f, 0f, 0f, 3f), Tok.TextPrimary);
+        var applied = Parts.Apply(PartAddButton, button) with { OnClick = add, Role = AutomationRole.Button };
+        // Text appearance: there is no rail, so the button is the whole thing.
+        if (!railed) return applied;
         // The add-button container belongs to the rail, so its baseline continues behind the transparent button. Leave
         // the selected flare's four-DIP curve-out clear when the last tab is selected.
         return new BoxEl
@@ -378,6 +724,99 @@ public sealed class TabStrip : Component
                 RailBaselineHost(lineMargin: followsSelected ? new Edges4(4f, 0f, 0f, 0f) : default),
                 applied,
             ],
+        };
+    }
+}
+
+/// <summary>
+/// The Text-appearance strip's sliding selection underline. The target (strip-local x + width) rides a CONTEXT value —
+/// the NavigationView <c>NavIndicator</c> idiom — so retargeting costs the parent no signal write mid-render.
+///
+/// <para><b>Layout is the resting state; the springs animate only the DELTA (FLIP).</b> A window resize CANCELS every
+/// in-flight structural track by design — <c>AnimScheduler.SnapStructuralToLayout</c>/<c>CancelStructuralAll</c> collapse
+/// TranslateX/ScaleX straight to the final bounds (docs/design/subsystems/gpu-renderer.md §window-resize snap, whose
+/// damage accumulator has rules built around that cancellation; docs/plans/butter-smooth-resize-v2.md:263 "FLIP capture
+/// is skipped when `resized` — resizes snap by design"). That is NOT a bug to work around: it means an indicator whose
+/// POSITION lives in the anim channel collapses to the strip origin on the first resize and stays there (observed).
+/// So the bar's x/width are pure layout truth (Margin.Left/Width, re-derived from the selected tab's arranged rect in
+/// every state — selection change, tab close, reorder, resize), and the springs carry only the leftover offset/scale
+/// from the PREVIOUS laid-out position, decaying to identity. Cancel them at any instant and the bar is already exactly
+/// under the selected tab.</para>
+///
+/// <para><b>Hug safety:</b> the strip root is a ZStack, which measures to its widest child — but this host's desired
+/// width is the indicator's right edge, which is always inside the selected tab and therefore inside the row. It can
+/// never widen the strip's hug (and so never inflate the TitleBarHit.Client island the title bar reports).</para>
+///
+/// <para><b>Why the bar is a CHILD of the component root, not the root itself:</b> a component anchor mirrors its
+/// child's Width/Height but NOT its Margin (<c>Reconciler.MirrorParticipation</c>), so a root that positions itself
+/// with Margin+Width lands in the wrong slot. The root here keeps a stable, unsized footprint and the animation targets
+/// the inner bar handle (the <c>Expander</c> chevron idiom).</para>
+///
+/// <para><b>Reduced motion:</b> seeded through <c>SeedValue(..., MotionTokenDef)</c> rather than the raw
+/// <c>UseSpring</c> hook — the raw spring path carries no <see cref="ReducedMotionPolicy"/>, so it would slide even
+/// under reduced motion. A token carries the policy and the scheduler snaps at the SEED (reduced-motion-as-a-value:
+/// authoring code never branches on the mutable global).</para>
+/// </summary>
+internal sealed class TabTextIndicator : Component
+{
+    public Prop<ColorF> Fill = Prop.Of(static () => Tok.AccentDefault);
+    public TemplateParts? Parts;
+
+    const float Thickness = 2f;
+
+    // The previous target, for the FLIP delta. Component-local state on an instance that outlives every render.
+    float _prevX, _prevW;
+    bool _seeded;
+    NodeHandle _bar;
+
+    public override Element Render()
+    {
+        Point2 target = UseContext(TabStrip.IndicatorTarget);
+        float x = target.X, w = target.Y;
+        bool visible = w > 0.5f;
+
+        // FLIP: where the bar must appear to come FROM to land on its new laid-out position/size.
+        float fromDx = _seeded && visible ? _prevX - x : 0f;
+        float fromScale = _seeded && visible && _prevW > 0.5f ? _prevW / w : 1f;
+        if (visible) { _prevX = x; _prevW = w; _seeded = true; }
+
+        var motion = MotionTokenDef.SpringOf(MotionSprings.SelectorPill, ReducedMotionPolicy.SnapEnd);
+        UseLayoutEffect(() =>
+        {
+            if (Context.Anim is not { } anim || _bar.IsNull) return;
+            anim.SeedValue(_bar, AnimChannel.TranslateX, 0f, in motion, from: fromDx);
+            anim.SeedValue(_bar, AnimChannel.ScaleX, 1f, in motion, from: fromScale);
+        }, DepKey.From(HashCode.Combine(MathF.Round(x), MathF.Round(w), visible)));
+
+        var bar = new BoxEl
+        {
+            Width = visible ? w : 0f,
+            Height = Thickness,
+            Margin = new Edges4(x, 0f, 0f, 0f),   // pure layout truth — the resize snap lands here
+            TransformOriginX = 0f,                // the FLIP scale pivots on the bar's LEFT edge
+            TransformOriginY = 1f,
+            HitTestVisible = false,
+            Fill = Fill,
+            // State-dependent RESTING opacity (the NavIndicator gotcha): a settled track frees WITHOUT resetting
+            // Opacity, so the static must equal the terminal or a later re-render re-asserts 1f and shows a stale bar.
+            Opacity = visible ? 1f : 0f,
+        };
+        var applied = Parts.Apply(TabStrip.PartSelectionIndicator, bar);
+        applied = applied with { OnRealized = TemplateParts.Chain<NodeHandle>(h => _bar = h, applied.OnRealized) };
+
+        // The unsized, hit-test-invisible host: stable layout participation for the component anchor to mirror.
+        // Its height is the TAB PLATE's baseline, not the strip's — AlignItems=End then parks the bar on the plate's
+        // bottom edge (y = 38..40 in the stock 48-DIP row) instead of the strip's floor (y = 46..48), which left the
+        // underline hanging 6 DIP under the tab it marks. TabStrip.TextTabBaseline derives the number from the row
+        // height and the plate height, so re-tuning either keeps the bar attached.
+        return new BoxEl
+        {
+            Direction = 0,
+            Height = TabStrip.TextTabBaseline,
+            Justify = FlexJustify.Start,
+            AlignItems = FlexAlign.End,
+            HitTestVisible = false,
+            Children = [applied],
         };
     }
 }

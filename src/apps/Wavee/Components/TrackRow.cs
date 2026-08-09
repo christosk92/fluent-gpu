@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -52,12 +52,12 @@ sealed class ArtistMoreButton : Component
 
         return new BoxEl
         {
-            Shrink = 0f, Padding = new Edges4(2f, 0f, 2f, 0f),
+            Shrink = 0f, Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f),
             OnRealized = h => anchor.Value = h,
             Role = AutomationRole.Button, Cursor = CursorId.Hand, OnClick = Toggle,
             Children =
             [
-                new TextEl("+" + extra) { Size = 11f, Weight = 600, Color = Tok.TextTertiary },
+                Caption("+" + extra) with { Weight = 600, Color = Tok.TextTertiary },
             ],
         };
     }
@@ -97,7 +97,10 @@ internal static class TrackRow
     internal const float ColGap = Spacing.M;       // shared by header + rows
     internal const float PadX = Spacing.L;         // shared horizontal inset (header chrome padding == row grid padding)
     internal const float RowInset = Spacing.S;     // rounded row-highlight inset (rows pad PadX−RowInset so columns stay header-aligned)
-    internal const float ThumbSize = 36f;
+    /// <summary>The row art column. On the app thumbnail ladder (32/40/48/56/64); 36 was between two rungs and the
+    /// tie is broken DOWNWARD on purpose — the COMPACT density row is 40 DIPs tall (<see cref="RowHeightFor"/>), so a
+    /// 40px thumb would fill it edge to edge with no breathing room at all.</summary>
+    internal const float ThumbSize = WaveeSize.Thumb32;
     internal const float CompactListItemExtent = ItemsView.ListItemExtent;
 
     // Track row height by density (0 Compact · 1 Default · 2 Cozy · 3 Comfortable).
@@ -221,7 +224,7 @@ internal static class TrackRow
         {
             // MinWidth=0: this stack sits in the STAR track, which the overflow guard collapses to 0 first. Without the
             // floor override it keeps its natural width and the title/artist runs paint across the whole row.
-            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 1f,
+            Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS,
             // Dimmed rather than recoloured: the title element is built by the CALLER (plain, marquee, bound), so the
             // grid cannot reach into it to swap a token — but it can hand the whole column back a step in the hierarchy,
             // which is the same signal and works for every title variant.
@@ -239,13 +242,13 @@ internal static class TrackRow
         if (set.By)
             Add(CellKey.By, AddedByCell(t.AddedBy, addedByProfile));
         if (set.Date)
-            Add(CellKey.Date, LeftCell(new TextEl(DetailFormat.DateAddedLabel(t.AddedAt)) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
+            Add(CellKey.Date, LeftCell(Caption(DetailFormat.DateAddedLabel(t.AddedAt)) with { Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }));
         // A track the server says is not playable yet (an unreleased entry on a partly-released album) reports 0 plays
         // and 0 duration. Formatting those gives "0" and "0:00", which reads as a real, dismal track rather than as one
         // that is not out — so the cells state the absence instead. Reuses the `notYetOut` local above rather than
         // re-deriving the test: one row must not be dim-but-timed or bright-but-dashed.
         if (set.Plays)
-            Add(CellKey.Plays, EndCell(new TextEl(notYetOut ? Dash : PlaysLabel(t.PlayCount)) { Size = 13f, Color = Tok.TextTertiary }));
+            Add(CellKey.Plays, EndCell(Caption(notYetOut ? Dash : PlaysLabel(t.PlayCount)) with { Color = Tok.TextTertiary }));
         if (ShowTempo(set))
             Add(CellKey.Tempo, EndCell(TempoCell(t)));
         // A pending track states WHEN rather than a dash, when the metadata plane gave us a live instant in the future
@@ -254,9 +257,12 @@ internal static class TrackRow
         string durationText = notYetOut
             ? (t.AvailableAt is { } live && live > DateTimeOffset.UtcNow ? DetailFormat.ShortDate(live) : Dash)
             : DetailFormat.TrackTime(t.DurationMs);
-        Add(CellKey.Duration, EndCell(new TextEl(durationText)
+        // Every secondary COLUMN in the row (album, added-by, date, plays, tempo, duration, the resting number) sits on
+        // ONE rung — Caption 12/16 — instead of the old 13/12.5/13/13/12.5/13/13 spread. The row therefore carries
+        // exactly two type steps: BodyStrong 14/20/600 for the title and Caption 12/16 for everything factual.
+        Add(CellKey.Duration, EndCell(Caption(durationText) with
         {
-            Size = 13f, Color = notYetOut ? Tok.TextTertiary : Tok.TextSecondary,
+            Color = notYetOut ? Tok.TextTertiary : Tok.TextSecondary,
         }));
 
         // Trailing chrome: Video (film at rest / bare "…" on hover) OR dedicated Actions "…", then Expand. Video must
@@ -308,19 +314,21 @@ internal static class TrackRow
             if (m is null) return new BoxEl();
             var hovered = UseSignal(false);
             bool oddZebra = m.Zebra && m.DisplayIndex % 2 != 0;
-            Element title = new TextEl(m.Track.Title)
+            Element title = WaveeType.TrackTitle(m.Track.Title) with
             {
-                Size = 14f, Weight = 600, Color = m.St.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+                Color = m.St.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
                 Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
             };
             return new BoxEl
             {
                 MinHeight = m.RowH, ClipToBounds = true, Margin = new Edges4(RowInset, 0f, RowInset, 0f),
-                Corners = CornerRadius4.All(6f),
+                // The interactive row highlight takes the CONTROL rung. The app used to run a 6-for-grids / 5-for-lists
+                // split that matched nothing on the Radii ramp; both are 4 now.
+                Corners = Radii.ControlAll,
                 Fill = oddZebra ? WaveeColors.RowZebra : ColorF.Transparent,
                 HoverFill = oddZebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
                 PressedFill = oddZebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
-                PressScale = 0.985f, BorderWidth = 1f,
+                PressScale = WaveeMotion.ScaleSubtle.Press, BorderWidth = 1f,
                 BorderColor = oddZebra ? Tok.StrokeCardDefault : ColorF.Transparent,
                 HoverBorderColor = Tok.StrokeCardDefault,
                 Role = AutomationRole.Button, OnClick = m.OnPlay,
@@ -347,30 +355,29 @@ internal static class TrackRow
                                     bool showDuration = true, ArtCardKind kind = ArtCardKind.Rail,
                                     Action? onAdd = null, bool likePop = false, bool showMore = false)
     {
-        float radius = kind == ArtCardKind.Grid ? 4f : 5f;
+        // One radius for the art, not the old grid-4 / list-5 split (5 was on no ramp at all).
+        const float radius = Radii.Control;
         float fab = Math.Clamp(art * 0.62f, 28f, 36f);
         var meta = new List<Element>(5);
 
         if (explicitBadge && t.IsExplicit) meta.Add(ExplicitBadge());
         if (set.Video && VideoPresence.HasVideo(t))
         {
-            if (meta.Count > 0) meta.Add(new TextEl("\u00B7") { Size = 12f, Color = Tok.TextTertiary });
+            if (meta.Count > 0) meta.Add(Caption("\u00B7") with { Color = Tok.TextTertiary });
             meta.Add(Icon(Icons.Movie, 13f, Tok.TextTertiary));
         }
         if (showArtists)
         {
-            if (meta.Count > 0) meta.Add(new TextEl("\u00B7") { Size = 12f, Color = Tok.TextTertiary });
+            if (meta.Count > 0) meta.Add(Caption("\u00B7") with { Color = Tok.TextTertiary });
             meta.Add(go is null
-                ? new TextEl(DetailFormat.ArtistNames(t.Artists)) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
+                ? Caption(DetailFormat.ArtistNames(t.Artists)) with { Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f }
                 : ArtistLinks(t.Artists, go));
         }
 
         var textKids = new List<Element>(3)
         {
-            new TextEl(t.Title)
+            WaveeType.TrackTitle(t.Title) with
             {
-                Size = 13f,
-                Weight = 600,
                 Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
                 MaxLines = 1,
                 Trim = TextTrim.CharacterEllipsis,
@@ -378,9 +385,9 @@ internal static class TrackRow
             },
         };
         if (meta.Count > 0)
-            textKids.Add(new BoxEl { Direction = 0, Gap = 4f, AlignItems = FlexAlign.Center, Children = meta.ToArray() });
+            textKids.Add(new BoxEl { Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Children = meta.ToArray() });
         if (set.Plays)
-            textKids.Add(new TextEl($"{t.PlayCount:N0} plays") { Size = 10f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            textKids.Add(Caption($"{t.PlayCount:N0} plays") with { Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
         var trailing = new List<Element>(3);
         if (onAdd is not null) trailing.Add(AddButton(onAdd));   // recommendation rows: the "+" add-to-playlist button leads the trailing cluster
@@ -388,10 +395,10 @@ internal static class TrackRow
         if (showDuration)
             trailing.Add(new BoxEl
             {
-                Padding = new Edges4(6f, 0f, 6f, 0f),
+                Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Children = [new TextEl(DetailFormat.TrackTime(t.DurationMs)) { Size = 12f, Color = Tok.TextSecondary }],
+                Children = [Caption(DetailFormat.TrackTime(t.DurationMs)) with { Color = Tok.TextSecondary }],
             });
         // Trailing "…" overflow — opens the card's ancestor context menu on click (ClickRequestsContext), revealed on
         // card hover exactly like a track row. The card must carry a .WithContextMenu ancestor (ArtistPopular does).
@@ -404,8 +411,8 @@ internal static class TrackRow
             Basis = 0f,
             MinWidth = 0f,
             MinHeight = kind == ArtCardKind.Grid ? 64f : 52f,
-            Gap = kind == ArtCardKind.Grid ? 10f : 10f,
-            Padding = kind == ArtCardKind.Grid ? new Edges4(4f, 4f, 4f, 4f) : new Edges4(4f, 2f, 4f, 2f),
+            Gap = Spacing.M,   // was a 10-vs-10 ternary — one value, on the grid
+            Padding = kind == ArtCardKind.Grid ? Edges4.All(Spacing.XS) : new Edges4(Spacing.XS, Spacing.XXS, Spacing.XS, Spacing.XXS),
             AlignItems = FlexAlign.Center,
             Children =
             [
@@ -422,11 +429,11 @@ internal static class TrackRow
                         Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, art, art, radius,
                                          decodePx: (int)MathF.Max(64f, art * 2f)),
                         st.IsBuffering
-                            ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = ColorF.FromRgba(0, 0, 0, 110), Children = [Spinner()] }
+                            ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = WaveeOnMedia.CoverScrim, Children = [Spinner()] }
                             : Embed.Comp(() => new NowPlayingOverlay(t.Uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
                     ],
                 },
-                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 2f, Justify = FlexJustify.Center, Children = textKids.ToArray() },
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS, Justify = FlexJustify.Center, Children = textKids.ToArray() },
                 .. trailing,
             ],
         };
@@ -451,8 +458,9 @@ internal static class TrackRow
             Basis = 0f,
             MinWidth = 0f,
             MinHeight = kind == ArtCardKind.Grid ? 66f : 54f,
-            Margin = kind == ArtCardKind.Grid ? new Edges4(0f, 1f, 0f, 1f) : new Edges4(4f, 2f, 4f, 2f),
-            Corners = CornerRadius4.All(kind == ArtCardKind.Grid ? 6f : 5f),
+            Margin = kind == ArtCardKind.Grid ? new Edges4(0f, 1f, 0f, 1f) : new Edges4(Spacing.XS, Spacing.XXS, Spacing.XS, Spacing.XXS),
+            // Same convergence as the eager row's highlight: one control rung, not 6-for-grids / 5-for-lists.
+            Corners = Radii.ControlAll,
             ClipToBounds = true,
             Fill = Prop.Of(() => isSel() ? Tok.FillSubtleSecondary : ColorF.Transparent),
             HoverFill = Tok.FillSubtleSecondary,
@@ -460,7 +468,7 @@ internal static class TrackRow
             BorderWidth = 1f,
             BorderColor = ColorF.Transparent,
             HoverBorderColor = Tok.StrokeCardDefault,
-            PressScale = 0.99f,
+            PressScale = WaveeMotion.ScaleSubtle.Press,
             Opacity = Prop.Of(() => isEn() ? 1f : ItemContainer.DisabledOpacity),
             Focusable = false,
             FocusVisualMargin = Edges4.All(1f),
@@ -509,16 +517,18 @@ internal static class TrackRow
             {
                 // 6px, dimmed: a server-supplied Camelot hue is fully saturated, and at 8px opaque it out-shouted the
                 // title on an otherwise quiet row. Small and slightly veiled still reads as the key's colour identity.
+                // Both the 6-DIP box and its 1.5-DIP corner are deliberately BELOW their ramps' smallest rungs — this
+                // is a colour SWATCH, not a surface, and a 4-DIP corner on a 6-DIP box is a circle.
                 Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
                 Fill = WaveePalette.ToColor(argb), AlignSelf = FlexAlign.Center,
             });
-        parts.Add(new TextEl(DetailFormat.Bpm(bpm)) { Size = 12.5f, Color = Tok.TextSecondary });
+        parts.Add(Caption(DetailFormat.Bpm(bpm)) with { Color = Tok.TextSecondary });
         if (KeyLabel(t) is { Length: > 0 } key)
         {
             // Separator: two bare numeric-ish tokens ("110 7B") read as one mangled value. The middot is the same
             // metadata-joining glyph the sublines use.
-            parts.Add(new TextEl("·") { Size = 12.5f, Color = Tok.TextTertiary });
-            parts.Add(new TextEl(key) { Size = 12.5f, Color = Tok.TextTertiary });
+            parts.Add(Caption("·") with { Color = Tok.TextTertiary });
+            parts.Add(Caption(key) with { Color = Tok.TextTertiary });
         }
 
         return new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Children = parts.ToArray() };
@@ -535,8 +545,8 @@ internal static class TrackRow
     /// relying on the drawer below being visible (which it is not, once the row scrolls to the viewport edge).</summary>
     internal static Element ExpandChevron(bool expanded, Action onToggle) => new BoxEl
     {
-        Width = 26f, Height = 26f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(Radii.Control),
+        Width = Spacing.XXL, Height = Spacing.XXL, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = Radii.ControlAll,
         HoverFill = Tok.FillControlSecondary,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
         FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
@@ -550,15 +560,32 @@ internal static class TrackRow
         ],
     };
 
+    /// <summary>The "explicit" badge. TWO DELIBERATE EXCEPTIONS to the ramps, both documented here rather than left as
+    /// bare literals:
+    /// <list type="number">
+    /// <item><b>10px type, below the Caption rung (12).</b> The badge is a 14-DIP box carrying a single capital, and it
+    /// has to sit inline on a 16-DIP metadata line without displacing it. A 12px "E" measures ~8.6 DIPs cap-height and
+    /// leaves no optical margin inside a 14px box with a 1px stroke; the ONLY way to keep the ramp here would be to grow
+    /// the badge until it out-shouted the artist names it annotates. The engine's <c>InfoBadge</c> is not the escape
+    /// hatch either — it renders a filled severity pill around a COUNT or a glyph, not an outlined letterform.</item>
+    /// <item><b>A 2px corner, below the Radii ramp's control rung (4).</b> On a 14px box a 4px corner rounds the square
+    /// into a lozenge and it stops reading as the standard explicit MARK.</item>
+    /// </list>
+    /// Everything else converged: 13 → 14 DIPs (the 4-grid) and the weight stays 600.</summary>
     internal static Element ExplicitBadge() => new BoxEl
     {
-        MinWidth = 13f, Height = 13f, Padding = new Edges4(2f, 0f, 2f, 0f),
+        MinWidth = 14f, Height = 14f, Padding = new Edges4(Spacing.XXS, 0f, Spacing.XXS, 0f),
         Corners = CornerRadius4.All(2f), BorderWidth = 1f, BorderColor = Tok.TextTertiary,
         Opacity = 0.6f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Children = [new TextEl("E") { Size = 8f, Weight = 600, Color = Tok.TextTertiary }],
+        Children = [new TextEl("E") { Size = 10f, LineHeight = 12f, Weight = 600, Color = Tok.TextTertiary }],
     };
 
-    internal static Element ArtistLinks(IReadOnlyList<ArtistRef> artists, Action<string, string?> go)
+    /// <summary>The billed artists as one ellipsized run of per-artist links. <paramref name="size"/>/<paramref name="weight"/>
+    /// default to the track-row metadata style (Caption 12/16); a caller with its own type ramp (the library detail
+    /// pane's hero line) passes its own — including a matching <paramref name="lineHeight"/>, so the run never falls
+    /// back to the shaper's natural box.</summary>
+    internal static Element ArtistLinks(IReadOnlyList<ArtistRef> artists, Action<string, string?> go,
+                                        float size = 12f, ushort weight = 0, float lineHeight = 0f)
     {
         if (artists.Count == 0) return new BoxEl();
         var spans = new TextSpan[artists.Count * 2 - 1];
@@ -571,7 +598,11 @@ internal static class TrackRow
         }
         return new SpanTextEl(spans)
         {
-            Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            // A run with no LineHeight falls to the shaper's natural box, which is what left the metadata lines off the
+            // vertical rhythm. At the Caption default the ramp's 16 is pinned; a caller that raised the SIZE without
+            // naming a line height keeps its previous natural box rather than being silently squeezed into 16.
+            Size = size, LineHeight = lineHeight > 0f ? lineHeight : size <= 12f ? 16f : float.NaN,
+            Weight = weight, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
             MinWidth = 0f,   // the NoWrap names must not inflate the flexible title column
         };
     }
@@ -603,7 +634,7 @@ internal static class TrackRow
         if (spans.Count > 0)
             kids.Add(new SpanTextEl(spans.ToArray())
             {
-                Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap,
+                Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, Wrap = TextWrap.NoWrap,
                 Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
                 Grow = 1f, Basis = 0f, MinWidth = 0f,
             });
@@ -636,7 +667,7 @@ internal static class TrackRow
         }
         return new SpanTextEl([new TextSpan(named ? album.Name : Dash, OnClick: open)])
         {
-            Size = 13f, Color = named ? Tok.TextSecondary : Tok.TextTertiary,
+            Size = 12f, LineHeight = 16f, Color = named ? Tok.TextSecondary : Tok.TextTertiary,
             Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
             Grow = 1f, Basis = 0f, MinWidth = 0f,   // yield to a squeezed Album track instead of flooring at the name's width
         };
@@ -653,8 +684,8 @@ internal static class TrackRow
             MinWidth = 0f, ClipToBounds = true,
             Children =
             [
-                PersonPicture.Create("", 22f, displayName: label, imageSourcePath: profile?.Avatar?.Url),
-                new TextEl(label) { Size = 13f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                PersonPicture.Create("", Spacing.XXL, displayName: label, imageSourcePath: profile?.Avatar?.Url),
+                Caption(label) with { Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ],
         };
     }
@@ -683,7 +714,7 @@ internal static class TrackRow
     internal static Element Heart(bool saved, Action? onLike, bool pop = false) => new BoxEl
     {
         Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(14f),
+        Corners = Radii.Circle(28f),
         Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
         Children =
         [
@@ -708,8 +739,8 @@ internal static class TrackRow
         var btn = new BoxEl
         {
             Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(14f),
-            HoverScale = 1.06f, PressScale = 0.94f,
+            Corners = Radii.Circle(28f),
+            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Cursor = enabled ? CursorId.Hand : (CursorId?)null, ClickRequestsContext = enabled,
             Role = AutomationRole.Button,
             Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
@@ -728,8 +759,8 @@ internal static class TrackRow
     internal static Element AddButton(Action? onAdd) => new BoxEl
     {
         Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(14f), BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-        HoverScale = 1.06f, PressScale = 0.94f,
+        Corners = Radii.Circle(28f), BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
         Cursor = onAdd is null ? (CursorId?)null : CursorId.Hand, OnClick = onAdd,
         Children = [Icon(Icons.Add, 15f, Tok.TextPrimary)],
     }.Interactive(Interaction.Subtle);
@@ -784,13 +815,13 @@ internal static class TrackRow
             isBuffering ? Spinner()
             : isNow     ? WaveeEqualizer.Of(isPlaying, static () => Tok.AccentTextPrimary, paused: hoverPaused)
             : isTop     ? Icon(Icons.FavoriteStarFill, 11f, accent)
-            :             new TextEl((index + 1).ToString()) { Size = 13f, Color = Tok.TextTertiary };
+            :             Caption((index + 1).ToString()) with { Color = Tok.TextTertiary };
         Element transport = isBuffering
             ? Spinner()
             : new BoxEl
             {
                 Width = 24f, Height = 24f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                PressScale = 0.86f,   // a real button press-push (the row-driven reveal is the hover cue)
+                PressScale = WaveeMotion.ScaleEmphatic.Press,   // a real button press-push (the row-driven reveal is the hover cue)
                 Children = [Icon(isNow && isPlaying ? Icons.Pause : Icons.Play, 12f, isNow ? accent : Tok.TextPrimary)],
             };
         return new BoxEl

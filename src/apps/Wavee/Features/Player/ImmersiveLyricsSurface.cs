@@ -231,14 +231,15 @@ sealed class ImmersiveLyricsSurface : Component
         Grow = 1f, Shrink = 1f, MinWidth = 0f, Direction = 1, Gap = 2f, ClipToBounds = true,
         Children =
         [
+            // BodyStrong over Caption — the app's title/meta pair. Was 13/700.
             new TextEl(track?.Title ?? Loc.Get(Strings.Player.NothingPlaying))
             {
-                Size = 13f, Weight = 700, Color = Tok.TextSecondary,
+                Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary,
                 Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
             new TextEl(track is { Artists.Count: > 0 } t ? DetailFormat.ArtistNames(t.Artists) : "")
             {
-                Size = 12f, Color = Tok.TextTertiary,
+                Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary,
                 Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
         ],

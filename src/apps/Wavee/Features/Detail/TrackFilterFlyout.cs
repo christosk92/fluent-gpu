@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -226,7 +226,7 @@ sealed class TrackFilterFlyout : Component
                 HoverFill = Tok.FillSubtleSecondary,
                 BorderWidth = 1f,
                 BorderColor = Tok.StrokeControlDefault,
-                BrushTransitionMs = 83f,
+                BrushTransitionMs = WaveeMotion.Faster,
                 Children =
                 [
                     Icon(glyph, 15f, Tok.TextTertiary),

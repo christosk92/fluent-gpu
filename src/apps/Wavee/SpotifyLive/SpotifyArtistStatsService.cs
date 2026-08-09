@@ -13,8 +13,6 @@ namespace Wavee.SpotifyLive;
 // Library master-detail also uses) — only the standalone ArtistPage calls this, so the Library surface stays 100% V4.
 sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store, WaveeLogger log = default) : IArtistStatsService
 {
-    static readonly TimeSpan Ttl = TimeSpan.FromHours(12);   // artist stats change slowly; revalidate on a generous window
-
     public async Task<Artist?> EnsureStatsAsync(string artistUri, CancellationToken ct = default)
     {
         var current = store.GetArtist(artistUri);
@@ -24,9 +22,7 @@ sealed class SpotifyArtistStatsService(PathfinderResource pf, IStore store, Wave
         // while still stamped fresh — without the check those artists show no releases column for a whole TTL.
         // Play counts need no gate of their own: they are stored WITH the chart (ArtistOverviewDoc.TopTracks) and
         // joined back on re-fatten, so they cannot be lost to another writer of the shared track row.
-        bool hasReleaseFacets = current?.LatestRelease is not null || current?.PopularReleases is { Count: > 0 };
-        if (current is not null && current.TopTracks is { Count: > 0 } && hasReleaseFacets
-            && DateTimeOffset.UtcNow - current.FetchedAt <= Ttl)
+        if (ArtistStatsCache.IsFresh(current))
             return current;
         try
         {

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using FluentGpu.Foundation;
 using FluentGpu.Scene;
 using TerraFX.Interop.DirectX;
@@ -220,7 +220,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         else
         {
             if (!TryAcquireSlot(out int slot)) return false;
-            t.Resource = CreateTexture(w, h); t.Slot = slot; t.Bucket = 0;
+            t.Resource = CreateTexture(w, h);
+            if (t.Resource == null) { _freeSlots.Push(slot); return false; }   // device-removed window: soft-fail, never throw
+            t.Slot = slot; t.Bucket = 0;
             t.TexSize = Math.Max(w, h); t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST;
             CreateSrv(t.Resource, slot, out t.Srv);
         }
@@ -308,7 +310,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
             else   // > 512: standalone exact-size texture (defensive; the cache buckets to ≤512, so this rarely runs)
             {
                 if (!TryAcquireSlot(out int slot)) return RejectCapacity();
-                t.Atlas = false; t.Resource = CreateTexture(w, h); t.Slot = slot; t.Bucket = 0;
+                var res = CreateTexture(w, h);
+                if (res == null) { _freeSlots.Push(slot); return RejectDeviceFault(); }
+                t.Atlas = false; t.Resource = res; t.Slot = slot; t.Bucket = 0;
                 t.TexSize = Math.Max(w, h); t.Ox = 0; t.Oy = 0;
                 t.State = D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST; t.Live = false;
                 CreateSrv(t.Resource, slot, out t.Srv);
@@ -329,7 +333,19 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         }
         t.W = w; t.H = h; t.RowPitch = rowPitch;
 
-        void* p; t.Upload->Map(0, null, &p);
+        // Device-removed window (threading-render-seam.md §9): CreateCommittedResource returns DXGI_ERROR_DEVICE_REMOVED
+        // rather than a buffer. Soft-fail — publish the current placement so ReleaseAfterDeviceFault retires exactly what
+        // this id owns, then reject. Throwing here would escape the render-thread seam and kill the process.
+        if (t.Upload == null) return ReleaseAfterDeviceFault(id, ref t);
+
+        void* p = null;
+        // Map is the second device touch that fails on a removed device; an unchecked HRESULT left `p` null and the
+        // row copy below wrote through it (an access violation, not even a catchable managed throw).
+        if ((int)t.Upload->Map(0, null, &p) < 0 || p == null)
+        {
+            NoteResourceFault("Image.Upload.Map");
+            return ReleaseAfterDeviceFault(id, ref t);
+        }
         byte* dst = (byte*)p;
         fixed (byte* src = pbgra8)
             for (int y = 0; y < h; y++)
@@ -347,6 +363,40 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         DroppedThisRun++;
         Diag.Count("d3d12", "imageUploadRejected");
         return ImageUploadResult.ResourceExhausted;
+    }
+
+    /// <summary>A resource create/map inside <see cref="Stage"/> failed — on a live device that is capacity (a driver OOM),
+    /// and in the crash we are hardening it is DXGI_ERROR_DEVICE_REMOVED. Either way the honest answer to the cache is the
+    /// SAME transient rejection <see cref="RejectCapacity"/> posts (<c>ResourceExhausted</c> → <c>GpuResourceExhausted</c>,
+    /// which <c>ImageCache.ReRealizeAllResident</c> re-requests once the device is rebuilt), so this adds NO enum member.
+    /// The arming signal is <see cref="ResourceFaults"/>, counted at the failing call itself.</summary>
+    private ImageUploadResult RejectDeviceFault()
+    {
+        DroppedThisRun++;
+        return ImageUploadResult.ResourceExhausted;
+    }
+
+    /// <summary>Count of GPU resource creates/maps that FAILED (the device-removed signature — on a removed device every
+    /// one of them does). Counted at the failing call, so it covers the cold atlas-page / pool-texture growth paths that
+    /// answer through <see cref="RejectCapacity"/> as well as the staging buffer. <c>D3D12Device.DrainImageJobs</c> reads
+    /// it as a delta across one drain and calls <c>NoteIfDeviceLost()</c> when it moved.</summary>
+    public int ResourceFaults { get; private set; }
+
+    private void NoteResourceFault(string what)
+    {
+        ResourceFaults++;
+        Diag.Count("d3d12", "imageResourceFault");
+        if (Diag.Enabled) Diag.Event("d3d12", $"image resource fault: {what} (device removed?)");
+    }
+
+    /// <summary>Roll back a half-built placement after a device-fault reject: publish the in-progress <paramref name="t"/>
+    /// under <paramref name="id"/> so <see cref="Free"/> retires exactly the resources this id now owns (a rerouted
+    /// entry's PRIOR placement was already retired above), then reject. Fence-deferred like every other retire.</summary>
+    private ImageUploadResult ReleaseAfterDeviceFault(int id, ref Tex t)
+    {
+        _byId[id] = t;
+        Free(id);
+        return RejectDeviceFault();
     }
 
     /// <summary>Evict an image (residency dropped it): return its atlas cell / pool texture for reuse and release its
@@ -449,6 +499,7 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         if (_pool.TryGetValue(bucket, out var stk) && stk.Count > 0) { pt = stk.Pop(); System.Threading.Interlocked.Decrement(ref _pooledFreeMirror); return true; }
         if (!TryAcquireSlot(out int slot)) { pt = default; return false; }
         var res = CreateTexture(bucket, bucket);            // cold pool growth (the only CreateTexture in steady state)
+        if (res == null) { _freeSlots.Push(slot); pt = default; return false; }   // device-removed: give the slot back, reject
         CreateSrv(res, slot, out var srv);
         pt = new Pooled
         {
@@ -493,6 +544,9 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         var pg = reuse >= 0 ? _pages[reuse] : new AtlasPage();
         pg.Free.Clear();
         pg.Tex = CreateTexture(PageSize, PageSize);
+        // Device-removed: no page. Return the slot and reject — a reused page entry keeps its pre-existing (Tex == null)
+        // shape, and a brand-new one is simply never added to _pages.
+        if (pg.Tex == null) { _freeSlots.Push(slot); page = cx = cy = 0; return false; }
         System.Threading.Interlocked.Increment(ref _atlasPageMirror);   // page gains a live Tex (null→non-null) — census mirror
 
         pg.Slot = slot;
@@ -555,9 +609,13 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         td.Width = (ulong)w; td.Height = (uint)h; td.DepthOrArraySize = 1; td.MipLevels = 1;
         td.Format = DXGI_FORMAT.DXGI_FORMAT_B8G8R8A8_UNORM; td.SampleDesc.Count = 1;
         td.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_UNKNOWN;
-        ID3D12Resource* tex;
-        Check(_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex), "Image.CreateTexture");
+        ID3D12Resource* tex = null;
+        // NULL on failure, never a throw: on a removed device (DXGI_ERROR_DEVICE_REMOVED, 0x887A0005) every create here
+        // fails, and this runs on the fgpu-render thread INSIDE the image drain — a throw past that seam is unobserved
+        // and kills the process. Every caller treats null as "could not admit" (media-pipeline.md §4.1).
+        if ((int)_device->CreateCommittedResource(&dp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &td,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_COPY_DEST, null, __uuidof<ID3D12Resource>(), (void**)&tex) < 0)
+        { NoteResourceFault("Image.CreateTexture"); return null; }
         D3D12MemoryDiagnostics.Track(tex, $"Image.Texture {w}x{h} BGRA8", (ulong)w * (uint)h * 4);
         return tex;
     }
@@ -582,9 +640,12 @@ internal sealed unsafe class ImageTextureStore : IDisposable
         rd.Width = bytes; rd.Height = 1; rd.DepthOrArraySize = 1; rd.MipLevels = 1;
         rd.Format = DXGI_FORMAT.DXGI_FORMAT_UNKNOWN; rd.SampleDesc.Count = 1;
         rd.Layout = D3D12_TEXTURE_LAYOUT.D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
-        ID3D12Resource* res;
-        Check(_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
-            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res), "Image.CreateUpload");
+        ID3D12Resource* res = null;
+        // NULL on failure (see CreateTexture): this is the exact call that produced the shipped crash
+        // "Image.CreateUpload failed: 0x887A0005" on the fgpu-render thread.
+        if ((int)_device->CreateCommittedResource(&hp, D3D12_HEAP_FLAGS.D3D12_HEAP_FLAG_NONE, &rd,
+            D3D12_RESOURCE_STATES.D3D12_RESOURCE_STATE_GENERIC_READ, null, __uuidof<ID3D12Resource>(), (void**)&res) < 0)
+        { NoteResourceFault("Image.CreateUpload"); return null; }
         D3D12MemoryDiagnostics.Track(res, name, bytes);
         return res;
     }

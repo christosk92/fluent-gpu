@@ -68,7 +68,7 @@ sealed class Rail : Component
     static Element Chevron(string glyph, bool enabled, Action onClick) => new BoxEl
     {
         Width = 32, Height = 32, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(16f), Fill = Tok.FillControlDefault,
+        Corners = Radii.Circle(32f), Fill = Tok.FillControlDefault,
         HoverFill = enabled ? Tok.FillControlSecondary : Tok.FillControlDefault,
         Opacity = enabled ? 1f : 0.35f, OnClick = enabled ? onClick : null,
         Children = [Icon(glyph, 13f, Tok.TextSecondary)],

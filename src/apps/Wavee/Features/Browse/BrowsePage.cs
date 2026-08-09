@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -120,7 +120,7 @@ sealed class BrowsePage : Component
         return new BoxEl
         {
             Direction = 1, Justify = FlexJustify.End, MinHeight = HeaderHeight, MinWidth = 0f,
-            Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.M),
+            Padding = new Edges4(Spacing.PageWide, Spacing.XL, Spacing.PageWide, Spacing.M),
             Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
             Gradient = GradientDown(new GradientStop(0f, wash), new GradientStop(1f, baseFill)),
             Children =
@@ -235,12 +235,12 @@ sealed class BrowsePage : Component
                 // ellipsise the labels instead of letting the rail overflow.
                 Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center,
                 Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
-                Corners = CornerRadius4.All(999f),
+                Corners = Radii.FullAll,
                 Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary,
                 BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverBorderColor = Tok.AccentDefault,
-                HoverScale = Motion.ReducedMotion ? 1f : 1.03f,
-                HoverDurationMs = 140f, HoverEasing = Easing.FluentDecelerate,
-                PressScale = Motion.ReducedMotion ? 1f : 0.98f,
+                HoverScale = WaveeMotion.ScaleSubtle.Hover,
+                HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+                PressScale = WaveeMotion.ScaleSubtle.Press,
                 OnClick = model is null ? null : () =>
                 {
                     if (c.IsClientFeature) model.OnOpenFeature(c.Uri);
@@ -248,7 +248,7 @@ sealed class BrowsePage : Component
                 },
                 Children = [new TextEl(c.Title)
                 {
-                    Size = 13.5f, Color = Tok.TextPrimary, HoverColor = Tok.AccentTextPrimary, MaxLines = 1,
+                    Size = 14f, LineHeight = 20f, Color = Tok.TextPrimary, HoverColor = Tok.AccentTextPrimary, MaxLines = 1,
                 }],
             };
         }
@@ -311,7 +311,7 @@ sealed class BrowsePage : Component
                 Direction = 1, Gap = Spacing.S,
                 Children =
                 [
-                    new BoxEl { Width = 160f, Height = 16f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardSecondary },
+                    new BoxEl { Width = 160f, Height = 16f, Corners = Radii.ControlAll, Fill = Tok.FillCardSecondary },
                     new BoxEl { Direction = 0, Gap = Spacing.M, Children = cards.ToArray() },
                 ],
             });

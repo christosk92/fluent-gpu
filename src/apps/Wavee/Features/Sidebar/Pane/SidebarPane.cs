@@ -295,7 +295,14 @@ sealed class SidebarPane : Component
         //     the rail on the old palette;
         //   • the culture epoch — same argument for the tile labels (`Loc.Get` inside the tooltip/`ShellNav.Dest`).
         //     Reading it here is also the subscription that re-renders this pane on a culture switch.
+        //   • O3 — the shortcut band's LIST: `Config.RailHead` is invoked inside this memo, and the band is
+        //     `SidebarCustomLayout.EffectiveTopBar`, a PLAIN property on the document. Its edits bump `LayoutVersion`
+        //     (which is not otherwise in this key — the plan version only moves when the ROW plan republishes), and its
+        //     COUNT is what decides whether the rail carries head tiles and their separating rule at all. Without both,
+        //     a rail that is currently presented would keep drawing the band the user just edited.
         // Unconditional (the hooks-order rule) even in the drawer, which has no rail at all.
+        int bandVersion = Prefs?.LayoutVersion.Value ?? 0;
+        int bandCount = Prefs?.TopBar.Count ?? SidebarCustomLayout.DefaultTopBar.Count;
         Element compactRail = UseMemo(
             () => _inDrawer
                 ? (Element)new BoxEl { Height = 0f, Shrink = 0f }
@@ -304,12 +311,14 @@ sealed class SidebarPane : Component
                     Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
                 },
             DepKey.Combine(
-                DepKey.From(planVersion, Tok.Epoch, Localization.CultureEpoch.Value,
-                            // …and the binder's PRESENCE, which the "no driver yet ⇒ shimmer the whole rail" fallback
-                            // reads directly. A binder arriving after the first frame need not move any of the versions
-                            // above (they all start at 0), and the rail must not stay on skeletons if it does.
-                            (_inDrawer ? 1 : 0) | (Prefs?.Binder is null ? 0 : 2)),
-                SelectedRoutePeek));
+                DepKey.Combine(
+                    DepKey.From(planVersion, Tok.Epoch, Localization.CultureEpoch.Value,
+                                // …and the binder's PRESENCE, which the "no driver yet ⇒ shimmer the whole rail" fallback
+                                // reads directly. A binder arriving after the first frame need not move any of the versions
+                                // above (they all start at 0), and the rail must not stay on skeletons if it does.
+                                (_inDrawer ? 1 : 0) | (Prefs?.Binder is null ? 0 : 2)),
+                    SelectedRoutePeek),
+                DepKey.From(bandVersion, bandCount)));
 
         var children = new List<Element>(2) { expanded };
         if (!_inDrawer)
@@ -340,6 +349,12 @@ sealed class SidebarPane : Component
 
     Element[] ExpandedChildren(int rows)
     {
+        // 0 — O3: the customizable shortcut band, the pane's TOPMOST chrome. Invoked here (not snapshotted) so the
+        //     LayoutVersion it reads subscribes this pane, and above Config.Head because it is the app's navigation
+        //     band rather than mode chrome. A null return is an emptied band and costs no layout at all.
+        //     The band ends in its OWN closing rule and ZERO bottom padding (SidebarNavBand.BandRule): the 8 DIP under
+        //     that rule is PanePad.Top below, contributed once by PaddedList. Nothing here may add a second gap.
+        Element? navBand = Config.NavBand?.Invoke();
         // 1 — the mode's own fixed chrome (V3's header band / toolbar / chips), then the optional library-only search head.
         //     The head is rendered ONLY when the document actually contains an EntityList section (a library-only search
         //     over a pane with no library list would filter nothing).
@@ -359,9 +374,10 @@ sealed class SidebarPane : Component
             ? EmptyPane()
             : PaddedList();
 
-        int n = 1 + (modeHead is null ? 0 : 1) + (searchHead is null ? 0 : 1);
+        int n = 1 + (navBand is null ? 0 : 1) + (modeHead is null ? 0 : 1) + (searchHead is null ? 0 : 1);
         var kids = new Element[n];
         int k = 0;
+        if (navBand is { } nb) kids[k++] = nb;
         if (modeHead is { } mh) kids[k++] = mh;
         if (searchHead is { } sh) kids[k++] = sh;
         kids[k] = body;

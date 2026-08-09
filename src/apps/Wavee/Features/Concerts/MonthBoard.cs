@@ -96,7 +96,8 @@ sealed class MonthBoard : Component
             [
                 new TextEl(month)
                 {
-                    Size = 22f, Weight = 650, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                    // Subtitle (20/28/600) - a section header, one rung under the page heading. Was 22/650.
+                    Size = 20f, LineHeight = 28f, Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MinWidth = 0f,
                     MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 },
                 Body(Strings.Concerts.Schedule.ShowCount(shows)) with

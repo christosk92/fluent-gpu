@@ -35,7 +35,7 @@ public static class DetailVerticalLayout
     public const float ExpandedContentFadeDistance = 96f;
     public const float ChromeHeaderHeight = 36f;
     public const float ChromeDividerHeight = 1f;
-    public const float StickyFadeBand = 22f;
+    public const float StickyFadeBand = 24f;   // 4-grid (Spacing.XXL) — was an off-grid 22, and the hero's own rhythm is 24
     public const float ImmersiveNominalW = 580f;
     public const float ImmersiveEnterW = 560f;
     public const float ImmersiveLeaveW = 600f;
@@ -43,7 +43,7 @@ public static class DetailVerticalLayout
     public const float CompactEnterW = 400f;
     public const float CompactLeaveW = 440f;
     public const float CompactHeroPad = 16f;
-    public const float CompactHeroGap = 14f;
+    public const float CompactHeroGap = 12f;   // 4-grid (Spacing.M) — was an off-grid 14; stays inside the 16 compact pad
     public const float CompactHeroArtworkSize = 96f;
     public const float MinimalHeroArtworkSize = 64f;
     public const float MinimalHeroEnterW = 340f;

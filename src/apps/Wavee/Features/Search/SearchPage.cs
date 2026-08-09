@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentGpu.Controls;
@@ -224,7 +224,7 @@ sealed class SearchPage : Component
     static Element ResultRow(Image? cover, int seed, string title, string subtitle, string type, bool circular, Action open) => new BoxEl
     {
         Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
         Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
         HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
         Children =
@@ -234,8 +234,8 @@ sealed class SearchPage : Component
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
                 Children =
                 [
-                    new TextEl(title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    new TextEl(title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    new TextEl(subtitle) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ] },
             TypePill(type),
         ],
@@ -243,8 +243,10 @@ sealed class SearchPage : Component
 
     static Element TypePill(string type) => new BoxEl
     {
-        Padding = new Edges4(10f, 3f, 10f, 3f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-        Children = [new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f }],
+        // Caption (12/16/600) in a Radii.Full capsule. The old 11 radius was a hand-computed half-height, and the
+        // 10/700 label was below the ramp; the 40/1000 tracking is the pill's voice and stays.
+        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll, Fill = Tok.FillSubtleSecondary,
+        Children = [new TextEl(type) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 40f }],
     };
 
     // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
@@ -309,9 +311,9 @@ sealed class SearchPage : Component
                 [
                     TypePill(type),
                     new BoxEl { Grow = 1f },
-                    new BoxEl { Width = 44f, Height = 44f, Corners = CornerRadius4.All(22f), Fill = Tok.AccentDefault,
+                    new BoxEl { Width = 44f, Height = 44f, Corners = Radii.Circle(44f), Fill = Tok.AccentDefault,
                         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Shadow = Elevation.Card,
-                        HoverScale = 1.06f, PressScale = 0.94f, OnClick = play,
+                        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = play,
                         Children = [Icon(Icons.Play, 16f, Tok.TextOnAccentPrimary)] },
                 ],
             },
@@ -345,7 +347,7 @@ sealed class SearchPage : Component
         [
             Icon(glyph, 40f, Tok.TextTertiary),
             WaveeType.PageHero(title),
-            new TextEl(sub) { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MaxWidth = 440f },
+            new TextEl(sub) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MaxWidth = 440f },
         ],
     };
 }
@@ -403,7 +405,7 @@ sealed class SearchSongs : Component
                 int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
                 var wrapper = new BoxEl
                 {
-                    Direction = 1, Corners = CornerRadius4.All(6f), ClipToBounds = true,
+                    Direction = 1, Corners = Radii.ControlAll, ClipToBounds = true,
                     Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
                         ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
@@ -737,8 +739,8 @@ sealed class SearchAllList : Component
 
     static Element SaveButton(bool saved, Action toggle) => new BoxEl
     {
-        Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f),
-        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.1f, OnClick = toggle,
+        Width = 32f, Height = 32f, Shrink = 0f, Corners = Radii.Circle(32f),
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = WaveeMotion.ScaleEmphatic.Hover, OnClick = toggle,
         BlocksDragArm = true,   // the row drags; this button saves — a press here is never a drag handle
         Children = [Icon(saved ? Icons.Accept : Icons.Add, 16f, saved ? Tok.AccentDefault : Tok.TextSecondary)],
     };
@@ -746,10 +748,10 @@ sealed class SearchAllList : Component
     static Element FollowButton(bool following, Action toggle) => new BoxEl
     {
         Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(16f, 6f, 16f, 6f), Corners = CornerRadius4.All(16f),
-        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.04f, OnClick = toggle,
+        Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S), Corners = Radii.PillAll,
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillSubtleSecondary, HoverScale = WaveeMotion.ScaleStandard.Hover, OnClick = toggle,
         BlocksDragArm = true,   // see SaveButton
-        Children = [new TextEl(following ? "Following" : "Follow") { Size = 12f, Weight = 700, Color = Tok.TextPrimary }],
+        Children = [new TextEl(following ? "Following" : "Follow") { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary }],
     };
 
     static string Names(IReadOnlyList<ArtistRef> artists)

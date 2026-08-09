@@ -97,19 +97,22 @@ sealed class DiscographyPage : Component
         {
             [DropDownButton.PartRoot] = b => b with
             {
-                MinHeight = 42f,
-                Padding = new Edges4(8f, 3f, 8f, 4f),
+                // 36 (the Title line box) + 4 top + 4 bottom = 44. The old 42 with an ASYMMETRIC 3/4 pad sat the label
+                // half a pixel high and off both grids.
+                MinHeight = 44f,
+                Padding = new Edges4(8f, 4f, 8f, 4f),
                 Fill = ColorF.Transparent,
                 HoverFill = Tok.FillSubtleSecondary,
                 PressedFill = Tok.FillSubtleTertiary,
                 BorderWidth = 0f,
-                Corners = CornerRadius4.All(6f),
+                Corners = Radii.ControlAll,
                 Cursor = CursorId.Hand,
             },
         };
         facetParts.Set<TextEl>(DropDownButton.PartLabel, t => t with
         {
-            Size = 28f, Weight = 700, Color = Tok.TextPrimary,
+            // Title (28/36/600) — the page's hero rung. Was 28/700 with the font's natural leading.
+            Size = 28f, LineHeight = 36f, Weight = 600, Color = Tok.TextPrimary,
             HoverColor = Tok.TextPrimary, PressedColor = Tok.TextPrimary,
         });
         facetParts.Set<BoxEl>(DropDownButton.PartChevron, b => b with
@@ -128,15 +131,16 @@ sealed class DiscographyPage : Component
         // Breadcrumb: clickable artist name → back to the artist page, chevron, then the switchable facet title.
         Element breadcrumb = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
             Children =
             [
                 new BoxEl
                 {
                     OnClick = () => go("artist:" + uri, artistName),
-                    Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
+                    Corners = Radii.ControlAll, HoverFill = Tok.FillSubtleSecondary,
                     Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS),
-                    Children = [ new TextEl(artistName) { Size = 28f, Weight = 700, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ],
+                    // Same Title rung as the facet label it sits beside — one breadcrumb, one size.
+                    Children = [ new TextEl(artistName) { Size = 28f, LineHeight = 36f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ],
                 },
                 Icon(Icons.ChevronRight, 18f, Tok.TextTertiary),
                 facetSelector,
@@ -145,8 +149,11 @@ sealed class DiscographyPage : Component
 
         var content = new BoxEl
         {
-            Direction = 1, Gap = Spacing.L,
-            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
+            // W1a-alias: WaveeSize.SectionGap is the shared page-section gap W1a adds to WaveeTokens.cs.
+            Direction = 1, Gap = WaveeSize.SectionGap,
+            // The desktop page gutter (Spacing.PageWide 36) with the standard 24 top — the same frame every other
+            // full page takes. Was a bespoke 32/40.
+            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.PageWide),
             Children =
             [
                 breadcrumb,

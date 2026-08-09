@@ -63,8 +63,8 @@ sealed class LibrarySortView : Component
             Children =
             [
                 Icon(Icons.Sort, 14f, Tok.TextSecondary),
-                new TextEl(SortLabel(sort)) { Size = 13f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                Icon(desc ? Icons.ChevronDown : Icons.ChevronUp, 10f, Tok.TextTertiary),
+                new TextEl(SortLabel(sort)) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                Icon(desc ? Icons.ChevronDown : Icons.ChevronUp, 12f, Tok.TextTertiary),
                 new BoxEl { Width = 1f, Height = 16f, Fill = Tok.StrokeDividerDefault },
                 Icon(ViewGlyph(view), 14f, Tok.TextSecondary),
             ],
@@ -149,6 +149,7 @@ sealed class LibrarySortPanel : Component
         return new BoxEl { Direction = 0, Gap = 4f, Padding = new Edges4(2f, 2f, 2f, 4f), Children = cells };
     }
 
-    static Element Header(string t) => new BoxEl { Padding = new Edges4(8f, 6f, 8f, 2f), Children = [new TextEl(t) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 30f }] };
+    // Caption (12/16/600) caps header - caps and tracking kept.
+    static Element Header(string t) => new BoxEl { Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XXS), Children = [new TextEl(t) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 30f }] };
     static Element Divider() => new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 4f, 4f, 4f) };
 }

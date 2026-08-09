@@ -15,6 +15,87 @@ public static class ShellResponsiveLayout
     public const float ToolbarNarrowEnterW = 520f;
     public const float ToolbarNarrowLeaveW = 560f;
 
+    // ── the MERGED chrome row (one 48-DIP TitleBar: tabs · window-centred search · identity) ──────────────────────────
+    // The row is allocated by SPACE ACCOUNTING (MergedChromeLayout.Resolve), not by a hand-authored threshold table:
+    // the FIXED BUDGET below is subtracted from the window width and what is left is handed out in ONE priority order —
+    // every tab at its 110-DIP floor first, then the search, then the tabs widen with whatever is still spare. The only
+    // width THRESHOLDS left are the three identity toggles (name · friends · forward), which are cheap fixed-width bits;
+    // their COST feeds the budget so the accounting stays honest across their bands.
+    //
+    // Hysteresis is unchanged in mechanism: MergedChromeLayout.Resolve re-resolves a PROMOTION at (width - hysteresis)
+    // and lets a DEMOTION happen immediately — the DetailTrackCommandBarLayout idiom. That single reserve makes every
+    // structural decision sticky without a per-stage current/leave pair.
+    // 40 DIP is deliberately the SAME band width the two-row toolbar used (ToolbarNarrowLeaveW - ToolbarNarrowEnterW).
+    public const float ChromePromotionHysteresisW = 40f;
+
+    /// <summary>The profile NAME beside the avatar — the first thing to go, so the gutters stop being the only give.</summary>
+    public const float ChromeNameEnterW = 1360f;
+    /// <summary>Friends keeps the two-row toolbar's own 1000 threshold — but as the band where it is IN THE ROW rather
+    /// than the band where it exists at all: below this it becomes a profile-menu row (<c>MergedChromeLayout.
+    /// FriendsInMenu</c>), so the affordance never disappears.
+    /// <para>The bell's 800 and the theme toggle's 720 are GONE, not moved: notifications now ride the profile chip's
+    /// unread badge and the theme toggle is an unconditional profile-menu row, so neither has a width at which it
+    /// drops. The ladder is shorter by two stages on purpose.</para></summary>
+    public const float ChromeFriendsEnterW = 1000f;
+    /// <summary>Forward folds into the "⋯" overflow at the SAME 520/560 band the old ShellToolbar used for its primary
+    /// nav — the raw threshold is <see cref="ToolbarNarrowEnterW"/> and the 40-DIP promotion reserve reproduces 560.</summary>
+    public const float ChromeForwardEnterW = ToolbarNarrowEnterW;
+
+    // ── the FIXED BUDGET: every DIP of the row that is neither a tab nor the search ───────────────────────────────────
+    // These are the row's REAL laid-out widths, read off the code that draws them — not fresh guesses. Each one names
+    // its source so a retune there is caught here. MergedChromeLayout.FixedBudget is the single consumer; it is what
+    // makes "how much room do the tabs actually have?" an arithmetic question instead of a hand-tuned table.
+
+    /// <summary>TitleBar's lead column before the tabs island: the bar's own 2-DIP root padding + the built-in pane
+    /// toggle (40 wide, and Wavee's <c>ChromeParts</c> margin override keeps the 44-DIP advance the stock 2-a-side
+    /// margin had) + TitleBar's 14-DIP <c>LeftHeaderPad</c>. Wavee sets no icon, title or subtitle, so nothing else
+    /// is in there. (TitleBar.cs: NavButtonSize/LeftHeaderPad and the root Padding.)</summary>
+    public const float ChromeBarLeadW = 60f;
+    /// <summary>One island affordance's advance: <c>ShellToolbar.BarNavStyle.Size</c> 40 + <c>BarNavMargin</c> 2+2.
+    /// Back, Forward, the Friends button and the "⋯" overflow are all exactly this.</summary>
+    public const float ChromeNavButtonW = 44f;
+    /// <summary>The tab strip's PERMANENTLY reserved "+" slot (TabStrip.AddPlate, 32 wide, no margin in text mode). It
+    /// is mounted at every width even while invisible — the reason the old hand-tuned keep steps over-evicted.</summary>
+    public const float ChromeAddSlotW = 32f;
+    /// <summary>The "⌄" tab-overflow plate (<c>TabOverflowButton</c>: 7 + a 10pt chevron + 3 gap + the count + 7).
+    /// Budgeted ONLY when the ladder is actually going to fold a tab away.</summary>
+    public const float ChromeTabOverflowW = 36f;
+    /// <summary>The profile chip with the avatar alone (ProfileMenu: 4 + a 24-DIP PersonPicture + 4). The unread badge
+    /// is a zero-footprint ZStack overlay, so it never enters the budget.</summary>
+    public const float ChromeProfileChipW = 32f;
+    /// <summary>What <c>ShowName</c> ADDS to that chip: the 8-DIP gap + the display-name caption + the extra 6 DIP of
+    /// right padding the named form carries. A nominal for a nominal name — the drag gutters absorb the error.</summary>
+    public const float ChromeProfileNameW = 90f;
+    /// <summary>TitleBar's guaranteed-grabbable drag strip before the captions (TitleBar.MinDragStrip).</summary>
+    public const float ChromeMinDragStripW = 48f;
+    /// <summary>The caption cluster: 3 × <c>CaptionButton.Width</c> (46).</summary>
+    public const float ChromeCaptionClusterW = 138f;
+    /// <summary>Reserved on EACH flank of the centre island so the search never butts against the tabs strip or the
+    /// identity cluster. The bar's two grow bands split the real leftover between them; this is only the floor that
+    /// keeps the two clusters from touching when the row is full.</summary>
+    public const float ChromeGutterMinW = 8f;
+    /// <summary>Search and tab widths snap DOWN to this. The ladder is now continuous in width, and a signal that moved
+    /// on every device pixel would re-render the bar (and re-push its non-client regions) per pixel of a resize drag —
+    /// exactly what the band-gated publish in WaveeShell exists to avoid. Snapping DOWN also keeps the allocation
+    /// inside the budget by construction.</summary>
+    public const float ChromeWidthQuantumW = 10f;
+
+    // Search: a real field between ChromeSearchMinW and ChromeSearchMaxW, else the click-expanding magnifier. These are
+    // the only two numbers the search ladder has now — everything between them is whatever space is left over.
+    public const float ChromeSearchMaxW = 420f;
+    public const float ChromeSearchMinW = 220f;
+    /// <summary>The MINIMUM GUARANTEED form of the search: a 32-DIP magnifier that CLICK-expands (LibraryV3Search's
+    /// pattern). Tabs are measured against THIS, not against the field — the search yields all the way to an icon
+    /// before a single tab is evicted.</summary>
+    public const float ChromeSearchIconW = 32f;
+    /// <summary>The click-expanded field in icon mode, clamped at render time against the bar's live CenterAvail.</summary>
+    public const float ChromeSearchExpandedW = 380f;
+
+    // Tabs: the FLOOR is what the allocator counts with (a text tab narrower than this is unreadable); the CAP is what
+    // a tab may grow to once the search is comfortable and there is still surplus.
+    public const float ChromeTabMaxW = 200f;
+    public const float ChromeTabMinW = 110f;
+
     // ── nav-pane (sidebar) width ─────────────────────────────────────────────────────────────────────────────────────
     // The single clamp bounds for the expanded pane. Every writer (the seam drag, the probe seam, the responsive default)
     // must clamp through these — a second literal pair is how the drag and the probe drifted apart.

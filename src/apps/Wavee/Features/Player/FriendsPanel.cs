@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using FluentGpu.Controls;
@@ -71,7 +71,7 @@ sealed class FriendsPanel : Component
             Grow = 1f, MinHeight = 0f, AutoEdgeFade = true, ScrollKey = "friendspanel",
             Content = new BoxEl
             {
-                Direction = 1, MinHeight = 0f, Padding = new Edges4(0f, 0f, 0f, 14f),
+                Direction = 1, MinHeight = 0f, Padding = new Edges4(0f, 0f, 0f, Spacing.M),
                 Children = rows.ToArray(),
             },
         });
@@ -91,22 +91,22 @@ sealed class FriendsPanel : Component
 
         var textKids = new List<Element>(3)
         {
-            new TextEl(fa.UserName) { Size = 13.5f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
-            new TextEl(trackLine) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
+            new TextEl(fa.UserName) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
+            new TextEl(trackLine) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f },
         };
         if (context is not null)
-            textKids.Add(new TextEl(context) { Size = 11f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f });
+            textKids.Add(new TextEl(context) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f });
 
         return new BoxEl
         {
             Key = "fr:" + fa.UserUri,
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f, MinHeight = 56f,
-            Padding = new Edges4(6f, 4f, 6f, 4f),
-            Corners = CornerRadius4.All(6f),
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = WaveeSize.TrackRowH,
+            Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+            Corners = Radii.ControlAll,
             Fill = zebra ? WaveeColors.RowZebra : ColorF.Transparent,
             HoverFill = onClick is not null ? (zebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover) : (zebra ? WaveeColors.RowZebra : ColorF.Transparent),
             PressedFill = onClick is not null ? (zebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed) : ColorF.Transparent,
-            PressScale = onClick is not null ? 0.985f : 1f,
+            PressScale = WaveeMotion.ScaleSubtle.PressIf(onClick is not null),
             Role = onClick is not null ? AutomationRole.Button : AutomationRole.None,
             Cursor = onClick is not null ? CursorId.Hand : CursorId.Arrow,
             Focusable = onClick is not null,
@@ -129,7 +129,7 @@ sealed class FriendsPanel : Component
                     [
                         live
                             ? WaveeEqualizer.Of(true, static () => Tok.AccentDefault, 14f)
-                            : new TextEl(RelTime(now - fa.TimestampMs)) { Size = 11f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1 },
+                            : new TextEl(RelTime(now - fa.TimestampMs)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1 },
                     ],
                 },
             ],
@@ -154,10 +154,10 @@ sealed class FriendsPanel : Component
                     [
                         new BoxEl
                         {
-                            Width = 12f, Height = 12f, Corners = CornerRadius4.All(6f),
-                            // The cut-out ring must match what the badge actually sits ON: FloatingPane is the content
-                            // pane flattened through the plate, so the ring reads as a hole whether the rail is docked
-                            // (translucent pane over the plate) or floating (that same surface, opaque).
+                            Width = 12f, Height = 12f, Corners = Radii.Circle(12f),
+                            // The cut-out ring must match what the badge actually sits ON: FloatingPane IS the opaque
+                            // ContentSurface, the one rung the rail paints whether it is docked or floating, so the
+                            // ring reads as a hole either way.
                             Fill = accent, BorderWidth = 2f, BorderColor = WaveeColors.FloatingPane,
                         },
                     ],
@@ -184,24 +184,24 @@ sealed class FriendsPanel : Component
         for (int i = 0; i < kids.Length; i++) kids[i] = SkeletonRow();
         return Shell(new BoxEl
         {
-            Direction = 1, MinHeight = 0f, Padding = new Edges4(0f, 4f, 0f, 0f),
+            Direction = 1, MinHeight = 0f, Padding = new Edges4(0f, Spacing.XS, 0f, 0f),
             Children = kids,
         });
     }
 
     static Element SkeletonRow() => new BoxEl
     {
-        Direction = 0, MinHeight = 56f, AlignItems = FlexAlign.Center, Gap = 10f, Padding = new Edges4(6f, 4f, 6f, 4f),
+        Direction = 0, MinHeight = WaveeSize.TrackRowH, AlignItems = FlexAlign.Center, Gap = Spacing.M, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
         Children =
         [
             new BoxEl { Width = Avatar, Height = Avatar, Shrink = 0f, Corners = CornerRadius4.All(Avatar / 2f), Fill = Tok.FillSubtleSecondary },
             new BoxEl
             {
-                Direction = 1, Grow = 1f, Gap = 5f,
+                Direction = 1, Grow = 1f, Gap = Spacing.XS,
                 Children =
                 [
-                    new BoxEl { Width = 120f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
-                    new BoxEl { Width = 160f, Height = 10f, Corners = CornerRadius4.All(4f), Fill = Tok.FillSubtleSecondary },
+                    new BoxEl { Width = 120f, Height = 12f, Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillSubtleSecondary },
+                    new BoxEl { Width = 160f, Height = 12f, Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillSubtleSecondary },
                 ],
             },
         ],
@@ -211,16 +211,16 @@ sealed class FriendsPanel : Component
     {
         var kids = new List<Element>(3)
         {
-            new TextEl(title) { Size = 13.5f, Weight = 600, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxWidth = 280f },
+            new TextEl(title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxWidth = 280f },
         };
         if (hint is { Length: > 0 })
-            kids.Add(new TextEl(hint) { Size = 12f, LineHeight = 17f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxWidth = 280f });
+            kids.Add(new TextEl(hint) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxWidth = 280f });
         if (action is not null) kids.Add(action);
 
         return new BoxEl
         {
-            Direction = 1, Grow = 1f, MinHeight = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = 10f,
-            Padding = Edges4.All(24f),
+            Direction = 1, Grow = 1f, MinHeight = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.M,
+            Padding = Edges4.All(Spacing.XXL),
             Children = kids.ToArray(),
         };
     }
@@ -228,18 +228,18 @@ sealed class FriendsPanel : Component
     static Element RetryPill(FriendsBridge fb) => new BoxEl
     {
         MinHeight = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(16f, 6f, 16f, 6f),
-        Corners = CornerRadius4.All(16f),
+        Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S),
+        Corners = Radii.PillAll,
         Fill = Tok.FillCardSecondary, HoverFill = WaveeColors.RowHover, PressedFill = WaveeColors.RowPressed,
         Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = fb.Refresh,
-        Children = [new TextEl(Loc.Get(Strings.Friends.Retry)) { Size = 12f, Weight = 600, Color = Tok.TextPrimary }],
+        Children = [new TextEl(Loc.Get(Strings.Friends.Retry)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary }],
     };
 
     // The panel frame: a full-height clipped column with the shared rail padding (matches QueuePanel).
     static Element Shell(Element content) => new BoxEl
     {
         Direction = 1, Grow = 1f, MinHeight = 0f, ClipToBounds = true,
-        Padding = new Edges4(14f, 4f, 14f, 0f),
+        Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, 0f),
         Children = [content],
     };
 }

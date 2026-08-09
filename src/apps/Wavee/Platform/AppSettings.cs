@@ -59,14 +59,16 @@ static class WaveeSettings
     public static readonly SettingKey<bool> DisableMarquee = new("appearance.marquee.disabled", false);
     public static readonly SettingKey<bool> DisableColorWashes = new("appearance.colorWashes.disabled", false);
     // The DWM window material. FALSE (the default) = Mica ALT (DWMSBT_TABBEDWINDOW — the flatter, neutral File-Explorer
-    // tint the whole shell ladder is solved against); TRUE = base Mica (DWMSBT_MAINWINDOW — more wallpaper-tinted, the
-    // stock "main window" backdrop). A bool, not an enum: DWM offers exactly these two Mica kinds, and acrylic is not a
-    // window-level option here (mica:false is the engine's no-Mica path, not a user choice). Seeds AppOptions.MicaAlt at
-    // startup and is applied LIVE on change via FluentApp.SetWindowMaterialAlt — deliberately a setting, not an env var.
+    // tint); TRUE = base Mica (DWMSBT_MAINWINDOW — more wallpaper-tinted, the stock "main window" backdrop). A bool, not
+    // an enum: DWM offers exactly these two Mica kinds, and acrylic is not a window-level option here (mica:false is the
+    // engine's no-Mica path, not a user choice). NO LONGER USER-FACING: the authenticated shell paints its own opaque
+    // deterministic ground over the whole window, so the DWM backdrop only ever shows under the LOGIN screen and the
+    // host fallback — the Settings ▸ Appearance row that flipped this was removed because there is nothing to choose
+    // between. The key stays as the startup seed for AppOptions.MicaAlt (Program.cs) and keeps existing profiles valid.
     public static readonly SettingKey<bool> WindowMaterialBaseMica = new("appearance.windowMaterial.baseMica", false);
     // The immersive lyrics surface's slowly-drifting blurred-cover backdrop. TRUE (the default) = the baked-blur cover
     // wanders on two incommensurate sinusoids; FALSE = the same cover, held perfectly still (and no ticker at all).
-    // Deliberately a SETTING, not an env var — the WindowMaterialBaseMica precedent: it is a taste/comfort choice a
+    // Deliberately a SETTING, not an env var — the DisableColorWashes precedent: it is a taste/comfort choice a
     // normal user makes about a surface they look at for whole songs, not a developer escape hatch, and it must apply
     // LIVE (the writer bumps AppearancePrefs.Epoch, which the surface reads). The OS reduced-motion preference
     // independently holds the drift still whatever this says — a value read, never a hook branch.

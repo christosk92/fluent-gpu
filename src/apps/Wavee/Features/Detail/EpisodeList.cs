@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -188,7 +188,7 @@ sealed class EpisodeList : Component
     {
         Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), Fill = Tok.AccentDefault,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Shadow = Elevation.Card,
-        HoverScale = 1.06f, PressScale = 0.94f, OnClick = play,
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = play,
         Children = [Icon(Icons.Play, 15f, Tok.TextOnAccentPrimary)],
     };
 

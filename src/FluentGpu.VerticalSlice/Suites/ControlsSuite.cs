@@ -1829,6 +1829,71 @@ static class ControlsSuite
                 noneOnDown && delivered && offDropped, $"down={noneOnDown} hit={delivered} off={offDropped}");
         }
 
+        // B.4b — LEFT activation walks to the nearest click-owning ancestor (input-a11y.md §6.5), exactly like the
+        // middle-release and context-request walks already did. Hit() treats DragBit as hit-anywhere and the DEEPEST hit
+        // wins, so a Draggable-ONLY child inside a clickable row/card was a click BLACK HOLE: the release fired
+        // GetClickHandler(child) — null — and the row never activated. Four things this pins:
+        //   • the walk fires the OWNER exactly once (never the child AND the owner),
+        //   • a child with its OWN OnClick still wins (the walk stops at the first owner),
+        //   • press and release that resolve to the same owner are ONE click even across different hit nodes
+        //     (pressing the row's label, releasing on the row's padding — the WinUI capture-on-the-owner shape),
+        //   • a release that resolves to NO owner is still not a click.
+        // Press-side is deliberately NOT walked: `_pressed` is the pressed-VISUAL singleton and a dozen release/cancel
+        // paths clear it on `_pressed == _down`, so it keeps tracking the raw hit — asserted here so the walk is proven
+        // to be what delivers the click, not the hit test.
+        {
+            var scene = new SceneStore();
+            int plateClicks = 0, ownClicks = 0, started = 0;
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Width = 240, Height = 120,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Key = "plate", Direction = 0, Width = 200, Height = 60, OnClick = () => plateClicks++,
+                        Children =
+                        [
+                            new BoxEl { Key = "label", Width = 80, Height = 30, CanDrag = true, OnDragStarted = _ => started++ },
+                            new BoxEl { Key = "own", Width = 40, Height = 30, OnClick = () => ownClicks++ },
+                        ],
+                    },
+                ],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            var plate = Child(scene, scene.Root, 0);
+            var label = Child(scene, plate, 0);
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(40, 15), 0, 0) });
+            bool hitTheChild = (scene.Flags(label) & NodeFlags.Pressed) != 0;   // the CanDrag child really is the hit
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(40, 15), 0, 0) });
+            bool walkedToOwner = plateClicks == 1 && ownClicks == 0;
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(100, 15), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(100, 15), 0, 0) });
+            bool childWins = ownClicks == 1 && plateClicks == 1;                // stops at the FIRST owner — no double fire
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(40, 15), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(150, 15), 0, 0) });
+            bool sameOwnerAcrossNodes = plateClicks == 2 && ownClicks == 1;     // label → plate padding is one click
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(40, 15), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(220, 100), 0, 0) });
+            bool offOwnerNoClick = plateClicks == 2;                            // released past the owner → nothing
+
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(40, 15), 0, 0) });
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(56, 15), 0, 0) });   // dx 16 > 4 → promote
+            bool dragArmedFromChild = started == 1 && disp.Drag.IsActive && disp.Drag.ActiveNode == label;
+            disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, new Point2(56, 15), 0, 0) });
+            bool dragSuppressesClick = plateClicks == 2 && ownClicks == 1;      // a finished drag never clicks the owner
+
+            Check("B.4b activation walks to the nearest click-owning ancestor: a Draggable-only child fires the row's OnClick once; its own OnClick still wins; owner-equality spans hit nodes; a drag still arms from the child and suppresses the click",
+                hitTheChild && walkedToOwner && childWins && sameOwnerAcrossNodes && offOwnerNoClick
+                    && dragArmedFromChild && dragSuppressesClick,
+                $"hitChild={hitTheChild} walked={walkedToOwner} childWins={childWins} sameOwner={sameOwnerAcrossNodes} offOwner={offOwnerNoClick} armed={dragArmedFromChild} suppressed={dragSuppressesClick} plate={plateClicks} own={ownClicks} started={started}");
+        }
+
         // B.5 — the element wheel hook sees the wheel BEFORE the viewport and consumes it when Handled
         // (NumberBox.cpp:578-597); an unhandled hook lets the dispatch fall through.
         {
@@ -2076,6 +2141,283 @@ static class ControlsSuite
                 Check("B.9c TabStrip raw selected material + CardStroke rim + continuous flare-cleared rail + MUX separator suppression",
                     tabs.Count == 3 && material && baseline && separators,
                     $"tabs={tabs.Count} shapes={shapes.Count} lines={horizontalLines.Count} material={material} clear={flareClear} sep={separators}");
+            }
+            finally { Tok.Use(saved); }
+        }
+
+        // B.9d — the TEXT appearance is a DIFFERENT grammar, not a restyle of the Chrome one: a tab is its label, and
+        // the whole MUX rail vocabulary (plate fills, the two selected TabShape layers, the separators, the bottom
+        // rail) is absent. Selection is carried by one strip-owned sliding underline whose springs target the selected
+        // tab's laid-out rect. Chrome mode (B.9c above) must still assert the full rail — the two are siblings.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                var selected = new Signal<int>(0);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("tabstrip-text", new Size2(640, 80), 1f));
+                window.Show();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => Embed.Comp(() => new TabStrip
+                        {
+                            Appearance = TabStripAppearance.Text,
+                            Items =
+                            [
+                                new TabViewItem { Header = "one", IsClosable = true },
+                                new TabViewItem { Header = "two", IsClosable = true },
+                                new TabViewItem { Header = "three", IsClosable = true },
+                            ],
+                            SelectedIndex = selected,
+                            IsAddTabButtonVisible = false,
+                            // Left at the DEFAULT (Auto): Text mode hover-gates the close button for every tab,
+                            // including the selected one — the `|| isSelected` arm the Chrome path keeps is dropped,
+                            // and Auto resolves to hover-only rather than always-on.
+                            MinTabWidth = 90f,
+                            MaxTabWidth = 200f,
+                        }),
+                    });
+                void Settle(int frames = 90) { for (int i = 0; i < frames; i++) host.RunFrame(); }
+                Settle();
+
+                int shapes = 0, hairlines = 0, ticks = 0;
+                NodeHandle underline = NodeHandle.Null;
+                void Collect(NodeHandle n)
+                {
+                    if (n.IsNull) return;
+                    ref var paint = ref host.Scene.Paint(n);
+                    RectF b = host.Scene.Bounds(n);
+                    if (paint.VisualKind == VisualKind.TabShape) shapes++;
+                    if (paint.VisualKind == VisualKind.Box && b.H is > 0f and <= 1.01f && b.W > 1f) hairlines++;
+                    if (paint.VisualKind == VisualKind.Box && b.W is > 0f and <= 1.01f && b.H >= 16f) ticks++;
+                    if (paint.VisualKind == VisualKind.Box && Near(b.H, 2f, 0.01f) && paint.Fill == Tok.AccentDefault)
+                        underline = n;
+                    for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c)) Collect(c);
+                }
+                Collect(host.Scene.Root);
+
+                var tabs = Roles(host.Scene, AutomationRole.Tab);
+                // Hover-only close, RESERVED-SLOT contract: a closable text tab always MOUNTS its × (so the content-hug
+                // tab's width can never change on hover — the old hover-MOUNTED × reflowed everything after it and slid
+                // the underline on every pointer pass), but at rest every × is Opacity 0 and not hit-testable. Hovering
+                // a tab reveals ITS × at full opacity while the tab's width stays byte-identical.
+                var closes = Roles(host.Scene, AutomationRole.Button);
+                bool slotsMounted = closes.Count == 3;
+                bool hiddenAtRest = true;
+                foreach (var c in closes)
+                    hiddenAtRest &= Near(host.Scene.Paint(c).Opacity, 0f, 0.001f)
+                        && (host.Scene.Flags(c) & NodeFlags.HitTestVisible) == 0;
+                float restW0 = host.Scene.AbsoluteRect(host.Scene.Parent(tabs[0])).W;
+                var hoverPt = host.Scene.AbsoluteRect(tabs[0]);
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(hoverPt.X + hoverPt.W / 2f, hoverPt.Y + hoverPt.H / 2f), 0, 0));
+                Settle();
+                var closesHover = Roles(host.Scene, AutomationRole.Button);
+                bool shownOnHover = closesHover.Count == 3 && Near(host.Scene.Paint(closesHover[0]).Opacity, 1f, 0.01f);
+                float hoverW0 = host.Scene.AbsoluteRect(host.Scene.Parent(tabs[0])).W;
+                bool widthStable = Near(hoverW0, restW0, 0.01f);
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(600f, 70f), 0, 0));
+                Settle();
+                bool closeContract = slotsMounted && hiddenAtRest && shownOnHover && widthStable;
+
+                // The underline tracks the SELECTED tab: x = tab.x + the 12-DIP label inset, width = tab.w − both
+                // insets, both in LAYOUT (the springs only ease the FLIP delta back to identity, so a resize that
+                // clears the animation slab leaves the bar exactly on target). AbsoluteRect folds in the live
+                // TranslateX, so reading it mid-flight shows the slide.
+                (float X, float W) Target(int index)
+                {
+                    RectF wrap = host.Scene.AbsoluteRect(host.Scene.Parent(tabs[index]));
+                    return (wrap.X + 12f, wrap.W - 24f);
+                }
+                float UnderlineX() => host.Scene.AbsoluteRect(underline).X;
+                float UnderlineW() => host.Scene.Bounds(underline).W;
+                // …and it is ANCHORED TO THE TAB PLATE'S BOTTOM EDGE, not to the strip's floor. The row is 48 tall with
+                // the 32-DIP plates centred, so the plate bottom is 40 and the 2-DIP bar occupies 38..40. It used to
+                // hang off the host's own 48-DIP bottom (46..48) — six DIP under the tab it marks, which reads as a rule
+                // beneath the whole bar rather than as that tab's underline.
+                float UnderlineBottom() { var r = host.Scene.AbsoluteRect(underline); return r.Y + r.H; }
+                float TabBottom(int index)
+                {
+                    RectF wrap = host.Scene.AbsoluteRect(host.Scene.Parent(tabs[index]));
+                    return wrap.Y + wrap.H;
+                }
+
+                var t0 = Target(0);
+                bool at0 = !underline.IsNull && Near(UnderlineX(), t0.X, 1.5f) && Near(UnderlineW(), t0.W, 1.5f);
+                bool onPlateBottom = !underline.IsNull && Near(UnderlineBottom(), TabBottom(0), 0.51f);
+                float x0 = underline.IsNull ? float.NaN : UnderlineX();
+
+                selected.Value = 2;                                  // …and it SLIDES to the new selection
+                Settle();
+                var t2 = Target(2);
+                bool at2 = !underline.IsNull && Near(UnderlineX(), t2.X, 1.5f) && Near(UnderlineW(), t2.W, 1.5f);
+                float x2 = underline.IsNull ? float.NaN : UnderlineX();
+
+                Check("B.9c-text TabStrip Text appearance: labels only — no TabShape/rail/separator ink — a sliding accent underline on the plate's bottom edge, and reserved-slot hover-only close (no width flicker)",
+                    tabs.Count == 3 && shapes == 0 && hairlines == 0 && ticks == 0
+                        && !underline.IsNull && at0 && at2 && onPlateBottom && x2 > x0 + 50f && closeContract,
+                    $"tabs={tabs.Count} shapes={shapes} hairlines={hairlines} ticks={ticks} underline={!underline.IsNull} " +
+                    $"at0={at0}(x={x0:0.#} want {t0.X:0.#}/{t0.W:0.#}) at2={at2}(x={x2:0.#} want {t2.X:0.#}/{t2.W:0.#}) " +
+                    $"onPlateBottom={onPlateBottom}(bottom={(underline.IsNull ? float.NaN : UnderlineBottom()):0.##} want {TabBottom(0):0.##}) " +
+                    $"closeContract={closeContract}(slots={slotsMounted} rest0={hiddenAtRest} hover1={shownOnHover} widthStable={widthStable} restW={restW0:0.##} hoverW={hoverW0:0.##})");
+
+                // Reduced motion is a VALUE read at the SEED, never a branch in authoring code — and the RAW UseSpring
+                // hook carries no ReducedMotionPolicy, so the underline seeds through a motion TOKEN instead. Same
+                // retarget, four frames in: normally still mid-flight, under reduced motion already parked.
+                var t1 = Target(1);
+                bool prevReduced = Motion.ReducedMotion;
+                float slideX, snapX;
+                try
+                {
+                    selected.Value = 1; Settle(4); slideX = UnderlineX();      // sliding
+                    selected.Value = 2; Settle();                              // park it back at the far tab
+                    Motion.ReducedMotion = true;
+                    selected.Value = 1; Settle(4); snapX = UnderlineX();       // snapped
+                }
+                finally { Motion.ReducedMotion = prevReduced; }
+                Check("B.9c-text TabStrip Text underline honours reduced-motion-as-a-value (token-seeded ⇒ snap, not slide)",
+                    !Near(slideX, t1.X, 3f) && Near(snapX, t1.X, 1.5f),
+                    $"target={t1.X:0.#} sliding@4f={slideX:0.#} reduced@4f={snapX:0.#}");
+
+                // A window resize CANCELS every in-flight structural track BY DESIGN (gpu-renderer.md's window-resize
+                // snap → AnimEngine.SnapStructuralToLayout/CancelStructuralAll; butter-smooth-resize-v2.md:263 "FLIP
+                // capture is skipped when `resized` — resizes snap by design"). The indicator survives that only
+                // because its RESTING position is pure layout and the springs carry a decaying FLIP delta: kill the
+                // delta at any instant and the bar is already under the selected tab. (An anim-positioned indicator
+                // collapsed to the strip origin here and never came back.)
+                selected.Value = 0; Settle();
+                selected.Value = 2; host.RunFrame(); host.RunFrame();     // mid-slide, delta still large
+                float midX = UnderlineX();
+                host.Animation.SnapStructuralToLayout(underline);         // exactly what a resize does to this node
+                host.RunFrame();
+                float snappedX = UnderlineX(), snappedW = UnderlineW();
+                // …and a real relayout (window resize) re-derives the rest position from the new tab rects.
+                window.ClientSizePx = new Size2(720, 80);
+                window.PaintRequested?.Invoke();
+                Settle(30);
+                var t2r = Target(2);
+                Check("B.9c-text TabStrip Text underline survives the by-design structural snap (rest = layout truth, not anim state)",
+                    !Near(midX, t2r.X, 3f) && Near(snappedX, t2r.X, 1.5f) && Near(snappedW, t2r.W, 1.5f)
+                        && Near(UnderlineX(), t2r.X, 1.5f) && Near(UnderlineW(), t2r.W, 1.5f),
+                    $"mid={midX:0.#} snapped={snappedX:0.#}/{snappedW:0.#} afterResize={UnderlineX():0.#}/{UnderlineW():0.#} want={t2r.X:0.#}/{t2r.W:0.#}");
+            }
+            finally { Tok.Use(saved); }
+        }
+
+        // B.9c-text (add button) — the Text strip's HOVER-ONLY "+". Three things are load-bearing and none of them are
+        // visible from the Chrome path: (1) the slot is RESERVED at rest, i.e. the button node exists and occupies its
+        // full 32 DIP after the LAST tab even while invisible — the strip hugs and a title bar reports that hug as ONE
+        // TitleBarHit.Client region, so a mount-on-hover would move the reported rect on every pointer entry; (2) at
+        // rest it paints NOTHING (opacity 0), so the reserved slot is not visible space; (3) the reserved slot is not a
+        // dead hole — it is hit-testable, so entering it reveals the button and a click still opens a tab. `Never`
+        // mounts no button at all, which is what keeps the historical no-"+" strip exactly as it was.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("tabstrip-add", new Size2(640, 80), 1f));
+                window.Show();
+                int added = 0;
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => Embed.Comp(() => new TabStrip
+                        {
+                            Appearance = TabStripAppearance.Text,
+                            // Non-closable on purpose: the close buttons would otherwise be MORE AutomationRole.Buttons
+                            // in the strip and the "+" could not be identified by role alone. IsClosable defaults TRUE,
+                            // and since the reserved-slot close contract the × nodes are mounted even at rest — so the
+                            // intent must be explicit.
+                            Items = [new TabViewItem { Header = "one", IsClosable = false },
+                                     new TabViewItem { Header = "two", IsClosable = false }],
+                            IsAddTabButtonVisible = true,
+                            AddButtonVisibility = TabStripAddButtonVisibility.OnStripPointerOver,
+                            OnAddTabButtonClick = () => { added++; return null; },
+                            MinTabWidth = 90f,
+                            MaxTabWidth = 200f,
+                        }),
+                    });
+                void Settle(int frames = 90) { for (int i = 0; i < frames; i++) host.RunFrame(); }
+                Settle();
+
+                var addButtons = Roles(host.Scene, AutomationRole.Button);
+                NodeHandle add = addButtons.Count == 1 ? addButtons[0] : NodeHandle.Null;
+                var addTabs = Roles(host.Scene, AutomationRole.Tab);
+                float Opacity() => add.IsNull ? float.NaN : host.Scene.Paint(add).Opacity;
+
+                RectF addRect = add.IsNull ? default : host.Scene.AbsoluteRect(add);
+                RectF lastTab = addTabs.Count == 2 ? host.Scene.AbsoluteRect(host.Scene.Parent(addTabs[1])) : default;
+                // RESERVED: full width, after the last tab — and INVISIBLE.
+                bool reserved = !add.IsNull && Near(addRect.W, 32f, 0.51f) && addRect.X >= lastTab.Right - 0.51f;
+                float restOpacity = Opacity();
+                bool hiddenAtRest = !add.IsNull && Near(restOpacity, 0f, 0.001f);
+
+                // Pointer onto a TAB ⇒ the strip is hovered ⇒ the "+" cross-fades in. (The reveal rides the strip's own
+                // per-tab hover signal with a sentinel for the button, NOT a hover handler on the strip root — an
+                // interactive ancestor becomes a hover CONTAINER and AnimScheduler.SetHoverDescendants would drive
+                // every text tab's HoverOpacity at once.)
+                var onTab = host.Scene.AbsoluteRect(addTabs[0]);
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(onTab.X + onTab.W / 2f, onTab.Y + onTab.H / 2f), 0, 0));
+                Settle();
+                float hoverOpacity = Opacity();
+                bool shownOnHover = Near(hoverOpacity, 1f, 0.01f);
+
+                // …and it is a real target while revealed: press+release over the reserved slot opens a tab.
+                var onAdd = new Point2(addRect.X + addRect.W / 2f, addRect.Y + addRect.H / 2f);
+                window.QueueInput(new InputEvent(InputKind.PointerMove, onAdd, 0, 0));
+                Settle(2);
+                window.QueueInput(new InputEvent(InputKind.PointerDown, onAdd, 0, 0));
+                host.RunFrame();
+                window.QueueInput(new InputEvent(InputKind.PointerUp, onAdd, 0, 0));
+                Settle();
+                bool clickable = added == 1 && Near(Opacity(), 1f, 0.01f);   // still revealed while the pointer is on IT
+
+                // Pointer off the strip ⇒ back to nothing.
+                window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(600f, 70f), 0, 0));
+                Settle();
+                float leftOpacity = Opacity();
+                bool hiddenAgain = Near(leftOpacity, 0f, 0.01f);
+
+                Check("B.9c-text TabStrip Text add button OnStripPointerOver: the '+' slot is reserved after the last tab, paints nothing at rest, fades in on strip hover (and is a live target there), and fades back out on leave",
+                    !add.IsNull && reserved && hiddenAtRest && shownOnHover && clickable && hiddenAgain,
+                    $"found={!add.IsNull}(buttons={addButtons.Count}) reserved={reserved}(w={addRect.W:0.#} x={addRect.X:0.#} lastTabRight={lastTab.Right:0.#}) " +
+                    $"rest={restOpacity:0.###} hover={hoverOpacity:0.###} left={leftOpacity:0.###} added={added}");
+            }
+            finally { Tok.Use(saved); }
+        }
+
+        // …and Never is a true absence, not a zero-width ghost: no add button node is mounted at all, which is the
+        // configuration every existing Text-strip host (and the B.9d block above) relies on.
+        {
+            ThemeKind saved = Tok.Theme;
+            try
+            {
+                Tok.Use(ThemeKind.Dark);
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc("tabstrip-noadd", new Size2(640, 80), 1f));
+                window.Show();
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings,
+                    new W0fStaticProbe
+                    {
+                        Build = () => Embed.Comp(() => new TabStrip
+                        {
+                            Appearance = TabStripAppearance.Text,
+                            Items = [new TabViewItem { Header = "one", IsClosable = false },
+                                     new TabViewItem { Header = "two", IsClosable = false }],
+                            IsAddTabButtonVisible = true,
+                            AddButtonVisibility = TabStripAddButtonVisibility.Never,
+                            MinTabWidth = 90f,
+                            MaxTabWidth = 200f,
+                        }),
+                    });
+                for (int i = 0; i < 90; i++) host.RunFrame();
+                int buttons = Roles(host.Scene, AutomationRole.Button).Count;
+                int tabCount = Roles(host.Scene, AutomationRole.Tab).Count;
+                Check("B.9c-text TabStrip Text add button Never: no '+' node is mounted (the strip is exactly its tabs)",
+                    buttons == 0 && tabCount == 2, $"buttons={buttons} tabs={tabCount}");
             }
             finally { Tok.Use(saved); }
         }

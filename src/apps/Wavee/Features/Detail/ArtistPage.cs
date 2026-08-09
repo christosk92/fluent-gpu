@@ -56,7 +56,7 @@ sealed partial class ArtistPage : Component
         var go = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
         var store = UseContext(LibraryStore.Slot);
-        var shellTint = UseContext(ShellTint.Slot);
+        var shellMaterial = UseContext(ShellMaterial.Slot);
         _acts = UseContext(ActionServices.Slot);          // shelf-card context menus (Menus.CardAttach)
         _menuOverlay = UseContext(Overlay.Service);
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
@@ -92,23 +92,27 @@ sealed partial class ArtistPage : Component
         // this page to every batch the discography grid kicks off while scrolling.
         _ = SpotifyLive.CoverColorPlane.Current.Watch(paletteUrl).Value;
         var artPalette = artistReady ? Surfaces.SchemeFor(paletteUrl) : null;
-        ColorF? micaTint = colorWashesDisabled || artPalette is not { } artScheme ? null : Tok.Theme == ThemeKind.Light
+        // A low-alpha art tone published over the shell's deterministic opaque ground (not a backdrop scrim): it warms
+        // the ground, never replaces it. Null ⇒ the bare ground.
+        ColorF? shellTint = colorWashesDisabled || artPalette is not { } artScheme ? null : Tok.Theme == ThemeKind.Light
             ? WaveePalette.Lift(WaveePalette.ToColor(artScheme.TextBase)) with { A = 0.05f }
             : WaveePalette.TintedDark(artScheme) with { A = 0.14f };
 
+        // Flat arm only (Wash: null) — same contract as DetailShell; the three-layer radial wash belongs to Home.
         void SetTint(ColorF? color)
         {
-            if (shellTint is not null) shellTint.Value = new ShellTintState(color, _tintOwner);
+            if (shellMaterial is not null) shellMaterial.Value = new ShellMaterialState(_tintOwner, color, null);
         }
         void ClearTint()
         {
-            if (shellTint is not null && ReferenceEquals(shellTint.Peek().Owner, _tintOwner)) shellTint.Value = default;
+            if (shellMaterial is not null && ReferenceEquals(shellMaterial.Peek().Owner, _tintOwner))
+                shellMaterial.Value = default;
         }
 
         // Exact deps are intentional: this is a low-frequency navigation/data effect, and route identity must refresh
         // ownership even when two artists happen to have the same extracted colour.
-        UseEffect(() => SetTint(micaTint), DepKey.From(HashCode.Combine(routeKey, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled)));
-        UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
+        UseEffect(() => SetTint(shellTint), DepKey.From(HashCode.Combine(routeKey, shellTint.HasValue, shellTint.GetValueOrDefault(), Tok.Theme, artistReady, colorWashesDisabled)));
+        UseActivation(onActivated: () => SetTint(shellTint), onDeactivated: ClearTint);
 
         var compactInteractive = UseSignal(false);
         var pageScroll = UseSignal(0f);   // live page scroll offset → published so the in-page virtualized discography grids window against it
@@ -132,6 +136,10 @@ sealed partial class ArtistPage : Component
                 // Scroll-position restoration keyed by the artist (route). One ScrollView serves successive artists in place,
                 // so without a key artist B would inherit A's scroll; with it, B starts at the top and a revisit to A restores it.
                 Key = "artist-scroll:" + routeKey, Grow = 1f, ScrollKey = routeKey,
+                // No colour edge cue: the default cue resolved its surface by ANCESTOR walk, which sails past the opaque
+                // content pane (a ZStack sibling) to the untinted ShellGround — a neutral one-rung-darker band painted
+                // OVER the pinned compact bar. The shy header itself is the occlusion cue on this page.
+                EdgeCues = ScrollEdgeCues.None,
                 // Publish the live offset (24px write-throttle floor; LazyGrid windowing is per-row inside the control).
                 OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
             };
@@ -230,7 +238,9 @@ sealed partial class ArtistPage : Component
 
         var inner = new BoxEl
         {
-            Direction = 1, Gap = Spacing.XL,
+            // W1a-alias: WaveeSize.SectionGap — the ONE page-section gap (32). Was Spacing.XL (20), which made this page's
+            // sections sit closer together than every other page's for no stated reason.
+            Direction = 1, Gap = WaveeSize.SectionGap,
             // DetailShell's clamp idiom ("detail:two-column"): Grow toward the wrapper row's free width, capped at 1600,
             // with the Justify=Center wrapper below centring the capped block. MaxWidth+AlignSelf.Center is NOT enough —
             // a non-Stretch child arranges at its MEASURED width, so the fluid Grow/Basis=0 sections would under-fill
