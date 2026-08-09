@@ -172,3 +172,25 @@ sealed class FollowButton : Component
         ],
     };
 }
+
+/// <summary>The same follow toggle as a plateless TEXT ACTION, for the sticky text-chrome context band — which has no
+/// plates in it at all, so the capsule above cannot go there (see <see cref="WaveeCta.TextAction"/> and its fence).
+/// Same bridge, same handler, same words; ON is accent INK instead of an accent border.
+/// <para>The uri freezes at mount like <see cref="FollowButton"/>'s, so every call site keys the embed on it.</para></summary>
+sealed class FollowTextAction : Component
+{
+    readonly string _uri;
+    readonly string? _name;   // display-only: names the profile in the notification-center activity entry
+    public FollowTextAction(string uri, string? name = null) { _uri = uri; _name = name; }
+
+    public override Element Render()
+    {
+        var lib = UseContext(LibraryBridge.Slot);
+        if (lib is null) return new BoxEl();                 // capability gate
+        bool following = lib.IsSaved(_uri);                  // subscribe
+        return WaveeCta.TextAction(
+            Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow),
+            () => lib.ToggleSaved(_uri, _name),
+            toggledOn: following);
+    }
+}

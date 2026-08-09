@@ -95,7 +95,6 @@ public class DetailVerticalLayoutTests
     public void StickyGeometry_UsesCompactIdentityPlusChromeInset()
     {
         Assert.Equal(56f, DetailVerticalLayout.CompactIdentityHeight);
-        Assert.Equal(36f, DetailVerticalLayout.CompactArtworkSize);
         Assert.Equal(37f, DetailVerticalLayout.ChromeExtent());
         Assert.Equal(85f, DetailVerticalLayout.ChromeExtent(contentFilterExtent: 48f));
         Assert.Equal(93f, DetailVerticalLayout.StickyClipInset());
@@ -135,14 +134,10 @@ public class DetailVerticalLayoutTests
         Assert.True(expandedStart <= compactStart);
     }
 
-    [Theory]
-    [InlineData(320f, 160f)]
-    [InlineData(580f, 266.8f)]
-    [InlineData(1400f, 480f)]
-    public void CompactPill_IsContentSizedWithViewportCap(float viewport, float expected)
-    {
-        Assert.Equal(expected, DetailVerticalLayout.CompactPillWidthCap(viewport), 2);
-    }
+    // The floating identity CAPSULE this file used to size (cover + title + owner, shadowed, bordered, viewport-capped)
+    // is deleted: the sticky header is now the text-chrome context band, which is full-bleed and has no capsule in it.
+    // Its width-cap ladder went with it; only the reveal-band TIMING constant survives (CompactRevealBand, pinned by
+    // ScrollHandoff_UsesLateOverlappingWindows above).
 
     [Fact]
     public void SideHero_EliminatesPaddingGapBeforeToolbar()

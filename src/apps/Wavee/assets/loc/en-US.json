@@ -113,6 +113,8 @@
     "filter": {
       "title": "Filter tracks",
       "searchThisList": "Search this list",
+      "find": "Find",
+      "short": "Filter",
       "searchIn": "Search in",
       "everything": "Everything",
       "titleOnly": "Title",

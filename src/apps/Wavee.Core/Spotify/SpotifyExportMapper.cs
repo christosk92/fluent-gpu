@@ -660,6 +660,11 @@ public static class SpotifyExportMapper
         var items = new List<SearchSuggestionItem>();
         var seenQueries = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
         var seenItems = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+        // Display-level dedupe on top of the URI one: Spotify's catalog carries duplicate track entries (relinked
+        // releases, market variants) with DISTINCT uris but identical kind+title+subtitle — in a suggestions popup
+        // that reads as the same song listed twice. Suggestions are a launcher, not a catalog: one row per display
+        // identity is correct, and the first (highest-ranked) uri wins.
+        var seenDisplay = new System.Collections.Generic.HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
 
         foreach (var hit in Arr(Dig(responseRoot, "data", "searchV2", "topResultsV2", "itemsV2")))
         {
@@ -673,7 +678,8 @@ public static class SpotifyExportMapper
                 continue;
             }
 
-            if (TryMapSuggestionItem(itemType, data) is { } rich && seenItems.Add(rich.Uri))
+            if (TryMapSuggestionItem(itemType, data) is { } rich && seenItems.Add(rich.Uri)
+                && seenDisplay.Add(rich.Kind + "\u001F" + rich.Title + "\u001F" + rich.Subtitle))
                 items.Add(rich);
 
             if (queries.Count >= 8 && items.Count >= 16) break;

@@ -6,6 +6,10 @@
     "play": "Afspelen",
     "pause": "Pauzeren",
     "likedSongs": "Nummers die je leuk vindt",
+    "filter": {
+      "find": "Zoeken",
+      "short": "Filteren"
+    },
     "artist": "ARTIEST",
     "songCount": "{count, plural, one {# nummer} other {# nummers}}",
     "today": "Vandaag",

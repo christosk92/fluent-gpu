@@ -6,8 +6,6 @@ namespace Wavee.Features.Detail;
 public enum ArtistHeroTier : byte { Narrow, Compact, Medium, Wide }
 public enum ArtistHeroVeilAxis : byte { Horizontal, Vertical }
 
-public readonly record struct ArtistCompactBarPolicy(bool ShowFollow);
-
 public readonly record struct ArtistHeroMetrics(
     ArtistHeroTier Tier,
     float MinHeight,
@@ -74,11 +72,10 @@ public static class ArtistHeroLayout
     public static float ExpandedFadeStart(float collapseDistance) => DetailVerticalLayout.ExpandedFadeStart(collapseDistance);
     public static float CompactRevealStart(float collapseDistance) => DetailVerticalLayout.CompactRevealStart(collapseDistance);
 
-    public static ArtistCompactBarPolicy CompactBarPolicyFor(ArtistHeroTier tier) => tier switch
-    {
-        ArtistHeroTier.Wide or ArtistHeroTier.Medium => new(true),
-        _ => new(false),
-    };
+    // NO compact-bar policy any more. The old tinted bar carried an avatar, the name and two CAPSULES, so Follow had
+    // to be dropped under width pressure to keep the row from clipping. The text-chrome context band that replaced it
+    // has no capsules: its actions are words, they are the cheapest things in the row, and they never drop — what
+    // yields under pressure is the PIVOT, from the right, which ContextBandLayout owns.
 
     public static float HeroHeightFor(float width) => width >= WideWidth ? WideHeight
         : width >= MediumWidth ? MediumHeight

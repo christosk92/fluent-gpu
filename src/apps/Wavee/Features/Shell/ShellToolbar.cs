@@ -263,7 +263,11 @@ sealed class OmnibarSuggestionsPopup : Component
         var s = _suggestions.Value;
         bool loading = _loading.Value;
         int highlighted = _highlight?.Value ?? -1;
-        float width = _width.Value > 0f ? _width.Value : 720f;
+        // FLOOR, not just fallback: the popup width tracks the anchor field, and the merged chrome's icon-mode search
+        // can be crushed to ChromeSearchIconW when the centre column has no room — anchoring a 40-DIP dropdown that
+        // renders every row as a vertical sliver. A popup is an overlay; it may be wider than its anchor. 400 keeps a
+        // cover + title + trailing actions legible (the overlay layer clamps to the window edge like any flyout).
+        float width = MathF.Max(_width.Value > 0f ? _width.Value : 720f, 400f);
         // Live path (FluentRichOmnibar) does not pass Services/go — resolve them from ambient context so row actions
         // (Play / Like / context menu) work the same as the retained RichOmnibar constructor.
         var svc = _svc ?? UseContext(Services.Slot);

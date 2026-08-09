@@ -21,6 +21,10 @@ sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
     readonly object _tintOwner = new();   // stable ownership across artist -> artist reuse and KeepAlive park/reactivate
+    // The context band's scroll-spy registry: the page's scroll viewport + one node per pivot-visible section. Written
+    // from OnRealized, read by ContextPivot's scroll effect — never an ancestor relationship, so the band can live
+    // inside the pinned hero while the sections live in the magazine body.
+    readonly SectionAnchors _anchors = new();
     // Cover-extracted page CHROME accent for accent-filled controls; null keeps the semantic default live.
     // WASH accent lives in CoverPaletteLeaves (veil / blend wash) — not a page field.
     ColorF? _paletteAccent;
@@ -98,11 +102,14 @@ sealed partial class ArtistPage : Component
         {
             compactInteractive.Value = false;
             pageScroll.Value = 0f;
+            // A new artist is a new set of sections in a REUSED slot. Dropping the registrations here means a pivot
+            // click during the first frames of the new artist can never land on the previous artist's node.
+            _anchors.Reset();
         }, routeKey);
         // One tree: the boundary renders Body with the resource's pending value, derives its loading paint, then fills
         // the same Body with the loaded artist. The page does not author or pass a separate skeleton subtree.
         var scroll = ScrollView(Skel.Region(artist,
-            content: a => Body(a, fansList, svc, go, bridge, compactInteractive),
+            content: a => Body(a, fansList, svc, go, bridge, compactInteractive, pageScroll),
             onFailed: () => ErrorState.Build(artist.Error),
             group: routeKey)
             with
@@ -114,6 +121,10 @@ sealed partial class ArtistPage : Component
                 // Scroll-position restoration keyed by the artist (route). One ScrollView serves successive artists in place,
                 // so without a key artist B would inherit A's scroll; with it, B starts at the top and a revisit to A restores it.
                 Key = "artist-scroll:" + routeKey, Grow = 1f, ScrollKey = routeKey,
+                // The band's pivot resolves "which section am I in" against THIS viewport, and scrolls THIS viewport
+                // on a click — an explicit handle, so a nested scroller deeper in the magazine can never be the thing
+                // that moves.
+                OnRealized = h => _anchors.Viewport = h,
                 // No colour edge cue: the default cue resolved its surface by ANCESTOR walk, which sails past the opaque
                 // content pane (a ZStack sibling) to the untinted ShellGround — a neutral one-rung-darker band painted
                 // OVER the pinned compact bar. The shy header itself is the occlusion cue on this page.
@@ -140,7 +151,7 @@ sealed partial class ArtistPage : Component
     }
 
     Element Body(Artist a, IReadOnlyList<Artist> fansAll, Services svc, Action<string, string?> go,
-                 PlaybackBridge? bridge, Signal<bool> compactInteractive)
+                 PlaybackBridge? bridge, Signal<bool> compactInteractive, IReadSignal<float> pageScroll)
     {
         string uri = a.Uri;
         // Cover-extracted chrome accent (null ⇒ semantic default). Wash/veil accents are owned by CoverPaletteLeaves.
@@ -173,42 +184,51 @@ sealed partial class ArtistPage : Component
         // across renders — note "related" and "fans" are deliberately DISTINCT keys: they are alternatives holding
         // different data, and reusing one key would reuse the shelf subtree across the swap.
         var sections = new List<Element>(15);
+        // The pivot is BUILT FROM the section list, in the same pass, so the two can never disagree about what the
+        // page renders. A section joins the pivot only when it is a DESTINATION — a place a visitor would aim at.
+        // The two banners (latest release, tour) are announcements sitting between destinations and are deliberately
+        // excluded: naming them in the pivot would advertise a jump to a 90-DIP card.
+        var pivot = new List<ContextPivotItem>(14);
+        void Sec(string key, string? pivotLabel, Element body)
+        {
+            if (pivotLabel is null) { sections.Add(body with { Key = "sec:" + key }); return; }
+            pivot.Add(new ContextPivotItem(key, pivotLabel));
+            sections.Add(ContextBand.Anchor(_anchors, key, body with { Key = "sec:" + key }));
+        }
         // NO pre-release band here. Four surfaces already carry the announcement, each in a place the visitor is
         // already looking: the hero eyebrow pill (narrow windows), the hero pinned card's date line (wide), the compact
         // bar once the hero scrolls away, and the Upcoming masthead at the head of the Releases column — where anyone
         // asking "what's new from this artist" looks first. A band of its own would be a FIFTH copy of one fact, and it
         // would push Top tracks, the thing most visitors came for, down by ~90px on every artist with something coming.
         if (popular.Count > 0)
-            sections.Add(TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.HeaderImage, a.Name, extras?.PreRelease, go, PlayContext, accent) with { Key = "sec:popular" });
+            Sec("popular", Loc.Get(Strings.Artist.TopTracks),
+                TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.HeaderImage, a.Name, extras?.PreRelease, go, PlayContext, accent));
         // The "just dropped" banner earns full-band prominence directly above Albums — not a narrow rail card
         // sharing a column with Artist Pick/Upcoming (see ArtistPage.TopTracks.LatestReleaseBanner).
         if (a.LatestRelease is { Name.Length: > 0, Uri.Length: > 0 } latestRelease)
-            sections.Add(Section(Loc.Get(Strings.Artist.LatestRelease), LatestReleaseBanner(latestRelease, go, PlayContext, accent))
-                with { Key = "sec:latest-release" });
+            Sec("latest-release", null,
+                Section(Loc.Get(Strings.Artist.LatestRelease), LatestReleaseBanner(latestRelease, go, PlayContext, accent)));
         // Owned discography stays inline as full virtualized facets; dedicated pages remain deep-link compatible only.
-        if (albums.Length > 0 || a.AlbumsTotal > 0) sections.Add(Embed.Comp(
+        if (albums.Length > 0 || a.AlbumsTotal > 0) Sec("albums", Loc.Get(Strings.Artist.Albums), Embed.Comp(
             new DiscographySection.Props(albums),
-            () => new DiscographySection(DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent))
-            with { Key = "sec:albums" });
-        if (singles.Length > 0 || a.SinglesTotal > 0) sections.Add(Embed.Comp(
+            () => new DiscographySection(DiscographyKind.Albums, Loc.Get(Strings.Artist.Albums), svc, go, PlayContext, accent)));
+        if (singles.Length > 0 || a.SinglesTotal > 0) Sec("singles", Loc.Get(Strings.Artist.SinglesEps), Embed.Comp(
             new DiscographySection.Props(singles),
-            () => new DiscographySection(DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent))
-            with { Key = "sec:singles" });
-        if (compilations.Length > 0 || a.CompilationsTotal > 0) sections.Add(Embed.Comp(
+            () => new DiscographySection(DiscographyKind.Singles, Loc.Get(Strings.Artist.SinglesEps), svc, go, PlayContext, accent)));
+        if (compilations.Length > 0 || a.CompilationsTotal > 0) Sec("compilations", Loc.Get(Strings.Artist.Compilations), Embed.Comp(
             new DiscographySection.Props(compilations),
-            () => new DiscographySection(DiscographyKind.Compilations, Loc.Get(Strings.Artist.Compilations), svc, go, PlayContext, accent))
-            with { Key = "sec:compilations" });
-        if (a.AppearsOn is { Count: > 0 } appears) sections.Add(AppearsOnShelf(appears, go, PlayContext) with { Key = "sec:appears-on" });
-        if (extras?.Tour is { } tour) sections.Add(TourBannerCard(tour,
-            () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)) with { Key = "sec:tour" });
-        if (extras?.MusicVideos is { Count: > 0 } videos) sections.Add(MusicVideosShelf(videos, PlayContext) with { Key = "sec:music-videos" });
-        if (extras?.Playlists is { Count: > 0 } playlists) sections.Add(PlaylistsShelf(playlists, go, PlayContext) with { Key = "sec:playlists" });
-        if (extras?.Concerts is { Count: > 0 } concerts) sections.Add(ConcertsRow(concerts, go) with { Key = "sec:concerts" });
-        if (extras?.Merch is { Count: > 0 } merch) sections.Add(MerchRow(merch) with { Key = "sec:merch" });
-        sections.Add(BiographyBand(a, albums.Length, singles.Length, extras, fans.Length, go) with { Key = "sec:biography" });
-        if (extras?.Gallery is { Count: > 0 } gallery) sections.Add(GalleryStrip(gallery) with { Key = "sec:gallery" });
-        if (extras?.Related is { Count: > 0 } related) sections.Add(RelatedShelf(related, go, PlayContext) with { Key = "sec:related" });
-        else if (fans.Length > 0) sections.Add(FansShelf(fans, go, PlayContext) with { Key = "sec:fans" });
+            () => new DiscographySection(DiscographyKind.Compilations, Loc.Get(Strings.Artist.Compilations), svc, go, PlayContext, accent)));
+        if (a.AppearsOn is { Count: > 0 } appears) Sec("appears-on", Loc.Get(Strings.Artist.AppearsOn), AppearsOnShelf(appears, go, PlayContext));
+        if (extras?.Tour is { } tour) Sec("tour", null, TourBannerCard(tour,
+            () => go(ConcertRoutes.ArtistSchedule(uri), a.Name)));
+        if (extras?.MusicVideos is { Count: > 0 } videos) Sec("music-videos", Loc.Get(Strings.Artist.MusicVideos), MusicVideosShelf(videos, PlayContext));
+        if (extras?.Playlists is { Count: > 0 } playlists) Sec("playlists", Loc.Get(Strings.Artist.PlaylistsDiscovery), PlaylistsShelf(playlists, go, PlayContext));
+        if (extras?.Concerts is { Count: > 0 } concerts) Sec("concerts", Loc.Get(Strings.Artist.UpcomingConcerts), ConcertsRow(concerts, go));
+        if (extras?.Merch is { Count: > 0 } merch) Sec("merch", Loc.Get(Strings.Artist.Merch), MerchRow(merch));
+        Sec("biography", Loc.Get(Strings.Artist.Biography), BiographyBand(a, albums.Length, singles.Length, extras, fans.Length, go));
+        if (extras?.Gallery is { Count: > 0 } gallery) Sec("gallery", Loc.Get(Strings.Artist.Gallery), GalleryStrip(gallery));
+        if (extras?.Related is { Count: > 0 } related) Sec("related", Loc.Get(Strings.Detail.FansAlsoLike), RelatedShelf(related, go, PlayContext));
+        else if (fans.Length > 0) Sec("fans", Loc.Get(Strings.Detail.FansAlsoLike), FansShelf(fans, go, PlayContext));
 
         var inner = new BoxEl
         {
@@ -249,7 +269,7 @@ sealed partial class ArtistPage : Component
                     Direction = 1,
                     Children =
                     [
-                        Banner(a, uri, Play, Shuffle, Radio, compactInteractive.Value),
+                        Banner(a, uri, Play, Shuffle, Radio, compactInteractive.Value, pivot.ToArray(), pageScroll),
                         sentinel,
                         new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false },
                         new BoxEl { Direction = 0, Justify = FlexJustify.Center, Children = [inner] },

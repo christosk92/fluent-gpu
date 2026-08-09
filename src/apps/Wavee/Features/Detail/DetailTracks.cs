@@ -1396,7 +1396,11 @@ sealed class TrackList : Component
         float compactLeft = TrackRow.PadXFor(tier);
         bool toolbarLabeled = tier <= 1;
         Element toolbar = Toolbar(toolbarLabeled, tier);
-        Element compactSearch = CompactSearch(availW, compactLeft);
+        // ONE capability scan per hero render, shared by the field and the band's Filter action — the scan walks every
+        // track in the model, and a 10k playlist cannot afford to walk it twice for two views of the same facts.
+        var filterCaps = FilterCapabilities(_full.Value.Value);
+        Element compactSearch = CompactSearch(availW, compactLeft, filterCaps);
+        Element compactActions = CompactBandActions(filterCaps);
         Element compactSelection = CompactSelectionToolbar();
         Element header = new BoxEl
         {
@@ -1406,7 +1410,7 @@ sealed class TrackList : Component
             Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, orientation, artSize, availW,
                 compactLeft, collapseDistance, _verticalCompactInteractive,
                 _searchExpanded, _selectionCommandsVisible!,
-                toolbar, compactSearch, compactSelection, _acts)],
+                toolbar, compactSearch, compactActions, compactSelection, _acts)],
         };
         return new BoxEl
         {
@@ -1529,25 +1533,24 @@ sealed class TrackList : Component
         };
 
         if (!_verticalHeader) return content;
-        float collapseDistance = DetailVerticalLayout.CollapseDistance(VerticalHeaderHeight(subscribe: true));
-        Element shadow = new BoxEl
+
+        // THE MERGED BAND'S LOWER STRATUM. This node pins at exactly the identity row's height, so once both are stuck
+        // the page shows ONE surface: identity row (56) + this column row, with this row's own bottom divider (see
+        // Header) as the band's single hairline. There is deliberately no drop shadow — the previous 8-DIP scroll-ramped
+        // Elevation.Card strip under the chrome was compensating for a TRANSLUCENT bar that content ghosted through;
+        // an opaque band needs no elevation to be a boundary, and Zune chrome carries none.
+        //
+        // The fill is BOUND to the pin flag rather than read during render: a bound colour is a compositor write, so
+        // sticking and unsticking never re-renders this list. It snaps rather than cross-fades (a bound channel is
+        // excluded from BrushTransition per-channel, by contract) — which is the behaviour we want anyway: the surface
+        // must be opaque the instant a row is capable of sliding under it, not 167 ms later.
+        var pinned = _verticalCompactInteractive;
+        return new BoxEl
         {
-            Direction = 1, Justify = FlexJustify.End, HitTestPassThrough = true,
-            Children =
-            [
-                new BoxEl
-                {
-                    Height = 8f, Fill = Tok.FillSolidBaseAlt with { A = 0.01f }, Shadow = Elevation.Card,
-                    OpacityGroup = true,
-                    ScrollBinds =
-                    [
-                        new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                            Range = ScrollRange.Px(collapseDistance * 0.85f, collapseDistance), OutStart = 0f, OutEnd = 1f },
-                    ],
-                },
-            ],
+            Key = "chrome-band", Direction = 1,
+            Fill = Prop.Of(() => pinned.Value ? ContextBand.Fill : ColorF.Transparent),
+            Children = [content],
         };
-        return ZStack(content, shadow) with { Direction = 1 };
     }
 
     Element Toolbar(bool labeled, int tier) =>
@@ -1725,23 +1728,71 @@ sealed class TrackList : Component
         _toolbarMetricsEpoch.Value = _toolbarMetricsEpoch.Peek() + 1;
     }
 
-    Element CompactSearch(float availW, float compactLeft)
+    Element CompactSearch(float availW, float compactLeft, TrackFilterCapabilities caps)
     {
         var h = _liveHandlers?.Value ?? _initialH;
-        var model = _full.Value.Value;
         bool expanded = _searchExpanded.Value;
-        return SearchHost(h, FilterCapabilities(model), expanded,
+        return SearchHost(h, caps, expanded,
             expanded ? CompactSearchWidth(availW, compactLeft) : DetailTrackCommandBarLayout.SearchIconWidth,
             compact: true);
     }
 
-    /// <summary>The expanded field's width in the compact sticky header. Derived, not the old hardcoded 196: the header
-    /// is <c>availW</c> wide with <c>compactLeft</c> padding either side, and the tools group is the field, one
-    /// <see cref="Spacing.M"/> gap and the play button — plus the gap the flex spacer leaves in front of the group. The
-    /// identity pill is unmounted while search is open, so all of that room is genuinely the field's.</summary>
-    static float CompactSearchWidth(float availW, float compactLeft)
+    /// <summary>The context band's RIGHT cluster: Find · Filter · Play, as plateless text actions (see
+    /// <see cref="WaveeCta.TextAction"/> and its fence). These are the SAME three affordances the band's three
+    /// deleted floating objects carried, on the same handlers — the search glyph became a word, the filter funnel
+    /// (which only existed as an affix INSIDE the expanded field, so it was unreachable from the collapsed bar at
+    /// all) became a word beside it, and the accent circle FAB became the band's one accent word.
+    ///
+    /// <para>Find keeps its node capture: collapsing the field restores focus to whatever opened it, and dropping the
+    /// icon button would otherwise have dropped that focus target on the floor.</para></summary>
+    Element CompactBandActions(TrackFilterCapabilities caps)
     {
-        float room = availW - compactLeft * 2f - DetailVerticalLayout.CompactPlaySize - Spacing.M * 2f;
+        var h = _liveHandlers?.Value ?? _initialH;
+        void ToggleFind()
+        {
+            if (_searchExpanded.Peek()) CollapseSearch(restoreFocus: false);
+            else _searchExpanded.Value = true;
+        }
+        return new BoxEl
+        {
+            Direction = 0, Gap = ContextBandLayout.ActionGap, Shrink = 0f,
+            AlignItems = FlexAlign.Center,
+            Children =
+            [
+                WaveeCta.TextAction(Loc.Get(Strings.Detail.Filter.Find), ToggleFind) with
+                {
+                    Key = "band:find",
+                    OnRealized = CaptureSearchButton,
+                },
+                Embed.Comp(new FilterButtonProps(caps, TextAction: true),
+                    () => new FilterButton(h.Filters, h.SetFilters)) with { Key = "band:filter" },
+                WaveeCta.TextAction(Loc.Get(Strings.Detail.Play), h.PlayAll, primary: true) with { Key = "band:play" },
+            ],
+        };
+    }
+
+    void CaptureSearchButton(NodeHandle node)
+    {
+        _searchButtonNode = node;
+        if (!_restoreSearchFocus) return;
+        _restoreSearchFocus = false;
+        _post?.Invoke(() => InputHooks.Current.Default.FocusNode?.Invoke(node, true));
+    }
+
+    /// <summary>The expanded field's width in the context band. Derived, not the old hardcoded 196: the band is
+    /// <c>availW</c> wide with <c>compactLeft</c> padding either side, and the right cluster is the three text
+    /// actions plus one cluster gap in front of them. The identity block is unmounted while search is open, so all of
+    /// that room is genuinely the field's.</summary>
+    float CompactSearchWidth(float availW, float compactLeft)
+    {
+        Span<float> actions =
+        [
+            ContextBandLayout.EstimateLabelWidth(Loc.Get(Strings.Detail.Filter.Find), ContextBandLayout.ActionPadX),
+            ContextBandLayout.EstimateLabelWidth(Loc.Get(Strings.Detail.Filter.Short), ContextBandLayout.ActionPadX),
+            ContextBandLayout.EstimateLabelWidth(Loc.Get(Strings.Detail.Play), ContextBandLayout.ActionPadX),
+        ];
+        float room = availW - compactLeft * 2f - ContextBandLayout.ActionsWidth(actions)
+                     - ContextBandLayout.ClusterGap;
         return MathF.Max(DetailTrackCommandBarLayout.SearchIconWidth,
                          MathF.Min(room, DetailTrackCommandBarLayout.SearchMax));
     }
@@ -3573,7 +3624,9 @@ sealed class DetailTrackSearchField : Component
 /// tempo arriving adds the Tempo facet), so they must reach the component through the props channel — never as a frozen
 /// ctor field, and never baked into the <c>Key</c>: a remount would drop the anchor/overlay refs and orphan an OPEN
 /// flyout. See docs/design/subsystems/component-props-contract.md.</summary>
-sealed record FilterButtonProps(TrackFilterCapabilities Caps);
+/// <summary><paramref name="TextAction"/> renders the button as the context band's plateless text action instead of
+/// the 32-DIP funnel square — same flyout, same state, a word instead of a glyph, because the band carries no plates.</summary>
+sealed record FilterButtonProps(TrackFilterCapabilities Caps, bool TextAction = false);
 
 sealed class FilterButton : Component
 {
@@ -3602,7 +3655,9 @@ sealed class FilterButton : Component
         var anchor = UseRef<NodeHandle>(default);
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
-        var caps = UsePropsOrDefault<FilterButtonProps>()?.Caps ?? default;
+        var props = UsePropsOrDefault<FilterButtonProps>();
+        var caps = props?.Caps ?? default;
+        bool asText = props?.TextAction == true;
         var current = _filters.Value;
         int activeCount = current.ActiveCount;
         // ActiveCount increments for EVERY non-default facet, so "has a count" and "is not the default state" are the
@@ -3622,6 +3677,19 @@ sealed class FilterButton : Component
                 { ConstrainToRootBounds = true });
             handle.Value.ClosedAction = () => handle.Value = null;
         }
+
+        // The context band's arm: a word, with ACCENT ink standing in for the accent plate + count badge. "Some
+        // filters are on" is the only state the collapsed affordance ever needed to carry — the exact count is one
+        // click away inside the flyout, and a numeral floating beside a bold word in a typographic bar reads as a
+        // defect rather than as a badge.
+        if (asText)
+            return ToolTip.Wrap(
+                WaveeCta.TextAction(Loc.Get(Strings.Detail.Filter.Short), Toggle, toggledOn: active) with
+                {
+                    OnRealized = h => anchor.Value = h,
+                },
+                Loc.Get(Strings.Detail.Filter.Title));
+
         // Mirror the WinUI TextControlButton affix (EditableText.InnerButton): Width 30 + the inner-button margin 0,4,4,4,
         // and NO explicit height / AlignSelf — the field's affix row (AlignItems=Stretch) fills it to full height, while
         // AlignItems/Justify=Center centers the glyph. Accent plate + count badge when a filter is active.

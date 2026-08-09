@@ -74,14 +74,6 @@ public class ArtistHeroLayoutTests
         }
     }
 
-    [Theory]
-    [InlineData(ArtistHeroTier.Wide, true)]
-    [InlineData(ArtistHeroTier.Medium, true)]
-    [InlineData(ArtistHeroTier.Compact, false)]
-    [InlineData(ArtistHeroTier.Narrow, false)]
-    public void CompactBarPolicy_DropsFollowUnderPressure(ArtistHeroTier tier, bool follow)
-    {
-        var policy = ArtistHeroLayout.CompactBarPolicyFor(tier);
-        Assert.Equal(follow, policy.ShowFollow);
-    }
+    // The tier-driven "drop Follow" policy is gone with the capsule bar it protected — the context band's actions are
+    // words that always fit, and the PIVOT is what yields under width pressure (ContextBandLayoutTests).
 }

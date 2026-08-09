@@ -68,7 +68,11 @@ sealed class RightRail : Component
         Element surface = new BoxEl
         {
             Grow = 1f, Corners = corners, ClipToBounds = true,
-            Fill = Prop.Of(() => ui.RailFits.Value ? ColorF.Transparent : WaveeColors.FileArea),
+            // RailOpen is part of the key: on CLOSE the shell spacer snaps to 0 in the commit frame (RailSpacerAnim is
+            // null on the projected path) and the underlay's coat vanishes instantly, while this panel spends 300ms
+            // translating out — without its own coat that slide is raw text over the expanding page. Open stays
+            // single-coat: RailOpen flips true while the panel is still off-clip, so the hand-off never double-paints.
+            Fill = Prop.Of(() => ui.RailFits.Value && ui.RailOpen.Value ? ColorF.Transparent : WaveeColors.FileArea),
         };
         // The stock edge, docked: 1px StrokeCardDefault on LEFT + TOP only (the same left+top-only mechanism the shell's
         // content region uses — WaveeShell.StrokeOverhang documents it), drawn TOPMOST so panel content cannot cover it.

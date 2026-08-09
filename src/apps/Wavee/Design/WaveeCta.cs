@@ -3,6 +3,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Localization;
+using Wavee.Features.Detail;
 
 namespace Wavee;
 
@@ -40,6 +41,19 @@ namespace Wavee;
 //   │                         │ what separates the control from the picture (MediaCard.PlayFab, the player           │
 //   │                         │ transport, video overlays). A circle on a flat panel is off-table.                   │
 //   └─────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────┘
+//
+// ── THE TEXT ACTION, AND ITS FENCE ────────────────────────────────────────────────────────────────────────────────
+// <see cref="TextAction"/> is a THIRD grammar — a plateless, bold, 14px word that is a button — and a third grammar is
+// exactly the kind of thing this file exists to prevent. It is sanctioned for ONE surface and fenced to it: the
+// text-chrome CONTEXT BAND (Wavee's one sticky page header — see ContextBandLayout / ContextBand). That band is
+// typography and nothing else: no thumbnail, no plates, no shadow. Putting a capsule in it would make the capsule the
+// loudest object in a bar whose entire premise is that it is quiet, and putting an icon button in it would reintroduce
+// the floating-glyph chrome the band replaced.
+//
+// It may NOT be used as a general low-emphasis button. A quiet action anywhere else is `Button.Create(...,
+// ButtonAppearance.Subtle)`; a navigational word is the stock HyperlinkButton (which this is NOT — a hyperlink says
+// "this goes somewhere", a text action says "this does something here"). If a second surface ever wants this, the
+// question to answer first is why it is not a context band.
 static class WaveeCta
 {
     /// <summary>Row 1 of the geometry table: the standard 32-square icon button's edge. Equal to the control ladder's
@@ -138,6 +152,70 @@ static class WaveeCta
     }
 
     static readonly Action NoOp = static () => { };
+
+    // ── the text action (context bands only — see the fence in the file header) ───────────────────────────────────
+
+    /// <summary>The context band's action rung: 14 / 600, no plate, no border, no scale cue.</summary>
+    public const float TextActionSize = 14f;
+    public const ushort TextActionWeight = 600;
+    public const float TextActionLineHeight = 20f;
+
+    /// <summary>A PLATELESS labelled action for a <see cref="ContextBand"/> row.
+    ///
+    /// <para><b>Ink is the whole state model.</b> Rest <c>TextSecondary</c> → hover <c>TextPrimary</c>, eased by the
+    /// engine's own HoverT through <see cref="TextEl.HoverColor"/> — no fill, no border, no hover plate, and
+    /// deliberately no <c>HoverScale</c>: a word that grows under the pointer inside a 56-DIP bar shoves its
+    /// neighbours, and the band's premise is that it is still. <paramref name="primary"/> (the ONE per band) and
+    /// <paramref name="toggledOn"/> (a latched toggle, e.g. Following) both take ACCENT ink on the stock hyperlink
+    /// ramp — <c>AccentTextPrimary</c> → <c>AccentTextSecondary</c> → <c>AccentTextTertiary</c>, the same ladder
+    /// <c>HyperlinkButton</c> rides — so accent ink in this band always means either "the primary verb" or "this is
+    /// on", and never decoration.</para>
+    ///
+    /// <para><b>The hover boundary is the ACTION's own box</b>, never the row that contains it. <c>HoverColor</c>
+    /// interpolates against the nearest interactive ancestor's HoverT, so a handler one level up would light every
+    /// action in the cluster at once (the hover-container trap that produced the "all the shelf cards popped"
+    /// class of bug).</para>
+    ///
+    /// <para>Everything a button owes is still here: <see cref="AutomationRole.Button"/>, <c>Focusable</c> with the
+    /// engine's keyboard ring, the hand cursor, and SENTENCE case — the label is passed through verbatim, because a
+    /// caps transform over a localized string mangles Turkish dotted i and expands German ß, and lowercase-stylized
+    /// chrome is on the rejected-Zune list.</para></summary>
+    public static BoxEl TextAction(string label, Action? onClick, bool primary = false, bool toggledOn = false,
+                                   string? glyph = null)
+    {
+        bool accent = primary || toggledOn;
+        ColorF rest = accent ? Tok.AccentTextPrimary : Tok.TextSecondary;
+        ColorF hover = accent ? Tok.AccentTextSecondary : Tok.TextPrimary;
+        ColorF pressed = accent ? Tok.AccentTextTertiary : Tok.TextSecondary;
+
+        var kids = new System.Collections.Generic.List<Element>(2);
+        if (glyph is { Length: > 0 })
+            kids.Add(new TextEl(glyph)
+            {
+                Size = 14f, FontFamily = Theme.IconFont,
+                Color = rest, HoverColor = hover, PressedColor = pressed,
+            });
+        kids.Add(new TextEl(label)
+        {
+            Size = TextActionSize, LineHeight = TextActionLineHeight, Weight = TextActionWeight,
+            Color = rest, HoverColor = hover, PressedColor = pressed,
+            MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
+        });
+
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Height = ContextBandLayout.Height - 2f * Spacing.M,
+            Padding = new Edges4(ContextBandLayout.ActionPadX, 0f, ContextBandLayout.ActionPadX, 0f),
+            // A focus ring needs a shape to draw; 4 is the control ladder's radius, and it is invisible at rest
+            // because nothing is filled.
+            Corners = Radii.ControlAll,
+            Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
+            OnClick = onClick,
+            Children = kids.ToArray(),
+        };
+    }
 
     /// <summary>The stock <c>ButtonPalette.For(ButtonAppearance.Accent)</c> ramp with <paramref name="fill"/>
     /// substituted for AccentFillColorDefault. Shades mirror Tok's AccentFillShade exactly (the SAME color at @0.90 /

@@ -6,6 +6,10 @@
     "play": "재생",
     "pause": "일시 정지",
     "likedSongs": "좋아요 표시한 곡",
+    "filter": {
+      "find": "찾기",
+      "short": "필터"
+    },
     "artist": "아티스트",
     "songCount": "{count, plural, other {#곡}}",
     "today": "오늘",

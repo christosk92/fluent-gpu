@@ -20,7 +20,7 @@ sealed partial class ArtistPage : Component
     readonly Signal<float> _heroWidth = new(ArtistHeroLayout.WideWidth);
 
     Element Banner(Artist a, string uri, Action play, Action shuffle, Action radio,
-                   bool compactCanHit)
+                   bool compactCanHit, ContextPivotItem[] pivot, IReadSignal<float> pageScroll)
     {
         float width = MathF.Max(1f, _heroWidth.Value);
         var tier = UseRef(ArtistHeroTier.Wide);
@@ -150,8 +150,8 @@ sealed partial class ArtistPage : Component
         // parallax/pin math on a static tree), so without this the derived shimmer falls back to the default Opacity=1
         // and paints a phantom avatar/name/button row above the hero on every artist page load. Off keeps its slot
         // (an empty spacer, harmless inside this ZStack) without shimmering content nobody sees yet.
-        Element compactPresentation = ArtistCompactBar.Build(a, uri, width, metrics.Tier, collapseDistance,
-            _accent, play, compactCanHit).Skeletonized(false);
+        Element compactPresentation = ArtistCompactBar.Build(a, uri, width, collapseDistance,
+            _accent, play, compactCanHit, pivot, _anchors, pageScroll).Skeletonized(false);
 
         return new BoxEl
         {

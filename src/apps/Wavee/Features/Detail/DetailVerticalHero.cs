@@ -37,7 +37,7 @@ static class DetailVerticalHero
                                 float compactLeft, float collapseDistance,
                                 IReadSignal<bool> compactInteractive,
                                 IReadSignal<bool> searchExpanded, IReadSignal<bool> selectionCommandsVisible,
-                                Element toolbar, Element compactSearch, Element compactSelection,
+                                Element toolbar, Element compactSearch, Element compactActions, Element compactSelection,
                                 ActionServices? acts = null)
     {
         bool side = o == DetailHeroOrientation.SideBySide;
@@ -425,111 +425,50 @@ static class DetailVerticalHero
             Children = [immersiveToken],
         };
 
-        Element compactArtwork = new BoxEl
+        // ── THE STUCK BAND: the shared text-chrome context bar (ContextBand) ─────────────────────────────────────
+        // What used to live here were three FLOATING objects over live scrolling rows: a shadowed, bordered, accent-
+        // tinted capsule holding a 36-DIP cover plus the title and owner; a bare 32-DIP search glyph; and a 40-DIP
+        // accent circle play FAB. Nothing was behind them — the rows simply slid under three unrelated shapes — and
+        // the capsule was a second, smaller rendering of the hero it was replacing. All three are deleted. In their
+        // place: one opaque band, typography only, whose lower stratum is the tracklist's own column header (pinned
+        // directly under this by VerticalChromeRoot), sharing this surface and carrying the band's single hairline.
+        //
+        // The byline is owner AND the meta line where both exist — "Spotify · 50 songs, 3 hr 12 min" — because the
+        // band has a full row of width where the old capsule had a 480-DIP cap it was already ellipsizing inside.
+        string compactMeta =
+            m.OwnerName is { Length: > 0 } bandOwner && m.MetaLine is { Length: > 0 } bandMeta
+                ? bandOwner + " · " + bandMeta
+                : m.OwnerName ?? m.MetaLine ?? eyebrow;
+        Element compactIdentityBlock = new BoxEl
         {
-            Width = DetailVerticalLayout.CompactArtworkSize,
-            Height = DetailVerticalLayout.CompactArtworkSize,
-            Shrink = 0f, ClipToBounds = true,
-            Corners = CornerRadius4.All(4f), HitTestVisible = false,
-            Children =
-            [
-                DetailRail.HeroArtwork(m, DetailVerticalLayout.CompactArtworkSize, radius: 4f,
-                    connected: false, morphKey: null, decodePx: 256)
-            ],
-        };
-        Element compactPlay = new BoxEl
-        {
-            ZStack = true,
-            Width = DetailVerticalLayout.CompactPlaySize,
-            Height = DetailVerticalLayout.CompactPlaySize,
-            Shrink = 0f, HitTestPassThrough = true,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = DetailVerticalLayout.CompactPlaySize,
-                    Height = DetailVerticalLayout.CompactPlaySize,
-                    Corners = CornerRadius4.All(DetailVerticalLayout.CompactPlaySize * 0.5f),
-                    Fill = h.Accent, HitTestVisible = false,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Children = [Icon(Icons.Play, 14f, onAccent)],
-                },
-                new BoxEl
-                {
-                    Width = DetailVerticalLayout.CompactPlaySize,
-                    Height = DetailVerticalLayout.CompactPlaySize,
-                    Corners = CornerRadius4.All(DetailVerticalLayout.CompactPlaySize * 0.5f),
-                    HitTestVisible = compactCanHit,
-                    Cursor = CursorId.Hand, Role = AutomationRole.Button, OnClick = h.PlayAll,
-                    HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
-                },
-            ],
-        };
-        // Search presence swaps this pill in-place; the scroll-bound compact wrapper below owns its reveal and 4-DIP slide.
-        string compactMeta = m.OwnerName ?? m.MetaLine ?? eyebrow;
-        float compactPillMax = DetailVerticalLayout.CompactPillWidthCap(viewportW);
-        float compactTextMax = MathF.Max(80f,
-            compactPillMax - DetailVerticalLayout.CompactArtworkSize - Spacing.S - 16f);
-        ColorF compactPillFill = ColorF.Lerp(
-            Tok.FillSolidSecondary, h.Accent, Tok.Theme == ThemeKind.Dark ? 0.14f : 0.08f);
-        Element compactPill = new BoxEl
-        {
-            Direction = 0, MinWidth = 0f, MaxWidth = compactPillMax,
-            Height = DetailVerticalLayout.CompactPillHeight, Shrink = 1f,
-            Padding = new Edges4(4f, 4f, 12f, 4f), Gap = Spacing.S,
-            AlignItems = FlexAlign.Center,
-            Corners = CornerRadius4.All(DetailVerticalLayout.CompactPillHeight * 0.5f),
-            Fill = compactPillFill, Shadow = Elevation.Card,
-            BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
-            // Scroll owns the 4-DIP handoff; this house recipe applies only when search replaces the pill.
-            HitTestVisible = false, Animate = MotionRecipes.PageFade,
-            TransformOriginX = 0f, TransformOriginY = 0.5f,
-            Children =
-            [
-                compactArtwork,
-                new BoxEl
-                {
-                    Direction = 1, MinWidth = 0f, MaxWidth = compactTextMax, Shrink = 1f, Gap = 0f,
-                    Children =
-                    [
-                        // BodyStrong (14/20/600) over Caption (12/16/400) — the same title/meta pair every track row in
-                        // the app uses. Was 13/650 over 10/450: three values, none of them on the ramp.
-                        Ui.BodyStrong(m.Title) with
-                        {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                        },
-                        Ui.Caption(compactMeta) with
-                        {
-                            Color = Tok.TextTertiary,
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                        },
-                    ],
-                },
-            ],
+            Direction = 1, MinWidth = 0f, Shrink = 1f, Gap = 0f,
+            Children = compactMeta is { Length: > 0 }
+                ? [ContextBand.Title(m.Title), ContextBand.Byline(compactMeta)]
+                : [ContextBand.Title(m.Title)],
         };
         Element compactSearchHost = new BoxEl
         {
             Shrink = 0f,
             Children = [compactSearch],
         };
-        Element compactTools = new BoxEl
+        // The expanded search field takes the TITLE's place, not the actions' — the actions are what the band is for,
+        // and a field that pushed them off-row would make Find a trap. The two live in ONE zero-gap slot so the
+        // hidden arm cannot leave a cluster gap behind and shift the visible one.
+        Element compactLeadSlot = new BoxEl
         {
-            Direction = 0, Shrink = 0f, Gap = Spacing.M,
-            AlignItems = FlexAlign.Center,
-            Children = [compactSearchHost, compactPlay],
-        };
-        Element normalCompactIdentity = new BoxEl
-        {
-            Direction = 0, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
-            Padding = new Edges4(compactLeft, 0f, compactLeft, 0f), Gap = Spacing.M,
-            AlignItems = FlexAlign.Center, HitTestPassThrough = true,
+            Direction = 0, MinWidth = 0f, Shrink = 1f, Gap = 0f, AlignItems = FlexAlign.Center,
             Children =
             [
-                Flow.Show(() => !searchExpanded.Value, compactPill),
-                new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
-                compactTools,
+                Flow.Show(() => !searchExpanded.Value, compactIdentityBlock),
+                Flow.Show(() => searchExpanded.Value, compactSearchHost),
             ],
         };
+        Element normalCompactIdentity = ContextBand.Row(viewportW, compactLeft,
+            [
+                compactLeadSlot,
+                new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, HitTestVisible = false },
+                compactActions,
+            ]);
         Element selectionCompactIdentity = new BoxEl
         {
             Direction = 1,
@@ -537,6 +476,7 @@ static class DetailVerticalHero
             Height = DetailVerticalLayout.CompactIdentityHeight,
             Padding = new Edges4(compactLeft, 4f, compactLeft, 4f),
             Justify = FlexJustify.Center,
+            Fill = ContextBand.Fill,
             Children = [compactSelection],
         };
         Element compactIdentityContent = new BoxEl
@@ -554,15 +494,8 @@ static class DetailVerticalHero
         {
             ZStack = true, Width = viewportW, Height = DetailVerticalLayout.CompactIdentityHeight,
             HitTestVisible = compactCanHit, HitTestPassThrough = true,
-            ScrollBinds =
-            [
-                new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                    Range = ScrollRange.Px(DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance),
-                    OutStart = 0f, OutEnd = 1f, Ease = Easing.Linear },
-                new() { From = ScrollChannel.Offset, To = BindSink.TransY,
-                    Range = ScrollRange.Px(DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance),
-                    OutStart = Spacing.XS, OutEnd = 0f, Ease = Easing.Linear },
-            ],
+            ScrollBinds = ContextBand.RevealBinds(
+                DetailVerticalLayout.CompactRevealStart(collapseDistance), collapseDistance),
             Children =
             [
                 compactIdentityContent,

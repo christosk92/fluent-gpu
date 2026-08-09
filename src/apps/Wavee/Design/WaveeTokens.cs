@@ -256,4 +256,27 @@ public static class WaveeColors
     public static ColorF PresetSwatch(ThemePalette palette) => Tok.Theme == ThemeKind.Light
         ? ColorContrast.Flatten(palette.LightShell.FileArea, MicaRef.LightDefault)
         : ColorContrast.Flatten(palette.DarkShell.FileArea, MicaRef.DarkDefault);
+
+    /// <summary>THE material of the sticky text-chrome CONTEXT BAND (<c>ContextBand</c> / <c>ContextBandLayout</c>) —
+    /// the one band the artist page and the track-detail pages pin at the top of their scroll region.
+    ///
+    /// <para>It is <b>OPAQUE, and that is the requirement</b>, not a preference: the band's whole job is to be the
+    /// thing scrolled content disappears UNDER. The bar it replaces on both pages was translucent (an acrylic recipe
+    /// on one, a lerped card fill on the other) and track rows and shelf cards ghosted through it — a sticky header
+    /// you can read the page through is not a header, it is a tint.</para>
+    ///
+    /// <para>The VALUE is the same flatten <see cref="PresetSwatch"/> uses, for the same reason: the surface the band
+    /// sits over is the content region, which paints the translucent <see cref="FileArea"/> rung over the window
+    /// material, so the honest opaque equivalent is that rung composited onto <see cref="MicaRef"/>'s neutral
+    /// no-wallpaper reference tone. NOT a hand-mixed grey and NOT the raw translucent layer token — the first drifts
+    /// from the region it must not visibly seam against, the second is what let the content ghost through. Reads the
+    /// ACTIVE palette (unlike PresetSwatch, which previews an inactive one), so a theme or preset switch re-fires it
+    /// through <c>Tok.Epoch</c> like every other live token here.</para>
+    ///
+    /// <para>THE APPROXIMATION, stated (inherited from PresetSwatch): live Mica takes colour from the desktop, so a
+    /// strongly tinted wallpaper drifts the real region toward it while this constant cannot follow. The band is
+    /// 56 DIP of chrome directly abutting that region, so the residual is a very small step at the seam and never a
+    /// visible plate — which is the trade an opaque band is worth.</para></summary>
+    public static ColorF ContextBand => ColorContrast.Flatten(FileArea,
+        Tok.Theme == ThemeKind.Light ? MicaRef.LightDefault : MicaRef.DarkDefault);
 }

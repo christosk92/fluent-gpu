@@ -22,11 +22,14 @@ public static class DetailVerticalLayout
     public const float HeroPad = 24f;
     public const float HeroGap = 24f;
     public const float CompactIdentityHeight = 56f;
-    public const float CompactArtworkSize = 36f;
-    public const float CompactPillHeight = 44f;
-    public const float CompactPlaySize = 40f;
-    public const float CompactPillMaxWidth = 480f;
-    public const float CompactPillViewportRatio = 0.46f;
+
+    /// <summary>The scroll distance the stuck band's reveal ramp occupies, ending at the collapse floor. 44 is
+    /// inherited verbatim from the floating identity capsule this band replaced (it was that capsule's height, so the
+    /// reveal took exactly one capsule of travel) and is kept as a TIMING constant, not a geometry one — the band has
+    /// no capsule in it any more, and the artist page shares the same window through
+    /// <c>ArtistHeroLayout.CompactRevealStart</c>, so changing it re-times two pages at once.</summary>
+    public const float CompactRevealBand = 44f;
+
     public const float ImmersiveIdentityTokenSize = 44f;
     public const float SideHeroBottomPad = 0f;
     public const float SideToolbarTopPad = 0f;
@@ -127,13 +130,10 @@ public static class DetailVerticalLayout
     public static float ExpandedFadeStart(float collapseDistance)
         => MathF.Max(0f, collapseDistance - ExpandedContentFadeDistance);
 
-    /// <summary>The compact identity's quiet crossfade/4-DIP slide occupies only its own final-height window.</summary>
+    /// <summary>The stuck band's quiet crossfade/4-DIP slide occupies only the last <see cref="CompactRevealBand"/>
+    /// DIP of the collapse.</summary>
     public static float CompactRevealStart(float collapseDistance)
-        => MathF.Max(0f, collapseDistance - CompactPillHeight);
-
-    public static float CompactPillWidthCap(float viewportWidth)
-        => MathF.Min(CompactPillMaxWidth,
-            MathF.Max(160f, MathF.Max(1f, viewportWidth) * CompactPillViewportRatio));
+        => MathF.Max(0f, collapseDistance - CompactRevealBand);
 
     /// <summary>Decode bucket for a full-width immersive cover. The source mapper retains the largest CDN rendition;
     /// this controls the decoded texture size without churning a cache key on every resize pixel.</summary>
