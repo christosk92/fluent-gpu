@@ -68,6 +68,12 @@ sealed class WaveeShell : Component
     // ToolbarLayout. Everything the bar's islands read comes from these signals, never from a frozen ctor arg.
     readonly Signal<MergedChromeLayout> _chromeLayout = new(MergedChromeLayout.FromWidth(0f, 1));
     readonly Signal<bool> _searchExpanded = new(false);     // the icon-mode search's click-expand latch
+    // The UNEXPANDED ladder, and the ONE thing the hysteresis is carried in. The PUBLISHED layout above may be the
+    // click-expansion's overlay (name folded, friends in the menu, tabs in the "⌄" to fund the field), and feeding
+    // THAT back in as `previous` would record those transient folds as held demotions — the promotion reserve would
+    // then keep the row lean after the latch dropped. So the carrier is kept beside the signal and never published.
+    // A plain field, not a signal: nothing renders off it, and it is written only from the ladder effect (off-render).
+    MergedChromeLayout _chromeBase = MergedChromeLayout.FromWidth(0f, 1);
     readonly Signal<int> _searchFocusRequest = new(0);      // Ctrl+K → put the caret in the field (a monotonic ticket)
     // The strip shows only the KeepTabs tabs the ladder allows, so it has its OWN index space (the visible slice). The
     // projection effect in Render derives both from _selectedTab / _tabMru / KeepTabs; nothing else writes them.
@@ -504,11 +510,20 @@ sealed class WaveeShell : Component
         // (1) The priority ladder. Band-gated exactly like the retired ToolbarLayout: it reads the HOT viewport width
         //     but only publishes when a stage actually flips, so a resize does not re-render the bar per pixel. The tab
         //     count is a dependency because KeepTabs is clamped to it.
+        //     The EXPAND LATCH is a dependency too: the click-expanded search claims its width IN PLACE, so flipping
+        //     it re-resolves the whole ladder (the row folds name/friends/tabs to fund the field, and folds back on
+        //     release). The carrier `_chromeBase` is always the UNEXPANDED resolution — see its declaration for why
+        //     publishing the expanded one back into `previous` would poison every later resolve.
         UseSignalEffect(() =>
         {
             float w = vpSig.Value.Width;
             _ = _tabsVersion.Value;
-            _chromeLayout.SetIfChanged(MergedChromeLayout.Resolve(w, _open.Count, _chromeLayout.Peek()));
+            bool expanded = _searchExpanded.Value;
+            int tabs = _open.Count;
+            _chromeBase = MergedChromeLayout.Resolve(w, tabs, _chromeBase);
+            _chromeLayout.SetIfChanged(expanded
+                ? MergedChromeLayout.Resolve(w, tabs, _chromeBase, searchExpanded: true)
+                : _chromeBase);
         });
         // (2) The visible-tab projection — the ONE place the strip's index space is derived, and deliberately OFF-render
         //     (computing it inside ItemsSource would mean writing _stripSelected from inside a render: a backwards

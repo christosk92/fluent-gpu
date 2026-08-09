@@ -19,6 +19,12 @@ public class MergedChromeLayoutTests
 
     static MergedChromeLayout At(float w) => MergedChromeLayout.FromWidth(w, Tabs);
 
+    /// <summary>The SEED resolution with the magnifier's click latch held — the shape the row takes the instant the
+    /// user clicks the collapsed search. (The shell always resolves the expansion from the UNEXPANDED carrier, which
+    /// is exactly what passing no <c>previous</c> models here.)</summary>
+    static MergedChromeLayout Expanded(float w, int tabCount)
+        => MergedChromeLayout.Resolve(w, tabCount, null, searchExpanded: true);
+
     /// <summary>The narrowest width at which the layout satisfies <paramref name="predicate"/> — the derived boundary
     /// every ordering and hysteresis assertion below is written against. The allocator is monotone in width, so this
     /// really is a boundary and not just the first of many.</summary>
@@ -533,5 +539,268 @@ public class MergedChromeLayoutTests
         Assert.Equal(8, wide.KeepTabs);
         Assert.Equal(3, MergedChromeLayout.Resolve(2000f, 3, wide).KeepTabs);
         Assert.Equal(1, MergedChromeLayout.Resolve(2000f, 1, wide).KeepTabs);
+    }
+
+    // ── the CLICK-EXPANDED search: the ladder's one user-initiated stage ──────────────────────────────────────────────
+    //
+    // THE REGRESSION (screenshot-verified): under pressure the ladder resolved SearchMode.Icon and the magnifier's
+    // click-expand was sized DOWNSTREAM, clamped against the bar's measured centre column. That column is ~the icon's
+    // own 32 DIP while the row is still collapsed, so the "expanded" field came out at ~40 DIP with a 40-DIP suggestion
+    // dropdown under it. The expansion is now an INPUT to the ladder: the field claims its width IN PLACE and the row
+    // folds its lower-priority chrome to fund it.
+
+    /// <summary>At every width where the unexpanded ladder collapses to the magnifier, the latch buys a REAL field —
+    /// never below the floor, never above the authored target, and (the honesty invariant) never wider than the row.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(5)]
+    [InlineData(8)]
+    [InlineData(12)]
+    public void Expanded_ClaimsARealFieldAtEveryWidthTheLadderCollapsed(int tabCount)
+    {
+        float min = MergedChromeLayout.MinimumExpandedWidthFor(tabCount);
+        for (float w = 0f; w <= SweepMax; w += 3f)
+        {
+            var seed = MergedChromeLayout.FromWidth(w, tabCount);
+            var e = Expanded(w, tabCount);
+
+            // The latch is a NO-OP wherever the ladder already carries a field — there is nothing to buy.
+            if (seed.SearchMode == MergedSearchMode.Field) { Assert.Equal(seed, e); continue; }
+            if (w < min) continue;                     // the give-up branch — pinned by its own test below
+
+            Assert.Equal(MergedSearchMode.Field, e.SearchMode);
+            Assert.True(e.SearchExpanded, $"the field at {w} is not flagged as the latch's");
+            Assert.True(e.SearchWidth >= ShellResponsiveLayout.ChromeSearchExpandedMinW,
+                        $"expanded to {e.SearchWidth} at {w} ({tabCount} tabs) — below the {ShellResponsiveLayout.ChromeSearchExpandedMinW} floor");
+            Assert.True(e.SearchWidth <= ShellResponsiveLayout.ChromeSearchExpandedW);
+            Assert.Equal(0f, e.SearchWidth % ShellResponsiveLayout.ChromeWidthQuantumW);
+            Assert.True(e.KeepTabs >= 1);
+            Assert.Equal(ShellResponsiveLayout.ChromeTabMinW, e.TabMaxWidth);   // a transient overlay never widens tabs
+            Assert.True(e.FootprintFor(tabCount) <= w + 0.5f,
+                        $"the expanded row {e} overflows a {w}-DIP window");
+        }
+    }
+
+    /// <summary>The 40-DIP field the defect actually shipped, at the reported window sizes: the ONE assertion that
+    /// would have caught it. (<c>ChromeSearchIconW</c> + the icon-mode clamp is what produced it.)</summary>
+    [Theory]
+    [InlineData(1000f, 4)]
+    [InlineData(1100f, 6)]
+    [InlineData(1250f, 8)]
+    [InlineData(1400f, 8)]
+    public void Regression_TheExpandedFieldIsNeverTheIconWidth(float width, int tabCount)
+    {
+        Assert.Equal(MergedSearchMode.Icon, MergedChromeLayout.FromWidth(width, tabCount).SearchMode);
+        var e = Expanded(width, tabCount);
+        Assert.Equal(MergedSearchMode.Field, e.SearchMode);
+        Assert.True(e.SearchWidth >= ShellResponsiveLayout.ChromeSearchExpandedMinW,
+                    $"the click-expanded search came out {e.SearchWidth} DIP wide at {width}");
+    }
+
+    /// <summary>The expansion is USER-INITIATED, so it is not gated by the promotion reserve: an icon the hysteresis is
+    /// still holding on a widening window opens on the click, not one band later.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(8)]
+    public void Expanded_IsNotGatedByThePromotionReserve(int tabCount)
+    {
+        float band = ShellResponsiveLayout.ChromePromotionHysteresisW;
+        float boundary = FirstWidthWhere(tabCount, l => l.SearchMode == MergedSearchMode.Field);
+        var held = MergedChromeLayout.Resolve(boundary - 1f, tabCount);
+        Assert.Equal(MergedSearchMode.Icon, held.SearchMode);
+
+        float w = boundary + band - 1f;                                   // inside the reserve: the icon is HELD …
+        Assert.Equal(MergedSearchMode.Icon, MergedChromeLayout.Resolve(w, tabCount, held).SearchMode);
+        var e = MergedChromeLayout.Resolve(w, tabCount, held, searchExpanded: true);   // … and the latch opens it anyway
+        Assert.Equal(MergedSearchMode.Field, e.SearchMode);
+        Assert.True(e.SearchWidth >= ShellResponsiveLayout.ChromeSearchExpandedMinW);
+    }
+
+    /// <summary>The FUNDING ORDER, as a per-width invariant: the expansion only ever takes things AWAY, it takes them
+    /// in the ladder's own priority order (name, then friends, then tabs), and it never touches Forward — whose rung
+    /// is cost-neutral by construction, so folding it would cost an affordance and free nothing.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(8)]
+    [InlineData(12)]
+    public void Expanded_FundsItselfInTheLaddersOwnPriorityOrder(int tabCount)
+    {
+        for (float w = MergedChromeLayout.MinimumExpandedWidthFor(tabCount); w <= SweepMax; w += 3f)
+        {
+            var seed = MergedChromeLayout.FromWidth(w, tabCount);
+            if (seed.SearchMode == MergedSearchMode.Field) continue;
+            var e = Expanded(w, tabCount);
+
+            Assert.True(!e.ShowName || seed.ShowName, $"the expansion ADDED the name at {w}");
+            Assert.True(!e.ShowFriends || seed.ShowFriends, $"the expansion ADDED the friends button at {w}");
+            Assert.True(e.KeepTabs <= seed.KeepTabs, $"the expansion ADDED a tab at {w}");
+            Assert.Equal(seed.ShowForward, e.ShowForward);
+            Assert.True(e.FriendsInRow ^ e.FriendsInMenu, $"friends were lost or duplicated at {w}");
+
+            // Friends only folds once the name has gone …
+            if (seed.ShowFriends && !e.ShowFriends) Assert.False(e.ShowName, $"friends folded before the name at {w}");
+            // … and a tab only once BOTH identity bits have.
+            if (e.KeepTabs < seed.KeepTabs)
+                Assert.True(e.BareAvatar, $"a tab folded while the identity cluster was still full at {w}");
+        }
+    }
+
+    /// <summary>…and all three rungs are actually REACHED — the order above would be vacuously true if the expansion
+    /// always folded everything (which is exactly what a <c>ChromeSearchExpandedW</c>-sized fold target would do).</summary>
+    [Fact]
+    public void Expanded_WalksTheFoldLadderOneRungAtATime()
+    {
+        const int tabCount = 8;
+        bool nameOnly = false, downToFriends = false, downToTabs = false;
+        for (float w = MergedChromeLayout.MinimumExpandedWidthFor(tabCount); w <= 2600f; w += 1f)
+        {
+            var seed = MergedChromeLayout.FromWidth(w, tabCount);
+            if (seed.SearchMode == MergedSearchMode.Field) continue;
+            var e = Expanded(w, tabCount);
+            bool foldedName = seed.ShowName && !e.ShowName;
+            bool foldedFriends = seed.ShowFriends && !e.ShowFriends;
+            bool foldedTabs = e.KeepTabs < seed.KeepTabs;
+
+            if (foldedName && !foldedFriends && !foldedTabs) nameOnly = true;
+            if (foldedFriends && !foldedTabs) downToFriends = true;
+            if (foldedTabs) downToTabs = true;
+        }
+        Assert.True(nameOnly, "no width funds the expansion out of the profile name alone");
+        Assert.True(downToFriends, "no width funds the expansion without also folding a tab");
+        Assert.True(downToTabs, "no width ever folds a tab to fund the expansion");
+    }
+
+    /// <summary>Dropping the latch restores the row EXACTLY — the pre-expansion resolution, holds and all. That is a
+    /// property of the shell's carrier discipline (<c>WaveeShell._chromeBase</c>): the expansion is resolved FROM the
+    /// unexpanded ladder and never back INTO it, so releasing simply publishes the carrier again.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(8)]
+    public void Expanded_LatchDropReturnsToThePreExpansionResolution(int tabCount)
+    {
+        MergedChromeLayout? carrier = null;
+        for (float w = SweepMax; w >= 0f; w -= 11f)
+        {
+            var basis = MergedChromeLayout.Resolve(w, tabCount, carrier);
+            _ = MergedChromeLayout.Resolve(w, tabCount, basis, searchExpanded: true);       // expand …
+            var released = MergedChromeLayout.Resolve(w, tabCount, basis);                  // … and release
+            Assert.Equal(basis, released);
+            Assert.False(released.SearchExpanded);
+            carrier = basis;
+        }
+    }
+
+    /// <summary>The running-infimum free space must survive an expand/collapse ROUND TRIP unpoisoned. <c>FreeSpace</c>
+    /// is a pure function of width, so the only way to poison it is to spend the expansion's folds twice — by feeding
+    /// the expanded result back in as <c>previous</c>, where its folds would read as HELD demotions and the promotion
+    /// reserve would keep the row lean long after the latch dropped. This walks a resize with the latch flapping and
+    /// asserts the carrier is bit-identical to the same walk that never touched it.</summary>
+    [Theory]
+    [InlineData(2)]
+    [InlineData(8)]
+    public void Expanded_DoesNotPoisonTheCarrierOrTheFreeSpaceInfimum(int tabCount)
+    {
+        MergedChromeLayout? clean = null, flapped = null;
+        int step = 0;
+        for (float w = SweepMax; w >= 400f; w -= 13f) Walk(w, ++step);
+        for (float w = 400f; w <= SweepMax; w += 13f) Walk(w, ++step);
+
+        void Walk(float w, int i)
+        {
+            float freeBefore = MergedChromeLayout.FreeSpace(w);
+            clean = MergedChromeLayout.Resolve(w, tabCount, clean);
+
+            var carrier = MergedChromeLayout.Resolve(w, tabCount, flapped);
+            // Every other step the user has the search open. The published overlay is DISCARDED; the carrier advances.
+            if ((i & 1) == 0) _ = MergedChromeLayout.Resolve(w, tabCount, carrier, searchExpanded: true);
+            flapped = carrier;
+
+            Assert.Equal(clean, flapped);
+            Assert.Equal(freeBefore, MergedChromeLayout.FreeSpace(w));
+        }
+    }
+
+    /// <summary>The one width at which the expansion may give up, pinned as a number: below it the leanest possible row
+    /// — bare avatar, one tab at its floor, the "⌄" — still cannot reach the 240 floor, so the magnifier stays.
+    /// <b>764 DIP with a single tab open, 800 with more.</b>
+    /// <para>Stated honestly, because it is the one place this fix does not reach: that is ABOVE Wavee's 300-DIP
+    /// minimum window (<c>Program.cs</c>), so a genuinely small window still cannot expand its search in place. The
+    /// ladder refuses instead of emitting a field the row would have to clip out of the caption cluster to honour, and
+    /// the island falls back to the old measured-column clamp there. Widening the refusal band is a LAYOUT question
+    /// (whether the tab strip may be counted below its floor), not an arithmetic one.</para></summary>
+    [Theory]
+    [InlineData(0, 764f)]
+    [InlineData(1, 764f)]
+    [InlineData(2, 800f)]
+    [InlineData(8, 800f)]
+    [InlineData(20, 800f)]
+    public void Expanded_MinimumWindowWidthIsPinned(int tabCount, float expected)
+    {
+        float min = MergedChromeLayout.MinimumExpandedWidthFor(tabCount);
+        Assert.Equal(expected, min);
+        // It buys the expansion's floor where the plain ladder buys the icon's — the SAME lean row, one substitution.
+        Assert.Equal(MergedChromeLayout.MinimumFootprintFor(tabCount)
+                     - ShellResponsiveLayout.ChromeSearchIconW + ShellResponsiveLayout.ChromeSearchExpandedMinW, min);
+        Assert.True(min < ShellResponsiveLayout.ChromeFriendsEnterW,
+                    "the give-up branch reaches up into the ladder's comfort bands");
+
+        // At or above it, NO width resolves the magnifier with the latch held …
+        for (float w = min; w <= SweepMax; w += 1f)
+            Assert.Equal(MergedSearchMode.Field, Expanded(w, tabCount).SearchMode);
+        // … and one DIP below it the row genuinely cannot pay, so it keeps the icon rather than emit a stub field.
+        // (Only observable with more than one tab open: a lone tab leaves enough room that the PLAIN ladder is already
+        // carrying a 220-DIP field at 744, well under this floor, so there is no collapsed search there to refuse.)
+        var below = Expanded(min - 1f, tabCount);
+        if (MergedChromeLayout.FromWidth(min - 1f, tabCount).SearchMode == MergedSearchMode.Icon)
+        {
+            Assert.Equal(MergedSearchMode.Icon, below.SearchMode);
+            Assert.False(below.SearchExpanded);
+            Assert.Equal(MergedChromeLayout.FromWidth(min - 1f, tabCount), below);
+        }
+    }
+
+    /// <summary>Space honesty across the whole expanded sweep, including while the hysteresis holds — the same
+    /// invariant <see cref="Space_IsNeverOverAllocated"/> pins for the plain ladder. The expansion spends the DIP its
+    /// folds returned and not one more.</summary>
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(9)]
+    [InlineData(16)]
+    public void Expanded_IsNeverOverAllocated(int tabCount)
+    {
+        float floor = MergedChromeLayout.MinimumFootprintFor(tabCount);
+        MergedChromeLayout? carrier = null;
+        for (float w = SweepMax; w >= 0f; w -= 9f) Step(w);
+        for (float w = 0f; w <= SweepMax; w += 9f) Step(w);
+
+        void Step(float w)
+        {
+            carrier = MergedChromeLayout.Resolve(w, tabCount, carrier);
+            var e = MergedChromeLayout.Resolve(w, tabCount, carrier, searchExpanded: true);
+            Assert.True(e.FootprintFor(tabCount) <= MathF.Max(w, floor) + 0.5f,
+                        $"the expanded layout {e} overflows a {w}-DIP row");
+        }
+    }
+
+    /// <summary>The flag the row's centre island reads to tell "the ladder wants a field here" from "the latch bought
+    /// one": it is set on exactly the resolutions the latch produced, and on nothing else. Without it the island's
+    /// widen-back-drops-the-latch effect fires on the expansion's own output — latch → Field → drop → Icon → latch.</summary>
+    [Fact]
+    public void SearchExpanded_FlagsOnlyTheFieldsTheLatchBought()
+    {
+        for (float w = 0f; w <= SweepMax; w += 7f)
+        {
+            Assert.False(MergedChromeLayout.FromWidth(w, Tabs).SearchExpanded);
+            var e = Expanded(w, Tabs);
+            Assert.Equal(e.SearchMode == MergedSearchMode.Field
+                         && MergedChromeLayout.FromWidth(w, Tabs).SearchMode == MergedSearchMode.Icon,
+                         e.SearchExpanded);
+        }
     }
 }

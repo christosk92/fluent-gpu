@@ -93,8 +93,13 @@ sealed class MergedChromeRow
         // NOT folded in (deliberately): the unread count. It rides the profile chip's avatar as a fixed-footprint
         // badge overlay inside a 24-DIP ZStack, so it changes no island's SIZE and ProfileMenu re-renders itself off
         // NotificationCenterBridge.UnreadCount. Only SHAPE/SIZE state belongs in this fold.
+        // The click-expansion is covered TWICE over, in both directions, and that is on purpose: bit 16 is the latch
+        // itself, and every other term moves with it because the latch is now an INPUT to the ladder (the expansion
+        // folds the name, the friends button and tabs to fund the field, so flags/SearchWidth/KeepTabs/hidden all
+        // change on the same flip). Either alone would bump; the region report must never miss this one.
         int flags = (l.ShowName ? 1 : 0) | (l.ShowFriends ? 2 : 0)
-                  | (l.ShowForward ? 4 : 0) | (l.SearchMode == MergedSearchMode.Icon ? 8 : 0) | (expanded ? 16 : 0);
+                  | (l.ShowForward ? 4 : 0) | (l.SearchMode == MergedSearchMode.Icon ? 8 : 0) | (expanded ? 16 : 0)
+                  | (l.SearchExpanded ? 32 : 0);
         return HashCode.Combine(flags, (int)l.SearchWidth, (int)l.TabMaxWidth, l.KeepTabs, epoch, hidden, auth);
     }
 
@@ -251,14 +256,25 @@ sealed class MergedSearchIsland : Component
                               IReadSignal<float> avail)
     { _text = text; _go = go; _expanded = expanded; _focusRequest = focusRequest; _layout = layout; _avail = avail; }
 
-    /// <summary>The field's live width: the ladder's value, clamped against the bar's measured centre column. Read
-    /// through a bound prop, never frozen — the ladder moves on every resize band.</summary>
+    /// <summary>The field's live width — <c>l.SearchWidth</c>, full stop, whenever the ladder resolved a field. Read
+    /// through a bound prop, never frozen: the ladder moves on every resize band AND on the expand latch.
+    ///
+    /// <para><b>Why the measured column is no longer the clamp.</b> The ladder now funds the click-expansion IN PLACE
+    /// (<c>MergedChromeLayout.Resolve</c>'s <c>searchExpanded</c> input), so <c>SearchWidth</c> is already sized
+    /// against the row's real budget and clamping it again is not safety, it is a bug: <c>CenterAvail</c> is the
+    /// column's ARRANGED width from the previous layout, and the column is one of three equal-weight grow siblings, so
+    /// while the row is still collapsed it measures ≈ the 32-DIP icon plus a third of the slack. Taking the min of the
+    /// two is what produced the reported 40-DIP "expanded" field (and, once the folds landed, a multi-frame ratchet
+    /// toward the fixed point instead of one clean open).</para>
+    ///
+    /// <para>The clamp survives on the ICON branch only — the last-resort path: the one frame between the latch flip
+    /// and the ladder's re-resolve, and the sub-<c>MinimumExpandedWidthFor</c> widths where the folds could not reach
+    /// the floor and the row genuinely has nothing to give.</para></summary>
     float FieldWidth()
     {
         var l = _layout.Value;
-        float target = l.SearchMode == MergedSearchMode.Icon
-            ? ShellResponsiveLayout.ChromeSearchExpandedW
-            : l.SearchWidth;
+        if (l.SearchMode == MergedSearchMode.Field) return l.SearchWidth;
+        float target = ShellResponsiveLayout.ChromeSearchExpandedW;
         float avail = _avail.Value;
         if (float.IsFinite(avail) && avail > 0f) target = MathF.Min(target, avail);
         return MathF.Max(ShellResponsiveLayout.ChromeSearchIconW, target);
@@ -279,7 +295,13 @@ sealed class MergedSearchIsland : Component
             return p;
         }, DepKey.Empty);
 
-        bool icon = _layout.Value.SearchMode == MergedSearchMode.Icon;
+        // "Is this a width the row wants a MAGNIFIER at?" — which is NOT the same question as "is SearchMode Icon?"
+        // any more, because the latch is now an input to the ladder: while it is held the ladder answers Field, and
+        // MergedChromeLayout.SearchExpanded is the flag saying that field exists ONLY because of the latch. Reading
+        // SearchMode alone here would make the drop-the-latch effect below fire on the expansion's own output —
+        // latch → Field → drop latch → Icon → latch … a per-frame oscillation.
+        var ladder = _layout.Value;
+        bool icon = ladder.SearchMode == MergedSearchMode.Icon || ladder.SearchExpanded;
         bool expanded = _expanded.Value;
         bool collapsed = icon && !expanded;
 

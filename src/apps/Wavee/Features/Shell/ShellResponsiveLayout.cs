@@ -88,8 +88,21 @@ public static class ShellResponsiveLayout
     /// pattern). Tabs are measured against THIS, not against the field — the search yields all the way to an icon
     /// before a single tab is evicted.</summary>
     public const float ChromeSearchIconW = 32f;
-    /// <summary>The click-expanded field in icon mode, clamped at render time against the bar's live CenterAvail.</summary>
+    /// <summary>The TARGET width of the click-expanded field in icon mode. The expansion claims this IN PLACE — the row
+    /// folds its lower-priority chrome (name → friends → tab width → tabs into the "⌄") to fund it, rather than the
+    /// field squeezing itself into whatever the collapsed row happened to leave over. See
+    /// <c>MergedChromeLayout.Resolve(width, tabCount, previous, searchExpanded)</c>.</summary>
     public const float ChromeSearchExpandedW = 380f;
+    /// <summary>The HARD FLOOR of a click-expanded field: below this the affordance is not a search box, it is a
+    /// decoration, so the ladder folds all the way to one tab in the strip rather than emit less. A window narrower
+    /// than <c>MergedChromeLayout.MinimumExpandedWidthFor</c> (764 with one tab open, 800 with more) forces the
+    /// expansion to give up and keep the magnifier — see that member for why the floor sits above the app's own
+    /// 300-DIP minimum window rather than below it.
+    /// <para>THIS is what the folds buy, one rung at a time; the field then grows into whatever they returned, capped
+    /// at the target above. Folding on toward 380 would fold every identity bit at every width the expansion can be
+    /// reached from (an icon-mode row has under <c>ChromeSearchMinW</c> of spare by definition), which is a ladder
+    /// with only one rung.</para></summary>
+    public const float ChromeSearchExpandedMinW = 240f;
 
     // Tabs: the FLOOR is what the allocator counts with (a text tab narrower than this is unreadable); the CAP is what
     // a tab may grow to once the search is comfortable and there is still surplus.
