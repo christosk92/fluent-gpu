@@ -49,7 +49,12 @@ sealed class BrowseDirectory : Component
             seed: Array.Empty<BrowseCategory>(),
             deps: svc is null ? 0 : 1).Loadable;
 
+        // SkelReveal.None, not the default Soft: the CONTENT owns its entrance here (the title + each band cascade in
+        // through WaveeEntrance below), and a block-level blur-reveal on top of that would fade the whole directory in
+        // as one slab while its bands were still arriving — two entrances for one mount. Same entrance-vs-reveal split
+        // SearchPage documents for its bound Songs list.
         return Skel.Region(cats, Skeleton, c => Body(c, model),
+            reveal: SkelReveal.None,
             isEmpty: c => c.Count == 0,
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)),
             onFailed: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)));
@@ -58,13 +63,24 @@ sealed class BrowseDirectory : Component
     static Element Body(IReadOnlyList<BrowseCategory> categories, Model? model)
     {
         var groups = BrowseTaxonomy.Grouped(categories);
+        // The directory is EAGER and mounts exactly once per Search-page mount (no virtualization anywhere in it), and
+        // its band count is fixed by the taxonomy — the two conditions WaveeEntrance requires. So the title lands
+        // first and the bands follow it 40ms apart, which is the whole Zune "the page assembles itself" moment on the
+        // surface a user sees the instant they open Search.
         var children = new List<Element>(groups.Count * 2 + 2)
         {
-            Title(Loc.Get(Strings.Browse.Title)) with { Margin = new Edges4(0f, 0f, 0f, Spacing.L) },
+            new BoxEl
+            {
+                Direction = 1, MinWidth = 0f,
+                Margin = new Edges4(0f, 0f, 0f, Spacing.L),
+                Animate = WaveeEntrance.Row(0),
+                Children = [WaveeType.PageHero(Loc.Get(Strings.Browse.Title))],
+            },
         };
 
+        int band = 1;
         foreach (var (group, items) in groups)
-            children.Add(Group(GroupLabel(group), items, model));
+            children.Add(Group(GroupLabel(group), items, model, band++));
 
         return new BoxEl
         {
@@ -94,11 +110,13 @@ sealed class BrowseDirectory : Component
         }
     }
 
-    // One band: an eyebrow heading over a responsive column grid of text links.
-    static Element Group(string label, IReadOnlyList<BrowseCategory> items, Model? model)
+    // One band: an eyebrow heading over a responsive column grid of text links. `index` is the band's position in the
+    // entrance cascade (see Body) — the ONLY thing it is used for.
+    static Element Group(string label, IReadOnlyList<BrowseCategory> items, Model? model, int index)
         => new BoxEl
         {
             Direction = 1, Gap = Spacing.S, MinWidth = 0f,
+            Animate = WaveeEntrance.Row(index),
             Children =
             [
                 WaveeType.Eyebrow(label) with { Color = Tok.TextTertiary },

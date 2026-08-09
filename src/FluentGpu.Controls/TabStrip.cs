@@ -449,9 +449,22 @@ public sealed class TabStrip : Component
     }
 
     // ── Text appearance ───────────────────────────────────────────────────────────────────────────────────────────
-    //  No plate, no flare, no separators, no rail: a tab IS its label. Selection reads as weight + full-strength
-    //  foreground; everything else sits at 0.6 and ramps to 0.85 under the pointer (BoxEl.HoverOpacity, so the ramp is
-    //  the engine's own hover fade — never a per-tab state machine). One strip-owned underline slides between tabs.
+    //  No plate, no flare, no separators, no rail: a tab IS its label. Selection reads as weight + the PRIMARY text
+    //  token; an unselected tab is the theme's SECONDARY text token and ramps to primary under the pointer. One
+    //  strip-owned underline slides between tabs.
+    //
+    //  WHY TOKENS AND NOT OPACITY. The strip used to express de-selection as `Opacity = 0.6` on the tab plate (ramping
+    //  to 0.85 on hover), which is a different thing that happens to look similar: an alpha multiplier over the whole
+    //  subtree, applied on top of a foreground that was ALREADY TextSecondary. That compounds — an inactive label
+    //  rendered at 0.6 × secondary, i.e. below every "dimmed text" rung the theme actually defines, and it dimmed the
+    //  tab's icon and its close-button glyph by the same factor even though neither is expressing selection. It is
+    //  also invisible to theming: a high-contrast or custom palette can retune TextSecondary, but it cannot retune a
+    //  hard-coded 0.6. The de-selection is now exactly the token ladder — TextSecondary at rest, TextPrimary on hover
+    //  and when selected — with the plate left at full strength.
+    //
+    //  The hover ramp is still the engine's own eased fade, not a hovered-index branch: TextEl.HoverColor interpolates
+    //  with the nearest interactive ancestor's HoverT (SceneRecorder.ResolveTextColorCore), and the plate IS that
+    //  ancestor — so it eases in and back out on its own, with no per-tab state machine.
 
     /// <summary>Size the per-tab geometry mirror + its CACHED bounds handlers to the current tab count. The handlers are
     /// equality-gated (no signal write when a re-arrange produced the same rect), so a redelivery is free.</summary>
@@ -553,15 +566,20 @@ public sealed class TabStrip : Component
                 FontFamily = Theme.IconFont,
                 Margin = new Edges4(0f, 0f, 8f, 0f),
                 Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+                // A==0 on the selected tab ⇒ "no state color" (the recorder leaves Color alone), so a selected glyph
+                // simply stays primary instead of ramping toward a colour it is already at.
+                HoverColor = selected ? default : Tok.TextPrimary,
             });
         }
 
         var label = new TextEl(item.Header)
         {
             Size = TextFontSize,
-            // Selection is WEIGHT + full-strength foreground; the plate carries the opacity tier (below).
+            // Selection is WEIGHT + the PRIMARY text token; de-selection is the SECONDARY token, ramping to primary
+            // under the pointer. See the section header for why this is a token ladder and not a plate opacity tier.
             Weight = selected ? (ushort)650 : (ushort)0,
             Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+            HoverColor = selected ? default : Tok.TextPrimary,
             Grow = 1f,
             Shrink = 1f,
             Trim = TextTrim.CharacterEllipsis,
@@ -622,10 +640,10 @@ public sealed class TabStrip : Component
             Padding = closeSlot
                 ? new Edges4(TextTabPadX, 0f, 6f, 0f)
                 : new Edges4(TextTabPadX, 0f, TextTabPadX, 0f),
-            // No Fill/HoverFill/PressedFill at all: a text strip has no plate. The state tier is OPACITY, ramped by the
-            // engine's own hover fade (BoxEl.HoverOpacity) rather than a hovered-index branch, so it eases both ways.
-            Opacity = selected ? 1f : 0.6f,
-            HoverOpacity = selected ? 1f : 0.85f,
+            // No Fill/HoverFill/PressedFill at all: a text strip has no plate. And no Opacity tier either — the state
+            // ramp is the FOREGROUND TOKEN on the label/glyph above, so it composes with the theme instead of dimming
+            // the whole subtree (icon and close glyph included) by a hard-coded alpha. This node stays the interactive
+            // ancestor whose eased HoverT drives that colour ramp.
             Role = AutomationRole.Tab,
             OnClick = select,
             // Middle-click close (WinUI TabViewItem.cpp:418-425/:449-462 — the dispatcher delivers Button==2 on a

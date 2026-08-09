@@ -409,18 +409,42 @@ sealed class LibraryPage : Component
         Width = _leftW.Value, Shrink = 0f,
         // Searching swaps the browse list for the top-level matches — matched artists (artists view) or matched albums
         // (albums view); the detail columns drill into the selection. Otherwise the normal self-scrolling ItemsView.
-        Children = [Toolbar(), fullSearch ? LeftSearchBody(sr, skel, sArtist, sAlbum) : ListBody(shown)],
+        Children = [Toolbar(title: true), fullSearch ? LeftSearchBody(sr, skel, sArtist, sAlbum) : ListBody(shown)],
     };
 
-    Element Toolbar() => new BoxEl
+    /// <summary>The master column's head: the page's big-type TITLE, then the sort/view picker, then the filter box.
+    ///
+    /// <para>The title is <see cref="WaveeType.PageHero"/> — the same 28/36/600 moment Search's directory, History and
+    /// every detail page open on — and it lives INSIDE this toolbar rather than above the columns because the toolbar
+    /// IS this page's header: the library is a master–detail browser whose right-hand panes are owned by whatever is
+    /// selected, so a full-width band above them would be a title for three surfaces at once. The master column floors
+    /// at 240 DIP (<see cref="ColumnGrip"/>'s min), which fits "Podcasts" — the longest of the three — on one line.</para>
+    ///
+    /// <para><paramref name="title"/> is false in the COLLAPSED single-column layout, where <c>CollapsedCrumbBar</c>
+    /// already names the kind as the breadcrumb root: two titles for one column is the double-title this converges
+    /// away from, and the crumb has to stay because it is also the drill-out affordance.</para></summary>
+    Element Toolbar(bool title = false) => new BoxEl
     {
-        Direction = 1, Gap = Spacing.S, Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.S),
-        Children =
-        [
-            new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Children = [Embed.Comp(() => new LibrarySortView(_sort, _desc, _view, _size, HasCreator, HasRelease)), new BoxEl { Grow = 1f }] },
-            AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _filter, queryIcon: Icons.Search, grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: Radii.Control),
-        ],
+        Direction = 1, Gap = Spacing.S, Padding = new Edges4(Spacing.M, title ? Spacing.L : Spacing.M, Spacing.M, Spacing.S),
+        Children = title
+            ?
+            [
+                WaveeType.PageHero(ShellNav.Dest(_kind).Title) with { MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis },
+                ToolbarPicker(),
+                ToolbarFilter(),
+            ]
+            : [ToolbarPicker(), ToolbarFilter()],
     };
+
+    Element ToolbarPicker() => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center,
+        Children = [Embed.Comp(() => new LibrarySortView(_sort, _desc, _view, _size, HasCreator, HasRelease)), new BoxEl { Grow = 1f }],
+    };
+
+    Element ToolbarFilter()
+        => AutoSuggestBox.Create(NoSuggest, Loc.Get(Strings.Library.Filter), text: _filter, queryIcon: Icons.Search,
+            grow: 1f, maxFillWidth: 9999f, minHeight: 32f, cornerRadius: Radii.Control);
 
     // The master list/grid IS the engine's ItemsView (WinUI ListView/GridView): single-selection, keyboard nav, and the
     // proper accent-bar / selected-state chrome painted by the item container. Keyed by the displayed set so a

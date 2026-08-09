@@ -1,4 +1,6 @@
+using System;
 using FluentGpu.Dsl;
+using FluentGpu.Foundation;
 
 namespace Wavee;
 
@@ -52,9 +54,61 @@ public static class WaveeMotion
     /// <summary>WinUI ControlNormalAnimationDuration — the workhorse: recolor, icon swap, material cross-fade.</summary>
     public const float Standard = 250f;
 
-    /// <summary>List entrance stagger per row. Not yet wired — Wave 5 (list/shelf entrance choreography) consumes it;
-    /// kept so the value is decided in one place when that lands.</summary>
+    /// <summary>List/shelf entrance stagger per item — the offset between one item's entrance and the next's. Reached
+    /// through <see cref="WaveeEntrance"/>, never multiplied by hand at a call site (that is what produced the
+    /// uncapped, reduced-motion-blind entrances this rung replaced).</summary>
     public const float StaggerMs = 40f;
+}
+
+/// <summary>
+/// THE list/shelf entrance recipe — the one place a Wavee surface says "my items arrive in sequence".
+///
+/// <para>It is a short rise + fade + a hair of blur, offset by <see cref="WaveeMotion.StaggerMs"/> per item and
+/// <b>capped</b> at <see cref="StaggerCap"/>: item 0..8 cascade, everything after shares item 8's delay and lands
+/// together. The cap is not a nicety — <c>Element.Stagger</c> (the engine's declarative parent-side spelling) is
+/// <i>index × ms</i> with no ceiling, so a 50-row list authored that way takes two seconds to finish arriving, and the
+/// rows nobody is looking at are the ones still animating.</para>
+///
+/// <para>REDUCED MOTION IS A VALUE, NEVER A BRANCH (the engine's animation canon, and the rule a previous stagger
+/// attempt broke: gating an entrance HOOK on <c>Motion.ReducedMotion</c> changes the hook COUNT between renders and
+/// crashes the reconciler the moment the flag flips mid-session — a resize grip flips it). So there is no
+/// <c>if (reduced)</c> here and none at any call site: <see cref="DelayMs"/> reads the flag and returns 0, and the
+/// engine's own <c>ReducedSnap</c> parks the rise and the blur at their end state while still cross-fading opacity
+/// (a fade aids orientation; it is not motion). Same shape as <see cref="ScaleTier.Hover"/>.</para>
+///
+/// <para>WHERE IT MAY BE USED. A surface qualifies only if its items mount ONCE. A virtualized list mounts items as
+/// they scroll in, and an entrance replayed mid-scroll reads as flicker — so the recipe belongs on eager stacks and on
+/// the engine's BOUND recycler path (<c>ItemsView.CreateBound</c>/<c>VirtualListEl.RowBind</c>), where a slot is
+/// re-bound rather than re-mounted and <c>scope.Index.Peek()</c> at realize IS the item's initial position. On a
+/// <c>RenderItem</c>-path virtual list (Home's measured row list, the library master list) it must NOT be used; those
+/// surfaces get their initial-mount cascade from <c>Skel.Region(reveal: SkelReveal.StaggerRows)</c>, which the engine
+/// fires once on the shimmer→real swap and never again on scroll.</para>
+/// </summary>
+public static class WaveeEntrance
+{
+    /// <summary>The last item index that gets its own rung. Items past it all ride this delay, so the whole entrance
+    /// is bounded at <c>StaggerCap × StaggerMs</c> (360 ms) no matter how long the list is.</summary>
+    public const int StaggerCap = 8;
+
+    /// <summary>How far an entering item rises, in DIP. Deliberately small — the same 8 the engine's own skeleton
+    /// reveal uses, so a staggered list and a skeleton-revealed one arrive with the same gesture.</summary>
+    public const float RiseDip = Expressive.DistBase;
+
+    /// <summary>The un-delayed spec. Tween (not spring) because a staggered cascade wants every item to take the same
+    /// time regardless of when it starts; <c>Channels = Opacity</c> so the node takes NO layout FLIP from this — the
+    /// recipe is an entrance, not a layout animation.</summary>
+    static readonly LayoutTransition Rise = new(
+        TransitionChannels.Opacity,
+        TransitionDynamics.Tween(Expressive.Slow, Easing.SmoothOut),
+        Enter: new EnterExit(Dy: RiseDip, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall));
+
+    /// <summary>Item <paramref name="index"/>'s entrance delay in ms: capped, and 0 under reduced motion.</summary>
+    public static float DelayMs(int index)
+        => Motion.ReducedMotion ? 0f : Math.Clamp(index, 0, StaggerCap) * WaveeMotion.StaggerMs;
+
+    /// <summary>Assign to <c>BoxEl.Animate</c> on the item's own wrapper box (never on a node whose Opacity is already
+    /// bound — a bound channel and an Enter opacity track fight over the same row).</summary>
+    public static LayoutTransition Row(int index) => Rise with { DelayMs = DelayMs(index) };
 }
 
 /// <summary>One interaction scale tier: the authored hover/press targets plus the reduced-motion-safe accessors every

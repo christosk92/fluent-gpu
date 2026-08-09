@@ -2221,6 +2221,43 @@ static class ControlsSuite
                 Settle();
                 bool closeContract = slotsMounted && hiddenAtRest && shownOnHover && widthStable;
 
+                // B.9c-text (selection expression) — the Text strip says "not selected" with a THEME TOKEN, not with a
+                // plate opacity tier. It used to multiply the whole tab subtree by 0.6 (0.85 on hover) on top of an
+                // already-secondary foreground, which (a) compounded to a dimness below any rung the theme defines,
+                // (b) dimmed the tab's icon and its close glyph, neither of which expresses selection, and (c) could
+                // not be retuned by a high-contrast or custom palette, because 0.6 is not a token. Pin the replacement
+                // so it cannot drift back: the label of an UNSELECTED tab rests on TextSecondary and carries a
+                // TextPrimary hover ramp (eased by the plate's own HoverT — SceneRecorder.ResolveTextColorCore), the
+                // SELECTED tab's label is TextPrimary with NO state ramp (A==0), and every plate sits at full opacity.
+                NodeHandle LabelOf(NodeHandle n, string header)
+                {
+                    if (n.IsNull) return NodeHandle.Null;
+                    if (host.Scene.Paint(n).VisualKind == VisualKind.Text && strings.Resolve(host.Scene.Paint(n).Text) == header)
+                        return n;
+                    for (var c = host.Scene.FirstChild(n); !c.IsNull; c = host.Scene.NextSibling(c))
+                    {
+                        var hit = LabelOf(c, header);
+                        if (!hit.IsNull) return hit;
+                    }
+                    return NodeHandle.Null;
+                }
+                var selLabel = LabelOf(tabs[0], "one");
+                var offLabel = LabelOf(tabs[1], "two");
+                bool platesFullStrength = true;
+                foreach (var t in tabs) platesFullStrength &= Near(host.Scene.Paint(t).Opacity, 1f, 0.001f);
+                bool selInk = !selLabel.IsNull
+                    && host.Scene.Paint(selLabel).TextColor == Tok.TextPrimary
+                    && host.Scene.Paint(selLabel).TextHoverColor.A == 0f;
+                bool offInk = !offLabel.IsNull
+                    && host.Scene.Paint(offLabel).TextColor == Tok.TextSecondary
+                    && host.Scene.Paint(offLabel).TextHoverColor == Tok.TextPrimary;
+                Check("B.9c-text TabStrip Text selection is a TEXT-TOKEN ramp (secondary→primary), not a plate opacity tier",
+                    selInk && offInk && platesFullStrength,
+                    $"selectedInk={selInk} unselectedInk={offInk} platesOpaque={platesFullStrength} " +
+                    $"sel={(selLabel.IsNull ? "none" : host.Scene.Paint(selLabel).TextColor.ToString())} " +
+                    $"off={(offLabel.IsNull ? "none" : host.Scene.Paint(offLabel).TextColor.ToString())}/" +
+                    $"{(offLabel.IsNull ? "none" : host.Scene.Paint(offLabel).TextHoverColor.ToString())}");
+
                 // The underline tracks the SELECTED tab: x = tab.x + the 12-DIP label inset, width = tab.w − both
                 // insets, both in LAYOUT (the springs only ease the FLIP delta back to identity, so a resize that
                 // clears the animation slab leaves the bar exactly on target). AbsoluteRect folds in the live

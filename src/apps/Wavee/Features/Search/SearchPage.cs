@@ -359,15 +359,11 @@ sealed class SearchSongs : Component
     const float RowExtent = 60f;
     readonly SwipeGroup _swipeGroup = new();
 
-    // transitions.dev texts-reveal for the bound Songs list: per-slot mount Enter (rise + fade + blur) with a baked
-    // per-index delay. Only the first viewport staggers; slots realized later by scrolling mount unanimated (the
-    // detail list's accepted behavior for virtualized entrances).
-    static readonly LayoutTransition RowRise = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(Expressive.Slow, Easing.SmoothOut),
-        Enter: new EnterExit(Dy: 8f, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall));
-    const int StaggerRowCap = 12;
-
+    // The bound Songs list's entrance is the app's ONE list recipe (WaveeEntrance): a per-slot mount Enter — rise +
+    // fade + blur — with a baked per-index delay off WaveeMotion.StaggerMs, capped so a long result set finishes
+    // arriving in 360ms rather than two seconds. This file used to own a private copy of that spec (its own transition
+    // constant, its own cap of 12, its own `!Motion.ReducedMotion` gate); the recipe now lives in the design system so
+    // a second staggered surface cannot re-pick the numbers.
     public override Element Render()
     {
         var model = UseContext(Props);
@@ -398,9 +394,7 @@ sealed class SearchSongs : Component
                 {
                     // Transparent row, not a stroked card - see ResultRow.
                     Direction = 1, Corners = Radii.ControlAll, ClipToBounds = true,
-                    Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
-                        ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
-                        : (LayoutTransition?)null,
+                    Animate = WaveeEntrance.Row(slot0),
                     // Search results are a COPY source: no SourcePlaylistUri/SourceRows, so a playlist destination adds
                     // rather than moves. A drag starting inside the multi-selection carries all of it (the DetailTracks
                     // rule); the row index is read at PROMOTION, never captured, because slots recycle.

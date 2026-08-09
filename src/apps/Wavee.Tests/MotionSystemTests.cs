@@ -17,7 +17,10 @@ namespace Wavee.Tests;
 ///   <item>every tier accessor collapses to 1f under reduced motion — the property no call site can forget;</item>
 ///   <item>the duration ladder is the WinUI Common_themeresources ladder and nothing else;</item>
 ///   <item>no source file outside the vocabulary may author a raw hover/press scale again.</item>
-/// </list></summary>
+/// </list>
+/// <para>Shares a collection with <see cref="EntranceStaggerTests"/>: both mutate the process-wide
+/// <c>Motion.ReducedMotion</c>, so they must not run concurrently.</para></summary>
+[Collection("wavee-motion-global")]
 public class MotionSystemTests
 {
     /// <summary>The three tiers by name, so a new tier cannot be added without landing in every gate below.</summary>
@@ -156,8 +159,9 @@ public class MotionSystemTests
         Assert.Equal(Motion.ControlNormal, WaveeMotion.Standard);
     }
 
-    /// <summary>The stagger rung survives the "no unused tokens" rule as a DECLARED forward reference (Wave 5 wires the
-    /// list/shelf entrance choreography). Pinned so the value is decided once, here, rather than re-picked there.</summary>
+    /// <summary>The stagger rung — declared here in Wave 2, wired in Wave 5 through <c>WaveeEntrance</c> (the ladder,
+    /// the cap and the reduced-motion collapse are pinned by <see cref="EntranceStaggerTests"/>). Pinned so the value
+    /// is decided once, here, rather than re-picked at each entrance.</summary>
     [Fact]
     public void StaggerRung_IsOneDecidedValue() => Assert.Equal(40f, WaveeMotion.StaggerMs);
 
