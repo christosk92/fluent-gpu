@@ -54,6 +54,14 @@ public enum MergedSearchMode : byte
 /// they only stretch — so they track the live width under whatever stage was held, quantised to
 /// <c>ChromeWidthQuantumW</c> so a resize drag does not re-render the bar per device pixel.</para>
 ///
+/// <para><b>The click-expanded search is part of this ladder, not a decoration on top of it.</b> Under pressure the row
+/// resolves <see cref="MergedSearchMode.Icon"/>, and the magnifier CLICK-EXPANDS. That expansion is an INPUT here
+/// (<c>searchExpanded</c>), not a render-time override: the field claims its width IN PLACE and the row folds its
+/// lower-priority chrome to fund it — name → bare avatar, friends → profile menu, then tabs into the "⌄", in exactly
+/// the priority order the stages above already encode. Sizing it downstream instead is what shipped a 40-DIP
+/// "expanded" field: the measured centre column is ~0 while the row is still collapsed, so the clamp floored at the
+/// icon width and the row never learned it was supposed to give way.</para>
+///
 /// <para>Engine-free by construction (System only) so <c>MergedChromeLayoutTests</c> drives the real allocator. The
 /// constants themselves live in <see cref="ShellResponsiveLayout"/>, next to the shell's other breakpoints.</para>
 /// </summary>
@@ -64,7 +72,8 @@ public readonly record struct MergedChromeLayout(
     MergedSearchMode SearchMode,
     float SearchWidth,
     float TabMaxWidth,
-    int KeepTabs)
+    int KeepTabs,
+    bool SearchExpanded = false)
 {
     /// <summary>A monotone "how much is this row carrying" score. NO LONGER the promotion comparand (the reserve is now
     /// applied per structural decision — see <see cref="Resolve"/>); it survives as the one-number summary the
@@ -97,8 +106,23 @@ public readonly record struct MergedChromeLayout(
     /// <para>Pure in its arguments by design: the row feeds no measured spans back in. TitleBar measures exactly ONE
     /// span — the centre column (<c>CenterAvail</c>) — and that measurement is a downstream CLAMP on the field the
     /// ladder already sized, not an input to the decision. Every other span in the row is a fixed constant the budget
-    /// below names, so there is nothing live to thread through.</para></summary>
-    public static MergedChromeLayout Resolve(float width, int tabCount, MergedChromeLayout? previous = null)
+    /// below names, so there is nothing live to thread through.</para>
+    /// <para><paramref name="searchExpanded"/> is the magnifier's click latch. When it is set and the ladder would
+    /// otherwise resolve <see cref="MergedSearchMode.Icon"/>, <see cref="Expand"/> forces a field and FUNDS it out of
+    /// the lower-priority chrome (see there for the order and the two targets). It is applied AFTER the hysteresis
+    /// hold and is never gated by it: the expansion is user-initiated, so it lands on the frame of the click rather
+    /// than one reserve band later. Coming back OUT is the ordinary machinery — the caller simply stops passing the
+    /// latch and the held ladder it never touched is published again.</para>
+    /// <para><b>The <paramref name="previous"/> contract, and the one way to break this:</b> it must be the
+    /// UNEXPANDED ladder — the carrier the hysteresis lives in. Feeding an EXPANDED result back in would record the
+    /// expansion's folds (name off, friends off, tabs folded) as HELD demotions, and the promotion reserve would then
+    /// keep the row lean after the latch dropped: the transient would have poisoned the steady state. So the shell
+    /// keeps the base ladder beside the published one (<c>WaveeShell._chromeBase</c>) and always resolves from THAT;
+    /// <see cref="SearchExpanded"/> marks the results that must never be fed back. The <c>FreeSpace</c> infimum itself
+    /// is a pure function of width and is untouched by any of this — the expansion spends the space the folds return
+    /// (<c>reclaimed</c>) instead of re-deriving a looser base.</para></summary>
+    public static MergedChromeLayout Resolve(float width, int tabCount, MergedChromeLayout? previous = null,
+                                             bool searchExpanded = false)
     {
         width = MathF.Max(0f, width);
         var stage = StageFor(width, tabCount);
@@ -108,7 +132,9 @@ public readonly record struct MergedChromeLayout(
                 MathF.Max(0f, width - ShellResponsiveLayout.ChromePromotionHysteresisW), tabCount);
             stage = Hold(in stage, Stage.Of(in old, tabCount), in reserved);
         }
-        return Compose(width, tabCount, in stage);
+        float reclaimed = 0f;
+        bool expanded = searchExpanded && Expand(width, tabCount, ref stage, out reclaimed);
+        return Compose(width, tabCount, in stage, expanded, reclaimed);
     }
 
     // ── the FIXED BUDGET ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -151,6 +177,22 @@ public readonly record struct MergedChromeLayout(
         => FixedBudget(false, false, false)
          + ShellResponsiveLayout.ChromeTabMinW
          + ShellResponsiveLayout.ChromeSearchIconW
+         + (tabCount > 1 ? ShellResponsiveLayout.ChromeTabOverflowW : 0f);
+
+    /// <summary>The narrowest window at which a click-expanded search can still be funded IN PLACE: the same lean floor
+    /// as <see cref="MinimumFootprintFor"/> but with the icon replaced by the expansion's hard floor
+    /// (<c>ChromeSearchExpandedMinW</c>). At or above this width, <c>Resolve(..., searchExpanded: true)</c> ALWAYS
+    /// returns a field — every fold above is available and their sum is enough — and below it the ladder keeps the
+    /// magnifier rather than emit a field too narrow to type in.
+    /// <para><b>764 DIP with a single tab open, 800 with more</b> (the "⌄" costs its own plate) — which is ABOVE
+    /// Wavee's 300-DIP minimum window, so state it plainly: between the app floor and this, clicking the magnifier
+    /// still cannot claim a real field and <c>MergedSearchIsland</c> falls back to the measured-column clamp. Lowering
+    /// it means letting the expansion count the tab strip below <c>ChromeTabMinW</c> — a layout decision (the strip
+    /// clips, the caption cluster must not move), not an arithmetic one, and deliberately not taken here.</para></summary>
+    public static float MinimumExpandedWidthFor(int tabCount)
+        => FixedBudget(false, false, false)
+         + ShellResponsiveLayout.ChromeTabMinW
+         + ShellResponsiveLayout.ChromeSearchExpandedMinW
          + (tabCount > 1 ? ShellResponsiveLayout.ChromeTabOverflowW : 0f);
 
     /// <summary>The space the tabs and the search share at this width — and the one place the model pays for keeping
@@ -244,30 +286,104 @@ public readonly record struct MergedChromeLayout(
         candidate.Field && (previous.Field || reserved.Field),
         Math.Min(candidate.Keep, Math.Max(previous.Keep, reserved.Keep)));
 
+    // ── the click-expanded search: the ladder's ONE user-initiated stage ──────────────────────────────────────────────
+
+    /// <summary>Force a field at a width that resolved the magnifier, and FUND it by folding the row's lower-priority
+    /// chrome — the same priority order the stages encode, run backwards:
+    /// <list type="number">
+    /// <item>the profile NAME (90 DIP) → a bare avatar,</item>
+    /// <item>FRIENDS (44) → a profile-menu row (the affordance moves address, it is never lost),</item>
+    /// <item>each TAB past the active one (110, less the "⌄" plate the first fold buys) → the overflow menu.</item>
+    /// </list>
+    /// <para>FORWARD is deliberately NOT on that list even though it sits between friends and the tabs on the width
+    /// ladder: <see cref="FixedBudget"/> makes its rung cost-neutral (the button it removes and the "⋯" it forces in
+    /// are the same plate), so folding it would cost an affordance and free nothing.</para>
+    /// <para><b>The folds buy the FLOOR; the field then grows into whatever they bought, capped at the target.</b> Each
+    /// rung is taken only while the row is still short of <c>ChromeSearchExpandedMinW</c> — so a squeeze the profile
+    /// name alone can pay for leaves the Friends button and the whole strip standing, and only a real squeeze walks
+    /// down to <c>KeepTabs = 1</c>. Folding further to chase the comfortable <c>ChromeSearchExpandedW</c> was
+    /// considered and rejected: it is arithmetically the same as having no fold ladder here at all (an icon-mode row
+    /// has under <c>ChromeSearchMinW</c> of spare BY DEFINITION, so a 380 target folds every identity bit at every
+    /// width it can be reached from), and 240 is already wider than the field this ladder is willing to keep
+    /// PERMANENTLY. <c>ChromeSearchExpandedW</c> survives as the CAP the field grows to when the folds overshoot.</para>
+    /// <para>Returns false — leaving <paramref name="s"/> untouched — when even the last fold cannot reach the floor.
+    /// That is only possible below <see cref="MinimumExpandedWidthFor"/>, and then the magnifier stays.</para>
+    /// <para><paramref name="reclaimed"/> is the DIP the folded identity bits return to the row. <see cref="Compose"/>
+    /// budgets from the same monotone <see cref="FreeSpace"/> as every other resolution — which assumes the identity
+    /// bits the WIDTH grants, not the ones this stage kept — so the saving has to be handed forward explicitly. It is
+    /// the exact plate width of each bit dropped here, which keeps the allocation conservative: the true fixed cost of
+    /// the composed stage is never above what the base plus this bonus budgeted (see <see cref="Compose"/>).</para></summary>
+    static bool Expand(float w, int tabCount, ref Stage s, out float reclaimed)
+    {
+        reclaimed = 0f;
+        if (s.Field) return false;                       // already a real omnibar — the latch has nothing to buy
+
+        int open = tabCount > 0 ? tabCount : 1;
+        int keep = Math.Clamp(s.Keep, 1, open);
+        bool name = s.Name, friends = s.Friends;
+        float chevron = keep < open ? ShellResponsiveLayout.ChromeTabOverflowW : 0f;
+        float spare = FreeSpace(w) - chevron - keep * ShellResponsiveLayout.ChromeTabMinW;
+
+        if (spare < ShellResponsiveLayout.ChromeSearchExpandedMinW && name)
+        {
+            name = false;
+            reclaimed += ShellResponsiveLayout.ChromeProfileNameW;
+            spare += ShellResponsiveLayout.ChromeProfileNameW;
+        }
+        if (spare < ShellResponsiveLayout.ChromeSearchExpandedMinW && friends)
+        {
+            friends = false;
+            reclaimed += ShellResponsiveLayout.ChromeNavButtonW;
+            spare += ShellResponsiveLayout.ChromeNavButtonW;
+        }
+        while (spare < ShellResponsiveLayout.ChromeSearchExpandedMinW && keep > 1)
+        {
+            // The FIRST fold also buys the "⌄" plate; every later one is the tab floor outright.
+            if (keep == open) spare -= ShellResponsiveLayout.ChromeTabOverflowW;
+            keep--;
+            spare += ShellResponsiveLayout.ChromeTabMinW;
+        }
+
+        if (spare < ShellResponsiveLayout.ChromeSearchExpandedMinW) { reclaimed = 0f; return false; }
+        s = new Stage(name, friends, s.Forward, true, keep);
+        return true;
+    }
+
     /// <summary>Turn a held stage into the row's widths at the LIVE width. The two continuous outputs are recomputed
     /// here rather than carried through the hold, so widening grows the field immediately instead of trailing the
-    /// window by the reserve.</summary>
-    static MergedChromeLayout Compose(float w, int tabCount, in Stage s)
+    /// window by the reserve.
+    /// <para><paramref name="expanded"/> swaps the search's two bounds for the click-expansion's pair (floor
+    /// <c>ChromeSearchExpandedMinW</c>, cap <c>ChromeSearchExpandedW</c>) and parks the tab cap at its floor: a
+    /// transient overlay that also widened the tabs would make its own collapse jarring.</para></summary>
+    static MergedChromeLayout Compose(float w, int tabCount, in Stage s, bool expanded = false, float reclaimed = 0f)
     {
         int open = tabCount > 0 ? tabCount : 1;
         int keep = Math.Clamp(s.Keep, 1, open);
 
         // Deliberately the SAME monotone free space the stage was decided on. A held stage is never RICHER than the
         // candidate (Hold only ever removes), so its true fixed cost is ≤ what this budgeted — the allocation below
-        // therefore always fits, and it stays monotone across the identity bands.
-        float free = FreeSpace(w);
+        // therefore always fits, and it stays monotone across the identity bands. `reclaimed` is the ONE addition:
+        // the exact plate width of every identity bit the expansion folded, which the base budget still assumed.
+        float free = FreeSpace(w) + reclaimed;
         if (keep < open) free -= ShellResponsiveLayout.ChromeTabOverflowW;
         float spare = MathF.Max(0f, free - keep * ShellResponsiveLayout.ChromeTabMinW);
 
+        float searchFloor = expanded ? ShellResponsiveLayout.ChromeSearchExpandedMinW
+                                     : ShellResponsiveLayout.ChromeSearchMinW;
+        float searchCap = expanded ? ShellResponsiveLayout.ChromeSearchExpandedW
+                                   : ShellResponsiveLayout.ChromeSearchMaxW;
+
         MergedSearchMode mode;
         float searchW;
-        if (s.Field && spare >= ShellResponsiveLayout.ChromeSearchMinW)
+        if (s.Field && spare >= searchFloor)
         {
             mode = MergedSearchMode.Field;
-            // Snapped DOWN, so the field never claims a DIP the budget did not have. 220 and 420 are both multiples of
-            // the quantum, so the clamp survives the snap.
-            searchW = Quantise(MathF.Min(spare, ShellResponsiveLayout.ChromeSearchMaxW));
-            spare -= searchW;
+            // Snapped DOWN, so the field never claims a DIP the budget did not have. 220, 240, 380 and 420 are all
+            // multiples of the quantum, so both clamps survive the snap.
+            searchW = Quantise(MathF.Min(spare, searchCap));
+            // A click-expansion parks the tabs at their floor: the surplus past the expanded cap stays drag band, so
+            // dropping the latch moves the field and NOTHING else.
+            spare = expanded ? 0f : spare - searchW;
         }
         else
         {
@@ -282,7 +398,8 @@ public readonly record struct MergedChromeLayout(
             ShellResponsiveLayout.ChromeTabMaxW,
             ShellResponsiveLayout.ChromeTabMinW + spare / keep));
 
-        return new MergedChromeLayout(s.Name, s.Friends, s.Forward, mode, searchW, tabMax, keep);
+        return new MergedChromeLayout(s.Name, s.Friends, s.Forward, mode, searchW, tabMax, keep,
+                                      SearchExpanded: expanded && mode == MergedSearchMode.Field);
     }
 
     static float Quantise(float v)
