@@ -271,6 +271,82 @@ public class LibrarySearchColdTests
         }
     }
 
+    // Stage O5 raised the stakes on (e): the SQL leg no longer just SOURCES the same corpus, it now DECIDES what to
+    // hydrate from the thin rows alone (match thin first, hydrate only survivors), while the null-candidates leg is the
+    // pre-O5 "hydrate everything, then match" walk verbatim. So the same equality is now the regression gate for the
+    // whole restructure — including the "why" captions, the per-album track sets and the cross-artist ordering that the
+    // thin pre-filter could plausibly have changed. Richer fixture: three artists, five albums, seven tracks, and
+    // queries that hit at every level (artist name / album name / track title / nothing).
+    [Fact]
+    public void ThinFirstParity_MatchesTheHydrateEverythingWalk()
+    {
+        var path = TempDb();
+        try
+        {
+            using var store = new CachedStore(new SqliteColdStore(path));
+            Seed(store);   // Michael Jackson ▸ Thriller(1982: Billie Jean, Beat It) + Bad(1987: Smooth Criminal)
+
+            var abba = new ArtistRef("ab", "spotify:artist:ab", "ABBA");
+            var arrival = AlbumOf(abba, "spotify:album:arrival", "Arrival", 1976,
+                ("dq", "Dancing Queen"), ("mm", "Money, Money, Money"));
+            var voulez = AlbumOf(abba, "spotify:album:voulez", "Voulez-Vous", 1979, ("cm", "Chiquitita"));
+            Save(store, abba, "ABBA", arrival, voulez);
+
+            var queen = new ArtistRef("qn", "spotify:artist:qn", "Queen");
+            var opera = AlbumOf(queen, "spotify:album:opera", "A Night at the Opera", 1975, ("br", "Bohemian Rhapsody"));
+            Save(store, queen, "Queen", opera);
+            store.Flush();
+
+            // artist-name hits, album-name hits, track-title hits, a hit at every level at once, and misses.
+            foreach (var q in new[] { "a", "e", "que", "queen", "arrival", "bohemian", "money", "night", "o", "zzz" })
+            {
+                var thinFirst = Reasons(LibrarySearchIndex.Run(store, LibrarySearchScope.Artists, q));
+                var hydrateAll = Reasons(LibrarySearchIndex.Run(store, LibrarySearchScope.Artists, q, null));
+                Assert.True(thinFirst == hydrateAll, $"query '{q}'\n  thin-first : {thinFirst}\n  hydrate-all: {hydrateAll}");
+            }
+        }
+        finally { TryDelete(path); }
+
+        static Album AlbumOf(ArtistRef artist, string uri, string name, int year, params (string Id, string Title)[] tracks)
+        {
+            var rows = new List<Track>(tracks.Length);
+            foreach (var t in tracks)
+                rows.Add(new Track(t.Id, "spotify:track:" + t.Id, t.Title, [artist], new AlbumRef("", uri, name), 1000, false, null));
+            return new Album("id" + uri, uri, name, null, [artist], year, rows.Count, rows, Hydration: AlbumHydrationLevel.Tracks);
+        }
+
+        static void Save(CachedStore store, ArtistRef artist, string name, params Album[] albums)
+        {
+            store.SetSaved("artists", artist.Uri, true, SyncState.Confirmed);
+            store.UpsertArtist(new Artist(artist.Id, artist.Uri, name, null, TopAlbums: albums));
+            foreach (var a in albums)
+            {
+                store.UpsertAlbum(a);
+                foreach (var t in a.Tracks!) store.UpsertTrack(t);
+            }
+        }
+
+        // The Shape() above plus the MATCH-REASON hierarchy (artist ▸ album ▸ track), which is what the thin pre-filter
+        // is most likely to disturb: dropping one child changes which child gets attributed as the "why".
+        static string Reasons(LibrarySearchResults r)
+        {
+            var sb = new System.Text.StringBuilder();
+            foreach (var a in r.Artists)
+            {
+                sb.Append(a.Uri).Append('/').Append(a.Name).Append('/').Append(a.MatchStart).Append(':').Append(a.MatchLen)
+                  .Append('/').Append(a.Match.Kind).Append('=').Append(a.Match.Term).Append('|');
+                foreach (var al in a.Albums)
+                {
+                    sb.Append(' ').Append(al.Uri).Append('/').Append(al.Year).Append('/').Append(al.MatchStart).Append(':').Append(al.MatchLen)
+                      .Append('/').Append(al.Match.Kind).Append('=').Append(al.Match.Term).Append('|');
+                    foreach (var t in al.Tracks)
+                        sb.Append("  ").Append(t.Uri).Append('/').Append(t.AlbumIndex).Append('/').Append(t.MatchStart).Append(':').Append(t.MatchLen).Append('|');
+                }
+            }
+            return sb.ToString();
+        }
+    }
+
     // ── (f) the offline QueryTracks fallback ─────────────────────────────────────────────────────────────────────────
 
     [Fact]

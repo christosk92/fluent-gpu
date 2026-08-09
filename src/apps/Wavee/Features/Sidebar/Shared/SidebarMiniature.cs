@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -164,10 +164,10 @@ static class SidebarMiniature
             "section:" + section.Kind, sample.TrackCount));
     }
 
-    static Element SectionTitle(string title) => new TextEl(title.ToUpperInvariant())
+    static Element SectionTitle(string title) => WaveeType.Eyebrow(title) with
     {
-        Size = 10f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1,
-        Trim = TextTrim.CharacterEllipsis, CharSpacing = 32f,
+        Color = Tok.TextTertiary, MaxLines = 1,
+        Trim = TextTrim.CharacterEllipsis,
         Margin = new Edges4(Spacing.XS, Spacing.XXS, Spacing.XS, Spacing.XXS),
     };
 

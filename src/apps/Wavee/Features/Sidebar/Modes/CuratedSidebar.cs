@@ -60,6 +60,11 @@ sealed class CuratedSidebar : Component
             SetSectionCollapsed = (id, collapsed) => _prefs?.Dispatch(new SetSectionCollapsed(id, collapsed)),
             ReadOnly = false,
             SearchHead = true,
+            // O3 — the customizable shortcut band, at its new render site. Set IDENTICALLY by all three modes: it is the
+            // app's navigation band (one global list on the layout document), not a Curated affordance — and it is NOT
+            // part of the document's sections, so the customizer's Top bar card remains its only structural editor.
+            NavBand = () => SidebarNavBand.Head(_prefs, _route, _go),
+            RailHead = () => SidebarNavBand.RailHead(_prefs, _route, _go),
             OnCustomize = OpenCustomizer,
             OnCreatePlaylist = CreatePlaylist,
         }, DepKey.Empty);

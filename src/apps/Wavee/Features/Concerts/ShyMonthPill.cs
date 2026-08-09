@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -125,7 +125,7 @@ sealed class ShyMonthPill : Component
         BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
         Children =
         [
-            Caption(text) with { Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1 },
+            WaveeType.Eyebrow(text) with { Color = WaveeAccent.Decor, MaxLines = 1 },
         ],
     };
 

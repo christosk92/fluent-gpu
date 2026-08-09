@@ -21,6 +21,11 @@ static class WaveeDragKindMap
         HomeCardKind.Album => WaveeResourceKind.Album,
         HomeCardKind.Artist => WaveeResourceKind.Artist,
         HomeCardKind.Track => WaveeResourceKind.Track,
+        // A podcast and an AUDIOBOOK are both a show here: both arrive under a spotify:show: uri and both resolve
+        // through the show reader — the same reasoning the SearchHitKind arm below spells out.
+        HomeCardKind.Podcast or HomeCardKind.Audiobook => WaveeResourceKind.Show,
+        // Episode never reaches this map: HomePage.CardDrag refuses a drag for it (no by-uri episode read exists, so the
+        // payload could be neither pinned nor deposited).
         _ => WaveeResourceKind.Playlist,   // Playlist + Liked
     };
 

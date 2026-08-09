@@ -61,6 +61,18 @@ sealed record SidebarPaneConfig
     /// before <see cref="SearchHead"/>. Invoked in the pane's render.</summary>
     public Func<Element?>? Head { get; init; }
 
+    /// <summary>O3 — the customizable SHORTCUT BAND (<c>SidebarCustomLayout.EffectiveTopBar</c>) as the pane's topmost
+    /// chrome, ABOVE <see cref="Head"/>: it is the app's navigation band, so nothing mode-owned may sit above it. All
+    /// three designs set this identically (<c>SidebarNavBand.Head</c>) — it is not a mode affordance, it is the shell's
+    /// band rendered at its new site, which is exactly why it arrives as a config delegate rather than a renderer branch.
+    ///
+    /// <para>Null, or a delegate returning null, draws nothing — an EMPTY band is the user emptying it on purpose.</para></summary>
+    public Func<Element?>? NavBand { get; init; }
+
+    /// <summary>The same band's 56-DIP form, PREPENDED to the rail's planned tiles (mirroring <see cref="RailFooter"/>'s
+    /// append). Null ⇒ no head tiles and no separating rule.</summary>
+    public Func<Element?>? RailHead { get; init; }
+
     /// <summary>Hang the quick sidebar-layout menu off the pane's FIRST section header (§C6.4 — the design switch must be
     /// reachable from the pane itself). V3 embeds those rows in its own overflow menu instead.</summary>
     public bool ShowLayoutMenu { get; init; } = true;

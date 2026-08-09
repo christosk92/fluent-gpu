@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
@@ -34,7 +34,7 @@ sealed class SaveButton : Component
         {
             Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(_box / 2f),
-            HoverScale = 1.06f, PressScale = 0.9f,
+            HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Role = AutomationRole.Button,
             OnClick = () => lib.ToggleSaved(_uri, _name),
             Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],
@@ -115,7 +115,13 @@ sealed class PreSaveButton : Component
         => direct || svc is null ? Task.FromResult<PreReleaseLink?>(null) : svc.PreRelease.ResolveAsync(uri, ct);
 }
 
-/// <summary>A Follow / Following pill — for artists + playlists (the "save" verb for a profile). Accent border + text when followed.</summary>
+/// <summary>A Follow / Following pill — for artists + playlists (the "save" verb for a profile). Accent border + text
+/// when followed (AccentSelection: "you follow this" is a state, and the border carries it).
+/// <para>THE ONLY follow control. SearchPage carried a second one — same words, same job, a different pill: 14/600 in a
+/// Radii.Pill box with a 1px border, no glyph and no followed state, next to this one's 13/700 in an 18-radius box with
+/// a 1.5px border. It is deleted; this is what a search hit's Follow renders now.</para>
+/// <para>Geometry is WaveeCta's capsule (36 tall, Radii.Full, the Standard hover/press rung) because a Follow pill
+/// stands beside a Play capsule on every artist hero — they have to be the same object at two jobs.</para></summary>
 sealed class FollowButton : Component
 {
     readonly string _uri;
@@ -132,19 +138,21 @@ sealed class FollowButton : Component
         ColorF idleInk = _foreground ?? Tok.TextPrimary;
         return new BoxEl
         {
-            Direction = 0, Height = 36f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = CornerRadius4.All(18f),
-            BorderWidth = 1.5f, BorderColor = following ? Tok.AccentDefault
+            Direction = 0, Height = WaveeCta.PillHeight, Gap = Spacing.S,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = Radii.FullAll,
+            BorderWidth = 1f, BorderColor = following ? Tok.AccentDefault
                 : _foreground is { } fg ? fg with { A = 0.42f } : Tok.StrokeControlDefault,
             HoverFill = _foreground is { } hover ? hover with { A = 0.12f } : Tok.FillSubtleSecondary,
             PressedFill = _foreground is { } press ? press with { A = 0.18f } : Tok.FillSubtleTertiary,
+            HoverScale = WaveeMotion.ScaleStandard.Hover, PressScale = WaveeMotion.ScaleStandard.Press,
             Role = AutomationRole.Button, Cursor = CursorId.Hand,
             OnClick = () => lib.ToggleSaved(_uri, _name),
             Children =
             [
                 Icon(following ? Icons.HeartFill : Icons.Heart, 14f, following ? Tok.AccentTextPrimary : idleInk),
-                new TextEl(Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow))
-                    { Size = 13f, Weight = 700, Color = following ? Tok.AccentTextPrimary : idleInk },
+                Body(Loc.Get(following ? Strings.Artist.Following : Strings.Artist.Follow)) with
+                    { Weight = 600, Color = following ? Tok.AccentTextPrimary : idleInk },
             ],
         };
     }
@@ -153,13 +161,14 @@ sealed class FollowButton : Component
     // bordered pill, not a full-width default bar that would stretch across the actions row.
     public static Element SkeletonShape() => new BoxEl
     {
-        Direction = 0, Height = 36f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = CornerRadius4.All(18f),
-        BorderWidth = 1.5f, BorderColor = Tok.StrokeControlDefault,
+        Direction = 0, Height = WaveeCta.PillHeight, Gap = Spacing.S,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = Radii.FullAll,
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         Children =
         [
             Icon(Icons.Heart, 14f, Tok.TextPrimary),
-            new TextEl(Loc.Get(Strings.Artist.Follow)) { Size = 13f, Weight = 700, Color = Tok.TextPrimary },
+            Body(Loc.Get(Strings.Artist.Follow)) with { Weight = 600, Color = Tok.TextPrimary },
         ],
     };
 }

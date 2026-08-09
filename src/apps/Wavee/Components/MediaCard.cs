@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentGpu.Animation;
@@ -64,14 +64,21 @@ public static class MediaCard
     // hovered so the lift halo isn't overpainted by a later card (the design's z-index:2); layout/hit-testing
     // unchanged. The returned box is the card ROOT — callers may still override Grow / Height / Border / Fill for
     // owner states (e.g. the discography drawer owner's accent border).
-    internal static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null, bool persistent = false) => new BoxEl
+    /// <summary>The application-wide card motion contract. Home's authored skins call this too, so changing the card
+    /// lift in one place cannot leave Search/Library and Home with different physics.</summary>
+    internal static BoxEl ApplyCardPhysics(BoxEl card) => card with
     {
-        ZStack = true, Corners = CornerRadius4.All(Radii.Card),
-        OnClick = onClick,
         HoverElevatePaint = true,
         WhileHover = new MotionTarget { OffsetY = -4f },
         WhilePressed = new MotionTarget { Scale = 0.99f, OffsetY = -1f },
         Transition = MotionTok.ControlNormal,
+    };
+
+    internal static BoxEl CardShell(Element content, Action onClick, ColorF? plateFill = null, bool persistent = false)
+        => ApplyCardPhysics(new BoxEl
+    {
+        ZStack = true, Corners = CornerRadius4.All(Radii.Card),
+        OnClick = onClick,
         Children =
         [
             new BoxEl
@@ -80,7 +87,11 @@ public static class MediaCard
                 Fill = plateFill ?? Tok.FillCardDefault,
                 HoverFill = persistent ? Tok.FillCardSecondary : default,
                 BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                Shadow = persistent ? Elevation.Card : Elevation.CardHover,
+                // Elevation.Card on BOTH legs. The hover plate used to lift to Elevation.CardHover (blur 16 dark) —
+                // the same blur band as Elevation.Flyout/Tooltip — so a merely-hovered card claimed a popup-class
+                // shadow and out-shouted real flyouts sitting above it. A card is a card hovered or not: the −4px
+                // lift and the plate reveal carry the state change; the shadow band does not have to.
+                Shadow = Elevation.Card,
                 Opacity = persistent ? 1f : 0f, HoverOpacity = 1f,
                 HoverDurationMs = MotionTok.ControlFaster.DurationMs,
                 HoverEasing = MotionTok.ControlFaster.Easing,
@@ -88,7 +99,7 @@ public static class MediaCard
             },
             content,
         ],
-    };
+    });
 
     // Hover-revealed corner "…" (top-right of the cover — the FAB's opposite corner): opens the card's attached context
     // menu (the WithMenu at the card root) anchored at the button — the engine's ClickRequestsContext re-enters the
@@ -100,22 +111,23 @@ public static class MediaCard
         {
             Grow = 1f, Direction = 1, AlignItems = FlexAlign.End,
             Padding = new Edges4(0f, FabInset, FabInset, 0f),
-            Opacity = persistent ? 1f : 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
+            Opacity = persistent ? 1f : 0f, HoverOpacity = 1f, HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
             Children =
             [
                 new BoxEl
                 {
                     Width = 30f, Height = 30f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Corners = CornerRadius4.All(15f),
-                    Fill = ColorF.FromRgba(0, 0, 0, 185),
-                    HoverFill = ColorF.FromRgba(20, 20, 20, 225),
-                    PressedFill = ColorF.FromRgba(0, 0, 0, 245),
-                    BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
-                    Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
+                    Corners = Radii.Circle(30f),
+                    Fill = WaveeOnMedia.ScrimRest,
+                    HoverFill = WaveeOnMedia.ScrimHover,
+                    PressedFill = WaveeOnMedia.ScrimPressed,
+                    BorderWidth = 1f, BorderColor = WaveeOnMedia.Stroke,
+                    Shadow = Elevation.Card,
+                    HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
                     ClickRequestsContext = true, Cursor = CursorId.Hand, Role = AutomationRole.Button,
                     // Pressing the "…" opens the menu; it must never double as a handle for dragging the card.
                     BlocksDragArm = true,
-                    Children = [ FabGlyph(Icons.More, 13f, Tok.OnMediaPrimary) ],
+                    Children = [ FabGlyph(Icons.More, 13f, WaveeOnMedia.Ink) ],
                 },
             ],
         }.Skeletonized(false)
@@ -126,15 +138,15 @@ public static class MediaCard
         {
             Width = size, Height = size, Shrink = 0f,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(size / 2f),
-            Fill = onDark ? ColorF.FromRgba(0, 0, 0, 132) : ColorF.Transparent,
-            HoverFill = onDark ? ColorF.FromRgba(0, 0, 0, 190) : Tok.FillSubtleSecondary,
-            PressedFill = onDark ? ColorF.FromRgba(0, 0, 0, 220) : Tok.FillSubtleTertiary,
+            Corners = Radii.Circle(size),
+            Fill = onDark ? WaveeOnMedia.ScrimRest : ColorF.Transparent,
+            HoverFill = onDark ? WaveeOnMedia.ScrimHover : Tok.FillSubtleSecondary,
+            PressedFill = onDark ? WaveeOnMedia.ScrimPressed : Tok.FillSubtleTertiary,
             BorderWidth = onDark ? 1f : 0f,
-            BorderColor = onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
+            BorderColor = onDark ? WaveeOnMedia.Stroke : ColorF.Transparent,
             ClickRequestsContext = true, Cursor = CursorId.Hand, Role = AutomationRole.Button,
             BlocksDragArm = true,   // its own affordance — see MoreCorner
-            Children = [ FabGlyph(Icons.More, 15f, onDark ? Tok.OnMediaPrimary : Tok.TextSecondary) ],
+            Children = [ FabGlyph(Icons.More, 15f, onDark ? WaveeOnMedia.Ink : Tok.TextSecondary) ],
         }.Skeletonized(false)
         : new BoxEl();
 
@@ -149,10 +161,12 @@ public static class MediaCard
         };
         return new BoxEl
         {
-            Shrink = 0f, Padding = new Edges4(10f, 5f, 10f, 5f), Corners = CornerRadius4.All(12f),
-            Fill = ColorF.FromRgba(0, 0, 0, 142), BorderWidth = 1f,
-            BorderColor = ColorF.FromRgba(255, 255, 255, 55), HitTestVisible = false,
-            Children = [ new TextEl(label) { Size = 10.5f, Weight = 700, Color = ColorF.FromRgba(255, 255, 255, 225), CharSpacing = 30f } ],
+            // Capsule by construction (Radii.Full clamps to half the box) rather than the hand-picked 12 that HAPPENED
+            // to be half of the old chip height — so the chip stays a capsule when its type or padding moves again.
+            Shrink = 0f, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
+            Fill = WaveeOnMedia.ScrimRest, BorderWidth = 1f,
+            BorderColor = WaveeOnMedia.Stroke, HitTestVisible = false,
+            Children = [ WaveeType.Eyebrow(label) with { Color = WaveeOnMedia.Ink } ],
         };
     }
 
@@ -190,67 +204,15 @@ public static class MediaCard
                                           onNavUri, menu, drag),
                       () => new ShelfCard());
 
+    /// <summary>The fixed cross extent allocated by a virtualized shelf for its maximum two-line text shape:
+    /// 6 outer gutter + 20 plate padding + (cardW - 16) cover + 8 content gap + 20 title + 2 text gap + 32 subtitle.
+    /// Home passes this same delegate to the shelf and its initial extent table.</summary>
+    internal static float ShelfHeight(float cardW) => cardW + 72f;
+
     // ── Grid card: fills the grid cell width (no cardW), square or circular cover. For AutoGrid/UniformGrid cells. ──
     // Mirrors the Shelf card but is width-AGNOSTIC: the cover fills the cell (Surfaces.ArtworkFill, CSS aspect-ratio 1)
     // and the labels truncate to the engine-measured slot width (the proven NavCardContent pattern) — so it drops into a
     // responsive grid whose track width isn't known at template time.
-    /// <summary>Dense horizontal Home card used by canonical “Made For {0}” modules.</summary>
-    public static Element Compact(Image? cover, string title, string subtitle, string uri, HomeCardKind kind,
-                                  Action onClick, Action onPlay, float art, float cardH, MenuAttach? menu = null,
-                                  DragSource? drag = null)
-    {
-        var hovered = new Signal<bool>(false);
-        bool circular = kind == HomeCardKind.Artist;
-        float radius = circular ? art / 2f : Radii.Card;
-        float action = art <= 100f ? 40f : 44f;
-        var artBox = new BoxEl
-        {
-            Width = art, Height = art, Shrink = 0f, ZStack = true, ClipToBounds = true,
-            Corners = CornerRadius4.All(radius), HoverScale = Motion.ReducedMotion ? 1f : 1.02f,
-            HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
-            Children =
-            [
-                circular
-                    ? PersonPicture.Create("", art, displayName: title, imageSourcePath: cover?.Url)
-                    : ArtworkOrLiked(cover, uri, art, art, radius, decodePx: 192),
-            ],
-        };
-        var card = new BoxEl
-        {
-            Direction = 0, Height = cardH, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(Spacing.S, MathF.Max(0f, (cardH - art) * 0.5f), Spacing.S, MathF.Max(0f, (cardH - art) * 0.5f)),
-            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
-            Fill = Tok.FillCardDefault, HoverFill = Tok.FillCardSecondary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
-            OnClick = onClick, PressScale = 0.99f, Draggable = drag,
-            WhileHover = Motion.ReducedMotion ? null : new MotionTarget { OffsetY = -3f },
-            WhilePressed = Motion.ReducedMotion ? null : new MotionTarget { Scale = 0.99f, OffsetY = -1f },
-            Transition = MotionTok.ControlNormal,
-            Children =
-            [
-                artBox,
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f, Justify = FlexJustify.Center,
-                    Children =
-                    [
-                        WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                        subtitle.Length == 0 ? new BoxEl() : WaveeType.TrackMeta(subtitle) with
-                            { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    ],
-                },
-                // Same reveal convention as the cover cards: retain the trailing slot for stable text geometry, but
-                // fade the play/pause surface in only while the compact card is hovered.
-                LazyOverlay(hovered, uri, onPlay, action, cover: false, action),
-                MoreInline(menu is not null),
-            ],
-            OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
-            OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
-        };
-        // The outer box is vertical GUTTER only — the drag source is the card above it.
-        return new BoxEl { Direction = 1, Padding = new Edges4(0f, 3f, 0f, 3f), Children = [ card.WithMenu(menu) ] };
-    }
-
     /// <remarks>The cover placeholder resolves its colour from <c>CoverColorPlane</c> inside <c>Surfaces</c> — a grid
     /// is where that matters most, since a whole screen of covers decodes at once.</remarks>
     public static Element GridCard(Image? cover, string title, string subtitle, string uri,
@@ -283,7 +245,7 @@ public static class MediaCard
                 coverStack,
                 new BoxEl
                 {
-                    Direction = 1, Gap = 2f, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
+                    Direction = 1, Gap = Spacing.XXS, AlignItems = circular ? FlexAlign.Center : FlexAlign.Start,
                     Children =
                     [
                         WaveeType.TrackTitle(title) with { Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
@@ -304,10 +266,9 @@ public static class MediaCard
     }
 
     // ── Artist Pick on-media chrome. The pick floats two SMALL surfaces over a full-bleed hero, so both plates use the
-    // canonical over-media idiom (Tok.MediaScrim + a white hairline + Tok.OnMedia* ink) rather than theme card brushes:
-    // ink over artwork is theme-INVARIANT (theming.md's leaf-value rule — Tokens.cs "On-media ink + scrim"), which is
-    // why the plates stay dark in light mode too. The hairline alpha matches CardLibraryAction's on-dark ring (58).
-    static readonly ColorF PickOnMediaHairline = ColorF.FromRgba(255, 255, 255, 58);
+    // canonical over-media idiom (WaveeOnMedia's one ladder — scrim + a white hairline + on-media ink) rather than
+    // theme card brushes: ink over artwork is theme-INVARIANT (theming.md's leaf-value rule — Tokens.cs "On-media ink +
+    // scrim"), which is why the plates stay dark in light mode too.
     const float PickHeight = 260f;         // the hero's fixed extent; the rail column supplies the width
     const float PickCommentMaxW = 300f;    // the comment pill's text budget — the pill hugs below it
     const float PickItemMaxW = 400f;       // the entity card's cap on a wide rail (prototype ≈ 380–420)
@@ -336,10 +297,10 @@ public static class MediaCard
         bool blurred = background is null && backdrop is not null;   // a square cover doing a wide banner's job
         bool onMedia = backdrop is not null;
 
-        ColorF plate = onMedia ? Tok.MediaScrim : Tok.FillSubtleSecondary;
-        ColorF hairline = onMedia ? PickOnMediaHairline : ColorF.Transparent;
-        ColorF ink = onMedia ? Tok.OnMediaPrimary : Tok.TextPrimary;
-        ColorF inkDim = onMedia ? Tok.OnMediaTertiary : Tok.TextSecondary;
+        ColorF plate = onMedia ? WaveeOnMedia.ScrimRest : Tok.FillSubtleSecondary;
+        ColorF hairline = onMedia ? WaveeOnMedia.Stroke : ColorF.Transparent;
+        ColorF ink = onMedia ? WaveeOnMedia.Ink : Tok.TextPrimary;
+        ColorF inkDim = onMedia ? WaveeOnMedia.InkTertiary : Tok.TextSecondary;
 
         // ── The comment pill (top-left): avatar + the artist's note, capsule corners, hugging its content. The text is
         // Grow (no Basis) so the pill MEASURES to the copy but can never out-measure the rail: FlexLayout hands a grow
@@ -349,7 +310,7 @@ public static class MediaCard
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
             AlignSelf = FlexAlign.Start, MaxWidth = PickCommentMaxW + 60f,
-            Padding = new Edges4(Spacing.XS, Spacing.XS, 14f, Spacing.XS),
+            Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.L, Spacing.XS),
             Corners = Radii.FullAll,
             Fill = plate,
             BorderWidth = onMedia ? 1f : 0f, BorderColor = hairline,
@@ -425,7 +386,7 @@ public static class MediaCard
                             // layer, no per-frame blur) and dimmed so it reads as a backdrop rather than a stretched
                             // square. The authored/header banner is shown crisp.
                             BakedBlur = blurred ? new BakedBlurSpec(30f, 0.5f) : (BakedBlurSpec?)null,
-                            ColorOverlay = blurred ? ColorF.FromRgba(8, 8, 10) with { A = 0.45f } : ColorF.Transparent,
+                            ColorOverlay = blurred ? WaveeOnMedia.BackdropDim : ColorF.Transparent,
                         },
                     // The canonical media scrims (Tokens.cs) — top for the pill, bottom for the entity card — so the
                     // white ink holds over a bright hero without dimming the middle of the image.
@@ -608,18 +569,18 @@ public static class MediaCard
                                       Action<NodeHandle>? arcCapture, Prop<Point2> spotlightCenter,
                                       Action<Point2>? pointerMove, Action? pointerExit, DragSource? drag)
         {
-            const float editorialScale = 1.25f;
             float artH = MathF.Max(360f, cardW * 1.25f);
             float aspect = cardW / artH;
-            float inset = Math.Clamp(cardW * 0.055f, 14f, 20f);
-            // Empty frosted space above the copy the feather ramps across. PROPORTIONAL to the art (≈ a quarter of the
+            float inset = Math.Clamp(cardW * 0.055f, Spacing.L, Spacing.XL);
+            // Empty frosted space above the copy the feather ramps across. PROPORTIONAL to the art (≈ a third of the
             // card), not a fixed 52px: a fixed pad on a tall editorial card left a short, abrupt wash — the frost has to
             // own the lower third of the artwork for the dissolve to read as gradual (the Apple editorial gradient zone).
-            // Scale only the internal frosted treatment: a taller dissolve zone plus the larger copy below it, while the
-            // outer card keeps its original dimensions.
-            float featherPad = Math.Clamp(artH * 0.24f * editorialScale, 72f * editorialScale, 200f * editorialScale);
+            // The old `editorialScale = 1.25f` multiplier is GONE: it existed to scale the copy off the type ramp
+            // (12.5/17/13 × 1.25), which is exactly the bypass this file no longer has. The dissolve zone it also scaled
+            // is preserved as its own proportion (0.24 × 1.25 = 0.30) with the bounds snapped to the 4-grid.
+            float featherPad = Math.Clamp(artH * 0.30f, 88f, 248f);
             float textW = MathF.Max(32f, cardW - 2f * inset);
-            const float radius = 14f;
+            const float radius = Radii.Card;
             bool showCountdown = counting && !Motion.ReducedMotion;
 
             var copy = new List<Element>(5);
@@ -627,22 +588,22 @@ public static class MediaCard
             if (eyebrow is { Length: > 0 } || showCountdown)
                 copy.Add(new BoxEl
                 {
-                    Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Width = textW, HitTestPassThrough = true,
+                    Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, Width = textW, HitTestPassThrough = true,
                     Children =
                     [
                         eyebrow is { Length: > 0 }
-                            ? new TextEl(eyebrow)
+                            ? WaveeType.Eyebrow(eyebrow) with
                             {
-                                Size = 12.5f * editorialScale, Weight = 600, Color = ColorF.FromRgba(255, 255, 255, 200),
+                                Color = WaveeOnMedia.InkSecondary,
                                 Grow = 1f, Basis = 0f, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
                             }
                             : new BoxEl { Grow = 1f },
                         showCountdown ? CountdownRing(arcCapture) : new BoxEl(),
                     ],
                 });
-            copy.Add(new TextEl(title)
+            copy.Add(Ui.Subtitle(title) with
             {
-                Size = 17f * editorialScale, Weight = 700, Color = Tok.OnMediaPrimary, Width = textW,
+                Color = WaveeOnMedia.Ink, Width = textW,
                 MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
             });
             if (peek is not null)
@@ -652,14 +613,18 @@ public static class MediaCard
                 // The card itself has a fixed portrait height, so smaller fitted cards cannot safely hold all five rows
                 // plus the title and actions. Reserve the complete action/footer geometry first and fit only whole rows
                 // in the remainder; this keeps both buttons inside the rounded bottom clip at every shelf width.
+                // 116 = the reserved eyebrow row (18) + title (28) + the action row (8 pad + 48 FAB) + three 4px stack
+                // gaps. It survived the type convergence unchanged: the title grew 21→28 while the eyebrow shrank
+                // 21→18 and the ring now sets that row's height.
                 float rowBudget = MathF.Max(36f, artH - featherPad - inset - 116f);
-                int fittingRows = Math.Clamp((int)MathF.Floor((rowBudget + 7f) / 43f), 1, PeekRows);
+                // Whole rows only: (budget + one gap) / (row height + one gap), with the row now 40 art + 8 gap.
+                int fittingRows = Math.Clamp((int)MathF.Floor((rowBudget + Spacing.S) / (WaveeSize.Thumb40 + Spacing.S)), 1, PeekRows);
                 var rows = new Element[Math.Min(peek.Count, fittingRows)];
                 for (int i = 0; i < rows.Length; i++) rows[i] = PeekRow(peek[i], textW);
                 copy.Add(new BoxEl
                 {
-                    Direction = 1, Gap = 7f, Width = textW, HitTestPassThrough = true, Stagger = 45f,
-                    Padding = new Edges4(0f, 6f, 0f, 0f), Key = "peek",
+                    Direction = 1, Gap = Spacing.S, Width = textW, HitTestPassThrough = true, Stagger = 45f,
+                    Padding = new Edges4(0f, Spacing.S, 0f, 0f), Key = "peek",
                     Children = rows,
                 });
             }
@@ -667,13 +632,13 @@ public static class MediaCard
                 // The playlist description is an HTML fragment (may carry <a>/<b>) — RichText parses it (decoded, tags
                 // not shown raw); links share the copy colour so they read as prose, not clickable chrome (the card owns
                 // the tap). Hover relaxes the clamp to 5 lines; the band's CardResizeHeight animates the space it takes.
-                copy.Add(RichText.Of(subtitle, 13f * editorialScale, ColorF.FromRgba(255, 255, 255, 224), ColorF.FromRgba(255, 255, 255, 224),
+                copy.Add(RichText.Of(subtitle, 14f, WaveeOnMedia.Ink, WaveeOnMedia.Ink,
                     textW, hovered ? (artH < 440f ? 4 : 5) : 2));
 
             copy.Add(new BoxEl
             {
-                Direction = 0, Width = textW, Gap = 8f, AlignItems = FlexAlign.Center,
-                Padding = new Edges4(0f, 7f, 0f, 0f),
+                Direction = 0, Width = textW, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(0f, Spacing.S, 0f, 0f),
                 Children =
                 [
                     Embed.Comp(() => new NowPlayingOverlay(uri, onPlay, 48f, cover: false, 48f, persistent: true, light: true)).Skeletonized(false),
@@ -697,8 +662,10 @@ public static class MediaCard
                     new BoxEl
                     {
                         Height = artH, ZStack = true,
-                        HoverScale = Motion.ReducedMotion ? 1f : 1.055f,
-                        HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
+                        // Standard rung, per the shelf card's zoom above: a full-bleed editorial cover is the LARGEST
+                        // moving surface in the app, so it takes the smaller multiplier, not the Emphatic one.
+                        HoverScale = WaveeMotion.ScaleStandard.Hover,
+                        HoverDurationMs = MotionTok.StandardEnter.DurationMs, HoverEasing = Easing.FluentDecelerate,
                         // Opaque, cover-coloured placeholder — NOT Tok.FillCardDefault. The card brushes are
                         // deliberately translucent, so using one here let the page show straight through and an
                         // editorial card read as an empty hole until its 512px art decoded.
@@ -710,8 +677,8 @@ public static class MediaCard
                         Height = artH, HitTestVisible = false, Corners = CornerRadius4.All(radius),
                         Gradient = new GradientSpec(GradientShape.Radial, 0f,
                         [
-                            new GradientStop(0f, ColorF.FromRgba(255, 255, 255, 46)),
-                            new GradientStop(0.48f, ColorF.FromRgba(255, 255, 255, 20)),
+                            new GradientStop(0f, WaveeOnMedia.SpotlightInner),
+                            new GradientStop(0.48f, WaveeOnMedia.SpotlightMid),
                             new GradientStop(1f, ColorF.Transparent),
                         ])
                         {
@@ -720,7 +687,7 @@ public static class MediaCard
                                                       Math.Clamp(Math.Clamp(cardW * 0.46f, 140f, 190f) / artH, 0.01f, 2f)),
                         },
                         RadialGradientCenter = spotlightCenter,
-                        Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
+                        Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
                     },
                     new BoxEl
                     {
@@ -763,14 +730,14 @@ public static class MediaCard
                                             {
                                                 FocusY = 1f,
                                                 BakedBlur = new BakedBlurSpec(26f, 0.5f),
-                                                ColorOverlay = ColorF.FromRgba(8, 8, 10) with { A = 0.42f },
+                                                ColorOverlay = WaveeOnMedia.BackdropDim,
                                                 Mask = new ImageMaskSpec(EdgeMask.Top, featherPad),
                                             },
                                         ],
                                     },
                                     new BoxEl
                                     {
-                                        Direction = 1, Gap = 3f, HitTestPassThrough = true,
+                                        Direction = 1, Gap = Spacing.XS, HitTestPassThrough = true,
                                         Padding = new Edges4(inset, featherPad, inset, inset),
                                         Children = copy.ToArray(),
                                     },
@@ -795,7 +762,7 @@ public static class MediaCard
             return new BoxEl
             {
                 ZStack = true,
-                OnClick = onClick, PressScale = 0.99f, Draggable = drag,
+                OnClick = onClick, PressScale = WaveeMotion.ScaleSubtle.Press, Draggable = drag,
                 // Elevate above sibling editorial cards while hovered so the lift halo survives (design z-index:2).
                 HoverElevatePaint = true,
                 OnPointerMoveWithin = pointerMove,
@@ -808,8 +775,8 @@ public static class MediaCard
                     new BoxEl
                     {
                         Grow = 1f, Corners = CornerRadius4.All(radius),
-                        Shadow = Elevation.CardHover, Opacity = 0f, HoverOpacity = 1f,
-                        HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
+                        Shadow = Elevation.Card, Opacity = 0f, HoverOpacity = 1f,   // card band, not the flyout band — see CardShell
+                        HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate, HitTestVisible = false,
                     },
                     card,
                 ],
@@ -823,11 +790,11 @@ public static class MediaCard
             ZStack = true, Width = 18f, Height = 18f, Shrink = 0f, HitTestPassThrough = true,
             Children =
             [
-                new BoxEl { Width = 18f, Height = 18f, Arc = new ArcSpec(ColorF.FromRgba(255, 255, 255, 64), 2f, 0f, 360f, RoundCaps: false) },
+                new BoxEl { Width = 18f, Height = 18f, Arc = new ArcSpec(WaveeOnMedia.Stroke, 2f, 0f, 360f, RoundCaps: false) },
                 new BoxEl
                 {
                     Width = 18f, Height = 18f,
-                    Arc = new ArcSpec(ColorF.FromRgba(255, 255, 255, 230), 2f, 0f, 360f, RoundCaps: true),
+                    Arc = new ArcSpec(WaveeOnMedia.Ink, 2f, 0f, 360f, RoundCaps: true),
                     OnRealized = arcCapture,
                 },
             ],
@@ -835,21 +802,24 @@ public static class MediaCard
 
         static Element PeekRow(HomePreviewTrack t, float textW)
         {
-            float nameW = MathF.Max(24f, textW - 36f - 10f);
+            const float art = WaveeSize.Thumb40;
+            float nameW = MathF.Max(24f, textW - art - Spacing.M);
             return new BoxEl
             {
-                Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, HitTestPassThrough = true,
+                Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, HitTestPassThrough = true,
                 Animate = MotionRecipes.PageFade,
                 Children =
                 [
                     new BoxEl
                     {
-                        Width = 36f, Height = 36f, Shrink = 0f, ClipToBounds = true, Corners = CornerRadius4.All(6f),
-                        Children = [ Surfaces.Artwork(t.Cover, Seed(t.Uri), 36f, 36f, 6f, decodePx: 64) ],
+                        Width = art, Height = art, Shrink = 0f, ClipToBounds = true, Corners = Radii.ControlAll,
+                        Children = [ Surfaces.Artwork(t.Cover, Seed(t.Uri), art, art, Radii.Control, decodePx: 64) ],
                     },
-                    new TextEl(t.Name)
+                    // Caption at 600, not a bespoke 12.5: the ramp's small-strong rung, with the line height that
+                    // comes with it. (A peek row is a compact list line, not a card title.)
+                    Caption(t.Name) with
                     {
-                        Size = 12.5f, Weight = 600, Color = ColorF.FromRgba(255, 255, 255, 235),
+                        Weight = 600, Color = WaveeOnMedia.Ink,
                         Width = nameW, MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis,
                     },
                 ],
@@ -873,7 +843,7 @@ public static class MediaCard
             Fill = Tok.FillCardDefault, HoverFill = Tok.FillControlSecondary,
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Shadow = Elevation.Card,
-            HoverScale = 1.02f, PressScale = 0.99f, OnClick = onClick, Draggable = drag,
+            HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press, OnClick = onClick, Draggable = drag,
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
             Children =
@@ -937,8 +907,10 @@ public static class MediaCard
                               MenuAttach? menu = null, DragSource? drag = null)
     {
         var hovered = new Signal<bool>(false);
-        float art = large ? 84f : 48f;
-        float r = circular ? art / 2f : (large ? Radii.Card : 6f);
+        float art = large ? 84f : WaveeSize.Thumb48;
+        // The ART's radius: a small row thumb takes the control rung (4) like every other 48px thumb in the app; the
+        // hero's 84px cover takes the card rung. The old 6 was on neither.
+        float r = circular ? art / 2f : (large ? Radii.Card : Radii.Control);
         float fab = large ? 44f : 30f;
         bool hasMeta = !large && meta is { Length: > 0 };
         bool hasDetail = !large && detail is { Length: > 0 };   // the audiobook blurb line under the subtitle (Spotify shows a 2-line description)
@@ -953,33 +925,39 @@ public static class MediaCard
             ],
         };
         var textKids = new System.Collections.Generic.List<Element>(3);
-        if (eyebrow is { Length: > 0 }) textKids.Add(new TextEl(eyebrow) { Size = 11f, Weight = 700, Color = eyebrowColor ?? Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+        if (eyebrow is { Length: > 0 })
+            textKids.Add(WaveeType.Eyebrow(eyebrow) with
+            { Color = eyebrowColor ?? Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         textKids.Add(large
-            ? new TextEl(title) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+            ? WaveeType.PageHero(title) with { Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
             : WaveeType.TrackTitle(title) with { Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         // Subtitle as a rich caption (matches the TrackMeta Caption style: 12px / secondary): anchor spans (artist/album)
         // become accent hyperlinks that navigate on their own, independent of the row's click. Plain text renders identically.
         textKids.Add(RichText.OfRow(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, onSubtitleNav));
-        if (hasMeta && !belowArt) textKids.Add(new TextEl(meta!) { Size = 11f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
-        if (hasDetail && !belowArt) textKids.Add(new TextEl(detail!) { Size = 11f, Color = Tok.TextTertiary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
+        if (hasMeta && !belowArt)
+            textKids.Add(Caption(meta!) with
+            { Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+        if (hasDetail && !belowArt)
+            textKids.Add(Caption(detail!) with
+            { Color = Tok.TextTertiary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
         var kids = new System.Collections.Generic.List<Element>(4)
         {
             coverStack,
-            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = large ? Spacing.S : 1f, Children = textKids.ToArray() },
+            new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = large ? Spacing.S : Spacing.XXS, Children = textKids.ToArray() },
         };
         if (typeChip is { Length: > 0 }) kids.Add(RowChip(typeChip));
         if (trailing is not null) kids.Add(trailing);
         if (belowArt)
         {
             var belowKids = new System.Collections.Generic.List<Element>(2);
-            if (hasMeta) belowKids.Add(new TextEl(meta!) { Size = 12f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
-            if (hasDetail) belowKids.Add(new TextEl(detail!) { Size = 12f, Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
+            if (hasMeta) belowKids.Add(Caption(meta!) with { Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            if (hasDetail) belowKids.Add(Caption(detail!) with { Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
 
             return new BoxEl
             {
                 Direction = 1, Height = float.NaN, MinHeight = 72f, Gap = Spacing.S,
-                Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S),
-                Corners = CornerRadius4.All(6f),
+                Padding = Edges4.All(Spacing.S),
+                Corners = Radii.CardAll,
                 Fill = Tok.FillCardSecondary,
                 HoverFill = Tok.FillCardDefault,
                 PressedFill = Tok.FillSubtleTertiary,
@@ -990,7 +968,7 @@ public static class MediaCard
                 Children =
                 [
                     new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Children = kids.ToArray() },
-                    new BoxEl { Direction = 1, Gap = 2f, Children = belowKids.ToArray() },
+                    new BoxEl { Direction = 1, Gap = Spacing.XXS, Children = belowKids.ToArray() },
                 ],
             }.WithMenu(menu);
         }
@@ -1002,9 +980,10 @@ public static class MediaCard
             Direction = 0, Height = large ? 112f : (hasDetail ? float.NaN : 64f), MinHeight = hasDetail ? 64f : float.NaN,
             AlignItems = FlexAlign.Center, Gap = large ? Spacing.L : Spacing.M,
             Padding = large ? new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M)
-                    : hasDetail ? new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S)
+                    : hasDetail ? Edges4.All(Spacing.S)
                     : new Edges4(Spacing.S, 0f, Spacing.S, 0f),
-            Corners = CornerRadius4.All(large ? Radii.Card : 6f),
+            // ONE row radius: both arms carry the same filled + stroked card chrome, so the old 8-vs-6 split is gone.
+            Corners = Radii.CardAll,
             Fill = Tok.FillCardSecondary,
             HoverFill = Tok.FillCardDefault,
             PressedFill = large ? Tok.FillCardDefault : Tok.FillSubtleTertiary,
@@ -1020,8 +999,10 @@ public static class MediaCard
 
     static Element RowChip(string text) => new BoxEl
     {
-        Shrink = 0f, Padding = new Edges4(10f, 3f, 10f, 3f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-        Children = [ new TextEl(text) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f } ],
+        // Capsule by construction (Radii.Full clamps to half the box), not a hand-picked 11 that tracked the old height.
+        Shrink = 0f, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
+        Fill = Tok.FillSubtleSecondary,
+        Children = [ WaveeType.Eyebrow(text) with { Color = Tok.TextTertiary } ],
     };
 
     // A stable-ish placeholder seed from the card's context uri (so each card gets its own gradient cover tone).
@@ -1031,7 +1012,7 @@ public static class MediaCard
     internal static Element PlayFab(Action onClick, string glyph, float size = FabSize) => new BoxEl
     {
         Width = size, Height = size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(size / 2f),
+        Corners = Radii.Circle(size),
         Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
         // The FAB already lives inside a clipped cover. Scaling its rounded plate past its retained paint bounds caused
         // the lower-right sector to be cut out (the visible "Pac-Man" wedge). Keep the plate geometry stable; color and
@@ -1074,24 +1055,41 @@ sealed class ShelfCard : Component
         float r = p.Circular ? inner / 2f : Radii.Card;
 
         Element face = p.Circular
+            // A missing artist photo must still be an intentional card, not a blank gray rectangle. PersonPicture gives
+            // us WinUI initials/contact fallback and the same circular crop when a real URL is present.
             ? PersonPicture.Create("", inner, displayName: p.Title, imageSourcePath: p.Cover?.Url)
             : p.Cover is null && LikedSongsArtwork.IsLikedUri(p.Uri)
                 ? LikedSongsArtwork.Cover(inner, r, p.MorphKey)
                 : p.Cover?.MosaicTiles is { Count: >= 4 } mtiles
                     ? Surfaces.Mosaic(mtiles, inner, inner, r)
                     : ZStack(
+                        // A neutral shimmer tile sits behind the art so a card is never an empty box — it breathes while
+                        // the real art loads and settles once it lands. The tile carries the cover's own graded colour
+                        // (CoverColorPlane) when it is known, so a loading card is that album's colour rather than a
+                        // neutral hole. The Image keeps a TRANSPARENT placeholder on purpose — the tile IS the backdrop.
                         Surfaces.Shimmer(p.Cover?.Url, (int)MediaCard.ShelfDecodePx, (int)MediaCard.ShelfDecodePx, inner, inner, r),
                         Image(p.Cover?.Url ?? "", ImageFit.Cover, 1f, MediaCard.ShelfDecodePx, r, placeholder: ColorF.Transparent)
                             with { MorphId = p.MorphKey });
 
         var coverStack = new BoxEl
         {
+            // The artwork already owns its square/circular crop. Do not apply that CIRCLE clip to the action layer:
+            // a bottom-right FAB is inside the cover's rectangular slot but outside the avatar circle, so clipping the
+            // whole stack shears its accent background. Square covers retain the old bounds clip.
             Width = inner, Height = inner, ZStack = true, ClipToBounds = !p.Circular, Corners = CornerRadius4.All(r),
-            HoverScale = Motion.ReducedMotion ? 1f : 1.035f,
-            HoverDurationMs = 300f, HoverEasing = Easing.FluentDecelerate,
+            // Artwork ZOOM, not a button: a ~200px cover on the Standard rung already travels ~4px per edge, where the
+            // Emphatic rung on a 32px FAB travels ~1px. Perceived travel — not the tier's name — is what must match, so
+            // every full-artwork zoom takes the Standard hover value (and has no press partner: a zoom has no pressed
+            // state; the card root owns the press).
+            HoverScale = WaveeMotion.ScaleStandard.Hover,
+            HoverDurationMs = MotionTok.StandardEnter.DurationMs, HoverEasing = Easing.FluentDecelerate,
             Children =
             [
                 face,
+                // The now-playing equalizer (bottom-left, when this card's context is playing) + the play/pause FAB
+                // (bottom-right, REVEALED ON HOVER). Reactive: subscribes to the playback bridge. The container carries
+                // NO OnClick, so the hit walks up to the card (its HoverScale fires + the FAB reveals off the card's
+                // hover); only the FAB itself is a hit target.
                 MediaCard.LazyOverlay(_hovered, p.Uri, p.OnPlay, MediaCard.FabSize, cover: true, inner),
                 MediaCard.MoreCorner(p.Menu is not null),
             ],
@@ -1099,6 +1097,10 @@ sealed class ShelfCard : Component
 
         var content = new BoxEl
         {
+            // No explicit Width: the shelf cell (a column container) cross-stretches the card to the cell's LIVE width.
+            // Grow=1 fills the cell's HEIGHT too: in a measured shelf the engine sizes the cell to the TALLEST card's
+            // natural height and every card fills it → uniform panels, exact, no reserved worst case; content stays
+            // top-aligned (cover, then text) with any slack below. The card itself just sizes to its content.
             Direction = 1, Gap = MediaCard.Pad, Grow = 1f,
             Padding = new Edges4(MediaCard.Pad, MediaCard.Pad, MediaCard.Pad, Spacing.M),
             Children =
@@ -1106,15 +1108,20 @@ sealed class ShelfCard : Component
                 coverStack,
                 new BoxEl
                 {
-                    Direction = 1, Gap = 2f, AlignItems = p.Circular ? FlexAlign.Center : FlexAlign.Start,
+                    Direction = 1, Gap = Spacing.XXS, AlignItems = p.Circular ? FlexAlign.Center : FlexAlign.Start,
                     Children =
                     [
+                        // Explicit Width clamps the run to the card (no overflow, ellipsis at the edge). MaxLines caps
+                        // how tall a verbose card can grow (and thus the whole uniform row).
                         WaveeType.TrackTitle(p.Title) with { Width = inner, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        // The description can be an HTML fragment (links to artists/playlists, bold) — parse → rich
+                        // spans (links accent + clickable via onNavUri, bold rendered), capped at two lines.
                         RichText.Of(p.Subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, inner, 2, p.OnNavUri),
                     ],
                 },
             ],
         };
+        // Grow=1 on the shell: a measured shelf cell stretches every card to the tallest card's height.
         var hovered = _hovered;
         var card = (MediaCard.CardShell(content, p.OnClick) with
         {
@@ -1123,7 +1130,8 @@ sealed class ShelfCard : Component
             OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
             OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
         }).WithMenu(p.Menu);
-        return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, 4f, 0f, 2f), Children = [card] };
+        // The padding box is the shelf's GUTTER, not the card — the drag source above deliberately sits inside it.
+        return new BoxEl { Grow = 1f, Direction = 1, Padding = new Edges4(0f, Spacing.XS, 0f, Spacing.XXS), Children = [card] };
     }
 }
 
@@ -1142,15 +1150,16 @@ sealed class CoverActionFabCore : Component
             return new BoxEl
             {
                 Width = cur.Size, Height = cur.Size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = CornerRadius4.All(cur.Size / 2f),
-                Fill = ColorF.FromRgba(0, 0, 0, 185),
-                HoverFill = ColorF.FromRgba(20, 20, 20, 225),
-                PressedFill = ColorF.FromRgba(0, 0, 0, 245),
-                BorderWidth = 1f, BorderColor = ColorF.FromRgba(255, 255, 255, 70),
-                Shadow = Elevation.Card, HoverScale = 1.07f, PressScale = 0.92f,
+                Corners = Radii.Circle(cur.Size),
+                Fill = WaveeOnMedia.ScrimRest,
+                HoverFill = WaveeOnMedia.ScrimHover,
+                PressedFill = WaveeOnMedia.ScrimPressed,
+                BorderWidth = 1f, BorderColor = WaveeOnMedia.Stroke,
+                Shadow = Elevation.Card,
+                HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
                 OnClick = () => live.Value.OnClick(), Cursor = CursorId.Hand, Role = AutomationRole.Button, Focusable = true,
-                BlocksDragArm = true,
-                Children = [MediaCard.FabGlyph(cur.Glyph, cur.Size * 0.40f, Tok.OnMediaPrimary)],
+                BlocksDragArm = true,   // a cover action button is its own affordance, not a card drag handle
+                Children = [MediaCard.FabGlyph(cur.Glyph, cur.Size * 0.40f, WaveeOnMedia.Ink)],
             };
         }), DepKey.Empty);
         return ToolTip.WrapStable(factory, p.Tooltip);
@@ -1178,15 +1187,15 @@ sealed class CardLibraryAction : Component
             {
                 Width = 40f, Height = 40f, Shrink = 0f,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = CornerRadius4.All(20f),
-                Fill = _onDark ? ColorF.FromRgba(0, 0, 0, 120) : ColorF.Transparent,
-                HoverFill = _onDark ? ColorF.FromRgba(0, 0, 0, 184) : Tok.FillSubtleSecondary,
-                PressedFill = _onDark ? ColorF.FromRgba(0, 0, 0, 218) : Tok.FillSubtleTertiary,
+                Corners = Radii.Circle(40f),
+                Fill = _onDark ? WaveeOnMedia.ScrimRest : ColorF.Transparent,
+                HoverFill = _onDark ? WaveeOnMedia.ScrimHover : Tok.FillSubtleSecondary,
+                PressedFill = _onDark ? WaveeOnMedia.ScrimPressed : Tok.FillSubtleTertiary,
                 BorderWidth = _onDark ? 1f : 0f,
-                BorderColor = _onDark ? ColorF.FromRgba(255, 255, 255, 58) : ColorF.Transparent,
+                BorderColor = _onDark ? WaveeOnMedia.Stroke : ColorF.Transparent,
                 Role = AutomationRole.Button, Cursor = CursorId.Hand,
                 OnClick = () => s.lib?.ToggleSaved(_uri, _name),
-                BlocksDragArm = true,
+                BlocksDragArm = true,   // save/follow is its own affordance, not a card drag handle
                 Children = [Icon(s.saved ? Icons.HeartFill : Icons.Heart, 17f, s.saved ? Tok.AccentTextPrimary : s.idle)],
             };
         }), DepKey.Empty);
@@ -1196,7 +1205,7 @@ sealed class CardLibraryAction : Component
         string tip = follow
             ? Loc.Get(saved ? Strings.Artist.Following : Strings.Artist.Follow)
             : Loc.Get(saved ? Strings.Detail.Edit.Saved : Strings.Detail.Edit.Save);
-        ColorF idle = _onDark ? ColorF.FromRgba(255, 255, 255, 225) : Tok.TextSecondary;
+        ColorF idle = _onDark ? WaveeOnMedia.Ink : Tok.TextSecondary;
         live.Value = (lib, saved, idle);
         return ToolTip.WrapStable(factory, tip);
     }
@@ -1345,17 +1354,17 @@ sealed class NowPlayingOverlay : Component
 
         if (_persistent)
         {
-            ColorF fill = _light ? ColorF.FromRgba(255, 255, 255) : Tok.AccentDefault;
-            ColorF hover = _light ? ColorF.FromRgba(235, 235, 235) : Tok.AccentSecondary;
-            ColorF pressed = _light ? ColorF.FromRgba(215, 215, 215) : Tok.AccentTertiary;
-            ColorF ink = _light ? ColorF.FromRgba(12, 12, 14) : Tok.TextOnAccentPrimary;
+            ColorF fill = _light ? WaveeOnMedia.LightButton : Tok.AccentDefault;
+            ColorF hover = _light ? WaveeOnMedia.LightButtonHover : Tok.AccentSecondary;
+            ColorF pressed = _light ? WaveeOnMedia.LightButtonPressed : Tok.AccentTertiary;
+            ColorF ink = _light ? WaveeOnMedia.LightButtonInk : Tok.TextOnAccentPrimary;
             // ToolTip.Wrap (not WrapStable): this branch is behind `_persistent` and already past earlier hooks —
             // a WrapStable UseMemo here would violate stable hook order vs the non-persistent path.
             return ToolTip.Wrap(new BoxEl
             {
                 Width = _fab, Height = _fab, Shrink = 0f,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Corners = CornerRadius4.All(_fab / 2f), Fill = fill, HoverFill = hover, PressedFill = pressed,
+                Corners = Radii.Circle(_fab), Fill = fill, HoverFill = hover, PressedFill = pressed,
                 Shadow = Elevation.Card, Role = AutomationRole.Button, Cursor = CursorId.Hand, OnClick = Toggle,
                 BlocksDragArm = true,
                 Children = [Icon(playingHere ? Icons.Pause : Icons.Play, _fab * 0.38f, ink)],
@@ -1367,8 +1376,8 @@ sealed class NowPlayingOverlay : Component
         // ~180ms decelerate fade (not the snappy default) so the button eases in rather than popping.
         Element reveal = new BoxEl
         {
-            Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
-            Direction = 1, AlignItems = FlexAlign.End, Gap = 7f,
+            Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+            Direction = 1, AlignItems = FlexAlign.End, Gap = Spacing.S,
             Children = _onNavigate is null
                 ? [ MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab) ]
                 : [
@@ -1378,7 +1387,7 @@ sealed class NowPlayingOverlay : Component
         };
         Element EqPill(bool pauseOnHover) => new BoxEl
         {
-            Padding = new Edges4(5f, 3f, 5f, 3f), Corners = CornerRadius4.All(4f), Fill = ColorF.FromRgba(0, 0, 0, 150),
+            Padding = Edges4.All(Spacing.XS), Corners = Radii.ControlAll, Fill = WaveeOnMedia.ScrimRest,
             Children =
             [
                 WaveeEqualizer.Of(playing, static () => Tok.AccentTextPrimary, 14f,
@@ -1395,8 +1404,8 @@ sealed class NowPlayingOverlay : Component
             Element rowFab = new BoxEl
             {
                 Width = _inner, Height = _inner, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = 180f, HoverEasing = Easing.FluentDecelerate,
-                Fill = ColorF.FromRgba(0, 0, 0, 110),
+                Opacity = 0f, HoverOpacity = 1f, HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+                Fill = WaveeOnMedia.CoverScrim,
                 Children = [ MediaCard.PlayFab(Toggle, playingHere ? Icons.Pause : Icons.Play, _fab) ],
             };
             return new BoxEl

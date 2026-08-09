@@ -16,6 +16,11 @@
     "settings": "Settings"
   },
 
+  "tabStrip": {
+    "$comment": "TabStrip add-button tooltip — WinUI TabView SR_TabViewAddButtonTooltip ('Add new tab'), in the shorter register a browser tab strip uses.",
+    "newTab": "New tab"
+  },
+
   "autoSuggest": {
     "noResults": "No results found",
     "search": "Search"

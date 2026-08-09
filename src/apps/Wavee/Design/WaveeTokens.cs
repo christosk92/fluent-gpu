@@ -7,6 +7,49 @@ namespace Wavee;
 // spacing / rounding scales come from the engine's `Spacing.*` / `Radii.*` supersets — we do NOT duplicate either. This
 // keeps only the fixed sizing scale Tok doesn't carry. The 4px grid is the native tell; every value here is a multiple of 4.
 
+/// <summary>THE ACCENT BUDGET — the three roles accent colour is allowed to play, and the rule that keeps them apart.
+///
+/// <para>Wavee is deliberately NOT a monochrome Fluent app: the artwork-derived accent is identity, and it stays. What
+/// it stopped being is ambient. An accent that appears in four unrelated jobs on one page stops meaning any of them —
+/// the reader can no longer tell "click this" from "you are here" from "this is a section". So every accent paint site
+/// declares which of exactly THREE roles it is:</para>
+///
+/// <list type="number">
+/// <item><b>AccentAction</b> — "clicking this does the page's primary thing." A SOLID accent plate behind on-accent ink:
+/// <see cref="WaveeCta"/>, <c>Button.Accent</c>, the play FABs. AT MOST ONE per screenful of content — if a surface has
+/// two, one of them is a secondary and takes <c>Button.Standard</c>. This is the scarcest role and the reason the empty
+/// state's action is quiet: an empty page's "Browse" must not outrank the page's real primary.</item>
+/// <item><b>AccentSelection</b> — "you are here." The SelectorBar pill, the nav rail's selection bar, a selected chip.
+/// Geometry is the tell and it is reserved: a short accent BAR/PILL against the edge of a control means selection and
+/// means nothing else. A decorative ornament may not borrow that shape (see the hard rule below).</item>
+/// <item><b>AccentDecor</b> — "this content has a colour." Section spines, hero washes, the date captions on concert
+/// cards, artist-shelf eyebrows, the module accent facts. Accent as TEXT or as a wash, never as a plate behind ink and
+/// never as a selection-shaped bar. This is the largest role by site count and it is kept: it is the identity.</item>
+/// </list>
+///
+/// <para>THE TWO HARD RULES, both enforced by construction after the voice-unification wave:</para>
+/// <list type="bullet">
+/// <item>A decorative ornament may not take SELECTION geometry. The artist section header's old 3×22 r1.5 accent
+/// capsule was pixel-for-pixel the selection-indicator shape doing a decorative job; it is now a 20×2 underline sitting
+/// under the header text, which is unmistakably a rule and not a selection pill.</item>
+/// <item>Accent is never STRUCTURE. A border, a divider, a chevron or a disclosure glyph is chrome; it takes
+/// <c>Tok.StrokeDividerDefault</c> / <c>Tok.TextSecondary</c>. Accent on structure was the single largest source of
+/// ambient accent in the app (dashed accent borders and accent chevrons on the concert surfaces).</item>
+/// </list></summary>
+public static class WaveeAccent
+{
+    /// <summary>Role 1 — the SOLID plate behind on-accent ink for the page's ONE primary action. Artwork-derived
+    /// surfaces pass their own graded fill to <see cref="WaveeCta"/> instead of reading this.</summary>
+    public static ColorF Action => Tok.AccentDefault;
+
+    /// <summary>Role 2 — "you are here". The bar/pill geometry that carries it is reserved to selection.</summary>
+    public static ColorF Selection => Tok.AccentDefault;
+
+    /// <summary>Role 3 — accent as CONTENT colour: text, spines, washes. The contrast-corrected accent INK, never the
+    /// raw fill, because this role always paints on the page surface rather than under on-accent ink.</summary>
+    public static ColorF Decor => Tok.AccentTextPrimary;
+}
+
 /// <summary>Fixed control / surface dimensions.</summary>
 public static class WaveeSize
 {
@@ -15,6 +58,21 @@ public static class WaveeSize
     public const float ArtThumb = 40, ArtNowPlaying = 64, ArtPlayerBar = 48;
     // Detail-page left-rail widths (the shared playlist/album/single detail surface; liked is single-column → no rail).
     public const float RailAlbum = 280, RailPlaylist = 240;
+
+    /// <summary>The in-page thumbnail ladder — the ONLY sizes an in-content cover/avatar may take. An 8px ladder off the
+    /// 4-grid: anything between two rungs (36, 44, 52, 57 …) snapped to its nearest rung, which is what stopped a page
+    /// from carrying five almost-identical art sizes that read as sloppiness rather than as hierarchy.</summary>
+    public const float Thumb32 = 32, Thumb40 = 40, Thumb48 = 48, Thumb56 = 56, Thumb64 = 64;
+
+    /// <summary>The vertical rhythm BETWEEN page sections / feed modules — the wide rung at desktop widths and the
+    /// narrow rung below the layout's own breakpoint. Home's module gap and the artist page's section stack read the
+    /// SAME two constants, so a section boundary is the same distance in both places.</summary>
+    public const float SectionGap = 32, SectionGapWide = 40;
+
+    /// <summary>The widest a page's content column grows before it stops tracking the window. DetailShell and
+    /// ArtistPage cap their two-column row here; Home caps each feed row at it, so the three pages line up at the
+    /// same measure on an ultra-wide display instead of one of them running edge to edge.</summary>
+    public const float PageMaxW = 1600;
 }
 
 /// <summary>The bottom player-bar dock geometry. Pages reserve this height so their last row clears the transport.</summary>
@@ -25,11 +83,27 @@ public static class PlayerDock
     public const float Reserve = BarH;
 }
 
-/// <summary>Wavee app shell colors. Derived from the active <see cref="Tok.Palette"/> shell ramp. The window itself is
-/// transparent to DWM Mica and the MUX tabbed-window ladder is built on top of it: the TAB RAIL row stays unpainted so
-/// bare Mica Alt is the frame; the app body sits on ONE translucent LayerOnMicaBaseAlt plate (toolbar, nav pane, player
-/// dock, content-pane backing); the content pane is a LayerFillColorDefault step on that plate; and (light) the opaque
-/// card is the step on the pane.</summary>
+/// <summary>Wavee app shell colors. The authenticated shell is the STOCK Windows 11 Mica stack (learn.microsoft.com
+/// system-backdrops; the WinUI-Gallery shell is the reference build):
+/// <list type="number">
+/// <item>BASE LAYER — Mica-passthrough. The shell root paints NOTHING; every chrome band (merged title row, sidebar,
+/// player dock) is a paint-site OMISSION over the live window material. The merged single-row chrome is what makes this
+/// safe: there are no plates left, so the two-material title-bar-vs-toolbar seam the old deterministic ground was
+/// invented for cannot recur. <see cref="ShellGround"/> (light #EDEDED = <see cref="MicaRef.LightDefault"/>, dark
+/// #202020) survives as the no-Mica FALLBACK and as the flatten base for opaque floating surfaces.</item>
+/// <item>MATERIAL — the page-published layer above the backdrop (<see cref="ShellMaterialState"/>): a low-alpha flat
+/// tint, or Home's three clipped radial washes — a scrim over Mica, so the material carries the page's hue.</item>
+/// <item>CONTENT LAYER — <see cref="FileArea"/> (stock <c>LayerFillColorDefault</c>), TRANSLUCENT: the content region
+/// and the right rail band paint this smoke over the base, PAIRED with a 1px <c>Tok.StrokeCardDefault</c> stroke on
+/// their LEFT+TOP edges only, one rounded corner, and no shadow. That pairing is the whole separation model — a
+/// translucent fill alone is too small a step to read as an edge, and stock never adds elevation to this layer.
+/// <see cref="ContentSurface"/> is the OPAQUE equivalent of this rung; the shell no longer paints it, but every
+/// FLOATING stand-in for a content band does (<see cref="FloatingPane"/>), and it is the flatten target the palette
+/// gates measure against.</item>
+/// </list>
+/// The login screen still shows bare DWM Mica (no shell is mounted there); the translucent <see cref="Toolbar"/> /
+/// <see cref="FileArea"/> rungs stay published because the palette contrast gates and the palette recipes are still
+/// written in terms of them.</summary>
 public static class WaveeColors
 {
     /// <summary>One theme's shell surfaces (the values that aren't simply a plain engine token).</summary>
@@ -47,62 +121,139 @@ public static class WaveeColors
         ActiveShell.RowZebra, ActiveShell.RowHover, ActiveShell.RowHoverZebra,
         ActiveShell.RowPressed, ActiveShell.RowPressedZebra);
 
-    // Both themes are published AS-IS: the shell ramp carries the stock WinUI alphas directly (an unpainted tab rail
-    // over real Mica + one LayerOnMicaBaseAlt body plate + one LayerFillColorDefault content pane on it), so the old
-    // light-only alpha re-multiply would re-thin values that are already the stock ones.
+    // The translucent MUX rungs. The authenticated shell no longer PAINTS them — every chrome band is now a paint-site
+    // omission over the ground — but they stay published verbatim: the palette contrast gates measure the preset's tint
+    // through them, and the palette recipes are defined in terms of them.
     public static ColorF Toolbar => Active.Toolbar;
     public static ColorF Sidebar => Active.Sidebar;
 
-    static ColorF MicaBase => Tok.Theme == ThemeKind.Light ? MicaRef.LightDefault : MicaRef.DarkDefault;
+    /// <summary>The chrome GROUND, as a value — for a floating pane that stands in for a docked CHROME band (the narrow
+    /// nav drawer, the sidebar preview well, the floating right-rail backing). Identical to what the shell paints under
+    /// the docked band, and opaque by construction: the page it covers must not read through it.</summary>
+    public static ColorF FloatingChrome => ShellGround;
 
-    /// <summary>Opaque equivalent of the app-body PLATE (rung 1) — for a floating pane that replaces a docked CHROME
-    /// band (the narrow nav drawer). It must not be translucent: the page it covers would read through it.</summary>
-    public static ColorF FloatingChrome => ColorContrast.Flatten(Active.Toolbar, MicaBase);
-
-    /// <summary>Opaque equivalent of the CONTENT PANE (rungs 1+2) — <see cref="FileArea"/> on the plate on Mica.
-    /// Matches <see cref="ContentPaneMerged"/>'s compositing (FileArea, not <see cref="Content"/>) so the opaque B4
-    /// plate is the same colour as the translucent merge it replaced. Also used for floating surfaces that replace a
-    /// docked content band.</summary>
-    public static ColorF FloatingPane => ColorContrast.Flatten(Active.FileArea,
-        ColorContrast.Flatten(Active.Toolbar, MicaBase));
+    /// <summary>The CONTENT surface, as a value — for a floating surface that stands in for a docked content band, and
+    /// for the login view, which has no shell under it at all. Same rung as <see cref="ContentSurface"/> by definition;
+    /// the two names mark intent (docked surface vs. floating stand-in), not different colours.</summary>
+    public static ColorF FloatingPane => ContentSurface;
     public static ColorF PlayerBar => Active.PlayerBar;
     public static ColorF FileArea => Active.FileArea;
 
-    /// <summary>Rungs 1+2 as ONE translucent surface — the content pane (<see cref="FileArea"/>) pre-composited onto the
-    /// app-body plate (<see cref="Toolbar"/>), still translucent so live Mica reads through it exactly as before. Source-over
-    /// is associative, so painting this one rect is pixel-identical to painting the plate and then the pane on top of it
-    /// (<c>Flatten(Over(pane, plate), mica) == Flatten(pane, Flatten(plate, mica))</c>, for ANY backdrop — including the
-    /// deactivate swing, where DWM drops the backdrop to the opaque window fallback). The shell's content region uses it so
-    /// that region pays ONE blended full-region SDF pass instead of two (neither rung can ever take the opaque no-blend PSO
-    /// — α &lt; 1 is the ladder contract). Computed live like its siblings, so a theme/preset switch re-fires it via
-    /// <c>Tok.Epoch</c>; the raw rungs stay published unchanged for the plate remainders and the gates.</summary>
-    public static ColorF ContentPaneMerged => ColorContrast.Over(Active.FileArea, Active.Toolbar);
+    // The dark ground's lightness (PaletteBuilder's `ColorRamp.Tinted(0.125f, …)` canvas) and the lift that takes it to
+    // #282828. Expressed as a mix-toward-white FRACTION rather than a literal grey so a tinted preset canvas gets the
+    // same step instead of being flattened back to neutral; at chroma 0 it lands on exactly 40/255 per channel.
+    const float DarkGroundL = 0.125f;
+    const float DarkContentLift = (40f / 255f - DarkGroundL) / (1f - DarkGroundL);
+
+    // The LIGHT ground's DROP off the stock canvas, in the same idiom mirrored to the other mix endpoint: the lift above
+    // is (target − L) / (1 − L) because `ColorRamp.Lighten` mixes toward WHITE (1); `ColorRamp.Darken` mixes toward
+    // BLACK (0), so the matching fraction is (L − target) / (L − 0). The neutral light canvas is #F3F3F3 (243/255) and
+    // the target is MicaRef.LightDefault #EDEDED (237/255) — the bare Mica Alt tone the Files tab rail uses as its
+    // DARKEST chrome band, which is the reference this ladder was modelled on. So the drop is (243 − 237) / 243 = 6/243
+    // ≈ 0.02469. A FRACTION, not a literal grey, so a tinted preset's canvas takes an equivalent perceptual step down
+    // instead of being flattened back to neutral; at chroma 0 it lands on exactly 237/255 per channel.
+    const float LightGroundL = 243f / 255f;
+    const float LightGroundDrop = (LightGroundL - 237f / 255f) / LightGroundL;
+
+    /// <summary>The chrome GROUND: the full-bleed opaque rect the whole authenticated shell sits on. Light is the stock
+    /// <c>FillSolidBase</c> #F3F3F3 dropped to #EDEDED — <see cref="MicaRef.LightDefault"/>, the bare Mica Alt tone the
+    /// Files tab rail (the reference this ladder copies) carries as its darkest chrome band; #F3F3F3 read as page, not
+    /// chrome. Dark keeps <c>FillSolidBase</c> #202020 verbatim — it is already that band. Computed live like its
+    /// siblings, so a theme/preset switch re-fires it via <c>Tok.Epoch</c>.</summary>
+    public static ColorF ShellGround => ShellGroundFor(
+        Tok.Theme == ThemeKind.Light ? Tok.Palette.Light : Tok.Palette.Dark, Tok.Theme);
+
+    /// <summary>Pure overload of <see cref="ShellGround"/> for an arbitrary token set — used by the gates and by
+    /// <see cref="PresetSwatch"/> to resolve a palette that is not the active one, without mutating global theme
+    /// state.</summary>
+    public static ColorF ShellGroundFor(TokenSet set, ThemeKind theme) => theme == ThemeKind.Light
+        ? ColorRamp.Darken(set.FillSolidBase, LightGroundDrop)
+        : set.FillSolidBase;
+
+    /// <summary>The OPAQUE content rung — ONE step above the ground. NOT what the docked shell paints any more (the
+    /// content region and the rail band are <see cref="FileArea"/> + a stock stroke over live Mica): this is the
+    /// wallpaper-independent stand-in every FLOATING content surface takes (<see cref="FloatingPane"/>, the login view,
+    /// which has no shell under it at all), and the value the palette gates flatten the translucent ladder against.
+    /// Light resolves to the stock
+    /// <c>FillSolidTertiary</c> #F9F9F9 over the #EDEDED ground; dark is a deliberate #282828 over the #202020 ground —
+    /// <c>FillSolidTertiary</c>'s dark arm lifts 6% (#2D2D2D), which reads as a second card rather than the page. Opaque
+    /// on purpose: nothing behind the authenticated shell is meant to show through, so this rung takes the no-blend PSO.
+    /// Computed live like its siblings, so a theme/preset switch re-fires it via <c>Tok.Epoch</c>.</summary>
+    public static ColorF ContentSurface => ContentSurfaceFor(
+        Tok.Theme == ThemeKind.Light ? Tok.Palette.Light : Tok.Palette.Dark, Tok.Theme);
+
+    /// <summary>Pure overload of <see cref="ContentSurface"/> for an arbitrary token set — used by the gates to pin both
+    /// themes without mutating the global active theme.</summary>
+    public static ColorF ContentSurfaceFor(TokenSet set, ThemeKind theme) => theme == ThemeKind.Light
+        ? set.FillSolidTertiary
+        : ColorRamp.Lighten(set.FillSolidBase, DarkContentLift);
+
+    // The content step as a TRANSLUCENT white layer: source-over of white@α onto a ground G lands on G + α(1−G), i.e.
+    // the same mix-toward-white the opaque rung uses — so α IS the lift fraction. Dark reuses DarkContentLift verbatim;
+    // light solves (249−237)/(255−237) = 2/3 against the #EDEDED ground. Neutral therefore composites to exactly
+    // ContentSurface over the bare ground — and over a page-published tint it lands on the TINTED equivalent, which an
+    // opaque fill cannot (it would punch a neutral hole through the wash).
+    const float LightContentLayerA = (249f / 255f - 237f / 255f) / (1f - 237f / 255f);
+
+    /// <summary>The content step expressed as a translucent white LAYER: it composites to <see cref="ContentSurface"/>
+    /// over the bare ground AND lands on the TINTED equivalent over a page's published shell tint, which an opaque fill
+    /// cannot (it would punch a neutral hole through the wash).
+    /// <para>NOTHING IN THE SHELL PAINTS THIS TODAY — the content region and the rail band take the stock
+    /// <see cref="FileArea"/> rung, and the text-first tab strip carries no plate at all (weight + opacity + one accent
+    /// underline). It stays published as the LAYER-equivalent of <see cref="ContentSurface"/>: the identity
+    /// <c>Over(ContentLayer, ShellGround) == ContentSurface</c> is what a fallback or a gate uses to reason about the
+    /// ladder in either space, and <c>ShellMergedRungTests</c> pins it. If a chrome-band-scale plate is ever wanted
+    /// again, this is the value it takes — not a hand-mixed grey.</para></summary>
+    public static ColorF ContentLayer => ContentLayerFor(Tok.Theme);
+
+    /// <summary>Pure overload of <see cref="ContentLayer"/> — theme in, no global reads, for the gates.</summary>
+    public static ColorF ContentLayerFor(ThemeKind theme) => ColorF.FromRgba(0xFF, 0xFF, 0xFF,
+        (byte)((theme == ThemeKind.Light ? LightContentLayerA : DarkContentLift) * 255f + 0.5f));
+
     public static ColorF Content => Active.Content;
     public static ColorF ContentAlt => Active.ContentAlt;
     public static ColorF PremiumText => Active.PremiumText;
 
-    // White-alpha stripes disappear over the near-white light Mica/page composite. Use a restrained neutral-ink ramp
-    // in light mode: visible enough to scan long lists, still quieter than selection and hover states. Dark keeps the
-    // palette-provided white overlays.
-    public static ColorF RowZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x08) : Active.RowZebra;
+    /// <summary>THE zebra stripe — the resting plate on an odd row of a LONG tracklist, and nothing else. Zebra is a
+    /// scanning aid for lists long enough to lose your place in (the detail tracklist, <c>TrackRow</c>); a 6-row queue
+    /// or a friends rail gets plain rows plus the standard hover, because striping a short list only adds noise.
+    /// <para>It is the engine's SUBTLE-FILL ink at its quietest rung — <see cref="Tok.FillSubtleTertiary"/> — not three
+    /// hand-picked alphas per theme. That derivation does two things the literals could not: it drops the light/dark
+    /// branch (the subtle ladder already flips black ink for white), and it enforces the invariant the old numbers
+    /// broke in DARK, where the stripe (0x0F) was EXACTLY the hover fill, so hovering a striped row moved the surface by
+    /// five alpha steps and read as nothing at all. A stripe MUST be quieter than hover or the row has no hover.</para></summary>
+    public static ColorF RowZebra => Tok.FillSubtleTertiary;
+
     public static ColorF RowHover => Active.RowHover;
-    public static ColorF RowHoverZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x0F) : Active.RowHoverZebra;
     public static ColorF RowPressed => Active.RowPressed;
-    public static ColorF RowPressedZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x14) : Active.RowPressedZebra;
+
+    /// <summary>Hover/press ON a striped row: the row state SOURCE-OVER the stripe, collapsed to one translucent fill
+    /// (the row paints a single <c>Fill</c>, never two stacked plates). <c>ColorContrast.Over</c> is associative, so the
+    /// merged rung composites pixel-identically to painting the two rungs in sequence — which is exactly what the old
+    /// literals were hand-approximating (light landed on 0x0F either way; the rest were eyeballed).</summary>
+    public static ColorF RowHoverZebra => ColorContrast.Over(Active.RowHover, RowZebra);
+
+    /// <inheritdoc cref="RowHoverZebra"/>
+    public static ColorF RowPressedZebra => ColorContrast.Over(Active.RowPressed, RowZebra);
 
     public static ColorF ChromeHover => Tok.FillSubtleSecondary;
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;
     public static ColorF Badge => Tok.AccentDefault;
 
-    /// <summary>Swatch preview for the palette picker: the preset's CONTENT PANE flattened through the PLATE and over
-    /// the reference Mica for the CURRENT theme — i.e. what that preset's largest surface actually reads as, so the
-    /// swatch matches what clicking it produces. Keyed on rung 2 because it is both the largest surface AND, riding a
-    /// tinted plate, the most tinted point of the whole ladder (the preset hue is applied twice there; pairwise dark
-    /// max-channel deltas measure 16/8/16/9/6/8 at the pane vs single digits at rung 1). Reads the ARGUMENT's shells,
-    /// not <c>Active</c> — the swatch previews a palette that is not the active one.</summary>
+    /// <summary>Swatch preview for the palette picker: the preset's CONTENT LAYER over the bare Mica base, for the
+    /// CURRENT theme — i.e. exactly the composite the shell's content region produces, so the swatch matches what
+    /// clicking it does to the largest surface in the window.
+    /// <para>It flattens <see cref="FileArea"/> (the translucent <c>LayerFillColorDefault</c> rung the region really
+    /// paints) rather than the opaque <see cref="ContentSurface"/> the swatch used to preview — that showed a rung the
+    /// authenticated shell stopped painting, so a preset whose translucent recipe differed from its opaque one
+    /// advertised the wrong colour.</para>
+    /// <para>THE APPROXIMATION, stated: live Mica has no colour until there is a desktop behind it, so the base here is
+    /// <see cref="MicaRef"/>'s neutral no-wallpaper reference tone (LightDefault / DarkDefault) — the same stand-in the
+    /// palette contrast gates measure against. On a strongly tinted wallpaper the real region drifts toward it; the
+    /// swatch cannot and should not chase that, because it is comparing PRESETS, not desktops.</para>
+    /// Reads the ARGUMENT's token sets, not the active ones — the swatch previews a palette that is not the active
+    /// one.</summary>
     public static ColorF PresetSwatch(ThemePalette palette) => Tok.Theme == ThemeKind.Light
-        ? ColorContrast.Flatten(palette.LightShell.Content,
-            ColorContrast.Flatten(palette.LightShell.Toolbar, MicaRef.LightDefault))
-        : ColorContrast.Flatten(palette.DarkShell.Content,
-            ColorContrast.Flatten(palette.DarkShell.Toolbar, MicaRef.DarkDefault));
+        ? ColorContrast.Flatten(palette.LightShell.FileArea, MicaRef.LightDefault)
+        : ColorContrast.Flatten(palette.DarkShell.FileArea, MicaRef.DarkDefault);
 }

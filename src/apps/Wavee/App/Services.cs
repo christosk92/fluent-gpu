@@ -108,6 +108,11 @@ public sealed class Services
     /// — only the standalone <c>ArtistPage</c> chart drives it. Offline/fake it is <see cref="NullArtistPopularTracksService"/>,
     /// which hands the seed straight back.</summary>
     public SwitchableArtistPopularTracksService ArtistPopularTracks { get; }
+    /// <summary>The signed-in user's own top artists and tracks (<c>userTopContent</c>, 4-week affinity) — Home's
+    /// top-artist row and its personal track badges.
+    /// Stable wrapper; the live provider is installed after login, offline/fake it is <see cref="NullUserTopService"/>,
+    /// which returns an empty list so the row simply does not render.</summary>
+    public SwitchableUserTopService UserTop { get; }
     /// <summary>Playlist save counts (the spclient <c>popcount</c> endpoint) for the playlist header's meta line.
     /// Stable wrapper; the live provider is installed on go-live. Offline it is <see cref="NullPlaylistPopcountService"/>,
     /// which returns null so the header simply omits the segment.</summary>
@@ -225,6 +230,7 @@ public sealed class Services
         AlbumEnrichment = new SwitchableAlbumEnrichmentService(new CatalogAlbumEnrichmentService(library));
         ArtistStats = new SwitchableArtistStatsService(new NullArtistStatsService());
         ArtistPopularTracks = new SwitchableArtistPopularTracksService(new NullArtistPopularTracksService());
+        UserTop = new SwitchableUserTopService(new NullUserTopService());
         PlaylistPopcount = new SwitchablePlaylistPopcountService(NullPlaylistPopcountService.Instance);
         PreRelease = new SwitchablePreReleaseService(NullPreReleaseService.Instance);
         ContentFilters = new SwitchableContentFilterService(NullContentFilterService.Instance);
@@ -530,6 +536,7 @@ public sealed class Services
         TrackAdornments = null;                       // row tint/tempo stop resolving; rows fall back to the neutral tile
         ArtistStats.SetInner(new NullArtistStatsService());   // drop the session-bound overview provider until the next live login
         ArtistPopularTracks.SetInner(new NullArtistPopularTracksService());   // …and its spclient/metadata-bound step two
+        UserTop.SetInner(new NullUserTopService());            // …and the account-scoped top-artist ranking on Home
         PlaylistPopcount.SetInner(NullPlaylistPopcountService.Instance);      // …and the playlist save-count badge
         PreRelease.SetInner(NullPreReleaseService.Instance);                  // …and kind-138 upcoming-release resolution
         ContentFilters.SetInner(NullContentFilterService.Instance);           // …and the Liked content-filter chips

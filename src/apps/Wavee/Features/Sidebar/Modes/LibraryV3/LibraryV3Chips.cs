@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -299,7 +299,7 @@ sealed class LibraryV3Chips : Component
             Fill = selected ? Tok.AccentDefault : Tok.FillSubtleSecondary,
             HoverFill = selected ? Tok.AccentSecondary : Tok.FillSubtleTertiary,
             PressedFill = selected ? Tok.AccentTertiary : Tok.FillSubtleTertiary,
-            BrushTransitionMs = 150f,
+            BrushTransitionMs = WaveeMotion.Fast,
             Role = AutomationRole.RadioButton, Cursor = CursorId.Hand,
             Focusable = focusable, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
             OnClick = onClick,
@@ -332,7 +332,7 @@ sealed class LibraryV3Chips : Component
         Padding = new Edges4(3f, 0f, 9f, 0f),
         Corners = Radii.FullAll,
         Fill = Tok.AccentDefault, HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
-        BrushTransitionMs = 150f,
+        BrushTransitionMs = WaveeMotion.Fast,
         Role = AutomationRole.RadioButton, Cursor = CursorId.Hand,
         Focusable = focusable, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
         OnClick = onClick,

@@ -1381,11 +1381,14 @@ internal static class WaveeNavProbe
         // with REAL vsync pacing (no latency/vsync suppression) so it reproduces the exact frame cadence the snap surfaced
         // under. Captures every frame → sbclick_a_NN.png (collapse) + sbclick_b_NN.png (expand) for a frame-by-frame diff.
         {
-            // Hamburger client-DIP position: first icon in the toolbar row (ShellToolbar), which sits below the titlebar
-            // tab row — approx (36, 108) DIP. QueueInput consumes DIP DIRECTLY (the WndProc converts screen-px→DIP before it
-            // enqueues), so NO DIP→px scale conversion is needed here. Both coords are env-overridable for robustness.
-            float clickX = float.TryParse(Environment.GetEnvironmentVariable("WAVEE_CLICK_X"), NumberStyles.Float, CultureInfo.InvariantCulture, out var cx) ? cx : 36f;
-            float clickY = float.TryParse(Environment.GetEnvironmentVariable("WAVEE_CLICK_Y"), NumberStyles.Float, CultureInfo.InvariantCulture, out var cy) ? cy : 108f;
+            // Hamburger client-DIP position: the merged chrome row's pane-toggle built-in. With WaveeShell.ChromeParts'
+            // four-DIP nudge it occupies x 8..48 / y 2..46 in the window's ONLY 48-DIP chrome row, so its centre is
+            // (28, 24) DIP — the same x the 56-DIP compact rail centres its icons on. (It used to be at (36, 108) when
+            // a separate ShellToolbar row lived under the title bar.) QueueInput consumes DIP DIRECTLY (the WndProc
+            // converts screen-px→DIP before it enqueues), so NO DIP→px scale conversion is needed here. Both coords are
+            // env-overridable for robustness.
+            float clickX = float.TryParse(Environment.GetEnvironmentVariable("WAVEE_CLICK_X"), NumberStyles.Float, CultureInfo.InvariantCulture, out var cx) ? cx : 28f;
+            float clickY = float.TryParse(Environment.GetEnvironmentVariable("WAVEE_CLICK_Y"), NumberStyles.Float, CultureInfo.InvariantCulture, out var cy) ? cy : 24f;
             var clickPt = new Point2(clickX, clickY);
             uint clickTime = 1;   // monotonically increasing stamp so the two toggles never read as a double-click
 

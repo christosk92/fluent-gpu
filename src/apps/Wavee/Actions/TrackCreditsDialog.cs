@@ -59,7 +59,9 @@ sealed class TrackCreditsDialog : Component
         foreach (var group in credits.GroupBy(c => string.IsNullOrWhiteSpace(c.RoleGroup) ? c.Role : c.RoleGroup!))
         {
             if (!string.IsNullOrWhiteSpace(group.Key))
-                kids.Add(new TextEl(group.Key!.ToUpperInvariant()) { Size = 10.5f, Weight = 750, Color = Tok.TextTertiary, CharSpacing = 80f });
+                // The role-group name arrives from the server ("Performers", "Songwriters", …) — its own casing is the
+                // right casing, and 10.5/750 was a rung of nobody's ramp.
+                kids.Add(WaveeType.Eyebrow(group.Key!) with { Color = Tok.TextTertiary });
             foreach (var c in group) kids.Add(CreditRow(c, go));
         }
         if (sources.Count > 0)

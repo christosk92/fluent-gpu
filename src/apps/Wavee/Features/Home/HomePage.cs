@@ -16,11 +16,21 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// The Home landing page — a vertically SCROLLING composition driven by the source-agnostic, CONDENSED HomeFeed (the
-// catalog seam groups a real Spotify home — dozens of sections — into a small, finite set of typed groups so it never
-// reads as an endless stack of rails; see docs/architecture.md §2). Each group renders by KIND with the existing
-// reusable cards: QuickGrid / Hero spotlight / horizontally-paged Shelf / a CollapsedGrid that folds the many
-// single-item recommendations into one grid. Async skeleton pattern throughout (UseResource + Skel.Region).
+// One reveal group covers both the page shell and the artist disclosure nested inside it. A shared token makes the
+// deriver coordinate those regions as one Home transition instead of staggering the inner disclosure a second time.
+static class HomeSkeleton
+{
+    internal static readonly object Group = new();
+}
+
+// The section directory Home renders is HomeLanding.Sections (HomeLandingProjection.SectionDirectory) — the ONE
+// producer, consumed by the single HomeRow.Sections emission. A second local selector used to live here; it had no
+// caller left and was deleted rather than kept as a divergent shadow of the projection's rules.
+
+// The Home landing page — a vertically scrolling composition driven by the source-agnostic, lossless HomeFeed ledger.
+// Every server section survives either as its own typed module or as an entry in the two-row section deck; the deck
+// drills into a dedicated page with a Home > section breadcrumb, following the Zune/Fluent master-detail model.
+// Async skeletons are derived from FakeData.HomeSeed through Skel.Region.
 sealed class HomePage : Component
 {
     public override Element Render()
@@ -29,8 +39,11 @@ sealed class HomePage : Component
         var go     = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
+        var sectionPreview = UseContext(HomeSectionPreviewStore.Slot);
         var acts = UseContext(ActionServices.Slot);        // card context menus (Menus.Card via CardAttach)
         var menuOverlay = UseContext(Overlay.Service);
+        var lib = UseContext(LibraryBridge.Slot);          // the hero's heart
+        var shellMaterial = UseContext(ShellMaterial.Slot);   // Home owns the shell material while it is the active page
         if (svc is null) return new BoxEl { Grow = 1f };
 
         var home = UseLoadable(Loadable<HomeFeed>.Pending(FakeData.HomeSeed));   // seed renders the loading shape; later refreshes swap Ready->Ready in place
@@ -39,6 +52,9 @@ sealed class HomePage : Component
         // Home groups have substantially different heights (quick grid / hero / compact grid / shelf / editorial).
         // Hoist one measured extent table so the viewport can correct and anchor rows while recycling offscreen groups.
         var homeLayout = UseMemo(static () => new HomeFeedVirtualLayout(), DepKey.Empty);
+        // Every module's "Show all" flag, hoisted here: a UseState inside a module shell would be re-created on every
+        // realization, so an expanded module would silently collapse the moment it scrolled out and back in.
+        var more = UseMemo(static () => new HomeShowAll(), DepKey.Empty);
         // Start the background home-refresh loop ONCE and tie it to this component's lifetime. A UseSignalEffect that
         // reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on unmount (KeepAlive eviction /
         // navigation away). Without this, each cold remount of Home leaked an orphaned 60s PeriodicTimer loop that
@@ -52,179 +68,148 @@ sealed class HomePage : Component
             StartHomeRefreshLoop(svc, home, post, cts.Token);
             Reactive.OnCleanup(() => { cts.Cancel(); cts.Dispose(); });
         });
+
+        // ── the shell MATERIAL: Home's three-wash composition (ShellMaterial / ShellMaterialLayer) ────────────────
+        // Home publishes the WASH arm (Tint: null); detail pages publish the flat tint arm. The SEED and the loaded feed
+        // go through this ONE path: the seed's cards carry no accent and no artwork, so it resolves to an empty wash and
+        // the shell keeps its bare deterministic ground while Home loads — no placeholder colour, ever.
+        _ = AppearancePrefs.Epoch.Value;   // the Settings toggle applies LIVE (the DisableColorWashes idiom)
+        bool colorWashesDisabled = svc.Settings.Get(WaveeSettings.DisableColorWashes);
+        var feedNow = home.Value.Value;    // subscribe → re-publish when the feed lands, and on every refresh swap
+        var washCards = HomeWashSource.Sources(feedNow);
+        // LATE GRADING: watch only the (at most three) selected artworks that are still waiting on the plane, so a
+        // landed grading re-renders this page and re-publishes the wash. Never CoverColorPlane.Epoch — every scrolling
+        // grid batch bumps that, and Home is the page with the most grids. A null/empty url is NOT passed to Watch:
+        // the plane answers an unkeyable url with its global epoch, which is exactly the subscription being avoided.
+        WatchArtwork(HomeWashSource.PlaneUrl(washCards.Hero));
+        WatchArtwork(HomeWashSource.PlaneUrl(washCards.Weekly));
+        WatchArtwork(HomeWashSource.PlaneUrl(washCards.Mix));
+        var picks = colorWashesDisabled ? default : HomeWashSource.Select(washCards, Surfaces.ChromeSchemeFor);
+        // Disabled ⇒ no material at all (Wash null, Tint null): Home still CLAIMS ownership, so the previous page's
+        // tint is cleared and only the deterministic ground remains.
+        HomeWash? wash = colorWashesDisabled
+            ? null
+            : new HomeWash(Layer(picks.Hero), Layer(picks.Weekly), Layer(picks.Mix));
+
+        // Owner-gated exactly like DetailShell: a page clears the material only while it is still the owner, so a
+        // "park Home + activate the destination" nav lands on the destination's material whichever effect fires first.
+        void SetWash(HomeWash? w)
+        {
+            if (shellMaterial is not null) shellMaterial.Value = new ShellMaterialState(_washOwner, null, w);
+        }
+        void ClearWash()
+        {
+            if (shellMaterial is not null && ReferenceEquals(shellMaterial.Peek().Owner, _washOwner))
+                shellMaterial.Value = default;
+        }
+        // SET on mount + on any real colour/artwork change (UseEffect, keyed on the resolved legs) and on REACTIVATION
+        // (a KeepAlive-cached page does not re-run its mount effect); CLEAR on park…
+        UseEffect(() => SetWash(wash),
+            DepKey.From(HashCode.Combine(colorWashesDisabled, HomeWashSource.Fingerprint(picks))));
+        UseActivation(onActivated: () => SetWash(wash), onDeactivated: ClearWash);
+        // …and on UNMOUNT too, because onDeactivated fires only on PARK: a nav that evicts Home without parking it would
+        // otherwise leave a wash owned by a gone page. Owner-gated, so it can never clobber the next page's material.
+        UseEffect(() => (Action?)ClearWash, DepKey.Empty);
+
         string? name = bridge?.User.Value?.DisplayName;     // subscribe → greeting refreshes on login
 
         void Play(string uri) => _ = svc.Player.PlayAsync(uri, 0);
-        void NavUri(string u) { if (RichText.RouteForUri(u) is { } k) go(k, null); }   // a link inside a card description → navigate to it
-        void NavCard(HomeCard c)
-        {
-            switch (c.Kind)
-            {
-                case HomeCardKind.Liked:
-                    go("liked", null);
-                    break;
-                case HomeCardKind.Track:
-                    _ = svc.Player.PlayTrackAsync(c.Uri);
-                    break;
-                case HomeCardKind.Album:
-                {
-                    string key = "album:" + c.Uri;
-                    preview?.Set(key, DetailPreview.FromAlbum(new Album(Id(c.Uri), c.Uri, c.Title, c.Image, Array.Empty<ArtistRef>(), 0, 0)));
-                    go(key, c.Title);
-                    break;
-                }
-                case HomeCardKind.Artist:
-                    go("artist:" + c.Uri, c.Title);
-                    break;
-                default:
-                {
-                    string key = "pl:" + c.Uri;
-                    preview?.Set(key, DetailPreview.FromPlaylist(new PlaylistSummary(c.Uri, c.Title, c.Subtitle ?? "", 0, c.Image)));
-                    go(key, c.Title);
-                    break;
-                }
-            }
-        }
+        // The card-open decision lives in HomeCardNav (shared with HomeSectionPage — the two drifted apart once already,
+        // over the Liked branch).
+        void NavCard(HomeCard c) => HomeCardNav.Open(c, preview, go, uri => _ = svc.Player.PlayTrackAsync(uri));
 
         void PlayCard(HomeCard c)
         {
-            if (c.Kind == HomeCardKind.Track) _ = svc.Player.PlayTrackAsync(c.Uri);
+            // Track and Episode are single items — they play themselves. Everything else is a CONTEXT (playlist, album,
+            // show, audiobook) the player starts from the top of.
+            if (c.Kind is HomeCardKind.Track or HomeCardKind.Episode) _ = svc.Player.PlayTrackAsync(c.Uri);
             else Play(c.Uri);
         }
 
         // Every home card is a drag SOURCE for the entity it stands for — drop it on a sidebar playlist to add its
         // tracks, on a folder to file it, on the pin band to pin it. The payload factory is gesture-COLD (it runs once,
         // at promotion), so it reads `acts` live rather than snapshotting anything here.
-        // A TRACK card is deliberately excluded: the feed carries only a uri for it — no Track object, and no by-uri
-        // track read exists — so its payload could be neither pinned nor deposited. A drag every surface refuses is
-        // worse than no drag at all.
+        // TRACK and EPISODE cards are deliberately excluded: the feed carries only a uri for either — no Track object, and
+        // no by-uri track read exists — so the payload could be neither pinned nor deposited. A drag every surface
+        // refuses is worse than no drag at all. (An audiobook/podcast IS draggable: it maps to a Show, which the sidebar
+        // and pin band both accept.)
         DragSource? CardDrag(HomeCard c)
-            => c.Kind == HomeCardKind.Track
+            => c.Kind is HomeCardKind.Track or HomeCardKind.Episode
                 ? null
                 : Drag.Source(WaveeDragKinds.Resource,
                     () => WaveeResourceDragPayload.ForEntity(WaveeDragKindMap.Of(c.Kind), c.Uri, c.Title, c.Image, acts));
 
-        Element Tile(HomeCard c, string section = "", int index = -1)
+        // Per-card callbacks as factories, so every module shell stays a pure function of (group, callbacks) and never
+        // needs the page's services threaded through it.
+        Action NavOf(HomeCard c) => () => NavCard(c);
+        Action PlayOf(HomeCard c) => () => PlayCard(c);
+
+        // Drag + the context menu, applied once per card by the shells. Both belong to the ENTITY, not the skin, so they
+        // survive the whole card vocabulary being re-authored: every module gets right-click and drag-out for free.
+        HomeCardChrome ChromeOf(HomeCard c) => new(
+            CardDrag(c),
+            Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, PlainSubtitle(c),
+                circular: c.Kind == HomeCardKind.Artist));
+
+        // "{n} songs · by {owner}" — the meta line the editorial feature and the feed cards close with.
+        // The owner comes from Meta.OwnerName, NOT from Subtitle: Subtitle is `description ?? ownerName`, so a playlist
+        // with a description made this read "50 songs · by <the entire description, tags and all>".
+        string CardMeta(HomeCard c)
         {
-            string? url = HomeImageDiagnostics.Enabled ? HomeImageDiagnostics.NormalizedUrl(c.Image) : null;
-            Element tile = MediaCard.QuickPick(c.Image, c.Title, c.Uri, () => NavCard(c), () => PlayCard(c),
-                accent: Surfaces.SchemeFor(c.Image?.Url) is { } a ? WaveePalette.Lift(WaveePalette.Accent(a)) : null,
-                diagnostics: url is { Length: > 0 }
-                    ? Embed.Comp(() => new HomeQuickImageProbe(url, c.Uri, c.Title, section, index)).Skeletonized(false)
-                    : null,
-                menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                    circular: c.Kind == HomeCardKind.Artist),
-                drag: CardDrag(c));
-            return tile is BoxEl box ? box with { Key = "home-quick:" + c.Uri, Animate = MotionRecipes.CardRefit } : tile;
+            int n = c.Meta?.TrackCount ?? 0;
+            string count = c.Kind == HomeCardKind.Episode
+                ? HomeCards.Duration(c.Meta?.DurationMs ?? 0)
+                : n > 0 ? Strings.Detail.SongCount(n) : "";
+            string? owner = c.Meta?.OwnerName;
+            if (count.Length == 0) return owner ?? "";
+            return owner is { Length: > 0 } o && c.Kind != HomeCardKind.Episode
+                ? Strings.Home.SongsBy(count, o)
+                : count;
         }
 
-        IEnumerable<Element> QuickTiles(IReadOnlyList<HomeCard> cards, string section, int max)
+        // The recents rail's caption names the entity TYPE. It used to fall through to Subtitle, which for a playlist is
+        // its owner — so every tile in the rail said "Spotify" and the rail explained nothing.
+        string KindLabel(HomeCard c) => c.Kind switch
         {
-            int n = Math.Min(cards.Count, max);
-            for (int i = 0; i < n; i++) yield return Tile(cards[i], section, i);
-        }
-
-        // Conventional discovery modules remain finite, one-row horizontal shelves using the SAME MediaCard.Shelf
-        // component as the rest of the app. PagedShelf clamps at the first/last page and never loops.
-        Element Shelf(HomeGroup g) => PagedShelf.Create(
-            g.Cards.Count,
-            cardAt: (i, w) =>
-            {
-                var c = g.Cards[i];
-                return MediaCard.Shelf(c.Image, c.Title, c.Subtitle ?? "", c.Uri,
-                    () => NavCard(c), () => PlayCard(c), w,
-                    circular: c.Kind == HomeCardKind.Artist, onNavUri: NavUri,
-                    menu: Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                        circular: c.Kind == HomeCardKind.Artist),
-                    drag: CardDrag(c));
-            },
-            measured: true,
-            header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
-            pager: ShelfPager.Chevrons,
-            // gap S, not L: the Shelf card already insets its artwork by Pad(8) each side for the hover plate, so the
-            // VISUAL cover-to-cover distance is gap + 16 — L read as ~32px of air between resting cards.
-            minCardW: 178f, maxCardW: 232f, gap: Spacing.S, edgeFade: 24f,
-            keyOf: i => g.Cards[i].Uri);
-
-        // Baseline recommendations are the deliberate exception: a three-up editorial interruption with full-bleed
-        // artwork and overlaid context/title, matching Apple Music's Top Picks module.
-        Element FeaturedShelf(HomeGroup g) => PagedShelf.Create(
-            g.Cards.Count,
-            cardAt: (i, w) =>
-            {
-                var c = g.Cards[i];
-                return MediaCard.EditorialCard(c.Image, c.Eyebrow, c.Title, c.Subtitle ?? "", c.Uri, c.Kind,
-                    () => NavCard(c), () => PlayCard(c), w,
-                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                        circular: c.Kind == HomeCardKind.Artist),
-                    // Hover peek: preview tracks from the batched feedBaselineLookup cache (primed when the feed lands).
-                    previewsOf: Wavee.SpotifyLive.HomeBaselinePreviews.For,
-                    previewsEpoch: Wavee.SpotifyLive.HomeBaselinePreviews.Epoch,
-                    drag: CardDrag(c));
-            },
-            measured: true,
-            header: g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
-            pager: ShelfPager.Chevrons,
-            // Width-adaptive editorial row, like a normal shelf but larger: the min width drives the column count
-            // (≈3 cols at ~1000px, 4 at ~1300, 5 from ~1600) and maxColumns caps an ultrawide window at 5 — never the
-            // old count-pinned 3-up that ballooned each card to a third of the row. The uncapped maxCardW keeps the
-            // FITTED columns filling the width (no maxCardW slivers); a break with fewer cards than columns simply
-            // shows them at the fitted size.
-            // edgeFade must cover the shelf's HaloBleed gutter (PagedShelf): with fade 0 a free-wheel (non-page-aligned)
-            // rest showed a RAW sliver of the scrolled-out neighbor in the gutter — the fade is what keeps it soft.
-            minCardW: 300f, maxCardW: 9999f, gap: Spacing.L, edgeFade: 24f,
-            maxColumns: 5,
-            keyOf: i => g.Cards[i].Uri);
-
-        Element CompactSection(HomeGroup g) => Responsive.Of(width =>
-        {
-            float art = HomeCompactLayout.Art(width);
-            float cardH = HomeCompactLayout.CardHeight(width);
-            int columns = HomeCompactLayout.Columns(width);
-            var cards = new Element[g.Cards.Count];
-            for (int i = 0; i < cards.Length; i++)
-            {
-                var c = g.Cards[i];
-                Element compact = MediaCard.Compact(c.Image, c.Title, c.Subtitle ?? "", c.Uri, c.Kind,
-                    () => NavCard(c), () => PlayCard(c), art, cardH,
-                    Menus.CardAttach(acts, menuOverlay, c.Uri, c.Title, c.Image, c.Subtitle,
-                        circular: c.Kind == HomeCardKind.Artist),
-                    drag: CardDrag(c));
-                cards[i] = compact is BoxEl b
-                    ? b with { Key = "home-compact:" + c.Uri, Animate = MotionRecipes.CardRefit }
-                    : compact;
-            }
-            return new BoxEl
-            {
-                Direction = 1, Gap = Spacing.M,
-                Children =
-                [
-                    g.Title is { Length: > 0 } t ? Surfaces.AccentHeader(t, GroupAccent(g)) : new BoxEl(),
-                    UniformGrid(columns, HomeCompactLayout.GridGap, cardH + HomeCompactLayout.RowClearance, cards),
-                ],
-            };
-        }, fallback: 900f);
-
-        // The library quick picks are the fixed opening matrix, not another unbounded feed module. The responsive
-        // column count A determines an A×A window; only a genuinely shorter source leaves the final row incomplete.
-        Element QuickSection(HomeGroup g) => Responsive.Of(width =>
-        {
-            int columns = HomeQuickLayout.Columns(width);
-            int count = HomeQuickLayout.VisibleCount(width, g.Cards.Count);
-            return UniformGrid(columns, HomeQuickLayout.Gap, MediaCard.QuickH,
-                QuickTiles(g.Cards, g.Title ?? "quick-grid", count).ToArray());
-        }, fallback: 1100f);
-
-        Element Group(HomeGroup g) => g.Kind switch
-        {
-            HomeGroupKind.QuickGrid => QuickSection(g),
-            HomeGroupKind.Hero when g.Cards.Count > 0 => Responsive.Of(w => HeroBand(g.Cards[0], GroupAccent(g), PlayCard, NavCard, w), fallback: 560f),
-            HomeGroupKind.Featured when g.Cards.Count > 0 => FeaturedShelf(g),
-            HomeGroupKind.Compact when g.Cards.Count > 0 => CompactSection(g),
-            HomeGroupKind.Shelf when g.Cards.Count > 0 => Shelf(g),
-            HomeGroupKind.CollapsedGrid when g.Cards.Count > 0 => Shelf(g),
-            _ => new BoxEl(),
+            HomeCardKind.Artist => Loc.Get(Strings.Home.Artist),
+            HomeCardKind.Album => Loc.Get(Strings.Home.Album),
+            HomeCardKind.Podcast or HomeCardKind.Audiobook => Loc.Get(Strings.Podcast.Show),
+            HomeCardKind.Episode => Loc.Get(Strings.Podcast.Episodes),
+            HomeCardKind.Track => Loc.Get(Strings.Detail.Column.Song),
+            HomeCardKind.Liked => Loc.Get(Strings.Detail.LikedSongs),
+            _ => Loc.Get(Strings.Nav.Playlist),
         };
+
+        // A description flattened for the string-typed consumers — a context-menu subtitle, a tooltip. RichText handles
+        // the rendered cases; these hold a string and would otherwise show the raw markup.
+        static string? PlainSubtitle(HomeCard c) => SpotifyExportMapper.ToPlainText(c.Subtitle);
+
+        void OpenSection(HomeSection section)
+        {
+            string identity = section.Uri is { Length: > 0 } uri
+                ? uri
+                : HomeSectionRoutes.LocalPrefix + HomeModuleLayout.SectionSetKey([section]);
+            string route = HomeSectionRoutes.Page(identity);
+            sectionPreview?.Set(route, section);
+            go(route, section.Title);
+        }
+
+        void NavUri(HomeFeed feed, string key)
+        {
+            if (HomeSectionRoutes.Is(key))
+            {
+                string uri = HomeSectionRoutes.UriOf(key);
+                var sections = feed.Sections;
+                if (sections is not null)
+                    for (int i = 0; i < sections.Count; i++)
+                        if (string.Equals(sections[i].Uri, uri, StringComparison.Ordinal))
+                        {
+                            OpenSection(sections[i]);
+                            return;
+                        }
+            }
+            go(key, null);
+        }
 
         // The Concert Hub destination is the final virtual row. It is mounted only when the measured list realizes the
         // tail of the feed instead of living permanently below every Spotify module.
@@ -260,13 +245,20 @@ sealed class HomePage : Component
         {
             // Preview lookup and image decode follow the realized window. The old eager whole-feed pass enqueued every
             // cover before the first content frame, largely defeating the benefit of recycling the group trees.
-            if (g.Kind == HomeGroupKind.Featured)
+            // The hover peek is primed for DiscoverFeed, not Featured: feedBaselineLookup only answers for the
+            // single-item baseline recommendations, which now coalesce into the discover feed. Featured is editorial
+            // playlists, which that batch has nothing to say about.
+            if (g.Kind == HomeGroupKind.DiscoverFeed)
                 Wavee.SpotifyLive.HomeBaselinePreviews.Prime(g.Cards.Select(c => c.Uri));
+            // The decode target per module — a cover decoded for a 32px station row must not be fetched at 512.
             int px = g.Kind switch
             {
+                HomeGroupKind.RadioDial or HomeGroupKind.QueueList => 64,
                 HomeGroupKind.QuickGrid => 64,
-                HomeGroupKind.Hero => 168,
-                HomeGroupKind.Compact => 128,
+                HomeGroupKind.RatedShelf or HomeGroupKind.ChipCards or HomeGroupKind.WeeklyPair
+                    or HomeGroupKind.DiscoverFeed => 128,
+                HomeGroupKind.Hero => 256,
+                HomeGroupKind.MixBand => 64,
                 HomeGroupKind.Featured => 512,
                 _ => 256,
             };
@@ -275,43 +267,45 @@ sealed class HomePage : Component
                 if (cards[i].Image?.Url is { Length: > 0 } url) PrefetchImage(url, px);
         }
 
-        Element HomeRow(Element child, string contentKey, float top, float bottom) => new BoxEl
-        {
-            Direction = 1,
-            Padding = new Edges4(Spacing.Gutter, top, Spacing.Gutter, bottom),
-            // Home is a heterogeneous virtual list: greeting, grids, shelves and the concert destination do not share
-            // a recyclable subtree shape. Keep this cheap row shell recyclable, but key its content so a shell reused
-            // for another row replaces the old subtree instead of positionally rebinding incompatible element trees.
-            Children = [ child with { Key = contentKey } ],
-        };
-
         Element VirtualHome(HomeFeed feed)
         {
             HomeImageDiagnostics.LogFeed(feed);
-            int groupCount = feed.Groups.Count;
-            int concertIndex = groupCount + 1; // 0 greeting, 1..N groups, N+1 concert destination
-            homeLayout.Configure(feed.Groups);
+            HomeFeedDiagnostics.LogModules(feed);
+            var landing = Landing(feed);
+            homeLayout.Configure(landing);
+
+            // The page is a FIXED table of rows in the prototype's order — not the server's. Each row resolves its own
+            // data (from the feed by kind, or from a service) and returns an empty box when it has none, so RowAt, KeyAt
+            // and Estimate all switch on the SAME enum and a new row cannot silently mis-size. This replaced the
+            // greeting + artists + N groups + timeline + tail index arithmetic, whose off-by-one hazards were the
+            // biggest structural risk in the page.
+            var rows = HomeFeedVirtualLayout.Rows;
 
             string KeyAt(int index)
             {
-                if (index == 0) return "home-greeting";
-                if (index == concertIndex) return "home-concerts";
-                var g = feed.Groups[index - 1];
-                string first = g.Cards.Count > 0 ? g.Cards[0].Uri : "empty";
-                return $"home-group:{g.Kind}:{g.Title}:{g.Cards.Count}:{first}";
+                var row = rows[index];
+                var g = FeedGroup(landing, row);
+                // Key on the group's identity so a recycled shell rebinds rather than positionally patching one module's
+                // tree onto another's.
+                return g is null
+                    ? "home-row:" + row
+                    : "home-row:" + row + ":" + HomeModuleLayout.SourceGroupKey(g);
             }
 
             Element RowAt(int index)
             {
-                string key = KeyAt(index);
-                if (index == 0)
-                    return HomeRow(GreetingBlock(name, feed, svc, post), key, Spacing.M, Spacing.XL);
-                if (index == concertIndex)
-                    return HomeRow(tail, key, 0f, PlayerDock.Reserve + Spacing.XXL);
-                return HomeRow(Group(feed.Groups[index - 1]), key, 0f, Spacing.XL);
+                var row = rows[index];
+                var child = RenderRow(feed, landing, row);
+                float tailBottom = PlayerDock.Reserve + Spacing.XXL;
+                return Responsive.Of(width => HomeRowShell(child, KeyAt(index),
+                    // The first row opens on the page gutter, not on half of it: 24 top matches the 36 sides closely
+                    // enough to read as one inset, where 12 read as "the page starts before it starts".
+                    row == HomeRow.Chips ? Spacing.XXL : 0f,
+                    row == HomeRow.Tail ? tailBottom : RowHasContent(landing, row) ? HomeModuleLayout.Gap(width) : 0f),
+                    fallback: HomeModuleLayout.FallbackWidth);
             }
 
-            return Virtual.Measured(groupCount + 2, homeLayout, RowAt, KeyAt, overscan: 1) with
+            return Virtual.Measured(rows.Length, homeLayout, RowAt, KeyAt, overscan: 1) with
             {
                 Grow = 1f,
                 Shrink = 1f,
@@ -319,19 +313,168 @@ sealed class HomePage : Component
                 ScrollKey = "home",
                 OnVisibleRange = (first, end) =>
                 {
-                    // The realized range already contains one row of overscan. Exclude the greeting and concert rows.
-                    int fromGroup = Math.Max(0, first - 1);
-                    int toGroup = Math.Min(groupCount, end - 1);
-                    for (int i = fromGroup; i < toGroup; i++) WarmGroup(feed.Groups[i]);
+                    for (int i = first; i < end && i < rows.Length; i++)
+                        if (FeedGroup(landing, rows[i]) is { } g) WarmGroup(g);
                 },
             };
         }
 
+        // Which feed group (if any) a row renders. The Chips / Artists / Timeline / Tail rows are service- or
+        // chrome-driven and have none.
+        HomeGroup? FeedGroup(HomeLanding landing, HomeRow row) => row switch
+        {
+            HomeRow.Hero => landing.Get(HomeGroupKind.Hero)?.Group,
+            HomeRow.Weekly => landing.Get(HomeGroupKind.WeeklyPair)?.Group,
+            HomeRow.Quick => landing.Get(HomeGroupKind.QuickGrid)?.Group,
+            HomeRow.Recents => landing.Get(HomeGroupKind.Recents)?.Group,
+            HomeRow.MixBand => landing.Get(HomeGroupKind.MixBand)?.Group,
+            HomeRow.ChipCards => landing.Get(HomeGroupKind.ChipCards)?.Group,
+            HomeRow.Radio => landing.Get(HomeGroupKind.RadioDial)?.Group,
+            HomeRow.Podcasts => landing.Get(HomeGroupKind.PodcastShelf)?.Group,
+            HomeRow.Editorial => landing.Get(HomeGroupKind.Featured)?.Group,
+            HomeRow.Feed => landing.Get(HomeGroupKind.DiscoverFeed)?.Group,
+            // The split row is sized by whichever of its two modules is taller; the estimator asks for both.
+            HomeRow.EpisodesAndBooks => landing.Get(HomeGroupKind.QueueList)?.Group
+                ?? landing.Get(HomeGroupKind.RatedShelf)?.Group,
+            _ => null,
+        };
+
+        bool RowHasContent(HomeLanding landing, HomeRow row) => row switch
+        {
+            // Service rows add their gap only after their async data is non-empty; an empty component contributes 0.
+            HomeRow.Artists or HomeRow.Timeline => false,
+            HomeRow.Chips or HomeRow.Tail => true,
+            HomeRow.Sections => landing.Sections.Count > 0,
+            _ => FeedGroup(landing, row) is not null,
+        };
+
+        Element RenderRow(HomeFeed feed, HomeLanding landing, HomeRow row)
+        {
+            void Navigate(string key) => NavUri(feed, key);
+            switch (row)
+            {
+                case HomeRow.Chips:
+                    return GreetingBlock(name, feed, svc, post);
+                case HomeRow.Hero:
+                    return landing.Get(HomeGroupKind.Hero) is { Group: { } h }
+                        ? HomeModules.SourceModule(h,
+                            Responsive.Of(w => HomeCards.HeroBand(h.Cards[0], HeroEyebrow(h.Cards[0], feed), CardMeta(h.Cards[0]),
+                                () => PlayCard(h.Cards[0]), () => ShuffleCard(h.Cards[0]), () => NavCard(h.Cards[0]),
+                                () => lib?.ToggleSaved(h.Cards[0].Uri, h.Cards[0].Title),
+                                ChromeOf(h.Cards[0]).Menu,
+                                w),
+                                fallback: 900f))
+                        : new BoxEl();
+                case HomeRow.Weekly:
+                    return FeedGroup(landing, row) is { } weekly
+                        ? HomeModules.WeeklyPair(weekly, NavOf, ChromeOf) : new BoxEl();
+                case HomeRow.Quick:
+                    return FeedGroup(landing, row) is { } quick
+                        ? HomeModules.Quick(quick, NavOf, PlayOf, ChromeOf, more.For(quick, "quick")) : new BoxEl();
+                case HomeRow.Recents:
+                    return FeedGroup(landing, row) is { } recents
+                        ? HomeModules.Recents(recents, NavOf, KindLabel, ChromeOf) : new BoxEl();
+                case HomeRow.MixBand:
+                    return FeedGroup(landing, row) is { } mixes
+                        ? HomeModules.MixBand(mixes, NavOf, ChromeOf) : new BoxEl();
+                case HomeRow.Artists:
+                    return Embed.Comp(() => new HomeArtistRow());
+                case HomeRow.ChipCards:
+                    return FeedGroup(landing, row) is { } chips
+                        ? HomeModules.ChipCards(chips, NavOf, ChromeOf, Navigate, more.For(chips, "chips")) : new BoxEl();
+                case HomeRow.Radio:
+                    return FeedGroup(landing, row) is { } radio
+                        ? HomeModules.Radio(radio, NavOf, PlayOf, ChromeOf, more.For(radio, "radio")) : new BoxEl();
+                case HomeRow.EpisodesAndBooks:
+                {
+                    var episodes = landing.Get(HomeGroupKind.QueueList)?.Group;
+                    var books = landing.Get(HomeGroupKind.RatedShelf)?.Group;
+                    if (episodes is null && books is null) return new BoxEl();
+                    Element left = episodes is null ? new BoxEl()
+                        : HomeModules.UpNext(episodes, NavOf, ChromeOf, more.For(episodes, "queue"));
+                    Element right = books is null ? new BoxEl()
+                        : HomeModules.Audiobooks(books, NavOf, ChromeOf, more.For(books, "books"));
+                    if (episodes is null) return HomeModules.SplitSingle(right);
+                    if (books is null) return HomeModules.SplitSingle(left);
+                    return HomeModules.SplitEven(left, right);
+                }
+                case HomeRow.Timeline:
+                    return Embed.Comp(() => new HomeTimeline());
+                case HomeRow.Podcasts:
+                    return FeedGroup(landing, row) is { } podcasts
+                        ? HomeModules.Podcasts(podcasts, NavOf, PlayOf, ChromeOf) : new BoxEl();
+                case HomeRow.Sections:
+                    return landing.Sections.Count == 0 ? new BoxEl()
+                        : HomeModules.SectionDeck(landing.Sections, OpenSection);
+                case HomeRow.Editorial:
+                    return FeedGroup(landing, row) is { } editorial
+                        ? HomeModules.Editorial(editorial, NavOf, PlayOf, CardMeta, ChromeOf, Navigate,
+                            more.For(editorial, "editorial")) : new BoxEl();
+                case HomeRow.Feed:
+                    return FeedGroup(landing, row) is { } discover
+                        ? HomeModules.Feed(discover, NavOf, PlayOf, ChromeOf, Navigate) : new BoxEl();
+                default:
+                    return tail;
+            }
+        }
+
+        // The page gutter is Spacing.PageWide (36) — the WinUI NavigationView content margin every other page in the app
+        // already uses — not the 24 this page had; and the row stops growing at WaveeSize.PageMaxW and centres, the same
+        // measure DetailShell and ArtistPage cap their two-column row at. The cap lives on the ROW rather than on the
+        // virtual list on purpose: the list keeps measuring at the full cross size (so the scrollbar stays at the window
+        // edge and the extent table is unaffected) while the content column stops chasing an ultra-wide display.
+        Element HomeRowShell(Element child, string contentKey, float top, float bottom) => new BoxEl
+        {
+            Direction = 0, Justify = FlexJustify.Center, MinWidth = 0f,
+            Children =
+            [
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Shrink = 1f, Basis = 0f, MinWidth = 0f, MaxWidth = WaveeSize.PageMaxW,
+                    Padding = new Edges4(Spacing.PageWide, top, Spacing.PageWide, bottom),
+                    // Home is a heterogeneous virtual list: no two module shapes share a recyclable subtree. Keep this
+                    // cheap row shell recyclable, but key its content so a shell reused for another row replaces the old
+                    // subtree instead of positionally rebinding incompatible element trees.
+                    Children = [ child with { Key = contentKey } ],
+                },
+            ],
+        };
+
+        // "Good morning, Christos · your daylist" — the greeting lives HERE, as the hero's eyebrow, because the prototype
+        // has no standalone greeting block: a page that opens with two stacked text blocks before any content wastes its
+        // best row. GreetingBlock keeps the standalone form for the no-hero case.
+        //
+        // The "· your daylist" tail belongs to an ACTUAL daylist and nothing else. The composer fills the hero slot with
+        // a Spotlight card (album / artist / editorial playlist) whenever the feed carries one and only falls back to the
+        // daylist, so appending the tail unconditionally captioned somebody's new album "your daylist". Same
+        // `Meta.Format` discriminator the composer routes on (SpotifyHomeComposer.ModuleForFormat).
+        string HeroEyebrow(HomeCard card, HomeFeed feed)
+        {
+            string part = GreetingPart(feed.Greeting);
+            string? who = name is { Length: > 0 } n && !LooksLikeHandle(n) ? n : null;
+            if (card.Meta?.Format is not "daylist")
+                return who is null ? part : Strings.Home.Greeting(part, who);
+            string daylist = Loc.Get(Strings.Home.YourDaylist);
+            return who is null ? part + " · " + daylist : Strings.Home.HeroEyebrow(part, who, daylist);
+        }
+
+        // Shuffle ARMS the mode before starting the context — the same two fire-and-forget calls, in the same order, as
+        // every other shuffle site (ArtistPage, LibraryPage, DetailShell). Without SetShuffleAsync this was a verbatim
+        // copy of Play and the hero's two buttons did the identical thing. Routed through PlayCard so a single-item hero
+        // (track/episode) still plays itself rather than being started as a context.
+        void ShuffleCard(HomeCard c)
+        {
+            _ = svc.Player.SetShuffleAsync(true);
+            PlayCard(c);
+        }
+
+        // The empty / failed viewport reads the SAME gutter and first-row inset as the live feed, so a page that fails
+        // to load is not laid out to a different measure than the page that succeeds.
         Element StateHome(Element state) => ScrollView(new BoxEl
         {
             Direction = 1,
             Gap = Spacing.XL,
-            Padding = new Edges4(Spacing.Gutter, Spacing.M, Spacing.Gutter, PlayerDock.Reserve + Spacing.XXL),
+            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.XXL),
             Children = [ GreetingBlock(name, null, svc, post), state, tail ],
         }) with { Grow = 1f, ScrollKey = "home" };
 
@@ -339,6 +482,7 @@ sealed class HomePage : Component
         // measure the virtual list at its complete content extent and silently realize every group again.
         return Skel.Region(
             home,
+            group: HomeSkeleton.Group,
             reveal: SkelReveal.StaggerRows,
             isEmpty: feed => feed.Groups.Count == 0,
             onEmpty: () => StateHome(EmptyState.Default()),
@@ -378,37 +522,75 @@ sealed class HomePage : Component
         }
     }
 
-    static string Id(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
-    // The group's chrome accent (renderer colour): the FIRST card's graded cover colour, else the semantic per-kind
-    // tint (amber-ish blue for made-for-you/editorial, the app accent elsewhere) while the plane has no grading yet.
-    // The colour arrives with the plane's epoch, which the page reads.
+
+    // The group's chrome accent, in three tiers of decreasing truth:
+    //   1. the first card's GRADED cover colour, from CoverColorPlane — the full five-role grading, theme-correct, and
+    //      the authority for every art colour in the app. Arrives with the plane's epoch once the cover decodes.
+    //   2. the SERVER's own extractedColors.colorDark for that card (HomeCardMeta.Accent) — available before a single
+    //      image byte lands, so a cold feed is already in its own colours instead of one hardcoded blue for the whole
+    //      page. Lifted, because colorDark is a near-black tone that would vanish on a dark card and bruise a light one.
+    //   3. the app accent.
+    // Note tier 2 is NOT written back into the plane: a partial entry would make TryGetTint/TryGetScheme HIT, and
+    // enqueue-for-grading only happens on a MISS — seeding would permanently starve the real grading for every home cover.
     static ColorF GroupAccent(HomeGroup g)
     {
         for (int i = 0; i < g.Cards.Count; i++)
             if (Surfaces.ChromeSchemeFor(g.Cards[i].Image?.Url) is { } s) return WaveePalette.ChromeAccent(s);
-        return WaveePalette.Lift(WaveePalette.ToColor(
-            g.Kind is HomeGroupKind.CollapsedGrid or HomeGroupKind.Compact or HomeGroupKind.Featured
-                ? 0xFF3B82F6u : 0xFF60CDFFu));
+        for (int i = 0; i < g.Cards.Count; i++)
+            if (g.Cards[i].Meta is { Accent: not 0u } m) return WaveePalette.Lift(WaveePalette.ToColor(m.Accent));
+        return Tok.AccentDefault;
     }
 
     // Greeting + the home facet chip row. The chips come from the SAME home response the shelves do, so they cost no
     // extra request; selecting one writes Services.HomeFacet and asks for a refresh, which re-issues home with the
     // `facet` variable populated (it was always in the request, hardcoded to "").
+    // The greeting appears here ONLY as a fallback. Normally it is the hero band's eyebrow ("Good morning, Christos ·
+    // your daylist") — the prototype has no standalone greeting block, because a page that opens with two stacked text
+    // blocks before any content wastes its best row. With no hero on the page there is nowhere else for it to go, so it
+    // comes back rather than being lost.
     Element GreetingBlock(string? name, HomeFeed? feed, Services? svc, Action<Action> post)
     {
-        var hero = GreetingHero(name);
-        if (feed?.Chips is not { Count: > 0 } chips || svc is null) return hero;
+        bool hasHero = feed is not null && HasHero(feed);
+        Element? hero = hasHero ? null : GreetingHero(name, feed?.Greeting);
+        if (feed?.Chips is not { Count: > 0 } chips || svc is null) return hero ?? new BoxEl();
 
         var chipRow = Ctx.Provide(HomeFacetChips.Props,
             new HomeFacetChips.Model(chips, () => RefreshForFacet(svc, post)),
             Embed.Comp(() => new HomeFacetChips()));
 
-        return new BoxEl
+        return hero is null ? chipRow : new BoxEl
         {
             Direction = 1, Gap = Spacing.M, MinWidth = 0f,
             Children = [ hero, chipRow ],
         };
     }
+
+    static bool HasHero(HomeFeed feed)
+    {
+        var gs = feed.Groups;
+        for (int i = 0; i < gs.Count; i++)
+            if (gs[i].Kind == HomeGroupKind.Hero && gs[i].Cards.Count > 0) return true;
+        return false;
+    }
+
+    /// <summary>The greeting WORD — the server's own when it sent one, else a local-clock guess. Spotify's
+    /// <c>home.greeting.transformedLabel</c> is already localized for the ACCOUNT and bucketed against the timezone the
+    /// home request itself carried, so it wins: the two disagree for anyone travelling, anyone on a differently-localized
+    /// OS, and anyone whose account language is not the system one. The clock fallback is for offline/fake sources, which
+    /// publish no greeting at all.</summary>
+    static string GreetingPart(string? serverGreeting)
+    {
+        if (serverGreeting is { Length: > 0 } fromServer) return fromServer;
+        int h = DateTime.Now.Hour;
+        return h < 5 ? Loc.Get(Strings.Home.GoodEvening)
+             : h < 12 ? Loc.Get(Strings.Home.GoodMorning)
+             : h < 18 ? Loc.Get(Strings.Home.GoodAfternoon)
+             : Loc.Get(Strings.Home.GoodEvening);
+    }
+
+    /// <summary>A Spotify user-id handle is a long space-less hash. Greeting someone by it is worse than not greeting them
+    /// by name at all.</summary>
+    static bool LooksLikeHandle(string name) => name.Length >= 20 && !name.Contains(' ');
 
     // A facet change is a new home REQUEST, not a client-side filter: Spotify returns a different set of shelves per
     // facet. PathfinderResource keys its cache on the request body, so each facet is its own entry rather than a stale
@@ -424,72 +606,60 @@ sealed class HomePage : Component
             catch { /* the previous feed stays on screen; the chip row reflects the attempted selection */ }
         });
 
+    // The shell-material ownership token (see ShellMaterialState): identity for race-free last-writer-wins across a
+    // navigation. Per instance, never static — two mounted HomePages must not clear each other's wash.
+    readonly object _washOwner = new();
+
+    // A resolved leg → the shell's layer record. Alpha stays 1 here: ShellMaterialLayer stamps the theme wash strength
+    // onto both gradient stops itself (ShellWashGeometry.HeroAlpha / ShelfAlpha).
+    static WashLayer? Layer(HomeWashPick? pick) => pick is { } p ? new WashLayer(p.Color, p.Key) : null;
+
+    // Subscribe this page to ONE artwork's grading. Guarded: CoverColorPlane.Watch(null/unkeyable) returns the plane's
+    // GLOBAL epoch, and subscribing Home to that would re-render the page on every grid batch it scrolls past.
+    static void WatchArtwork(string? url)
+    {
+        if (url is { Length: > 0 }) _ = SpotifyLive.CoverColorPlane.Current.Watch(url).Value;
+    }
+
     // The live home Loadable, captured on render so the facet refresh publishes into the SAME instance this page is
     // bound to — a facet change patches the feed in place rather than remounting the page. Instance state, not static:
     // two mounted HomePages (tabs) must not fight over one field.
     Loadable<HomeFeed>? _facetFeed;
 
-    // ── greeting hero ────────────────────────────────────────────────────────────────────────────────
-    static Element GreetingHero(string? name)
+    // ── the landing projection, memoized on the feed ───────────────────────────────────────────────────────────────
+    // Project() walks every group and every card of the feed (per-kind aggregation, a URI dedupe set per module, the
+    // section directory) and is a PURE function of (feed, titles). It used to run inside VirtualHome, which is re-entered
+    // on every re-render of the page — a hover fade, a chip selection, a landed cover grading, a "Show all" toggle — so
+    // the whole projection was rebuilt many times per second while nothing about the feed had changed.
+    //
+    // The feed is an immutable snapshot published by the refresh loop, so a REFERENCE hit is a content hit. Titles are
+    // compared by value because Loc is live (HomeModuleCopy deliberately re-resolves per read): a language change must
+    // re-title the modules, and it is the only other input Project reads. Instance state, like _facetFeed.
+    HomeFeed? _landingFeed;
+    HomeModuleTitles? _landingTitles;
+    HomeLanding? _landing;
+
+    HomeLanding Landing(HomeFeed feed)
     {
-        int h = DateTime.Now.Hour;
-        string part = h < 5 ? Loc.Get(Strings.Home.GoodEvening)
-                    : h < 12 ? Loc.Get(Strings.Home.GoodMorning)
-                    : h < 18 ? Loc.Get(Strings.Home.GoodAfternoon)
-                    : Loc.Get(Strings.Home.GoodEvening);
-        // Omit a Spotify user-id handle (a long, space-less hash) — show the bare greeting until a real display name lands.
-        bool looksLikeHandle = name is { Length: >= 20 } && !name.Contains(' ');
-        string greet = (string.IsNullOrWhiteSpace(name) || looksLikeHandle) ? part : Strings.Home.Greeting(part, name);
+        var titles = HomeModuleCopy.Titles;
+        if (_landing is { } cached && ReferenceEquals(_landingFeed, feed) && titles.Equals(_landingTitles))
+            return cached;
+        var landing = HomeLandingProjection.Project(feed, titles);
+        _landingFeed = feed;
+        _landingTitles = titles;
+        _landing = landing;
+        return landing;
+    }
+
+    // ── greeting hero (the no-hero fallback only) ────────────────────────────────────────────────────
+    static Element GreetingHero(string? name, string? serverGreeting)
+    {
+        string part = GreetingPart(serverGreeting);
+        string greet = name is { Length: > 0 } n && !LooksLikeHandle(n) ? Strings.Home.Greeting(part, n) : part;
         return new BoxEl
         {
             Direction = 1, Gap = Spacing.XS, Padding = new Edges4(0f, Spacing.S, 0f, 0f),
             Children = [ WaveeType.PageHero(greet), WaveeType.TrackMeta(Loc.Get(Strings.Home.OnRotation)) ],
-        };
-    }
-
-    // ── featured spotlight (a Hero card — full-width band, the calm break) ──────────────────────────────
-    static Element HeroBand(HomeCard c, ColorF accent, Action<HomeCard> play, Action<HomeCard> nav, float innerW)
-    {
-        float textMax = innerW > 1f ? MathF.Max(160f, innerW - 216f) : 560f;
-        return new BoxEl
-        {
-            Direction = 0, Gap = Spacing.L, AlignItems = FlexAlign.Center,
-            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
-            Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            // Spotlight glow: a soft accent radial pooled behind the cover (left-of-center), fading into the neutral
-            // card material toward the right — so the art appears to emit its own color (the WinUI hero treatment),
-            // rather than the whole band being painted. Opaque card-based stops keep it a material, not a wash.
-            Gradient = RadialGradient(
-                new Point2(0.16f, 0.5f), new Point2(0.78f, 1.05f),
-                new GradientStop(0f, ColorF.Lerp(Tok.FillCardSecondary, accent, 0.30f)),
-                new GradientStop(1f, Tok.FillCardSecondary)),
-            Children =
-            [
-                new BoxEl
-                {
-                    Corners = CornerRadius4.All(Radii.Card), Shadow = Elevation.Card, ClipToBounds = true,
-                    OnClick = () => nav(c), Cursor = CursorId.Hand,
-                    Children = [ Image(c.Image?.Url ?? "", 168f, 168f, Radii.Card, placeholder: Tok.FillCardDefault) ],
-                },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.S,
-                    Children =
-                    [
-                        Caption(Loc.Get(Strings.Home.FeaturedAlbum)) with { Color = accent, Weight = 700, CharSpacing = 80f, MaxWidth = textMax },
-                        WaveeType.PageHero(c.Title) with { MaxWidth = textMax, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
-                        WaveeType.TrackMeta(c.Subtitle ?? "") with { MaxWidth = textMax, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                        new BoxEl
-                        {
-                            Direction = 0, Margin = new Edges4(0f, Spacing.S, 0f, 0f),
-                            // A labeled media Play, so it wears the WaveeCta pill on the same cover-derived chrome accent
-                            // as this spotlight's glow and caption.
-                            Children = [ WaveeCta.Play(accent, () => play(c), Loc.Get(Strings.Home.Play)) ],
-                        },
-                    ],
-                },
-            ],
         };
     }
 
@@ -502,67 +672,113 @@ sealed class HomePage : Component
 /// window/content extent credible before those measurements exist. The state is hoisted by HomePage and retained across
 /// refreshes, so steady scrolling remains the normal Fenwick-table path.
 /// </summary>
-static class HomeCompactLayout
+/// <summary>The page's rows, in the prototype's order. This is a DESIGNED rhythm — cinematic, then dense, then a rail,
+/// then a band, then radial, then chips, then tabular, then a dual, then a timeline, then editorial, then the feed — and
+/// deliberately NOT the order Spotify returns sections in. Each row resolves its own data and renders nothing when it has
+/// none, which is what lets the table be fixed-length.</summary>
+enum HomeRow : byte
 {
-    public const float GridGap = Spacing.S;
-    public const float RowClearance = 4f;
-
-    public static float Art(float width) => width < 620f ? 72f : 88f;
-    public static float CardHeight(float width) => width < 620f ? 88f : 104f;
-    public static int Columns(float width) => width >= 960f ? 3 : width >= 620f ? 2 : 1;
+    Chips, Hero, Weekly, Quick, Recents, MixBand, Artists, ChipCards, Radio, EpisodesAndBooks,
+    Podcasts, Timeline, Sections, Editorial, Feed, Tail,
 }
 
-static class HomeQuickLayout
+/// <summary>Every module's "Show all" flag, hoisted by the page so it survives the virtual list recycling its row. A
+/// <c>UseState</c> inside a module shell would be re-created on every realization, so the module would silently collapse
+/// back the moment it scrolled out and in again.</summary>
+sealed class HomeShowAll
 {
-    public const float MinColumnWidth = 320f;
-    public const float Gap = Spacing.M;
-    public const int MaxColumns = 3;
+    /// <summary>Bounded FIFO, exactly like <see cref="HomeSectionPreviewStore"/>. The key carries the group's leading
+    /// card URI, so every 60-second refresh that reshuffles a shelf mints a NEW key and strands the old one — an
+    /// all-day session accumulated one dead flag per lane per refresh, forever. Only the handful of lanes on the page
+    /// (quick / chips / radio / queue / books / editorial) are ever live, so 32 keeps several refresh generations of
+    /// history and a module still on screen can never lose its expanded flag to eviction.</summary>
+    const int Capacity = 32;
+    readonly Dictionary<string, ShowAllState> _states = new(StringComparer.Ordinal);
+    readonly Queue<string> _order = new();
 
-    public static int Columns(float width)
-        => Math.Clamp((int)MathF.Floor((MathF.Max(1f, width) + Gap) / (MinColumnWidth + Gap)), 1, MaxColumns);
-
-    public static int VisibleCount(float width, int available)
+    /// <summary>One state per source group and lane. Section identity is part of the key, so expanding one peer shelf
+    /// never unfolds another shelf of the same module kind.</summary>
+    public ShowAllState For(HomeGroup group, string lane)
     {
-        int columns = Columns(width);
-        return Math.Min(Math.Max(0, available), columns * columns);
+        string key = lane + "\u001F" + (group.Uri ?? group.Title ?? "") + "\u001F"
+            + (group.Cards.Count > 0 ? group.Cards[0].Uri : "");
+        if (_states.TryGetValue(key, out var state)) return state;
+        state = new ShowAllState(new Signal<bool>(false));
+        _states.Add(key, state);
+        _order.Enqueue(key);
+        while (_states.Count > Capacity && _order.TryDequeue(out var oldest)) _states.Remove(oldest);
+        return state;
     }
 }
 
+/// <summary>Variable-height Home stack with row-aware first estimates. The engine still measures every realized row and
+/// feeds the exact extent back through <see cref="IMeasuredVirtualLayout.SetMeasured"/>; these estimates only make the
+/// cold window and content extent credible before those measurements exist. State is hoisted by HomePage and retained
+/// across refreshes, so steady scrolling remains the normal Fenwick-table path.
+///
+/// <para>Because the row table is FIXED, <see cref="Estimate"/> switches on <see cref="HomeRow"/> and has no
+/// index arithmetic and no fallthrough arm — the two hazards that made the previous shape mis-size a row silently and
+/// flap the scroll anchor mid-scroll.</para></summary>
 sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 {
+    public static readonly HomeRow[] Rows =
+    [
+        HomeRow.Chips, HomeRow.Hero, HomeRow.Weekly, HomeRow.Quick, HomeRow.Recents, HomeRow.MixBand,
+        HomeRow.Artists, HomeRow.ChipCards, HomeRow.Radio, HomeRow.EpisodesAndBooks, HomeRow.Podcasts,
+        HomeRow.Timeline, HomeRow.Sections, HomeRow.Editorial, HomeRow.Feed, HomeRow.Tail,
+    ];
+
     readonly ExtentTable _extents = new(0, 1f);
-    HomeGroupKind[] _kinds = Array.Empty<HomeGroupKind>();
-    int[] _cardCounts = Array.Empty<int>();
-    bool[] _titled = Array.Empty<bool>();
-    int _groupCount;
+    readonly record struct GroupMetric(int Count, bool Titled);
+    // Landing projection guarantees at most one authored module per kind. The lossless source ledger is represented by
+    // the section directory and does not multiply module extents or vertical gaps here.
+    readonly Dictionary<HomeGroupKind, List<GroupMetric>> _groups = new();
+    int _sectionDeckCount;
     int _shapeVersion;
     int _seededVersion = -1;
     float _seededCross = float.NaN;
 
-    public void Configure(IReadOnlyList<HomeGroup> groups)
+    public void Configure(HomeLanding landing)
     {
-        int count = groups.Count;
-        bool changed = count != _groupCount;
-        if (_kinds.Length < count)
+        var next = new Dictionary<HomeGroupKind, List<GroupMetric>>();
+        // A cheap structural fingerprint: which kinds are present and how many cards each holds. Anything else about the
+        // feed cannot change a row's height.
+        foreach (var kind in Enum.GetValues<HomeGroupKind>())
         {
-            Array.Resize(ref _kinds, count);
-            Array.Resize(ref _cardCounts, count);
-            Array.Resize(ref _titled, count);
+            var group = landing.Get(kind)?.Group;
+            if (group is null) continue;
+            next.Add(kind, [new GroupMetric(group.Cards.Count, group.Title is { Length: > 0 })]);
         }
-
-        for (int i = 0; i < count; i++)
+        bool changed = !SameShape(_groups, next);
+        if (changed)
         {
-            var g = groups[i];
-            bool titled = g.Title is { Length: > 0 };
-            if (!changed && (_kinds[i] != g.Kind || _cardCounts[i] != g.Cards.Count || _titled[i] != titled))
-                changed = true;
-            _kinds[i] = g.Kind;
-            _cardCounts[i] = g.Cards.Count;
-            _titled[i] = titled;
+            // A kind disappeared between feeds — drop the stale entries rather than sizing a row that no longer renders.
+            _groups.Clear();
+            foreach (var pair in next) _groups.Add(pair.Key, pair.Value);
         }
-
-        _groupCount = count;
+        int deck = landing.Sections.Count;
+        if (deck != _sectionDeckCount) { _sectionDeckCount = deck; changed = true; }
         if (changed) _shapeVersion++;
+    }
+
+    static bool SameShape(Dictionary<HomeGroupKind, List<GroupMetric>> a,
+                          Dictionary<HomeGroupKind, List<GroupMetric>> b)
+    {
+        if (a.Count != b.Count) return false;
+        foreach (var pair in a)
+        {
+            if (!b.TryGetValue(pair.Key, out var other) || pair.Value.Count != other.Count) return false;
+            for (int i = 0; i < pair.Value.Count; i++) if (pair.Value[i] != other[i]) return false;
+        }
+        return true;
+    }
+
+    int Count(HomeGroupKind kind)
+    {
+        if (!_groups.TryGetValue(kind, out var groups)) return 0;
+        int total = 0;
+        for (int i = 0; i < groups.Count; i++) total += groups[i].Count;
+        return total;
     }
 
     void Ensure(int itemCount, float crossSize)
@@ -579,65 +795,96 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
         if (FluentGpu.Foundation.ScrollTrace.CompiledIn && FluentGpu.Foundation.ScrollTrace.Enabled)
             FluentGpu.Foundation.ScrollTrace.Note(110, cross, itemCount, (_extents.Count << 8) | (_seededVersion == _shapeVersion ? 1 : 0), _seededCross);
 
-        _extents.Reset(itemCount, 360f);
+        _extents.Reset(itemCount, 240f);
         for (int i = 0; i < itemCount; i++) _extents.SetExtent(i, Estimate(i, cross));
         _seededCross = cross;
         _seededVersion = _shapeVersion;
     }
 
+    // A module head is Subtitle 20/28 plus the module head gap.
+    const float Head = 28f + HomeModuleLayout.HeadGap;
+
     float Estimate(int index, float cross)
     {
-        float available = MathF.Max(1f, cross - 2f * Spacing.L);
-        if (index == 0)
-            return 84f + Spacing.M + Spacing.XL; // greeting copy + row top/bottom rhythm
-        if (index == _groupCount + 1)
-            return Wavee.Features.Concerts.ConcertLayout.WideEditorial(available).Height
-                + PlayerDock.Reserve + Spacing.XXL;
+        // The SAME arithmetic HomeRowShell performs: cap the row at the app page measure, then take the page gutter off
+        // both sides. If these two ever disagree the estimator sizes a module for a width the renderer never uses, and
+        // the measured list re-pins its scroll anchor mid-scroll.
+        float available = MathF.Max(1f, MathF.Min(cross, WaveeSize.PageMaxW) - 2f * Spacing.PageWide);
+        float gap = HomeModuleLayout.Gap(available);
+        var row = (uint)index < (uint)Rows.Length ? Rows[index] : HomeRow.Tail;
 
-        int gi = index - 1;
-        if ((uint)gi >= (uint)_groupCount) return 360f;
-        int count = _cardCounts[gi];
-        float header = _titled[gi] ? 42f + Spacing.M : 0f;
-
-        return _kinds[gi] switch
+        float Stack(HomeGroupKind kind, bool shelfOwnsHeader = false)
         {
-            HomeGroupKind.QuickGrid => QuickExtent(available, count),
-            HomeGroupKind.Hero => 168f + 2f * Spacing.L + Spacing.XL,
-            HomeGroupKind.Compact => header + CompactExtent(available, count) + Spacing.XL,
-            HomeGroupKind.Featured => header + FeaturedExtent(available) + Spacing.XL,
-            HomeGroupKind.Shelf or HomeGroupKind.CollapsedGrid => header + ShelfExtent(available) + Spacing.XL,
-            _ => Spacing.XL,
+            if (!_groups.TryGetValue(kind, out var groups) || groups.Count == 0) return 0f;
+            float extent = 0f;
+            int rendered = 0;
+            for (int i = 0; i < groups.Count; i++)
+            {
+                var group = groups[i];
+                if (group.Count == 0) continue;
+                if (rendered++ > 0) extent += HomeModuleLayout.Gap(available);
+                if (!shelfOwnsHeader && group.Titled) extent += Head;
+                extent += HomeModuleLayout.ContentExtent(kind, available, group.Count);
+            }
+            return extent;
+        }
+
+        float First(HomeGroupKind kind)
+        {
+            if (!_groups.TryGetValue(kind, out var groups)) return 0f;
+            for (int i = 0; i < groups.Count; i++)
+                if (groups[i].Count > 0)
+                    return (groups[i].Titled ? Head : 0f)
+                        + HomeModuleLayout.ContentExtent(kind, available, groups[i].Count);
+            return 0f;
+        }
+
+        float RowStack(HomeGroupKind kind, bool shelfOwnsHeader = false)
+        {
+            float extent = Stack(kind, shelfOwnsHeader);
+            return extent > 0f ? extent + gap : 0f;
+        }
+
+        static float SplitExtent(float left, float right, float width, float outerGap)
+        {
+            if (left <= 0f && right <= 0f) return 0f;
+            if (width >= HomeModuleLayout.SplitEvenMin || left <= 0f || right <= 0f)
+                return MathF.Max(left, right) + outerGap;
+            return left + HomeModuleLayout.Gap(width) + right + outerGap;
+        }
+
+        return row switch
+        {
+            // Greeting fallback (only when there is no hero) + the chip row.
+            HomeRow.Chips => (Count(HomeGroupKind.Hero) > 0 ? 0f : 84f) + 40f + Spacing.XXL + gap,
+            // Through ContentExtent, not a second literal: the hero band's authored text/action allocation and the
+            // estimator's prediction are the same arithmetic.
+            HomeRow.Hero => Count(HomeGroupKind.Hero) == 0 ? 0f
+                : First(HomeGroupKind.Hero) + gap,
+            HomeRow.Weekly => RowStack(HomeGroupKind.WeeklyPair),
+            HomeRow.Quick => RowStack(HomeGroupKind.QuickGrid),
+            // PagedShelf owns the recents header, chevrons, lift clearance, and shared MediaCard height.
+            HomeRow.Recents => RowStack(HomeGroupKind.Recents, shelfOwnsHeader: true),
+            HomeRow.MixBand => RowStack(HomeGroupKind.MixBand),
+            // The podium sizes itself: head + the tallest avatar + its 8-DIP pod gap + a two-line Caption 12/16 label +
+            // the podium's own 16-a-side padding. (The label leg used to say 30 while the renderer set 15/line — the
+            // convergence onto Caption 12/16 is what made the two agree.)
+            HomeRow.Artists => Head + 2f * Spacing.L + 2f * Spacing.S + 76f + Spacing.S + 2f * 16f + gap,
+            HomeRow.ChipCards => RowStack(HomeGroupKind.ChipCards),
+            HomeRow.Radio => RowStack(HomeGroupKind.RadioDial),
+            // Side by side above the split threshold, stacked below — so the estimate is the max of the two, or the sum.
+            HomeRow.EpisodesAndBooks => SplitExtent(Stack(HomeGroupKind.QueueList), Stack(HomeGroupKind.RatedShelf), available, gap),
+            HomeRow.Podcasts => RowStack(HomeGroupKind.PodcastShelf, shelfOwnsHeader: true),
+            // Up to 8 rows in day groups (a 40 cover with 8 of padding a side); it hides itself when the feed is empty
+            // and the measured pass corrects it.
+            HomeRow.Timeline => Head + 8f * (WaveeSize.Thumb40 + 2f * Spacing.S) + gap,
+            HomeRow.Sections => _sectionDeckCount == 0 ? 0f : HomeModuleLayout.SectionDeckExtent + gap,
+            HomeRow.Editorial => RowStack(HomeGroupKind.Featured),
+            HomeRow.Feed => Count(HomeGroupKind.DiscoverFeed) == 0 ? 0f
+                : HomeModuleLayout.ContentExtent(HomeGroupKind.DiscoverFeed, available, Count(HomeGroupKind.DiscoverFeed)) + gap,
+            _ => Wavee.Features.Concerts.ConcertLayout.WideEditorial(available).Height * 2f
+                 + Spacing.XL + PlayerDock.Reserve + Spacing.XXL,
         };
-    }
-
-    static float QuickExtent(float width, int count)
-    {
-        if (count <= 0) return Spacing.XL;
-        int columns = HomeQuickLayout.Columns(width);
-        int visible = HomeQuickLayout.VisibleCount(width, count);
-        int rows = (visible + columns - 1) / columns;
-        return rows * MediaCard.QuickH + Math.Max(0, rows - 1) * HomeQuickLayout.Gap + Spacing.XL;
-    }
-
-    static float CompactExtent(float width, int count)
-    {
-        float rowHeight = HomeCompactLayout.CardHeight(width) + HomeCompactLayout.RowClearance;
-        int columns = HomeCompactLayout.Columns(width);
-        int rows = Math.Max(1, (count + columns - 1) / columns);
-        return rows * rowHeight + Math.Max(0, rows - 1) * HomeCompactLayout.GridGap;
-    }
-
-    static float ShelfExtent(float width)
-    {
-        var (_, cardW) = FillRowVirtualLayout.Fit(width, 178f, 232f, Spacing.L);
-        // Square art plus the fixed one-line title/two-line metadata stack, card padding, and shelf shadow clearance.
-        return cardW + 76f;
-    }
-
-    static float FeaturedExtent(float width)
-    {
-        var (_, cardW) = FillRowVirtualLayout.Fit(width, 300f, 9999f, Spacing.L, maxColumns: 5);
-        return MathF.Max(360f, cardW * 1.25f) + 12f; // portrait art/card + shelf shadow clearance
     }
 
     public float ContentExtent(int itemCount, float crossSize)
@@ -657,25 +904,25 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 
     public RectF ItemRect(int index, float crossSize)
     {
-        Ensure(_groupCount + 2, crossSize);
+        Ensure(Rows.Length, crossSize);
         return new RectF(0f, _extents.OffsetOf(index), crossSize, _extents.ExtentAt(index));
     }
 
     public void SetMeasured(int index, float mainExtent, float crossSize)
     {
-        Ensure(_groupCount + 2, crossSize);
+        Ensure(Rows.Length, crossSize);
         _extents.SetExtent(index, mainExtent);
     }
 
     public float OffsetOf(int index, float crossSize)
     {
-        Ensure(_groupCount + 2, crossSize);
+        Ensure(Rows.Length, crossSize);
         return _extents.OffsetOf(index);
     }
 
     public int IndexAt(float offset, float crossSize)
     {
-        Ensure(_groupCount + 2, crossSize);
+        Ensure(Rows.Length, crossSize);
         return _extents.IndexAt(offset);
     }
 }
@@ -727,7 +974,8 @@ static class HomeImageDiagnostics
             var group = feed.Groups[gi];
             if (group.Kind != HomeGroupKind.QuickGrid) continue;
 
-            int total = Math.Min(group.Cards.Count, HomeQuickLayout.MaxColumns * HomeQuickLayout.MaxColumns);
+            // The diagnostic samples what the jump-back-in grid actually SHOWS, which is the module's own display cap.
+            int total = Math.Min(group.Cards.Count, HomeModuleLayout.QuickShown);
             int url = 0, mosaic = 0, missing = 0, emptyUrl = 0;
             for (int i = 0; i < total; i++)
             {

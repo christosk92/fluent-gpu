@@ -99,7 +99,7 @@ sealed class AlbumTrailing : Component
         var moreBy = m.MoreByArtist is { Count: > 0 } mb ? mb
             : data.About?.TopAlbums is { Count: > 0 } ta ? ta : null;
         if (moreBy is { Count: > 0 } && m.Artists.Count > 0)
-            sections.Add(AlbumShelf(Strings.Detail.MoreBy(m.Artists[0].Name), moreBy, h, acts));
+            sections.Add(AlbumList(Strings.Detail.MoreBy(m.Artists[0].Name), moreBy, h, acts));
 
         if (data.Featured.Count > 0)
             sections.Add(FeaturedSection(data.Featured, h, acts));
@@ -108,7 +108,7 @@ sealed class AlbumTrailing : Component
             sections.Add(MerchSection(data.Merch));
 
         if (data.Similar.Count > 0)
-            sections.Add(AlbumShelf(Loc.Get(Strings.Detail.SimilarAlbums), data.Similar, h, acts));
+            sections.Add(AlbumList(Loc.Get(Strings.Detail.SimilarAlbums), data.Similar, h, acts));
 
         return new BoxEl
         {
@@ -181,7 +181,7 @@ sealed class AlbumTrailing : Component
         {
             var body = new List<Element>(3)
             {
-                new TextEl("ABOUT THIS RELEASE") { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
+                WaveeType.Eyebrow("About this release") with { Color = Tok.TextTertiary },
             };
             // The bento: a wrap row of compact fact tiles. Wrap-grow (FlexLayout.ArrangeWrap) fills each line edge-to-edge,
             // so the tiles flow 2×2 in a narrow rail and a single row when wide — no ragged gaps.
@@ -403,8 +403,8 @@ sealed class AlbumTrailing : Component
                         Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
-                            new TextEl(Loc.Get(HasCustomVideo(m) ? Strings.VideoOverride.CustomLabel : Strings.Detail.WatchOfficialVideo))
-                            { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
+                            WaveeType.Eyebrow(Loc.Get(HasCustomVideo(m) ? Strings.VideoOverride.CustomLabel : Strings.Detail.WatchOfficialVideo))
+                                with { Color = Tok.TextTertiary },
                             WaveeType.RailHeader(m.Title) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                             new TextEl(m.MetaLine) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         ],
@@ -440,48 +440,59 @@ sealed class AlbumTrailing : Component
         ],
     };
 
-    // "Featured on" — a playlist PagedShelf (the More-by recipe, playlists instead of albums).
-    // `acts` is threaded in (DetailHandlers carries only Actions) purely so these cards can be DRAG SOURCES: the
+    // ── the trailing sections are VERTICAL, on purpose ───────────────────────────────────────────────────────────────
+    //
+    // "Featured on", "More by", "Similar albums" and "Merch" used to be four horizontal `PagedShelf`es stacked inside the
+    // detail page's own VERTICAL scroller. That is nested-axis scrolling: the user is already panning this column
+    // downward, and each shelf asks them to switch to a horizontal gesture (and to hit a pager) to see the rest of a
+    // list whose items are then only half-visible. It also means a shelf's card width — and therefore how many items
+    // the section shows at all — is decided by the rail's current width, so the same album page shows 3 or 6 "more by"
+    // entries depending on an unrelated splitter position.
+    //
+    // The trailing column now scrolls ONE way. Each section is a short vertical stack of compact rows, capped, with a
+    // quiet "Show all" link that expands it IN PLACE (no route, no second surface — everything is already loaded).
+    // The section headers are unchanged.
+    //
+    // Row form per content type:
+    //   · albums + playlists → `MediaCard.Row` (48-DIP cover, title, subtitle, hover play FAB, drag source, menu) — the
+    //     app's existing compact media row, so these read exactly like a search "All" list;
+    //   · merch → a bespoke `MerchRow`, because merch has no play affordance and its second line is a PRICE, which is
+    //     the row's call to action rather than a subtitle.
+    // The cap itself lives on TrailingStack (which enforces it) — five rows is the point where a section is still a
+    // glance rather than a second track list stacked under the first one.
+    //
+    // "Featured on" — the playlists this album appears on.
+    // `acts` is threaded in (DetailHandlers carries only Actions) purely so these rows can be DRAG SOURCES: the
     // payload's track resolver and its rootlist lookup both need the composition root.
-    static Element FeaturedSection(IReadOnlyList<PlaylistSummary> pls, DetailHandlers h, ActionServices? acts) => new BoxEl
-    {
-        Direction = 1,
-        Grow = 1f,
-        AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
-        Children =
-        [
-            PagedShelf.Create(
-                pls.Count,
-                cardAt: (i, w) => MediaCard.Shelf(pls[i].Cover, pls[i].Name, pls[i].OwnerName, pls[i].Uri,
-                    () => h.OpenPlaylist(pls[i]), () => h.PlayContext(pls[i].Uri), w,
-                    drag: Drag.Source(WaveeDragKinds.Resource,
-                        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, pls[i].Uri, pls[i].Name,
-                                                                 pls[i].Cover, acts))),
-                measured: true,
-                header: WaveeType.RailHeader(Loc.Get(Strings.Detail.FeaturedOn))),
-        ],
-    };
+    static Element FeaturedSection(IReadOnlyList<PlaylistSummary> pls, DetailHandlers h, ActionServices? acts)
+        => TrailingSection(Loc.Get(Strings.Detail.FeaturedOn), pls.Count,
+            i => MediaCard.Row(pls[i].Cover, pls[i].Name, pls[i].OwnerName, pls[i].Uri, circular: false,
+                onClick: () => h.OpenPlaylist(pls[i]), onPlay: () => h.PlayContext(pls[i].Uri),
+                drag: Drag.Source(WaveeDragKinds.Resource,
+                    () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Playlist, pls[i].Uri, pls[i].Name,
+                                                             pls[i].Cover, acts))),
+            signature: "featured:" + pls.Count + ":" + (pls.Count > 0 ? pls[0].Uri : ""));
 
-    // Album shelf (More-by / Similar albums) — a PagedShelf of square album cards: open the album, or play it from the card.
-    static Element AlbumShelf(string header, IReadOnlyList<Album> albums, DetailHandlers h, ActionServices? acts) => new BoxEl
+    // More-by / Similar albums — open the album, or play it from the row's hover FAB.
+    static Element AlbumList(string header, IReadOnlyList<Album> albums, DetailHandlers h, ActionServices? acts)
+        => TrailingSection(header, albums.Count,
+            i => MediaCard.Row(albums[i].Cover, albums[i].Name, AlbumSubtitle(albums[i]), albums[i].Uri, circular: false,
+                onClick: () => h.OpenAlbum(albums[i]), onPlay: () => h.PlayContext(albums[i].Uri),
+                drag: Drag.Source(WaveeDragKinds.Resource,
+                    () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, albums[i].Uri, albums[i].Name,
+                                                             albums[i].Cover, acts))),
+            signature: header + ":" + albums.Count + ":" + (albums.Count > 0 ? albums[0].Uri : ""));
+
+    /// <summary>The shared section wrapper: the page's trailing padding around a capped, expandable stack.
+    /// <paramref name="signature"/> keys the stateful stack so a re-bound section (the model going preview→full, or a
+    /// route swap onto a reused instance) remounts with the new data — a Component freezes its ctor args at mount.</summary>
+    static Element TrailingSection(string title, int count, Func<int, Element> rowAt, string signature) => new BoxEl
     {
         Direction = 1,
         Grow = 1f,
         AlignSelf = FlexAlign.Stretch,
         Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
-        Children =
-        [
-            PagedShelf.Create(
-                albums.Count,
-                cardAt: (i, w) => MediaCard.Shelf(albums[i].Cover, albums[i].Name, AlbumSubtitle(albums[i]), albums[i].Uri,
-                    () => h.OpenAlbum(albums[i]), () => h.PlayContext(albums[i].Uri), w,
-                    drag: Drag.Source(WaveeDragKinds.Resource,
-                        () => WaveeResourceDragPayload.ForEntity(WaveeResourceKind.Album, albums[i].Uri, albums[i].Name,
-                                                                 albums[i].Cover, acts))),
-                measured: true,
-                header: WaveeType.RailHeader(header)),
-        ],
+        Children = [Embed.Comp(() => new TrailingStack(title, count, rowAt)) with { Key = "trail:" + signature }],
     };
 
     // Album card subtitle: the artist (similar albums carry their own artist), else the year, else the kind badge.
@@ -490,42 +501,45 @@ sealed class AlbumTrailing : Component
         : a.Year > 0 ? a.Year.ToString()
         : Loc.Get(Strings.Detail.Badge.Album);
 
-    // "Merch" — a PagedShelf of product cards (image + name + price). The card opens the external shop in the OS browser.
-    static Element MerchSection(IReadOnlyList<MerchItem> merch) => new BoxEl
-    {
-        Direction = 1,
-        Grow = 1f,
-        AlignSelf = FlexAlign.Stretch,
-        Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.L),
-        Children =
-        [
-            PagedShelf.Create(
-                merch.Count,
-                cardAt: (i, w) => MerchCard(merch[i], w),
-                measured: true,
-                header: WaveeType.RailHeader(Loc.Get(Strings.Artist.Merch))),
-        ],
-    };
+    // "Merch" — product rows (thumb + name + price). The row opens the external shop in the OS browser.
+    static Element MerchSection(IReadOnlyList<MerchItem> merch)
+        => TrailingSection(Loc.Get(Strings.Artist.Merch), merch.Count, i => MerchRow(merch[i]),
+            signature: "merch:" + merch.Count + ":" + (merch.Count > 0 ? merch[0].Name : ""));
 
-    static Element MerchCard(MerchItem item, float w)
+    /// <summary>One merch row. Deliberately NOT <see cref="MediaCard.Row"/>: merch has nothing to play (that row's whole
+    /// second affordance is a hover play FAB over the art) and its second line is a PRICE — the row's call to action,
+    /// which therefore sits trailing in the accent link ink rather than under the title as a subtitle.</summary>
+    static Element MerchRow(MerchItem item)
     {
-        float inner = MathF.Max(48f, w - 2f * Spacing.S);
+        const float Thumb = WaveeSize.Thumb48;
+        string? url = item.ShopUrl is { Length: > 0 } u ? u : null;
         return new BoxEl
         {
-            Width = w, Direction = 1, Gap = Spacing.XS, Padding = Edges4.All(Spacing.S),
-            Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
-            HoverFill = Tok.FillCardSecondary, PressedFill = Tok.FillCardDefault,
+            Direction = 0, Height = 64f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+            Corners = Radii.CardAll,
+            Fill = Tok.FillCardSecondary, HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary,
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            HoverScale = WaveeMotion.ScaleSubtle.HoverIf(url is not null),
+            PressScale = WaveeMotion.ScaleSubtle.PressIf(url is not null),
+            // A merch entry with no shop link is a plain listing, not a dead button — don't announce one.
+            Role = url is null ? AutomationRole.None : AutomationRole.Button,
+            Focusable = url is not null, Cursor = url is null ? (CursorId?)null : CursorId.Hand,
             // Open the external shop through the IPlatformApp.OpenUri PAL seam (what HyperlinkButton uses); headless records.
-            OnClick = item.ShopUrl is { Length: > 0 } url ? () => InputHooks.Current.Default.OpenUri?.Invoke(url) : null,
+            OnClick = url is null ? null : () => InputHooks.Current.Default.OpenUri?.Invoke(url),
             Children =
             [
                 new BoxEl
                 {
-                    Width = inner, Height = inner, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
-                    Children = [Surfaces.Artwork(item.Image, item.Name.GetHashCode() & 0x7fffffff, inner, inner, Radii.Control)],
+                    Width = Thumb, Height = Thumb, Shrink = 0f, Corners = CornerRadius4.All(Radii.Control), ClipToBounds = true,
+                    Children = [Surfaces.Artwork(item.Image, item.Name.GetHashCode() & 0x7fffffff, Thumb, Thumb, Radii.Control)],
                 },
-                new TextEl(item.Name) { Size = 13f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, Width = inner },
-                new TextEl(item.Price.Length > 0 ? item.Price : Loc.Get(Strings.Artist.Buy)) { Size = 12f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Width = inner },
+                WaveeType.TrackTitle(item.Name) with { Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                new TextEl(item.Price.Length > 0 ? item.Price : Loc.Get(Strings.Artist.Buy))
+                {
+                    Size = 12f, LineHeight = 16f, Weight = 600, Shrink = 0f,
+                    Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
             ],
         };
     }
@@ -573,8 +587,8 @@ sealed class AlbumTrailing : Component
                     Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                     Children =
                     [
-                        new TextEl(Loc.Get(Strings.Detail.AboutTheArtist).ToUpperInvariant())
-                            { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 120f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        WaveeType.Eyebrow(Loc.Get(Strings.Detail.AboutTheArtist))
+                            with { Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
                         {
                             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
@@ -604,7 +618,7 @@ sealed class AlbumTrailing : Component
         [
             CardSkeleton(),
             ChipsSkeleton(),
-            ShelfSkeleton(),
+            RowsSkeleton(),
         ],
     };
 
@@ -618,17 +632,20 @@ sealed class AlbumTrailing : Component
         { Width = 132f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), Fill = Tok.FillCardDefault }).ToArray(),
     });
 
-    static Element ShelfSkeleton() => SectionSkeleton(new BoxEl
+    // Reserves the shape the trailing sections now REALLY have: a short stack of 64-DIP media rows (was a horizontal
+    // strip of 150-DIP cards, which reserved the wrong axis and settled with a visible jump).
+    static Element RowsSkeleton() => SectionSkeleton(new BoxEl
     {
-        Direction = 0, Gap = Spacing.M, ClipToBounds = true,
-        Children = Enumerable.Range(0, 5).Select(_ => (Element)new BoxEl
+        Direction = 1, Gap = Spacing.XS,
+        Children = Enumerable.Range(0, 3).Select(_ => (Element)new BoxEl
         {
-            Width = 150f, Direction = 1, Gap = Spacing.S, Shrink = 0f,
+            Height = 64f, Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+            Corners = Radii.CardAll, Fill = Tok.FillCardSecondary,
             Children =
             [
-                new BoxEl { Width = 150f, Height = 150f, Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault },
-                new BoxEl { Width = 110f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
-                new BoxEl { Width = 70f, Height = 10f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
+                new BoxEl { Width = WaveeSize.Thumb48, Height = WaveeSize.Thumb48, Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardDefault },
+                new BoxEl { Width = 160f, Height = 12f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardDefault },
             ],
         }).ToArray(),
     });
@@ -645,4 +662,55 @@ sealed class AlbumTrailing : Component
             body,
         ],
     };
+}
+
+/// <summary>A capped, expandable vertical stack under a section header — the trailing column's ONE list shape.
+///
+/// <para>Its own <see cref="Component"/> purely for the expand state: "Show all" must not push a re-render up into
+/// <c>AlbumTrailing</c> (which owns the whole enrichment resource) just to lengthen one list. The rows are already
+/// loaded, so expanding is free and there is nowhere else to send the user — a link that navigated to a fifth surface
+/// to show four more albums would be worse than the horizontal shelf this replaced.</para>
+///
+/// <para>Ctor args freeze at mount (component-props contract), so the section that builds this keys it by a data
+/// signature — see <c>TrailingSection</c>.</para></summary>
+sealed class TrailingStack : Component
+{
+    /// <summary>How many rows show before "Show all" — shared with the section wrapper's documented cap.</summary>
+    internal const int Cap = 5;
+
+    readonly string _title;
+    readonly int _count;
+    readonly Func<int, Element> _rowAt;
+
+    public TrailingStack(string title, int count, Func<int, Element> rowAt)
+    {
+        _title = title; _count = count; _rowAt = rowAt;
+    }
+
+    public override Element Render()
+    {
+        var (expanded, setExpanded) = UseState(false);
+        int shown = expanded ? _count : Math.Min(_count, Cap);
+        var rows = new Element[shown];
+        for (int i = 0; i < shown; i++) rows[i] = _rowAt(i);
+
+        var head = new List<Element>(3)
+        {
+            WaveeType.RailHeader(_title) with { Grow = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+        };
+        if (_count > shown)
+            // The stock quiet link (HyperlinkButton at the Small rung) — the same control Home's modules use for the
+            // same job, so "there is more here" reads identically on both pages.
+            head.Add(HyperlinkButton.Create(Strings.Home.ShowAllCount(_count), () => setExpanded(true), size: ControlSize.Small));
+
+        return new BoxEl
+        {
+            Direction = 1, Gap = Spacing.M, Grow = 1f, AlignSelf = FlexAlign.Stretch,
+            Children =
+            [
+                new BoxEl { Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f, Children = head.ToArray() },
+                new BoxEl { Direction = 1, Gap = Spacing.XS, Children = rows },
+            ],
+        };
+    }
 }

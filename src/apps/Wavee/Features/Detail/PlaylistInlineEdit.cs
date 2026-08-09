@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
@@ -29,10 +29,13 @@ static class PlaylistInlineEdit
         => Embed.Comp(() => new EditableCover(full, size, radius, shadow, morphKey, decodePx, preferLargest))
             with { Key = $"pl-edit-cover:{(int)size}:{(int)radius}:{shadow}:{morphKey}:{decodePx}:{preferLargest}" };
 
-    internal static Element Title(Loadable<DetailModel> full, float width, float titleSize, ushort weight = 900,
-                                  bool onMedia = false)
-        => Embed.Comp(() => new EditableTitle(full, width, titleSize, weight, onMedia))
-            with { Key = $"pl-edit-title:{(int)width}:{(int)titleSize}:{weight}:{onMedia}" };
+    /// <summary>The editable arm of the hero title. <paramref name="lineHeight"/> is the type-ramp line height paired
+    /// with <paramref name="titleSize"/> (Title 28/36, TitleLarge 40/52 …) — the caller owns the rung, so both arms of
+    /// the title (this one and the plain <c>TextEl</c>) sit on the identical metric. Default weight is the ramp's 600.</summary>
+    internal static Element Title(Loadable<DetailModel> full, float width, float titleSize, ushort weight = 600,
+                                  bool onMedia = false, float lineHeight = float.NaN)
+        => Embed.Comp(() => new EditableTitle(full, width, titleSize, weight, onMedia, lineHeight))
+            with { Key = $"pl-edit-title:{(int)width}:{(int)titleSize}:{weight}:{onMedia}:{(int)lineHeight}" };
 
     internal static Element Description(Loadable<DetailModel> full, float width, int maxLines, DetailHandlers h,
                                         bool onMedia = false)
@@ -213,7 +216,7 @@ static class PlaylistInlineEdit
             Fill = accent ? a with { A = 0.16f } : ColorF.Transparent,
             HoverFill = accent ? a with { A = 0.26f } : Tok.FillSubtleSecondary,
             PressedFill = accent ? a with { A = 0.12f } : Tok.FillSubtleTertiary,
-            HoverScale = 1.06f, PressScale = 0.94f,
+            HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
             Cursor = CursorId.Hand, Focusable = true, AllowFocusOnInteraction = false,
             Role = AutomationRole.Button, OnClick = onClick,
             Enter = new EnterExit(Sx: 0.8f, Sy: 0.8f, Opacity: 0f, Active: true),
@@ -380,6 +383,7 @@ static class PlaylistInlineEdit
         readonly float _titleSize;
         readonly ushort _weight;
         readonly bool _onMedia;
+        readonly float _lineHeight;
         readonly Signal<string> _draft = new("");
         readonly Signal<bool> _editing = new(false);
         readonly Signal<bool> _hovered = new(false);
@@ -387,8 +391,9 @@ static class PlaylistInlineEdit
         readonly Ref<NodeHandle> _editShell = new(NodeHandle.Null);
         int _saveEpoch;
 
-        public EditableTitle(Loadable<DetailModel> full, float width, float titleSize, ushort weight, bool onMedia)
-        { _full = full; _width = width; _titleSize = titleSize; _weight = weight; _onMedia = onMedia; }
+        public EditableTitle(Loadable<DetailModel> full, float width, float titleSize, ushort weight, bool onMedia,
+                             float lineHeight)
+        { _full = full; _width = width; _titleSize = titleSize; _weight = weight; _onMedia = onMedia; _lineHeight = lineHeight; }
 
         public override Element Render()
         {
@@ -407,7 +412,9 @@ static class PlaylistInlineEdit
                     {
                         FontFamily = "Segoe UI Variable Display",
                         Size = _titleSize, Weight = _weight,
-                        LineHeight = _titleSize * 1.08f,
+                        // The type ramp's paired line height, handed in by the caller — not a 1.08× multiple of the
+                        // size, which produced a different leading for every title size on the page.
+                        LineHeight = _lineHeight,
                         CharSpacing = _titleSize >= 34f ? -28f : -16f,
                         MaxWidth = _width,
                         Wrap = TextWrap.WrapWholeWords, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
@@ -415,7 +422,7 @@ static class PlaylistInlineEdit
                     }
                     : WaveeType.PageHero(m.Title) with
                     {
-                        Size = _titleSize, MinSize = 18f, Weight = _weight, Width = _width, LineHeight = float.NaN,
+                        Size = _titleSize, MinSize = 18f, Weight = _weight, Width = _width, LineHeight = _lineHeight,
                         MaxWidth = _width,
                         Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
                         Color = Tok.TextPrimary,
@@ -708,7 +715,7 @@ static class PlaylistInlineEdit
                     {
                         Width = _size, Height = _size, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                         Corners = CornerRadius4.All(_size * 0.5f),
-                        HoverScale = 1.06f, PressScale = 0.94f,
+                        HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                         Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                         OnClick = () => Share(m),
                         Children = [new BoxEl
@@ -829,7 +836,7 @@ static class PlaylistInlineEdit
                 {
                     Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Corners = CornerRadius4.All(14f),
-                    HoverScale = 1.06f, PressScale = 0.94f,
+                    HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                     Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                     OnClick = Toggle, OnRealized = h => anchor.Value = h,
                     Children = [Icon(Icons.Friends, 14f, Tok.TextSecondary)],
@@ -840,7 +847,7 @@ static class PlaylistInlineEdit
                 Direction = 0, Shrink = 0f, Height = 28f, Gap = Spacing.XS, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Padding = new Edges4(10f, 0f, 12f, 0f), Corners = CornerRadius4.All(14f),
                 BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
-                HoverScale = 1.03f, PressScale = 0.97f,
+                HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                 Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                 OnClick = Toggle, OnRealized = h => anchor.Value = h,
                 Children =
@@ -935,7 +942,7 @@ static class PlaylistInlineEdit
                 Direction = 0, Height = 34f, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(17f), Fill = accent,
                 HoverFill = Tok.AccentSecondary, PressedFill = Tok.AccentTertiary,
-                HoverScale = 1.02f, PressScale = 0.98f,
+                HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                 Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.Button,
                 IsEnabled = status != StatusSaving,
                 OnClick = status == StatusSaving ? null : () => _ = RunSaveAsync(
@@ -1025,7 +1032,7 @@ static class PlaylistInlineEdit
             {
                 Width = 40f, Height = 40f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Corners = CornerRadius4.All(20f),
-                HoverScale = 1.06f, PressScale = 0.94f,
+                HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                 OnClick = Toggle,
                 OnRealized = h => anchor.Value = h,
                 Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],

@@ -39,7 +39,7 @@ readonly record struct DetailHandlers(
     IReadSignal<bool>? MultiSelect = null, Action<bool>? SetMultiSelect = null);
 
 // The two-column detail scaffold (mounted only once data is Ready, so its lifecycle = the loaded page's lifecycle).
-// Owns: the art-derived backdrop wash + accent, the page-scoped Mica tint (set/cleared through the activation
+// Owns: the art-derived backdrop wash + accent, the page-scoped shell material tint (set/cleared through the activation
 // lifecycle), and the now-playing re-skin epoch. Delegates the rail / track list / trailing to the static builders.
 sealed class DetailShell : Component
 {
@@ -53,7 +53,7 @@ sealed class DetailShell : Component
     readonly Image? _fallbackCover;       // mount-time nav-preview cover; seeds the per-route stable-cover latch
     string? _ctxUri;                      // the loaded context uri — the per-context sort key; refreshed each render
     DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (reused slot re-derives)
-    readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellTint (see ShellTintState)
+    readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellMaterial (see ShellMaterialState)
     readonly Signal<int> _mode = new(0);  // adaptive layout mode (0 widest), written by OnBoundsChanged
     readonly Signal<bool> _verticalHeroImmersive = new(false);
     float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
@@ -118,9 +118,12 @@ sealed class DetailShell : Component
     // Compact strip width while collapsed (sidebar analog): wide enough for a readable cover + 2-line title, narrow
     // enough that the track list keeps most of the card. Cover = strip − 2× Spacing.S.
     const float RailCompactW = 96f;
-    // The grip's hit strip: 7 DIP normally (a hairline seam between two visible columns), 12 while collapsed — the
-    // compact strip already carries cover/chevron re-open, but the seam still accepts a bare click / drag past ReExpand.
-    const float GripStripW = 7f, GripStripCollapsedW = 12f;
+    // The grip's hit strip: the shared 16-DIP splitter target (ColumnGrip.StripW), invisible at rest with a
+    // reveal-on-hover indicator — the stock GridSplitter model. Collapsed keeps a wider 20 because the seam is then
+    // also a re-open gesture (the compact strip carries cover/chevron re-open; the seam still accepts a bare click or a
+    // drag past ReExpand). Was 7/12 — under half the pointer target every stock sizer ships.
+    static float GripStripW => ColumnGrip.StripW;
+    const float GripStripCollapsedW = 20f;
 
     public override Element Render()
     {
@@ -133,7 +136,7 @@ sealed class DetailShell : Component
         _actsRef = acts;                             // …and the hero cover's drag payload, built inside RowChildren
         var libBridge = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
-        var shellTint = UseContext(ShellTint.Slot);
+        var shellMaterial = UseContext(ShellMaterial.Slot);
         var navPreview = UseContext(NavPreviewStore.Slot);   // in-app card nav stashes a preview → destination reconciles in place
 
         var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
@@ -189,11 +192,14 @@ sealed class DetailShell : Component
         var chrome = coverChrome ?? liveChrome;
         ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp) : Tok.AccentDefault;
 
-        // Page-scoped Mica tint: cover-keyed binder (activation + unmount clear), not a page-scope Watch.
+        // Page-scoped shell material tint: a cover-keyed binder leaf (UseEffect publication + UseActivation set/clear +
+        // a mount-once unmount clear — the "wash sticks" fix), not a page-scope Watch, so a graded batch repaints one
+        // zero-size node instead of rebuilding the rail/track-list tree. It publishes the FLAT arm only (Wash: null) —
+        // the three-layer radial wash belongs to Home.
         // Ready: true — match pre-leaf SchemeFor timing: apply as soon as a cover URL is known (preview / cached
-        // grading). Gating on modelReady left Home→detail with a cached palette on plain Mica until Ready.
+        // grading). Gating on modelReady left Home→detail with a cached palette on the bare ground until Ready.
         Element tintBinder = CoverPaletteLeaves.ShellTint(
-            paletteUrl, ready: true, colorWashesDisabled, apply: _cfg.TwoColumn, _tintOwner, shellTint,
+            paletteUrl, ready: true, colorWashesDisabled, apply: _cfg.TwoColumn, _tintOwner, shellMaterial,
             key: "detail-tint:" + route.Name, fallbackUrl: liveUrl);
 
         // ── handlers (close over live svc/model; not frozen ctor args) ──
@@ -429,7 +435,13 @@ sealed class DetailShell : Component
         bool railCollapsed = railCollapsedSignal.Value && resizableRail;
         float railW = mode == 0 && resizableRail ? railWidthSignal.Value : RailW(mode, _cfg);
         float winH = viewportSig.Value.Height;   // subscribe (only here) → re-fit smoothly on resize (stable per page → no nav jump)
-        float titleSize = Math.Clamp(24f + (winH - 620f) * 0.05f, 24f, 38f);   // 620px window → 24px … 900px → 38px
+        // TWO RUNGS OF THE RAMP, not a fluid interpolation. The old Clamp(24 + (winH-620)*0.05, 24, 38) produced a
+        // different off-ramp size at every window height (24.05, 31.4, 37.2 …), so the page hero was never the same
+        // typographic step twice and never matched any other title in the app. A tall window gets TitleLarge (40/52),
+        // anything shorter gets Title (28/36) — the same two rungs Ui.Title / Ui.TitleLarge publish. 900px is the
+        // breakpoint the old ramp's own comment already treated as "the big end".
+        float titleSize = winH >= 900f ? 40f : 28f;
+        float titleLineHeight = titleSize >= 40f ? 52f : 36f;
         int descLines = winH < 760f ? 3 : 6;
         var row = new BoxEl
         {
@@ -445,7 +457,7 @@ sealed class DetailShell : Component
             // The hero/rail column is a SIBLING of the track list, so a drag released over the cover, the title or the
             // actions used to reach no destination at all — the dead zone this closes.
             DropTarget = PageDropTarget(m, acts, kind),
-            Children = RowChildren(m, handlers, railW, titleSize, descLines, right,
+            Children = RowChildren(m, handlers, railW, titleSize, titleLineHeight, descLines, right,
                 resizableRail, railCollapsed, railWidthSignal, railCollapsedSignal, kind, settings),
         };
         var twoColumnPage = new BoxEl
@@ -526,8 +538,8 @@ sealed class DetailShell : Component
     // The two-column row's children. Collapsed keeps a compact identity strip — `[compact, grip, right]` — so the rail
     // never vanishes (WP-κ). `right` keeps its Key so the track list reconciles in place across the collapse rather than
     // remounting (a remount would reset the scroll offset and the hero morph on every collapse).
-    Element[] RowChildren(DetailModel m, DetailHandlers handlers, float railW, float titleSize, int descLines,
-        Element right, bool resizableRail, bool railCollapsed,
+    Element[] RowChildren(DetailModel m, DetailHandlers handlers, float railW, float titleSize, float titleLineHeight,
+        int descLines, Element right, bool resizableRail, bool railCollapsed,
         Signal<float> railWidthSignal, Signal<bool> railCollapsedSignal, DetailKind kind, IAppSettings? settings)
     {
         if (railCollapsed)
@@ -560,7 +572,7 @@ sealed class DetailShell : Component
             // PAINT-BOUND (WaveeShell's sidebar-fade pattern): the resist-zone cue rides the compositor's opacity
             // channel, so a drag toward the detent never re-renders the rail subtree.
             Opacity = Prop.Of(() => _railFade.Value),
-            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, descLines, _model, _actsRef)],
+            Children = [DetailRail.Build(m, _cfg, handlers, railW, titleSize, titleLineHeight, descLines, _model, _actsRef)],
         };
         return resizableRail
             ? [railFaded, DetailRailGrip(railWidthSignal, railCollapsedSignal, kind, settings, collapsedNow: false), right]

@@ -24,14 +24,36 @@ namespace Wavee;
 //
 // This is also NOT the skin for circular play FABs sitting ON artwork: those keep their round geometry and their own
 // scale cues (MediaCard.PlayFab, the album-expand / episode / search circles, the hero Shuffle Fab, video overlays).
+//
+// ── THE ICON-BUTTON GEOMETRY TABLE ────────────────────────────────────────────────────────────────────────────────
+// A button with no label has no text to say what it is, so its SHAPE has to. The app had five shapes doing that job
+// (26 circles, 28 circles, 30 pills, 32 squares, 36 pills) and they carried no distinct meanings — a 26 circle in the
+// queue and a 32 square in the toolbar were the same affordance drawn two ways. There are now exactly THREE rows, and
+// a new icon button must be one of them:
+//
+//   ┌─ geometry ──────────────┬─ where ─────────────────────────────────────────────────────────────────────────────┐
+//   │ 32 × 32, Radii.Control  │ THE standard icon button. Toolbars, panels, rows, flyouts, dialogs — every icon      │
+//   │ (stock IconButton)      │ affordance on a NORMAL surface. If you are unsure, it is this one.                   │
+//   │ 36 × 36, Radii.Full     │ The icon-only arm OF THIS PILL (<see cref="Icon"/>) — and only inside a CTA cluster  │
+//   │                         │ where it stands beside labeled 36 capsules and must read as their equal.             │
+//   │ circle, any diameter    │ A FAB, and ONLY ON MEDIA: floated over artwork or video, where the round plate is    │
+//   │                         │ what separates the control from the picture (MediaCard.PlayFab, the player           │
+//   │                         │ transport, video overlays). A circle on a flat panel is off-table.                   │
+//   └─────────────────────────┴─────────────────────────────────────────────────────────────────────────────────────┘
 static class WaveeCta
 {
+    /// <summary>Row 1 of the geometry table: the standard 32-square icon button's edge. Equal to the control ladder's
+    /// <c>WaveeSize.ControlH</c> by construction — an icon button is a control, so it is control-height.</summary>
+    public const float IconButtonSize = WaveeSize.ControlH;
+
     /// <summary>The media pill's height. One step above the 32-DIP control ladder so a labeled media primary reads as
     /// the page's dominant action; also the height of the Follow pill it shares hero rows with.</summary>
     public const float PillHeight = 36f;
 
-    const float PillHoverScale = 1.04f;
-    const float PillPressScale = 0.97f;
+    // The pill's scale cue is no longer authored here: this skin's 1.04 hover IS the Standard rung of
+    // WaveeMotion.ScaleStandard (a labeled media primary is the canonical "discrete aim target"), and its press
+    // deepened 0.97 -> the rung's 0.96 so the ladder has one press value per tier. Reading the tier also makes the
+    // pill reduced-motion-safe, which the two local consts never were.
 
     /// <summary>The primary Play CTA on an artwork-derived <paramref name="accent"/>. <paramref name="label"/> defaults
     /// to the shared detail-surface "Play" string; surfaces with their own wording pass it.</summary>
@@ -65,10 +87,57 @@ static class WaveeCta
                 Bold = true,
             }) with
         {
-            HoverScale = PillHoverScale,
-            PressScale = PillPressScale,
+            HoverScale = WaveeMotion.ScaleStandard.Hover,
+            PressScale = WaveeMotion.ScaleStandard.Press,
             Cursor = CursorId.Hand,
         };
+
+    /// <summary>The ICON-ONLY arm of the pill — row 2 of the geometry table. Same height, same appearance ramp, same
+    /// hover/press rung and the same hand cursor as its labeled siblings, but square, so <see cref="Radii.Full"/>
+    /// resolves to a circle and the cluster reads as "three capsules, one of which happens to be round" rather than as
+    /// two grammars parked next to each other.
+    /// <para>Built on the stock <see cref="IconButton"/> (focus ring, Space/Enter mechanics, AutomationRole, the 83ms
+    /// brush ramp) wearing the BUTTON appearance ramp rather than the icon-button's own subtle one — beside a filled
+    /// standard capsule a transparent-until-hover square disappears. The inner glyph's AnimatedIcon scale is switched
+    /// OFF (<c>IconHoverScale = 1</c>): this skin's documented divergence is that the whole CAPSULE scales, and running
+    /// both would compound to a 1.12 hover.</para>
+    /// <para><paramref name="requestsContext"/> is the overflow "…" case: it re-enters the engine's context funnel to
+    /// find the surface's ATTACHED menu instead of carrying a handler of its own. OnClick and ClickRequestsContext are
+    /// mutually exclusive in the reconciler, so the handler is dropped when it is set.</para></summary>
+    public static BoxEl Icon(string glyph, Action? onClick, ButtonAppearance appearance = ButtonAppearance.Standard,
+        Button.ButtonPalette? palette = null, float size = PillHeight, bool requestsContext = false)
+    {
+        var s = Button.DefaultStyle(appearance, palette: palette);
+        var box = IconButton.Create(glyph, onClick ?? NoOp, style: IconButton.DefaultStyle with
+        {
+            Size = size,
+            CornerRadius = Radii.Full,
+            Foreground = s.Foreground,
+            HoverForeground = s.HoverForeground,
+            PressedForeground = s.PressedForeground,
+            DisabledForeground = s.DisabledForeground,
+            Fill = s.Background,
+            HoverFill = s.HoverBackground,
+            PressedFill = s.PressedBackground,
+            DisabledFill = s.DisabledBackground,
+            IconHoverScale = 1f,
+            IconPressScale = 1f,
+        }) with
+        {
+            // The button ramp's hairline, which IconButton.Style has no knob for — without it the round arm is the one
+            // control in the cluster with no edge.
+            BorderBrush = s.BorderBrush,
+            HoverBorderBrush = s.HoverBorderBrush,
+            PressedBorderBrush = s.PressedBorderBrush,
+            BorderWidth = s.BorderWidth,
+            HoverScale = WaveeMotion.ScaleStandard.Hover,
+            PressScale = WaveeMotion.ScaleStandard.Press,
+            Cursor = CursorId.Hand,
+        };
+        return requestsContext ? box with { OnClick = null, ClickRequestsContext = true } : box;
+    }
+
+    static readonly Action NoOp = static () => { };
 
     /// <summary>The stock <c>ButtonPalette.For(ButtonAppearance.Accent)</c> ramp with <paramref name="fill"/>
     /// substituted for AccentFillColorDefault. Shades mirror Tok's AccentFillShade exactly (the SAME color at @0.90 /

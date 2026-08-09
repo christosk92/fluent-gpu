@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
@@ -96,7 +95,7 @@ sealed class BrowsePage : Component
         Direction = 1, Gap = Spacing.L, MinWidth = 0f,
         Children =
         [
-            EmptyState.Build(Loc.Get(Strings.Browse.Unavailable), glyph: Icons.Globe),
+            EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)),
             ExploreAllButton(model),
         ],
     };
@@ -120,7 +119,7 @@ sealed class BrowsePage : Component
         return new BoxEl
         {
             Direction = 1, Justify = FlexJustify.End, MinHeight = HeaderHeight, MinWidth = 0f,
-            Padding = new Edges4(Spacing.L, Spacing.XL, Spacing.L, Spacing.M),
+            Padding = new Edges4(Spacing.PageWide, Spacing.XL, Spacing.PageWide, Spacing.M),
             Corners = CornerRadius4.All(Radii.Card), ClipToBounds = true,
             Gradient = GradientDown(new GradientStop(0f, wash), new GradientStop(1f, baseFill)),
             Children =
@@ -228,28 +227,31 @@ sealed class BrowsePage : Component
             {
                 Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand,
                 FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
-                // A pill, not a rounded rectangle: full-radius corners, a hairline that lifts to the accent on hover,
-                // and a small scale/settle. The previous version only swapped one near-identical fill token, so on a
-                // light ground the hover was effectively invisible and the chip read as flat, dead text.
+                // A QUIET chip, and deliberately NOT a SelectorBar item. These look like a facet row and are not one:
+                // there is no selection model here at all — every chip NAVIGATES (Role = Hyperlink, onClick opens
+                // another page), so a selection pill would advertise a state that can never be true. What they lose in
+                // this wave is the accent: an accent HOVER BORDER plus an accent hover LABEL made every one of ~20
+                // links a candidate for the page's accent, which is accent on structure (hard rule 2 of the accent
+                // budget in WaveeTokens). The pill shape, the fixed height and the hover motion — Wavee identity —
+                // stay; the state ladder is now the neutral subtle-fill rungs the rest of the app's quiet chips use.
                 // Fixed height + Shrink 0: on a non-wrapping rail, flex would otherwise compress every pill to fit and
                 // ellipsise the labels instead of letting the rail overflow.
                 Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center,
                 Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
-                Corners = CornerRadius4.All(999f),
+                Corners = Radii.FullAll,
                 Fill = Tok.FillControlDefault, HoverFill = Tok.FillControlSecondary,
-                BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverBorderColor = Tok.AccentDefault,
-                HoverScale = Motion.ReducedMotion ? 1f : 1.03f,
-                HoverDurationMs = 140f, HoverEasing = Easing.FluentDecelerate,
-                PressScale = Motion.ReducedMotion ? 1f : 0.98f,
+                PressedFill = Tok.FillControlTertiary,
+                BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
+                HoverBorderColor = Tok.StrokeControlStrongDefault,
+                HoverScale = WaveeMotion.ScaleSubtle.Hover,
+                HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+                PressScale = WaveeMotion.ScaleSubtle.Press,
                 OnClick = model is null ? null : () =>
                 {
                     if (c.IsClientFeature) model.OnOpenFeature(c.Uri);
                     else model.OnOpenCategory(c.Uri, c.Title);
                 },
-                Children = [new TextEl(c.Title)
-                {
-                    Size = 13.5f, Color = Tok.TextPrimary, HoverColor = Tok.AccentTextPrimary, MaxLines = 1,
-                }],
+                Children = [Ui.Body(c.Title) with { Color = Tok.TextPrimary, MaxLines = 1 }],
             };
         }
 
@@ -293,8 +295,6 @@ sealed class BrowsePage : Component
     /// the stub page at least names where the user asked to go.</summary>
     static string RouteFor(string uri) => RichText.RouteForUri(uri) ?? uri;
 
-    static string Upper(string s) => s.ToUpper(CultureInfo.CurrentCulture);
-
     static Element Skeleton()
     {
         var rows = new List<Element>(4)
@@ -311,7 +311,7 @@ sealed class BrowsePage : Component
                 Direction = 1, Gap = Spacing.S,
                 Children =
                 [
-                    new BoxEl { Width = 160f, Height = 16f, Corners = CornerRadius4.All(4f), Fill = Tok.FillCardSecondary },
+                    new BoxEl { Width = 160f, Height = 16f, Corners = Radii.ControlAll, Fill = Tok.FillCardSecondary },
                     new BoxEl { Direction = 0, Gap = Spacing.M, Children = cards.ToArray() },
                 ],
             });

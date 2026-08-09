@@ -3,186 +3,283 @@ using System.Text.Json;
 
 namespace Wavee.Core;
 
-/// <summary>Projects Spotify's raw home into a mixed editorial cadence: substantial sections remain finite horizontal
-/// shelves, Spotlight remains a hero, and baseline recommendations become editorial breaks interleaved between
-/// shelves. This avoids both one enormous grid and an unbroken stack of identical carousels.</summary>
+/// <summary>App-authored labels for modules which combine or supplement source sections. Server section titles remain
+/// verbatim on their single owning <see cref="HomeGroup"/>; these labels are fallbacks for synthetic/personal modules.</summary>
+public sealed record HomeModuleTitles(
+    string JumpBackIn = "Jump back in",
+    string Recents = "Recents",
+    string MadeForYou = "Made for you",
+    string TopMixes = "Your top mixes",
+    string Radio = "Radio",
+    string UpNext = "Up next",
+    string Audiobooks = "Audiobooks for you",
+    string EditorsPicks = "Editors' picks",
+    string BecauseYouListened = "Because you listened",
+    string Podcasts = "Podcasts")
+{
+    public static readonly HomeModuleTitles Default = new();
+}
+
+/// <summary>Projects Spotify Home into authored module previews and a lossless source-section ledger. Classification is
+/// per card, but grouping and deduplication are per section: the same URI in two source sections survives in both. One
+/// group owns each non-empty server title, giving every titled section exactly one drill affordance.</summary>
 public static class SpotifyHomeComposer
 {
-    const int MaxSections = 12;
-    const int CardsPerSection = 24;
-    // A real home carries ~20 single-item HomeFeedBaselineSectionData recs. The editorial shelf is width-adaptive
-    // (up to 5 columns), so 5 per break fills a wide row exactly; ALL breaks are placed (no cap) — the interleave
-    // below spreads them evenly across the full shelf list instead of clustering them at the top.
-    const int FeaturedCardsPerBreak = 5;
-    const int QuickPicks = 9;   // fills the desktop 3×3 quick matrix when the source has enough library data
-    const int RecentsShown = 12;
+    const int QuickPicks = 9;
 
-    // madeForYouTitle: the localized "Made for you" label supplied by the caller (the app layer has the loc system;
-    // Core stays framework-neutral). Defaults to English for the offline/export path. recentlyPlayedTitle labels the
-    // recents shelf built from the home response's embedded HomeRecentlyPlayedSectionData list.
     public static HomeContribution Compose(JsonElement homeRoot, IReadOnlyList<PlaylistSummary> library,
-        string madeForYouTitle = "Made for you", string moreForYouTitle = "More for you",
-        string recentlyPlayedTitle = "Recently played")
+        HomeModuleTitles? titles = null)
     {
-        HomeGroup? quick = null, hero = null, recents = null;
-        // Generic sections keep their response order even when their visual treatment differs. Baseline recommendations
-        // are still folded into separate editorial breaks and distributed across this ordered module list below.
-        var modules = new List<HomeGroup>();
-        var featured = new List<HomeCard>();
+        var t = titles ?? HomeModuleTitles.Default;
+        var groups = new List<HomeGroup>();
+        var sourceSections = new List<HomeSection>();
+        HomeGroup? spotlight = null;
 
+        // Export/fake callers may supply library quick picks directly. This is a synthetic module, not a server section,
+        // so it deliberately does not enter the source-section accounting ledger.
         if (library.Count > 0)
         {
-            var picks = library.Take(QuickPicks)
-                .Select(p => new HomeCard(p.Uri, p.Name, p.OwnerName, p.Cover, HomeCardKind.Playlist)).ToList();
-            quick = new HomeGroup(HomeGroupKind.QuickGrid, null, picks);
+            var quick = new List<HomeCard>(Math.Min(library.Count, QuickPicks));
+            foreach (var p in library.Take(QuickPicks))
+                quick.Add(new HomeCard(p.Uri, p.Name, p.OwnerName, p.Cover, HomeCardKind.Playlist, p.MosaicTiles));
+            groups.Add(new HomeGroup(HomeGroupKind.QuickGrid, t.JumpBackIn, quick));
         }
 
         var sections = SpotifyExportMapper.Dig(homeRoot, "sectionContainer", "sections", "items");
         if (sections.ValueKind == JsonValueKind.Array)
-            foreach (var sec in sections.EnumerateArray())
+            foreach (var rawSection in sections.EnumerateArray())
             {
-                var d = SpotifyExportMapper.Dig(sec, "data");
-                var tn = Str(d, "__typename");
-                var title = Str(d, "title", "transformedLabel") ?? Str(d, "title", "text");
-                var items = SpotifyExportMapper.Dig(sec, "sectionItems", "items");
-                switch (tn)
+                var data = SpotifyExportMapper.Dig(rawSection, "data");
+                var type = Str(data, "__typename");
+                var title = Str(data, "title", "transformedLabel") ?? Str(data, "title", "text");
+                var subtitle = Str(data, "subtitle", "transformedLabel") ?? Str(data, "subtitle", "text");
+                var uri = Str(rawSection, "uri") ?? Str(data, "uri");
+                var items = SpotifyExportMapper.Dig(rawSection, "sectionItems", "items");
+                int totalCount = IntAt(rawSection, "sectionItems", "totalCount");
+
+                switch (type)
                 {
                     case "HomeSpotlightSectionData":
-                        if (hero is null && FirstCard(items) is { } hc)
-                            hero = new HomeGroup(HomeGroupKind.Hero, title, new[] { hc });
+                    {
+                        var mapped = Cards(items);
+                        var section = Section(uri, title, subtitle, totalCount, mapped);
+                        sourceSections.Add(section);
+                        if (mapped.Cards.Count == 0)
+                        {
+                            if (HasIdentity(section)) groups.Add(Group(HomeGroupKind.SectionEntry, section, mapped.Cards, true));
+                            break;
+                        }
+
+                        var hero = Group(HomeGroupKind.Hero, section, mapped.Cards, true);
+                        if (spotlight is null) spotlight = hero;
+                        else groups.Add(hero);
                         break;
+                    }
+
                     case "HomeFeedBaselineSectionData":
-                        // Single-item personalized rec → one Featured card; the section title becomes the card eyebrow.
-                        if (FirstCard(items) is { } bc)
-                            featured.Add(title is { Length: > 0 } ? bc with { Eyebrow = title } : bc);
+                    {
+                        var mapped = Cards(items);
+                        if (title is { Length: > 0 })
+                            mapped = mapped with { Cards = mapped.Cards.Select(c => c with { Eyebrow = title }).ToList() };
+                        var section = Section(uri, title, subtitle, totalCount, mapped);
+                        sourceSections.Add(section);
+                        groups.Add(Group(mapped.Cards.Count > 0 ? HomeGroupKind.DiscoverFeed : HomeGroupKind.SectionEntry,
+                            section, mapped.Cards, true));
                         break;
-                    case "HomeGenericSectionData":
-                        if (modules.Count < MaxSections)
-                        {
-                            var cards = Cards(items, CardsPerSection);
-                            if (cards.Count >= 2)
-                            {
-                                var kind = GenericKind(Str(d, "title", "translatedBaseText"));
-                                modules.Add(new HomeGroup(kind, title, cards));
-                            }
-                        }
-                        break;
+                    }
+
                     case "HomeRecentlyPlayedSectionData":
-                        // The desktop home embeds recents inline: one sectionItem whose content.data is a `List` of
-                        // recent entities. Render it directly — no separate recents API call.
-                        if (recents is null && FirstContentData(items) is { ValueKind: JsonValueKind.Object } listData)
-                        {
-                            var rc = SpotifyExportMapper.RecentCardsFromListData(listData, RecentsShown);
-                            if (rc.Count > 0)
-                                recents = new HomeGroup(HomeGroupKind.Shelf, recentlyPlayedTitle, rc);
-                        }
+                    {
+                        var mapped = FirstContentData(items) is { ValueKind: JsonValueKind.Object } listData
+                            ? RecentCards(listData)
+                            : new MappedCards([], RawCount(items), RawCount(items), 0);
+                        var section = Section(uri, title ?? t.Recents, subtitle, totalCount, mapped);
+                        sourceSections.Add(section);
+                        groups.Add(Group(mapped.Cards.Count > 0 ? HomeGroupKind.Recents : HomeGroupKind.SectionEntry,
+                            section, mapped.Cards, true));
                         break;
-                    // HomeShortsSectionData: skipped (short-form module we don't render).
+                    }
+
+                    // Unknown future section types still enter the ledger and degrade to the card-driven classifier.
+                    // This preserves their title/URI instead of silently deleting the whole section.
+                    default:
+                    {
+                        var mapped = Cards(items);
+                        var section = Section(uri, title, subtitle, totalCount, mapped);
+                        sourceSections.Add(section);
+                        EmitSectionGroups(section, groups);
+                        break;
+                    }
                 }
             }
 
-        var groups = new List<HomeGroup>();
-        if (quick is not null) groups.Add(quick);
-        if (recents is not null) groups.Add(recents);   // recently played leads (was a separate query; now inline)
-        if (hero is not null) groups.Add(hero);
-        int featureAt = 0, featureBreak = 0;
-        void AddFeatureBreak()
-        {
-            if (featureAt >= featured.Count) return;
-            int take = Math.Min(FeaturedCardsPerBreak, featured.Count - featureAt);
-            var cards = featured.GetRange(featureAt, take);
-            groups.Add(new HomeGroup(HomeGroupKind.Featured,
-                featureBreak == 0 ? madeForYouTitle : moreForYouTitle,
-                cards));
-            featureAt += take;
-            featureBreak++;
-        }
+        // Spotlight is the preferred Hero preview regardless of response position. Other Hero sections remain present;
+        // the view moves them into its drill-in deck after assigning the first Hero its one cinematic slot.
+        if (spotlight is not null) groups.Insert(library.Count > 0 ? 1 : 0, spotlight);
 
-        // Apple-style rhythm: open with personalization, then SPREAD the remaining breaks evenly across the whole
-        // shelf list (interval = shelves ÷ remaining breaks) so the editorial cadence covers the entire home instead
-        // of front-loading — the old "every 2 shelves, max 3 breaks" clustered them at the top and dropped the rest.
-        AddFeatureBreak();
-        int breaksLeft = (featured.Count - featureAt + FeaturedCardsPerBreak - 1) / FeaturedCardsPerBreak;
-        int interval = breaksLeft > 0 ? Math.Max(1, (int)Math.Ceiling(modules.Count / (double)(breaksLeft + 1))) : int.MaxValue;
-        for (int i = 0; i < modules.Count; i++)
-        {
-            groups.Add(modules[i]);
-            if ((i + 1) % interval == 0) AddFeatureBreak();
-        }
-        while (featureAt < featured.Count) AddFeatureBreak();   // drain any leftover recs at the tail
-        return new HomeContribution(groups, Priority: 0, Chips: MapChips(homeRoot));
+        return new HomeContribution(groups, Priority: 0, Chips: MapChips(homeRoot), Greeting: Greeting(homeRoot),
+            Sections: sourceSections);
     }
 
-    /// <summary>Projects <c>home.homeChips[]</c> — the Music / Podcasts / Audiobooks facet row, each optionally
-    /// carrying a second level ("Following"). The id is an opaque server token that goes straight back into the
-    /// <c>facet</c> request variable; the label is already localised by the server, so it is never re-translated.
-    /// A chip with no usable id or label is dropped rather than rendered as a dead control.</summary>
+    static void EmitSectionGroups(HomeSection section, List<HomeGroup> groups)
+    {
+        var cards = section.Cards;
+        if (cards.Count == 0)
+        {
+            if (HasIdentity(section)) groups.Add(Group(HomeGroupKind.SectionEntry, section, cards, true));
+            return;
+        }
+
+        int editorial = 0;
+        foreach (var card in cards) if (IsEditorialFormat(card.Meta?.Format)) editorial++;
+        if (editorial * 2 > cards.Count)
+        {
+            groups.Add(Group(HomeGroupKind.Topic, section, cards, true));
+            return;
+        }
+
+        var byKind = new Dictionary<HomeGroupKind, List<HomeCard>>();
+        foreach (var card in cards)
+        {
+            var kind = ModuleFor(card);
+            if (!byKind.TryGetValue(kind, out var list)) byKind.Add(kind, list = []);
+            list.Add(card);
+        }
+
+        HomeGroupKind? dominant = null;
+        foreach (var pair in byKind)
+            if (pair.Value.Count * 2 > cards.Count) { dominant = pair.Key; break; }
+
+        bool moduleOwnsTitle = dominant is not null && section.Title is { Length: > 0 };
+        if (dominant is null || !moduleOwnsTitle)
+            groups.Add(Group(HomeGroupKind.SectionEntry, section, cards, true));
+
+        foreach (var pair in byKind)
+            groups.Add(Group(pair.Key, section, pair.Value, moduleOwnsTitle && dominant == pair.Key));
+    }
+
+    static bool IsEditorialFormat(string? format) =>
+        format is "editorial" or "format-shows-shuffle" or "artistsets" or "descripto";
+
+    static bool HasIdentity(HomeSection section) =>
+        section.Uri is { Length: > 0 } || section.Title is { Length: > 0 };
+
+    static HomeGroup Group(HomeGroupKind kind, HomeSection section, IReadOnlyList<HomeCard> cards, bool ownsTitle) =>
+        new(kind, ownsTitle ? section.Title : null, cards,
+            ownsTitle ? section.Subtitle : null, section.Uri, section.TotalCount);
+
+    static HomeSection Section(string? uri, string? title, string? subtitle, int totalCount, MappedCards mapped) =>
+        new(uri, title, subtitle, mapped.Cards, totalCount > 0 ? totalCount : mapped.Cards.Count,
+            mapped.Raw, mapped.Unsupported, mapped.Duplicates);
+
+    /// <summary>The server greeting is already localized for the account. Empty means the source has no greeting.</summary>
+    static string Greeting(JsonElement homeRoot) =>
+        Str(homeRoot, "greeting", "transformedLabel")
+        ?? Str(homeRoot, "greeting", "translatedBaseText")
+        ?? "";
+
+    static HomeGroupKind ModuleFor(HomeCard card) => card.Kind switch
+    {
+        HomeCardKind.Episode => HomeGroupKind.QueueList,
+        HomeCardKind.Audiobook => HomeGroupKind.RatedShelf,
+        HomeCardKind.Podcast => HomeGroupKind.PodcastShelf,
+        HomeCardKind.Playlist => ModuleForFormat(card.Meta?.Format),
+        _ => HomeGroupKind.QuickGrid,
+    };
+
+    static HomeGroupKind ModuleForFormat(string? format) => format switch
+    {
+        "daylist" => HomeGroupKind.Hero,
+        "daily-mix" => HomeGroupKind.MixBand,
+        "discover-weekly" or "release-radar" => HomeGroupKind.WeeklyPair,
+        "topic-mix" or "artist-mix-reader" => HomeGroupKind.ChipCards,
+        "inspiredby-mix" => HomeGroupKind.RadioDial,
+        "editorial" or "format-shows-shuffle" or "artistsets" or "descripto" => HomeGroupKind.Featured,
+        _ => HomeGroupKind.QuickGrid,
+    };
+
     static IReadOnlyList<HomeChip>? MapChips(JsonElement homeRoot)
     {
         var items = SpotifyExportMapper.Dig(homeRoot, "homeChips");
         if (items.ValueKind != JsonValueKind.Array || items.GetArrayLength() == 0) return null;
 
         var chips = new List<HomeChip>(items.GetArrayLength());
-        foreach (var c in items.EnumerateArray())
-        {
-            if (MapChip(c) is { } chip) chips.Add(chip);
-        }
+        foreach (var item in items.EnumerateArray())
+            if (MapChip(item) is { } chip) chips.Add(chip);
         return chips.Count > 0 ? chips : null;
     }
 
-    static HomeChip? MapChip(JsonElement c)
+    static HomeChip? MapChip(JsonElement item)
     {
-        var id = SpotifyExportMapper.Str(c, "id");
-        // transformedLabel is the display form; translatedBaseText is the untransformed source. Prefer the former.
-        var label = SpotifyExportMapper.Str(c, "label", "transformedLabel")
-                    ?? SpotifyExportMapper.Str(c, "label", "translatedBaseText");
+        var id = SpotifyExportMapper.Str(item, "id");
+        var label = SpotifyExportMapper.Str(item, "label", "transformedLabel")
+                    ?? SpotifyExportMapper.Str(item, "label", "translatedBaseText");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(label)) return null;
 
-        var subs = SpotifyExportMapper.Dig(c, "subChips");
+        var rawChildren = SpotifyExportMapper.Dig(item, "subChips");
         List<HomeChip>? children = null;
-        if (subs.ValueKind == JsonValueKind.Array)
-            foreach (var s in subs.EnumerateArray())
-                if (MapChip(s) is { } sub) (children ??= new List<HomeChip>(2)).Add(sub);
+        if (rawChildren.ValueKind == JsonValueKind.Array)
+            foreach (var rawChild in rawChildren.EnumerateArray())
+                if (MapChip(rawChild) is { } child) (children ??= new List<HomeChip>(2)).Add(child);
 
-        return new HomeChip(id!, label!, (IReadOnlyList<HomeChip>?)children ?? System.Array.Empty<HomeChip>());
+        return new HomeChip(id, label, (IReadOnlyList<HomeChip>?)children ?? Array.Empty<HomeChip>());
     }
 
-    // Route on Spotify's stable canonical template, never the localized/transformed display label. Unknown templates
-    // stay conventional so a server-side copy experiment cannot unexpectedly turn an arbitrary shelf editorial.
-    static HomeGroupKind GenericKind(string? translatedBaseText)
+    readonly record struct MappedCards(List<HomeCard> Cards, int Raw, int Unsupported, int Duplicates);
+
+    static MappedCards Cards(JsonElement items)
     {
-        string key = translatedBaseText?.Trim() ?? "";
-        if (key.Equals("Made For {0}", StringComparison.OrdinalIgnoreCase)) return HomeGroupKind.Compact;
-        if (key.Equals("Jump back in", StringComparison.OrdinalIgnoreCase)) return HomeGroupKind.Featured;
-        return HomeGroupKind.Shelf;
+        var cards = new List<HomeCard>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int raw = 0, unsupported = 0, duplicates = 0;
+        if (items.ValueKind == JsonValueKind.Array)
+            foreach (var item in items.EnumerateArray())
+            {
+                raw++;
+                if (SpotifyExportMapper.CardFromEntity(SpotifyExportMapper.Dig(item, "content", "data")) is not { } card)
+                {
+                    unsupported++;
+                    continue;
+                }
+                if (!seen.Add(card.Uri)) { duplicates++; continue; }
+                cards.Add(card);
+            }
+        return new MappedCards(cards, raw, unsupported, duplicates);
     }
 
-    static string? Str(JsonElement e, params string[] path)
+    static MappedCards RecentCards(JsonElement listData)
     {
-        var x = SpotifyExportMapper.Dig(e, path);
-        return x.ValueKind == JsonValueKind.String ? x.GetString() : null;
+        var rawItems = SpotifyExportMapper.Dig(listData, "items", "items");
+        int raw = RawCount(rawItems);
+        // Map without deduplication so this ledger, not the mapper, can distinguish unsupported items from duplicates.
+        var mapped = SpotifyExportMapper.RecentCardsFromListData(listData, raw, deduplicate: false);
+        var cards = new List<HomeCard>(mapped.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        int duplicates = 0;
+        foreach (var card in mapped)
+        {
+            if (!seen.Add(card.Uri)) { duplicates++; continue; }
+            cards.Add(card);
+        }
+        return new MappedCards(cards, raw, Math.Max(0, raw - mapped.Count), duplicates);
     }
 
-    // The content.data of the first section item (the recently-played `List` for HomeRecentlyPlayedSectionData).
+    static int RawCount(JsonElement items) => items.ValueKind == JsonValueKind.Array ? items.GetArrayLength() : 0;
+
     static JsonElement FirstContentData(JsonElement items) =>
         items.ValueKind == JsonValueKind.Array && items.GetArrayLength() > 0
             ? SpotifyExportMapper.Dig(items[0], "content", "data")
             : default;
 
-    static HomeCard? FirstCard(JsonElement items) =>
-        items.ValueKind == JsonValueKind.Array && items.GetArrayLength() > 0
-            ? SpotifyExportMapper.CardFromEntity(SpotifyExportMapper.Dig(items[0], "content", "data"))
-            : null;
-
-    static List<HomeCard> Cards(JsonElement items, int max)
+    static int IntAt(JsonElement element, params string[] path)
     {
-        var list = new List<HomeCard>();
-        if (items.ValueKind == JsonValueKind.Array)
-            foreach (var it in items.EnumerateArray())
-            {
-                if (list.Count >= max) break;
-                if (SpotifyExportMapper.CardFromEntity(SpotifyExportMapper.Dig(it, "content", "data")) is { } c) list.Add(c);
-            }
-        return list;
+        var value = SpotifyExportMapper.Dig(element, path);
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int result) ? result : 0;
+    }
+
+    static string? Str(JsonElement element, params string[] path)
+    {
+        var value = SpotifyExportMapper.Dig(element, path);
+        return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 }

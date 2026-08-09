@@ -669,11 +669,16 @@ public sealed class AppHost : IDisposable
     private void SubmitPresentOnRenderThread(Threading.RenderFrame rf)
     {
         Threading.ThreadGuard.AssertRender();
-        // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
-        // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
-        if (_imageQueue is { } q) _device.DrainImageJobs(q);
         try
         {
+            // Step 1 (async): stage uploads / free evictions on the render thread, BEFORE the submit opens its command list —
+            // so a texture is resident before the draw that references it, and the store stays single-toucher (no lock).
+            // INSIDE the try (deliberately): the staging path touches the device exactly like submit/present does, so a
+            // device-removed failure there must land in the SAME recovery gate below. It used to sit one line outside,
+            // which is how "Image.CreateUpload failed: 0x887A0005" left the fgpu-render thread as an unobserved
+            // background exception and killed the process. The backend also soft-fails staging now (it rejects instead
+            // of throwing) — this is the belt to that suspenders.
+            if (_imageQueue is { } q) _device.DrainImageJobs(q);
             if (rf.SuppressVsync) { _device.SuppressVsyncOnce(); _device.SuppressLatencyWaitOnce(); }
             else if (rf.InteractivePresent) _device.SuppressVsyncOnce();
             _device.SubmitDrawList(_renderSeam.Bytes(rf), _renderSeam.SortKeys(rf), in rf.Submit, _swapchain);
@@ -3098,7 +3103,21 @@ public sealed class AppHost : IDisposable
             // 7.5 apply finished decodes + evict. The bisection arm skips ONLY the apply, and ONLY while scrolling —
             // Tick still runs, so cross-fades and eviction bookkeeping stay live and the arm changes one variable.
             if (s_bisectNoImagePump && scrollActive) _bisectPumpsSuppressed++;
-            else _images.Pump();
+            else
+            {
+                // The SYNC/inline analogue of the render-thread drain guard (SubmitPresentOnRenderThread): Pump's pixel
+                // sink is `_device.TryUploadImage`, a device touch that fails with DXGI_ERROR_DEVICE_REMOVED in exactly
+                // the same window as submit/present — and phase 7.5 sits OUTSIDE the submit try below, so the throw used
+                // to escape Paint entirely. Route it into the SAME foreground recovery gate; a genuine (non-device-loss)
+                // decoder/upload bug still propagates. The backend soft-fails staging first, so this is the net, not the
+                // normal path (media-pipeline.md §4.1).
+                try { _images.Pump(); }
+                catch (Exception ex)
+                {
+                    if (!TryRecoverForegroundDeviceLost(ex, clicks)) throw;
+                    return LastStats;
+                }
+            }
             _images.Tick(dtMs);
             long tImagePump = Stopwatch.GetTimestamp();
             if (s_allocDiag) { db = Probe(SegImages, db, dt0); dt0 = Stopwatch.GetTimestamp(); }
@@ -4290,13 +4309,25 @@ public sealed class AppHost : IDisposable
         // A detached child's swapchain is presented by the PARENT's render thread, so its resize must park THAT thread too —
         // OwningRenderThread resolves to _renderThread (primary) or _parentRenderThread (child). Force-sync + single-thread
         // take the else (the render thread is idle-parked between publishes, never mid-present concurrently with a resize).
+        //
+        // Resize runs out of the WndProc, and every step of D3D12Swapchain.Resize (the fenced WaitForGpu signal,
+        // ResizeBuffers, the GetBuffer per RTV) Checks its HRESULT and throws on a removed device — an unhandled throw
+        // inside a window message. Consult NoteIfDeviceLost: a recorded loss means SKIP the resize (RecoverDevice
+        // rebuilds the swapchain wholesale, and one stale-size frame until the recovery frame lands is invisible next to
+        // a crash); anything else is a genuine bug and rethrows. The exception FILTER runs before the finally, so the
+        // render loop is still Resumed on both outcomes.
         if (OwningRenderThread is { } rt && _asyncActive)
         {
             rt.Quiesce();
             try { _swapchain.Resize(s); }
+            catch (Exception) when (_device.NoteIfDeviceLost()) { }
             finally { rt.Resume(); }
         }
-        else _swapchain.Resize(s);
+        else
+        {
+            try { _swapchain.Resize(s); }
+            catch (Exception) when (_device.NoteIfDeviceLost()) { }
+        }
         _needFullLayout = true;
         return true;
     }

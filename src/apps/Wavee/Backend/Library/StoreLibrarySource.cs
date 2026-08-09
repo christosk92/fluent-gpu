@@ -50,7 +50,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public Wavee.Backend.Sync.LibrarySync? Sync { get; set; }
 
     /// <summary>Set by the live bootstrap: the editorial/personalized Pathfinder home groups, inserted after the pinned
-    /// quick-pick matrix and above the store-derived library shelves. Null offline → only the library-derived home.</summary>
+    /// quick-pick matrix. Null offline leaves the store-derived quick picks.</summary>
     public Func<CancellationToken, Task<LiveHomeResult>>? LiveHomeFetch { get; set; }
 
     /// <summary>The most recent non-empty <c>homeChips</c> set. A faceted home response does not reliably repeat the
@@ -376,13 +376,68 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
             TracksTotal: tracks.Count);
     }
 
-    // Offline, cache-only full-text library search (the library page's left search box). Scans the RESIDENT store only —
-    // never the network — so it stays instant; ranked+grouped by LibrarySearchIndex. Off the UI thread (Store reads are
-    // lock-safe); an empty store / empty query → Empty.
+    // Offline, cache-only full-text library search (the library page's left search box). Never touches the network, so it
+    // stays instant; ranked+grouped by LibrarySearchIndex. Off the UI thread (Store reads are lock-safe); an empty store /
+    // empty query → Empty.
+    //
+    // `ct` is now REAL, not just a start gate. `Task.Run(work, ct)` only refuses to START a cancelled work item; once the
+    // walk was running, a superseded keystroke used to run to completion holding the cold store's read lock. The token is
+    // threaded into LibrarySearchIndex.Run, which checks it at the top of both walks.
     public Task<LibrarySearchResults> SearchLibraryAsync(string query, LibrarySearchScope scope, CancellationToken ct = default)
         => query.Trim().Length == 0
             ? Task.FromResult(LibrarySearchResults.Empty)
-            : Task.Run(() => LibrarySearchIndex.Run(_store, scope, query), ct);
+            : Task.Run(() => RunLibrarySearch(query, scope, ct), ct);
+
+    LibrarySearchResults RunLibrarySearch(string query, LibrarySearchScope scope, CancellationToken ct)
+    {
+        var corpus = CorpusFor(scope);
+        // The search HYDRATES its survivors, and on a CachedStore each promotion into the hot tier raises a StoreChange
+        // on THIS thread — which would otherwise invalidate the very corpus we are searching, once per keystroke, for
+        // ever. The suppression is thread-scoped and covers only the walk, so a genuine concurrent write (the sync loop,
+        // a user save — always another thread) still invalidates normally.
+        bool prev = s_searchHydrating;
+        s_searchHydrating = true;
+        try { return LibrarySearchIndex.Run(_store, scope, query, corpus, ct); }
+        finally { s_searchHydrating = prev; }
+    }
+
+    // ── the per-scope search corpus cache ────────────────────────────────────────────────────────────────────────────
+    // Typing one query used to stream the WHOLE cold candidate corpus (up to three set-based statements, each holding the
+    // cold store's read lock for its duration) once per character. The corpus is a pure function of (scope, library
+    // state), so it is cached on this long-lived source and reused across keystrokes.
+    //
+    // WHAT INVALIDATES IT:
+    //   • any StoreChange this source already observes (OnStoreChange — the same seam that drives CollectionsChanged):
+    //     a saved-set add/remove, a membership adoption, a metadata upsert, and the single coalesced Bulk signal that a
+    //     sync / the CachedStore warm pass ends with. That is deliberately coarser than "the corpus actually moved" —
+    //     a stale corpus would hide a just-saved artist, and rebuilding is three statements.
+    //   • a 30 s TTL, the conservative backstop for anything that mutates the cold tier WITHOUT a hot-tier change signal
+    //     (the write-behind lane landing a row, the cache GC, another process).
+    // EXCEPT the search's own hydration — see RunLibrarySearch.
+    const long CorpusTtlMs = 30_000;
+    sealed record CorpusEntry(int Gen, long Stamp, LibrarySearchCorpus Corpus);
+    CorpusEntry? _corpusArtists;
+    CorpusEntry? _corpusAlbums;
+    int _corpusGen;
+    [ThreadStatic] static bool s_searchHydrating;
+
+    LibrarySearchCorpus CorpusFor(LibrarySearchScope scope)
+    {
+        bool artists = scope == LibrarySearchScope.Artists;
+        // Read the generation BEFORE the load: a mutation that lands while we are streaming stamps the entry stale, so
+        // the NEXT search rebuilds rather than serving a corpus that raced the write.
+        int gen = Volatile.Read(ref _corpusGen);
+        long now = Environment.TickCount64;
+        var cached = artists ? Volatile.Read(ref _corpusArtists) : Volatile.Read(ref _corpusAlbums);
+        if (cached is not null && cached.Gen == gen && now - cached.Stamp < CorpusTtlMs) return cached.Corpus;
+
+        var built = LibrarySearchCorpus.Load(_store as Wavee.Backend.Persistence.ILibraryCandidateStore, scope);
+        var entry = new CorpusEntry(gen, now, built);
+        // A plain reference swap of an IMMUTABLE snapshot: two threadpool searches may both build, and the loser's work
+        // is simply discarded — never a torn or half-indexed corpus.
+        if (artists) Volatile.Write(ref _corpusArtists, entry); else Volatile.Write(ref _corpusAlbums, entry);
+        return built;
+    }
 
     public async Task<IReadOnlyList<string>> SuggestAsync(string query, CancellationToken ct = default)
     {
@@ -410,14 +465,17 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         catch { return SearchSuggestions.Empty; }
     }
 
-    // A home built from the SYNCED library (no Spotify home-feed API needed): a pinned jump-back-in quick grid (Liked +
-    // first playlists), then live editorial modules and "Your playlists" / "Your albums" / "Your artists" shelves.
-    // Empty only on a truly empty store.
+    // A home built from the synced library without appending a second library tail: pinned jump-back-in quick picks
+    // (Liked + first playlists), followed by the live section-owned modules. Empty only on a truly empty store.
+    //
+    // DEGRADED sessions are the exception. When there is no live fetch at all (offline / tests) or the fetch failed or
+    // came back with nothing, the live tail is empty and Home would collapse to at most nine quick-pick tiles. The
+    // synced library is still resident, so the three shelves it can always build — "Your playlists" / "Your albums" /
+    // "Your artists" — are re-emitted as the FALLBACK. They are never appended when live modules landed: that second
+    // library tail is exactly what the section-owned Home replaced.
     public async Task<HomeContribution> GetHomeAsync(CancellationToken ct = default)
     {
         var playlists = await GetPlaylistsAsync(ct).ConfigureAwait(false);
-        var albums = await GetAlbumsAsync(ct).ConfigureAwait(false);
-        var artists = await GetArtistsAsync(ct).ConfigureAwait(false);
         int likedCount = _store.SavedUris("liked").Count;
 
         var groups = new List<HomeGroup>();
@@ -428,49 +486,90 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
                 Strings.Detail.SongCount(likedCount), null, HomeCardKind.Liked));
         for (int i = 0; i < playlists.Count && quick.Count < 9; i++)
             quick.Add(new HomeCard(playlists[i].Uri, playlists[i].Name, null, playlists[i].Cover, HomeCardKind.Playlist, playlists[i].MosaicTiles));
-        if (quick.Count > 0)
-            groups.Add(new HomeGroup(HomeGroupKind.QuickGrid, null, quick));
 
-        // The personal quick matrix is the stable first home module. Pathfinder editorial/personalized groups follow
-        // it, still above the larger library-derived shelves.
+        // The personal quick matrix is the stable first Home module. Pathfinder editorial/personalized groups follow.
         IReadOnlyList<HomeChip>? chips = null;
+        string greeting = "";
+        IReadOnlyList<HomeSection>? liveSections = null;
+        var liveGroups = new List<HomeGroup>();
         if (LiveHomeFetch is { } liveFetch)
         {
             try
             {
                 var live = await liveFetch(ct).ConfigureAwait(false);
-                groups.AddRange(live.Groups);
+                liveGroups.AddRange(live.Groups);
                 // Pin the last non-empty set. A FACETED home response does not always repeat homeChips, and taking it
                 // verbatim meant selecting a facet could drop the row that produced the selection: the chips vanished,
                 // the greeting collapsed back to a bare hero, and the feed stayed filtered with no way to see or undo
                 // it. The chip set is a near-static piece of account chrome, so the previous one is always a better
                 // answer than none. A response that DOES carry chips still replaces it wholesale.
                 chips = live.Chips is { Count: > 0 } fresh ? _lastHomeChips = fresh : _lastHomeChips;
+                greeting = live.Greeting;
+                liveSections = live.Sections;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch { /* editorial home is best-effort — the library-derived shelves below still render */ }
+            catch (Exception ex)
+            {
+                // Editorial Home is best-effort, but never SILENT: swallowed, this is indistinguishable from an account
+                // the server has no modules for, and the only visible symptom is a Home that quietly lost its shelves.
+                WaveeLog.Instance.Warn("library", "home.live.failed",
+                    "live home fetch failed; falling back to the library shelves: " + ex.Message);
+            }
         }
 
+        if (quick.Count > 0)
+            groups.Add(new HomeGroup(HomeGroupKind.QuickGrid, Loc.Get(Strings.Home.JumpBackIn), quick));
+        groups.AddRange(liveGroups);
+
+        // The degraded-session fallback (see the note on this method). Albums/artists are joined lazily — a healthy live
+        // session never pays for two library reads it will not use.
+        if (liveGroups.Count == 0)
+            await AddLibraryShelvesAsync(groups, playlists, ct).ConfigureAwait(false);
+
+        return new HomeContribution(groups, Priority: 100, Chips: chips, Greeting: greeting, Sections: liveSections);
+    }
+
+    // The offline/failed-session library tail. Kinded Shelf — the deliberate "conventional shelf" fallback of
+    // HomeGroupKind — and titled from the SAME three loc keys the shelves have always used, so a degraded Home keeps
+    // its identity (and its drill pages) rather than rendering nine tiles and nothing else.
+    async Task AddLibraryShelvesAsync(List<HomeGroup> groups, IReadOnlyList<PlaylistSummary> playlists, CancellationToken ct)
+    {
         if (playlists.Count > 0)
         {
             var cards = new List<HomeCard>(playlists.Count);
-            foreach (var p in playlists) cards.Add(new HomeCard(p.Uri, p.Name, p.OwnerName, p.Cover, HomeCardKind.Playlist, p.MosaicTiles));
-            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourPlaylists), cards));
+            for (int i = 0; i < playlists.Count; i++)
+            {
+                var p = playlists[i];
+                cards.Add(new HomeCard(p.Uri, p.Name, p.OwnerName, p.Cover, HomeCardKind.Playlist, p.MosaicTiles));
+            }
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourPlaylists), cards, TotalCount: cards.Count));
         }
+
+        var albums = await GetAlbumsAsync(ct).ConfigureAwait(false);
         if (albums.Count > 0)
         {
             var cards = new List<HomeCard>(albums.Count);
-            foreach (var a in albums) cards.Add(new HomeCard(a.Uri, a.Name, "Album", a.Cover, HomeCardKind.Album));
-            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourAlbums), cards));
+            string subtitle = Loc.Get(Strings.Detail.Column.Album);
+            for (int i = 0; i < albums.Count; i++)
+            {
+                var a = albums[i];
+                cards.Add(new HomeCard(a.Uri, a.Name, subtitle, a.Cover, HomeCardKind.Album));
+            }
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourAlbums), cards, TotalCount: cards.Count));
         }
+
+        var artists = await GetArtistsAsync(ct).ConfigureAwait(false);
         if (artists.Count > 0)
         {
             var cards = new List<HomeCard>(artists.Count);
-            foreach (var a in artists) cards.Add(new HomeCard(a.Uri, a.Name, "Artist", a.Image, HomeCardKind.Artist));
-            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourArtists), cards));
+            string subtitle = Loc.Get(Strings.Detail.Column.Artist);
+            for (int i = 0; i < artists.Count; i++)
+            {
+                var a = artists[i];
+                cards.Add(new HomeCard(a.Uri, a.Name, subtitle, a.Image, HomeCardKind.Artist));
+            }
+            groups.Add(new HomeGroup(HomeGroupKind.Shelf, Loc.Get(Strings.Home.YourArtists), cards, TotalCount: cards.Count));
         }
-
-        return new HomeContribution(groups, Priority: 100, Chips: chips);
     }
 
     public Task<LibraryStats> GetStatsAsync(CancellationToken ct = default)
@@ -659,6 +758,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     // ── change fan-out → CollectionsChanged ──
     void OnStoreChange(StoreChange c)
     {
+        // Stamp the search corpus stale (see CorpusFor). Suppressed while THIS thread is inside a library search: the
+        // walk's own hot-tier promotions come back through here and must not invalidate the corpus they are reading.
+        if (!s_searchHydrating) Interlocked.Increment(ref _corpusGen);
         if (c.IsBulk) { foreach (var k in AllKinds) _collections.OnNext(k); return; }
         if (c.Kind is { } explicitKind) { _collections.OnNext(explicitKind); return; }
         if (KindOfUri(c.Uri) is { } kind) _collections.OnNext(kind);

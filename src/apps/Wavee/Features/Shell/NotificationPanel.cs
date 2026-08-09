@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using FluentGpu.Controls;
@@ -13,57 +13,10 @@ using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// ── The toolbar bell → notification center ────────────────────────────────────────────────────────────────────────────
-// Replaces the dead BellButton: an unread badge over the bell, opening an anchored flyout (ProfileMenu / NavHistoryButton
-// pattern) with the four-category notification panel. Reads NotificationCenterBridge for the reactive snapshot + badge.
-sealed class NotificationBell : Component
-{
-    public override Element Render()
-    {
-        var nc = UseContext(NotificationCenterBridge.Slot);
-        var overlay = UseContext(Overlay.Service);
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-
-        int unread = nc?.UnreadCount.Value ?? 0;   // subscribe → badge tracks the count
-
-        void Open()
-        {
-            if (nc is null) return;
-            if (handle.Value is { IsOpen: true } h) { h.Close(); return; }
-            handle.Value = overlay.Open(
-                () => anchor.Value,
-                () => Embed.Comp(() => new NotificationPanel(() => handle.Value?.Close())),
-                FlyoutPlacement.BottomEdgeAlignedRight,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
-                {
-                    ConstrainToRootBounds = false,
-                });
-            handle.Value.ClosedAction = () => handle.Value = null;
-            nc.OnPanelOpened();
-        }
-
-        var button = IconButton.Create(Icons.Bell, Open, ShellToolbar.NavStyle) with { OnRealized = h => anchor.Value = h };
-        if (unread <= 0) return button;
-
-        return new BoxEl
-        {
-            ZStack = true, Width = 36f, Height = 32f,
-            Children =
-            [
-                button,
-                // full-size overlay so the unread pill floats at the top-right of the button (the original shape)
-                new BoxEl
-                {
-                    Width = 36f, Height = 32f, Direction = 1, Justify = FlexJustify.Start, HitTestVisible = false,
-                    Children = [ new BoxEl { Direction = 0, Justify = FlexJustify.End, Children = [ InfoBadge.Count(unread) ] } ],
-                },
-            ],
-        };
-    }
-}
-
-// ── The panel content (flyout body) ──────────────────────────────────────────────────────────────────────────────────
+// ── The notification center's panel ───────────────────────────────────────────────────────────────────────────────────
+// There is no standalone bell any more. The unread badge rides the PROFILE CHIP's avatar and a "Notifications" row in
+// the profile flyout opens this panel anchored to that chip (ProfileMenu.OpenNotifications, which marks unread-seen via
+// NotificationCenterBridge.OnPanelOpened exactly as the bell did). This component is the body it shows.
 sealed class NotificationPanel : Component
 {
     const float Width = 380f;
@@ -425,7 +378,7 @@ sealed class NotificationPanel : Component
             kids.Add(new TextEl(Strings.Notifications.Activity.Detail.RenamedFrom(oldName, newName)) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
         if (p?.Tracks is { Count: > 0 } tracks)
         {
-            kids.Add(new TextEl(Loc.Get(Strings.Notifications.Activity.Detail.Tracks)) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 30f });
+            kids.Add(WaveeType.Eyebrow(Loc.Get(Strings.Notifications.Activity.Detail.Tracks)) with { Color = Tok.TextTertiary });
             int shown = 0;
             foreach (var t in tracks)
             {
@@ -505,13 +458,13 @@ sealed class NotificationPanel : Component
     static Element StatusChip(string label, ColorF tint) => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(7f, 1f, 7f, 1f), Corners = CornerRadius4.All(8f), Fill = Tok.FillSubtleSecondary,
-        Children = [ new TextEl(label) { Size = 10f, Weight = 700, Color = tint, CharSpacing = 20f } ],
+        Children = [ WaveeType.Eyebrow(label) with { Color = tint } ],
     };
 
     static Element TypePill(string type) => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(9f, 2f, 9f, 2f), Corners = CornerRadius4.All(10f), Fill = Tok.FillSubtleSecondary,
-        Children = [ new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f } ],
+        Children = [ WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary } ],
     };
 
     static Element PillButton(string label, Action onClick, bool accent) => new BoxEl

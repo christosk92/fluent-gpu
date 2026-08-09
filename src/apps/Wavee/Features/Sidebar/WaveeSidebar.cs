@@ -78,6 +78,10 @@ sealed class WaveeSidebar : Component
             // Classic has no library-only search head (its Playlists section is a tree, not an EntityList).
             SearchHead = false,
             OnCreatePlaylist = CreatePlaylist,
+            // O3 — the customizable shortcut band, at its new render site. Set IDENTICALLY by all three modes: it is the
+            // app's navigation band (one global list on the layout document), not a Classic affordance.
+            NavBand = () => SidebarNavBand.Head(_prefs, _route, _go),
+            RailHead = () => SidebarNavBand.RailHead(_prefs, _route, _go),
             // The rail's create-playlist affordance. A rail plan is tiles-from-sections and cannot express authored
             // chrome, so Classic's landed 40-DIP "+" tile is appended by the pane instead of planned.
             RailFooter = () => Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, SidebarRailItem.Box, 16f)),

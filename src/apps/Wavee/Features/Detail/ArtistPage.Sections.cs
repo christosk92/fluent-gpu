@@ -15,18 +15,24 @@ sealed partial class ArtistPage : Component
     // (same visual with Tok.AccentDefault) so the home accent bands and these stay one definition.
     internal BoxEl AccentHeader(string title) => Surfaces.AccentHeader(title, _accent);
 
+    // Same ornament as the shared header (Surfaces.AccentRule): the 3 × 22 r1.5 accent capsule that used to lead this
+    // row was the SELECTION-indicator geometry doing decoration — see the accent-budget rules on WaveeAccent — so the
+    // mark moved under the text and the count keeps its place beside the title.
     internal BoxEl AccentHeader(string title, int count) => new BoxEl
     {
-        Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
+        Direction = 1, Gap = 2f, MinWidth = 0f,
         Children =
         [
             new BoxEl
             {
-                Width = 3f, MinHeight = 22f, AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(1.5f), Fill = _accent,
+                Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, MinWidth = 0f,
+                Children =
+                [
+                    WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    BodyStrong(count.ToString()) with { Color = Tok.TextTertiary },
+                ],
             },
-            WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            new TextEl(count.ToString()) { Size = 15f, Weight = 600, Color = Tok.TextTertiary },
+            Surfaces.AccentRule(_accent),
         ],
     };
 

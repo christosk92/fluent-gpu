@@ -700,6 +700,23 @@ exact field the playback clock writes. No new opcode (no `DrawLyricsRun`); no Te
 - **DComp Commit/Present-stall:** video keeps presenting on the compositor thread independent of our loop
   (the §8 win); our only cost is a hole-punch clear + a `Place` poke.
 
+**The upload/staging path SOFT-FAILS during a device-removed window — it never throws past the render-thread
+seam.** Every resource touch in staging (the upload-buffer create, the bucket/atlas texture create on cold pool
+growth, and the `Map` of the staging buffer) fails with `DXGI_ERROR_DEVICE_REMOVED` for the whole window between
+the device dying and `RecoverDevice` rebuilding it — and under async these run **on the render thread**, inside
+the image drain that precedes the frame's submit (`threading-render-seam.md` §9). A throw there is an unobserved
+background exception: process death, not a dropped frame. So the contract is: a failed create/map returns
+*nothing* (a null resource), the caller releases whatever it partially acquired and answers with the ordinary
+transient rejection (`ImageUploadResult.ResourceExhausted` → `ImageFailureKind.GpuResourceExhausted`), and the
+drain then calls `NoteIfDeviceLost()` once so the recovery gate arms even when no `Present` follows soon (a
+minimized or idle window can drain image jobs for many turns without presenting, and the whole recovery hangs
+off that one recorded reason). The drain call site itself sits INSIDE the render seam's device-lost `try` — the
+belt to that suspenders — and the synchronous/inline pump is wrapped in the same foreground recovery gate the
+submit/present path uses. Because those entries land `Failed`-exhausted rather than `Ready`,
+`ImageCache.ReRealizeAllResident()` re-requests that failure kind too, not just resident images: the rebuilt
+device has a fresh, empty texture store, so "the GPU could not admit it" is by construction no longer true, and
+a *pinned* exhausted entry would otherwise never retry on its own. Gated headlessly by VerticalSlice DL5/DL6.
+
 ---
 
 ## 11. Build order — single-thread-correct first, then flip (per `hardened-v1-plan.md` §6)

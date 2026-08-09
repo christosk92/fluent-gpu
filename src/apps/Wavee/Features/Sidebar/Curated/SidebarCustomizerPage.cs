@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -248,13 +248,13 @@ sealed class SidebarCustomizerPage : Component
                 Children =
                 [
                     // THE EYEBROW (R3.2 item 1): the ACTIVE template, which is the one piece of context the title cannot
-                    // carry — "Customize sidebar" is true of every document, "WAVEE CURATED" says which one this is.
+                    // carry — "Customize sidebar" is true of every document, "Wavee curated" says which one this is.
+                    // AccentDecor: accent as content colour on a localized template NAME (never caps-transformed).
                     wide
-                        ? new TextEl(Loc.Get(SidebarTemplates.NameLocKey(
-                              prefs?.Layout.TemplateId ?? SidebarTemplates.Curated)).ToUpperInvariant())
+                        ? WaveeType.Eyebrow(Loc.Get(SidebarTemplates.NameLocKey(
+                              prefs?.Layout.TemplateId ?? SidebarTemplates.Curated))) with
                         {
-                            Size = 10f, Weight = 600, Color = Tok.AccentTextPrimary, CharSpacing = 60f,
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                            Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         }
                         : new BoxEl { Height = 0f },
                     new TextEl(Loc.Get(CzLoc.Title))
@@ -468,9 +468,9 @@ sealed class SidebarCustomizerPage : Component
         {
             Key = "body:" + (int)tier, Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
             Gap = RegionGap,
-            // NO page-level Fill: the wash under these cards is the shell's own content-pane plate (WaveeColors.FileArea),
-            // and painting a second translucent layer over it double-composites — the documented regression at
-            // WaveeShell.cs's "rung 2". The Settings page paints no background either; its cards float on the same plate.
+            // NO page-level Fill: the surface under these cards is the shell's own content pane
+            // (WaveeColors.ContentSurface), and painting a second layer over it just repaints the same rung. The
+            // Settings page paints no background either; its cards float on the same surface.
             Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
             Children = [.. kids],
         };
@@ -618,7 +618,7 @@ sealed class SidebarCustomizerPage : Component
     /// than staying quiet, so they stay silent and are recorded in the wave's HANDOFF.</summary>
     static string? RejectLocKey(SidebarRejectReason reason, bool topBar) => reason switch
     {
-        SidebarRejectReason.SectionCapReached when topBar => TopBarLoc.CapReached,
+        SidebarRejectReason.SectionCapReached when topBar => SidebarNavBandLoc.CapReached,
         SidebarRejectReason.DuplicateItem when topBar => CzLoc.TopBarDuplicate,
         SidebarRejectReason.InvalidIcon when topBar => CzLoc.TopBarInvalidIcon,
         SidebarRejectReason.UnknownItem when topBar => CzLoc.TopBarUnknownItem,

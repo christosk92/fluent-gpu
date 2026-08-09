@@ -11,6 +11,21 @@ public interface IArtistStatsService
     Task<Artist?> EnsureStatsAsync(string artistUri, CancellationToken ct = default);
 }
 
+/// <summary>The one freshness predicate shared by the stats service and warm UI seeds.</summary>
+public static class ArtistStatsCache
+{
+    public static readonly TimeSpan Ttl = TimeSpan.FromHours(12);
+
+    public static bool IsFresh(Artist? artist, DateTimeOffset now)
+    {
+        bool hasReleaseFacets = artist?.LatestRelease is not null || artist?.PopularReleases is { Count: > 0 };
+        return artist is not null && artist.TopTracks is { Count: > 0 } && hasReleaseFacets
+            && now - artist.FetchedAt <= Ttl;
+    }
+
+    public static bool IsFresh(Artist? artist) => IsFresh(artist, DateTimeOffset.UtcNow);
+}
+
 /// <summary>A stable service identity whose live provider can be installed after login without rebuilding the UI tree.</summary>
 public sealed class SwitchableArtistStatsService : IArtistStatsService
 {

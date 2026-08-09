@@ -1,0 +1,230 @@
+using System;
+using System.Collections.Generic;
+using Wavee.Core;
+
+namespace Wavee;
+
+/// <summary>One app-authored Home module plus the source section that can satisfy a server-side "Show all". The
+/// module is a landing-page projection only: the source ledger remains untouched and owns drill-in/accounting.</summary>
+internal sealed record HomeLandingModule(HomeGroup Group, HomeSection? PrimarySection);
+
+/// <summary>The finite prototype rhythm projected from a lossless <see cref="HomeFeed"/>. Each visual kind has at most
+/// one landing module; every identified source section remains separately available in <see cref="Sections"/>.</summary>
+internal sealed class HomeLanding
+{
+    readonly HomeLandingModule?[] _modules = new HomeLandingModule?[Enum.GetValues<HomeGroupKind>().Length];
+
+    public IReadOnlyList<HomeSection> Sections { get; }
+
+    public HomeLanding(IReadOnlyList<HomeSection> sections) => Sections = sections;
+
+    public HomeLandingModule? Get(HomeGroupKind kind) => _modules[(int)kind];
+    internal void Set(HomeGroupKind kind, HomeLandingModule module) => _modules[(int)kind] = module;
+}
+
+/// <summary>Pure, engine-free Home landing projection. Source groups are concatenated in feed order and de-duplicated
+/// by card URI only for the landing preview; <see cref="HomeFeed.Sections"/> is never rewritten or de-duplicated by
+/// card, so the same recommendation can still occur for two different server reasons on their drill pages.
+/// <para>Two rules this file owns, both landing-only (the feed keeps its kinds, order and titles either way): a module
+/// whose authored shape cannot be satisfied is SUPPRESSED but never eats its cards — the half-pair falls through to the
+/// shapeless grid; and the shapeless grid wears a server section's label when exactly one such label feeds it.</para></summary>
+internal static class HomeLandingProjection
+{
+    static readonly HomeGroupKind[] AggregatedKinds =
+    [
+        HomeGroupKind.QuickGrid, HomeGroupKind.Recents, HomeGroupKind.MixBand,
+        HomeGroupKind.ChipCards, HomeGroupKind.RadioDial, HomeGroupKind.QueueList,
+        HomeGroupKind.RatedShelf, HomeGroupKind.PodcastShelf, HomeGroupKind.Featured,
+        HomeGroupKind.DiscoverFeed,
+    ];
+
+    public static HomeLanding Project(HomeFeed feed, HomeModuleTitles titles)
+    {
+        var landing = new HomeLanding(SectionDirectory(feed));
+
+        var heroes = Groups(feed, HomeGroupKind.Hero);
+        if (heroes.Count > 0)
+        {
+            var hero = heroes[0];
+            landing.Set(HomeGroupKind.Hero, new HomeLandingModule(hero, PrimarySection(feed, [hero])));
+        }
+
+        var weekly = Groups(feed, HomeGroupKind.WeeklyPair);
+        var (pair, loneWeekly) = WeeklyPair(weekly);
+        if (pair is not null)
+            landing.Set(HomeGroupKind.WeeklyPair,
+                new HomeLandingModule(pair, PrimarySection(feed, weekly)));
+
+        for (int i = 0; i < AggregatedKinds.Length; i++)
+        {
+            var kind = AggregatedKinds[i];
+            var source = Groups(feed, kind);
+            // A suppressed two-up hands its one card to the shapeless grid rather than dropping it (see WeeklyPair).
+            var lone = kind == HomeGroupKind.QuickGrid ? loneWeekly : null;
+            if (source.Count == 0 && lone is null) continue;
+            var cards = UniqueCards(source);
+            // FIRST, not appended: the grid renders only its first HomeModuleLayout.QuickShown cards before "Show all",
+            // so appending would re-hide the very card this fallback exists to save.
+            if (lone is not null && !Holds(cards, lone.Uri)) cards.Insert(0, lone);
+            if (cards.Count == 0) continue;
+            int total = cards.Count;
+            for (int g = 0; g < source.Count; g++) total = Math.Max(total, source[g].TotalCount);
+            var group = new HomeGroup(kind, Title(kind, source, titles), cards,
+                TotalCount: total);
+            landing.Set(kind, new HomeLandingModule(group, PrimarySection(feed, source)));
+        }
+
+        return landing;
+    }
+
+    static List<HomeGroup> Groups(HomeFeed feed, HomeGroupKind kind)
+    {
+        var result = new List<HomeGroup>(3);
+        for (int i = 0; i < feed.Groups.Count; i++)
+            if (feed.Groups[i].Kind == kind && feed.Groups[i].Cards.Count > 0)
+                result.Add(feed.Groups[i]);
+        return result;
+    }
+
+    static List<HomeCard> UniqueCards(IReadOnlyList<HomeGroup> groups)
+    {
+        var cards = new List<HomeCard>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int g = 0; g < groups.Count; g++)
+            for (int c = 0; c < groups[g].Cards.Count; c++)
+            {
+                var card = groups[g].Cards[c];
+                if (seen.Add(card.Uri)) cards.Add(card);
+            }
+        return cards;
+    }
+
+    /// <summary>The two-up module (both appointments present) or, failing that, the ONE appointment that does exist.</summary>
+    static (HomeGroup? Pair, HomeCard? Lone) WeeklyPair(IReadOnlyList<HomeGroup> groups)
+    {
+        HomeCard? discover = null, release = null;
+        for (int g = 0; g < groups.Count; g++)
+            for (int c = 0; c < groups[g].Cards.Count; c++)
+            {
+                var card = groups[g].Cards[c];
+                switch (card.Meta?.Format)
+                {
+                    case "discover-weekly" when discover is null: discover = card; break;
+                    case "release-radar" when release is null: release = card; break;
+                }
+            }
+        // The prototype is a standing APPOINTMENT PAIR, so a singleton still gets NO two-up: half of an authored 1fr 1fr
+        // row is a hole, not a module. Suppressing the module must not delete the CARD, though — the composer routes both
+        // formats EXCLUSIVELY to WeeklyPair, and a young account routinely has Discover Weekly weeks before its first
+        // Release Radar, so the card would otherwise reach no landing module at all. It falls through to the shapeless
+        // quick grid (where a card whose format named no module lands anyway); the feed's own WeeklyPair group, its kind
+        // and its ordinal are untouched, and its source page stays in the section directory.
+        if (discover is not null && release is not null)
+            return (new HomeGroup(HomeGroupKind.WeeklyPair, null, [discover, release], TotalCount: 2), null);
+        return (null, discover ?? release);
+    }
+
+    static bool Holds(List<HomeCard> cards, string uri)
+    {
+        for (int i = 0; i < cards.Count; i++)
+            if (string.Equals(cards[i].Uri, uri, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    static string? Title(HomeGroupKind kind, IReadOnlyList<HomeGroup> source, HomeModuleTitles titles) => kind switch
+    {
+        // The grid is the SHAPELESS bucket: a card lands here precisely because nothing in its content named a module,
+        // so the server's own section label is the only honest explanation of the row — and the composer gives a
+        // generic section's title to exactly this group when the grid is its dominant module. Every other aggregate
+        // names a SHAPE the app can label ("Radio", "Podcasts"); this one cannot. So when one label, and only one,
+        // feeds the grid, wear it verbatim (never matched, never re-translated); a grid fed by two differently
+        // labelled sections — or by the app's own library quick picks alongside a server section — can honestly wear
+        // neither and falls back to the app's copy.
+        HomeGroupKind.QuickGrid => SoleTitle(source) ?? titles.JumpBackIn,
+        HomeGroupKind.Recents => titles.Recents,
+        // The server commonly personalizes this one ("Made For Christos"); retain that localized label when present.
+        HomeGroupKind.MixBand => FirstTitle(source) ?? titles.MadeForYou,
+        HomeGroupKind.ChipCards => titles.TopMixes,
+        HomeGroupKind.RadioDial => titles.Radio,
+        HomeGroupKind.QueueList => titles.UpNext,
+        HomeGroupKind.RatedShelf => titles.Audiobooks,
+        HomeGroupKind.PodcastShelf => titles.Podcasts,
+        HomeGroupKind.Featured => titles.EditorsPicks,
+        HomeGroupKind.DiscoverFeed => titles.BecauseYouListened,
+        _ => FirstTitle(source),
+    };
+
+    /// <summary>The one label carried by the contributing groups, or null when they carry none — or disagree. Blank
+    /// copy is not a label: the skeleton seed titles its groups with a placeholder space, and a module must fall back to
+    /// its real header there so the shimmer is derived from the silhouette the loaded page actually has.</summary>
+    static string? SoleTitle(IReadOnlyList<HomeGroup> groups)
+    {
+        string? only = null;
+        for (int i = 0; i < groups.Count; i++)
+        {
+            var title = groups[i].Title;
+            if (string.IsNullOrWhiteSpace(title)) continue;
+            if (only is null) only = title;
+            else if (!string.Equals(only, title, StringComparison.Ordinal)) return null;
+        }
+        return only;
+    }
+
+    static string? FirstTitle(IReadOnlyList<HomeGroup> groups)
+    {
+        for (int i = 0; i < groups.Count; i++)
+            if (groups[i].Title is { Length: > 0 } title) return title;
+        return null;
+    }
+
+    static HomeSection? PrimarySection(HomeFeed feed, IReadOnlyList<HomeGroup> groups)
+    {
+        HomeSection? best = null;
+        int bestTotal = -1;
+        if (feed.Sections is { } sections)
+            for (int g = 0; g < groups.Count; g++)
+            {
+                var group = groups[g];
+                if (group.Uri is not { Length: > 0 } uri) continue;
+                for (int s = 0; s < sections.Count; s++)
+                    if (string.Equals(sections[s].Uri, uri, StringComparison.Ordinal)
+                        && sections[s].TotalCount > bestTotal)
+                    {
+                        best = sections[s];
+                        bestTotal = sections[s].TotalCount;
+                    }
+            }
+        return best;
+    }
+
+    static IReadOnlyList<HomeSection> SectionDirectory(HomeFeed feed)
+    {
+        var result = new List<HomeSection>();
+        var uris = new HashSet<string>(StringComparer.Ordinal);
+        if (feed.Sections is { Count: > 0 } sections)
+        {
+            for (int i = 0; i < sections.Count; i++)
+            {
+                var section = sections[i];
+                if (!HasIdentity(section)) continue;
+                if (section.Uri is { Length: > 0 } uri && !uris.Add(uri)) continue;
+                result.Add(section);
+            }
+            return result;
+        }
+
+        // Non-composer/fake sources may omit the optional ledger. Preserve their identified groups as local drill pages.
+        for (int i = 0; i < feed.Groups.Count; i++)
+        {
+            var group = feed.Groups[i];
+            if (group.Title is not { Length: > 0 } && group.Uri is not { Length: > 0 }) continue;
+            if (group.Uri is { Length: > 0 } uri && !uris.Add(uri)) continue;
+            result.Add(new HomeSection(group.Uri, group.Title, group.Subtitle, group.Cards,
+                Math.Max(group.TotalCount, group.Cards.Count), group.Cards.Count));
+        }
+        return result;
+    }
+
+    static bool HasIdentity(HomeSection section) =>
+        section.Uri is { Length: > 0 } || section.Title is { Length: > 0 };
+}

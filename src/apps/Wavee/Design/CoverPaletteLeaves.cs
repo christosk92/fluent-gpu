@@ -37,9 +37,9 @@ static class CoverPaletteLeaves
         => Embed.Comp(new CoverKeyedVeil.Props(url, axis, width, height),
                       () => new CoverKeyedVeil()) with { Key = key };
 
-    /// <summary>Publishes the page-scoped Mica tint when THIS cover is graded — no page re-render.</summary>
+    /// <summary>Publishes the page-scoped shell material tint when THIS cover is graded — no page re-render.</summary>
     public static Element ShellTint(string? url, bool ready, bool disabled, bool apply, object owner,
-                                    Signal<ShellTintState>? slot, string key, string? fallbackUrl = null)
+                                    Signal<ShellMaterialState>? slot, string key, string? fallbackUrl = null)
         => Embed.Comp(new CoverShellTintBinder.Props(url, fallbackUrl, ready, disabled, apply, owner, slot),
                       () => new CoverShellTintBinder()) with { Key = key };
 
@@ -131,12 +131,13 @@ sealed class CoverKeyedVeil : Component
     }
 }
 
-/// <summary>Shell Mica tint publisher. Watches one cover; writes <see cref="ShellTint"/> without the page Render
-/// subscribing to that Watch.</summary>
+/// <summary>Shell material tint publisher. Watches one cover; writes <see cref="ShellMaterialState"/> without the page
+/// Render subscribing to that Watch. Flat arm only (<c>Wash: null</c>) — detail/artist pages never publish the radial
+/// three-layer wash, which belongs to Home.</summary>
 sealed class CoverShellTintBinder : Component
 {
     internal sealed record Props(string? Url, string? FallbackUrl, bool Ready, bool Disabled, bool Apply, object Owner,
-                                 Signal<ShellTintState>? Slot);
+                                 Signal<ShellMaterialState>? Slot);
 
     public override Element Render()
     {
@@ -146,23 +147,25 @@ sealed class CoverShellTintBinder : Component
             _ = SpotifyLive.CoverColorPlane.Current.Watch(fb).Value;
         var coverArt = p.Ready ? Surfaces.SchemeFor(p.Url) : null;
         var artPalette = coverArt ?? (p.Ready ? Surfaces.SchemeFor(p.FallbackUrl) : null);
-        ColorF? micaTint = p.Disabled || !p.Apply || artPalette is not { } artScheme ? null
+        // A low-alpha art tone published over the shell's deterministic opaque ground (not a backdrop scrim): it warms
+        // the ground, never replaces it. Null ⇒ the bare ground.
+        ColorF? shellTint = p.Disabled || !p.Apply || artPalette is not { } artScheme ? null
             : Tok.Theme == ThemeKind.Light
                 ? WaveePalette.Lift(WaveePalette.ToColor(artScheme.TextBase)) with { A = 0.05f }
                 : WaveePalette.TintedDark(artScheme) with { A = 0.14f };
 
         void SetTint(ColorF? color)
         {
-            if (p.Slot is not null) p.Slot.Value = new ShellTintState(color, p.Owner);
+            if (p.Slot is not null) p.Slot.Value = new ShellMaterialState(p.Owner, color, null);
         }
         void ClearTint()
         {
             if (p.Slot is not null && ReferenceEquals(p.Slot.Peek().Owner, p.Owner)) p.Slot.Value = default;
         }
 
-        UseEffect(() => SetTint(micaTint),
-            DepKey.From(HashCode.Combine(p.Url, micaTint.HasValue, micaTint.GetValueOrDefault(), Tok.Theme, p.Ready, p.Disabled, p.Apply)));
-        UseActivation(onActivated: () => SetTint(micaTint), onDeactivated: ClearTint);
+        UseEffect(() => SetTint(shellTint),
+            DepKey.From(HashCode.Combine(p.Url, shellTint.HasValue, shellTint.GetValueOrDefault(), Tok.Theme, p.Ready, p.Disabled, p.Apply)));
+        UseActivation(onActivated: () => SetTint(shellTint), onDeactivated: ClearTint);
         UseEffect(() => (Action?)ClearTint, DepKey.Empty);
 
         return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };

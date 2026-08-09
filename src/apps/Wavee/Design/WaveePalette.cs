@@ -9,6 +9,10 @@ namespace Wavee;
 // maps the roles it needs here; nothing carries a per-entity palette any more.
 public static class WaveePalette
 {
+    const float HairlineSaturationCeiling = 0.50f;
+    const float HairlineContrast = 3.25f;
+    const float HairlineHoverContrast = 3.55f;
+
     public static ColorF ToColor(uint argb)
     {
         byte a = (byte)(argb >> 24), r = (byte)(argb >> 16), g = (byte)(argb >> 8), b = (byte)argb;
@@ -46,6 +50,45 @@ public static class WaveePalette
         var (h, s, v) = c.ToHsv();
         if (s <= NeutralS) return c;
         return ColorF.FromHsv(h, MathF.Max(s, minS), MathF.Max(v, targetMax / 255f), c.A);
+    }
+
+    /// <summary>A quiet identity hairline solved against the actual card surface. Saturation is capped, then value is
+    /// binary-solved to a 3.25:1 contrast ratio in the theme-appropriate direction. This is deliberately separate from
+    /// <see cref="Lift"/>/<see cref="Vivid"/>: chrome fills want brightness and chroma; a 2-DIP rule does not.</summary>
+    public static ColorF Hairline(ColorF seed)
+        => Hairline(seed, Tok.Theme,
+            ColorContrast.Flatten(Tok.FillCardDefault, WaveeColors.FloatingPane), HairlineContrast);
+
+    /// <summary>The hovered card's slightly stronger identity cue; 3.55:1 remains below the 4.5:1 text threshold.</summary>
+    public static ColorF HairlineHover(ColorF seed)
+        => Hairline(seed, Tok.Theme,
+            ColorContrast.Flatten(Tok.FillCardSecondary, WaveeColors.FloatingPane), HairlineHoverContrast);
+
+    /// <summary>Pure overload used by contrast tests for both themes without mutating global theme state.</summary>
+    public static ColorF Hairline(ColorF seed, ThemeKind theme, ColorF cardBackground, float targetContrast = HairlineContrast)
+    {
+        var (h, s, _) = seed.ToHsv();
+        s = MathF.Min(s, HairlineSaturationCeiling);
+
+        // Contrast is monotonic along V for a fixed hue/saturation. Dark cards search from black to white and retain
+        // the lighter solution; light cards search the same interval and retain the darker solution.
+        float lo = 0f, hi = 1f;
+        for (int i = 0; i < 22; i++)
+        {
+            float mid = (lo + hi) * 0.5f;
+            float ratio = ColorContrast.Ratio(ColorF.FromHsv(h, s, mid, seed.A), cardBackground);
+            if (theme == ThemeKind.Dark)
+            {
+                if (ratio < targetContrast) lo = mid; else hi = mid;
+            }
+            else
+            {
+                // On a light card, contrast falls as V rises.
+                if (ratio < targetContrast) hi = mid; else lo = mid;
+            }
+        }
+        float v = theme == ThemeKind.Dark ? hi : lo;
+        return ColorF.FromHsv(h, s, v, seed.A);
     }
 
     /// <summary>THE page's chrome accent — the one derivation every accent-filled control on a media surface uses: the
@@ -98,8 +141,9 @@ public static class WaveePalette
     public static ColorF BackgroundDark(in CoverColorPlane.Scheme s) => ToColor(s.BackgroundBase);
     public static ColorF TintedDark(in CoverColorPlane.Scheme s) => ToColor(s.BackgroundTintedBase);
 
-    /// <summary>Neutral card fill under <see cref="Surfaces.HeroWash"/> — same as the shell content card on detail pages.</summary>
-    public static ColorF HeroBase(CoverColorPlane.Scheme? art) => WaveeColors.FileArea;
+    /// <summary>Neutral card fill under <see cref="Surfaces.HeroWash"/> — same as the shell content card on detail pages
+    /// (now the OPAQUE content surface, so the hero base no longer depends on what shows through it).</summary>
+    public static ColorF HeroBase(CoverColorPlane.Scheme? art) => WaveeColors.ContentSurface;
 
     /// <summary>Hero-wash accent — same derivation as <c>DetailShell</c> (lifted accent in light, the dominant tone in dark).</summary>
     public static ColorF HeroWashColor(CoverColorPlane.Scheme? art) =>

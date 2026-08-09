@@ -100,19 +100,19 @@ sealed partial class ArtistPage : Component
         // RouteForUri routes both; the literal fallback keeps a uri it cannot classify on the album route rather than
         // on the generic "Coming soon" stub, which is where a bare spotify: uri lands.
         string route = RichText.RouteForUri(p.Uri) ?? ("album:" + p.Uri);
-        // "Upcoming" keeps the sibling eyebrow's sentence case ("Latest release"); the release TYPE is upper-cased
-        // because that is how every other type token in this column reads (KindLabel → "ALBUM", the strip chips'
-        // "2026 · SINGLE"). Absent type → the bare word, never a dangling separator.
+        // Sentence case throughout, including the release TYPE: the sibling tokens it used to match ("ALBUM" out of
+        // KindLabel) are LOCALIZED strings, and upper-casing those is the exact defect the eyebrow role gave up.
+        // Absent type → the bare word, never a dangling separator.
         string eyebrow = p.Type is { Length: > 0 } type
-            ? Loc.Get(Strings.Artist.Upcoming) + " · " + type.ToUpperInvariant()
+            ? Loc.Get(Strings.Artist.Upcoming) + " · " + type
             : Loc.Get(Strings.Artist.Upcoming);
         // Announced-but-undated is a real state on the wire — then the card announces without promising a day.
         string meta = p.ReleaseAt is { } dated ? Strings.Detail.ReleasesOn(DetailFormat.ShortDate(dated)) : "";
 
         return new BoxEl
         {
-            Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center,
-            Padding = Edges4.All(10f), Corners = CornerRadius4.All(Radii.Card),
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = Edges4.All(Spacing.M), Corners = CornerRadius4.All(Radii.Card),
             // A FULL card, on the bare page surface: this is a discrete promoted object (one announced record) — exactly
             // what a Fluent card is FOR — and the announcement is this page's one piece of news, so it earns the chrome.
             // The stroke is safe because nothing encloses it any more; there is no second hairline to double up with.
@@ -133,21 +133,19 @@ sealed partial class ArtistPage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
-                        new TextEl(eyebrow)
+                        // The eyebrow alias (12/16/600 + the one tracking). Title is BodyStrong (14/20/600), the app's
+                        // card-title rung.
+                        WaveeType.Eyebrow(eyebrow) with { Color = Tok.TextTertiary, MaxLines = 1 },
+                        Ui.BodyStrong(p.Name) with
                         {
-                            Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
-                        },
-                        new TextEl(p.Name)
-                        {
-                            Size = 15f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                            MinWidth = 0f,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                         meta.Length > 0
-                            ? new TextEl(meta) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+                            ? Ui.Caption(meta) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
                             : new BoxEl(),
                         new BoxEl
                         {
-                            Direction = 0, Gap = Spacing.S, Margin = new Edges4(0f, 6f, 0f, 0f),
+                            Direction = 0, Gap = Spacing.S, Margin = new Edges4(0f, Spacing.S, 0f, 0f),
                             Children =
                             [
                                 // NO Play button, and there must never be one: a prerelease uri must never reach
@@ -184,7 +182,8 @@ sealed partial class ArtistPage : Component
     // Instance (not static) so it can reach the page's `_acts` for its drag payload — the same reason CardMenu is.
     Element LatestReleaseBanner(Album al, Action<string, string?> go, Action<string> play, Func<ColorF> accent)
     {
-        var metaParts = new List<string>(3) { KindLabel(al.Kind).ToUpperInvariant() };
+        // KindLabel is LOCALIZED ("Album" / "Single" / "Compilation") — never caps-transformed.
+        var metaParts = new List<string>(3) { KindLabel(al.Kind) };
         string date = ReleaseDateLabel(al);
         if (date.Length > 0) metaParts.Add(date);
         if (al.TrackCount > 0) metaParts.Add(Strings.Artist.TrackCount(al.TrackCount));
@@ -209,14 +208,13 @@ sealed partial class ArtistPage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
-                        new TextEl(eyebrow)
+                        // The eyebrow over a Subtitle (20/28/600) headline — this is the page's one "news" banner, so
+                        // it takes the shelf-header rung rather than an off-ramp 17. Eyebrow 16 + gap 4 + subtitle
+                        // 28 = 48, comfortably inside the 72-DIP cover beside it.
+                        WaveeType.Eyebrow(eyebrow) with { Color = Tok.TextTertiary, MaxLines = 1 },
+                        Ui.Subtitle(al.Name) with
                         {
-                            Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
-                        },
-                        new TextEl(al.Name)
-                        {
-                            Size = 17f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1,
-                            Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
                     ],
                 },

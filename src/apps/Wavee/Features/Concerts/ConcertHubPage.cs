@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
@@ -98,7 +98,6 @@ sealed class ConcertHubPage : Component
                 place is null
                     ? Loc.Get(Strings.Concerts.EmptyWithoutLocation)
                     : Loc.Get(Strings.Concerts.EmptyForLocation),
-                Icons.MapPin,
                 actionLabel: place is null ? Loc.Get(Strings.Concerts.Location.Set) : null,
                 onAction: place is null ? () => _location.TogglePicker(() => _anchor.Value) : null),
             group: "concert-hub");
@@ -126,7 +125,8 @@ sealed class ConcertHubPage : Component
         var content = new BoxEl
         {
             Direction = 1, Gap = Spacing.L,
-            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
+            // The standard desktop page frame: PageWide (36) gutters, the 24 top every other page takes.
+            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.PageWide),
             Children = kids.ToArray(),
         };
         var scroll = ScrollView(content) with
@@ -152,16 +152,16 @@ sealed class ConcertHubPage : Component
     {
         return new BoxEl
         {
-            Direction = 1, MinWidth = 0f, Gap = 4f,
+            Direction = 1, MinWidth = 0f, Gap = Spacing.XS,
             Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
             Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardDefault,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, Shadow = Elevation.Card,
+            // Stroke OR shadow, never both statically: the hairline is the separation model for a docked surface.
+            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
-                Caption(Upper(Loc.Get(Strings.Concerts.LiveMusic))) with
+                WaveeType.Eyebrow(Loc.Get(Strings.Concerts.LiveMusic)) with
                 {
-                    Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
-                    Trim = TextTrim.CharacterEllipsis,
+                    Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 },
                 WaveeType.PageHero(Loc.Get(Strings.Concerts.Title)) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 Body(Loc.Get(Strings.Concerts.Subtitle)) with
@@ -205,9 +205,9 @@ sealed class ConcertHubPage : Component
             n,
             cardAt: (i, w) => ConcertUi.VerticalCard(concerts[i],
                 () => go(ConcertRoutes.Detail(concerts[i].Uri), concerts[i].Title ?? concerts[i].Venue)),
-            header: SectionCaption(Upper(section.Kind == ConcertFeedSectionKind.Nearby
+            header: SectionCaption(section.Kind == ConcertFeedSectionKind.Nearby
                 ? Loc.Get(Strings.Concerts.NearYou)
-                : Loc.Get(Strings.Concerts.RecommendedForYou))),
+                : Loc.Get(Strings.Concerts.RecommendedForYou)),
             headerGap: Spacing.S,
             measured: true, keyOf: i => concerts[i].Uri) with { Key = "hub-shelf:" + section.Key };
     }
@@ -235,7 +235,7 @@ sealed class ConcertHubPage : Component
             {
                 Key = "hub-grid:" + section.Key,
                 Direction = 1, Gap = Spacing.S,
-                Children = [ SectionCaption(Upper(Loc.Get(Strings.Concerts.AllEvents))), AutoGrid(GridMinCol, Spacing.M, float.NaN, cards) ],
+                Children = [ SectionCaption(Loc.Get(Strings.Concerts.AllEvents)), AutoGrid(GridMinCol, Spacing.M, float.NaN, cards) ],
             };
         }
 
@@ -248,7 +248,7 @@ sealed class ConcertHubPage : Component
             Direction = 1, Gap = Spacing.S, MinWidth = 0f,
             Children =
             [
-                SectionCaption(Upper(Loc.Get(Strings.Concerts.AllEvents))),
+                SectionCaption(Loc.Get(Strings.Concerts.AllEvents)),
                 Embed.Comp(() => new LazyGrid(
                     count: () => _allEvents.Value.Count,
                     cell: (i, w) => EventCell(i, go),
@@ -275,7 +275,7 @@ sealed class ConcertHubPage : Component
             n,
             cardAt: (i, w) => PlaylistPromoCard(promos[i],
                 () => go("pl:" + promos[i].Uri, promos[i].Name), w, acts),
-            header: SectionCaption(Upper(Loc.Get(Strings.Concerts.PlaylistsForScene))),
+            header: SectionCaption(Loc.Get(Strings.Concerts.PlaylistsForScene)),
             headerGap: Spacing.S,
             measured: true, keyOf: i => promos[i].Uri) with { Key = "hub-promos:" + sectionKey };
     }
@@ -313,12 +313,9 @@ sealed class ConcertHubPage : Component
         };
     }
 
-    static string Upper(string s) => s.ToUpper(CultureInfo.CurrentCulture);
-
-    static Element SectionCaption(string label) => Caption(label) with
+    static Element SectionCaption(string label) => WaveeType.Eyebrow(label) with
     {
-        Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
-        Trim = TextTrim.CharacterEllipsis,
+        Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
     };
 
     // ── query orchestration (generation-guarded) ─────────────────────────────────────────────────────────────────────

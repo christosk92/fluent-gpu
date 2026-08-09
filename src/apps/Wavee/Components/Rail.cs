@@ -53,6 +53,21 @@ sealed class Rail : Component
         var header = new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            // THE HOVER SCOPE for the pager reveal, and it is deliberately the HEADER ROW, not the whole shelf.
+            //
+            // The engine reveals a descendant on its container's hover (AnimScheduler.SetHoverDescendants), but only
+            // for REVEAL affordances — HoverOpacity / Hover-PressScale — and it recurses THROUGH non-interactive
+            // wrappers. Putting the scope on the rail root (or on the viewport, or on the card strip) would therefore
+            // hand every MediaCard in the strip its container's hover, and every one of them carries a
+            // WaveeMotion HoverScale: hovering ONE card would pop ALL of them. There is no wrapper that fixes it
+            // either — a hover boundary is by definition an interactive node, so it acquires HoverWithin itself and
+            // cascades from there. The header row contains exactly the title, a spacer and these two buttons, and none
+            // of the first two is a reveal, so scoping here reveals the chevrons and nothing else. (This is the same
+            // "scope the hover, don't hoist it" shape as TabStrip's hovered-index signal.)
+            //
+            // The no-op handlers are what make this node interactive so the dispatcher publishes HoverWithin on it.
+            OnHoverMove = static _ => { },
+            OnPointerExit = static () => { },
             Children =
             [
                 WaveeType.RailHeader(_title),
@@ -65,12 +80,33 @@ sealed class Rail : Component
         return new BoxEl { Direction = 1, Gap = Spacing.M, Children = [header, viewport] };
     }
 
+    // A QUIET pager button: borderless, unpainted at rest, revealed on the header's hover, with the subtle fill on its
+    // own hover — WaveeCta's icon-button table row 1 (32 × 32, Radii.Control, 16 glyph).
+    //
+    // It was a filled 32-DIP CIRCLE (Tok.FillControlDefault) painted permanently at each end of every shelf header, a
+    // pair of grey pucks competing with the shelf's own title and cards for attention on a page that stacks many
+    // shelves. Circles are reserved for FABs ON MEDIA (the geometry table's row 3); a pager is chrome on a flat page,
+    // so it takes the square rung, and chrome that is only useful while the pointer is on the shelf shows up then.
+    // A DISABLED end goes to 0 (nothing to page to) rather than dimming a visible puck to 35%.
+    //
+    // The rest opacity is a quiet 0.7, NOT 0. A fully hidden control that is still Focusable is a keyboard trap you
+    // cannot see, and the engine has no focus-driven reveal channel to pair with the hover one — so the affordance
+    // stays present and merely recessive, and the HEADER hover is what brings it to full strength.
     static Element Chevron(string glyph, bool enabled, Action onClick) => new BoxEl
     {
-        Width = 32, Height = 32, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(16f), Fill = Tok.FillControlDefault,
-        HoverFill = enabled ? Tok.FillControlSecondary : Tok.FillControlDefault,
-        Opacity = enabled ? 1f : 0.35f, OnClick = enabled ? onClick : null,
-        Children = [Icon(glyph, 13f, Tok.TextSecondary)],
+        Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = CornerRadius4.All(Radii.Control),
+        Fill = Tok.FillSubtleTransparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        Opacity = enabled ? RestOpacity : 0f, HoverOpacity = enabled ? 1f : 0f,
+        HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+        HoverScale = WaveeMotion.ScaleStandard.HoverIf(enabled), PressScale = WaveeMotion.ScaleStandard.PressIf(enabled),
+        Role = AutomationRole.Button, Focusable = enabled, AllowFocusOnInteraction = false,
+        Cursor = enabled ? CursorId.Hand : (CursorId?)null,
+        OnClick = enabled ? onClick : null,
+        Children = [Icon(glyph, RailChevronGlyph, Tok.TextSecondary)],
     };
+
+    const float RailChevronGlyph = 16f;
+    const float RestOpacity = 0.7f;
 }

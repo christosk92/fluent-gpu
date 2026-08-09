@@ -562,15 +562,43 @@ public static class FakeData
     // Representative PENDING seeds for the skeleton-loading boundary: Skel.Region renders content(seed) and DERIVES the
     // shimmer from it, so these give the home/search resources a real-shaped (blank) value to lay out WHILE loading — the
     // page itself says nothing about skeletons. Content is blank; the deriver turns each title/cover into a shimmer bar.
+    //
+    // This MUST track the composer's module order and counts (SpotifyHomeComposer.Compose): the shimmer IS this tree, so
+    // a seed that disagrees with the loaded layout turns the reveal into a jump-cut. It only needs to cover the rows a
+    // cold viewport can actually show — the tail realizes after content has landed and never shimmers.
+    // Cards carry a null Meta on purpose, except the hero: that is the case every ordinary module renderer must survive,
+    // while HeroBlank supplies the title/tags/meta/action lanes that determine the hero's actual minimum height.
     public static readonly HomeFeed HomeSeed = new("", new HomeGroup[]
     {
-        new(HomeGroupKind.QuickGrid, null, BlankCards("quick", 9, HomeCardKind.Playlist)),
-        new(HomeGroupKind.Shelf, " ", BlankCards("shelf-a", 6, HomeCardKind.Album)),
-        new(HomeGroupKind.Compact, " ", BlankCards("compact", 4, HomeCardKind.Playlist)),
-        new(HomeGroupKind.Featured, " ", BlankCards("featured", 3, HomeCardKind.Playlist)),
-        new(HomeGroupKind.Shelf, " ", BlankCards("shelf-b", 6, HomeCardKind.Artist)),
-    });
+        // One entry per module kind the composer can emit, at the count the module SHOWS. Counts and order are
+        // load-bearing: they are the silhouette from which the Home shimmer is derived.
+        new(HomeGroupKind.Hero, " ", [HeroBlank()], Uri: "wavee:skeleton:section:hero", TotalCount: 1),
+        new(HomeGroupKind.WeeklyPair, null, WeeklyBlanks()),
+        new(HomeGroupKind.QuickGrid, " ", BlankCards("quick", 8, HomeCardKind.Playlist)),
+        new(HomeGroupKind.Recents, " ", BlankCards("recents", 8, HomeCardKind.Album)),
+        new(HomeGroupKind.MixBand, " ", BlankCards("mix", 6, HomeCardKind.Playlist)),
+        new(HomeGroupKind.ChipCards, " ", BlankCards("chips", 6, HomeCardKind.Playlist)),
+        new(HomeGroupKind.RadioDial, " ", BlankCards("radio", 12, HomeCardKind.Playlist)),
+        new(HomeGroupKind.QueueList, " ", BlankCards("queue", 6, HomeCardKind.Episode)),
+        new(HomeGroupKind.RatedShelf, " ", BlankCards("books", 6, HomeCardKind.Audiobook)),
+        new(HomeGroupKind.Featured, " ", BlankCards("featured", 4, HomeCardKind.Playlist)),
+        new(HomeGroupKind.PodcastShelf, " ", BlankCards("podcasts", 6, HomeCardKind.Podcast), Uri: "wavee:skeleton:section:podcasts", TotalCount: 6),
+        new(HomeGroupKind.Topic, " ", BlankCards("topic", 7, HomeCardKind.Playlist), Uri: "wavee:skeleton:section:topic", TotalCount: 20),
+        new(HomeGroupKind.SectionEntry, " ", BlankCards("section", 7, HomeCardKind.Playlist), Uri: "wavee:skeleton:section:mixed", TotalCount: 20),
+        new(HomeGroupKind.DiscoverFeed, " ", BlankCards("discover", 12, HomeCardKind.Playlist)),
+    }, Sections:
+    [
+        new("wavee:skeleton:section:topic", " ", " ", BlankCards("topic-section", 7, HomeCardKind.Playlist), 20, 7),
+        new("wavee:skeleton:section:mixed", " ", null, BlankCards("mixed-section", 7, HomeCardKind.Playlist), 20, 7),
+        new("wavee:skeleton:section:podcasts", " ", null, BlankCards("podcast-section", 6, HomeCardKind.Podcast), 6, 6),
+    ]);
     public static readonly SearchResults SearchSeed = Search("skeleton");
+
+    static HomeCard HeroBlank() => new(
+        "wavee:skeleton:hero:0", "Afternoon focus rotation", "A representative hero description", null,
+        HomeCardKind.Playlist,
+        Meta: new HomeCardMeta(Format: "daylist", TrackCount: 50,
+            Seeds: ["focus", "indie", "chill"], OwnerName: "Wavee"));
 
     static HomeCard[] BlankCards(string group, int n, HomeCardKind kind)
     {
@@ -578,4 +606,12 @@ public static class FakeData
         for (int i = 0; i < n; i++) cards[i] = new HomeCard("wavee:skeleton:" + group + ":" + i, "", "", null, kind);
         return cards;
     }
+
+    static HomeCard[] WeeklyBlanks() =>
+    [
+        new("wavee:skeleton:weekly:discover", "", "", null, HomeCardKind.Playlist,
+            Meta: new HomeCardMeta(Format: "discover-weekly")),
+        new("wavee:skeleton:weekly:radar", "", "", null, HomeCardKind.Playlist,
+            Meta: new HomeCardMeta(Format: "release-radar")),
+    ];
 }

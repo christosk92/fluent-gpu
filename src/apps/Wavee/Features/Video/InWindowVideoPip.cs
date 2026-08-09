@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -56,7 +56,7 @@ sealed class InWindowVideoPip : Component
     const float CloseSize = 24f;                     // the ✕ hit target inside the strip
     const float EdgeBand = 6f;                       // the four thin edge resize bands
     const float CornerW = 14f, CornerH = 12f;        // the four corner resize zones (also the strip's side inset)
-    const float ChromeFadeMs = 150f;                 // hover-reveal / hide of the chrome
+    const float ChromeFadeMs = WaveeMotion.Fast;     // hover-reveal / hide of the chrome
 
     // Entrance / exit (the compact-overlay pop). Channels = Opacity ONLY — deliberately NOT a layout transition, so the
     // node is never marked BoundsAnimated and a live drag/resize is never FLIP-chased; the TERMINALS carry the scale.

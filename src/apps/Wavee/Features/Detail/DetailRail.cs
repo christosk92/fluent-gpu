@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -39,7 +39,7 @@ static class DetailRail
     // The side rail: the cover STRETCHES to fill the column width (a big hero — the image is NEVER shrunk for height).
     // The height fit comes from the TEXT — titleSize (the shell lowers it on a short rail; auto-fits down to 18px) and
     // the description's line cap (descMaxLines) — and only then the rail's own scrollbar (last resort).
-    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, int descMaxLines, Loadable<DetailModel> modelSource, ActionServices? acts = null)
+    public static Element Build(DetailModel m, DetailConfig cfg, DetailHandlers h, float railW, float titleSize, float titleLineHeight, int descMaxLines, Loadable<DetailModel> modelSource, ActionServices? acts = null)
     {
         float cover = CoverEdge(railW);
         var kids = new List<Element>(10);
@@ -69,14 +69,16 @@ static class DetailRail
             kids.Add(PlaylistOwnerBlock(m, cover, modelSource));
         }
 
-        // Hero title — a heavy run that AUTO-FITS to the cover width in ≤2 LINES, from titleSize down to 18px. The shell
-        // LOWERS titleSize on a SHORT rail so the TEXT gives (never the image). A short name stays big; a long one scales
-        // to a compact 2-line block. Natural line height; ellipsis is the last resort.
+        // Hero title — the page's Title/TitleLarge rung, AUTO-FITTING to the cover width in ≤3 LINES down to 18px. The
+        // shell picks the rung from the window height (Title 28/36 or TitleLarge 40/52) and hands the paired line height
+        // in with it; `float.NaN` here used to mean "whatever the font's natural box is", which is exactly the metric the
+        // ramp exists to pin. Weight is the ramp's 600, not the old 900 — PageHero IS Ui.Title, and a 900 override made
+        // this the only 900 in the app.
         kids.Add(editable
-            ? PlaylistInlineEdit.Title(modelSource, cover, titleSize)
+            ? PlaylistInlineEdit.Title(modelSource, cover, titleSize, lineHeight: titleLineHeight)
             : WaveeType.PageHero(m.Title) with
             {
-                Size = titleSize, MinSize = 18f, Weight = 900, Width = cover, LineHeight = float.NaN,
+                Size = titleSize, MinSize = 18f, Weight = 600, Width = cover, LineHeight = titleLineHeight,
                 Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
             });
 
@@ -226,8 +228,9 @@ static class DetailRail
 
         // Title cross-stretches to the info column's (Grow) width → wraps to it; ≤3 lines avoids truncation.
         info.Add(editable
-            ? PlaylistInlineEdit.Title(modelSource, 600f, 28f)
-            : WaveeType.PageHero(m.Title) with { Size = 28f, Weight = 900, Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
+            // Title (28/36/600) — the same rung and weight as the side rail's hero above. Was a 900 override.
+            ? PlaylistInlineEdit.Title(modelSource, 600f, 28f, lineHeight: 36f)
+            : WaveeType.PageHero(m.Title) with { Size = 28f, LineHeight = 36f, Weight = 600, Wrap = TextWrap.WrapWholeWords, MaxLines = 3, Trim = TextTrim.CharacterEllipsis });
         if (cfg.Badges == BadgeStyle.TypeYear && m.Artists.Count > 0)
             info.Add(Embed.Comp(() => new ArtistFacePile(m, 600f, h)));
         if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
@@ -379,12 +382,12 @@ static class DetailRail
             _ => Loc.Get(Strings.Nav.YourLibrary),
         };
 
-    /// <summary>The eyebrow RUN — small, heavy, tracked-out tertiary metadata on one line. Shared with the vertical
-    /// hero: the type/year fact must look identical in both layouts, so the styling has exactly one definition.</summary>
-    internal static TextEl EyebrowRun(string text) => new(text)
+    /// <summary>The eyebrow RUN — tertiary metadata on one line. Shared with the vertical hero: the type/year fact must
+    /// look identical in both layouts, so the styling has exactly one definition — which is now
+    /// <see cref="WaveeType.Eyebrow"/> plus this role's colour and its one-line clamp.</summary>
+    internal static TextEl EyebrowRun(string text) => WaveeType.Eyebrow(text) with
     {
-        Size = 11f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 40f,
-        MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+        Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
     };
 
     // The WaveeCta media pill on the cover-extracted accent (WaveeCta resolves the WCAG on-fill ink itself).
@@ -395,7 +398,7 @@ static class DetailRail
     {
         Width = FabSize, Height = FabSize, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(FabSize / 2f),
-        HoverScale = 1.06f, PressScale = 0.94f, OnClick = onClick,
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = onClick,
         Children = [Icon(glyph, 16f, Tok.TextSecondary)],
     }.Interactive(Interaction.Subtle);
 

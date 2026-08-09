@@ -91,10 +91,15 @@ static class Program
 
         int frames = -1;
         string? screenshot = null;
+        // --width/--height override the startup client size. They exist for the screenshot loop: a responsive page's
+        // breakpoints can only be verified by capturing AT each width, and the alternative is dragging the window by hand.
+        int winW = 1180, winH = 760;
         for (int i = 0; i < args.Length; i++)
         {
             if (args[i] == "--frames" && i + 1 < args.Length && int.TryParse(args[i + 1], out int f)) frames = f;
             if (args[i] == "--screenshot" && i + 1 < args.Length) screenshot = args[i + 1];
+            if (args[i] == "--width" && i + 1 < args.Length && int.TryParse(args[i + 1], out int ww) && ww >= 300) winW = ww;
+            if (args[i] == "--height" && i + 1 < args.Length && int.TryParse(args[i + 1], out int wh) && wh >= 300) winH = wh;
         }
 
         // Headless backend-engine self-test (no window): exercises the five backend engines and exits 0 (pass) / 1 (fail).
@@ -292,11 +297,11 @@ static class Program
                 AmbientPowerPolicy.Attach(h);
                 return WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             };
-            // customFrame:true → the in-app TitleBar (WaveeShell) draws the Mica-extended caption buttons + drag region.
+            // customFrame:true → the in-app TitleBar (WaveeShell) draws the extended caption buttons + drag region.
             // micaAlt → Mica BaseAlt (the flatter File-Explorer tint, matching WaveeMusic's MicaBackdrop Kind="BaseAlt")
-            // unless the user picked base Mica in Settings ▸ Appearance (WaveeSettings.WindowMaterialBaseMica). This is the
-            // STARTUP seed only; the Settings toggle re-applies the material live on the running window through
-            // FluentApp.SetWindowMaterialAlt, so the two paths agree without an env var.
+            // unless the profile carries base Mica (WaveeSettings.WindowMaterialBaseMica — no longer user-facing). The
+            // DWM material is only VISIBLE under the login screen and the host fallback: the authenticated shell paints
+            // its own opaque deterministic ground edge-to-edge, so nothing behind it reads through.
             // NO AmbientFps here any more (it used to hard-code 60): the pacing of PERPETUAL ambient motion — the
             // seek playhead, now-playing equalizer, skeleton shimmer, buffering spinner, karaoke lyrics wipe — is
             // AmbientPowerPolicy's call, attached above. Explicit ~30 fps always (HalfRefresh is avoided — on a 120 Hz
@@ -311,7 +316,7 @@ static class Program
                     // MinWidth 300 (DIP): the shell is verified sound below 360 — the detail surface is in vertical mode,
                     // the track table is at tier 6 and the hero artwork is at its 64-DIP floor — and 360 DIP was a hard
                     // ~564 physical-px floor at 150% DPI (300 → ~450) that stopped the window fitting a half-screen split.
-                    Title = "Wavee Music", Width = 1180, Height = 760,
+                    Title = "Wavee Music", Width = winW, Height = winH,
                     MinWidth = 300, CustomFrame = true,
                     MicaAlt = !settings.Get(WaveeSettings.WindowMaterialBaseMica),
                 },

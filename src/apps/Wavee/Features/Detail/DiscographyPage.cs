@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentGpu.Animation;
@@ -52,6 +52,21 @@ sealed class DiscographyPage : Component
     readonly Signal<Route> _route;
     public DiscographyPage(Signal<Route> route) { _route = route; }
 
+    // The facet set, in ONE order: the SelectorBar's item order, the index the route maps to, and the labels the
+    // breadcrumb's last crumb shows all read these two arrays.
+    static readonly DiscographyKind[] FacetKinds =
+        [DiscographyKind.Albums, DiscographyKind.Singles, DiscographyKind.Compilations];
+    static readonly string[] FacetLabels =
+        [DiscographyRoute.FacetTitle(DiscographyKind.Albums),
+         DiscographyRoute.FacetTitle(DiscographyKind.Singles),
+         DiscographyRoute.FacetTitle(DiscographyKind.Compilations)];
+
+    static int FacetIndex(DiscographyKind k)
+    {
+        for (int i = 0; i < FacetKinds.Length; i++) if (FacetKinds[i] == k) return i;
+        return 0;
+    }
+
     VirtualCollection<Album>? _vc;
     string _key = "";
     System.Threading.CancellationTokenSource? _cts;   // re-scoped per facet route; cancelled on route change + unmount
@@ -84,69 +99,40 @@ sealed class DiscographyPage : Component
         var pageScroll = UseSignal(0f);
         void Play(string u) => _ = svc.Player.PlayAsync(u, 0);
 
-        var facetItems = new MenuFlyoutItem[]
-        {
-            MenuFlyoutItem.RadioItem("Albums", kind == DiscographyKind.Albums,
-                kind == DiscographyKind.Albums ? null : () => go(DiscographyRoute.Make(DiscographyKind.Albums, uri), artistName)),
-            MenuFlyoutItem.RadioItem("Singles", kind == DiscographyKind.Singles,
-                kind == DiscographyKind.Singles ? null : () => go(DiscographyRoute.Make(DiscographyKind.Singles, uri), artistName)),
-            MenuFlyoutItem.RadioItem("Compilations", kind == DiscographyKind.Compilations,
-                kind == DiscographyKind.Compilations ? null : () => go(DiscographyRoute.Make(DiscographyKind.Compilations, uri), artistName)),
-        };
-        var facetParts = new TemplateParts
-        {
-            [DropDownButton.PartRoot] = b => b with
-            {
-                MinHeight = 42f,
-                Padding = new Edges4(8f, 3f, 8f, 4f),
-                Fill = ColorF.Transparent,
-                HoverFill = Tok.FillSubtleSecondary,
-                PressedFill = Tok.FillSubtleTertiary,
-                BorderWidth = 0f,
-                Corners = CornerRadius4.All(6f),
-                Cursor = CursorId.Hand,
-            },
-        };
-        facetParts.Set<TextEl>(DropDownButton.PartLabel, t => t with
-        {
-            Size = 28f, Weight = 700, Color = Tok.TextPrimary,
-            HoverColor = Tok.TextPrimary, PressedColor = Tok.TextPrimary,
-        });
-        facetParts.Set<BoxEl>(DropDownButton.PartChevron, b => b with
-        {
-            Margin = new Edges4(6f, 0f, 0f, 0f),
-            Opacity = 0f, HoverOpacity = 1f, PressedOpacity = 1f,
-            HoverDurationMs = Motion.ControlFast,
-        });
-        Element facetSelector = Embed.Comp(() => new DropDownButton
-        {
-            Label = DiscographyRoute.FacetTitle(kind),
-            Items = facetItems,
-            Parts = facetParts,
-        }) with { Key = "discography-facet:" + route.Name };
-
-        // Breadcrumb: clickable artist name → back to the artist page, chevron, then the switchable facet title.
+        // THE PAGE HEAD — stock breadcrumb, page title, facet bar. Three shared controls replacing three bespoke ones:
+        // a hand-rolled clickable crumb, a hand-drawn ChevronRight separator, and a DropDownButton skinned up to the
+        // 28-DIP Title rung so it could impersonate the last crumb. HomeSectionPage does exactly this one drill-in from
+        // Home, which is what a drill-in page is supposed to look like in this app.
         Element breadcrumb = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = 10f,
+            Direction = 1, Gap = Spacing.S, MinWidth = 0f,
             Children =
             [
-                new BoxEl
-                {
-                    OnClick = () => go("artist:" + uri, artistName),
-                    Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
-                    Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.XS, Spacing.XS),
-                    Children = [ new TextEl(artistName) { Size = 28f, Weight = 700, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis } ],
-                },
-                Icon(Icons.ChevronRight, 18f, Tok.TextTertiary),
-                facetSelector,
+                BreadcrumbBar.Create(
+                    [artistName, DiscographyRoute.FacetTitle(kind)],
+                    i => { if (i == 0) go("artist:" + uri, artistName); }),
+                WaveeType.PageHero(DiscographyRoute.FacetTitle(kind)) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                // Albums / Singles / Compilations is a SINGLE-SELECT facet set, so it is a SelectorBar — the app's one
+                // facet control (Search, History and Settings already speak it). It used to be three radio items inside
+                // a flyout, which hid two of the three choices behind a click on a control shaped like a page title.
+                // A fresh selection signal per render is the ArtistSchedulePage idiom: props are re-pushed live, and the
+                // route (not the control) is the source of truth for which facet is showing.
+                SelectorBar.Create(FacetLabels, new Signal<int>(FacetIndex(kind)),
+                    onChange: i =>
+                    {
+                        var next = FacetKinds[i];
+                        if (next != kind) go(DiscographyRoute.Make(next, uri), artistName);
+                    }),
             ],
         };
 
         var content = new BoxEl
         {
-            Direction = 1, Gap = Spacing.L,
-            Padding = new Edges4(32f, 40f, 32f, PlayerDock.Reserve + 40f),
+            // W1a-alias: WaveeSize.SectionGap is the shared page-section gap W1a adds to WaveeTokens.cs.
+            Direction = 1, Gap = WaveeSize.SectionGap,
+            // The desktop page gutter (Spacing.PageWide 36) with the standard 24 top — the same frame every other
+            // full page takes. Was a bespoke 32/40.
+            Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.PageWide),
             Children =
             [
                 breadcrumb,

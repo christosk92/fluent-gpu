@@ -155,12 +155,11 @@ sealed class SidebarLivePreview : Component
                     // The bounded card the pane lives in: the preview is a WINDOW onto the pane, so it clips and never
                     // lets the pane's own scroller drive the inspector's height.
                     Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 120f, ClipToBounds = true,
-                    // The well wears the SIDEBAR'S OWN PLATE (round-2 defect 7). The pane paints no background of its own —
-                    // the SHELL does, with `WaveeColors.Sidebar` — so a well filled with a generic card colour let the app
-                    // wash show straight through and the preview never read as a sidebar. `FloatingChrome` is the OPAQUE
-                    // equivalent of that same plate token (flattened over Mica), which is the right one here: this well
-                    // sits on the content pane, not on the window's Mica backdrop, so the translucent form would
-                    // double-composite.
+                    // The well wears the SIDEBAR'S OWN SURFACE (round-2 defect 7). The pane paints no background of its
+                    // own — the SHELL's ground is what shows under it — so a well filled with a generic card colour let
+                    // the app wash show straight through and the preview never read as a sidebar. `FloatingChrome` IS
+                    // that ground as a value, which is the right one here: this well sits on the content pane, one rung
+                    // up, so it must repaint the chrome rung rather than inherit it.
                     Corners = Radii.CardAll, Fill = Prop.Of(() => WaveeColors.FloatingChrome),
                     BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     HitTestVisible = false,

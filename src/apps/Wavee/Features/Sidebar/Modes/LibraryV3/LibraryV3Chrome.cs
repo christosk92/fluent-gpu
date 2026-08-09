@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -136,23 +136,24 @@ sealed class LibraryV3Chrome : Component
         {
             string q = prefs.V3Search.Peek();
             if (q.Length > 24) q = q.Substring(0, 24) + "…";
-            body = EmptyState.Build(Strings.Sidebar.V3.Empty.Search(q),
-                                    Loc.Get(Strings.Sidebar.V3.Empty.SearchSub), Icons.Search,
+            // Compact throughout the sidebar: a 240-DIP rail is exactly what EmptyState.Compact exists for.
+            body = EmptyState.Compact(Strings.Sidebar.V3.Empty.Search(q),
+                                    Loc.Get(Strings.Sidebar.V3.Empty.SearchSub),
                                     Loc.Get(Strings.Sidebar.V3.ClearSearch), () => prefs.V3Search.SetIfChanged(""));
         }
         else if (state.Filter != (int)SidebarV3Filter.All)
         {
             // The qualifier case falls through to here using the FILTER label: the qualifier itself auto-clears (§3.2.4)
             // rather than persisting an invisible filter, so there is no separate empty-by-qualifier state to author.
-            body = EmptyState.Build(Strings.Sidebar.V3.Empty.Filter(LibraryV3Labels.Filter(state.Filter)),
-                                    null, Icons.Filter,
+            body = EmptyState.Compact(Strings.Sidebar.V3.Empty.Filter(LibraryV3Labels.Filter(state.Filter)),
+                                    null,
                                     Loc.Get(Strings.Sidebar.V3.ClearFilter),
                                     () => prefs.SetV3Filter((int)SidebarV3Filter.All));
         }
         else
         {
-            body = EmptyState.Build(Loc.Get(Strings.Sidebar.V3.Empty.Library),
-                                    Loc.Get(Strings.Sidebar.V3.Empty.LibrarySub), Icons.MusicNote,
+            body = EmptyState.Compact(Loc.Get(Strings.Sidebar.V3.Empty.Library),
+                                    Loc.Get(Strings.Sidebar.V3.Empty.LibrarySub),
                                     Loc.Get(Strings.Sidebar.CreatePlaylistTooltip), _session.CreatePlaylist);
         }
 

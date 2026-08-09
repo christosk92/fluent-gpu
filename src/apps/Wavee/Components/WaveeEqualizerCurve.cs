@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using FluentGpu.Controls;
@@ -248,7 +248,7 @@ sealed class WaveeEqualizerCurveCore : Component
                 BorderBrush = enabled ? Tok.ControlElevationBorder : GradientSpec.Solid(Tok.StrokeControlDefault),
                 BorderColor = enabled ? Tok.AccentDefault : Tok.TextDisabled,
                 Shadow = hot ? Elevation.Flyout : null,
-                BrushTransitionMs = 83f,
+                BrushTransitionMs = WaveeMotion.Faster,
             });
         }
     }

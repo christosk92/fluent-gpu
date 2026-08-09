@@ -87,8 +87,8 @@ public sealed class CoverColorPlane
     /// it) every time a scrolling grid finished another batch.</summary>
     public IReadSignal<int> Epoch => _epoch;
 
-    /// <summary>A signal that changes only when THIS image is graded — for page chrome (hero wash, accent bar, Mica
-    /// tint), which depends on one cover rather than on every colour in flight. Read it at page scope and the wash
+    /// <summary>A signal that changes only when THIS image is graded — for page chrome (hero wash, accent bar, the
+    /// shell material tint), which depends on one cover rather than on every colour in flight. Read it at page scope and the wash
     /// lands the moment its own cover resolves, with no coupling to unrelated batches.</summary>
     public IReadSignal<int> Watch(string? url)
     {

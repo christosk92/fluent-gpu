@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -24,13 +24,14 @@ namespace Wavee;
 /// </summary>
 sealed class LibraryV3Search : Component
 {
-    /// <summary>Open/close motion (§3.2.16): the wrapper's width tweens over 180 ms and the icon cross-fades.</summary>
+    /// <summary>Open/close motion (§3.2.16): the wrapper's width tweens over the Fast rung and the icon
+    /// cross-fades (authored 180/100 ms; both legs snapped to the ladder, keeping the enter:exit ratio).</summary>
     static readonly LayoutTransition FieldReveal = new(
-        TransitionChannels.Bounds, TransitionDynamics.Tween(180f, Easing.SmoothOut),
+        TransitionChannels.Bounds, TransitionDynamics.Tween(WaveeMotion.Fast, Easing.SmoothOut),
         Size: SizeMode.Reflow,
         Enter: new EnterExit(Opacity: 0f, Active: true),
         Exit: new EnterExit(Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(100f, Easing.SmoothOut));
+        ExitDynamics: TransitionDynamics.Tween(WaveeMotion.Faster, Easing.SmoothOut));
 
     static readonly string[] NoSuggest = [];
 

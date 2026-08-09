@@ -78,7 +78,7 @@ sealed partial class ArtistPage : Component
     {
         long max = 1;
         foreach (var c in cities) if (c.Listeners > max) max = c.Listeners;
-        var rows = new List<Element>(cities.Count + 1) { new TextEl(Loc.Get(Strings.Artist.ListenedMostIn)) { Size = 13f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 10f } };
+        var rows = new List<Element>(cities.Count + 1) { WaveeType.Eyebrow(Loc.Get(Strings.Artist.ListenedMostIn)) with { Color = Tok.TextTertiary } };
         foreach (var c in cities) rows.Add(CityBarRow(c, max));
         return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() };
     }
@@ -113,7 +113,9 @@ sealed partial class ArtistPage : Component
         Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
         Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        Children = [new TextEl(value) { Size = 26f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }, new TextEl(label) { Size = 12f, Color = Tok.TextSecondary }],
+        // Title (28/36/600) over Caption — a stat tile's number is a heading, so it takes the heading rung rather than
+        // an off-ramp 26/800. Basis is 140, so a 28px figure has room.
+        Children = [Ui.Title(value) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis }, Ui.Caption(label)],
     };
 
 }

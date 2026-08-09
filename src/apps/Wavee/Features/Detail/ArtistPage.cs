@@ -55,7 +55,7 @@ sealed partial class ArtistPage : Component
         var go = UseContext(HistoryStore.NavCtx);
         var bridge = UseContext(PlaybackBridge.Slot);
         var store = UseContext(LibraryStore.Slot);
-        var shellTint = UseContext(ShellTint.Slot);
+        var shellMaterial = UseContext(ShellMaterial.Slot);
         _acts = UseContext(ActionServices.Slot);          // shelf-card context menus (Menus.CardAttach)
         _menuOverlay = UseContext(Overlay.Service);
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
@@ -84,8 +84,12 @@ sealed partial class ArtistPage : Component
         bool artistReady = artist.State.Value == (byte)LoadState.Ready;
         var currentArtist = artist.Value.Value;
         string? paletteUrl = PaletteImageUrl(currentArtist);
+        // The shell material tint is published from a leaf: the Watch subscription, the derived tone and the
+        // owner-gated set/clear effects all live inside CoverPaletteLeaves.ShellTint, so a graded batch repaints one
+        // zero-size node instead of rebuilding the magazine tree. Flat arm only (Wash: null) — the three-layer radial
+        // wash belongs to Home.
         Element tintBinder = CoverPaletteLeaves.ShellTint(
-            paletteUrl, artistReady, colorWashesDisabled, apply: true, _tintOwner, shellTint,
+            paletteUrl, artistReady, colorWashesDisabled, apply: true, _tintOwner, shellMaterial,
             key: "artist-tint:" + routeKey);
 
         var compactInteractive = UseSignal(false);
@@ -110,6 +114,10 @@ sealed partial class ArtistPage : Component
                 // Scroll-position restoration keyed by the artist (route). One ScrollView serves successive artists in place,
                 // so without a key artist B would inherit A's scroll; with it, B starts at the top and a revisit to A restores it.
                 Key = "artist-scroll:" + routeKey, Grow = 1f, ScrollKey = routeKey,
+                // No colour edge cue: the default cue resolved its surface by ANCESTOR walk, which sails past the opaque
+                // content pane (a ZStack sibling) to the untinted ShellGround — a neutral one-rung-darker band painted
+                // OVER the pinned compact bar. The shy header itself is the occlusion cue on this page.
+                EdgeCues = ScrollEdgeCues.None,
                 // Publish the live offset (24px write-throttle floor; LazyGrid windowing is per-row inside the control).
                 OnScrollGeometryChanged = (g => (long)(g.OffsetY / 24f), g => pageScroll.Value = g.OffsetY),
             };
@@ -204,7 +212,9 @@ sealed partial class ArtistPage : Component
 
         var inner = new BoxEl
         {
-            Direction = 1, Gap = Spacing.XL,
+            // W1a-alias: WaveeSize.SectionGap — the ONE page-section gap (32). Was Spacing.XL (20), which made this page's
+            // sections sit closer together than every other page's for no stated reason.
+            Direction = 1, Gap = WaveeSize.SectionGap,
             // DetailShell's clamp idiom ("detail:two-column"): Grow toward the wrapper row's free width, capped at 1600,
             // with the Justify=Center wrapper below centring the capped block. MaxWidth+AlignSelf.Center is NOT enough —
             // a non-Stretch child arranges at its MEASURED width, so the fluid Grow/Basis=0 sections would under-fill

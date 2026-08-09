@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -113,7 +113,7 @@ sealed class EpisodeList : Component
                         Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
-                            new TextEl(Loc.Get(Strings.Podcast.ContinueListening)) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 80f },
+                            WaveeType.Eyebrow(Loc.Get(Strings.Podcast.ContinueListening)) with { Color = Tok.TextTertiary },
                             new TextEl(e.Title) { Size = 15f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                             new TextEl($"{e.PublishedAt:MMM d} · {e.DurationMs / 60000} min") { Size = 12f, Color = Tok.TextSecondary },
                             ProgressBar(Pct(e)),
@@ -188,7 +188,7 @@ sealed class EpisodeList : Component
     {
         Width = 40f, Height = 40f, Shrink = 0f, Corners = CornerRadius4.All(20f), Fill = Tok.AccentDefault,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Shadow = Elevation.Card,
-        HoverScale = 1.06f, PressScale = 0.94f, OnClick = play,
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = play,
         Children = [Icon(Icons.Play, 15f, Tok.TextOnAccentPrimary)],
     };
 

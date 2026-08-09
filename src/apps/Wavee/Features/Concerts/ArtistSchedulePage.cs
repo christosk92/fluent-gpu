@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using FluentGpu.Controls;
@@ -84,7 +84,7 @@ sealed class ArtistSchedulePage : Component
             onFailed: () => ErrorState.Build(schedule.Error, onRetry: () => reload.Value++),
             isEmpty: s => s is null || s.Concerts.Count == 0,
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Concerts.Schedule.NoUpcoming),
-                Loc.Get(Strings.Concerts.Schedule.NoUpcomingSubtitle), Icons.Calendar),
+                Loc.Get(Strings.Concerts.Schedule.NoUpcomingSubtitle)),
             group: "artist-schedule:" + _artistUri);
 
         var content = new BoxEl
@@ -134,8 +134,8 @@ sealed class ArtistSchedulePage : Component
         {
             var group = groups[selected];
             var culture = CultureInfo.CurrentCulture;
-            string month = new DateTime(group.Year, group.Month, 1).ToString("MMMM yyyy", culture).ToUpper(culture);
-            _tracker.Label = month + " · " + Strings.Concerts.Schedule.ShowCount(group.ShowCount).ToUpper(culture);
+            string month = new DateTime(group.Year, group.Month, 1).ToString("MMMM yyyy", culture);
+            _tracker.Label = month + " · " + Strings.Concerts.Schedule.ShowCount(group.ShowCount);
             sections.Add(TourDates(groups, selected, nearby, artistName, wide, go));
         }
         else
@@ -153,7 +153,7 @@ sealed class ArtistSchedulePage : Component
                 Children =
                 [
                     EmptyState.Build(Loc.Get(Strings.Concerts.Schedule.NoMoreDates),
-                        Loc.Get(Strings.Concerts.Schedule.NoMoreDatesSubtitle), Icons.Calendar,
+                        Loc.Get(Strings.Concerts.Schedule.NoMoreDatesSubtitle),
                         actionLabel: Loc.Get(Strings.Concerts.Location.Set),
                         onAction: () => _location.TogglePicker(() => _anchor.Value)),
                 ],
@@ -168,10 +168,9 @@ sealed class ArtistSchedulePage : Component
     {
         var blocks = new List<Element>(6)
         {
-            Caption(Loc.Get(Strings.Concerts.Schedule.OnTour).ToUpper(CultureInfo.CurrentCulture)) with
+            WaveeType.Eyebrow(Loc.Get(Strings.Concerts.Schedule.OnTour)) with
             {
-                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f,
-                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
             WaveeType.PageHero(artistName) with
             { Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
@@ -182,8 +181,7 @@ sealed class ArtistSchedulePage : Component
         if (spotlight is { } next)
         {
             var text = ConcertScheduleShaping.TileText(next, artistName);
-            string caption = Strings.Concerts.Schedule.NextShow(ConcertScheduleShaping.RelativeTime(next.Date, now))
-                .ToUpper(CultureInfo.CurrentCulture);
+            string caption = Strings.Concerts.Schedule.NextShow(ConcertScheduleShaping.RelativeTime(next.Date, now));
             blocks.Add(new BoxEl { Height = 1f, MinWidth = 0f, Fill = Tok.StrokeDividerDefault });
             blocks.Add(new BoxEl
             {
@@ -193,13 +191,12 @@ sealed class ArtistSchedulePage : Component
                     ConcertUi.DateBlock(next.Date),
                     new BoxEl
                     {
-                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 3f,
+                        Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XS,
                         Children =
                         [
-                            Caption(caption) with
+                            WaveeType.Eyebrow(caption) with
                             {
-                                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 30f,
-                                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                                Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                             },
                             WaveeType.TrackTitle(text.Primary) with
                             { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
@@ -275,7 +272,9 @@ sealed class ArtistSchedulePage : Component
                     Children =
                     [
                         new TextEl(Loc.Get(Strings.Concerts.Schedule.TourDates))
-                        { Size = 24f, Weight = 650, Color = Tok.TextPrimary, MaxLines = 1 },
+                        // Title (28/36/600) - the page-level heading over the month board, whose own month
+                        // headers take the rung below it (Subtitle 20/28). Was an off-ramp 24/650.
+                        { Size = 28f, LineHeight = 36f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1 },
                         selector,
                     ],
                 },

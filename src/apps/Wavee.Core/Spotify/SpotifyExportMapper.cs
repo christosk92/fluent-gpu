@@ -796,10 +796,70 @@ public static class SpotifyExportMapper
         return 0;
     }
 
+    // Fractional reads (an audiobook's averageRating is 4.568880688806883). Invariant culture on the string fallback so
+    // a comma-decimal locale cannot silently parse "4.56" as 456.
+    static double DoubleAt(JsonElement e, params string[] path)
+    {
+        var x = Dig(e, path);
+        if (x.ValueKind == JsonValueKind.Number) return x.GetDouble();
+        if (x.ValueKind == JsonValueKind.String
+            && double.TryParse(x.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var v)) return v;
+        return 0d;
+    }
+
     // ── identity / hashing ─────────────────────────────────────────────────────────────────────────────────
     /// <summary>Decode HTML character references in Spotify free text — bios and descriptions arrive HTML-encoded
     /// (<c>&amp;#39;</c> → an apostrophe, <c>&amp;#x1f90d;</c> → an emoji). A no-op for plain text.</summary>
     public static string? HtmlText(string? s) => string.IsNullOrEmpty(s) ? s : System.Net.WebUtility.HtmlDecode(s);
+
+    /// <summary>Flatten an HTML fragment to PLAIN text — tags dropped, their text kept, whitespace collapsed. For the
+    /// string-typed consumers that cannot render spans: a meta line, a context-menu subtitle, a tooltip.
+    ///
+    /// <para>Descriptions arrive as fragments (<c>&lt;a href="spotify:…"&gt;</c> links, <c>&lt;b&gt;</c>) — and
+    /// <see cref="HtmlText"/> makes that WORSE for a plain-text reader, because it decodes an escaped
+    /// <c>&amp;lt;a&amp;gt;</c> into a live tag before the UI ever sees it. Anything that renders an Element should use
+    /// <c>RichText</c> instead, which parses the fragment properly; this is only for the places that hold a string.</para>
+    ///
+    /// <para>A hand walk rather than a Regex: this runs on the render path and Regex is a trim/AOT liability for one
+    /// shape. Two private copies of this algorithm already existed (the artist bio's and the audiobook detail's) — this
+    /// is the one they should have shared.</para>
+    ///
+    /// <para>A '&lt;' opens a tag only when it is FOLLOWED by an ASCII letter, '/' or '!' — the HTML5 tag-open rule.
+    /// A bare '&lt;' is prose and passes through: "I &amp;lt;3 this mix" decodes (via <see cref="HtmlText"/>, which runs
+    /// FIRST on the card path) to "I &lt;3 this mix", and the old "any '&lt;' starts a tag, only '&gt;' ends it" walk
+    /// swallowed the entire rest of the description — the card rendered the single word "I". An opener that never finds
+    /// its '&gt;' is treated the same way: the remainder is emitted as text rather than dropped.</para></summary>
+    public static string? ToPlainText(string? html)
+    {
+        if (string.IsNullOrEmpty(html)) return html;
+        if (html.IndexOf('<') < 0) return html;   // the common case: no markup, no allocation
+        var sb = new System.Text.StringBuilder(html.Length);
+        bool lastSpace = false;
+        for (int i = 0; i < html.Length; i++)
+        {
+            char c = html[i];
+            if (c == '<' && i + 1 < html.Length && IsTagNameStart(html[i + 1]))
+            {
+                int close = html.IndexOf('>', i + 1);
+                if (close >= 0) { i = close; continue; }      // a real tag — drop it whole, keep the text around it
+                // Unterminated: either a truncated fragment or prose that merely looks like markup. Either way the rest
+                // is the only content there is, so fall through and keep it (this '<' included) as text.
+            }
+            if (char.IsWhiteSpace(c))
+            {
+                if (!lastSpace && sb.Length > 0) { sb.Append(' '); lastSpace = true; }
+                continue;
+            }
+            sb.Append(c);
+            lastSpace = false;
+        }
+        return sb.ToString().TrimEnd();
+    }
+
+    // The HTML5 tag-open condition: a letter starts a tag, '/' an end tag, '!' a declaration/comment. Anything else
+    // after '<' (a digit, a space, punctuation) is text.
+    static bool IsTagNameStart(char c)
+        => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '/' || c == '!';
 
     /// <summary>The trailing id of a `spotify:kind:id` uri (base-62; never parse "trailing digits").</summary>
     public static string IdFromUri(string uri) { int i = uri.LastIndexOf(':'); return i >= 0 ? uri[(i + 1)..] : uri; }
@@ -907,40 +967,268 @@ public static class SpotifyExportMapper
         bool isOwner = string.Equals(ownerName, CurrentUser, StringComparison.OrdinalIgnoreCase);
         var caps = new PlaylistCapabilities(canView, canEdit, CanEditMetadata: isOwner, IsCollaborative: false, IsOwner: isOwner);
 
-        // Cover-extracted page accent: the detail (playlistV2) node carries a rich extractedColorSet on its square
-        // cover; the library (libraryV3) node carries the simpler colorDark on its first image. Prefer the rich set;
-        // null (missing/fallback) leaves the page on its neutral default.
-        var imgItems = Dig(data, "images", "items");
-        var firstImg = imgItems.ValueKind == JsonValueKind.Array && imgItems.GetArrayLength() > 0 ? imgItems[0] : default;
-
+        // No cover accent is read here on purpose: Playlist carries no colour field, and CoverColorPlane — keyed by
+        // IMAGE, not entity — is the app's single resolver for art colour, so a per-entity copy would be a second
+        // source of truth. The home path's pre-decode accent goes through HomeCardMeta.Accent (see AccentArgb) because
+        // a home card is rendered before any cover has decoded; a detail page has already resolved its own.
         return new Playlist(
             IdFromUri(uri), uri, StrAt(data, "name") ?? "", HtmlText(StrAt(data, "description")), ownerName,
             ImagesCover(data), trackCount, tracks ?? System.Array.Empty<Track>(),
             owner, caps, StrAt(data, "format"), Source: "spotify");
     }
 
-    // ── home cards (an entity inside a section item: Album / Playlist / Artist) ─────────────────────────────
+    // ── home cards (an entity inside a section item) ────────────────────────────────────────────────────────
+    /// <summary>Map one home section item's entity into a <see cref="HomeCard"/>, or null when the node is not a
+    /// renderable entity (a <c>NotFound</c> sentinel, a wrapper with no data). Every arm fills
+    /// <see cref="HomeCardMeta"/>, because that is what the composer routes on and what the content-specific modules
+    /// render: without it a whole audiobook shelf mapped to nothing and was silently discarded by the composer's
+    /// minimum-cards gate.</summary>
     public static HomeCard? CardFromEntity(JsonElement data)
     {
         var typename = StrAt(data, "__typename");
         var uri = StrAt(data, "uri");
         if (uri is null) return null;
         var name = StrAt(data, "name") ?? "";
+        uint accent = AccentArgb(data);
         switch (typename)
         {
             case "Album":
-                return new HomeCard(uri, name, FirstArtistName(data), CoverArt(data) ?? EntityImage(data), HomeCardKind.Album);
+                return new HomeCard(uri, name, FirstArtistName(data), CoverArt(data) ?? EntityImage(data), HomeCardKind.Album,
+                    Meta: new HomeCardMeta(Accent: accent));
             case "Playlist":
-                return new HomeCard(uri, name, HtmlText(StrAt(data, "description")) ?? StrAt(data, "ownerV2", "data", "name"),
-                    ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist);
+            {
+                // The format token routes the module shape. Seeds are the artist/tag chips the description lists — but
+                // ONLY for the mix formats that actually list them; an editorial blurb is prose and would parse into
+                // fake chips. A daylist carries a clean comma list in `localized_terms`, which beats its prose.
+                // A BLANK format is normalized to null: the server sends "" for a plain user playlist, which means the
+                // same thing as absent, and letting both forms through would make every consumer test for two.
+                var format = StrAt(data, "format") is { Length: > 0 } f ? f : null;
+                var description = HtmlText(StrAt(data, "description"));
+                bool isDaylist = string.Equals(format, "daylist", StringComparison.Ordinal);
+                var pretitle = isDaylist ? Attr(data, "daylist_pretitle") : null;
+                var seeds = isDaylist
+                    ? SplitTerms(Attr(data, "localized_terms")) ?? ParseSeeds(description)
+                    : ListsSeeds(format) ? ParseSeeds(description) : null;
+                // `daylist_pretitle` is the provider's explicit generic label. A matching/empty name is a shallow
+                // identity, not permission to derive a personalized title from localized_terms. The live boundary
+                // resolves the exact playlist header before it releases Home from its derived shimmer.
+                bool needsHydration = isDaylist && (name.Length == 0
+                    || (pretitle is { Length: > 0 } && string.Equals(name, pretitle, StringComparison.Ordinal)));
+                // Owner and description are kept APART. Subtitle carries whichever the card displays (the description
+                // when there is one), and Meta.OwnerName always carries the owner — so a meta line can say "by Spotify"
+                // instead of "by <the whole description>".
+                var owner = StrAt(data, "ownerV2", "data", "name");
+                return new HomeCard(uri, name, description ?? owner,
+                    ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist,
+                    Meta: new HomeCardMeta(format, accent, (int)LongAt(data, "content", "totalCount"), seeds,
+                        OwnerName: owner, GenericTitle: pretitle, NeedsHydration: needsHydration));
+            }
             case "Artist":
                 // Artist entities expose their display name under profile.name (albums/playlists use top-level name).
                 // Reading only data.name produced photo-only cards whose sole caption was the generic "Artist" label.
                 var artistName = StrAt(data, "profile", "name") ?? name;
-                return new HomeCard(uri, artistName, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist);
+                return new HomeCard(uri, artistName, "Artist", ArtistAvatar(data) ?? EntityImage(data), HomeCardKind.Artist,
+                    Meta: new HomeCardMeta(Accent: accent));
+            case "Episode":
+            {
+                // The show name is the row's second line — an episode title alone ("Unsexy Habits That Will Put You
+                // Ahead of 99% of People") says nothing about which podcast it belongs to. mediaTypes carries VIDEO for
+                // a video-first episode, which the row reflects in its ARTWORK ASPECT rather than a badge alone.
+                var show = StrAt(data, "podcastV2", "data", "name");
+                return new HomeCard(uri, name, show, CoverArt(data) ?? EntityImage(data), HomeCardKind.Episode,
+                    Meta: new HomeCardMeta(Accent: accent,
+                        DurationMs: LongAt(data, "duration", "totalMilliseconds"),
+                        ResumeMs: LongAt(data, "playedState", "playPositionMilliseconds"),
+                        HasVideo: HasMediaType(data, "VIDEO")));
+            }
+            case "Audiobook":
+            {
+                // Audiobooks arrive under a spotify:show: URI, so they route like a show but render a rating cluster.
+                // showAverage gates the rating: the server sends an average even when it does not want it displayed.
+                var authors = Dig(data, "authorsV2");
+                var author = authors.ValueKind == JsonValueKind.Array && authors.GetArrayLength() > 0
+                    ? StrAt(authors[0], "name") : null;
+                double rating = BoolAt(data, false, "rating", "averageRating", "showAverage")
+                    ? DoubleAt(data, "rating", "averageRating", "average") : 0d;
+                return new HomeCard(uri, name, author, CoverArt(data) ?? EntityImage(data), HomeCardKind.Audiobook,
+                    Meta: new HomeCardMeta(Accent: accent,
+                        DurationMs: LongAt(data, "audiobookDuration", "totalMilliseconds"),
+                        Rating: rating, Author: author,
+                        Signifier: StrAt(data, "accessInfo", "signifier", "text")));
+            }
+            case "Podcast":
+                return new HomeCard(uri, name, StrAt(data, "publisher", "name"),
+                    CoverArt(data) ?? EntityImage(data), HomeCardKind.Podcast,
+                    Meta: new HomeCardMeta(Accent: accent));
             default:
                 return null;
         }
+    }
+
+    // The playlist formats whose DESCRIPTION is a seed list rather than prose. daily-mix / inspiredby-mix use a plain
+    // comma form ("D.O., Wonstein, KIMMUSEUM and more"); topic-mix / artist-mix-reader / descripto / daylist use
+    // anchors. Everything else (editorial, format-shows-shuffle, discover-weekly, release-radar, artistsets) is a
+    // human-written blurb and must NOT be parsed — "Your shortcut to hidden gems, deep cuts, and future faves" would
+    // otherwise become three chips.
+    static bool ListsSeeds(string? format) => format switch
+    {
+        "daily-mix" or "inspiredby-mix" or "topic-mix" or "artist-mix-reader" or "descripto" or "daylist" => true,
+        _ => false,
+    };
+
+    /// <summary>The artist/tag chips a mix lists in its description. Two dialects, both real: ANCHORS (quoted
+    /// <c>href="spotify:playlist:…"</c> on a daylist/descripto, BARE <c>href=spotify:playlist:…</c> on a
+    /// topic-mix/artist-mix-reader) and a plain comma list ("With LE SSERAFIM, NewJeans, ILLIT and more"). Null when the
+    /// text is neither. Anchors win because their inner text is the exact display name.</summary>
+    public static IReadOnlyList<string>? ParseSeeds(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return null;
+        if (AnchorTexts(description) is { Count: > 0 } anchors) return anchors;
+
+        // Plain comma form. Strip a leading "With " (the inspiredby-mix shape), then split. The trailing segment ends in
+        // a locale-dependent "and more" / "en meer", which DropTrailingConjunction removes — only when it really is that
+        // trailer, never by counting tokens (see the note there).
+        var text = description.AsSpan().Trim();
+        if (text.IndexOf('<') >= 0) return null;              // markup we did not recognise — do not guess
+        if (text.StartsWith("With ", StringComparison.OrdinalIgnoreCase)) text = text[5..].TrimStart();
+        if (text.IndexOf(',') < 0) return null;               // a single clause is a sentence, not a list
+
+        var parts = text.ToString().Split(',');
+        var seeds = new List<string>(parts.Length);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            var seg = parts[i].Trim();
+            if (i == parts.Length - 1) seg = DropTrailingConjunction(seg);
+            if (seg.Length > 0 && seg.Length <= 64) seeds.Add(seg);
+        }
+        return seeds.Count > 0 ? seeds : null;
+    }
+
+    // The localized "…and more" trailer Spotify appends to the LAST comma segment of a seed list. It is exactly two
+    // tokens: a conjunction plus a quantity word.
+    //
+    // "KIMMUSEUM and more" → "KIMMUSEUM"; "Daniel Seavey en meer" → "Daniel Seavey". Everything else is left ALONE:
+    // "Rage Against the Machine", "Wind & Fire" (the tail of "Earth, Wind & Fire") and "Simon and Garfunkel" all
+    // survive. The previous rule was "drop the final two whitespace tokens whenever there are three", which silently
+    // truncated every 3+-token artist name in the chip row — the seeds are display names, so a wrong chip is a visible,
+    // unrecoverable lie about who is on the mix.
+    //
+    // Both halves must match, and that pairing is what makes it safe: the penultimate token has to be a conjunction
+    // (never '&' — that is the ampersand INSIDE names like "Earth, Wind & Fire"), and the final token has to read like a
+    // quantity word — letters with no uppercase among them. A real name ends in a capitalized proper noun; "more" /
+    // "meer" / "mehr" / "más" does not.
+    static readonly string[] TrailingConjunctions =
+    [
+        "and", "en", "und", "et", "y", "e", "och", "og", "ja", "i", "oraz", "ve", "и", "та", "외", "등",
+    ];
+
+    static string DropTrailingConjunction(string segment)
+    {
+        int last = segment.LastIndexOf(' ');
+        if (last <= 0) return segment;                                   // one token — nothing to strip
+        int penult = segment.LastIndexOf(' ', last - 1);
+        if (penult < 0) return segment;                                  // two tokens — the shortest real name shape
+        if (!IsTrailingConjunction(segment.AsSpan(penult + 1, last - penult - 1))) return segment;
+        if (!IsQuantityWord(segment.AsSpan(last + 1))) return segment;
+        return segment[..penult].TrimEnd();
+    }
+
+    static bool IsTrailingConjunction(ReadOnlySpan<char> token)
+    {
+        for (int i = 0; i < TrailingConjunctions.Length; i++)
+            if (token.Equals(TrailingConjunctions[i], StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // "more" / "meer" / "더보기" → true. "Garfunkel" / "Machine" / "Fire" → false (an uppercase letter means a name).
+    // Punctuation-only tokens are false too: the trailer is a WORD.
+    static bool IsQuantityWord(ReadOnlySpan<char> token)
+    {
+        bool letter = false;
+        for (int i = 0; i < token.Length; i++)
+        {
+            if (char.IsUpper(token[i])) return false;
+            letter |= char.IsLetter(token[i]);
+        }
+        return letter;
+    }
+
+    // Pull the inner text out of every <a …>text</a>, accepting both quoted and bare href attributes. A hand walk
+    // rather than a Regex: this runs once per card on the home path and Regex is a trim/AOT liability for one shape.
+    static List<string>? AnchorTexts(string s)
+    {
+        List<string>? result = null;
+        int i = 0;
+        while ((i = s.IndexOf("<a", i, StringComparison.OrdinalIgnoreCase)) >= 0)
+        {
+            int open = s.IndexOf('>', i);
+            if (open < 0) break;
+            int close = s.IndexOf("</a>", open, StringComparison.OrdinalIgnoreCase);
+            if (close < 0) break;
+            var inner = s[(open + 1)..close].Trim();
+            if (inner.Length > 0) (result ??= new List<string>(4)).Add(inner);
+            i = close + 4;
+        }
+        return result;
+    }
+
+    /// <summary>A playlist <c>attributes[]</c> value by key — the array of <c>{key,value}</c> pairs a home playlist
+    /// carries (<c>localized_terms</c>, <c>madeFor.username</c>, <c>canContainArtists.uris</c>, …).</summary>
+    public static string? Attr(JsonElement data, string key)
+    {
+        var attrs = Dig(data, "attributes");
+        if (attrs.ValueKind != JsonValueKind.Array) return null;
+        foreach (var a in attrs.EnumerateArray())
+            if (string.Equals(StrAt(a, "key"), key, StringComparison.Ordinal)) return StrAt(a, "value");
+        return null;
+    }
+
+    static IReadOnlyList<string>? SplitTerms(string? csv)
+    {
+        if (string.IsNullOrWhiteSpace(csv)) return null;
+        var parts = csv.Split(',');
+        var list = new List<string>(parts.Length);
+        foreach (var p in parts)
+        {
+            var t = p.Trim();
+            if (t.Length > 0) list.Add(t);
+        }
+        return list.Count > 0 ? list : null;
+    }
+
+    static bool HasMediaType(JsonElement data, string type)
+    {
+        var arr = Dig(data, "mediaTypes");
+        if (arr.ValueKind != JsonValueKind.Array) return false;
+        foreach (var m in arr.EnumerateArray())
+            if (m.ValueKind == JsonValueKind.String && string.Equals(m.GetString(), type, StringComparison.OrdinalIgnoreCase))
+                return true;
+        return false;
+    }
+
+    /// <summary>The server's own cover accent as opaque ARGB, or 0 when unknown. Spotify files
+    /// <c>extractedColors.colorDark</c> under a DIFFERENT node per entity type — playlists hang it off the first image,
+    /// albums/episodes/audiobooks/podcasts off coverArt, artists off the avatar — so this walks all three the way
+    /// <see cref="EntityImage"/> walks its image chain. <c>isFallback</c> means "we had no colours and invented one",
+    /// which is worse than the neutral tile, so it is rejected.</summary>
+    public static uint AccentArgb(JsonElement data)
+    {
+        var items = Dig(data, "images", "items");
+        if (items.ValueKind == JsonValueKind.Array && items.GetArrayLength() > 0
+            && GradedHex(Dig(items[0], "extractedColors")) is { } fromImages)
+            return fromImages;
+        return GradedHex(Dig(data, "coverArt", "extractedColors"))
+            ?? GradedHex(Dig(data, "visuals", "avatarImage", "extractedColors"))
+            ?? GradedHex(Dig(data, "visualIdentity", "squareCoverImage", "extractedColors"))
+            ?? 0u;
+    }
+
+    static uint? GradedHex(JsonElement extractedColors)
+    {
+        var dark = Dig(extractedColors, "colorDark");
+        if (dark.ValueKind != JsonValueKind.Object) return null;
+        if (BoolAt(dark, false, "isFallback")) return null;
+        return HexToArgb(StrAt(dark, "hex"));
     }
 
     public static IReadOnlyList<HomeCard> RecentCards(JsonElement responseRoot, int max = 8)
@@ -957,17 +1245,19 @@ public static class SpotifyExportMapper
     }
 
     /// <summary>Recents cards from a single `List` node (data.__typename == "List") — the shape embedded in the home
-    /// response's HomeRecentlyPlayedSectionData section item. Same recent-entity mapping as <see cref="RecentCards"/>.</summary>
-    public static IReadOnlyList<HomeCard> RecentCardsFromListData(JsonElement listData, int max = 12)
+    /// response's HomeRecentlyPlayedSectionData section item. Same recent-entity mapping as <see cref="RecentCards"/>;
+    /// callers doing their own loss accounting can disable the default URI deduplication.</summary>
+    public static IReadOnlyList<HomeCard> RecentCardsFromListData(JsonElement listData, int max = 12,
+                                                                  bool deduplicate = true)
     {
         var cards = new List<HomeCard>(max);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        HashSet<string>? seen = deduplicate ? new(StringComparer.OrdinalIgnoreCase) : null;
         AppendRecentCards(listData, cards, seen, max);
         return cards;
     }
 
-    // Walk a `List` node's items.items[].entity.data → recent cards, deduping by URI into the shared accumulator.
-    static void AppendRecentCards(JsonElement list, List<HomeCard> cards, HashSet<string> seen, int max)
+    // Walk a `List` node's items.items[].entity.data → recent cards, optionally deduping into the shared accumulator.
+    static void AppendRecentCards(JsonElement list, List<HomeCard> cards, HashSet<string>? seen, int max)
     {
         var items = Dig(list, "items", "items");
         if (items.ValueKind != JsonValueKind.Array) return;
@@ -978,7 +1268,7 @@ public static class SpotifyExportMapper
             var data = Dig(wrapper, "data");
             if (data.ValueKind != JsonValueKind.Object) continue;
             if (CardFromRecentEntity(data, StrAt(wrapper, "_uri")) is not { } card) continue;
-            if (!seen.Add(card.Uri)) continue;
+            if (seen is not null && !seen.Add(card.Uri)) continue;
             cards.Add(card);
         }
     }
@@ -1469,5 +1759,66 @@ public static class SpotifyExportMapper
                 PickImage(Dig(it, "visuals", "avatarImage", "sources"))));
         }
         return list.Count > 0 ? list : null;
+    }
+
+    // ── userTopContent (data.me.profile.topArtists) → the user's own affinity ranking ───────────────────────────
+    /// <summary>The signed-in user's top artists, highest affinity first. The response nests them under
+    /// <c>me.profile.topArtists.items[].data</c>; the two shorter paths are accepted as well because this operation's
+    /// document has moved that node between <c>me.profile</c> and <c>me</c> across client versions, and an artist row
+    /// that silently empties is indistinguishable from an account with no listening history.</summary>
+    public static IReadOnlyList<RelatedArtist> TopArtistsFromUserTop(JsonElement responseRoot)
+    {
+        var data = Dig(responseRoot, "data");
+        var items = FirstArray(
+            Dig(data, "me", "profile", "topArtists", "items"),
+            Dig(data, "me", "topArtists", "items"),
+            Dig(data, "topArtists", "items"));
+        if (items.ValueKind != JsonValueKind.Array) return System.Array.Empty<RelatedArtist>();
+
+        var list = new List<RelatedArtist>(items.GetArrayLength());
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var it in items.EnumerateArray())
+        {
+            // Items arrive wrapped ({ data: Artist }) on this operation, but tolerate an unwrapped Artist too.
+            var d = Dig(it, "data");
+            if (d.ValueKind != JsonValueKind.Object) d = it;
+            var uri = StrAt(d, "uri");
+            if (uri is null || !seen.Add(uri)) continue;
+            var name = StrAt(d, "profile", "name") ?? StrAt(d, "name") ?? "";
+            if (name.Length == 0) continue;
+            list.Add(new RelatedArtist(IdFromUri(uri), uri, name, ArtistAvatar(d) ?? EntityImage(d)));
+        }
+        return list;
+    }
+
+    /// <summary>The track half of <c>userTopContent</c>. It is carried by the same document as topArtists and accepts the
+    /// same three historical container paths plus wrapped/unwrapped track items.</summary>
+    public static IReadOnlyList<Track> TopTracksFromUserTop(JsonElement responseRoot)
+    {
+        var data = Dig(responseRoot, "data");
+        var items = FirstArray(
+            Dig(data, "me", "profile", "topTracks", "items"),
+            Dig(data, "me", "topTracks", "items"),
+            Dig(data, "topTracks", "items"));
+        if (items.ValueKind != JsonValueKind.Array) return System.Array.Empty<Track>();
+
+        var list = new List<Track>(items.GetArrayLength());
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var item in items.EnumerateArray())
+        {
+            var track = Dig(item, "data");
+            if (track.ValueKind != JsonValueKind.Object) track = Dig(item, "track");
+            if (track.ValueKind != JsonValueKind.Object) track = Dig(item, "itemV2", "data");
+            if (track.ValueKind != JsonValueKind.Object) track = item;
+            if (MapArtistTrack(track) is { Uri.Length: > 0 } mapped && seen.Add(mapped.Uri)) list.Add(mapped);
+        }
+        return list;
+    }
+
+    static JsonElement FirstArray(params JsonElement[] candidates)
+    {
+        foreach (var c in candidates)
+            if (c.ValueKind == JsonValueKind.Array && c.GetArrayLength() > 0) return c;
+        return default;
     }
 }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -77,18 +77,11 @@ sealed partial class SettingsPage
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
-        // The window material is the one appearance toggle that is NOT a token read: it is a DWM attribute on the HWND, so
-        // flipping it has to re-invoke DwmSetWindowAttribute on the live window (FluentApp.SetWindowMaterialAlt, which also
-        // becomes what the host re-applies on a later theme flip). Hence its own writer rather than AppearanceToggle.
-        Element WindowMaterialToggle() => ToggleSwitch.Create(
-            new Signal<bool>(settings?.Get(WaveeSettings.WindowMaterialBaseMica) ?? false), onChange: _ =>
-            {
-                if (settings is null) return;
-                bool baseMica = !settings.Get(WaveeSettings.WindowMaterialBaseMica);
-                settings.Set(WaveeSettings.WindowMaterialBaseMica, baseMica);
-                FluentGpu.FluentApp.SetWindowMaterialAlt(!baseMica);   // live: base Mica ⇔ !micaAlt
-                Bump();
-            }, style: SettingsCard.CompactToggleStyle());
+        // (The "Use base Mica" row is gone, but NOT because the shell covers the backdrop — it does the opposite: the
+        // authenticated shell is bare Mica with translucent content-layer rungs over it, so the DWM material is visible
+        // through every chrome band. The row went away because MicaAlt is the one right answer for that stack and a
+        // base/alt toggle is a choice with no good second option. WaveeSettings.WindowMaterialBaseMica + its Program.cs
+        // seed stay — they still pick the material.)
 
         void SetTheme(int mode)
         {
@@ -138,8 +131,6 @@ sealed partial class SettingsPage
                 AppearanceToggle(WaveeSettings.DisableMarquee), Icons.Font),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.DisableColorWashes), Loc.Get(Strings.Settings.Appearance.DisableColorWashesSub),
                 AppearanceToggle(WaveeSettings.DisableColorWashes), Icons.Brush),
-            SettingsRow(Loc.Get(Strings.Settings.Appearance.WindowMaterial), Loc.Get(Strings.Settings.Appearance.WindowMaterialSub),
-                WindowMaterialToggle(), Icons.Brush),
             // The immersive-lyrics cover drift. A plain AppearanceToggle: its Bump() raises AppearancePrefs.Epoch, which
             // ImmersiveLyricsSurface reads, so flipping it starts/stops the drift on an OPEN surface — no restart.
             SettingsRow(Loc.Get(Strings.Settings.Appearance.LyricsBackdrop), Loc.Get(Strings.Settings.Appearance.LyricsBackdropSub),
@@ -179,9 +170,9 @@ sealed partial class SettingsPage
             ColorF faint = on ? Tok.AccentDefault with { A = 0.45f } : Tok.FillSubtleTertiary with { A = 0.7f };
 
             Element Bar(float w, float h) => new BoxEl { Width = w, Height = h, Corners = CornerRadius4.All(h / 2f), Fill = faint };
-            Element RowBar() => new BoxEl { Height = 5f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(2.5f), Fill = faint };
+            Element RowBar() => new BoxEl { Height = 4f, AlignSelf = FlexAlign.Stretch, Corners = CornerRadius4.All(2f), Fill = faint };
             Element Art(float edge) => new BoxEl { Width = edge, Height = edge, Corners = CornerRadius4.All(4f), Fill = block, Shrink = 0f };
-            Element Pill() => new BoxEl { Width = 24f, Height = 9f, Corners = CornerRadius4.All(4.5f), Fill = block };
+            Element Pill() => new BoxEl { Width = 24f, Height = 8f, Corners = CornerRadius4.All(Radii.Control), Fill = block };
             Element SmallPill() => new BoxEl { Width = 20f, Height = 8f, Corners = CornerRadius4.All(4f), Fill = block };
             Element Pills() => new BoxEl { Direction = 0, Gap = 4f, Children = [Pill(), Pill()] };
 
@@ -234,29 +225,29 @@ sealed partial class SettingsPage
 
             return new BoxEl
             {
-                Direction = 1, Gap = 6f, AlignItems = FlexAlign.Center,
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Role = AutomationRole.RadioButton, Focusable = true, Cursor = CursorId.Hand,
                 OnClick = () => set(value),
                 Children =
                 [
                     new BoxEl
                     {
-                        // Drop 10f→9f when selected so the 1f→2f border growth draws inward and the wireframe stays put.
-                        Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
+                        // Drop 8f→7f when selected so the 1f→2f border growth draws inward and the wireframe stays put.
+                        Width = 116f, Height = 84f, Padding = Edges4.All(on ? 7f : 8f),
                         Direction = 1, ClipToBounds = true,
                         Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillSubtleSecondary,
                         BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
-                        HoverScale = 1.02f, PressScale = 0.98f,
+                        HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                         Children = [sketch],
                     },
-                    new TextEl(label) { Size = 11f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
+                    new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
                 ],
             };
         }
 
         return new BoxEl
         {
-            Direction = 0, Gap = 12f, Wrap = true, AlignItems = FlexAlign.Start,
+            Direction = 0, Gap = Spacing.M, Wrap = true, AlignItems = FlexAlign.Start,
             Children =
             [
                 Card(DetailVerticalLayout.PageAuto, PageLayoutLabels()[0], automatic: true),
@@ -283,20 +274,20 @@ sealed partial class SettingsPage
                     {
                         Width = 30f, Height = 30f, Corners = CornerRadius4.All(15f), Fill = fill,
                         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        BorderWidth = on ? 2.5f : 1f,
+                        BorderWidth = on ? 2f : 1f,
                         BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
                         Children = on
-                            ? [new TextEl(Icons.Accept) { Size = 13f, FontFamily = Theme.IconFont, Color = Tok.TextOnAccentPrimary }]
+                            ? [new TextEl(Icons.Accept) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextOnAccentPrimary }]
                             : [],
                     },
-                    new TextEl(label) { Size = 11f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
+                    new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
                 ],
             };
         }
 
         return new BoxEl
         {
-            Direction = 0, Gap = 12f, AlignItems = FlexAlign.Center, Wrap = true,
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Wrap = true,
             Children =
             [
                 Swatch("warm", Loc.Get(Strings.Settings.Appearance.PaletteWarm), WaveeColors.PresetSwatch(Tok.WarmPalette)),
@@ -307,18 +298,11 @@ sealed partial class SettingsPage
         };
     }
 
-    Element DensityBlock(int density, Action<int> setDensity) => new BoxEl
-    {
-        Direction = 1, AlignSelf = FlexAlign.Stretch,
-        Corners = CornerRadius4.All(Radii.Card),
-        Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        ClipToBounds = true,
-        Children =
-        [
-            SettingsRow(Loc.Get(Strings.Settings.Appearance.RowDensity), Loc.Get(Strings.Settings.Appearance.RowDensitySub),
-                DensityCards(density, setDensity), Icons.List),
-        ],
-    };
+    // ONE settings row, so it IS the card: SettingsCard already paints the group chrome (radius, fill, hairline).
+    // The hand-built BoxEl that used to wrap it drew a second card around the first, doubling the stroke.
+    Element DensityBlock(int density, Action<int> setDensity)
+        => SettingsRow(Loc.Get(Strings.Settings.Appearance.RowDensity), Loc.Get(Strings.Settings.Appearance.RowDensitySub),
+            DensityCards(density, setDensity), Icons.List, align: SettingsCard.ContentAlignment.Vertical);
 
     // Match the page-layout selector: the preview card itself is the radio control. The real density ordering is
     // compressed into each fixed-size wireframe, so the choice communicates row height before it is applied.
@@ -335,8 +319,8 @@ sealed partial class SettingsPage
 
             Element MockRow() => new BoxEl
             {
-                Height = rowHeight, Direction = 0, Gap = 5f, AlignItems = FlexAlign.Center,
-                Padding = new Edges4(3f, 0f, 3f, 0f),
+                Height = rowHeight, Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
                 Corners = CornerRadius4.All(3f), Fill = faint,
                 Children =
                 [
@@ -347,29 +331,29 @@ sealed partial class SettingsPage
 
             return new BoxEl
             {
-                Direction = 1, Gap = 6f, AlignItems = FlexAlign.Center,
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.Center,
                 Role = AutomationRole.RadioButton, Focusable = true, Cursor = CursorId.Hand,
                 OnClick = () => set(value),
                 Children =
                 [
                     new BoxEl
                     {
-                        Width = 116f, Height = 84f, Padding = Edges4.All(on ? 9f : 10f),
+                        Width = 116f, Height = 84f, Padding = Edges4.All(on ? 7f : 8f),
                         Direction = 1, Gap = 4f, Justify = FlexJustify.Center, ClipToBounds = true,
                         Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillSubtleSecondary,
                         BorderWidth = on ? 2f : 1f, BorderColor = on ? Tok.AccentDefault : Tok.StrokeControlDefault,
-                        HoverScale = 1.02f, PressScale = 0.98f,
+                        HoverScale = WaveeMotion.ScaleSubtle.Hover, PressScale = WaveeMotion.ScaleSubtle.Press,
                         Children = [MockRow(), MockRow(), MockRow()],
                     },
                     new TextEl(labels[value])
-                        { Size = 11f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
+                        { Size = 12f, LineHeight = 16f, Weight = (ushort)(on ? 600 : 400), Color = on ? Tok.TextPrimary : Tok.TextSecondary },
                 ],
             };
         }
 
         return new BoxEl
         {
-            Direction = 0, Gap = 12f, Wrap = true, AlignItems = FlexAlign.Start,
+            Direction = 0, Gap = Spacing.M, Wrap = true, AlignItems = FlexAlign.Start,
             Children = [Card(0), Card(1), Card(2), Card(3)],
         };
     }
@@ -402,34 +386,36 @@ sealed partial class SettingsPage
                 ? prefs.Design.Value
                 : SidebarDesignGating.ActiveDesign(settings);
 
-            var kids = new List<Element>(3)
-            {
-                SettingsRow(Loc.Get(Strings.Settings.Sidebar.Design), Loc.Get(Strings.Settings.Sidebar.DesignSub),
-                    // Compact cards: this row shares a page column with the header/description block, and the compact
-                    // ladder keeps all three visible on a narrow window before the row has to wrap.
-                    SidebarDesignPicker.Row(prefs, settings, compact: true),
-                    Icons.SplitView, align: SettingsCard.ContentAlignment.Vertical),
-            };
+            // Compact cards: this row shares a page column with the header/description block, and the compact
+            // ladder keeps all three visible on a narrow window before the row has to wrap.
+            Element picker = SidebarDesignPicker.Row(prefs, settings, compact: true);
 
             // Rendered only while Curated is active (§C6.3): the customizer edits the Curated document, so offering it
             // for Classic/Library would navigate to an editor for something the user is not looking at. The quick layout
             // menu's "Customize sidebar…" row is the path that switches first — this one never switches silently.
-            if (SidebarDesignGating.CanCustomize(design))
-            {
-                kids.Add(Divider());
-                kids.Add(SettingsRow(Loc.Get(Strings.Settings.Sidebar.Customize),
-                    Loc.Get(Strings.Settings.Sidebar.CustomizeSub), control: null, icon: Icons.Edit,
-                    isClickEnabled: true, onClick: () => go(SidebarLayoutMenu.CustomizeRoute, null)));
-            }
+            if (!SidebarDesignGating.CanCustomize(design))
+                // Nothing to group: ONE settings row already IS the card. The hand-built BoxEl this replaced painted a
+                // second card (radius + fill + hairline) around a SettingsCard that carries its own.
+                return SettingsRow(Loc.Get(Strings.Settings.Sidebar.Design), Loc.Get(Strings.Settings.Sidebar.DesignSub),
+                    picker, Icons.SplitView, align: SettingsCard.ContentAlignment.Vertical);
 
-            return new BoxEl
+            // Two rows ⇒ the engine's grouped-card control (the same SettingsExpander idiom SettingsPage.Playback.cs
+            // uses), which owns the group chrome, the divider and the item indentation.
+            return SettingsExpander.Create(new SettingsExpander.Options
             {
-                Direction = 1, AlignSelf = FlexAlign.Stretch,
-                Corners = CornerRadius4.All(Radii.Card),
-                Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                ClipToBounds = true,
-                Children = kids.ToArray(),
-            };
+                Header = Loc.Get(Strings.Settings.Sidebar.Design),
+                Description = Loc.Get(Strings.Settings.Sidebar.DesignSub),
+                HeaderIcon = Icons.SplitView,
+                Content = picker,
+                InitiallyExpanded = true,
+                Items =
+                [
+                    SettingsItem(Loc.Get(Strings.Settings.Sidebar.Customize),
+                        Loc.Get(Strings.Settings.Sidebar.CustomizeSub), control: null,
+                        isClickEnabled: true, onClick: () => go(SidebarLayoutMenu.CustomizeRoute, null),
+                        icon: Icons.Edit),
+                ],
+            });
         }
     }
 }

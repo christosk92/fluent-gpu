@@ -552,6 +552,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     {
         AssertSubmitThread();
         if (_imageTextures is null) return;
+        int faultsBefore = _imageTextures.ResourceFaults;
         while (queue.TryDequeueJob(out var j))
         {
             if (j.Evict) { _imageTextures.Free(j.Id); continue; }
@@ -559,6 +560,11 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (res != ImageUploadResult.Accepted) queue.PostReject(j.Id, res);   // +1-frame async admission: the UI folds the rejection next Pump
             if (j.Buffer is not null) queue.ReturnUploadBuffer(j.Buffer);   // ownership transferred to us; return to the host's bounded pixel pool after Stage copied it
         }
+        // A staging create/map failed. On a healthy device that was a driver OOM and this is a cheap no-op
+        // (GetDeviceRemovedReason == S_OK ⇒ false); on a removed device it RECORDS the loss so the UI recovery gate
+        // (threading-render-seam.md §9) arms even if no Present happens soon — a minimized/idle window can drain image
+        // jobs for many turns without presenting, and the whole recovery hangs off that one recorded reason.
+        if (_imageTextures.ResourceFaults != faultsBefore) NoteIfDeviceLost();
     }
 
     // ── Device-lost recovery (Step 4, ASYNC only; design/subsystems/threading-render-seam.md §9) ──

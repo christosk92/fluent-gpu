@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -65,10 +65,9 @@ sealed class ConcertFilterBar : Component
             Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = Spacing.S,
             Children =
             [
-                Caption(Upper(Loc.Get(Strings.Concerts.Filter.FilterBy))) with
+                WaveeType.Eyebrow(Loc.Get(Strings.Concerts.Filter.FilterBy)) with
                 {
-                    Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
-                    Trim = TextTrim.CharacterEllipsis,
+                    Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 },
                 new BoxEl { Grow = 1f },
                 Embed.Comp(() => new CountTicker
@@ -99,7 +98,8 @@ sealed class ConcertFilterBar : Component
             Direction = 1, Gap = Spacing.XS, MinWidth = 0f,
             Padding = new Edges4(Spacing.M, Spacing.S, Spacing.M, Spacing.S),
             Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillLayerDefault,
-            BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault, Shadow = Elevation.Card,
+            // Stroke OR shadow, never both statically (the pinned bar is a docked surface, not a floating card).
+            BorderWidth = 1f, BorderColor = Tok.StrokeSurfaceDefault,
             ScrollBinds = [ new() { PinTop = 0f } ],
             Children = [ caption, scroller ],
         };
@@ -251,6 +251,4 @@ sealed class ConcertFilterBar : Component
     }
 
     static Element Divider() => new BoxEl { Width = 1f, Height = 20f, Shrink = 0f, Fill = Tok.StrokeSurfaceDefault };
-
-    static string Upper(string s) => s.ToUpper(CultureInfo.CurrentCulture);
 }

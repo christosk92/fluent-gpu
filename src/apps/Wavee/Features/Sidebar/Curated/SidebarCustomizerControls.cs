@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -87,14 +87,14 @@ static class CzRow
     /// <summary>An 11f/600 UPPERCASE tertiary group label — the flat-group heading. The four groups used to be
     /// <c>SettingsExpander</c> accordions whose headers rendered as literal <c>[sidebar.customizer.group.*]</c>; the group
     /// is now ALWAYS OPEN, so the label is plain text with nothing to toggle and no disclosure state to remember.
-    /// <para>Uppercasing happens at the UI edge (the <c>TrackFilterFlyout</c> / <c>QueuePanel</c> idiom) so the catalog
-    /// keeps sentence case for the languages where an all-caps heading is wrong to author.</para></summary>
+    /// <para>The catalog authors these in sentence case and the UI keeps that casing verbatim — the old edge
+    /// upper-casing was exactly the transform the eyebrow role gave up (it is wrong to author, and wrong to APPLY, in
+    /// the languages whose casing rules Invariant does not model).</para></summary>
     /// <remarks>Returns <see cref="TextEl"/>, not <see cref="Element"/>, so a caller can <c>with</c>-tweak its flex
     /// props (the group head row needs <c>Grow=1</c> to let the trailing caption sit flush right).</remarks>
-    public static TextEl GroupLabel(string text) => new TextEl(text.ToUpperInvariant())
+    public static TextEl GroupLabel(string text) => WaveeType.Eyebrow(text) with
     {
-        Size = 11f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1, CharSpacing = 40f,
-        Trim = TextTrim.CharacterEllipsis,
+        Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
     };
 
     /// <summary>One always-open property group: the uppercase label (plus an optional trailing caption — round-2 defect 4

@@ -210,3 +210,24 @@ convention already discounts them, so subtracting them again in app code moved t
 `OriginalInsertionIndex`), and pass the **pre-move** index the backend's move convention expects. Return `true` from
 `OnDeposit` only when a mutation was actually issued — that is what promises the membership snapshot the gap is handed
 over to; returning `true` optimistically leaves the gap open forever.
+
+---
+
+## 15. A `Draggable`-only child inside a clickable ancestor used to eat the click
+
+**Mechanism.** `DragBit` is in the hit-test **self-hit** mask (`InputDispatcher.Hit`), so a `CanDrag`/`Draggable` node
+is hit-testable in its own right — and the **deepest** hit wins. Release used to deliver the click to that raw hit
+node only, so a drag-handle child with no `OnClick` (a tab's label lane, a card's title block) swallowed every click
+aimed at the row it sits in: press showed nothing, release fired a null handler, the row never activated. The
+right-click and middle-release paths already walked ancestors; left activation did not.
+
+**Rule.** Left activation now resolves the **activation owner** — the nearest enabled self-or-ancestor with
+`ClickBit` — and fires that node's handler (first owner wins, so a child with its own `OnClick` still beats its
+parent and the two never both fire). The mouse same-target check compares resolved owners, so press-on-label →
+release-on-padding is one click on the row; touch keeps its strict same-node gate. Press-side visuals still track the
+raw hit node. See `input-a11y.md` §6.5; gate `B.4b`.
+
+Still prefer putting `CanDrag`/`Draggable` on the **click-owning node itself** rather than relying on the walk: one
+node then owns hit-testing, the pressed visual, the drag arm and the click, and `DragController.TryArm`'s own
+walk-up has nothing to disambiguate. That is the sidebar row pattern (`SidebarEntityRow.cs:318-329`). The walk is a
+safety net for shapes you do not control, not a licence to scatter drag handles inside clickables.

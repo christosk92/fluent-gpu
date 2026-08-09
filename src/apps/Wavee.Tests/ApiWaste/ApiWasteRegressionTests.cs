@@ -50,6 +50,36 @@ public class PathfinderResourceTests
         });
         Assert.Equal(1, http.Calls);
     }
+
+    [Fact]
+    public async Task ExactInvalidation_RefetchesOnce_AndMakesTheFreshBodyResident()
+    {
+        var http = new FakeExchange((_, call) =>
+            new HttpResp(200, new Dictionary<string, string>(),
+                Encoding.UTF8.GetBytes("{\"data\":{\"version\":" + call + "}}")));
+        var resource = new PathfinderResource(new PathfinderClient(http), () => Ctx);
+        static void Variables(Utf8JsonWriter w) => w.WriteString("facet", "music-chip");
+
+        using (var first = await resource.UseQueryAsync("home", "hash", Variables,
+                   PathfinderClient.Platform.Desktop, TestContext.Current.CancellationToken))
+            Assert.Equal(1, first!.RootElement.GetProperty("data").GetProperty("version").GetInt32());
+        using (var hit = await resource.UseQueryAsync("home", "hash", Variables,
+                   PathfinderClient.Platform.Desktop, TestContext.Current.CancellationToken))
+            Assert.Equal(1, hit!.RootElement.GetProperty("data").GetProperty("version").GetInt32());
+        Assert.Equal(1, http.Calls);
+
+        resource.Invalidate("home", "hash", Variables, PathfinderClient.Platform.Desktop);
+
+        using (var refreshed = await resource.UseQueryAsync("home", "hash", Variables,
+                   PathfinderClient.Platform.Desktop, TestContext.Current.CancellationToken))
+            Assert.Equal(2, refreshed!.RootElement.GetProperty("data").GetProperty("version").GetInt32());
+        using (var resident = await resource.UseQueryAsync("home", "hash", Variables,
+                   PathfinderClient.Platform.Desktop, TestContext.Current.CancellationToken))
+            Assert.Equal(2, resident!.RootElement.GetProperty("data").GetProperty("version").GetInt32());
+
+        Assert.Equal(2, http.Calls);
+        Assert.Equal(0, resource.PendingBodyCount);
+    }
 }
 
 public class ExtensionEtagCacheTests

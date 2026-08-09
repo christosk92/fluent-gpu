@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -88,15 +88,17 @@ sealed class NowPlayingPanel : Component
         var meta = new List<Element>(3);
         if (track.Artists.Count > 0)
             meta.Add(go is null
-                ? new TextEl(DetailFormat.ArtistNames(track.Artists)) { Size = 13f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
+                // Body (14/20) for the artist line, Caption (12/16) for the album — the ramp's two prose rungs, in place
+                // of the old 13/12 pair whose 13 was on no ramp at all.
+                ? new TextEl(DetailFormat.ArtistNames(track.Artists)) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
                 : HeroArtistLinks(track.Artists, go, Tok.TextSecondary));
         if (track.Album.Uri.Length > 0 && go is not null)
             meta.Add(new SpanTextEl([new TextSpan(track.Album.Name, OnClick: () => go("album:" + track.Album.Uri, track.Album.Name))])
             {
-                Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             });
         else if (track.Album.Name.Length > 0)
-            meta.Add(new TextEl(track.Album.Name) { Size = 12f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            meta.Add(new TextEl(track.Album.Name) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
 
         string? url = track.Image?.Url is { Length: > 0 } u ? ImageSource.Normalize(u) : null;
         // Bound placeholder: Watch is inside the thunk so a late grading paints without re-rendering the panel.
@@ -123,7 +125,7 @@ sealed class NowPlayingPanel : Component
                 art,
                 new BoxEl
                 {
-                    Direction = 0, Gap = 10f, AlignItems = FlexAlign.Start,
+                    Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Start,
                     Children =
                     [
                         new BoxEl
@@ -131,9 +133,10 @@ sealed class NowPlayingPanel : Component
                             Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                             Children =
                             [
-                                new TextEl(track.Title)
+                                // Subtitle (20/28/600) — the panel's now-playing title rung (WaveeType.NowPlayingTitle's
+                                // metrics). Was 22/850: an invented size and the app's only 850.
+                                Ui.Subtitle(track.Title) with
                                 {
-                                    Size = 22f, Weight = 850, Color = Tok.TextPrimary,
                                     Wrap = TextWrap.Wrap, MaxLines = 3, Trim = TextTrim.CharacterEllipsis,
                                 },
                                 new BoxEl { Direction = 1, Gap = 2f, Children = meta.ToArray() },
@@ -168,7 +171,7 @@ sealed class NowPlayingPanel : Component
         }
         return new SpanTextEl(spans)
         {
-            Size = 13f, Color = color, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1, MinWidth = 0f,
+            Size = 14f, LineHeight = 20f, Color = color, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MaxLines = 1, MinWidth = 0f,
         };
     }
 
@@ -217,17 +220,19 @@ sealed class NowPlayingPanel : Component
         {
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = 6f,
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
                 Children =
                 [
-                    new TextEl(artist.Name) { Size = 18f, Weight = 800, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    // 18/24/600 — the ramp's BodyLarge rung at heading weight. This sits one step UNDER the section
+                    // headers (Subtitle 20/28), which is exactly its role: a card heading inside a section.
+                    new TextEl(artist.Name) { Size = 18f, LineHeight = 24f, Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     artist.Verified ? Icon(Icons.Check, 12f, Tok.AccentTextPrimary) : new BoxEl(),
                 ],
             },
         };
-        if (facts.Count > 0) body.Add(new BoxEl { Direction = 0, Wrap = true, Gap = 6f, Children = facts.ToArray() });
+        if (facts.Count > 0) body.Add(new BoxEl { Direction = 0, Wrap = true, Gap = Spacing.S, Children = facts.ToArray() });
         if (!string.IsNullOrWhiteSpace(artist.Bio))
-            body.Add(new TextEl(artist.Bio!) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 5, Trim = TextTrim.CharacterEllipsis });
+            body.Add(new TextEl(artist.Bio!) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 5, Trim = TextTrim.CharacterEllipsis });
         body.Add(new BoxEl { Direction = 0, Children = [Embed.Comp(() => new FollowButton(artist.Uri, artist.Name)) with { Key = "follow:" + artist.Uri }] });
 
         return Section(Loc.Get(Strings.Detail.AboutTheArtist), new BoxEl
@@ -265,8 +270,8 @@ sealed class NowPlayingPanel : Component
                         Children =
                         [
                             new TextEl(c.Country is { Length: > 0 } country ? c.City + ", " + country : c.City)
-                                { Size = 12f, Weight = 650, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                            new TextEl(Count(c.Listeners)) { Size = 11f, Color = Tok.TextTertiary },
+                                { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                            new TextEl(Count(c.Listeners)) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary },
                         ],
                     },
                     new BoxEl
@@ -277,7 +282,7 @@ sealed class NowPlayingPanel : Component
                 ],
             });
         }
-        return Section(Loc.Get(Strings.Artist.ListenedMostIn), new BoxEl { Direction = 1, Gap = 10f, Children = rows.ToArray() });
+        return Section(Loc.Get(Strings.Artist.ListenedMostIn), new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() });
     }
 
     static Element Credits(IReadOnlyList<TrackCredit> credits, IReadOnlyList<string> sources, Action<string, string?>? go)
@@ -286,13 +291,14 @@ sealed class NowPlayingPanel : Component
         foreach (var group in credits.GroupBy(c => string.IsNullOrWhiteSpace(c.RoleGroup) ? c.Role : c.RoleGroup!))
         {
             if (!string.IsNullOrWhiteSpace(group.Key))
-                kids.Add(new TextEl(group.Key!.ToUpperInvariant()) { Size = 10.5f, Weight = 750, Color = Tok.TextTertiary, CharSpacing = 80f });
+                // The role-group name arrives from the server with its own casing — the eyebrow keeps it.
+                kids.Add(WaveeType.Eyebrow(group.Key!) with { Color = Tok.TextTertiary });
             foreach (var c in group) kids.Add(CreditRow(c, go));
         }
         if (sources.Count > 0)
             kids.Add(new TextEl(Strings.Player.CreditsSource(string.Join(", ", sources)))
             {
-                Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
+                Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis,
             });
         return Section(Loc.Get(Strings.Player.Credits), new BoxEl { Direction = 1, Gap = 8f, Children = kids.ToArray() });
     }
@@ -302,9 +308,9 @@ sealed class NowPlayingPanel : Component
         Element name = c.Linkable && c.ArtistUri is { Length: > 0 } uri && go is not null
             ? new SpanTextEl([new TextSpan(c.Name, OnClick: () => go("artist:" + uri, c.Name))])
             {
-                Size = 13f, Weight = 650, Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             }
-            : new TextEl(c.Name) { Size = 13f, Weight = 650, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
+            : new TextEl(c.Name) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
@@ -313,7 +319,7 @@ sealed class NowPlayingPanel : Component
                 new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Children = [name] },
                 string.IsNullOrWhiteSpace(c.Role)
                     ? new BoxEl()
-                    : new TextEl(c.Role) { Size = 11f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    : new TextEl(c.Role) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             ],
         };
     }
@@ -327,7 +333,7 @@ sealed class NowPlayingPanel : Component
 
     static Element MerchRow(MerchItem item) => new BoxEl
     {
-        Direction = 0, Gap = 10f, AlignItems = FlexAlign.Center, Padding = Edges4.All(8f),
+        Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, Padding = Edges4.All(Spacing.S),
         Corners = CornerRadius4.All(Radii.Control), Fill = Tok.FillCardSecondary,
         BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault, HoverFill = Tok.FillCardDefault,
         Cursor = item.ShopUrl is { Length: > 0 } ? CursorId.Hand : (CursorId?)null,
@@ -344,8 +350,9 @@ sealed class NowPlayingPanel : Component
                 Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 2f,
                 Children =
                 [
-                    new TextEl(item.Name) { Size = 12.5f, Weight = 650, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(item.Price.Length > 0 ? item.Price : Loc.Get(Strings.Artist.Buy)) { Size = 12f, Weight = 700, Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    // BodyStrong name over a Caption price — two lines of 20 + 16 = 36, inside the 56 thumbnail beside it.
+                    new TextEl(item.Name) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
+                    new TextEl(item.Price.Length > 0 ? item.Price : Loc.Get(Strings.Artist.Buy)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.AccentTextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ],
             },
         ],
@@ -360,12 +367,12 @@ sealed class NowPlayingPanel : Component
             var st = TrackRow.StateOf(b, lib, t);
             rows.Add(new BoxEl
             {
-                Direction = 1, Corners = CornerRadius4.All(6f), HoverFill = Tok.FillSubtleSecondary,
+                Direction = 1, Corners = Radii.ControlAll, HoverFill = Tok.FillSubtleSecondary,
                 Children =
                 [
                     TrackRow.ArtCard(t, st, NextCols, go,
                         onPlay: () => TrackRow.Invoke(b, t, () => b.Player.PlayTrackAsync(t)),
-                        art: 42f,
+                        art: WaveeSize.ArtThumb,
                         showArtists: true,
                         explicitBadge: false,
                         showDuration: false,
@@ -379,30 +386,34 @@ sealed class NowPlayingPanel : Component
     static IReadOnlyList<QueueEntry> NextUp(IReadOnlyList<QueueEntry> queue)
         => queue.Where(e => e.Bucket is QueueBucket.UserQueue or QueueBucket.NextUp).Take(5).ToArray();
 
+    // The rail's section header is WaveeType.RailHeader UNMODIFIED. It used to be overridden back down to 14, which
+    // re-implemented BodyStrong and left the alias meaning two different things in two panels.
     static Element Section(string title, Element body) => new BoxEl
     {
-        Direction = 1, Gap = 10f,
+        Direction = 1, Gap = Spacing.S,
         Children =
         [
-            WaveeType.RailHeader(title) with { Size = 14f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            WaveeType.RailHeader(title) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
             body,
         ],
     };
 
     static Element Fact(string value, string label) => new BoxEl
     {
-        Direction = 1, Gap = 1f, Padding = new Edges4(8f, 5f, 8f, 5f),
-        Corners = CornerRadius4.All(6f), Fill = Tok.FillSubtleSecondary,
+        // Two Caption rungs (600 over 400) in a Radii.Control pill on the 4-grid — was 12/800 over 10, in a 6-radius
+        // pill with a 5px vertical pad.
+        Direction = 1, Gap = Spacing.XXS, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+        Corners = Radii.ControlAll, Fill = Tok.FillSubtleSecondary,
         Children =
         [
-            new TextEl(value) { Size = 12f, Weight = 800, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-            new TextEl(label) { Size = 10f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            new TextEl(value) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+            new TextEl(label) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         ],
     };
 
     static Element LoadingSection() => Section(Loc.Get(Strings.Detail.AboutTheArtist), new BoxEl
     {
-        Direction = 1, Gap = 10f, Padding = Edges4.All(12f),
+        Direction = 1, Gap = Spacing.S, Padding = Edges4.All(Spacing.M),
         Corners = CornerRadius4.All(Radii.Card), Fill = Tok.FillCardSecondary,
         Children =
         [
@@ -412,12 +423,8 @@ sealed class NowPlayingPanel : Component
         ],
     });
 
-    static Element Empty(string message) => new BoxEl
-    {
-        Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = Edges4.All(22f),
-        Children = [new TextEl(message) { Size = 13f, Color = Tok.TextSecondary }],
-    };
+    // Rail scale (this panel is ~340 DIP wide) on the shared grammar.
+    static Element Empty(string message) => EmptyState.Compact(message);
 
     static string Count(long n) => n.ToString("N0");
 }

@@ -1135,15 +1135,25 @@ public sealed class InputDispatcher
                     if (wasRepeat) OnRepeatReleased?.Invoke(_down);   // stop the auto-repeat
                     SetState(ref _pressed, NodeHandle.Null, NodeFlags.Pressed);   // release
                     _selDragging = false;   // the selection (if any) stays; the drag gesture ends with the press
-                    if (!up.IsNull && up == _down)
+                    // Activation OWNERSHIP (input-a11y.md §6.5): press and release are one gesture when they resolve to
+                    // the same click-owning ancestor, not only when they land on the same hit node. That is the WinUI
+                    // shape (the press captures on the owner) and it is what makes a plate with inert children behave as
+                    // ONE button: pressing its CanDrag label and releasing on its padding is a click on the plate.
+                    bool sameNode = !up.IsNull && up == _down;
+                    var upOwner = NearestClickOwner(up);
+                    bool sameOwner = sameNode || (!upOwner.IsNull && upOwner == NearestClickOwner(_down));
+                    if (sameOwner)
                     {
                         DispatchPointerReleased(up, e.PositionPx);
                         // Click on release-over-same (ClickMode.Release). Pointer FOCUS already moved on the press
                         // edge (WinUI ButtonBase_Partial.cpp:700-709) — the release only fires the click.
-                        if (!wasRepeat) InvokeActivation(up, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
+                        // Commits on the OWNER, never on the inert hit node (which has no handler to fire).
+                        if (!wasRepeat) InvokeActivation(upOwner.IsNull ? up : upOwner, ContextRequestTrigger.Invoke);   // repeat nodes already fired via the ticker
                         // Hyperlink span click: release over the span's laid rect fires ITS action (WinUI inline
                         // Hyperlink commits on the release over the pressed hyperlink, RichTextBlock.cpp:2996-3001).
-                        if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
+                        // Still strictly release-over-the-SAME-node: a span action is the leaf's, not the owner's, so
+                        // the widened owner-equality above must not let a press elsewhere on the plate fire a link.
+                        if (sameNode && (_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
                         {
                             int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
                             if (si >= 0 && _scene.TryGetSpanText(up, out var linkSpans) && (uint)si < (uint)linkSpans.Length)
@@ -2719,7 +2729,12 @@ public sealed class InputDispatcher
             else if (up == _down)
             {
                 DispatchPointerReleased(up, e.PositionPx);
-                InvokeActivation(up, ContextRequestTrigger.Invoke);   // tap = release-over-same click (or context-invoke on a ClickRequestsContext node)
+                // Same activation-ownership walk as the mouse release: a tap on a CanDrag-only (or cursor-only) child
+                // commits on the nearest clickable ancestor. Touch keeps the STRICT same-node gate — the pan/slop
+                // machinery above already owns "did this contact stay put", and widening it here would let a contact
+                // that wandered to a sibling still tap the plate.
+                var tapOwner = NearestClickOwner(up);
+                InvokeActivation(tapOwner.IsNull ? up : tapOwner, ContextRequestTrigger.Invoke);   // tap = release-over-same click (or context-invoke on a ClickRequestsContext node)
                 if ((_scene.Interaction(up).HandlerMask & InteractionInfo.SpanLinksBit) != 0)
                 {
                     int si = HitLinkSpan(up, PointToLocal(up, e.PositionPx));
@@ -2753,13 +2768,43 @@ public sealed class InputDispatcher
     /// this is a no-op unless a stray path set it).</summary>
     private void ClearTouchHover() => SetState(ref _hovered, NodeHandle.Null, NodeFlags.Hovered);
 
+    /// <summary>The node that OWNS a pointer activation started at <paramref name="node"/> (input-a11y.md §6.5): the
+    /// nearest enabled self-or-ancestor carrying a click handler. <see cref="Hit"/> deliberately makes a node hit-testable
+    /// for reasons that are NOT activation — <c>DragBit</c> (CanDrag), <c>CursorBit</c>, <c>SelectableTextBit</c>,
+    /// <c>ContextBit</c> — and the deepest such node wins the hit. Without this walk a <c>CanDrag</c>-only child inside a
+    /// clickable row/card is a CLICK BLACK HOLE: the release fires <c>GetClickHandler(child)</c>, which is null, and the
+    /// row never activates. <c>ClickRequestsContext</c> implies <c>ClickBit</c> (Reconciler), so one bit covers both
+    /// activation shapes. Returns Null when nothing in the chain activates — the caller then does what it always did.
+    /// Same shape as <see cref="DispatchMiddleRelease"/> / <see cref="DispatchContextRequest"/>; stopping at the FIRST
+    /// owner is what keeps a nested clickable from double-firing with its ancestor.</summary>
+    private NodeHandle NearestClickOwner(NodeHandle node)
+    {
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
+        {
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.ClickBit) != 0) return n;
+        }
+        return NodeHandle.Null;
+    }
+
+    /// <summary>Deliver the release to the nearest enabled self-or-ancestor that took a pointer press/release handler —
+    /// the same ancestor walk <see cref="DispatchMiddleRelease"/> already used for the middle button, and for the same
+    /// reason: an inert child (a CanDrag label, a cursor-only glyph) must not swallow its plate's release. Stops at the
+    /// FIRST <c>PressedBit</c> node whether or not it took the Released half, so a release never leaks past an
+    /// intervening pressed-handler node to its grandparent.</summary>
     private void DispatchPointerReleased(NodeHandle node, Point2 positionPx)
     {
-        _scene.GetPointerReleased(node)?.Invoke(new PointerEventArgs
+        for (var n = node; !n.IsNull; n = _scene.Parent(n))
         {
-            Local = LocalPos(node, positionPx), ClickCount = _pressClickCount, Mods = _pressMods,
-            Button = 0, Kind = _pressKind,
-        });
+            if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
+            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.PressedBit) == 0) continue;
+            _scene.GetPointerReleased(n)?.Invoke(new PointerEventArgs
+            {
+                Local = LocalPos(n, positionPx), ClickCount = _pressClickCount, Mods = _pressMods,
+                Button = 0, Kind = _pressKind,
+            });
+            return;
+        }
     }
 
     /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).</summary>
@@ -2820,7 +2865,13 @@ public sealed class InputDispatcher
     /// <c>ClickRequestsContext</c> node (bit 16) re-enters the context-request funnel via <see cref="RequestContextFrom"/>
     /// with <paramref name="ctxTrigger"/> (<see cref="ContextRequestTrigger.Invoke"/> for pointer/touch, or
     /// <see cref="ContextRequestTrigger.Keyboard"/> for a Space/Enter activation so the first item focuses); every other
-    /// clickable fires its click handler as before. The single commit chokepoint for all activation sites.</summary>
+    /// clickable fires its click handler as before. The single commit chokepoint for all activation sites.
+    /// <para>Fires on the node it is HANDED — it does not walk. The ancestor walk belongs to the POINTER release sites,
+    /// which resolve <see cref="NearestClickOwner"/> before calling in, because only there is the node a raw hit-test
+    /// result that may be interactive-but-not-clickable. The other three callers already hold an activation owner and
+    /// must NOT walk: keyboard Space/Enter is gated on the focused node's own <c>ClickBit</c>, an accelerator/access-key
+    /// owner is the registered target, and the <c>_dragTarget</c> capture-commit is a continuous OnDrag node whose click
+    /// handler IS its commit edge (a slider scrub inside a clickable card must never end up clicking the card).</para></summary>
     private void InvokeActivation(NodeHandle node, ContextRequestTrigger ctxTrigger)
     {
         if (!node.IsNull && (_scene.Interaction(node).HandlerMask & InteractionInfo.ClickRequestsContextBit) != 0)

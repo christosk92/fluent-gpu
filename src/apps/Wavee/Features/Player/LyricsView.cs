@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
@@ -390,7 +390,7 @@ sealed class LyricsView : Component
                         Padding = new Edges4(11f, 7f, 13f, 7f), Corners = CornerRadius4.All(16f),
                         Fill = Tok.FillSolidBase with { A = 0.92f }, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                         HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
-                        PressScale = 0.98f, Cursor = CursorId.Hand,
+                        PressScale = WaveeMotion.ScaleSubtle.Press, Cursor = CursorId.Hand,
                         OnClick = () => BeginResync(Context.Scene),
                         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
                         Enter = new EnterExit(Dy: 4f, Opacity: 0f, Active: true),
@@ -400,7 +400,7 @@ sealed class LyricsView : Component
                         [
                             ProgressRing.Create(_resyncProgress, size: 18f, foreground: Tok.AccentDefault,
                                 track: Tok.StrokeControlDefault with { A = 0.55f }),
-                            new TextEl(label) { Size = 12f, Weight = 650, Color = Tok.TextPrimary },
+                            new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary },
                         ],
                     }),
             ],
@@ -738,12 +738,12 @@ sealed class LyricsView : Component
         [
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = 5f,
-                Padding = new Edges4(9f, 5f, 9f, 5f), Corners = CornerRadius4.All(7f),
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+                Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.ControlAll,
                 Fill = Tok.FillSolidBase with { A = 0.90f }, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                 Cursor = CursorId.Hand, OnClick = () => _debugOpen.Value = true,
                 Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
-                Children = [new TextEl("lyrics debug") { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
+                Children = [new TextEl("lyrics debug") { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary }],
             },
         ],
     };
@@ -758,13 +758,13 @@ sealed class LyricsView : Component
                 Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
                 Children =
                 [
-                    new TextEl("Lyrics search") { Size = 15f, Weight = 700, Color = Tok.TextPrimary, Grow = 1f },
+                    new TextEl("Lyrics search") { Size = 18f, LineHeight = 24f, Weight = 600, Color = Tok.TextPrimary, Grow = 1f },
                     new BoxEl
                     {
-                        Padding = new Edges4(9f, 4f, 9f, 4f), Corners = CornerRadius4.All(6f), Fill = Tok.FillSubtleSecondary,
+                        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.ControlAll, Fill = Tok.FillSubtleSecondary,
                         Cursor = CursorId.Hand, OnClick = () => _debugOpen.Value = false,
                         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
-                        Children = [new TextEl("close ✕") { Size = 11f, Weight = 600, Color = Tok.TextSecondary }],
+                        Children = [new TextEl("close ✕") { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary }],
                     },
                 ],
             },
@@ -773,19 +773,19 @@ sealed class LyricsView : Component
         if (report is null)
         {
             rows.Add(new TextEl("No search recorded for this track yet — it may be a local/fake track, or the fetch is still in flight. Close and reopen to refresh.")
-            { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = 17f });
+            { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
         }
         else
         {
-            rows.Add(new TextEl(report.Summary) { Size = 12.5f, Weight = 600, Color = Tok.AccentTextPrimary, Wrap = TextWrap.Wrap, LineHeight = 18f });
+            rows.Add(new TextEl(report.Summary) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.AccentTextPrimary, Wrap = TextWrap.Wrap });
             rows.Add(new TextEl($"“{report.Title}” — {(report.Artist.Length > 0 ? report.Artist : "(no artist)")}")
             { Size = 12f, Color = Tok.TextPrimary, Wrap = TextWrap.Wrap, LineHeight = 16f });
             rows.Add(new TextEl($"album: {(report.Album.Length > 0 ? report.Album : "—")}   ·   {report.DurationMs / 1000}s   ·   ISRC: {report.Isrc ?? "—"}")
-            { Size = 11f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, LineHeight = 15f });
+            { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap });
             rows.Add(new BoxEl { Height = 1f, Fill = Tok.StrokeCardDefault });
             foreach (var t in report.Sources) rows.Add(SourceRow(t));
             if (report.Sources.Count == 0)
-                rows.Add(new TextEl("(no sources ran)") { Size = 12f, Color = Tok.TextSecondary });
+                rows.Add(new TextEl("(no sources ran)") { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary });
         }
 
         return new BoxEl
@@ -796,7 +796,7 @@ sealed class LyricsView : Component
                 new ScrollEl
                 {
                     Grow = 1f, MinHeight = 0f,
-                    Content = new BoxEl { Direction = 1, Gap = 9f, Padding = new Edges4(18f, 16f, 18f, 18f), Children = rows.ToArray() },
+                    Content = new BoxEl { Direction = 1, Gap = Spacing.S, Padding = Edges4.All(Spacing.L), Children = rows.ToArray() },
                 },
             ],
         };
@@ -817,22 +817,22 @@ sealed class LyricsView : Component
         {
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Gap = 7f,
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                 Children =
                 [
-                    new BoxEl { Width = 8f, Height = 8f, Corners = CornerRadius4.All(4f), Fill = dot },
-                    new TextEl(t.SourceId) { Size = 12.5f, Weight = 700, Color = t.Winner ? Tok.AccentTextPrimary : Tok.TextPrimary },
+                    new BoxEl { Width = 8f, Height = 8f, Corners = Radii.Circle(8f), Fill = dot },
+                    new TextEl(t.SourceId) { Size = 14f, LineHeight = 20f, Weight = 600, Color = t.Winner ? Tok.AccentTextPrimary : Tok.TextPrimary },
                     new TextEl($"{t.Outcome.ToString().ToUpperInvariant()} · {t.ElapsedMs}ms{(t.Winner ? "  ★ winner" : "")}")
-                    { Size = 11f, Weight = 600, Color = Tok.TextSecondary, Grow = 1f },
+                    { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, Grow = 1f },
                 ],
             },
         };
         if (t.Detail.Length > 0)
-            lines.Add(new TextEl(t.Detail) { Size = 11f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, LineHeight = 15f });
+            lines.Add(new TextEl(t.Detail) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
         if (t.Outcome == LyricsOutcome.Hit && t.RerankReason.Length > 0)
-            lines.Add(new TextEl($"rerank score {t.Score:F2}  ·  {t.RerankReason}") { Size = 10.5f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, LineHeight = 14f });
+            lines.Add(new TextEl($"rerank score {t.Score:F2}  ·  {t.RerankReason}") { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap });
 
-        return new BoxEl { Direction = 1, Gap = 3f, Children = lines.ToArray() };
+        return new BoxEl { Direction = 1, Gap = Spacing.XS, Children = lines.ToArray() };
     }
 
     void PrepareDocument(LyricsDocument doc, long posMs)
@@ -2297,8 +2297,8 @@ sealed class LyricsView : Component
     static Element Message(string msg) => new BoxEl
     {
         Grow = 1f, MinHeight = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(22f, 0f, 22f, 0f),
-        Children = [new TextEl(msg) { Size = 13f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap }],
+        Padding = new Edges4(Spacing.XXL, 0f, Spacing.XXL, 0f),
+        Children = [new TextEl(msg) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap }],
     };
 }
 
@@ -2559,7 +2559,7 @@ sealed class LyricLineView : Component
             Element main = LineText(_line.Text, lit ? Tok.TextPrimary : Tok.TextSecondary) with
             {
                 // ~150 ms brush cross-fade so the Primary↔Secondary color flip at the handoff never snaps in one frame.
-                BrushTransitionMs = 150f,
+                BrushTransitionMs = WaveeMotion.Fast,
                 OnRealized = h => _reportNode(_index, h),
             };
             textEl = new BoxEl { ZStack = true, Children = [glow, main] };

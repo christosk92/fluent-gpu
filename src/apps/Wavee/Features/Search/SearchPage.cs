@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using FluentGpu.Controls;
@@ -151,7 +151,7 @@ sealed class SearchPage : Component
             return HitsList(r.Profiles, Loc.Get(Strings.Search.NoProfileResults), r, go, Play, PlayTrack, PlayKnownTrack);
 
         if (chip != 0 && r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count == 0)
-            return Centered(Icons.Search, Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
+            return EmptyState.Build(Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
 
         return chip switch
         {
@@ -223,10 +223,13 @@ sealed class SearchPage : Component
 
     static Element ResultRow(Image? cover, int seed, string title, string subtitle, string type, bool circular, Action open) => new BoxEl
     {
+        // A ROW, not a card. Twenty of these stacked put twenty hairlines down the page, which reads as a table with
+        // its rules drawn twice - and a filled plate per row leaves no quiet ground for hover to move against. Rows are
+        // transparent at rest and take the subtle-fill ladder on interaction, like every other list in the app.
         Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = CornerRadius4.All(6f),
-        Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
+        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
+        Fill = ColorF.Transparent,
+        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
         Children =
         [
             new BoxEl { Width = 48f, Height = 48f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 24f : 6f), ClipToBounds = true,
@@ -234,8 +237,8 @@ sealed class SearchPage : Component
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 1f,
                 Children =
                 [
-                    new TextEl(title) { Size = 14f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    new TextEl(subtitle) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    new TextEl(title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    new TextEl(subtitle) { Size = 12f, LineHeight = 16f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ] },
             TypePill(type),
         ],
@@ -243,8 +246,9 @@ sealed class SearchPage : Component
 
     static Element TypePill(string type) => new BoxEl
     {
-        Padding = new Edges4(10f, 3f, 10f, 3f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-        Children = [new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f }],
+        // The eyebrow alias in a Radii.Full capsule. The old 11 radius was a hand-computed half-height.
+        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll, Fill = Tok.FillSubtleSecondary,
+        Children = [WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary }],
     };
 
     // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
@@ -309,9 +313,9 @@ sealed class SearchPage : Component
                 [
                     TypePill(type),
                     new BoxEl { Grow = 1f },
-                    new BoxEl { Width = 44f, Height = 44f, Corners = CornerRadius4.All(22f), Fill = Tok.AccentDefault,
+                    new BoxEl { Width = 44f, Height = 44f, Corners = Radii.Circle(44f), Fill = Tok.AccentDefault,
                         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Shadow = Elevation.Card,
-                        HoverScale = 1.06f, PressScale = 0.94f, OnClick = play,
+                        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press, OnClick = play,
                         Children = [Icon(Icons.Play, 16f, Tok.TextOnAccentPrimary)] },
                 ],
             },
@@ -337,17 +341,6 @@ sealed class SearchPage : Component
         Children = [PagedShelf.Create(count, cardAt: cardAt, measured: true, header: WaveeType.RailHeader(title))],
     };
 
-    static Element Centered(string glyph, string title, string sub) => new BoxEl
-    {
-        Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.XL, Spacing.XXL, Spacing.XL, Spacing.XXL),
-        Children =
-        [
-            Icon(glyph, 40f, Tok.TextTertiary),
-            WaveeType.PageHero(title),
-            new TextEl(sub) { Size = 14f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MaxWidth = 440f },
-        ],
-    };
 }
 
 // Search track rows — the All-view "Songs" preview (capped) and the dedicated "Songs" tab (full). A Component so the rows
@@ -366,15 +359,11 @@ sealed class SearchSongs : Component
     const float RowExtent = 60f;
     readonly SwipeGroup _swipeGroup = new();
 
-    // transitions.dev texts-reveal for the bound Songs list: per-slot mount Enter (rise + fade + blur) with a baked
-    // per-index delay. Only the first viewport staggers; slots realized later by scrolling mount unanimated (the
-    // detail list's accepted behavior for virtualized entrances).
-    static readonly LayoutTransition RowRise = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(Expressive.Slow, Easing.SmoothOut),
-        Enter: new EnterExit(Dy: 8f, Opacity: 0f, Active: true, Blur: Expressive.BlurSmall));
-    const int StaggerRowCap = 12;
-
+    // The bound Songs list's entrance is the app's ONE list recipe (WaveeEntrance): a per-slot mount Enter — rise +
+    // fade + blur — with a baked per-index delay off WaveeMotion.StaggerMs, capped so a long result set finishes
+    // arriving in 360ms rather than two seconds. This file used to own a private copy of that spec (its own transition
+    // constant, its own cap of 12, its own `!Motion.ReducedMotion` gate); the recipe now lives in the design system so
+    // a second staggered surface cannot re-pick the numbers.
     public override Element Render()
     {
         var model = UseContext(Props);
@@ -403,11 +392,9 @@ sealed class SearchSongs : Component
                 int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
                 var wrapper = new BoxEl
                 {
-                    Direction = 1, Corners = CornerRadius4.All(6f), ClipToBounds = true,
-                    Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                    Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
-                        ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
-                        : (LayoutTransition?)null,
+                    // Transparent row, not a stroked card - see ResultRow.
+                    Direction = 1, Corners = Radii.ControlAll, ClipToBounds = true,
+                    Animate = WaveeEntrance.Row(slot0),
                     // Search results are a COPY source: no SourcePlaylistUri/SourceRows, so a playlist destination adds
                     // rather than moves. A drag starting inside the multi-selection carries all of it (the DetailTracks
                     // rule); the row index is read at PROMOTION, never captured, because slots recycle.
@@ -597,7 +584,7 @@ sealed class SearchAllList : Component
             return new BoxEl { Direction = 1, Gap = Spacing.S, Children = fallback.ToArray() };
 
         // No unified top-results and no facet rows.
-        return EmptyState.Build(Loc.Get(Strings.Search.NoResults), glyph: Icons.Search);
+        return EmptyState.Build(Loc.Get(Strings.Search.NoResults));
     }
 
     internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle,
@@ -609,7 +596,7 @@ sealed class SearchAllList : Component
     internal static Element BuildHits(IReadOnlyList<SearchTopHit> hits, LibraryBridge? lib, Model model, string emptyTitle,
                                       ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
-        if (hits.Count == 0) return EmptyState.Build(emptyTitle, glyph: Icons.Search);
+        if (hits.Count == 0) return EmptyState.Build(emptyTitle);
         var rows = new Element[hits.Count];
         for (int i = 0; i < hits.Count; i++)
             rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
@@ -622,7 +609,9 @@ sealed class SearchAllList : Component
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
         Element? trailing =
-            h.Followable ? FollowButton(lib?.IsSaved(h.Uri) ?? false, () => lib?.ToggleSaved(h.Uri, h.Name))
+            // The SHARED FollowButton component, not a local look-alike: it owns the followed state, the accent
+            // border that carries it, and the capsule geometry it shares with the Play CTA.
+            h.Followable ? Embed.Comp(() => new FollowButton(h.Uri, h.Name)) with { Key = "follow:" + h.Uri }
             : isTrack ? SaveButton(lib?.IsSaved(h.Uri) ?? false, () => { if (h.Uri.Length > 0) lib?.ToggleSaved(h.Uri, h.Name); })
             : null;
         Action play = isTrack ? () => model.PlayTrack(h.Uri) : () => model.PlayContext(h.Uri);
@@ -701,7 +690,7 @@ sealed class SearchAllList : Component
         a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Uri, true,
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
-        trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large,
+        trailing: Embed.Comp(() => new FollowButton(a.Uri, a.Name)) with { Key = "follow:" + a.Uri }, large: large,
         menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Image, Loc.Get(Strings.Search.TypeArtist), circular: true),
         // An artist is PINNABLE but carries no tracks — dropping it on a playlist is refused with a cue, never a guess.
         drag: Drag.Source(WaveeDragKinds.Resource,
@@ -737,19 +726,10 @@ sealed class SearchAllList : Component
 
     static Element SaveButton(bool saved, Action toggle) => new BoxEl
     {
-        Width = 32f, Height = 32f, Shrink = 0f, Corners = CornerRadius4.All(16f),
-        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.1f, OnClick = toggle,
+        Width = 32f, Height = 32f, Shrink = 0f, Corners = Radii.Circle(32f),
+        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = WaveeMotion.ScaleEmphatic.Hover, OnClick = toggle,
         BlocksDragArm = true,   // the row drags; this button saves — a press here is never a drag handle
         Children = [Icon(saved ? Icons.Accept : Icons.Add, 16f, saved ? Tok.AccentDefault : Tok.TextSecondary)],
-    };
-
-    static Element FollowButton(bool following, Action toggle) => new BoxEl
-    {
-        Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(16f, 6f, 16f, 6f), Corners = CornerRadius4.All(16f),
-        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillSubtleSecondary, HoverScale = 1.04f, OnClick = toggle,
-        BlocksDragArm = true,   // see SaveButton
-        Children = [new TextEl(following ? "Following" : "Follow") { Size = 12f, Weight = 700, Color = Tok.TextPrimary }],
     };
 
     static string Names(IReadOnlyList<ArtistRef> artists)

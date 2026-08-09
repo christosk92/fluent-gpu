@@ -48,6 +48,7 @@ public static class SuiteRegistry
         new("touch", "touch", TouchSuite.Run),
         new("image", "image", ImageSuite.Run),
         new("controls", "controls", ControlsSuite.Run),
+        new("titlebar", "titlebar", TitleBarSuite.Run),
         new("nav", "nav", NavSuite.Run),
         new("overlay", "overlay", OverlaySuite.Run),
         new("damage", "damage", DamageSuite.Run),
