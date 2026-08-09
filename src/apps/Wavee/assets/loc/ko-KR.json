@@ -120,6 +120,8 @@
       "rowDensitySub": "트랙 목록의 행 높이",
       "pageLayout": "트랙 페이지 레이아웃",
       "pageLayoutSub": "자동 사이드 레일을 사용하거나 모든 크기에서 아트워크 히어로를 사용합니다",
+      "pageTone": "페이지 색상을 히어로로 제한",
+      "pageToneSub": "페이지 전체를 물들이지 않고 히어로 아래에서 아트워크 색조를 서서히 없앱니다",
       "disableMarquee": "흐르는 텍스트 끄기",
       "disableMarqueeSub": "긴 제목을 스크롤하지 않고 자릅니다",
       "disableColorWashes": "색상 워시 끄기",

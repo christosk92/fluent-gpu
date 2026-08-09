@@ -144,6 +144,11 @@ sealed partial class SettingsPage
             DensityBlock(density, SetDensity),
             SettingsRow(Loc.Get(Strings.Settings.Appearance.PageLayout), Loc.Get(Strings.Settings.Appearance.PageLayoutSub),
                 PageLayoutCards(pageLayout, SetPageLayout), Icons.List),
+            // …and how far that page's art-derived TONE reaches. Beside the layout row because it is the same kind of
+            // choice about the same surface. A plain AppearanceToggle: its Bump() raises AppearancePrefs.Epoch, which
+            // every mounted DetailShell already reads, so flipping it re-solves an open page's ground with no restart.
+            SettingsRow(Loc.Get(Strings.Settings.Appearance.PageTone), Loc.Get(Strings.Settings.Appearance.PageToneSub),
+                AppearanceToggle(WaveeSettings.DetailPageToneHeroOnly), Icons.Brush),
             // The sidebar design is the last item of the Appearance group — beside the other layout choices, before the
             // Language header (§C6.3). A Component rather than an inline block: the card needs SidebarPreferences and the
             // nav action from CONTEXT, and GeneralTab runs only while the General tab is selected, so a hook added here

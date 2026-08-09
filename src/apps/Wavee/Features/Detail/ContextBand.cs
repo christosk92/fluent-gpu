@@ -63,7 +63,13 @@ sealed class SectionAnchors
 static class ContextBand
 {
     /// <summary>The band's opaque material. See <see cref="WaveeColors.ContextBand"/> for why it is opaque and why it
-    /// is that particular flatten.</summary>
+    /// is that particular flatten.
+    ///
+    /// <para>A page that paints its OWN opaque ground under the band (the detail pages' art-derived
+    /// <c>WaveePalette.PageTone</c> plane) must not use this constant: it is solved against the neutral Mica reference,
+    /// and on a tinted page that reads as a grey plate. Those callers pass a live fill through
+    /// <see cref="Row(float,float,Element[],Func{ColorF})"/> instead, which resolves
+    /// <see cref="WaveeColors.ContextBandOver"/> on the compositor.</para></summary>
     public static ColorF Fill => WaveeColors.ContextBand;
 
     /// <summary>The band's single lower edge — a low-alpha SEPARATOR token, never the accent. The accent in this band
@@ -108,13 +114,15 @@ static class ContextBand
     /// <summary>The identity row: <see cref="ContextBandLayout.Height"/> tall, gutter-padded, opaque, and carrying no
     /// edge of its own — the caller decides where the band's ONE hairline goes (overlaid on the artist page, in flow
     /// under the tracklist's column header on the detail pages).</summary>
-    public static Element Row(float width, float gutter, Element[] children) => new BoxEl
+    public static Element Row(float width, float gutter, Element[] children, Func<ColorF>? fill = null) => new BoxEl
     {
         Direction = 0, Width = width, Height = ContextBandLayout.Height,
         Padding = new Edges4(gutter, 0f, gutter, 0f),
         Gap = ContextBandLayout.ClusterGap,
         AlignItems = FlexAlign.Center,
-        Fill = Fill,
+        // BOUND when the caller supplies one: a page whose ground is art-derived re-solves this brush on the
+        // compositor as gradings land, instead of re-rendering the band (and its pivot, and its actions) for a colour.
+        Fill = fill is null ? Fill : Prop.Of(fill),
         Children = children,
     };
 

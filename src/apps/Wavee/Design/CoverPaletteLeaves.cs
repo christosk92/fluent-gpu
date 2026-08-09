@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
+using Wavee.Core;
 using Wavee.Features.Detail;
 using static FluentGpu.Dsl.Ui;
 
@@ -15,17 +17,18 @@ namespace Wavee;
 /// </summary>
 static class CoverPaletteLeaves
 {
-    static readonly LayoutTransition PaletteWashTransition = new(
-        TransitionChannels.Opacity,
-        TransitionDynamics.Tween(420f, Easing.SmoothOut),
-        Enter: new EnterExit(Opacity: 0f, Active: true),
-        Exit: new EnterExit(Opacity: 0f, Active: true),
-        ExitDynamics: TransitionDynamics.Tween(320f, Easing.SmoothOut));
-
-    /// <summary>Detail page wash (two-column <see cref="Surfaces.HeroWash"/> or vertical <see cref="Surfaces.DetailHeroWash"/>).</summary>
-    public static Element DetailWash(string? url, string? fallbackUrl, bool immersive, bool vertical, bool disabled, string key)
-        => Embed.Comp(new CoverKeyedWash.Props(url, fallbackUrl, immersive, vertical, disabled),
-                      () => new CoverKeyedWash()) with { Key = key };
+    /// <summary>THE detail page's ground: one OPAQUE art-derived plane (<see cref="WaveePalette.PageTone"/>) behind
+    /// both hero arms, carrying the blurred background extension and — in hero-only mode — the fade back to the neutral
+    /// surface below the hero. It replaces the stack of top-anchored alpha washes the two arms used to paint.
+    ///
+    /// <para><paramref name="tone"/> is a mount-stable box the leaf PUBLISHES the resolved tone into (from an effect,
+    /// never from Render), so surfaces that must sit ON the tone — the sticky context band's material — can bind to it
+    /// without the page taking a <c>Watch</c> subscription of its own.</para></summary>
+    public static Element PageTonePlane(string? url, string? fallbackUrl, bool disabled, float heroBand,
+                                        float pageHeight, bool heroOnly, Image? cover,
+                                        Signal<ColorF?>? tone, string key)
+        => Embed.Comp(new CoverPageTonePlane.Props(url, fallbackUrl, disabled, heroBand, pageHeight, heroOnly, cover, tone),
+                      () => new CoverPageTonePlane()) with { Key = key };
 
     /// <summary>Artist page blend wash (height follows the hero layout for the current width).</summary>
     public static Element ArtistBlendWash(string? url, float heroWidth, bool disabled, string key)
@@ -42,43 +45,127 @@ static class CoverPaletteLeaves
                                     Signal<ShellMaterialState>? slot, string key, string? fallbackUrl = null)
         => Embed.Comp(new CoverShellTintBinder.Props(url, fallbackUrl, ready, disabled, apply, owner, slot),
                       () => new CoverShellTintBinder()) with { Key = key };
-
-    internal static LayoutTransition WashTransition => PaletteWashTransition;
 }
 
-/// <summary>Detail wash leaf: reads <see cref="SpotifyLive.CoverColorPlane.Watch"/> in its own Render so a colour
-/// landing rebuilds only this box's Gradient.</summary>
-sealed class CoverKeyedWash : Component
+/// <summary>The detail page's opaque art-derived ground. The <c>CoverColorPlane.Watch</c> subscription lives HERE, in
+/// a leaf, never in a page <c>Render</c> — so a grading arriving mid-scroll re-renders this one node and nothing else;
+/// the rail, the hero and the virtualized track list are untouched. (The leaf HAS to re-render rather than merely
+/// re-paint, because it also PUBLISHES the resolved tone for the sticky band to flatten its material over. The bound
+/// <c>Fill</c> below keeps the brush itself on the compositor, and <c>BrushTransitionMs</c> is what turns a grading
+/// arrival into a cross-fade rather than a snap.)
+///
+/// <para><b>The background extension</b> (the art melting into the surface) is the same node: a scaled, blurred copy of
+/// the cover masked away over the hero band. It uses <c>ImageEl.BakedBlur</c> — the blur is baked ONCE per (source,
+/// size, sigma) into a derived texture and the node is then an ordinary quad, so scrolling the page costs no Gaussian.
+/// A <c>BoxEl.Blur</c> here would instead be a pooled offscreen RT plus a separable Gaussian with a ~3σ halo EVERY
+/// frame, which is what that property exists for (animated softening) and not this.</para></summary>
+sealed class CoverPageTonePlane : Component
 {
-    internal sealed record Props(string? Url, string? FallbackUrl, bool Immersive, bool Vertical, bool Disabled);
+    internal sealed record Props(string? Url, string? FallbackUrl, bool Disabled, float HeroBand, float PageHeight,
+                                 bool HeroOnly, Image? Cover, Signal<ColorF?>? Tone);
+
+    /// <summary>Blur radius of the background extension, and the resolution it is baked at. Large sigma at half
+    /// resolution is the cheap end of the bake and the only honest one at this scale — a lightly blurred cover reads as
+    /// a mistake, not as a backdrop.</summary>
+    const float BackdropSigmaDip = 72f, BackdropResolutionScale = 0.5f;
+    const float BackdropSaturation = 1.35f;
+    const float BackdropAlphaDark = 0.40f, BackdropAlphaLight = 0.45f;
 
     public override Element Render()
     {
         var p = UseProps<Props>();
-        if (p.Disabled)
+
+        // The Watch subscriptions, resolved ONCE per render and read here. Hoisting them out of the Fill closure
+        // matters: Watch takes the plane's lock, and a bound brush is re-evaluated on the paint path.
+        var plane = SpotifyLive.CoverColorPlane.Current;
+        _ = plane.Watch(p.Url).Value;
+        if (p.FallbackUrl is { Length: > 0 } fb && !string.Equals(fb, p.Url, StringComparison.Ordinal))
+            _ = plane.Watch(fb).Value;
+
+        // The published tone is what the sticky band flattens its material over. Resolved here (this leaf is the one
+        // node allowed to observe the plane) and written from an EFFECT — a signal write during Render is never legal.
+        ColorF? resolved = p.Disabled ? null : Resolve(p);
+        var tone = p.Tone;
+        UseEffect(() =>
+        {
+            if (tone is not null) tone.Value = resolved;
+        }, DepKey.From(HashCode.Combine(resolved.HasValue, resolved.GetValueOrDefault(), p.Disabled)));
+        UseEffect(() => (Action?)(() => { if (tone is not null) tone.Value = null; }), DepKey.Empty);
+
+        if (p.Disabled || resolved is null)
             return new BoxEl { Grow = 1f, HitTestVisible = false };
 
-        _ = SpotifyLive.CoverColorPlane.Current.Watch(p.Url).Value;
-        if (p.FallbackUrl is { Length: > 0 } fb && !string.Equals(fb, p.Url, StringComparison.Ordinal))
-            _ = SpotifyLive.CoverColorPlane.Current.Watch(fb).Value;
-
-        var coverArt = Surfaces.SchemeFor(p.Url);
-        var livePal = coverArt is null ? Surfaces.SchemeFor(p.FallbackUrl) : null;
-        var art = coverArt ?? livePal;
-        bool light = Tok.Theme == ThemeKind.Light;
-        ColorF washColor = light
-            ? (coverArt is { } cover ? WaveePalette.Lift(WaveePalette.Accent(cover))
-                : livePal is { } lp ? WaveePalette.Accent(lp) : Tok.AccentDefault)
-            : WaveePalette.BackgroundDark(art ?? WaveePalette.Neutral);
+        var kids = new List<Element>(2);
+        if (Backdrop(p) is { } backdrop) kids.Add(backdrop);
+        if (p.HeroOnly && HeroOnlyVeil(p) is { } veil) kids.Add(veil);
 
         return new BoxEl
         {
             ZStack = true, Grow = 1f, HitTestVisible = false,
             ClipToBounds = true, Corners = WaveeShell.ContentPaneCorners,
-            Gradient = p.Vertical
-                ? Surfaces.DetailHeroWash(washColor, p.Immersive)
-                : Surfaces.HeroWash(washColor),
-            Animate = CoverPaletteLeaves.WashTransition,
+            // BOUND: the brush stays a compositor value, so a theme/preset re-fire lands without this subtree being
+            // rebuilt, and the 250ms ramp cross-fades a grading arrival instead of snapping to it.
+            Fill = Prop.Of(() => Resolve(p) ?? WaveeColors.ContentSurface),
+            BrushTransitionMs = WaveeMotion.Standard,
+            Children = kids.ToArray(),
+        };
+    }
+
+    /// <summary>Cover grading → the page's ground. Cheap: two dictionary probes and the clamp; no subscription (the
+    /// caller owns that), so it is safe on the paint path.</summary>
+    static ColorF? Resolve(Props p)
+        => WaveePalette.PageTone(Surfaces.SchemeFor(p.Url) ?? Surfaces.SchemeFor(p.FallbackUrl), Tok.Theme);
+
+    /// <summary>The blurred, oversaturated cover behind the hero, masked to nothing by the hero's lower edge.</summary>
+    static Element? Backdrop(Props p)
+    {
+        string? url = ImageSource.UrlFor(p.Cover, preferLargest: false);
+        if (url is not { Length: > 0 }) return null;
+        float band = DetailVerticalLayout.BackdropBandFor(p.HeroBand);
+        // The mask reaches zero exactly at the band's lower edge — i.e. at the hero's own bottom — so the art has
+        // already become the tone by the time the track list starts.
+        float feather = band * DetailVerticalLayout.BackdropFadeFraction;
+        // A ZStack child with an explicit Height and NO Width fills the stack's width and sits flush at the top —
+        // exactly the band this wants, with no alignment authored.
+        return new BoxEl
+        {
+            Height = band,
+            ZStack = true, ClipToBounds = true, HitTestVisible = false,
+            Opacity = Tok.Theme == ThemeKind.Light ? BackdropAlphaLight : BackdropAlphaDark,
+            Children =
+            [
+                Ui.Image(url, ImageFit.Cover, aspect: float.NaN, decodePx: 512f, corners: 0f,
+                    placeholder: ColorF.Transparent, blurHash: p.Cover?.BlurHash,
+                    transition: ImageTransition.Fade(WaveeMotion.Standard)) with
+                {
+                    AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
+                    BakedBlur = new BakedBlurSpec(BackdropSigmaDip, BackdropResolutionScale),
+                    Saturation = BackdropSaturation,
+                    Mask = new ImageMaskSpec(EdgeMask.Bottom, 0f, 0f, 0f, feather),
+                },
+            ],
+        };
+    }
+
+    /// <summary>Hero-only mode: the tone survives the hero band and dissolves into the neutral content surface below
+    /// it. The veil fades the neutral ground IN over the tone (rather than fading the tone OUT to nothing), so the
+    /// composite stays opaque the whole way down — the plane's job is to BE the ground, not to tint one.</summary>
+    static Element? HeroOnlyVeil(Props p)
+    {
+        float pageH = p.PageHeight > 1f ? p.PageHeight : 0f;
+        if (pageH <= 1f) return null;
+        float band = DetailVerticalLayout.BackdropBandFor(p.HeroBand);
+        float start = Math.Clamp(band / pageH, 0.12f, 0.80f);
+        float end = MathF.Min(1f, start + 0.22f);
+        ColorF ground = WaveeColors.ContentSurface;
+        return new BoxEl
+        {
+            HitTestVisible = false,   // sized by the ZStack (no explicit extent ⇒ full bleed)
+            Gradient = GradientDown(
+                new GradientStop(0f, ground with { A = 0f }),
+                new GradientStop(start, ground with { A = 0f }),
+                new GradientStop(end, ground),
+                new GradientStop(1f, ground)),
         };
     }
 }

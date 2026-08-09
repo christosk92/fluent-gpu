@@ -52,9 +52,9 @@ public static class Surfaces
 
     /// <summary>The full graded roles behind a cover — for PAGE chrome (hero washes, accent bars, the Play button, the
     /// shell's published material tint) rather than a placeholder tile. Null until the plane has a grading for this theme.
-    /// Callers that want the wash to appear the moment it lands must NOT read <c>Watch</c>/<c>Epoch</c> at page scope
-    /// (that rebuilds the whole page); subscribe from a leaf wash/tint node or a bound Fill instead — see
-    /// <c>CoverKeyedWash</c>.</summary>
+    /// Callers that want the colour to appear the moment it lands must NOT read <c>Watch</c>/<c>Epoch</c> at page scope
+    /// (that rebuilds the whole page); subscribe from a leaf tone/tint node or a bound Fill instead — see
+    /// <c>CoverPageTonePlane</c> and its siblings in <c>CoverPaletteLeaves</c>.</summary>
     internal static SpotifyLive.CoverColorPlane.Scheme? SchemeFor(string? url) =>
         SpotifyLive.CoverColorPlane.Current.TryGetScheme(url, Tok.Theme == ThemeKind.Light);
 
@@ -98,7 +98,7 @@ public static class Surfaces
 
     /// <summary>Semantic copy protection over full-bleed artist photography. Both axes use exactly four stops (the
     /// recorder limit) and release to alpha zero at the hero seam. Peak alphas match the immersive detail hero
-    /// (<see cref="DetailHeroWash"/>) rather than a near-opaque plate: the photography must stay READ as photography —
+    /// (the deleted immersive detail hero's) rather than a near-opaque plate: the photography must stay READ as photography —
     /// a 0.96 peak flattened the hero into what read as a solid painted band, the opposite of the album pages.</summary>
     public static GradientSpec ArtistHeroVeil(ColorF accent, ArtistHeroVeilAxis axis)
     {
@@ -122,19 +122,9 @@ public static class Surfaces
             new GradientStop(1f, veil with { A = 0f }));
     }
 
-    public static GradientSpec DetailHeroWash(ColorF accent, bool immersive)
-    {
-        if (!immersive) return HeroWash(accent);
-        // Peak alphas are high so the melted art edge lands on a readable plate; the falloff stays past the upper list.
-        float top = Tok.Theme == ThemeKind.Light ? 0.42f : 0.78f;
-        float mid = Tok.Theme == ThemeKind.Light ? 0.28f : 0.55f;
-        float low = Tok.Theme == ThemeKind.Light ? 0.10f : 0.22f;
-        return GradientDown(
-            new GradientStop(0f, accent with { A = top }),
-            new GradientStop(0.42f, accent with { A = mid }),
-            new GradientStop(0.78f, accent with { A = low }),
-            new GradientStop(1f, accent with { A = 0f }));
-    }
+    // DetailHeroWash — the immersive detail hero's strong four-stop alpha wash — is DELETED with the immersive hero
+    // arm itself. The detail pages no longer stack a wash over a neutral ground: they paint ONE opaque art-derived
+    // page tone (WaveePalette.PageTone, mounted by CoverPaletteLeaves.PageTonePlane) that the whole page sits on.
 
     /// <summary>A neutral album-art placeholder: the app's skeleton tile (<see cref="Tok.FillCardDefault"/>) that
     /// BREATHES while the art at <paramref name="url"/> is still loading and settles to a calm static tile once it is

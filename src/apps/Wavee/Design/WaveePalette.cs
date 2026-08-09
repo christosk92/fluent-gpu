@@ -141,6 +141,93 @@ public static class WaveePalette
     public static ColorF BackgroundDark(in CoverColorPlane.Scheme s) => ToColor(s.BackgroundBase);
     public static ColorF TintedDark(in CoverColorPlane.Scheme s) => ToColor(s.BackgroundTintedBase);
 
+    // ── THE PAGE TONE ───────────────────────────────────────────────────────────────────────────────────────────
+    // The detail pages' ONE art-derived surface: an opaque plane the whole page sits on, replacing the stack of
+    // top-anchored alpha washes that used to tint it. Two rules, and they are the whole contract:
+    //
+    //   1. COMPLEMENTARY, NOT SAMPLED. The tone takes the cover's HUE and nothing else. It is not the cover's dominant
+    //      colour re-painted at page scale — that is what produced pages the artwork could not be told apart from.
+    //      Saturation and lightness are the page's, not the record's, so two albums by the same artist read as the
+    //      same PAGE in two different colours rather than as two different apps.
+    //   2. THE CLAMP IS THE POINT. Apple Music's unclamped version of this is its single loudest complaint: a
+    //      saturated cover produces a page that is genuinely hard to read, and a dark cover produces one that is
+    //      indistinguishable from every other dark cover's. So lightness is FORCED (never sampled) to
+    //      <see cref="PageToneDarkL"/> / <see cref="PageToneLightL"/> and saturation is CAPPED at
+    //      <see cref="PageToneDarkSMax"/> / <see cref="PageToneLightSMax"/>. The forced lightness is also what makes
+    //      the standard Tok ink tokens correct on this plane in both themes — there is no on-media ladder on these
+    //      pages, because polarity is guaranteed by construction rather than measured per cover.
+    //
+    // A cover with no hue worth using (greyscale art, a mosaic of monochrome tiles) gets the NEUTRAL tone instead of
+    // an invented tint — the same decision <see cref="ChromeAccent"/> makes for the Play button, for the same reason.
+
+    /// <summary>Below this HSV saturation the dominant graded role has no hue to build a page tone from.</summary>
+    public const float PageToneChromaFloor = 0.12f;
+
+    /// <summary>The forced HSL lightness of the dark tone, and the cap on its HSL saturation.</summary>
+    public const float PageToneDarkL = 0.15f, PageToneDarkSMax = 0.30f;
+
+    /// <summary>The forced HSL lightness of the light tone, and the cap on its HSL saturation.</summary>
+    public const float PageToneLightL = 0.89f, PageToneLightSMax = 0.42f;
+
+    /// <summary>The hue-less answer: a near-black in dark, a WARM off-white in light (a neutral grey page reads as
+    /// "unfinished" beside every tinted one, and warm is the direction the app's light palette already leans).</summary>
+    public static ColorF PageToneNeutralDark { get; } = ColorF.FromRgba(0x15, 0x15, 0x15);
+    public static ColorF PageToneNeutralLight { get; } = ColorF.FromRgba(0xF6, 0xF4, 0xF1);
+
+    /// <summary>THE detail page's ground tone for a cover's grading, or null when there is no grading to build one
+    /// from (the caller then paints nothing and the page keeps its neutral surface). See the contract above.</summary>
+    public static ColorF? PageTone(CoverColorPlane.Scheme? scheme, ThemeKind theme)
+    {
+        if (scheme is not { } s) return null;
+        var dominant = Accent(s);                        // the cover's HUE role (see Accent's doc for why not textBrightAccent)
+        var (_, hsvSat, _) = dominant.ToHsv();
+        if (hsvSat < PageToneChromaFloor)
+            return theme == ThemeKind.Dark ? PageToneNeutralDark : PageToneNeutralLight;
+        var (h, sat, _) = ToHsl(dominant);
+        return theme == ThemeKind.Dark
+            ? FromHsl(h, MathF.Min(sat, PageToneDarkSMax), PageToneDarkL)
+            : FromHsl(h, MathF.Min(sat, PageToneLightSMax), PageToneLightL);
+    }
+
+    // HSL, not HSV: the page tone's contract is stated in LIGHTNESS ("dark: L ≈ 15 %"), and HSV's V is not lightness —
+    // a fully saturated hue at V=0.15 and a grey at V=0.15 have very different perceived brightness. The engine's
+    // ColorF publishes HSV only, so the two conversions live here, where the one caller that needs them is.
+    internal static (float H, float S, float L) ToHsl(in ColorF c)
+    {
+        float max = MathF.Max(c.R, MathF.Max(c.G, c.B));
+        float min = MathF.Min(c.R, MathF.Min(c.G, c.B));
+        float l = (max + min) * 0.5f;
+        float d = max - min;
+        if (d <= 1e-6f) return (0f, 0f, l);
+        float s = l > 0.5f ? d / (2f - max - min) : d / (max + min);
+        float h = max == c.R ? (c.G - c.B) / d + (c.G < c.B ? 6f : 0f)
+            : max == c.G ? (c.B - c.R) / d + 2f
+            : (c.R - c.G) / d + 4f;
+        return (h * 60f, s, l);
+    }
+
+    internal static ColorF FromHsl(float hDeg, float s, float l, float a = 1f)
+    {
+        s = Math.Clamp(s, 0f, 1f);
+        l = Math.Clamp(l, 0f, 1f);
+        if (s <= 0f) return new ColorF(l, l, l, a);
+        float q = l < 0.5f ? l * (1f + s) : l + s - l * s;
+        float p = 2f * l - q;
+        float h = hDeg / 360f;
+        h -= MathF.Floor(h);
+        return new ColorF(Hue(p, q, h + 1f / 3f), Hue(p, q, h), Hue(p, q, h - 1f / 3f), a);
+
+        static float Hue(float p, float q, float t)
+        {
+            if (t < 0f) t += 1f;
+            if (t > 1f) t -= 1f;
+            if (t < 1f / 6f) return p + (q - p) * 6f * t;
+            if (t < 0.5f) return q;
+            if (t < 2f / 3f) return p + (q - p) * (2f / 3f - t) * 6f;
+            return p;
+        }
+    }
+
     /// <summary>Neutral card fill under <see cref="Surfaces.HeroWash"/> — same as the shell content card on detail pages
     /// (now the OPAQUE content surface, so the hero base no longer depends on what shows through it).</summary>
     public static ColorF HeroBase(CoverColorPlane.Scheme? art) => WaveeColors.ContentSurface;

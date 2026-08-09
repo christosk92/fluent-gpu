@@ -19,7 +19,8 @@ public class DetailLayoutBreakpointTests
         Assert.Equal(DetailLayoutBreakpoints.VerticalMode,
             DetailLayoutBreakpoints.InitialModeForViewport(360f));
         Assert.Equal(4, DetailLayoutBreakpoints.InitialTierForViewport(360f));
-        Assert.Equal(DetailHeroOrientation.Compact, DetailVerticalLayout.OrientationFor(360f));
+        // …and the hero seeds STACKED (artwork above the copy) at that width, which is the only flow decision left.
+        Assert.False(DetailVerticalLayout.RowFlow(360f));
     }
 
     [Fact]

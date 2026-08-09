@@ -276,7 +276,19 @@ public static class WaveeColors
     /// <para>THE APPROXIMATION, stated (inherited from PresetSwatch): live Mica takes colour from the desktop, so a
     /// strongly tinted wallpaper drifts the real region toward it while this constant cannot follow. The band is
     /// 56 DIP of chrome directly abutting that region, so the residual is a very small step at the seam and never a
-    /// visible plate — which is the trade an opaque band is worth.</para></summary>
-    public static ColorF ContextBand => ColorContrast.Flatten(FileArea,
-        Tok.Theme == ThemeKind.Light ? MicaRef.LightDefault : MicaRef.DarkDefault);
+    /// visible plate — which is the trade an opaque band is worth.</para>
+    ///
+    /// <para>THE GROUND IS A PARAMETER. The paragraph above bakes in an assumption — that the surface under the band
+    /// is the content region over bare Mica — and the track-detail pages stopped satisfying it the moment they started
+    /// painting an opaque art-derived tone (<see cref="WaveePalette.PageTone"/>) behind the whole page. Flattening the
+    /// translucent content rung onto the WRONG ground is exactly the drift this recipe exists to prevent: the band
+    /// would read as a grey plate parked on a tinted page. So the surface is an argument, and
+    /// <see cref="ContextBand"/> below is this function's null case rather than a second recipe — the artist page (no
+    /// tone) and the detail pages (tone) share one derivation.</para></summary>
+    public static ColorF ContextBandOver(ColorF? pageTone) => ColorContrast.Flatten(FileArea,
+        pageTone ?? (Tok.Theme == ThemeKind.Light ? MicaRef.LightDefault : MicaRef.DarkDefault));
+
+    /// <summary>The band over the neutral Mica reference — every surface that does NOT paint its own opaque ground.
+    /// See <see cref="ContextBandOver"/> for the derivation and why it is opaque.</summary>
+    public static ColorF ContextBand => ContextBandOver(null);
 }

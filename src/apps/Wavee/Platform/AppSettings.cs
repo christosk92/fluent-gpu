@@ -53,9 +53,16 @@ static class WaveeSettings
     // a permanent column costs width on every row. It is always available inside a row's expander, so this setting only
     // promotes it to a column for the users who do want to scan it (DJ-adjacent use). App-wide, like RowDensity.
     public static readonly SettingKey<bool> TempoColumn = new("detail.tempoColumn", false);
-    // Track-detail page layout: 0 Automatic (metadata rail on wide windows, immersive Hero on narrow) · 1 Hero (the
-    // hero composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
+    // Track-detail page layout: 0 Automatic (metadata rail on wide windows, the hero on narrow) · 1 Hero (the hero
+    // composition at every width — the rail is never composed for track pages; podcasts keep the automatic layout).
     public static readonly SettingKey<int> DetailPageLayout = new("detail.page.layout", 0);
+    // How far the detail page's art-derived TONE (WaveePalette.PageTone) reaches. FALSE (the default) = the whole page
+    // sits on it; TRUE = it survives the hero band and dissolves back into the neutral content surface below. A taste
+    // choice about how loud a page is allowed to be, so it is a setting rather than a breakpoint — and it is only ever
+    // a REDUCTION of the default, which is why it is a bool and not a third page-layout enum value. Note the tone is
+    // absent entirely (not merely hero-limited) when DisableColorWashes is on or the cover has no grading; this row
+    // chooses between "tinted page" and "tinted hero", never between "tint" and "no tint".
+    public static readonly SettingKey<bool> DetailPageToneHeroOnly = new("detail.page.tone.heroOnly", false);
     public static readonly SettingKey<bool> DisableMarquee = new("appearance.marquee.disabled", false);
     public static readonly SettingKey<bool> DisableColorWashes = new("appearance.colorWashes.disabled", false);
     // The DWM window material. FALSE (the default) = Mica ALT (DWMSBT_TABBEDWINDOW — the flatter, neutral File-Explorer

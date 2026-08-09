@@ -20,7 +20,11 @@ namespace Wavee;
 sealed partial class ArtistPage : Component
 {
     readonly Signal<Route> _route;
-    readonly object _tintOwner = new();   // stable ownership across artist -> artist reuse and KeepAlive park/reactivate
+    // Identity for race-free last-writer-wins on ShellMaterial, and it survives KeepAlive park/reactivate (which is
+    // what the owner check in CoverShellTintBinder's clear path needs). NOT a cross-artist token: ContentHost's
+    // SlotKey is tab + route.Name + route.Arg, so artist→artist mounts a NEW ArtistPage with a new owner — the
+    // outgoing page clears its own tint on unmount and the incoming one publishes its own.
+    readonly object _tintOwner = new();
     // The context band's scroll-spy registry: the page's scroll viewport + one node per pivot-visible section. Written
     // from OnRealized, read by ContextPivot's scroll effect — never an ancestor relationship, so the band can live
     // inside the pinned hero while the sections live in the magazine body.
@@ -64,7 +68,7 @@ sealed partial class ArtistPage : Component
         _menuOverlay = UseContext(Overlay.Service);
         if (svc is null || store is null) return new BoxEl { Grow = 1f };
 
-        var route = _route.Value;                       // subscribe → reload on artist→artist nav (reused slot)
+        var route = _route.Value;                       // subscribe → re-derive when this slot's route object changes
         string routeKey = route.Name;
         string uri = UriOf(route) ?? "";
 
@@ -81,10 +85,12 @@ sealed partial class ArtistPage : Component
         store.EnsureArtists();
         var fansList = store.Artists.Value.Value;
 
-        // ArtistPage is kept alive and reused for artist -> artist navigation, just like DetailShell. Shell tint + wash
-        // Watch subscriptions live in cover-keyed leaves (CoverPaletteLeaves) — never in this Render — so a graded batch
-        // does not rebuild the magazine tree. HeaderImage is the dominant visual; fall back to the avatar only when
-        // there is no hero image.
+        // ContentHost's SlotKey carries the ROUTE (tab + name + arg), so artist→artist mounts a fresh ArtistPage and
+        // slides it in; KeepAlive parks the previous one so going back restores its scroll and its loaded data. There
+        // is no cross-artist instance reuse to defend against here — but the shell tint + wash Watch subscriptions
+        // still live in cover-keyed leaves (CoverPaletteLeaves), never in this Render, so a graded batch does not
+        // rebuild the magazine tree. HeaderImage is the dominant visual; fall back to the avatar only when there is no
+        // hero image.
         bool artistReady = artist.State.Value == (byte)LoadState.Ready;
         var currentArtist = artist.Value.Value;
         string? paletteUrl = PaletteImageUrl(currentArtist);

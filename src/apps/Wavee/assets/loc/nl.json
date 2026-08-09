@@ -120,6 +120,8 @@
       "rowDensitySub": "Hoogte van rijen in nummerlijsten",
       "pageLayout": "Indeling van nummerpagina",
       "pageLayoutSub": "Gebruik automatisch het zijpaneel, of de artwork-hero op elk formaat",
+      "pageTone": "Paginakleur beperken tot de hero",
+      "pageToneSub": "Laat de artworkkleur onder de hero vervagen in plaats van de hele pagina te tinten",
       "disableMarquee": "Lopende tekst uitschakelen",
       "disableMarqueeSub": "Lange titels afkappen in plaats van laten scrollen",
       "disableColorWashes": "Kleurvlakken uitschakelen",

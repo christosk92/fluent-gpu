@@ -44,7 +44,7 @@ sealed class TrackList : Component
     const int VerticalChromeIndex = 1;
     const int VerticalTrackStart = 2;
     const float VerticalHeaderFallbackHeight = 420f;
-    const float CompactVerticalHeaderFallbackHeight = 200f;
+    const float RowFlowVerticalHeaderFallbackHeight = 320f;
     const int TrackOverscanItems = 8;
 
     // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
@@ -71,13 +71,14 @@ sealed class TrackList : Component
                                                                // SAME virtualized list + cell, but no album trailing (About/Fans/More-by)
                                                                // so the rows ARE the scroller — the tier system still drops columns to fit.
     readonly bool _verticalHeader;                              // narrow detail mode: hero + chrome are measured rows in this list's scroller
-    readonly Signal<bool>? _verticalHeroImmersive;
+    readonly Signal<float>? _verticalHeroHeightOut;             // published UP to DetailShell: the tone plane's backdrop band
+    readonly IReadSignal<ColorF?> _pageTone;                    // published DOWN from DetailShell's tone plane: the sticky band's ground
     readonly Signal<bool> _verticalCompactInteractive = new(false); // pin-edge only: enable compact Play hit target
     readonly Signal<bool> _verticalBodyClipEngaged = new(false);     // trailing page only: fade exactly while the sticky cut is active
     readonly Signal<float> _verticalHeaderHeight = new(0f);
-    readonly Signal<float> _verticalHeroW = new(0f);           // measured page width (vertical mode) → the hero's orientation/art size
-    DetailHeroOrientation _verticalHeroOrientation = DetailHeroOrientation.SideBySide;
-    bool _verticalHeroOrientationInitialized;
+    readonly Signal<float> _verticalHeroW = new(0f);           // measured page width (vertical mode) → the hero's art size / flow
+    bool _verticalHeroRowFlow;                                  // artwork BESIDE the identity column (see DetailVerticalLayout.RowFlow)
+    bool _verticalHeroFlowInitialized;
     bool _hasDate;                                             // any track carries an AddedAt → the Date-added column exists
     bool _hasBy;                                               // collaborative (≥2 contributors) → the Added-by column exists
     readonly Signal<int> _tier = new(0);                       // width tier (0 = widest/full), written by OnBoundsChanged
@@ -231,14 +232,20 @@ sealed class TrackList : Component
 
     public TrackList(Signal<Route> route, Loadable<DetailModel> full, PlaybackBridge? bridge, DetailHandlers h,
                      bool showToolbar = true, bool embedded = false, bool verticalHeader = false,
-                     Signal<bool>? verticalHeroImmersive = null,
+                     Signal<float>? verticalHeroHeight = null,
+                     IReadSignal<ColorF?>? pageTone = null,
                      IReadSignal<DetailHandlers?>? liveHandlers = null)
     {
         _route = route; _full = full; _bridge = bridge; _initialH = _h = h; _liveHandlers = liveHandlers;
         _showToolbar = showToolbar; _embedded = embedded;
         _verticalHeader = verticalHeader && !embedded;
-        _verticalHeroImmersive = verticalHeroImmersive;
+        _verticalHeroHeightOut = verticalHeroHeight;
+        _pageTone = pageTone ?? NoPageTone;
     }
+
+    /// <summary>The constant "this page paints no art-derived ground" answer, so the hero's band-fill bind is a plain
+    /// signal read on every construction (LibraryPage's embedded list included) rather than a null check per frame.</summary>
+    static readonly Signal<ColorF?> NoPageTone = new(null);
 
     int TrackStart => _verticalHeader && !_cfg.HasTrailing ? VerticalTrackStart : 0;
 
@@ -476,8 +483,8 @@ sealed class TrackList : Component
         {
             float seedW = viewport.Peek().Width;
             _initialTierSeed = DetailLayoutBreakpoints.InitialTierForViewport(seedW);
-            if (_verticalHeader && !_verticalHeroOrientationInitialized)
-                _verticalHeroOrientation = DetailVerticalLayout.OrientationFor(seedW);
+            if (_verticalHeader && !_verticalHeroFlowInitialized)
+                _verticalHeroRowFlow = DetailVerticalLayout.RowFlow(seedW);
         }
         _svc = svc; _post = UsePost();           // cached so the rec fetch/add handlers reach the extender + marshal results back to the UI thread
         Context.UseSignalEffect(() => Reactive.OnCleanup(() => { try { _recCts.Cancel(); _recCts.Dispose(); } catch { } }));   // cancel in-flight rec fetches on unmount
@@ -868,18 +875,15 @@ sealed class TrackList : Component
                 _lastRightW = r.W;
                 if (_verticalHeader)
                 {
-                    var orientation = DetailVerticalLayout.OrientationFor(
-                        r.W, _verticalHeroOrientation, _verticalHeroOrientationInitialized);
-                    // Orientation flips change natural hero height a lot (200-art row ↔ full-bleed square). Clear the
-                    // cached measure so PresentedH OutStart cannot stay stuck on the previous orientation's height and
-                    // clip the new composition (missing actions / empty lower hero).
-                    if (_verticalHeroOrientationInitialized && orientation != _verticalHeroOrientation)
+                    bool rowFlow = DetailVerticalLayout.RowFlow(
+                        r.W, _verticalHeroRowFlow, _verticalHeroFlowInitialized);
+                    // A stacked ↔ row restructure changes the natural hero height a lot (a 280 cover ABOVE the copy vs
+                    // a 200-240 cover BESIDE it). Clear the cached measure so PresentedH's OutStart cannot stay stuck
+                    // on the previous flow's height and clip the new composition (missing actions / empty lower hero).
+                    if (_verticalHeroFlowInitialized && rowFlow != _verticalHeroRowFlow)
                         _verticalHeaderHeight.Value = 0f;
-                    _verticalHeroOrientation = orientation;
-                    _verticalHeroOrientationInitialized = true;
-                    bool immersive = orientation == DetailHeroOrientation.Immersive;
-                    if (_verticalHeroImmersive is not null && _verticalHeroImmersive.Peek() != immersive)
-                        _verticalHeroImmersive.Value = immersive;
+                    _verticalHeroRowFlow = rowFlow;
+                    _verticalHeroFlowInitialized = true;
                     if (MathF.Abs(_verticalHeroW.Peek() - r.W) > 4f) _verticalHeroW.Value = r.W;
                 }
                 // The FIRST real width is authoritative: it takes the NOMINAL tier with no hysteresis (initialized:
@@ -1326,9 +1330,9 @@ sealed class TrackList : Component
     {
         float h = subscribe ? _verticalHeaderHeight.Value : _verticalHeaderHeight.Peek();
         if (h > 1f) return h;
-        return _verticalHeroOrientation == DetailHeroOrientation.Compact
-            ? CompactVerticalHeaderFallbackHeight
-            : VerticalHeaderFallbackHeight;
+        // Pre-measure fallback. Row flow is the SHORTER composition (the cover caps at 240 beside the copy instead of
+        // stacking a 280 square above it), so the two floors are not the same guess.
+        return _verticalHeroRowFlow ? RowFlowVerticalHeaderFallbackHeight : VerticalHeaderFallbackHeight;
     }
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) SwipeCloseObserver()
@@ -1379,6 +1383,10 @@ sealed class TrackList : Component
         if (r.H <= 1f) return;
         if (MathF.Abs(_verticalHeaderHeight.Peek() - r.H) <= 1f) return;
         _verticalHeaderHeight.Value = r.H;
+        // …and up to the page, whose art-derived tone plane sizes its blurred background extension (and, in hero-only
+        // mode, its fade back to neutral) to exactly this band. Value-gated by the 1-DIP test above, so a settling
+        // hero writes it once rather than once per layout pass.
+        if (_verticalHeroHeightOut is not null) _verticalHeroHeightOut.Value = r.H;
     }
 
     Element VerticalHero()
@@ -1388,8 +1396,7 @@ sealed class TrackList : Component
         // ItemsView identity, so a settle cannot remount every realized track row.
         var h = _liveHandlers?.Value ?? _h;
         float availW = _verticalHeroW.Value;
-        var orientation = _verticalHeroOrientation;
-        float artSize = DetailVerticalLayout.ArtworkFor(availW, orientation);
+        bool rowFlow = _verticalHeroRowFlow;
         float expandedHeight = VerticalHeaderHeight(subscribe: true);
         float collapseDistance = DetailVerticalLayout.CollapseDistance(expandedHeight);
         int tier = ClampTier(_tier.Value);
@@ -1407,9 +1414,9 @@ sealed class TrackList : Component
             Key = "vhero:header",
             Direction = 1,
             OnBoundsChanged = MeasureVerticalHeader,
-            Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, orientation, artSize, availW,
+            Children = [DetailVerticalHero.Build(_model, _cfg, h, _full, rowFlow, availW,
                 compactLeft, collapseDistance, _verticalCompactInteractive,
-                _searchExpanded, _selectionCommandsVisible!,
+                _searchExpanded, _selectionCommandsVisible!, _pageTone,
                 toolbar, compactSearch, compactActions, compactSelection, _acts)],
         };
         return new BoxEl
@@ -2939,9 +2946,10 @@ sealed class TrackList : Component
                     VideoActions.Apply(_acts!, curation, t.Uri, mp4, replace: curation.Has(t.Uri));
                 })
             : null;
-        // Apple's immersive/stacked track list uses plain rows (no per-row pill/border) — only in that mode; wide
-        // side-by-side keeps the WinUI zebra-pill treatment below.
-        bool plainRows = _verticalHeader && _verticalHeroOrientation != DetailHeroOrientation.SideBySide;
+        // The hero-system page's STACKED flow uses plain rows (no per-row pill/border) — the page is one column there
+        // and an inset pill reads as a second, narrower page. Row flow (a wide hero-system page) keeps the WinUI
+        // zebra-pill treatment below, as every two-column page does.
+        bool plainRows = _verticalHeader && !_verticalHeroRowFlow;
         var skin = new BoxEl
         {
             ZStack = true, MinHeight = rowH, ClipToBounds = true,    // ZStack → the left accent bar overlays the content

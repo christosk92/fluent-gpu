@@ -532,6 +532,8 @@
       "rowDensitySub": "Height of rows in track lists",
       "pageLayout": "Track page layout",
       "pageLayoutSub": "Use the side rail automatically, or the artwork Hero at every size",
+      "pageTone": "Limit page color to the hero",
+      "pageToneSub": "Fade the artwork tone out below the hero instead of tinting the whole page",
       "disableMarquee": "Disable marquee text",
       "disableMarqueeSub": "Keep overflowing titles truncated instead of scrolling them",
       "disableColorWashes": "Disable color washes",

@@ -52,11 +52,18 @@ sealed class DetailShell : Component
     readonly Signal<DetailHandlers?> _liveHandlers = new(null);   // reactive parent→TrackList props; never freeze accent/actions
     readonly Image? _fallbackCover;       // mount-time nav-preview cover; seeds the per-route stable-cover latch
     string? _ctxUri;                      // the loaded context uri — the per-context sort key; refreshed each render
-    DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (reused slot re-derives)
+    DetailConfig _cfg = DetailConfig.Album;   // derived from route kind + loaded ReleaseKind each render (a re-derive per route, see below)
     readonly object _tintOwner = new();   // identity for race-free last-writer-wins on ShellMaterial (see ShellMaterialState)
     readonly Signal<int> _mode = new(0);  // adaptive layout mode (0 widest), written by OnBoundsChanged
-    readonly Signal<bool> _verticalHeroImmersive = new(false);
+    // The vertical hero's MEASURED height, published back up by TrackList (which owns the measurement). The page-tone
+    // plane needs it: it is the band the blurred background extension occupies and where hero-only mode fades out.
+    readonly Signal<float> _verticalHeroHeight = new(0f);
+    // The live page tone, PUBLISHED BY the tone plane's leaf (the one node allowed to observe the colour plane) and
+    // consumed by the sticky context band, which must flatten its opaque material over this ground rather than over
+    // the neutral Mica reference. Mount-stable, so it rides constructor arguments safely.
+    readonly Signal<ColorF?> _pageTone = new(null);
     float _measuredW;                     // last measured page width — replayed once when the rail layout-lock clears (Task C)
+    float _measuredH;                     // last measured page height — the tone plane's hero-only fade is a fraction of it
     bool _modeInitialized;                // first measurement uses the nominal breakpoints; later vertical crosses hysteresis
     readonly Signal<TrackSort> _sort = new(TrackSort.Default);   // track-list sort, persisted per context (loaded per route)
     readonly Signal<string> _query = new("");                    // filter search query (transient — clears on navigation)
@@ -100,6 +107,10 @@ sealed class DetailShell : Component
     // two-column) · 3 Vertical (rail collapses to a top header, list below). Sized so the right track area keeps a
     // usable width before the vertical switch.
     const int Vertical = DetailLayoutBreakpoints.VerticalMode;
+    /// <summary>The two-column arm's "hero region" for the page tone: it has no ONE measured hero (the rail is a
+    /// full-height column), so the band the artwork backdrop occupies is the same top fraction the accent wash this
+    /// plane replaced already faded out over.</summary>
+    const float TwoColumnHeroBandFraction = 0.55f;
     static int ModeFor(float w, int currentMode, bool initialized)
         => DetailLayoutBreakpoints.ModeFor(w, currentMode, initialized);
     static float RailW(int mode, DetailConfig cfg) => mode switch { 0 => cfg.RailWidth, 1 => 224f, _ => 188f };
@@ -139,11 +150,15 @@ sealed class DetailShell : Component
         var shellMaterial = UseContext(ShellMaterial.Slot);
         var navPreview = UseContext(NavPreviewStore.Slot);   // in-app card nav stashes a preview → destination reconciles in place
 
-        var route = _route.Value;                      // subscribe → re-derive kind/cfg/morphKey on a detail-route swap (reused slot)
+        // ContentHost's SlotKey is tab + route.Name + route.Arg, so every destination gets its OWN DetailShell
+        // instance and album→album slides a new page in (KeepAlive parks the old one for Back). This subscription is
+        // therefore about the route OBJECT changing under one slot — a nav-preview stash resolving into the real
+        // model, not a different album arriving in this instance.
+        var route = _route.Value;
         var (kind, id) = DetailPage.ParseDetail(route);
         var raw = _model.Value.Value;                  // subscribe → re-render preview→full (header updates in place)
         bool modelReady = _model.State.Value == (byte)LoadState.Ready;         // subscribe → latch cover on Pending→Ready
-        _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single); a reused slot re-derives it
+        _cfg = DetailPage.ResolveConfig(kind, raw);    // release-kind-dependent (album→single) → re-derived as the model loads
         _ctxUri = raw.ContextUri;                      // the per-context sort key, refreshed as the model loads
         _defaultSort = kind == DetailKind.Liked ? new TrackSort(SortColumn.DateAdded, Descending: true) : TrackSort.Default;
         // Cover handoff: keep the already-visible (preview) art across SetReady when the API returns a different CDN
@@ -186,9 +201,10 @@ sealed class DetailShell : Component
         var liveChrome = liveUrl is not null ? Surfaces.ChromeSchemeFor(liveUrl) : null;
 
         // Accent for Play / row chrome: SchemeFor at this render (cached hits land immediately). Late gradings update
-        // the wash/tint leaves paint-only; accent-filled controls refresh on the next natural shell re-render
-        // (track change, model ready, theme). Wash colour itself is owned by CoverKeyedWash (same lift / BackgroundDark
-        // contract as before).
+        // the tone/tint leaves paint-only; accent-filled controls refresh on the next natural shell re-render
+        // (track change, model ready, theme). The page's GROUND colour itself is owned by CoverPageTonePlane
+        // (WaveePalette.PageTone), which is a different axis from this accent — chroma for chrome, a clamped tone for
+        // the page.
         var chrome = coverChrome ?? liveChrome;
         ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp) : Tok.AccentDefault;
 
@@ -240,8 +256,9 @@ sealed class DetailShell : Component
         // captures SetSort, which closes over `settings`) ──
         UseEffect(() =>
         {
-            // Re-keyed per context: on a detail-route swap (reused slot) load THIS page's persisted sort + density and
-            // clear transient search/filters so they never bleed across pages.
+            // Re-keyed per context: load THIS page's persisted sort + density and clear transient search/filters. The
+            // key is the CONTEXT URI, not the mount, because the uri arrives with the model — a page mounted from a
+            // nav preview settles onto its real context one render later.
             _query.Value = "";
             _filters.Value = TrackFilterState.Default;
             _multiSelect.Value = false;
@@ -329,6 +346,7 @@ sealed class DetailShell : Component
         {
             if (r.W <= 0f) return;
             _measuredW = r.W;
+            if (r.H > 0f) _measuredH = r.H;
             int md = ModeFor(r.W, _mode.Peek(), _modeInitialized);
             _modeInitialized = true;
             if (md != _mode.Peek()) _mode.Value = md;
@@ -375,7 +393,8 @@ sealed class DetailShell : Component
                 [
                     Embed.Comp(() => new TrackList(_route, _model, bridge, handlers, showToolbar,
                         verticalHeader: verticalTracks,
-                        verticalHeroImmersive: _verticalHeroImmersive,
+                        verticalHeroHeight: _verticalHeroHeight,
+                        pageTone: _pageTone,
                         liveHandlers: _liveHandlers)) with
                     {
                         // A route is a new scroll/hero identity. Remounting prevents an album→album swap from painting
@@ -386,11 +405,31 @@ sealed class DetailShell : Component
                 ],
             };
 
+        // ── THE PAGE TONE PLANE ─────────────────────────────────────────────────────────────────────────────────
+        // ONE opaque art-derived ground for BOTH arms, mounted at the shell root behind everything. It replaces the
+        // per-arm alpha washes (the deleted detail-wash leaf): those tinted the TOP of a neutral page, which is a
+        // different thing from the page HAVING a tone, and the vertical arm needed a second "immersive" wash recipe
+        // stacked on top of it to survive the full-bleed cover that is also gone.
+        //
+        // heroBand is what the blurred background extension occupies and where hero-only mode fades back to neutral.
+        // The vertical arm publishes its MEASURED hero height; the two-column arm has no single measured hero, so it
+        // keeps the 55 % top band the wash it replaces already faded over (Surfaces.HeroWash's own fade stop) — same
+        // footprint, different material.
+        bool heroOnly = settings?.Get(WaveeSettings.DetailPageToneHeroOnly) ?? false;
+        // The window viewport is the pre-measure stand-in: it is larger than the page (it includes the chrome rows),
+        // so the first frame's fade lands slightly low and the first real Measure corrects it.
+        float pageH = _measuredH > 1f ? _measuredH : viewportSig.Peek().Height;
+        float heroBand = mode == Vertical && verticalTracks
+            ? _verticalHeroHeight.Value                          // subscribe → the band settles with the hero's measure
+            : pageH * TwoColumnHeroBandFraction;
+        Element tonePlane = CoverPaletteLeaves.PageTonePlane(
+            paletteUrl, liveUrl, colorWashesDisabled, heroBand, pageH, heroOnly, m.Cover, _pageTone,
+            key: "detail-tone:" + route.Name + ":" + Tok.Theme);
+
         // HERO SYSTEM: item 0 owns the expanded identity and the custom retained shy-header morph; the chrome pins below
         // it inside TrackList's overlay. The list remounts only on the two-column↔Hero-system cross.
         if (mode == Vertical)
         {
-            bool immersiveHero = verticalTracks && _verticalHeroImmersive.Value;
             Element verticalContent = new BoxEl
             {
                 Direction = 1, Grow = 1f, ClipToBounds = true,
@@ -412,9 +451,7 @@ sealed class DetailShell : Component
                 Children =
                 [
                     tintBinder,
-                    CoverPaletteLeaves.DetailWash(
-                        paletteUrl, liveUrl, immersiveHero, vertical: true, colorWashesDisabled,
-                        key: "detail-wash:" + route.Name + ":" + Tok.Theme + ":v:" + immersiveHero),
+                    tonePlane,
                     verticalPage,
                 ],
             };
@@ -474,9 +511,7 @@ sealed class DetailShell : Component
             Children =
             [
                 tintBinder,
-                CoverPaletteLeaves.DetailWash(
-                    paletteUrl, liveUrl, immersive: false, vertical: false, colorWashesDisabled,
-                    key: "detail-wash:" + route.Name + ":" + Tok.Theme + ":h"),
+                tonePlane,
                 twoColumnPage,
             ],
         };
