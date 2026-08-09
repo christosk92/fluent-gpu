@@ -100,11 +100,11 @@ sealed partial class ArtistPage : Component
         // RouteForUri routes both; the literal fallback keeps a uri it cannot classify on the album route rather than
         // on the generic "Coming soon" stub, which is where a bare spotify: uri lands.
         string route = RichText.RouteForUri(p.Uri) ?? ("album:" + p.Uri);
-        // "Upcoming" keeps the sibling eyebrow's sentence case ("Latest release"); the release TYPE is upper-cased
-        // because that is how every other type token in this column reads (KindLabel → "ALBUM", the strip chips'
-        // "2026 · SINGLE"). Absent type → the bare word, never a dangling separator.
+        // Sentence case throughout, including the release TYPE: the sibling tokens it used to match ("ALBUM" out of
+        // KindLabel) are LOCALIZED strings, and upper-casing those is the exact defect the eyebrow role gave up.
+        // Absent type → the bare word, never a dangling separator.
         string eyebrow = p.Type is { Length: > 0 } type
-            ? Loc.Get(Strings.Artist.Upcoming) + " · " + type.ToUpperInvariant()
+            ? Loc.Get(Strings.Artist.Upcoming) + " · " + type
             : Loc.Get(Strings.Artist.Upcoming);
         // Announced-but-undated is a real state on the wire — then the card announces without promising a day.
         string meta = p.ReleaseAt is { } dated ? Strings.Detail.ReleasesOn(DetailFormat.ShortDate(dated)) : "";
@@ -133,12 +133,9 @@ sealed partial class ArtistPage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
-                        // Caption (12/16/600) for the caps eyebrow — caps and tracking untouched, only the off-ramp
-                        // 10/700 metrics move. Title is BodyStrong (14/20/600), the app's card-title rung.
-                        new TextEl(eyebrow)
-                        {
-                            Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
-                        },
+                        // The eyebrow alias (12/16/600 + the one tracking). Title is BodyStrong (14/20/600), the app's
+                        // card-title rung.
+                        WaveeType.Eyebrow(eyebrow) with { Color = Tok.TextTertiary, MaxLines = 1 },
                         Ui.BodyStrong(p.Name) with
                         {
                             MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
@@ -185,7 +182,8 @@ sealed partial class ArtistPage : Component
     // Instance (not static) so it can reach the page's `_acts` for its drag payload — the same reason CardMenu is.
     Element LatestReleaseBanner(Album al, Action<string, string?> go, Action<string> play, Func<ColorF> accent)
     {
-        var metaParts = new List<string>(3) { KindLabel(al.Kind).ToUpperInvariant() };
+        // KindLabel is LOCALIZED ("Album" / "Single" / "Compilation") — never caps-transformed.
+        var metaParts = new List<string>(3) { KindLabel(al.Kind) };
         string date = ReleaseDateLabel(al);
         if (date.Length > 0) metaParts.Add(date);
         if (al.TrackCount > 0) metaParts.Add(Strings.Artist.TrackCount(al.TrackCount));
@@ -210,13 +208,10 @@ sealed partial class ArtistPage : Component
                     Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
                     Children =
                     [
-                        // Caption caps eyebrow over a Subtitle (20/28/600) headline — this is the page's one "news"
-                        // banner, so it takes the shelf-header rung rather than an off-ramp 17. Eyebrow 16 + gap 4 +
-                        // subtitle 28 = 48, comfortably inside the 72-DIP cover beside it.
-                        new TextEl(eyebrow)
-                        {
-                            Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 20f, MaxLines = 1,
-                        },
+                        // The eyebrow over a Subtitle (20/28/600) headline — this is the page's one "news" banner, so
+                        // it takes the shelf-header rung rather than an off-ramp 17. Eyebrow 16 + gap 4 + subtitle
+                        // 28 = 48, comfortably inside the 72-DIP cover beside it.
+                        WaveeType.Eyebrow(eyebrow) with { Color = Tok.TextTertiary, MaxLines = 1 },
                         Ui.Subtitle(al.Name) with
                         {
                             MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,

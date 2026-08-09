@@ -237,35 +237,43 @@ public static class Surfaces
         };
     }
 
-    // ── section accents (the WaveeMusic "region" look: an accent-bar header + a faintly tinted band) ─────────
-    /// <summary>A section header with a 3px colored accent bar (and an optional caps eyebrow above the title). The bar
-    /// and eyebrow take <paramref name="accent"/> — e.g. a <see cref="WaveePalette.Lift"/>-ed cover-extracted color, so a
-    /// shelf's bar matches its content. Returns a <see cref="BoxEl"/> so call sites can layout-tweak it via <c>with</c>.</summary>
+    // ── section accents (the WaveeMusic "region" look: an accent-ruled header + a faintly tinted band) ─────────
+
+    /// <summary>THE section ornament: a 20×2 accent RULE that sits under a section header's text.
+    ///
+    /// <para>It replaces a 3 × 22 capsule with a 1.5 radius parked to the LEFT of the header — which was, pixel for
+    /// pixel, the selection-indicator geometry (a short accent bar flush against a control's edge, exactly what
+    /// SelectorBar's pill and the nav rail's marker mean) doing a decorative job. Reusing selection geometry for
+    /// decoration is the one thing the accent budget's first hard rule forbids: with it, every artist-page section read
+    /// as "you are here", eight times down one page. A horizontal rule UNDER the text cannot be confused for a
+    /// selection marker, and it is the older and quieter editorial idiom besides.</para>
+    ///
+    /// <para>20 and 2 are both on the 4-grid's half-step ladder and deliberately fixed: a rule that tracked the title's
+    /// width would make eight sections eight different lengths, which is the raggedness the constant avoids.</para></summary>
+    public static BoxEl AccentRule(ColorF accent) => new()
+    {
+        // AlignSelf.Start, explicitly: in the header's COLUMN the cross axis is horizontal, and a stretched rule would
+        // run the full width of the section instead of being a 20-DIP mark.
+        Width = AccentRuleWidth, Height = AccentRuleHeight, Shrink = 0f, AlignSelf = FlexAlign.Start,
+        Fill = accent, HitTestVisible = false,
+        Margin = new Edges4(0f, AccentRuleGap, 0f, 0f),
+    };
+
+    /// <summary>The section rule's geometry — one definition, so the artist page's counted header and the shared shelf
+    /// header cannot drift.</summary>
+    public const float AccentRuleWidth = 20f, AccentRuleHeight = 2f, AccentRuleGap = 6f;
+
+    /// <summary>A section header: an optional eyebrow, the title, and the <see cref="AccentRule"/> under them. The rule
+    /// and the eyebrow take <paramref name="accent"/> — e.g. a <see cref="WaveePalette.Lift"/>-ed cover-extracted color,
+    /// so a shelf's rule matches its content. Returns a <see cref="BoxEl"/> so call sites can layout-tweak it via
+    /// <c>with</c>.</summary>
     public static BoxEl AccentHeader(string title, ColorF accent, string? eyebrow = null)
     {
-        Element label = eyebrow is { Length: > 0 }
-            ? new BoxEl
-            {
-                Direction = 1, Gap = 2f, MinWidth = 0f, Grow = 1f, Basis = 0f,
-                Children =
-                [
-                    // Caption (12/16/600) — the app's one caps-eyebrow rung. Caps and the 40/1000 tracking are the
-                    // eyebrow's voice and stay; the 11/700 metrics were on no ramp.
-                    new TextEl(eyebrow) { Size = 12f, LineHeight = 16f, Weight = 600, CharSpacing = 40f, Color = accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                ],
-            }
-            : WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
-        return new BoxEl
-        {
-            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
-            Children =
-            [
-                // A 3-DIP capsule: Radii.Circle derives the radius from the bar's own width instead of hand-halving it.
-                new BoxEl { Width = 3f, MinHeight = Spacing.XXL, AlignSelf = FlexAlign.Stretch, Corners = Radii.Circle(3f), Fill = accent },
-                label,
-            ],
-        };
+        var head = WaveeType.RailHeader(title) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis };
+        Element[] lines = eyebrow is { Length: > 0 }
+            ? [WaveeType.Eyebrow(eyebrow) with { Color = accent, MaxLines = 1, Trim = TextTrim.CharacterEllipsis }, head, AccentRule(accent)]
+            : [head, AccentRule(accent)];
+        return new BoxEl { Direction = 1, Gap = 2f, MinWidth = 0f, Children = lines };
     }
 
     /// <summary>A module header — a title, an optional subdued subtitle on the same BASELINE, and an optional trailing

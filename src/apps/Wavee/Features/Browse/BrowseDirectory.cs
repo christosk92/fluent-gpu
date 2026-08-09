@@ -1,6 +1,5 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Globalization;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -52,8 +51,8 @@ sealed class BrowseDirectory : Component
 
         return Skel.Region(cats, Skeleton, c => Body(c, model),
             isEmpty: c => c.Count == 0,
-            onEmpty: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable), glyph: Icons.Globe),
-            onFailed: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable), glyph: Icons.Globe));
+            onEmpty: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)),
+            onFailed: () => EmptyState.Build(Loc.Get(Strings.Browse.Unavailable)));
     }
 
     static Element Body(IReadOnlyList<BrowseCategory> categories, Model? model)
@@ -95,14 +94,14 @@ sealed class BrowseDirectory : Component
         }
     }
 
-    // One band: an uppercase heading over a responsive column grid of text links.
+    // One band: an eyebrow heading over a responsive column grid of text links.
     static Element Group(string label, IReadOnlyList<BrowseCategory> items, Model? model)
         => new BoxEl
         {
             Direction = 1, Gap = Spacing.S, MinWidth = 0f,
             Children =
             [
-                Caption(Upper(label)) with { Color = Tok.TextTertiary, Weight = 600, CharSpacing = 40f },
+                WaveeType.Eyebrow(label) with { Color = Tok.TextTertiary },
                 Responsive.Of(width => Columns(items, model, width > 0f ? width : 900f), fallback: 900f),
             ],
         };
@@ -144,8 +143,6 @@ sealed class BrowseDirectory : Component
         BrowseGroup.Charts => Loc.Get(Strings.Browse.Charts),
         _ => Loc.Get(Strings.Browse.More),
     };
-
-    static string Upper(string s) => s.ToUpper(CultureInfo.CurrentCulture);
 
     static Element Link(BrowseCategory c, Model? model) => new BoxEl
     {

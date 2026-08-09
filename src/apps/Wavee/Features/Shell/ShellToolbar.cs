@@ -483,7 +483,7 @@ sealed class OmnibarSuggestionsPopup : Component
         Padding = new Edges4(9f, 2f, 9f, 2f),
         Corners = CornerRadius4.All(10f),
         Fill = Tok.FillSubtleSecondary,
-        Children = [new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f }],
+        Children = [WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary }],
     };
 
     static string TypeLabel(SearchSuggestionKind kind) => kind switch

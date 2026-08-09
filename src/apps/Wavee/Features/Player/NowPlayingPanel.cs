@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -285,9 +285,8 @@ sealed class NowPlayingPanel : Component
         foreach (var group in credits.GroupBy(c => string.IsNullOrWhiteSpace(c.RoleGroup) ? c.Role : c.RoleGroup!))
         {
             if (!string.IsNullOrWhiteSpace(group.Key))
-                // Caption (12/16/600). Caps + the 80/1000 tracking are the label's voice and stay; the fractional 10.5
-                // and the 750 weight were neither a ramp size nor a ramp weight.
-                kids.Add(new TextEl(group.Key!.ToUpperInvariant()) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 80f });
+                // The role-group name arrives from the server with its own casing — the eyebrow keeps it.
+                kids.Add(WaveeType.Eyebrow(group.Key!) with { Color = Tok.TextTertiary });
             foreach (var c in group) kids.Add(CreditRow(c, go));
         }
         if (sources.Count > 0)
@@ -418,12 +417,8 @@ sealed class NowPlayingPanel : Component
         ],
     });
 
-    static Element Empty(string message) => new BoxEl
-    {
-        Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = Edges4.All(Spacing.XXL),
-        Children = [new TextEl(message) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary }],
-    };
+    // Rail scale (this panel is ~340 DIP wide) on the shared grammar.
+    static Element Empty(string message) => EmptyState.Compact(message);
 
     static string Count(long n) => n.ToString("N0");
 }

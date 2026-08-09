@@ -28,15 +28,28 @@ public static class WaveeType
     /// <summary>Artist · duration · metadata. → Ui.Caption secondary (12 / 16 / 400).</summary>
     public static TextEl TrackMeta(string s) => Ui.Caption(s).Secondary();
 
+    /// <summary>THE tracking every eyebrow carries — 30/1000 em, owned by <see cref="Eyebrow"/> and authored nowhere
+    /// else. Before convergence the app carried NINE tracking values on this one role (10, 20, 30, 32, 40, 50, 60, 70,
+    /// 80, 120): a letterspacing ladder nobody designed, spread over 58 call sites, which is why two eyebrows stacked
+    /// on the same page never looked like the same label. 30 is the value that survives SENTENCE case — the old 60-120
+    /// rungs were compensating for ALL-CAPS, and caps is exactly what this role gave up.</summary>
+    public const float EyebrowTracking = 30f;
+
     /// <summary>An EYEBROW — the small label that names what a card/section IS ("Editorial", "Daily Mix", "Video",
-    /// "Release", the hero's greeting). One rung, one weight, everywhere: → Ui.Caption at 600 (12 / 16 / 600).
-    /// <para>Deliberately carries NO colour, no casing and no tracking: those are the label's VOICE and belong to the
-    /// call site (an accent reason, a tertiary kind tag and an on-accent badge are the same type at three different
-    /// jobs). This alias owns the metrics only.</para>
+    /// "Release", the hero's greeting). One rung, one weight, ONE tracking, everywhere: → Ui.Caption at 600
+    /// (12 / 16 / 600) + <see cref="EyebrowTracking"/>.
+    /// <para>CASE IS NOT PART OF THE VOICE. The role used to be ALL-CAPS + heavy letterspacing, which is neither Fluent
+    /// (sentence case everywhere) nor the editorial/Zune register the rest of the app aims at — and a
+    /// <c>.ToUpper()</c> on a LOCALIZED string is worse than a style mistake: it mangles Turkish dotted i, expands
+    /// German ß, and shouts a user's own display name back at them. So the alias takes the string's OWN casing and no
+    /// call site may caps-transform it.</para>
+    /// <para>COLOUR still belongs to the call site — an accent reason, a tertiary kind tag and an on-accent badge are
+    /// the same type doing three different jobs, and the accent arm is deliberate identity (see the accent-roles
+    /// section in <c>WaveeTokens</c>). Metrics and tracking are the alias's; colour is not.</para>
     /// <para>Text that merely wants this RUNG without being an eyebrow — a rank numeral, a podium tile's artist name, a
     /// day heading — reads <c>Ui.Caption(x) with { Weight = 600 }</c> straight off the factory (same metrics, same line
-    /// height) rather than claiming to be a label it is not. One alias per ROLE, not one per rung.</para></summary>
-    public static TextEl Eyebrow(string s) => Ui.Caption(s) with { Weight = 600 };
+    /// height, no tracking) rather than claiming to be a label it is not. One alias per ROLE, not one per rung.</para></summary>
+    public static TextEl Eyebrow(string s) => Ui.Caption(s) with { Weight = 600, CharSpacing = EyebrowTracking };
 
     /// <summary>"Because you played…" section / rail headers. → Ui.Subtitle (20 / 28 / 600).</summary>
     public static TextEl RailHeader(string s) => Ui.Subtitle(s);

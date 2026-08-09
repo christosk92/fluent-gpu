@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -61,7 +61,7 @@ sealed class ConcertDetailPage : Component
             onFailed: () => ErrorState.Build(details.Error, onRetry: () => reload.Value++),
             isEmpty: d => d is null,
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Concerts.Detail.NotAvailable),
-                Loc.Get(Strings.Concerts.Detail.NotAvailableSubtitle), Icons.Calendar),
+                Loc.Get(Strings.Concerts.Detail.NotAvailableSubtitle)),
             group: "concert-detail:" + _concertUri);
 
         var content = new BoxEl
@@ -124,10 +124,9 @@ sealed class ConcertDetailPage : Component
         string title = HeroTitle(d);
 
         var headline = new List<Element>(3);
-        headline.Add(Caption(Upper(Loc.Get(Strings.Concerts.Detail.Concert))) with
+        headline.Add(WaveeType.Eyebrow(Loc.Get(Strings.Concerts.Detail.Concert)) with
         {
-            Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
-            Trim = TextTrim.CharacterEllipsis,
+            Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
         });
         headline.Add(WaveeType.PageHero(title) with
         { Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis });
@@ -185,7 +184,7 @@ sealed class ConcertDetailPage : Component
     // ── ticket offers ────────────────────────────────────────────────────────────────────────────────────────────────
     static Element TicketSection(IReadOnlyList<ConcertOffer> offers)
     {
-        var kids = new List<Element>(offers.Count + 1) { SectionCaption(Upper(Loc.Get(Strings.Concerts.Detail.Tickets))) };
+        var kids = new List<Element>(offers.Count + 1) { SectionCaption(Loc.Get(Strings.Concerts.Detail.Tickets)) };
         for (int i = 0; i < offers.Count; i++) kids.Add(OfferCard(offers[i], i));
         return new BoxEl { Direction = 1, Gap = Spacing.S, MinWidth = 0f, Children = kids.ToArray() };
     }
@@ -259,9 +258,9 @@ sealed class ConcertDetailPage : Component
                         new BoxEl
                         {
                             Grow = 1f, Basis = 0f, MinWidth = 0f,
-                            Children = [ SectionCaption(Upper(Loc.Get(Strings.Concerts.Detail.Lineup))) ],
+                            Children = [ SectionCaption(Loc.Get(Strings.Concerts.Detail.Lineup)) ],
                         },
-                        Caption(Upper(Strings.Concerts.Detail.ArtistCount(artists.Count))) with
+                        WaveeType.Eyebrow(Strings.Concerts.Detail.ArtistCount(artists.Count)) with
                         { Color = Tok.TextSecondary, MaxLines = 1 },
                     ],
                 },
@@ -321,23 +320,20 @@ sealed class ConcertDetailPage : Component
         return PagedShelf.Create(
             n,
             cardAt: (i, w) => i == 0
-                ? ConcertUi.BrowseAllCard(Upper(Loc.Get(Strings.Concerts.LiveMusic)),
+                ? ConcertUi.BrowseAllCard(Loc.Get(Strings.Concerts.LiveMusic),
                     Loc.Get(Strings.Concerts.BrowseAll),
                     () => go(ConcertRoutes.Hub, Loc.Get(Strings.Concerts.Title)))
                 : ConcertUi.VerticalCard(related[i - 1],
                     () => go(ConcertRoutes.Detail(related[i - 1].Uri), related[i - 1].Title ?? related[i - 1].Venue)),
-            header: SectionCaption(Upper(Loc.Get(Strings.Concerts.Detail.RelatedConcerts))),
+            header: SectionCaption(Loc.Get(Strings.Concerts.Detail.RelatedConcerts)),
             headerGap: Spacing.S,
             measured: true, keyOf: i => i == 0 ? "browse-all" : related[i - 1].Uri);
     }
 
-    static string Upper(string s) => s.ToUpper(CultureInfo.CurrentCulture);
-
-    // The accent eyebrow caption shared by every section (matches the schedule page's header style).
-    static Element SectionCaption(string label) => Caption(label) with
+    // The accent eyebrow shared by every section (matches the schedule page's header style). AccentDecor: kept.
+    static Element SectionCaption(string label) => WaveeType.Eyebrow(label) with
     {
-        Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
-        Trim = TextTrim.CharacterEllipsis,
+        Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
     };
 
     static int StableSeed(string value)

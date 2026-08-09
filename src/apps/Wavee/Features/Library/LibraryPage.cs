@@ -429,8 +429,12 @@ sealed class LibraryPage : Component
     Element ListBody(NavItem[] shown)
     {
         int view = _view.Value; int size = _size.Value;   // subscribe
+        // A filtered-to-nothing column IS an empty state (rail scale - these panes floor at 220-300 DIP); an
+        // unfiltered empty column is still LOADING, and a big-type "nothing here" would be a lie about it.
         if (shown.Length == 0)
-            return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL), Children = [new TextEl(_filter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }] };
+            return _filter.Peek().Length > 0
+                ? EmptyState.Compact(Loc.Get(Strings.Library.NoMatch))
+                : new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL), Children = [Caption("…").Secondary()] };
 
         bool grid = view >= 2; bool compact = view == 0 || view == 2;
         string key = "nav:" + view + ":" + size + ":" + NavHash(shown);
@@ -700,8 +704,7 @@ sealed class LibraryPage : Component
         Padding = new Edges4(Spacing.M, Spacing.M, Spacing.M, Spacing.S),
         Children =
         [
-            // Caption (12/16/600) - caps and the 50/1000 tracking are the header's voice and stay.
-            new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 50f },
+            WaveeType.Eyebrow(label) with { Color = Tok.TextTertiary },
             count >= 0
                 ? new TextEl(count.ToString())
                   {
@@ -761,8 +764,12 @@ sealed class LibraryPage : Component
             Key = "search:" + uri, Animate = SearchRowChange,
             Direction = 0, Height = 56f, AlignItems = FlexAlign.Center, Gap = Spacing.M, ClipToBounds = true,
             Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
-            Fill = selected ? Tok.AccentSubtle : ColorF.Transparent,
-            HoverFill = selected ? Tok.AccentSubtle : Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+            // The BROWSE-LIST selection language, not a bespoke accent tint. Every other list in the app marks the
+            // selected row with the subtle-fill ladder (that is what SelectorVisual/ItemContainer paint); this one
+            // painted Tok.AccentSubtle instead, so the SAME state looked like two different states depending on which
+            // list you were in - and it spent the page's accent on a row that is not an action.
+            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
+            HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
             OnClick = onClick,
             Children =
             [
@@ -897,8 +904,7 @@ sealed class LibraryPage : Component
             ? Pane with { Key = "lib:tracks", Grow = 1f, Basis = 0f, MinWidth = 220f, Shrink = 1f,
                 Children = [Embed.Comp(() => new LibraryDetailPane(albumTracks, false, svc, bridge))] }
             : Pane with { Key = "lib:tracks:empty", Grow = 1f, Basis = 0f, MinWidth = 220f, Shrink = 1f,
-                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                Children = [new TextEl(Loc.Get(Strings.Library.SelectAlbumTracks)) { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }] };
+                Children = [EmptyState.Compact(Loc.Get(Strings.Library.SelectAlbumTracks))] };
         return new BoxEl
         {
             Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f, AlignItems = FlexAlign.Stretch, ClipToBounds = true,
@@ -908,8 +914,8 @@ sealed class LibraryPage : Component
 
     static Element Placeholder(string key) => Pane with
     {
-        Key = "lib:empty", Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Children = [new TextEl(Loc.Get(key)) { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }],
+        Key = "lib:empty", Grow = 1f,
+        Children = [EmptyState.Compact(Loc.Get(key))],
     };
 
     // The grip's ColumnGrip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed Width=10 / Shrink=0
@@ -1203,7 +1209,7 @@ sealed class LibraryDetailPane : Component
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 3f,
                     Children =
                     [
-                        new TextEl(m.BadgeType ?? (_show ? Loc.Get(Strings.Podcast.Show) : "")) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 50f },
+                        WaveeType.Eyebrow(m.BadgeType ?? (_show ? Loc.Get(Strings.Podcast.Show) : "")) with { Color = Tok.TextTertiary },
                         TitleLink(m, routeKey, go, navPreview),
                         // A podcast's publisher is a plain name with no uri to open — it stays text. Album artists are
                         // real entities, so each billed name is its own link (the same span row the track rows use).
@@ -1403,8 +1409,9 @@ sealed class LibraryArtistPane : Component
     Element Body(IReadOnlyList<Album> albums)
     {
         if (albums.Count == 0)
-            return new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL),
-                Children = [new TextEl(_aFilter.Peek().Length > 0 ? Loc.Get(Strings.Library.NoMatch) : "…") { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary }] };
+            return _aFilter.Peek().Length > 0
+                ? EmptyState.Compact(Loc.Get(Strings.Library.NoMatch))
+                : new BoxEl { Padding = new Edges4(Spacing.M, Spacing.XL, Spacing.M, Spacing.XL), Children = [Caption("…").Secondary()] };
 
         int view = _aView.Value, size = _aSize.Value;   // subscribe
         bool grid = view >= 2, compact = view == 0 || view == 2;

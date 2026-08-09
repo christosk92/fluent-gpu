@@ -159,11 +159,7 @@ sealed class QueuePanel : Component
                 Rows("a", autoUp, b, lib, go, display, removable: !viewer, dim: true, _autoPages, acts, menuOverlay, _swipeGroup)));
         }
         if (track is null && userQueue.Count == 0 && ctxUp.Count == 0)
-            content.Add(new BoxEl
-            {
-                Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Padding = Edges4.All(Spacing.XXL),
-                Children = [new TextEl(Loc.Get(Strings.Player.NothingPlaying)) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary }],
-            });
+            content.Add(EmptyState.Compact(Loc.Get(Strings.Player.NothingPlaying)));
 
         Element body = new BoxEl
         {
@@ -356,11 +352,9 @@ sealed class QueuePanel : Component
     {
         var top = new List<Element>(4)
         {
-            // Caption (12/16/600). Caps + the 120/1000 tracking are the header's voice and stay untouched.
-            new TextEl(title.ToUpperInvariant())
+            WaveeType.Eyebrow(title) with
             {
-                Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 120f,
-                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
         };
         if (count >= 0) top.Add(new TextEl(count.ToString()) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary });
@@ -405,10 +399,10 @@ sealed class QueuePanel : Component
             // part-to-make-room motion this panel's plain keyed rows can express natively).
             int item = reorder is { } ro ? ro.ItemAt(i) : i;
             if ((uint)item >= (uint)entries.Count) item = i;
-            var row = QueueRow(b, lib, go, display, entries[item], item, entries, zebra: (i & 1) != 0, removable, dim,
+            var row = QueueRow(b, lib, go, display, entries[item], item, entries, removable, dim,
                                acts, menuOverlay, swipeGroup, reorder is null);
             // Direction 1 on the wrapper: its single child must stretch across the WIDTH (a row-direction wrapper
-            // would size the row to its content and collapse the zebra/hover plate to the text).
+            // would size the row to its content and collapse the hover plate to the text).
             kids.Add(reorder is { } r
                 ? (BoxEl)r.Item(item, row, key: RowKey(entries[item])) with { Direction = 1 }
                 : row);
@@ -440,7 +434,7 @@ sealed class QueuePanel : Component
 
     static Element QueueRow(PlaybackBridge b, LibraryBridge? lib, Action<string, string?>? go,
         Signal<IReadOnlyList<QueueEntry>> display, QueueEntry entry, int bucketIndex, IReadOnlyList<QueueEntry> section,
-        bool zebra, bool removable, bool dim,
+        bool removable, bool dim,
         ActionServices? acts = null, IOverlayService? menuOverlay = null, SwipeGroup? swipeGroup = null,
         bool ownDrag = true)
     {
@@ -473,9 +467,12 @@ sealed class QueuePanel : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, MinHeight = 44f,
             Padding = new Edges4(Spacing.S, 0f, Spacing.XS, 0f),
             Corners = Radii.ControlAll,
-            Fill = zebra ? WaveeColors.RowZebra : ColorF.Transparent,
-            HoverFill = zebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover,
-            PressedFill = zebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed,
+            // NO ZEBRA. Striping is a scanning aid for lists long enough to lose your place in; the queue shows a
+            // handful of rows in a 340-DIP rail, where the stripe is not navigation, it is just texture - and it
+            // halved the contrast the hover state had left to move against. Plain rows, standard hover.
+            Fill = ColorF.Transparent,
+            HoverFill = WaveeColors.RowHover,
+            PressedFill = WaveeColors.RowPressed,
             PressScale = WaveeMotion.ScaleSubtle.Press,
             Opacity = dim ? 0.72f : 1f,
             Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
@@ -524,7 +521,10 @@ sealed class QueuePanel : Component
                 // Hover-revealed "…" overflow beside the ✕ (kept): opens the SAME queue-entry menu the row shows on
                 // right-click, anchored at the button — the engine's ClickRequestsContext re-enters the context-request
                 // funnel here and the walk finds the row's OnContextRequested (the WithContextMenu attach below). Only
-                // rendered when a menu is actually attachable; sized to the queue's 26px action density.
+                // rendered when a menu is actually attachable. Row 1 of WaveeCta's icon-button geometry table - a
+                // 32-square at the control radius. It used to be a 28 CIRCLE, which the table reserves for FABs on
+                // media; nothing here is on media, and two round buttons in a flat rail read as a different control
+                // family from the identical square ones in the toolbar right above them.
                 acts is not null && menuOverlay is not null
                     ? new BoxEl
                     {
@@ -533,8 +533,9 @@ sealed class QueuePanel : Component
                         [
                             new BoxEl
                             {
-                                Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                                Corners = Radii.Circle(28f),
+                                Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
+                                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                                Corners = Radii.ControlAll,
                                 HoverFill = WaveeColors.RowPressed,
                                 Role = AutomationRole.Button, Cursor = CursorId.Hand,
                                 ClickRequestsContext = true,
@@ -546,18 +547,17 @@ sealed class QueuePanel : Component
                 removable && !entry.ItemId.IsNone
                     ? new BoxEl
                     {
-                        // 28, not 26, so a 12-DIP glyph (the smallest legible icon rung — 9 was below it) still keeps an
-                        // 8-DIP ring of target around it. Radii.Circle derives the pill from the box instead of
-                        // hand-halving it.
-                        Width = 28f, Height = 28f, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                        Corners = Radii.Circle(28f),
+                        // Row 1 of the icon-button geometry table (see WaveeCta): 32-square at the control radius.
+                        Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize, Shrink = 0f,
+                        AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                        Corners = Radii.ControlAll,
                         HoverFill = WaveeColors.RowPressed,
                         Role = AutomationRole.Button, Cursor = CursorId.Hand,
                         BlocksDragArm = true,
                         OnClick = Remove,
                         Children = [new TextEl(Icons.ChromeClose) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextTertiary, HoverColor = Tok.TextPrimary }],
                     }
-                    : new BoxEl { Width = 28f, Shrink = 0f },
+                    : new BoxEl { Width = WaveeCta.IconButtonSize, Shrink = 0f },
             ],
         };
         bool canRemove = removable && !entry.ItemId.IsNone;

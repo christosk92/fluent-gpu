@@ -78,7 +78,7 @@ sealed partial class ArtistPage : Component
     {
         long max = 1;
         foreach (var c in cities) if (c.Listeners > max) max = c.Listeners;
-        var rows = new List<Element>(cities.Count + 1) { new TextEl(Loc.Get(Strings.Artist.ListenedMostIn)) { Size = 13f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 10f } };
+        var rows = new List<Element>(cities.Count + 1) { WaveeType.Eyebrow(Loc.Get(Strings.Artist.ListenedMostIn)) with { Color = Tok.TextTertiary } };
         foreach (var c in cities) rows.Add(CityBarRow(c, max));
         return new BoxEl { Direction = 1, Gap = Spacing.S, Children = rows.ToArray() };
     }

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -149,7 +149,6 @@ sealed class LibrarySortPanel : Component
         return new BoxEl { Direction = 0, Gap = 4f, Padding = new Edges4(2f, 2f, 2f, 4f), Children = cells };
     }
 
-    // Caption (12/16/600) caps header - caps and tracking kept.
-    static Element Header(string t) => new BoxEl { Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XXS), Children = [new TextEl(t) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 30f }] };
+    static Element Header(string t) => new BoxEl { Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XXS), Children = [WaveeType.Eyebrow(t) with { Color = Tok.TextTertiary }] };
     static Element Divider() => new BoxEl { Height = 1f, Fill = Tok.StrokeDividerDefault, Margin = new Edges4(4f, 4f, 4f, 4f) };
 }

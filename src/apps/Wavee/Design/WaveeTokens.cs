@@ -7,6 +7,49 @@ namespace Wavee;
 // spacing / rounding scales come from the engine's `Spacing.*` / `Radii.*` supersets — we do NOT duplicate either. This
 // keeps only the fixed sizing scale Tok doesn't carry. The 4px grid is the native tell; every value here is a multiple of 4.
 
+/// <summary>THE ACCENT BUDGET — the three roles accent colour is allowed to play, and the rule that keeps them apart.
+///
+/// <para>Wavee is deliberately NOT a monochrome Fluent app: the artwork-derived accent is identity, and it stays. What
+/// it stopped being is ambient. An accent that appears in four unrelated jobs on one page stops meaning any of them —
+/// the reader can no longer tell "click this" from "you are here" from "this is a section". So every accent paint site
+/// declares which of exactly THREE roles it is:</para>
+///
+/// <list type="number">
+/// <item><b>AccentAction</b> — "clicking this does the page's primary thing." A SOLID accent plate behind on-accent ink:
+/// <see cref="WaveeCta"/>, <c>Button.Accent</c>, the play FABs. AT MOST ONE per screenful of content — if a surface has
+/// two, one of them is a secondary and takes <c>Button.Standard</c>. This is the scarcest role and the reason the empty
+/// state's action is quiet: an empty page's "Browse" must not outrank the page's real primary.</item>
+/// <item><b>AccentSelection</b> — "you are here." The SelectorBar pill, the nav rail's selection bar, a selected chip.
+/// Geometry is the tell and it is reserved: a short accent BAR/PILL against the edge of a control means selection and
+/// means nothing else. A decorative ornament may not borrow that shape (see the hard rule below).</item>
+/// <item><b>AccentDecor</b> — "this content has a colour." Section spines, hero washes, the date captions on concert
+/// cards, artist-shelf eyebrows, the module accent facts. Accent as TEXT or as a wash, never as a plate behind ink and
+/// never as a selection-shaped bar. This is the largest role by site count and it is kept: it is the identity.</item>
+/// </list>
+///
+/// <para>THE TWO HARD RULES, both enforced by construction after the voice-unification wave:</para>
+/// <list type="bullet">
+/// <item>A decorative ornament may not take SELECTION geometry. The artist section header's old 3×22 r1.5 accent
+/// capsule was pixel-for-pixel the selection-indicator shape doing a decorative job; it is now a 20×2 underline sitting
+/// under the header text, which is unmistakably a rule and not a selection pill.</item>
+/// <item>Accent is never STRUCTURE. A border, a divider, a chevron or a disclosure glyph is chrome; it takes
+/// <c>Tok.StrokeDividerDefault</c> / <c>Tok.TextSecondary</c>. Accent on structure was the single largest source of
+/// ambient accent in the app (dashed accent borders and accent chevrons on the concert surfaces).</item>
+/// </list></summary>
+public static class WaveeAccent
+{
+    /// <summary>Role 1 — the SOLID plate behind on-accent ink for the page's ONE primary action. Artwork-derived
+    /// surfaces pass their own graded fill to <see cref="WaveeCta"/> instead of reading this.</summary>
+    public static ColorF Action => Tok.AccentDefault;
+
+    /// <summary>Role 2 — "you are here". The bar/pill geometry that carries it is reserved to selection.</summary>
+    public static ColorF Selection => Tok.AccentDefault;
+
+    /// <summary>Role 3 — accent as CONTENT colour: text, spines, washes. The contrast-corrected accent INK, never the
+    /// raw fill, because this role always paints on the page surface rather than under on-accent ink.</summary>
+    public static ColorF Decor => Tok.AccentTextPrimary;
+}
+
 /// <summary>Fixed control / surface dimensions.</summary>
 public static class WaveeSize
 {
@@ -171,14 +214,27 @@ public static class WaveeColors
     public static ColorF ContentAlt => Active.ContentAlt;
     public static ColorF PremiumText => Active.PremiumText;
 
-    // White-alpha stripes disappear over the near-white light content surface. Use a restrained neutral-ink ramp
-    // in light mode: visible enough to scan long lists, still quieter than selection and hover states. Dark keeps the
-    // palette-provided white overlays.
-    public static ColorF RowZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x08) : Active.RowZebra;
+    /// <summary>THE zebra stripe — the resting plate on an odd row of a LONG tracklist, and nothing else. Zebra is a
+    /// scanning aid for lists long enough to lose your place in (the detail tracklist, <c>TrackRow</c>); a 6-row queue
+    /// or a friends rail gets plain rows plus the standard hover, because striping a short list only adds noise.
+    /// <para>It is the engine's SUBTLE-FILL ink at its quietest rung — <see cref="Tok.FillSubtleTertiary"/> — not three
+    /// hand-picked alphas per theme. That derivation does two things the literals could not: it drops the light/dark
+    /// branch (the subtle ladder already flips black ink for white), and it enforces the invariant the old numbers
+    /// broke in DARK, where the stripe (0x0F) was EXACTLY the hover fill, so hovering a striped row moved the surface by
+    /// five alpha steps and read as nothing at all. A stripe MUST be quieter than hover or the row has no hover.</para></summary>
+    public static ColorF RowZebra => Tok.FillSubtleTertiary;
+
     public static ColorF RowHover => Active.RowHover;
-    public static ColorF RowHoverZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x0F) : Active.RowHoverZebra;
     public static ColorF RowPressed => Active.RowPressed;
-    public static ColorF RowPressedZebra => Tok.Theme == ThemeKind.Light ? ColorF.FromRgba(0, 0, 0, 0x14) : Active.RowPressedZebra;
+
+    /// <summary>Hover/press ON a striped row: the row state SOURCE-OVER the stripe, collapsed to one translucent fill
+    /// (the row paints a single <c>Fill</c>, never two stacked plates). <c>ColorContrast.Over</c> is associative, so the
+    /// merged rung composites pixel-identically to painting the two rungs in sequence — which is exactly what the old
+    /// literals were hand-approximating (light landed on 0x0F either way; the rest were eyeballed).</summary>
+    public static ColorF RowHoverZebra => ColorContrast.Over(Active.RowHover, RowZebra);
+
+    /// <inheritdoc cref="RowHoverZebra"/>
+    public static ColorF RowPressedZebra => ColorContrast.Over(Active.RowPressed, RowZebra);
 
     public static ColorF ChromeHover => Tok.FillSubtleSecondary;
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;

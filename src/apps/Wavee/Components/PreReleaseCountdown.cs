@@ -71,9 +71,10 @@ sealed class PreReleaseCountdown : Component
                     Direction = 1, Gap = Spacing.XS, MinWidth = 0f, Grow = 1f,
                     Children =
                     [
-                        Caption(Loc.Get(Strings.Detail.PreReleaseEyebrow)) with
+                        // AccentDecor — the countdown's accent IS the release's colour. Kept; only case/tracking moved.
+                        WaveeType.Eyebrow(Loc.Get(Strings.Detail.PreReleaseEyebrow)) with
                         {
-                            Color = accent, Weight = 700, CharSpacing = 40f, MaxLines = 1,
+                            Color = accent, MaxLines = 1,
                         },
                         released ? OutNow() : Tiles(remaining),
                     ],

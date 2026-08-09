@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using FluentGpu.Controls;
@@ -250,7 +250,7 @@ sealed class MonthBoard : Component
             Children =
             [
                 BodyStrong(d.Day.ToString(c)) with { Color = Tok.TextPrimary, MaxLines = 1 },
-                Caption(d.ToString("ddd", c).ToUpper(c)) with { Color = Tok.TextSecondary, CharSpacing = 20f, MaxLines = 1 },
+                WaveeType.Eyebrow(d.ToString("ddd", c)) with { Color = Tok.TextSecondary, MaxLines = 1 },
             ],
         };
     }
@@ -265,8 +265,8 @@ sealed class MonthBoard : Component
             [
                 BodyStrong(run.First.Date.Day.ToString(c) + "–" + run.Last.Date.Day.ToString(c)) with
                 { Color = Tok.TextPrimary, MaxLines = 1 },
-                Caption(run.First.Date.ToString("ddd", c).ToUpper(c) + "–" + run.Last.Date.ToString("ddd", c).ToUpper(c)) with
-                { Color = Tok.TextSecondary, CharSpacing = 10f, MaxLines = 1 },
+                WaveeType.Eyebrow(run.First.Date.ToString("ddd", c) + "–" + run.Last.Date.ToString("ddd", c)) with
+                { Color = Tok.TextSecondary, MaxLines = 1 },
             ],
         };
     }

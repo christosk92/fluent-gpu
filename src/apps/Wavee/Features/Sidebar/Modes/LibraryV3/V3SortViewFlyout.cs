@@ -219,7 +219,7 @@ sealed class V3SortViewPanel : Component
     static Element Header(string t) => new BoxEl
     {
         Padding = new Edges4(8f, 6f, 8f, 2f),
-        Children = [new TextEl(t) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 30f }],
+        Children = [WaveeType.Eyebrow(t) with { Color = Tok.TextTertiary }],
     };
 
     static Element PanelDivider() => new BoxEl

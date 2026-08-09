@@ -382,13 +382,12 @@ static class DetailRail
             _ => Loc.Get(Strings.Nav.YourLibrary),
         };
 
-    /// <summary>The eyebrow RUN — small, heavy, tracked-out tertiary metadata on one line. Shared with the vertical
-    /// hero: the type/year fact must look identical in both layouts, so the styling has exactly one definition.</summary>
-    internal static TextEl EyebrowRun(string text) => new(text)
+    /// <summary>The eyebrow RUN — tertiary metadata on one line. Shared with the vertical hero: the type/year fact must
+    /// look identical in both layouts, so the styling has exactly one definition — which is now
+    /// <see cref="WaveeType.Eyebrow"/> plus this role's colour and its one-line clamp.</summary>
+    internal static TextEl EyebrowRun(string text) => WaveeType.Eyebrow(text) with
     {
-        // Caption (12/16/600) — the ONE caps-eyebrow rung. Caps and the 40/1000 tracking stay; 11 was off the ramp.
-        Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 40f,
-        MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+        Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
     };
 
     // The WaveeCta media pill on the cover-extracted accent (WaveeCta resolves the WCAG on-fill ink itself).

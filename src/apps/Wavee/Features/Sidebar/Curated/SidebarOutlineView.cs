@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
@@ -162,10 +162,11 @@ sealed class SidebarOutlineView : Component
         Grow = 1f, Shrink = 1f, Direction = 1, MinHeight = 0f,
         Children =
         [
-            EmptyState.Build(
+            // Compact: this is a customizer COLUMN, not a page body - the page-scale 28/36 headline wraps to three
+            // ragged lines in it.
+            EmptyState.Compact(
                 Loc.Get(CzLoc.Empty),
                 Loc.Get(CzLoc.EmptySub),
-                Icons.SplitView,
                 Loc.Get(CzLoc.StartFromTemplate),
                 // The palette is the "add a section" path, but at the narrow tiers it lives behind a command-bar flyout
                 // this card has no anchor for — so the empty state's one-click recovery is the template instead.

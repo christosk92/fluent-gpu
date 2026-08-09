@@ -166,7 +166,7 @@ public static class MediaCard
             Shrink = 0f, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
             Fill = WaveeOnMedia.ScrimRest, BorderWidth = 1f,
             BorderColor = WaveeOnMedia.Stroke, HitTestVisible = false,
-            Children = [ WaveeType.Eyebrow(label) with { Color = WaveeOnMedia.Ink, CharSpacing = 30f } ],
+            Children = [ WaveeType.Eyebrow(label) with { Color = WaveeOnMedia.Ink } ],
         };
     }
 
@@ -1083,7 +1083,7 @@ public static class MediaCard
         // Capsule by construction (Radii.Full clamps to half the box), not a hand-picked 11 that tracked the old height.
         Shrink = 0f, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll,
         Fill = Tok.FillSubtleSecondary,
-        Children = [ WaveeType.Eyebrow(text) with { Color = Tok.TextTertiary, CharSpacing = 40f } ],
+        Children = [ WaveeType.Eyebrow(text) with { Color = Tok.TextTertiary } ],
     };
 
     // A stable-ish placeholder seed from the card's context uri (so each card gets its own gradient cover tone).

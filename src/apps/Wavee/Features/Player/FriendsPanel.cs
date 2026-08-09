@@ -55,7 +55,10 @@ sealed class FriendsPanel : Component
         return state switch
         {
             FriendFeedState.Offline => Message(Loc.Get(Strings.Friends.Offline)),
-            FriendFeedState.Error => Message(Loc.Get(Strings.Friends.Error), action: RetryPill(fb)),
+            // A stock Standard button, not the old hand-rolled pill: a retry is a utility action on a flat panel,
+            // which is row 1 of the button grammar - see WaveeCta's geometry table.
+            FriendFeedState.Error => Message(Loc.Get(Strings.Friends.Error),
+                actionLabel: Loc.Get(Strings.Friends.Retry), onAction: fb.Refresh),
             FriendFeedState.Loading or FriendFeedState.Idle => SkeletonView(),
             _ => Message(Loc.Get(Strings.Friends.Empty), Loc.Get(Strings.Friends.EmptyHint)),
         };
@@ -65,7 +68,7 @@ sealed class FriendsPanel : Component
     static Element RowsView(IReadOnlyList<FriendActivity> items, long now, ColorF accent, Action<string, string?>? go)
     {
         var rows = new List<Element>(items.Count);
-        for (int i = 0; i < items.Count; i++) rows.Add(Row(items[i], now, accent, go, zebra: (i & 1) != 0));
+        for (int i = 0; i < items.Count; i++) rows.Add(Row(items[i], now, accent, go));
         return Shell(new ScrollEl
         {
             Grow = 1f, MinHeight = 0f, AutoEdgeFade = true, ScrollKey = "friendspanel",
@@ -77,7 +80,7 @@ sealed class FriendsPanel : Component
         });
     }
 
-    static Element Row(FriendActivity fa, long now, ColorF accent, Action<string, string?>? go, bool zebra)
+    static Element Row(FriendActivity fa, long now, ColorF accent, Action<string, string?>? go)
     {
         bool live = fa.TimestampMs > 0 && now - fa.TimestampMs <= LiveWindowMs;
 
@@ -103,9 +106,11 @@ sealed class FriendsPanel : Component
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinHeight = WaveeSize.TrackRowH,
             Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
             Corners = Radii.ControlAll,
-            Fill = zebra ? WaveeColors.RowZebra : ColorF.Transparent,
-            HoverFill = onClick is not null ? (zebra ? WaveeColors.RowHoverZebra : WaveeColors.RowHover) : (zebra ? WaveeColors.RowZebra : ColorF.Transparent),
-            PressedFill = onClick is not null ? (zebra ? WaveeColors.RowPressedZebra : WaveeColors.RowPressed) : ColorF.Transparent,
+            // NO ZEBRA: a friends rail is a short list in a 340-DIP panel, so the stripe was texture rather than a
+            // scanning aid. Plain rows + the standard hover, which is also the only state a non-clickable row has.
+            Fill = ColorF.Transparent,
+            HoverFill = onClick is not null ? WaveeColors.RowHover : ColorF.Transparent,
+            PressedFill = onClick is not null ? WaveeColors.RowPressed : ColorF.Transparent,
             PressScale = WaveeMotion.ScaleSubtle.PressIf(onClick is not null),
             Role = onClick is not null ? AutomationRole.Button : AutomationRole.None,
             Cursor = onClick is not null ? CursorId.Hand : CursorId.Arrow,
@@ -207,33 +212,11 @@ sealed class FriendsPanel : Component
         ],
     };
 
-    static Element Message(string title, string? hint = null, Element? action = null)
-    {
-        var kids = new List<Element>(3)
-        {
-            new TextEl(title) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxWidth = 280f },
-        };
-        if (hint is { Length: > 0 })
-            kids.Add(new TextEl(hint) { Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap, MaxWidth = 280f });
-        if (action is not null) kids.Add(action);
-
-        return new BoxEl
-        {
-            Direction = 1, Grow = 1f, MinHeight = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.M,
-            Padding = Edges4.All(Spacing.XXL),
-            Children = kids.ToArray(),
-        };
-    }
-
-    static Element RetryPill(FriendsBridge fb) => new BoxEl
-    {
-        MinHeight = 32f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S),
-        Corners = Radii.PillAll,
-        Fill = Tok.FillCardSecondary, HoverFill = WaveeColors.RowHover, PressedFill = WaveeColors.RowPressed,
-        Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true, OnClick = fb.Refresh,
-        Children = [new TextEl(Loc.Get(Strings.Friends.Retry)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary }],
-    };
+    // The shared empty-state grammar at RAIL scale (this panel is ~340 DIP). Was a hand-rolled stack with its own
+    // 14/600-secondary heading, its own 12/16 hint and a hand-rolled pill for the action - three parts, three
+    // divergences from the component that already owns all three.
+    static Element Message(string title, string? hint = null, string? actionLabel = null, Action? onAction = null)
+        => EmptyState.Compact(title, hint, actionLabel, onAction);
 
     // The panel frame: a full-height clipped column with the shared rail padding (matches QueuePanel).
     static Element Shell(Element content) => new BoxEl

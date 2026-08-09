@@ -141,10 +141,8 @@ sealed class TrackFilterFlyout : Component
                 margin: Spacing.S, alignmentRatio: 0f, animate: true);
         }, RevealDelayMs, DepKey.From(OpenSectionIndex()));
 
-        Element SectionTitle(string text) => new TextEl(text.ToUpperInvariant())
+        Element SectionTitle(string text) => WaveeType.Eyebrow(text) with
         {
-            Size = 10f,
-            Weight = 700,
             Color = Tok.TextTertiary,
             Margin = new Edges4(4f, 0f, 4f, 8f),
         };

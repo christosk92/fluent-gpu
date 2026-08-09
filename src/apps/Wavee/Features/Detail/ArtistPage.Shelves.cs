@@ -41,7 +41,8 @@ sealed partial class ArtistPage : Component
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,
                 Children =
                 [
-                    new TextEl(t.Eyebrow) { Size = 11f, Weight = 700, Color = Tok.AccentTextPrimary, CharSpacing = 30f },
+                    // AccentDecor — an artist-shelf eyebrow is the deliberate accent identity; only the metrics moved.
+                    WaveeType.Eyebrow(t.Eyebrow) with { Color = WaveeAccent.Decor },
                     new TextEl(t.Headline) { Size = 16f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                     new TextEl(t.Subline) { Size = 13f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                 ] },
@@ -115,10 +116,10 @@ sealed partial class ArtistPage : Component
             new BoxEl { Direction = 1, Width = 48f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 0f,
                 Children =
                 [
-                    // Caption caps month (12/16/600, tracking kept) over a Title day numeral (28/36/600). The 48-DIP
-                    // date column fits a two-digit 28px figure with room to spare; the block grows ~5 DIP versus the
-                    // old 11/700 + 24/800, which the measured shelf absorbs.
-                    new TextEl(c.Date.ToString("MMM", CultureInfo.InvariantCulture).ToUpperInvariant()) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.AccentTextPrimary, CharSpacing = 10f },
+                    // The eyebrow month over a Title day numeral (28/36/600). The 48-DIP date column fits a two-digit
+                    // 28px figure with room to spare. The month keeps the format's OWN casing ("Jan", not "JAN") and
+                    // keeps its accent — a concert date caption is AccentDecor, the identity this wave preserved.
+                    WaveeType.Eyebrow(c.Date.ToString("MMM", CultureInfo.InvariantCulture)) with { Color = WaveeAccent.Decor },
                     new TextEl(c.Date.Day.ToString()) { Size = 28f, LineHeight = 36f, Weight = 600, Color = Tok.TextPrimary },
                 ] },
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = 2f,

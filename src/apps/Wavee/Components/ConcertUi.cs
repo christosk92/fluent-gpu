@@ -27,7 +27,7 @@ public static class ConcertUi
         float width = compact ? 48f : 56f;
         float height = compact ? 52f : 60f;
         string day = date.Day.ToString(culture);
-        string month = date.ToString("MMM", culture).ToUpper(culture);
+        string month = date.ToString("MMM", culture);
 
         return new BoxEl
         {
@@ -37,7 +37,7 @@ public static class ConcertUi
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
-                Caption(month) with { Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 20f, MaxLines = 1 },
+                WaveeType.Eyebrow(month) with { Color = WaveeAccent.Decor, MaxLines = 1 },
                 BodyStrong(day) with { Color = Tok.TextPrimary, MaxLines = 1 },
             ],
         };
@@ -116,10 +116,10 @@ public static class ConcertUi
 
         var text = new List<Element>(3)
         {
-            Caption(DateCaption(concert.Date)) with
+            // AccentDecor - the concert date caption is the deliberate accent identity; kept, on the eyebrow rung.
+            WaveeType.Eyebrow(DateCaption(concert.Date)) with
             {
-                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MinWidth = 0f, MaxLines = 1,
-                Trim = TextTrim.CharacterEllipsis,
+                Color = WaveeAccent.Decor, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
             WaveeType.TrackTitle(title) with
             {
@@ -203,10 +203,9 @@ public static class ConcertUi
                     Direction = 1, MinWidth = 0f, Gap = 3f,
                     Children =
                     [
-                        Caption(caption) with
+                        WaveeType.Eyebrow(caption) with
                         {
-                            Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MinWidth = 0f,
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                            Color = WaveeAccent.Decor, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         },
                         WaveeType.TrackTitle(title) with
                         {
@@ -325,11 +324,12 @@ public static class ConcertUi
         };
     }
 
-    // "FRI, AUG 21 · 19:00" (current culture) — the accent eyebrow-caption voice the pages already use.
+    // "Fri, Aug 21 · 19:00" (current culture) — the accent eyebrow voice the pages already use, in the format's OWN
+    // casing. The old .ToUpper(culture) was a caps transform over a CULTURE-FORMATTED date, i.e. over localized text.
     static string DateCaption(DateTimeOffset date)
     {
         var culture = CultureInfo.CurrentCulture;
-        return (date.ToString("ddd, MMM d", culture) + " · " + date.ToString("t", culture)).ToUpper(culture);
+        return date.ToString("ddd, MMM d", culture) + " · " + date.ToString("t", culture);
     }
 
     // A full-width page hero, restructured (R3.1 — the copy comes OFF the photo): the image is a pure ATMOSPHERE BAND —
@@ -385,10 +385,9 @@ public static class ConcertUi
         // hero and no-hero pages read as the same surface.
         var copyLines = new List<Element>(3)
         {
-            Caption(eyebrow) with
+            WaveeType.Eyebrow(eyebrow) with
             {
-                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MinWidth = 0f, MaxLines = 1,
-                Trim = TextTrim.CharacterEllipsis,
+                Color = WaveeAccent.Decor, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
             WaveeType.PageHero(title) with { Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis },
         };
@@ -437,18 +436,16 @@ public static class ConcertUi
             : cityPrimary ? concert.City
             : string.IsNullOrWhiteSpace(concert.Title) ? Loc.Get(Strings.Concerts.Detail.Concert) : concert.Title!;
         string meta = cityPrimary ? concert.Date.ToString("t", culture) : TimeMeta(concert);
-        string caption = Strings.Concerts.Schedule.NextShow(ConcertScheduleShaping.RelativeTime(concert.Date, now))
-            .ToUpper(culture);
+        string caption = Strings.Concerts.Schedule.NextShow(ConcertScheduleShaping.RelativeTime(concert.Date, now));
         ColorF fill = accent is { } argb
             ? ColorF.Lerp(Tok.FillCardDefault, WaveePalette.ToColor(argb), 0.11f)
             : Tok.FillCardDefault;
 
         var copy = new List<Element>(3)
         {
-            Caption(caption) with
+            WaveeType.Eyebrow(caption) with
             {
-                Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MinWidth = 0f, MaxLines = 1,
-                Trim = TextTrim.CharacterEllipsis,
+                Color = WaveeAccent.Decor, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
             WaveeType.TrackTitle(venue) with { MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
         };
@@ -490,10 +487,9 @@ public static class ConcertUi
             BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
-                Caption(date.ToString("MMM", c).ToUpper(c)) with
-                { Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 20f, MaxLines = 1 },
+                WaveeType.Eyebrow(date.ToString("MMM", c)) with { Color = WaveeAccent.Decor, MaxLines = 1 },
                 new TextEl(date.Day.ToString(c)) { Size = 34f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1 },
-                Caption(date.ToString("ddd", c).ToUpper(c)) with { Color = Tok.TextSecondary, CharSpacing = 20f, MaxLines = 1 },
+                WaveeType.Eyebrow(date.ToString("ddd", c)) with { Color = Tok.TextSecondary, MaxLines = 1 },
             ],
         };
     }
@@ -535,8 +531,14 @@ public static class ConcertUi
         ],
     };
 
-    /// <summary>A compact Fluent filter token. Unlike SelectorBar (view switching), this is a toggleable query facet:
-    /// the selected state is a filled pill with a check mark and the unselected state is a bordered control surface.</summary>
+    /// <summary>A compact Fluent filter token — a MULTI-SELECT query facet, which is precisely why it is not a
+    /// <c>SelectorBar</c>: a SelectorBar has exactly ONE selected item, and this strip routinely has none or five.
+    /// Selected is a filled accent pill (AccentSelection, the sanctioned role); unselected is a bordered control surface.
+    /// <para>NO LABEL SHIFT. The selected arm used to INSERT a 14-DIP check plus a 6-DIP gap ahead of the label, so
+    /// selecting a token slid its own text sideways and reflowed every token to its right — the strip visibly walked
+    /// under the cursor. The filled accent plate and the on-accent ink already say "selected" (and the ToggleButton role
+    /// says it to a screen reader), so the redundant glyph is gone and a token is now the same width in both
+    /// states.</para></summary>
     public static BoxEl FilterToken(string label, bool selected, Action onClick) => new BoxEl
     {
         Key = "filter-token:" + label,
@@ -554,19 +556,7 @@ public static class ConcertUi
         BorderColor = selected ? Tok.AccentDefault : Tok.StrokeControlDefault,
         BrushTransitionMs = WaveeMotion.Fast,
         Role = AutomationRole.ToggleButton, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
-        Children = selected
-            ?
-            [
-                new BoxEl
-                {
-                    Key = "filter-check:" + label, Width = 14f, Height = 14f, Shrink = 0f,
-                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Animate = MotionRecipes.IconSwap,
-                    Children = [ Icon(Icons.Check, 12f, Tok.TextOnAccentPrimary) ],
-                },
-                Body(label) with { Color = Tok.TextOnAccentPrimary, MaxLines = 1 },
-            ]
-            : [ Body(label) with { Color = Tok.TextPrimary, MaxLines = 1 } ],
+        Children = [ Body(label) with { Color = selected ? Tok.TextOnAccentPrimary : Tok.TextPrimary, MaxLines = 1 } ],
     };
 
     // ── hub filter-bar pills (concerts v2, rev-7 segmented-pill fusion) ──────────────────────────────────────────────
@@ -665,9 +655,12 @@ public static class ConcertUi
         ],
     };
 
-    /// <summary>A dashed-outline "more/less" affordance for the genre-token strip — accent text over a dashed accent
-    /// border (the engine's <c>BorderDashOn/Off</c> stroke, the DropZone look). Toggles the strip between the capped
-    /// top-3 head and the full concept list.</summary>
+    /// <summary>A dashed-outline "more/less" affordance for the genre-token strip — an accent LABEL over a NEUTRAL
+    /// dashed border (the engine's <c>BorderDashOn/Off</c> stroke, the DropZone look). Toggles the strip between the
+    /// capped top-3 head and the full concept list.
+    /// <para>The border and the chevron used to be accent too. A border is STRUCTURE and a chevron is a disclosure
+    /// glyph — hard rule 2 of the accent budget (see <c>WaveeAccent</c>): accent names content and actions, never
+    /// chrome. The label keeps its accent, because THAT is the affordance.</para></summary>
     public static Element MoreToken(string label, bool expanded, Action onClick) => new BoxEl
     {
         Key = "genre-more",
@@ -678,12 +671,12 @@ public static class ConcertUi
         Direction = 0, Height = 32f, Shrink = 0f, AlignItems = FlexAlign.Center, Gap = 6f,
         Padding = new Edges4(14f, 5f, 14f, 5f),
         Corners = CornerRadius4.All(Radii.Full),
-        BorderWidth = 1f, BorderColor = Tok.AccentTextPrimary with { A = 0.55f }, BorderDashOn = 5f, BorderDashOff = 4f,
+        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, BorderDashOn = 5f, BorderDashOff = 4f,
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand, OnClick = onClick,
         Children =
         [
             Body(label) with { Color = Tok.AccentTextPrimary, MaxLines = 1 },
-            Icon(expanded ? Icons.ChevronUp : Icons.ChevronDown, 10f, Tok.AccentTextPrimary) with { Shrink = 0f },
+            Icon(expanded ? Icons.ChevronUp : Icons.ChevronDown, 10f, Tok.TextSecondary) with { Shrink = 0f },
         ],
     }.Interactive(Interaction.Subtle);
 
@@ -747,10 +740,9 @@ public static class ConcertUi
                     Gap = Spacing.S, Justify = FlexJustify.Center,
                     Children =
                     [
-                        Caption(eyebrow.ToUpper(CultureInfo.CurrentCulture)) with
+                        WaveeType.Eyebrow(eyebrow) with
                         {
-                            Color = Tok.AccentTextPrimary, Weight = 700, CharSpacing = 40f, MaxLines = 1,
-                            Trim = TextTrim.CharacterEllipsis,
+                            Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         },
                         WaveeType.PageHero(title) with
                         {
@@ -766,8 +758,9 @@ public static class ConcertUi
                             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
                             Children =
                             [
-                                BodyStrong(actionLabel) with { Color = Tok.AccentTextPrimary },
-                                Icon(Icons.ChevronRight, 14f, Tok.AccentTextPrimary),
+                                BodyStrong(actionLabel) with { Color = WaveeAccent.Decor },
+                                // The chevron is chrome, not the action - accent stops at the label (budget rule 2).
+                                Icon(Icons.ChevronRight, 14f, Tok.TextSecondary),
                             ],
                         },
                     ],

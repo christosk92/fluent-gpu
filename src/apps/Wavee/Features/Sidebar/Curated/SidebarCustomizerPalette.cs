@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -329,10 +329,9 @@ sealed class SidebarCustomizerPalette : Component
     };
     static Element GroupHeader(SidebarPaletteGroup group) => Header(Loc.Get(SidebarPalette.GroupLocKey(group)));
 
-    static Element Header(string text) => new TextEl(text.ToUpperInvariant())
+    static Element Header(string text) => WaveeType.Eyebrow(text) with
     {
-        Size = 11f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1, CharSpacing = 40f,
-        Trim = TextTrim.CharacterEllipsis,
+        Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
         Margin = new Edges4(Spacing.XS, Spacing.S, Spacing.XS, 2f),
     };
 
@@ -429,10 +428,9 @@ sealed class SidebarTemplateList : Component
         var ids = SidebarTemplates.All;
         var kids = new List<Element>(ids.Length + (_showHeading ? 1 : 0));
         if (_showHeading)
-            kids.Add(new TextEl(Loc.Get(CzLoc.Templates).ToUpperInvariant())
+            kids.Add(WaveeType.Eyebrow(Loc.Get(CzLoc.Templates)) with
             {
-                Size = 11f, Weight = 600, Color = Tok.TextTertiary, MaxLines = 1, CharSpacing = 40f,
-                Trim = TextTrim.CharacterEllipsis,
+                Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 Margin = new Edges4(Spacing.XS, Spacing.S, Spacing.XS, 2f),
             });
         for (int i = 0; i < ids.Length; i++)

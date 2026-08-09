@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -65,10 +65,9 @@ sealed class ConcertFilterBar : Component
             Direction = 0, AlignItems = FlexAlign.Center, MinWidth = 0f, Gap = Spacing.S,
             Children =
             [
-                Caption(Upper(Loc.Get(Strings.Concerts.Filter.FilterBy))) with
+                WaveeType.Eyebrow(Loc.Get(Strings.Concerts.Filter.FilterBy)) with
                 {
-                    Color = Tok.AccentTextPrimary, Weight = 600, CharSpacing = 40f, MaxLines = 1,
-                    Trim = TextTrim.CharacterEllipsis,
+                    Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 },
                 new BoxEl { Grow = 1f },
                 Embed.Comp(() => new CountTicker
@@ -252,6 +251,4 @@ sealed class ConcertFilterBar : Component
     }
 
     static Element Divider() => new BoxEl { Width = 1f, Height = 20f, Shrink = 0f, Fill = Tok.StrokeSurfaceDefault };
-
-    static string Upper(string s) => s.ToUpper(CultureInfo.CurrentCulture);
 }

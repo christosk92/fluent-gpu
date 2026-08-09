@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using FluentGpu.Controls;
@@ -378,7 +378,7 @@ sealed class NotificationPanel : Component
             kids.Add(new TextEl(Strings.Notifications.Activity.Detail.RenamedFrom(oldName, newName)) { Size = 12f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap });
         if (p?.Tracks is { Count: > 0 } tracks)
         {
-            kids.Add(new TextEl(Loc.Get(Strings.Notifications.Activity.Detail.Tracks)) { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 30f });
+            kids.Add(WaveeType.Eyebrow(Loc.Get(Strings.Notifications.Activity.Detail.Tracks)) with { Color = Tok.TextTertiary });
             int shown = 0;
             foreach (var t in tracks)
             {
@@ -458,13 +458,13 @@ sealed class NotificationPanel : Component
     static Element StatusChip(string label, ColorF tint) => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(7f, 1f, 7f, 1f), Corners = CornerRadius4.All(8f), Fill = Tok.FillSubtleSecondary,
-        Children = [ new TextEl(label) { Size = 10f, Weight = 700, Color = tint, CharSpacing = 20f } ],
+        Children = [ WaveeType.Eyebrow(label) with { Color = tint } ],
     };
 
     static Element TypePill(string type) => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(9f, 2f, 9f, 2f), Corners = CornerRadius4.All(10f), Fill = Tok.FillSubtleSecondary,
-        Children = [ new TextEl(type) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 40f } ],
+        Children = [ WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary } ],
     };
 
     static Element PillButton(string label, Action onClick, bool accent) => new BoxEl

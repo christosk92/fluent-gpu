@@ -151,7 +151,7 @@ sealed class SearchPage : Component
             return HitsList(r.Profiles, Loc.Get(Strings.Search.NoProfileResults), r, go, Play, PlayTrack, PlayKnownTrack);
 
         if (chip != 0 && r.Tracks.Count + r.Artists.Count + r.Albums.Count + r.Playlists.Count == 0)
-            return Centered(Icons.Search, Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
+            return EmptyState.Build(Loc.Get(Strings.Search.NoResults), Strings.Search.NoResultsSub(q));
 
         return chip switch
         {
@@ -223,10 +223,13 @@ sealed class SearchPage : Component
 
     static Element ResultRow(Image? cover, int seed, string title, string subtitle, string type, bool circular, Action open) => new BoxEl
     {
+        // A ROW, not a card. Twenty of these stacked put twenty hairlines down the page, which reads as a table with
+        // its rules drawn twice - and a filled plate per row leaves no quiet ground for hover to move against. Rows are
+        // transparent at rest and take the subtle-fill ladder on interaction, like every other list in the app.
         Direction = 0, Height = 60f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
         Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
-        Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-        HoverFill = Tok.FillCardDefault, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
+        Fill = ColorF.Transparent,
+        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary, OnClick = open,
         Children =
         [
             new BoxEl { Width = 48f, Height = 48f, Shrink = 0f, Corners = CornerRadius4.All(circular ? 24f : 6f), ClipToBounds = true,
@@ -243,10 +246,9 @@ sealed class SearchPage : Component
 
     static Element TypePill(string type) => new BoxEl
     {
-        // Caption (12/16/600) in a Radii.Full capsule. The old 11 radius was a hand-computed half-height, and the
-        // 10/700 label was below the ramp; the 40/1000 tracking is the pill's voice and stays.
+        // The eyebrow alias in a Radii.Full capsule. The old 11 radius was a hand-computed half-height.
         Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS), Corners = Radii.FullAll, Fill = Tok.FillSubtleSecondary,
-        Children = [new TextEl(type) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextTertiary, CharSpacing = 40f }],
+        Children = [WaveeType.Eyebrow(type) with { Color = Tok.TextTertiary }],
     };
 
     // ── browse empty state ───────────────────────────────────────────────────────────────────────────────────────
@@ -339,17 +341,6 @@ sealed class SearchPage : Component
         Children = [PagedShelf.Create(count, cardAt: cardAt, measured: true, header: WaveeType.RailHeader(title))],
     };
 
-    static Element Centered(string glyph, string title, string sub) => new BoxEl
-    {
-        Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.XL, Spacing.XXL, Spacing.XL, Spacing.XXL),
-        Children =
-        [
-            Icon(glyph, 40f, Tok.TextTertiary),
-            WaveeType.PageHero(title),
-            new TextEl(sub) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MaxWidth = 440f },
-        ],
-    };
 }
 
 // Search track rows — the All-view "Songs" preview (capped) and the dedicated "Songs" tab (full). A Component so the rows
@@ -405,8 +396,8 @@ sealed class SearchSongs : Component
                 int slot0 = scope.Index.Peek();   // the slot's initial item index at realize
                 var wrapper = new BoxEl
                 {
+                    // Transparent row, not a stroked card - see ResultRow.
                     Direction = 1, Corners = Radii.ControlAll, ClipToBounds = true,
-                    Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
                     Animate = slot0 < StaggerRowCap && !Motion.ReducedMotion
                         ? RowRise with { DelayMs = slot0 * Expressive.Stagger }
                         : (LayoutTransition?)null,
@@ -599,7 +590,7 @@ sealed class SearchAllList : Component
             return new BoxEl { Direction = 1, Gap = Spacing.S, Children = fallback.ToArray() };
 
         // No unified top-results and no facet rows.
-        return EmptyState.Build(Loc.Get(Strings.Search.NoResults), glyph: Icons.Search);
+        return EmptyState.Build(Loc.Get(Strings.Search.NoResults));
     }
 
     internal static Element BuildFiltered(SearchResults r, LibraryBridge? lib, Model model, Func<SearchTopHit, bool> include, string emptyTitle,
@@ -611,7 +602,7 @@ sealed class SearchAllList : Component
     internal static Element BuildHits(IReadOnlyList<SearchTopHit> hits, LibraryBridge? lib, Model model, string emptyTitle,
                                       ActionServices? acts = null, IOverlayService? menuOverlay = null)
     {
-        if (hits.Count == 0) return EmptyState.Build(emptyTitle, glyph: Icons.Search);
+        if (hits.Count == 0) return EmptyState.Build(emptyTitle);
         var rows = new Element[hits.Count];
         for (int i = 0; i < hits.Count; i++)
             rows[i] = HitRow(hits[i], lib, model, large: false, acts, menuOverlay);
@@ -624,7 +615,9 @@ sealed class SearchAllList : Component
     {
         bool isTrack = h.Kind == SearchHitKind.Track;
         Element? trailing =
-            h.Followable ? FollowButton(lib?.IsSaved(h.Uri) ?? false, () => lib?.ToggleSaved(h.Uri, h.Name))
+            // The SHARED FollowButton component, not a local look-alike: it owns the followed state, the accent
+            // border that carries it, and the capsule geometry it shares with the Play CTA.
+            h.Followable ? Embed.Comp(() => new FollowButton(h.Uri, h.Name)) with { Key = "follow:" + h.Uri }
             : isTrack ? SaveButton(lib?.IsSaved(h.Uri) ?? false, () => { if (h.Uri.Length > 0) lib?.ToggleSaved(h.Uri, h.Name); })
             : null;
         Action play = isTrack ? () => model.PlayTrack(h.Uri) : () => model.PlayContext(h.Uri);
@@ -703,7 +696,7 @@ sealed class SearchAllList : Component
         a.Image, a.Name, Loc.Get(Strings.Search.TypeArtist), a.Uri, true,
         () => model.Go("artist:" + a.Uri, a.Name), () => model.PlayContext(a.Uri),
         typeChip: large ? null : Loc.Get(Strings.Search.TypeArtist),
-        trailing: FollowButton(lib?.IsSaved(a.Uri) ?? false, () => lib?.ToggleSaved(a.Uri, a.Name)), large: large,
+        trailing: Embed.Comp(() => new FollowButton(a.Uri, a.Name)) with { Key = "follow:" + a.Uri }, large: large,
         menu: CardMenu(acts, menuOverlay, a.Uri, a.Name, a.Image, Loc.Get(Strings.Search.TypeArtist), circular: true),
         // An artist is PINNABLE but carries no tracks — dropping it on a playlist is refused with a cue, never a guess.
         drag: Drag.Source(WaveeDragKinds.Resource,
@@ -743,15 +736,6 @@ sealed class SearchAllList : Component
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, HoverFill = Tok.FillSubtleSecondary, HoverScale = WaveeMotion.ScaleEmphatic.Hover, OnClick = toggle,
         BlocksDragArm = true,   // the row drags; this button saves — a press here is never a drag handle
         Children = [Icon(saved ? Icons.Accept : Icons.Add, 16f, saved ? Tok.AccentDefault : Tok.TextSecondary)],
-    };
-
-    static Element FollowButton(bool following, Action toggle) => new BoxEl
-    {
-        Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S), Corners = Radii.PillAll,
-        BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault, HoverFill = Tok.FillSubtleSecondary, HoverScale = WaveeMotion.ScaleStandard.Hover, OnClick = toggle,
-        BlocksDragArm = true,   // see SaveButton
-        Children = [new TextEl(following ? "Following" : "Follow") { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextPrimary }],
     };
 
     static string Names(IReadOnlyList<ArtistRef> artists)

@@ -181,7 +181,7 @@ sealed class AlbumTrailing : Component
         {
             var body = new List<Element>(3)
             {
-                new TextEl("ABOUT THIS RELEASE") { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
+                WaveeType.Eyebrow("About this release") with { Color = Tok.TextTertiary },
             };
             // The bento: a wrap row of compact fact tiles. Wrap-grow (FlexLayout.ArrangeWrap) fills each line edge-to-edge,
             // so the tiles flow 2×2 in a narrow rail and a single row when wide — no ragged gaps.
@@ -403,8 +403,8 @@ sealed class AlbumTrailing : Component
                         Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
-                            new TextEl(Loc.Get(HasCustomVideo(m) ? Strings.VideoOverride.CustomLabel : Strings.Detail.WatchOfficialVideo))
-                            { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 60f },
+                            WaveeType.Eyebrow(Loc.Get(HasCustomVideo(m) ? Strings.VideoOverride.CustomLabel : Strings.Detail.WatchOfficialVideo))
+                                with { Color = Tok.TextTertiary },
                             WaveeType.RailHeader(m.Title) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                             new TextEl(m.MetaLine) { Size = 12f, Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         ],
@@ -573,8 +573,8 @@ sealed class AlbumTrailing : Component
                     Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                     Children =
                     [
-                        new TextEl(Loc.Get(Strings.Detail.AboutTheArtist).ToUpperInvariant())
-                            { Size = 11f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 120f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        WaveeType.Eyebrow(Loc.Get(Strings.Detail.AboutTheArtist))
+                            with { Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                         new BoxEl
                         {
                             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,

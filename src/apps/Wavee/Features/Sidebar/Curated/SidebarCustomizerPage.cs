@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
@@ -248,13 +248,13 @@ sealed class SidebarCustomizerPage : Component
                 Children =
                 [
                     // THE EYEBROW (R3.2 item 1): the ACTIVE template, which is the one piece of context the title cannot
-                    // carry — "Customize sidebar" is true of every document, "WAVEE CURATED" says which one this is.
+                    // carry — "Customize sidebar" is true of every document, "Wavee curated" says which one this is.
+                    // AccentDecor: accent as content colour on a localized template NAME (never caps-transformed).
                     wide
-                        ? new TextEl(Loc.Get(SidebarTemplates.NameLocKey(
-                              prefs?.Layout.TemplateId ?? SidebarTemplates.Curated)).ToUpperInvariant())
+                        ? WaveeType.Eyebrow(Loc.Get(SidebarTemplates.NameLocKey(
+                              prefs?.Layout.TemplateId ?? SidebarTemplates.Curated))) with
                         {
-                            Size = 10f, Weight = 600, Color = Tok.AccentTextPrimary, CharSpacing = 60f,
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                            Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                         }
                         : new BoxEl { Height = 0f },
                     new TextEl(Loc.Get(CzLoc.Title))

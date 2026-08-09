@@ -257,10 +257,11 @@ sealed class HomeArtistRow : Component
             {
                 Shrink = 0f, Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
                 Corners = Radii.FullAll, Fill = Tok.SystemFillSuccessBackground,
-                // Caps + tracking stay (that is the badge's VOICE); only the metrics converge — 10 was two rungs off.
-                Children = [WaveeType.Eyebrow(Strings.Home.InYourTop(topCount).ToUpper(System.Globalization.CultureInfo.CurrentCulture)) with
+                // A LOCALIZED, count-interpolated string ("In your top 5") — the alias's own case and tracking, nothing
+                // added. The success green is a SEMANTIC colour, not the page accent, so it is outside the accent budget.
+                Children = [WaveeType.Eyebrow(Strings.Home.InYourTop(topCount)) with
                 {
-                    CharSpacing = 40f, Color = Tok.SystemFillSuccess,
+                    Color = Tok.SystemFillSuccess,
                     MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                 }],
             } : new BoxEl(),

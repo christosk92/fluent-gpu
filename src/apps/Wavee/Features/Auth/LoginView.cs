@@ -289,7 +289,7 @@ sealed class TwoPaneLogin : Component
             new BoxEl
             {
                 Padding = new Edges4(10f, 4f, 10f, 4f), Corners = CornerRadius4.All(11f), Fill = Tok.FillSubtleSecondary,
-                Children = [new TextEl(Loc.Get(Strings.Auth.Or)) { Size = 11f, Weight = 700, Color = Tok.TextSecondary, CharSpacing = 40f }],
+                Children = [WaveeType.Eyebrow(Loc.Get(Strings.Auth.Or)) with { Color = Tok.TextSecondary }],
             },
             new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault },
         ],

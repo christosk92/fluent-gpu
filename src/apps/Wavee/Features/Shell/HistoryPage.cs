@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
@@ -330,7 +330,7 @@ sealed class HistoryPage : Component
                     Margin = new Edges4(0f, 0f, 0f, 4f),
                     Children =
                     [
-                        new TextEl(label.ToUpperInvariant()) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, CharSpacing = 60f },
+                        WaveeType.Eyebrow(label) with { Color = Tok.TextSecondary },
                         new BoxEl { Grow = 1f, Height = 1f, Margin = new Edges4(4f, 0f, 4f, 0f), Fill = Tok.StrokeDividerDefault },
                         new BoxEl
                         {
@@ -377,7 +377,7 @@ sealed class HistoryPage : Component
                     Margin = new Edges4(0f, 0f, 0f, 4f),
                     Children =
                     [
-                        new TextEl(Loc.Get(Strings.Nav.History.MostVisited)) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextSecondary, CharSpacing = 60f },
+                        WaveeType.Eyebrow(Loc.Get(Strings.Nav.History.MostVisited)) with { Color = Tok.TextSecondary },
                         new BoxEl { Grow = 1f, Height = 1f, Margin = new Edges4(4f, 0f, 4f, 0f), Fill = Tok.StrokeDividerDefault },
                     ],
                 },
@@ -511,17 +511,8 @@ sealed class HistoryPage : Component
             : isFilter ? Loc.Get(Strings.Nav.History.Empty.TryAll)
             : Loc.Get(Strings.Nav.History.Empty.StartNavigating);
 
-        return new BoxEl
-        {
-            Grow = 1f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Gap = Spacing.M, Padding = new Edges4(0f, 0f, 0f, 80f),
-            Children =
-            [
-                Icon(isSearch ? Icons.Search : Icons.Clock, 40f, Tok.TextTertiary),
-                WaveeType.PageHero(heading),
-                Caption(sub).Secondary(),
-            ],
-        };
+        // Qualified: this page has a private EmptyState(...) BUILDER method of its own that shadows the type name.
+        return Wavee.EmptyState.Build(heading, sub);
     }
 
     // ── Page header (title + stats + search + SelectorBar filter + ComboBox sort) ─────────────────

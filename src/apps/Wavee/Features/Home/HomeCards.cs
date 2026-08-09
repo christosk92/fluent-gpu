@@ -283,11 +283,13 @@ static class HomeCards
             Direction = 1, Width = MathF.Max(1f, width - 2f * metrics.CopyPaddingX), Gap = 0f, MinWidth = 0f,
             Children =
             [
-                // `.hero-eyebrow { text-transform: uppercase }` — the caps are what make the greeting read as a label on
-                // the band rather than as a second heading competing with the daylist title.
-                WaveeType.Eyebrow(eyebrow.ToUpper(System.Globalization.CultureInfo.CurrentCulture)) with
+                // The prototype's `.hero-eyebrow { text-transform: uppercase }` is NOT honoured, and this is the site
+                // that proves the rule: this string is "Good morning, {user} · your daylist" — localized copy carrying
+                // the USER'S OWN DISPLAY NAME. Upper-casing it shouted a person's name back at them and mangled it in
+                // any locale with casing rules Invariant does not model. The eyebrow's rung + weight + tracking already
+                // make it read as a label; case never had to.
+                WaveeType.Eyebrow(eyebrow) with
                 {
-                    CharSpacing = 80f,
                     Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
                     Margin = new Edges4(0f, 0f, 0f, Spacing.S),
                 },
@@ -313,21 +315,25 @@ static class HomeCards
                         Margin = new Edges4(0f, 0f, 0f, Spacing.L),
                     }
                     : new BoxEl(),
-                // `.hero-actions` — four flat 32px controls at r-ctrl: accent Play, standard Shuffle, then icon-only
-                // heart and more. Deliberately NOT WaveeCta.Play's 36px fully-rounded pill: on this band the prototype's
-                // squarer cluster is the look, and the four read as one row of equals.
+                // `.hero-actions` — the app's ONE primary-action grammar: an accent Play capsule on the daylist's own
+                // graded colour, a standard Shuffle capsule beside it, then the icon-only arm of the same capsule for
+                // like and overflow. This used to be a private 32px/13px cluster whose own doc comment declared the
+                // divergence ("deliberately NOT WaveeCta"), which is the definition of a second grammar: the hero of
+                // the app's landing page was the one primary action that did not look like the app's primary action.
                 new BoxEl
                 {
                     Direction = 0, Wrap = true, Gap = Spacing.S, AlignItems = FlexAlign.Center, MinWidth = 0f,
                     Children =
                     [
-                        HeroButton(Loc.Get(Strings.Home.Play), Icons.Play, onPlay, accent: true, accentColor: accent),
-                        HeroButton(Loc.Get(Strings.Detail.Shuffle), Icons.Shuffle, onShuffle),
-                        HeroButton(null, Icons.Heart, onLike),
+                        WaveeCta.Accent(Loc.Get(Strings.Home.Play), accent, onPlay) with { Shrink = 0f },
+                        WaveeCta.Pill(Loc.Get(Strings.Detail.Shuffle), onShuffle, ButtonAppearance.Standard,
+                            glyph: Icons.Shuffle) with { Shrink = 0f },
+                        WaveeCta.Icon(Icons.Heart, onLike) with { Shrink = 0f },
                         // The "…" carries no handler of its own: ClickRequestsContext re-enters the engine's context
                         // funnel, which walks up and finds the band's attached menu — the same mechanism MediaCard's
                         // corner "…" uses, so the hero's overflow is the card's real menu rather than a second one.
-                        menu is null ? new BoxEl() : HeroButton(null, Icons.More, null, requestsContext: true),
+                        menu is null ? new BoxEl()
+                            : WaveeCta.Icon(Icons.More, null, requestsContext: true) with { Shrink = 0f },
                     ],
                 }.Skeletonized(false),
             ],
@@ -374,35 +380,6 @@ static class HomeCards
             ],
         };
         return menu is null ? surface : surface.WithMenu(menu);
-    }
-
-    /// <summary>`.btn` / `.btn.accent` / `.btn.icon` — height 32, r-ctrl, 13/600 label with a 15px glyph. A label-less
-    /// call is the 32-square icon variant.</summary>
-    static Element HeroButton(string? label, string glyph, Action? onClick, bool accent = false,
-                              ColorF accentColor = default, bool requestsContext = false)
-    {
-        var ink = accent ? Tok.TextOnAccentPrimary : Tok.TextPrimary;
-        Element[] kids = label is { Length: > 0 } l
-            ? [Icon(glyph, 15f, ink), BodyStrong(l) with { Color = ink, MaxLines = 1 }]
-            : [Icon(glyph, 15f, ink)];
-        var box = new BoxEl
-        {
-            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Height = 32f, Shrink = 0f,
-            Width = label is { Length: > 0 } ? float.NaN : 32f,
-            Padding = label is { Length: > 0 } ? new Edges4(Spacing.L, 0f, Spacing.L, 0f) : default,
-            Corners = Radii.ControlAll,
-            OnClick = onClick, Cursor = CursorId.Hand, Role = AutomationRole.Button,
-            ClickRequestsContext = requestsContext,
-            Children = kids,
-        };
-        return accent
-            ? box with
-            {
-                Fill = accentColor, HoverFill = ColorF.Lerp(accentColor, Tok.TextPrimary, 0.10f),
-                BrushTransitionMs = MotionTok.ControlFast.DurationMs,
-            }
-            : box.Interactive(Interaction.Control);
     }
 
     static IEnumerable<Element> Tags(IReadOnlyList<string> seeds, int max)
@@ -509,8 +486,7 @@ static class HomeCards
                 HomeAccentLeaf.Numeral(c, ordinal.ToString(System.Globalization.CultureInfo.CurrentCulture)),
                 Titled(WaveeType.Eyebrow(Loc.Get(Strings.Home.DailyMix)) with
                 {
-                    CharSpacing = 70f, Color = Tok.TextTertiary,
-                    MaxLines = 1, Shrink = 1f, MinWidth = 0f,
+                    Color = Tok.TextTertiary, MaxLines = 1, Shrink = 1f, MinWidth = 0f,
                 }, c.Uri, 10f),
                 c.Meta?.Seeds is { Count: > 0 } seeds
                     ? Caption(string.Join(" · ", seeds)) with
@@ -693,10 +669,19 @@ static class HomeCards
     };
 
     // ── H2 · the audiobook row ─────────────────────────────────────────────────────────────────────────────────
-    /// <summary>`.brow` — `48px 1fr auto`, padding 8, art 48 r-ctrl, and a rating cluster: a star glyph, the value to
-    /// 2dp, a 48-wide meter, and the length in a fixed cell. Two decimals because that is the precision the server sends (4.57,
-    /// not 4.5). A numeral plus a meter rather than `RatingControl`: that takes a FloatSignal constructed at the call
-    /// site, so a virtualized list of these would allocate one signal per row realization.</summary>
+    /// <summary>`.brow` — `48px 1fr auto`, padding 8, art 48 r-ctrl, and a rating cluster: the stock read-only
+    /// <see cref="RatingControl"/> star strip, the value to 2dp, and the length in a fixed cell. Two decimals because
+    /// that is the precision the server sends (4.57, not 4.5), and a five-star strip cannot express it — the strip says
+    /// "this is a rating", the numeral says which one.
+    /// <para>THE METER IS GONE. It was <c>ProgressBar.Determinate(rating / 5)</c>: a control whose entire meaning is
+    /// "how far through a task are we", pressed into service as a rating gauge in a list where the row NEXT to it uses
+    /// a real progress hairline for real resume progress. The old comment rejected the stock control on allocation
+    /// grounds — "a virtualized list of these would allocate one signal per row realization" — and that was measured
+    /// against a workload this surface does not have: <c>HomeModuleLayout.BooksShown</c> caps the shelf at a handful of
+    /// rows (expandable to the group, still bounded), the signal is allocated ONCE per mount inside the factory closure
+    /// (not per render), and the neighbouring art tile already mounts a whole <c>CoverShimmer</c> component per cover.
+    /// Read-only mode also parks the strip on the PLACEHOLDER brush (TextPrimary, not accent), so restoring the real
+    /// control costs the accent budget nothing.</para></summary>
     public static Element BookRow(HomeCard c, Action onNav)
     {
         var m = c.Meta;
@@ -706,12 +691,11 @@ static class HomeCards
                 Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center, Shrink = 0f,
                 Children =
                 [
-                    Icon(Icons.FavoriteStarFill, 11f, Tok.TextTertiary),
+                    RatingControl.Create(placeholder: (float)m.Rating, readOnly: true),
                     Caption(m.Rating.ToString("0.00", System.Globalization.CultureInfo.CurrentCulture)) with
                     {
                         Weight = 600, Color = Tok.TextPrimary, MaxLines = 1,
                     },
-                    ProgressBar.Determinate((float)(m.Rating / 5d), WaveeSize.Thumb48),
                     Count(Hours(m.DurationMs), WaveeSize.Thumb32),
                 ],
             }
@@ -762,9 +746,11 @@ static class HomeCards
                             BorderWidth = 1f, BorderColor = ColorF.Lerp(Tok.StrokeControlDefault, accent, 0.40f),
                             Children =
                             [
+                                // AccentDecor (see the accent-roles section in WaveeTokens): accent as CONTENT colour,
+                                // naming the module's voice. Deliberate and kept — only the case and the tracking moved.
                                 WaveeType.Eyebrow(Loc.Get(Strings.Home.Editorial)) with
                                 {
-                                    CharSpacing = 60f, Color = Tok.AccentTextPrimary, MaxLines = 1,
+                                    Color = WaveeAccent.Decor, MaxLines = 1,
                                 },
                             ],
                         },
@@ -843,7 +829,7 @@ static class HomeCards
                         c.Eyebrow is { Length: > 0 } e
                             ? WaveeType.Eyebrow(e) with
                             {
-                                CharSpacing = 50f, Color = Tok.AccentTextPrimary,
+                                Color = WaveeAccent.Decor,
                                 MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                             }
                             : new BoxEl(),
@@ -919,7 +905,7 @@ static class HomeCards
         };
     }
 
-    /// <summary>`.kindtag` — a bordered Caption 12/16 caps type label ("Release" / "Episode").</summary>
+    /// <summary>`.kindtag` — a bordered eyebrow type label ("Release" / "Episode").</summary>
     static Element KindTag(string text) => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
@@ -927,11 +913,11 @@ static class HomeCards
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         Children =
         [
-            WaveeType.Eyebrow(text) with { CharSpacing = 50f, Color = Tok.TextTertiary, MaxLines = 1 },
+            WaveeType.Eyebrow(text) with { Color = Tok.TextTertiary, MaxLines = 1 },
         ],
     };
 
-    /// <summary>`.newpill` — a solid accent Caption 12/16 caps badge. The one place on home an accent PLATE appears behind text.</summary>
+    /// <summary>`.newpill` — a solid accent eyebrow badge. The one place on home an accent PLATE appears behind text.</summary>
     static Element NewPill() => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),
@@ -940,7 +926,7 @@ static class HomeCards
         [
             WaveeType.Eyebrow(Loc.Get(Strings.Home.NewBadge)) with
             {
-                CharSpacing = 50f, Color = Tok.TextOnAccentPrimary, MaxLines = 1,
+                Color = Tok.TextOnAccentPrimary, MaxLines = 1,
             },
         ],
     };

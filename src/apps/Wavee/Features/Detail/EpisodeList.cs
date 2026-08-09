@@ -113,7 +113,7 @@ sealed class EpisodeList : Component
                         Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
                         Children =
                         [
-                            new TextEl(Loc.Get(Strings.Podcast.ContinueListening)) { Size = 10f, Weight = 700, Color = Tok.TextTertiary, CharSpacing = 80f },
+                            WaveeType.Eyebrow(Loc.Get(Strings.Podcast.ContinueListening)) with { Color = Tok.TextTertiary },
                             new TextEl(e.Title) { Size = 15f, Weight = 700, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
                             new TextEl($"{e.PublishedAt:MMM d} · {e.DurationMs / 60000} min") { Size = 12f, Color = Tok.TextSecondary },
                             ProgressBar(Pct(e)),
