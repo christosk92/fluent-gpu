@@ -187,9 +187,14 @@ sealed class RightRail : Component
     // A glyph button in the panel header — the CloseButton shape, with a tooltip because its glyph is not universal.
     // `active` is the STATEFUL variant (the secondary-line toggle): the accent tint is the only affordance a 32 DIP
     // glyph has to say "this is currently on", and the tooltip carries which layer it is.
+    //
+    // GEOMETRY: row 1 of WaveeCta's icon-button table — 32 × 32, Radii.Control, 16-DIP glyph. The glyph used to be 12,
+    // which is not a rung of anything: it made a full-size button look like a shrunken one, and it disagreed with the
+    // immersive lyrics surface's twin (36 box / 14 glyph) even though the two are the same control on two surfaces.
     static Element HeaderButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
     {
-        Width = 32f, Height = 32f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
         Cursor = CursorId.Hand, OnClick = onClick,
@@ -197,7 +202,7 @@ sealed class RightRail : Component
         [
             new TextEl(glyph)
             {
-                Size = 12f, FontFamily = Theme.IconFont,
+                Size = HeaderGlyph, FontFamily = Theme.IconFont,
                 Color = active ? Tok.AccentTextPrimary : Tok.TextSecondary,
                 HoverColor = active ? Tok.AccentTextPrimary : Tok.TextPrimary,
             },
@@ -212,12 +217,17 @@ sealed class RightRail : Component
         _ => Loc.Get(Strings.Player.NowPlaying),
     };
 
+    /// <summary>The shared glyph size for this header's buttons and the immersive surface's twin — WaveeCta's icon
+    /// table pairs the 32-square rung with a 16-DIP glyph.</summary>
+    internal const float HeaderGlyph = 16f;
+
     static Element CloseButton(Action onClick) => new BoxEl
     {
-        Width = 32f, Height = 32f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
         Cursor = CursorId.Hand, OnClick = onClick,
-        Children = [new TextEl(Icons.ChromeClose) { Size = 12f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
+        Children = [new TextEl(Icons.ChromeClose) { Size = HeaderGlyph, FontFamily = Theme.IconFont, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary }],
     }.Interactive(Interaction.Subtle);
 }

@@ -247,9 +247,16 @@ sealed class ImmersiveLyricsSurface : Component
 
     // One shape for every glyph button in this top bar, so the secondary-line toggle and the close button read as a
     // pair. `active` is the toggle's on-state affordance (accent tint) — the same treatment the rail header uses.
+    //
+    // GEOMETRY: literally the same control as RightRail's header button, so it is literally the same geometry — row 1
+    // of WaveeCta's icon-button table (32 × 32, Radii.Control, 16-DIP glyph), sharing RightRail.HeaderGlyph. The pair
+    // used to be 36/14 here against 32/12 there: a bigger box wearing a smaller glyph than its twin, which is the
+    // combination that made the two surfaces read as two different apps. The 36 rung belongs to the CTA cluster only
+    // (WaveeCta.PillHeight), and this bar has no CTA in it.
     static Element GlyphButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
     {
-        Width = 36f, Height = 36f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Corners = CornerRadius4.All(Radii.Control),
         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
         Cursor = CursorId.Hand, OnClick = onClick,
@@ -257,7 +264,7 @@ sealed class ImmersiveLyricsSurface : Component
         [
             new TextEl(glyph)
             {
-                Size = 14f, FontFamily = Theme.IconFont,
+                Size = RightRail.HeaderGlyph, FontFamily = Theme.IconFont,
                 Color = active ? Tok.AccentTextPrimary : Tok.TextSecondary,
                 HoverColor = active ? Tok.AccentTextPrimary : Tok.TextPrimary,
             },

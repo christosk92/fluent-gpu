@@ -126,9 +126,12 @@ sealed class DetailShell : Component
     // Compact strip width while collapsed (sidebar analog): wide enough for a readable cover + 2-line title, narrow
     // enough that the track list keeps most of the card. Cover = strip − 2× Spacing.S.
     const float RailCompactW = 96f;
-    // The grip's hit strip: 7 DIP normally (a hairline seam between two visible columns), 12 while collapsed — the
-    // compact strip already carries cover/chevron re-open, but the seam still accepts a bare click / drag past ReExpand.
-    const float GripStripW = 7f, GripStripCollapsedW = 12f;
+    // The grip's hit strip: the shared 16-DIP splitter target (ColumnGrip.StripW), invisible at rest with a
+    // reveal-on-hover indicator — the stock GridSplitter model. Collapsed keeps a wider 20 because the seam is then
+    // also a re-open gesture (the compact strip carries cover/chevron re-open; the seam still accepts a bare click or a
+    // drag past ReExpand). Was 7/12 — under half the pointer target every stock sizer ships.
+    static float GripStripW => ColumnGrip.StripW;
+    const float GripStripCollapsedW = 20f;
 
     public override Element Render()
     {

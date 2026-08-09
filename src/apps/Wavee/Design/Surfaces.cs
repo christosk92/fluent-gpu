@@ -260,8 +260,14 @@ public static class Surfaces
     };
 
     /// <summary>The section rule's geometry — one definition, so the artist page's counted header and the shared shelf
-    /// header cannot drift.</summary>
-    public const float AccentRuleWidth = 20f, AccentRuleHeight = 2f, AccentRuleGap = 6f;
+    /// header cannot drift.
+    ///
+    /// <para><see cref="AccentRuleGap"/> is the rule's TOP margin and stacks on top of the header column's own 2-DIP
+    /// gap, so it is half of a two-part distance. At 6 that distance was 8 DIP below a 28-DIP line box — far enough
+    /// that the mark floated free of the text and read as a separate object under the header (and, inside a
+    /// <c>PagedShelf</c> header row, grew the row ~10 DIP past the 32-DIP chevrons it sits beside). At 2 the total is
+    /// 4 DIP: a typographic rule attached to its title, and a +2 DIP shelf header instead of +10.</para></summary>
+    public const float AccentRuleWidth = 20f, AccentRuleHeight = 2f, AccentRuleGap = 2f;
 
     /// <summary>A section header: an optional eyebrow, the title, and the <see cref="AccentRule"/> under them. The rule
     /// and the eyebrow take <paramref name="accent"/> — e.g. a <see cref="WaveePalette.Lift"/>-ed cover-extracted color,
@@ -307,11 +313,20 @@ public static class Surfaces
             ],
         };
 
-    /// <summary>A "section band" as a Fluent MATERIAL surface (the WinUI grouped-content look), not a painted color
-    /// region: a neutral rounded card (<see cref="Tok.FillCardDefault"/> fill + hairline border) with
-    /// the accent layered as a soft glow that KISSES the top edge under the header and fades into the material by ~45%
-    /// down. So the color reads as a content-derived spark over material, the material leads, and it sits naturally next
-    /// to the rest of the Fluent surfaces. One opaque top→bottom gradient (no overlay) keeps it a single, cheap node.</summary>
+    /// <summary>A "section band": a quiet rounded WASH behind a page section, carrying the accent as a soft tint that
+    /// kisses the top edge and fades into the material by ~45% down.
+    ///
+    /// <para>NOT a card. It used to be one — <see cref="Tok.FillCardDefault"/> plus a <see cref="Tok.StrokeCardDefault"/>
+    /// hairline — which put a bordered container around a PAGE SECTION whose content was already a row of bordered
+    /// cards: a box of boxes, and one more stroke than Fluent's grouped-content look actually draws. The shell's
+    /// published material already carries the page's tint (D19/D29), so the band's only remaining job is to say "these
+    /// belong together", and an unbordered wash says it without adding an edge. The border is therefore GONE and the
+    /// fill stays as the tint alone; one opaque top→bottom gradient keeps it a single, cheap node.</para>
+    ///
+    /// <para>Layout-neutral by construction: the dropped border was 1 DIP inside a <see cref="Spacing.L"/> padding box,
+    /// so nothing shifts. (No live call site today — Home's hero flattened its 16-DIP inset into
+    /// <c>HomeHeroLayout</c> — this is kept as the ONE recipe a future banded section must use, so the treatment cannot
+    /// be re-invented with a stroke.)</para></summary>
     public static BoxEl SectionBand(Element content, ColorF accent)
     {
         ColorF card = Tok.FillCardDefault;
@@ -323,7 +338,6 @@ public static class Surfaces
             Direction = 1, Gap = Spacing.M,
             Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, Spacing.L),
             Corners = CornerRadius4.All(Radii.Card),
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Gradient = GradientDown(
                 new GradientStop(0f, top),
                 new GradientStop(0.45f, card),

@@ -90,12 +90,17 @@ sealed class PlayerBarContent : Component
     // while Marquee.Speed prevents a barely-overflowing title from creeping invisibly. PingPong holds at the tail.
     const float MarqueeCycleMs = 10000f;
     const float MarqueeEndPauseMs = 2500f;
-    // Dark glyph for the WHITE primary play/pause face (the musa/Spotify treatment — a white circle, dark icon).
-    // Thin volume rail — the WinUI Slider trimmed to a 4px track + a small 12px thumb so it reads as a level line.
-    static Slider.Style RailStyle => Slider.DefaultStyle with
-    {
-        TrackHeight = 4f, TrackCornerRadius = 2f, ThumbRingDiameter = 12f, InnerThumbDiameter = 8f, ThumbCornerRadius = 6f,
-    };
+    // The video SPLIT button's disclosure half — the one documented exception to the 32-DIP transport floor, and the
+    // same exception WinUI's own SplitButton makes (SecondaryButtonSize is narrower than ControlHeight; only the HEIGHT
+    // stays on the ladder, which is why `boxHeight: buttonBox` is passed with it). It was `buttonBox * 0.55f` /
+    // `buttonGlyph * 0.62f` — 17.6 × 9.9 once the box floor landed, which is a chevron you cannot hit.
+    const float SplitChevronW = 20f, SplitChevronGlyph = 10f;
+    // The volume rail is the STOCK slider: Slider.DefaultStyle already IS a 4px/2r track, and the only thing this bar
+    // used to override was the THUMB — 12/8/6 against the stock 22/12/10, i.e. a 12-DIP grab target on the control the
+    // user drags most. SeekBar derives every metric from Slider.DefaultStyle for exactly this reason; the volume rail
+    // now does the same by simply not passing a style. `thickness` must clear the 22-DIP ring or the slider's own
+    // over-thumb hit test (|cross − thickness/2| ≤ ring/2) is clipped by a 16-DIP box.
+    static float VolumeThickness => Slider.DefaultStyle.ThumbRingDiameter;
     static readonly Slider.SliderOptions VolumeSliderOptions = new()
     {
         ThumbToolTipValueConverter = static value => $"{Math.Clamp((int)MathF.Round(value * 100f), 0, 100)}%",
@@ -308,7 +313,9 @@ sealed class PlayerBarContent : Component
             });
         leftKids.Add(metaCol);
         if (showLike)
-            leftKids.Add(Transport(liked ? Icons.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, MathF.Min(30f, buttonBox), 15f,
+            // The heart is a transport-grade target like every other glyph on this row — it used to be capped at 30/15,
+            // which put the ONE affordance that survives to the 300-DIP floor below the WinUI icon-button minimum.
+            leftKids.Add(Transport(liked ? Icons.HeartFill : Icons.Heart, () => { if (track is { } lt) lib?.ToggleSaved(lt.Uri, lt.Title); }, true, liked, accent, buttonBox, buttonGlyph,
                     onRealized: h => likeNode.Value = h)
                 // The cluster is a drag handle (below); the heart is its own affordance, so a press on it must not
                 // arm the drag — the first few px of a like-press would otherwise lift the track.
@@ -445,7 +452,7 @@ sealed class PlayerBarContent : Component
             {
                 Key = "volume-slider", Animate = ItemMotion,   // Slider.Create returns a component element (no Animate lane); wrap it like the other Embed.Comp items
                 Children = [Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); }, options: VolumeSliderOptions,
-                    length: 96f, thickness: 16f, style: RailStyle)],
+                    length: 96f, thickness: VolumeThickness)],
             });
         if (showLyrics && ui is not null && active)
             rightKids.Add(Transport(WaveeIcons.Lyrics,
@@ -520,7 +527,7 @@ sealed class PlayerBarContent : Component
                         // align against the primary, because ToolTip.Wrap's wrapper sets AlignSelf=Start and a child's
                         // AlignSelf beats this row's AlignItems=Center — which is what put the chevron ~8px high.
                         Transport(Icons.ChevronDownSmall, OpenVideoMenu, true, false, accent,
-                            buttonBox * 0.55f, buttonGlyph * 0.62f, boxHeight: buttonBox),
+                            SplitChevronW, SplitChevronGlyph, boxHeight: buttonBox),
                         Loc.Get(Strings.Player.VideoOptions)),
                 ],
             });
@@ -850,42 +857,47 @@ sealed class PlayerBarContent : Component
         }
     }
 
-    /// <summary>A transport TOGGLE/command glyph button. The active state is shown by an ACCENT glyph + a 3px accent dot
-    /// under it — never a filled background (that's reserved for the hover/press interaction axis). Box never fills at
-    /// rest; hover/press use the WinUI subtle fills, the glyph carries the foreground ramp + AnimatedIcon-style scale.</summary>
+    /// <summary>A transport TOGGLE/command glyph button.
+    ///
+    /// <para>THE ON-STATE IS THE STOCK TOGGLE GRAMMAR: an accent glyph over a <see cref="Tok.FillSubtleSecondary"/>
+    /// plate — WinUI's <c>AppBarToggleButton</c> checked visual (a checked AppBar toggle fills; it does not sprout an
+    /// ornament). This replaced a 3 × 3 accent DOT parked under the glyph, which was the whole "is shuffle on?" answer
+    /// in ~9 device-independent pixels: at 100% scaling it is smaller than the period at the end of this sentence, it
+    /// sat on the button's bottom edge where the glyph's own descenders live, and it carried no hit-target, focus or
+    /// high-contrast meaning. The file previously argued that a filled background is "reserved for the hover/press
+    /// interaction axis" — but that reservation is what forced the ornament, and WinUI itself does not honour it: a
+    /// ToggleButton's CHECKED fill and its POINTER-OVER fill are different rungs of the same subtle ramp, which is
+    /// exactly how a user tells a latched control from a hovered one. So the checked rung is claimed here, and the
+    /// hover/press axis keeps the two rungs above it (Tertiary while checked) plus the glyph ramp and the scale cue.</para>
+    ///
+    /// <para>Rest (unchecked) is still a completely unpainted box: the dock is a paint-site omission over the window's
+    /// base layer, and a row of resting plates would re-plate it.</para></summary>
     /// <param name="boxHeight">Override the button's HEIGHT (default: square, <paramref name="box"/>). Only the split
     /// video button uses it: a narrow disclosure half must still be as TALL as the primary it sits beside, exactly like
     /// <c>SplitButton</c>'s secondary half (Width = SecondaryButtonSize, Height = ControlHeight). Equal heights are what
     /// keeps the two glyphs on one visual centre line — the row's <c>AlignItems=Center</c> cannot do it, because
-    /// <c>ToolTip.Wrap</c>'s wrapper carries <c>AlignSelf=Start</c> and a per-child AlignSelf beats the row's AlignItems.
-    /// The active dot never affects this: the outer box is explicitly sized, so it is the same in both states.</param>
+    /// <c>ToolTip.Wrap</c>'s wrapper carries <c>AlignSelf=Start</c> and a per-child AlignSelf beats the row's AlignItems.</param>
     internal static BoxEl Transport(string glyph, Action onClick, bool enabled, bool active, ColorF accent, float box = 36f, float glyphSize = 16f,
         Action<NodeHandle>? onRealized = null, string? font = null, float? boxHeight = null)
     {
         float height = boxHeight ?? box;
         ColorF fg = !enabled ? Tok.TextDisabled : active ? accent : Tok.TextSecondary;
         ColorF hover = !enabled ? Tok.TextDisabled : active ? accent : Tok.TextPrimary;
-        var glyphLayer = new BoxEl
-        {
-            Width = box, Height = height, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            HitTestVisible = false,
-            Children = [new TextEl(glyph) { Size = glyphSize, FontFamily = font ?? Theme.IconFont, Color = fg, HoverColor = hover }],
-        };
-        var dotLayer = new BoxEl
-        {
-            Width = box, Height = 3f, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            AlignSelf = FlexAlign.End, Margin = new Edges4(0f, 0f, 0f, 3f), HitTestVisible = false,
-            Children = [new BoxEl { Width = 3f, Height = 3f, Corners = CornerRadius4.All(1.5f), Fill = accent, Opacity = active ? 1f : 0f }],
-        };
+        // The checked plate rides the SUBTLE ramp one rung below the interaction rungs above it, so a latched button and
+        // a hovered button never render the same fill. Unchecked keeps every rung transparent (see the doc).
+        ColorF rest = active && enabled ? Tok.FillSubtleSecondary : ColorF.Transparent;
+        ColorF restHover = active && enabled ? Tok.FillSubtleTertiary : ColorF.Transparent;
         return new BoxEl
         {
-            Width = box, Height = height, ZStack = true,
-            Fill = ColorF.Transparent, HoverFill = ColorF.Transparent, PressedFill = ColorF.Transparent,
+            Width = box, Height = height, Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = CornerRadius4.All(Radii.Control),
+            Fill = rest, HoverFill = restHover, PressedFill = rest,
+            BrushTransitionMs = WaveeMotion.Faster,   // the plate cross-fades on the toggle edge (WinUI 83ms), never snaps
             HoverScale = WaveeMotion.ScaleEmphatic.HoverIf(enabled), PressScale = WaveeMotion.ScaleEmphatic.PressIf(enabled),
             Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
             OnRealized = onRealized,
             IsEnabled = enabled, OnClick = onClick, Cursor = enabled ? CursorId.Hand : (CursorId?)null,
-            Children = [glyphLayer, dotLayer],
+            Children = [new TextEl(glyph) { Size = glyphSize, FontFamily = font ?? Theme.IconFont, Color = fg, HoverColor = hover }],
         };
     }
 
@@ -1204,8 +1216,12 @@ sealed class DevicesButton : Component
         var handle = UseRef<OverlayHandle?>(null);
         var svc = UseContext(Overlay.Service);
         _ = _b.Devices.Value;                         // subscribe → re-render on roster change (flyout content reads its own)
-        string? activeId = _b.ActiveDeviceId.Value;   // subscribe → the active row shows a check + the glyph highlights
-        bool active = !string.IsNullOrEmpty(activeId);
+        // The ON state is "playback is on ANOTHER device", not "some device id is set" — which is true in essentially
+        // every live session, this PC included. That distinction did not show while the on-state was a 3px dot nobody
+        // could see; now that it is a real plate (see Transport), a button lit permanently would be pure noise. This is
+        // also the same condition RemoteDeviceLine uses to decide whether to say "Playing on <device>" at all, so the
+        // glyph and the line can no longer disagree. RemoteDevice reads Devices + ActiveDeviceId → still subscribed.
+        bool active = PlayerBarContent.RemoteDevice(_b) is not null;
         int req = _b.DevicePickerRequest.Value;       // subscribe → re-render (and re-run the effect) on a toast "Choose device" click
         var lastReq = UseRef(req);                     // seeded at mount → a request that predates this mount is ignored
 

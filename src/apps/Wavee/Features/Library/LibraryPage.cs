@@ -918,17 +918,34 @@ sealed class LibraryPage : Component
         Children = [EmptyState.Compact(Loc.Get(key))],
     };
 
-    // The grip's ColumnGrip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed Width=10 / Shrink=0
+    // The grip's ColumnGrip carries Grow=1 to fill the column HEIGHT — so it must be boxed in a fixed-width / Shrink=0
     // wrapper, else that Grow leaks into the horizontal row and the grip eats half the leftover width (the empty-gap bug).
+    // The width is ColumnGrip.StripW (16), not a local number: the strip IS the hit target, and all three library
+    // splitters plus the detail rail's must be the same target.
     static Element Grip(Signal<float> w, float min, float max, Action onCommit) => new BoxEl
     {
-        Width = 7f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
+        Width = ColumnGrip.StripW, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
         Children = [Embed.Comp(() => new ColumnGrip(w, min, max, onCommit))],
     };
 }
 
-// A thin drag-to-resize seam between two library columns. Reuses the engine's eager pointer capture (BoxEl.OnDrag) and
-// reconstructs the true window-X each frame (the grip moves as the column resizes). Invisible at rest, a hairline on hover.
+// A drag-to-resize seam between two library columns — the app's GridSplitter. Reuses the engine's eager pointer capture
+// (BoxEl.OnDrag) and reconstructs the true window-X each frame (the grip moves as the column resizes).
+//
+// STOCK GRIDSPLITTER MODEL (WinUI / the Toolkit's GridSplitter + WinUI 3 Gallery's PropertySizer, and the same shape
+// SidebarResizeGrip already ships): a WIDE, INVISIBLE hit strip with a reveal-on-hover indicator inside it. The engine
+// has no splitter control of its own (checked: FluentGpu.Controls has ScrollBar/Slider/SplitView but no Splitter/Sizer),
+// so this component is it.
+//
+// It used to be a 7-DIP strip around a PERMANENT 1px hairline, which was wrong twice over:
+//   · 7 DIP is half the pointer-accuracy target for an edge gesture (16 is what the sidebar grip and every stock sizer
+//     use), and there is no touch story at 7 at all;
+//   · the hairline was always painted, so a *seam* was drawn between two panes that already read as separate surfaces —
+//     and it "brightened on hover" via `HoverFill = Tok.TextTertiary`, a TEXT token used as a FILL. Worse, that hover
+//     only fired when the pointer was over the 1-DIP line itself: a plain HoverFill child is not driven by its
+//     container's hover (AnimScheduler.SetHoverDescendants only cascades to REVEAL affordances — HoverOpacity /
+//     Hover-PressScale), so 6 of the strip's 7 DIP were dead to the cue. The indicator below is opacity-revealed for
+//     exactly that reason, and it therefore lights from anywhere in the strip, including mid-drag (PressedOpacity).
 //
 // OPT-IN COLLAPSE DETENT (WP-η). By default this is the plain hard-clamp splitter every library column has always used:
 // the width tracks the cursor 1:1 inside [min,max], drag-end commits, and NOTHING else happens. Passing a `collapsed`
@@ -977,18 +994,43 @@ sealed class ColumnGrip : Component
     // gets the plain grip rather than a half-wired detent.
     bool Detent => _collapsed is not null && _forcePush > 0f;
 
+    /// <summary>THE splitter hit strip (DIP). Every column seam in the app is this wide — the library's three, the
+    /// detail rail's, and the sidebar's own grip, which already used 16. Wide enough to grab without aiming; invisible
+    /// at rest, so widening it costs the page nothing.</summary>
+    public const float StripW = 16f;
+    /// <summary>The reveal-on-hover indicator: a 2-DIP rounded line, inset 4 from the top and bottom of the column so it
+    /// reads as a grab handle rather than as a full-bleed divider.</summary>
+    const float IndicatorW = 2f, IndicatorInset = 4f;
+
     public override Element Render() => new BoxEl
     {
-        // A persistent 1px divider centred in a 7px hit strip (always visible = the column seam; the strip is the drag
-        // target). Brightens slightly on hover to cue that it's draggable. When the host has collapsed the column it
-        // widens its wrapper (the seam is then the ONLY re-open affordance, so it needs a bigger grab target) — that is
+        // An INVISIBLE 16-DIP hit strip with a centred indicator that fades in on hover / drag. When the host has
+        // collapsed the column it may widen its wrapper further (the seam is then the only re-open affordance) — that is
         // the host's business; this component just fills whatever strip it is given.
         Grow = 1f, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Cursor = CursorId.SizeWE,
         OnRealized = h => _self = h, OnPointerDown = OnDown, OnDrag = OnMove,
         OnClick = _onReleased,   // for an OnDrag node, OnClick IS the release/commit edge (drag-end) — persist the chosen width
         OnDragCanceled = _onCanceled,
-        Children = [new BoxEl { Width = 1f, Grow = 1f, Fill = Tok.StrokeDividerDefault, HoverFill = Tok.TextTertiary }],
+        Children =
+        [
+            new BoxEl
+            {
+                Width = IndicatorW, Grow = 1f, Shrink = 0f,
+                Margin = new Edges4(0f, IndicatorInset, 0f, IndicatorInset),
+                Corners = CornerRadius4.All(IndicatorW * 0.5f),
+                // ControlStrongFill — the token WinUI puts on a THUMB (scrollbar thumb, slider rail): this is a grab
+                // handle, so it takes the grab-handle colour. Deliberately NOT the accent: WaveeAccent's rule (b) says
+                // accent is never structure, and a splitter is structure.
+                Fill = Tok.FillControlStrong,
+                // Opacity, not HoverFill — a fill-only child does not follow its container's hover (see the type
+                // comment), whereas a reveal does, so this lights from anywhere in the 16-DIP strip and stays lit for
+                // the whole drag.
+                Opacity = 0f, HoverOpacity = 1f, PressedOpacity = 1f,
+                HoverDurationMs = WaveeMotion.Fast, HoverEasing = Easing.FluentDecelerate,
+                HitTestVisible = false,
+            },
+        ],
     };
 
     void OnDown(Point2 local)
@@ -1371,19 +1413,36 @@ sealed class LibraryArtistPane : Component
         ],
     };
 
-    // The "Go to artist" pill — extracted verbatim from the former ArtistNav so it can sit inline in the toolbar row.
+    // "Go to artist" — the discography pane's ONLY route to the artist page, so it has to read as a live link.
+    //
+    // It used to be a grey 16-radius PILL: capsule geometry (the app's CTA grammar) filled with nothing, labelled in
+    // TextSecondary, sitting in a toolbar next to real controls. Capsule + grey + secondary ink is, everywhere else in
+    // this app, what a DISABLED pill looks like — so the one navigation affordance in the pane advertised itself as
+    // unavailable. It is now the stock HyperlinkButton treatment (HyperlinkButton_themeresources.xaml): AccentTextFill
+    // ink on the rest/hover/pressed ramp, ControlCornerRadius (4) — NOT a capsule, so it cannot be mistaken for a CTA —
+    // and the SubtleFill hover/pressed plate. The ↗ glyph stays: this navigates AWAY from the master-detail pane, which
+    // is exactly what that glyph means, and it now takes the link's ink like the label. Hand-rolled rather than
+    // HyperlinkButton.Create only because the control owns its Children slot and this link has a trailing glyph.
     static Element GoToArtist(Artist a, Action<string, string?> go) => new BoxEl
     {
         Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
-        Corners = Radii.PillAll, Padding = new Edges4(Spacing.M, Spacing.XS, Spacing.M, Spacing.XS),
+        Corners = CornerRadius4.All(Radii.Control),
+        Padding = new Edges4(Spacing.S, Spacing.XS, Spacing.S, Spacing.XS),
+        Fill = Tok.FillSubtleTransparent, HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+        BrushTransitionMs = WaveeMotion.Faster,
+        Role = AutomationRole.Hyperlink, Focusable = true, Cursor = CursorId.Hand,
         HoverScale = WaveeMotion.ScaleStandard.Hover, PressScale = WaveeMotion.ScaleStandard.Press,
         OnClick = () => go("artist:" + a.Uri, a.Name),
         Children =
         [
-            new TextEl(Loc.Get(Strings.Detail.GoToArtist)) { Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary, HoverColor = Tok.TextPrimary },
-            Icon(Icons.OpenInNewWindow, 14f, Tok.TextSecondary),
+            new TextEl(Loc.Get(Strings.Detail.GoToArtist))
+            {
+                Size = 14f, LineHeight = 20f, Weight = 600,
+                Color = Tok.AccentTextPrimary, HoverColor = Tok.AccentTextSecondary, PressedColor = Tok.AccentTextTertiary,
+            },
+            Icon(Icons.OpenInNewWindow, 14f, Tok.AccentTextPrimary),
         ],
-    }.Interactive(Interaction.Subtle);
+    };
 
     // Filter (title contains) + sort over the artist's releases. Sort codes mirror the picker: 0 = as returned by the API
     // (≈ release-date desc), 1 = reversed, 2 = Alphabetical, 4 = Release date (by Year). Direction flips the sorted forms.
