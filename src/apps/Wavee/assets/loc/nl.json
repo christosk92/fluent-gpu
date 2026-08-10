@@ -626,6 +626,7 @@
   },
 
   "menu": {
+    "artistUnavailable": "De artiest van dit album is niet gevonden",
     "moveUp": "Omhoog verplaatsen",
     "moveDown": "Omlaag verplaatsen",
     "saveToLiked": "Opslaan in Nummers die je leuk vindt",

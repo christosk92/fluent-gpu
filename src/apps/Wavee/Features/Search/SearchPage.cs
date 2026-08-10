@@ -547,6 +547,17 @@ sealed class SearchAllList : Component
     static MenuAttach? TrackMenu(ActionServices? acts, IOverlayService? overlay, Track t)
         => acts is null || overlay is null ? null : Menus.TrackAttach(acts, overlay, t);
 
+    /// <summary>The menu for a unified top-results row. A TRACK hit looks itself up in the page's own results first
+    /// (<see cref="TrackOf"/> — the same track that produced the hit is in <c>SearchResults.Tracks</c>) and gets the FULL
+    /// track menu: Go to album, Go to artist(s) and credits need the track's album/artist URIs, which a uri-only hit does
+    /// not carry, and without this a song right-clicked in search offered a strictly smaller menu than the same song
+    /// right-clicked on a detail page. Exactly the resolution the row's DRAG source already performs, for the same
+    /// reason, at the same cost: cold, once per gesture. A miss falls back to the uri-only card menu.</summary>
+    static MenuAttach? HitMenu(ActionServices? acts, IOverlayService? overlay, Model model, SearchTopHit h)
+        => h.Kind == SearchHitKind.Track && TrackOf(model, h.Uri) is { } t
+            ? TrackMenu(acts, overlay, t)
+            : CardMenu(acts, overlay, h.Uri, h.Name, h.Image, h.Subtitle, h.RoundImage);
+
     // ── drag sources ────────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>A uri-only hit row's drag source. A TRACK hit looks itself up in the page's own results first (the same
     /// track that produced the hit is in <c>SearchResults.Tracks</c>) — that is what turns an otherwise inert track
@@ -624,7 +635,7 @@ sealed class SearchAllList : Component
             typeChip: large ? null : h.TypeLabel, detail: large ? null : h.Detail, trailing: trailing, large: large,
             meta: large ? null : h.Meta, detailBelowArt: h.Kind == SearchHitKind.Audiobook,
             onSubtitleNav: key => model.Go(key, null),   // artist/album names in the subtitle are individually clickable
-            menu: CardMenu(acts, menuOverlay, h.Uri, h.Name, h.Image, h.Subtitle, h.RoundImage),
+            menu: HitMenu(acts, menuOverlay, model, h),
             drag: EntityDrag(acts, model, h));
     }
 

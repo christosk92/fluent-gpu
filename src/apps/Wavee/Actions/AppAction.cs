@@ -101,7 +101,8 @@ public static class AppActions
         TrackActions.RemoveFromThisPlaylist, TrackActions.RemoveFromQueue,
         VideoActions.AttachVideo, VideoActions.ReplaceVideo, VideoActions.LocateVideo,
         VideoActions.RemoveVideo, VideoActions.ShowVideoInExplorer,
-        ContainerActions.PlayContext, ContainerActions.SaveContext, ContainerActions.OpenItem,
+        ContainerActions.PlayContext, ContainerActions.PlayContextNext, ContainerActions.AddContextToQueue,
+        ContainerActions.SaveContext, ContainerActions.OpenItem, ContainerActions.GoToAlbumArtist,
         ContainerActions.RenamePlaylist, ContainerActions.InviteCollaborators, ContainerActions.DeletePlaylist,
         PinActions.PinToSidebar, PinActions.UnpinFromSidebar,
     ];
