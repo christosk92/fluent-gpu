@@ -190,6 +190,23 @@ public static class WaveePalette
     public static ColorF PageToneNeutralDark { get; } = ColorF.FromRgba(0x15, 0x15, 0x15);
     public static ColorF PageToneNeutralLight { get; } = ColorF.FromRgba(0xF5, 0xF5, 0xF5);
 
+    /// <summary>The dark theme's blurred-backdrop opacity range, adapted to the COVER'S OWN BRIGHTNESS. A flat alpha
+    /// tuned on moody sleeves (the old 0.40) turns a bright mustard daylist into a bloom: on a near-black tone the
+    /// backdrop's loudness is roughly its luminance × its alpha, so the alpha must fall as the cover's luminance rises
+    /// for the perceived wash to stay level. Linear lerp of the dominant role's WCAG relative luminance:
+    /// a charcoal cover (lum ≈ 0.05) sits near <see cref="BackdropDarkAMax"/>, a bright yellow one (lum ≈ 0.7+) lands
+    /// near <see cref="BackdropDarkAMin"/>. No-grading fallback = the midpoint. The LIGHT arm stays a flat constant
+    /// (see CoverPaletteLeaves) — on a near-white ground the loudness relationship inverts and the whisper tone keeps
+    /// the range too small to matter.</summary>
+    public const float BackdropDarkAMax = 0.34f, BackdropDarkAMin = 0.14f;
+
+    public static float BackdropAlphaDark(CoverColorPlane.Scheme? scheme)
+    {
+        if (scheme is not { } s) return (BackdropDarkAMax + BackdropDarkAMin) * 0.5f;
+        float lum = ColorContrast.RelativeLuminance(Accent(s));
+        return BackdropDarkAMax + (BackdropDarkAMin - BackdropDarkAMax) * Math.Clamp(lum, 0f, 1f);
+    }
+
     /// <summary>THE detail page's ground tone for a cover's grading, or null when there is no grading to build one
     /// from (the caller then paints nothing and the page keeps its neutral surface). See the contract above.</summary>
     public static ColorF? PageTone(CoverColorPlane.Scheme? scheme, ThemeKind theme)

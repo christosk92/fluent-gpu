@@ -47,6 +47,32 @@ public class DetailPageToneTests
         Assert.Null(WaveePalette.PageTone(null, ThemeKind.Light));
     }
 
+    // A bright mustard sleeve — the daylist that produced the "too bright, too eye-catching" wash report. The chroma
+    // role is a high-luminance yellow, which is exactly the input the flat 0.40 backdrop alpha was never tuned for.
+    static CoverColorPlane.Scheme BrightMustard => new(
+        BackgroundBase: 0xFFC9A227, BackgroundTintedBase: 0xFFE6C233, TextBase: 0xFF1A1A1A,
+        TextSubdued: 0xFF4D4D4D, TextBrightAccent: 0xFF1A1A1A);
+
+    [Fact]
+    public void TheDarkBackdrop_FallsAsTheCoverBrightens()
+    {
+        float moody = WaveePalette.BackdropAlphaDark(SaturatedRed);      // deep red — low luminance
+        float bright = WaveePalette.BackdropAlphaDark(BrightMustard);    // bright yellow — high luminance
+        Assert.True(bright < moody,
+            $"a bright sleeve must get LESS backdrop than a moody one (bright={bright:F3}, moody={moody:F3})");
+        // Both stay inside the published range, and the ordering spans a real gap, not a rounding artifact.
+        Assert.InRange(moody, WaveePalette.BackdropDarkAMin, WaveePalette.BackdropDarkAMax);
+        Assert.InRange(bright, WaveePalette.BackdropDarkAMin, WaveePalette.BackdropDarkAMax);
+        Assert.True(moody - bright > 0.05f, $"the adaptation must be perceptible (gap={moody - bright:F3})");
+    }
+
+    [Fact]
+    public void TheDarkBackdrop_NoGradingFallsBackToTheMidpoint()
+    {
+        Assert.Equal((WaveePalette.BackdropDarkAMax + WaveePalette.BackdropDarkAMin) * 0.5f,
+            WaveePalette.BackdropAlphaDark(null), 3);
+    }
+
     /// <summary>The clamp box, stated as an assertion. A saturated cover lands INSIDE it in both themes — the tone is
     /// never the cover's own lightness, and its chroma is capped well below the cover's.</summary>
     [Theory]

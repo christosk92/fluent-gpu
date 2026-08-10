@@ -12,8 +12,8 @@ using Wavee.Core;
 namespace Wavee;
 
 /// <summary>
-/// The stage's LEFT region: identity + transport, bottom-anchored in a fixed 352-DIP column on the wide stage and folded
-/// into a single header ROW below <see cref="StageLayout.WideEnterW"/>.
+/// The stage's LEFT region: identity + transport, optically CENTRED in a fixed 352-DIP column on the wide stage and
+/// folded into a single header ROW below <see cref="StageLayout.WideEnterW"/>.
 ///
 /// <para><b>One structure, one reflow flag.</b> Both shapes are this one component reading
 /// <see cref="StageLayout.Wide"/> — the detail hero's rule. Nothing here re-derives a breakpoint; every size comes off
@@ -51,7 +51,10 @@ sealed class StageIdentity : Component
     /// <summary>The column's internal gutter — <see cref="StageLayout.ColumnPadX"/>, which is where
     /// <see cref="StageLayout.ColumnContentW"/> (304) comes from.</summary>
     const float ColumnPadX = StageLayout.ColumnPadX;
-    const float ColumnPadBottom = 28f;
+    /// <summary>The column's vertical gutter, applied SYMMETRICALLY (top == bottom). The cluster is optically centred
+    /// in its band, and an optical centre with a 28-DIP floor and a 0-DIP ceiling is not a centre — the free space
+    /// above and below has to be the same before <c>FlexJustify.Center</c> can mean anything.</summary>
+    const float ColumnPadY = 28f;
     const float StackGap = 18f;
     const float TransportGap = 6f;
     const float VolumeThickness = 20f;
@@ -117,8 +120,15 @@ sealed class StageIdentity : Component
     //      over the column's own BACKGROUND (a gap between controls; the row padding) resolved the COLUMN as the hit.
     //   2. `AnimScheduler.SetHover` then runs SetHoverDescendants from that node: a descendant that carries a
     //      reveal/scale affordance follows its CONTAINER's hover — and every StageChrome button carries HoverScale.
-    //   3. `SetPress` is worse: SetPressDescendants recurses UNCONDITIONALLY, with no interactive boundary and no
-    //      reveal filter, so one press on the container drives PressTarget on every descendant that has an interact row.
+    //   3. `SetPress` used to be worse: SetPressDescendants recursed UNCONDITIONALLY, with no interactive boundary at
+    //      all, so one press on the container drove PressTarget on every descendant with an interact row.
+    //
+    // (3) IS NOW FIXED IN THE ENGINE. SetPressDescendants carries the same nested-interactive boundary hover has: a
+    // container press drives a boundary child (a button that owns an interact row still lights) and STOPS beneath it,
+    // and the interact-row gate is the reach filter for everything else. `AnimSuite` gate 58c pins it. What that does
+    // NOT fix is (1): the container is still the HIT, so it still owns the press/hover for every gap between controls,
+    // and its own non-boundary reveal descendants still follow it. The shield below is therefore still load-bearing —
+    // it is the answer to hit OWNERSHIP and to the hover cascade, not just to the press one.
     //
     // THE FIX, without losing right-click-anywhere. The menu goes on a SHELL (a ZStack) plus a childless full-bleed
     // SHIELD layer beneath the content:
@@ -210,14 +220,22 @@ sealed class StageIdentity : Component
             // content back inside the designed 352. (The dark SHADE under the column is not here any more — it is a
             // full-bleed layer in the backdrop stack, so it can feather more than twice as far for free.)
             Width = L.LayoutWidth, Shrink = 0f,
-            // BOTTOM-ANCHORED, and Grow is what makes that true. A component's element is mounted UNDER a host node
-            // whose own layout is the scene default (a column, Grow 0), so this box was taking its MEASURED height and
-            // sitting at the top of a full-height host: Justify = End had no free space to distribute and was silently
-            // inert, which is why the cover read as pinned top-left with the window's whole lower half empty. Growing
-            // into the host's height gives End something to end against.
+            // CENTRED, and Grow is what makes that true. A component's element is mounted UNDER a host node whose own
+            // layout is the scene default (a COLUMN, Grow 0), so this box was taking its MEASURED height and sitting at
+            // the top of a full-height host: Justify had no free space to distribute and was silently inert, which is
+            // why the cover read as pinned top-left with the window's whole lower half empty. Growing into the host's
+            // height gives Justify something to spend.
+            //
+            // The Grow is VERTICAL and only vertical: the surface's band owns this region's horizontal participation
+            // (see the wrapper note in ImmersiveLyricsSurface.StageBody), because the anchor mirrors this element's
+            // FlexGrow and the wide band is a ROW, where the same number would have read as "and half the free width".
+            //
+            // ANCHORING: the cluster sits in the OPTICAL centre of its column rather than on the floor. Bottom-anchored
+            // put the cover's top edge under the caption band on a short window and left a 300-square of dead scrim
+            // above it on a tall one; the padding is symmetric (ColumnPadY both ends) so Center is a real centre.
             Grow = 1f, MinHeight = 0f,
-            Direction = 1, Justify = FlexJustify.End,
-            Padding = new Edges4(ColumnPadX, 0f, L.ColumnFalloff + ColumnPadX, ColumnPadBottom),
+            Direction = 1, Justify = FlexJustify.Center,
+            Padding = new Edges4(ColumnPadX, ColumnPadY, L.ColumnFalloff + ColumnPadX, ColumnPadY),
             Children = kids.ToArray(),
         };
     }

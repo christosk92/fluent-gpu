@@ -160,6 +160,9 @@ sealed class SidebarPane : Component
     /// <summary>Playlist-tree tiles the 56-DIP rail may draw before the rest of the document gets its turn.</summary>
     const int RailTreeTiles = 20;
 
+    /// <summary>The pane's context-menu SHIELD — see the note at the end of <c>Render</c>.</summary>
+    const string ContextShieldKey = "sidebar:context-shield";
+
     /// <summary>An expanded row eases in from a slight rise (the app's add vocabulary).</summary>
 
     // ── published to the bound row slots each render. PLAIN FIELDS by design: a bound slot is a frozen child, so it reads
@@ -340,8 +343,34 @@ sealed class SidebarPane : Component
 
         // §3.1.5 / §C6.4 — the pane's own background context menu opens the quick layout menu. Row menus still WIN:
         // ContextMenu.Attach dispatches to the nearest self-or-ancestor handler, so only empty pane chrome reaches this.
+        //
+        // …but it may NOT hang off the pane root, and this is the same defect the immersive stage's identity column
+        // documents (StageIdentity.ContextScope). `OnContextRequested` sets InteractionInfo.ContextBit, and ContextBit
+        // is in InputDispatcher.Hit's hit-anywhere mask — an element with a context flyout is a hit-test target in its
+        // own right (the WinUI rule). So a press on any DEAD SPOT of the sidebar (the rail's separator rule, the gap
+        // between tiles, the pane's own padding) resolved the ROOT as the press/hover owner, and every engine cascade
+        // that starts at the hit node then started at a node whose subtree is the ENTIRE sidebar.
+        //
+        // The fix is the stage's, verbatim: the menu goes on a ZStack SHELL plus a CHILDLESS full-bleed SHIELD beneath
+        // the content. Hit takes the LAST matching child, so the content layers still win wherever they hit and the
+        // shield takes everything else — and a cascade from the shield reaches exactly nothing, because it has no
+        // children. The shell keeps ContextBit as an ANCESTOR, which is all right-click-anywhere ever needed (the
+        // context funnel walks self-or-ancestors) and which no hover/press cascade ever starts from: HoverWithin is
+        // published only for Pointer/Click/Pressed bits, and the press target is the deepest HIT node — the shield.
         if (MenuOverlay is { } svc && Prefs is { } prefs)
-            root = root.WithContextMenu(svc, () => SidebarLayoutMenu.Model(prefs, _go));
+        {
+            Func<ContextMenuModel?> menu = () => SidebarLayoutMenu.Model(prefs, _go);
+            root = new BoxEl
+            {
+                Grow = 1f, Direction = 1, ZStack = true, ClipToBounds = true,
+                Children =
+                [
+                    // MUST STAY CHILDLESS — that is the whole contract. SidebarPaneInvariantTests pins the literal.
+                    new BoxEl { Key = ContextShieldKey }.WithContextMenu(svc, menu),
+                    root with { Grow = 0f, Shrink = 0f },
+                ],
+            }.WithContextMenu(svc, menu);
+        }
         return root;
     }
 

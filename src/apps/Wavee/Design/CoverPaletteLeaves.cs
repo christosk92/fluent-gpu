@@ -72,15 +72,18 @@ sealed class CoverPageTonePlane : Component
     const float BackdropSigmaDip = 72f, BackdropResolutionScale = 0.5f;
     const float BackdropSaturation = 1.35f;
 
-    /// <summary>Opacity of the blurred cover behind the hero, per theme.
+    /// <summary>Opacity of the blurred cover behind the hero.
     ///
-    /// <para>The light value was 0.45 — ABOVE dark's — and that was correct only for as long as the light page tone was
-    /// a pastel: a loud ground needs a loud backdrop or the art looks like a stain on it. Under the whisper clamp
-    /// (<see cref="WaveePalette.PageToneLightL"/>: L 0.94, S ≤ 0.16) the ground is a whisper and 0.45 of a
-    /// 1.35×-saturated blurred cover became the loudest thing on the page — the flashbang moved from the ground to the
-    /// art. 0.32 puts it back BELOW the dark arm, which is the correct relative order for the same reason every other
-    /// light-arm alpha in this app is lower: a dark surface absorbs a wash and a near-white one does not.</para></summary>
-    const float BackdropAlphaDark = 0.40f, BackdropAlphaLight = 0.32f;
+    /// <para>LIGHT is a flat constant: it was 0.45 — ABOVE dark's — which was correct only while the light page tone was
+    /// a pastel; under the whisper clamp (<see cref="WaveePalette.PageToneLightL"/>: L 0.94, S ≤ 0.16) the ground is a
+    /// whisper and 0.45 of a 1.35×-saturated blurred cover became the loudest thing on the page. 0.32 restores the
+    /// correct relative order (a dark surface absorbs a wash; a near-white one does not).</para>
+    ///
+    /// <para>DARK is <see cref="WaveePalette.BackdropAlphaDark"/> — luminance-ADAPTIVE, not a constant. A flat 0.40 was
+    /// tuned on moody sleeves and turned a bright mustard daylist into a full-page bloom (user report): on a near-black
+    /// tone the backdrop's loudness scales with the cover's own luminance, so the alpha falls as the cover brightens
+    /// (0.34 for charcoal art → 0.14 for a bright yellow sleeve).</para></summary>
+    const float BackdropAlphaLight = 0.32f;
 
     public override Element Render()
     {
@@ -109,11 +112,28 @@ sealed class CoverPageTonePlane : Component
             ClipToBounds = true, Corners = WaveeShell.ContentPaneCorners,
             // BOUND: the brush stays a compositor value, so a theme/preset re-fire lands without this subtree being
             // rebuilt, and the 250ms ramp cross-fades a grading arrival instead of snapping to it.
-            Fill = Prop.Of(() => Resolve(p) ?? WaveeColors.ContentSurface),
+            // TRANSLUCENT, deliberately (user report: an opaque tone made detail pages a dead slab beside Home's
+            // breathing surface). The tone rides OVER the standard content stack — FileArea over live Mica — so the
+            // wallpaper's life shows through it exactly as it does on every other page; the clamped tone still names
+            // the record's hue. Dark can afford more transparency (dark Mica is near-black, so the composite barely
+            // moves); light stays high so a loud wallpaper cannot blow through the whisper clamp.
+            Fill = Prop.Of(() => !p.HeroOnly && Resolve(p) is { } t
+                ? t with { A = Tok.Theme == ThemeKind.Light ? PlaneAlphaLight : PlaneAlphaDark }
+                : ColorF.Transparent),   // hero-only: the tone BAND child paints; the page below breathes
             BrushTransitionMs = WaveeMotion.Standard,
             Children = kids.ToArray(),
         };
     }
+
+    /// <summary>How much of the tone plane covers the Mica stack beneath it. The dials for "the page reads as the
+    /// record's colour" vs "the page is part of a Mica window" — 1.0 is the dead slab the user rejected.
+    ///
+    /// <para>DARK is 0.45, and the arithmetic is the point: Home's surface is ~30% smoke, so ~70% of dark Mica's
+    /// wallpaper tinting survives there — the "alive" look the detail pages are being matched to. At 0.45 the plane
+    /// passes ~55% of the same signal (comparable, still clearly toned); at the first attempt's 0.72 it passed ~28%
+    /// and still read as a slab. LIGHT stays high: light Mica is bright and busy, and the whisper tone (L 0.94,
+    /// S ≤ 0.16) is quiet enough that a loud wallpaper would otherwise shift the page's read.</para></summary>
+    const float PlaneAlphaDark = 0.45f, PlaneAlphaLight = 0.90f;
 
     /// <summary>Cover grading → the page's ground. Cheap: two dictionary probes and the clamp; no subscription (the
     /// caller owns that), so it is safe on the paint path.</summary>
@@ -131,11 +151,12 @@ sealed class CoverPageTonePlane : Component
         float feather = band * DetailVerticalLayout.BackdropFadeFraction;
         // A ZStack child with an explicit Height and NO Width fills the stack's width and sits flush at the top —
         // exactly the band this wants, with no alignment authored.
+        var scheme = Surfaces.SchemeFor(p.Url) ?? Surfaces.SchemeFor(p.FallbackUrl);
         return new BoxEl
         {
             Height = band,
             ZStack = true, ClipToBounds = true, HitTestVisible = false,
-            Opacity = Tok.Theme == ThemeKind.Light ? BackdropAlphaLight : BackdropAlphaDark,
+            Opacity = Tok.Theme == ThemeKind.Light ? BackdropAlphaLight : WaveePalette.BackdropAlphaDark(scheme),
             Children =
             [
                 Ui.Image(url, ImageFit.Cover, aspect: float.NaN, decodePx: 512f, corners: 0f,
@@ -151,25 +172,27 @@ sealed class CoverPageTonePlane : Component
         };
     }
 
-    /// <summary>Hero-only mode: the tone survives the hero band and dissolves into the neutral content surface below
-    /// it. The veil fades the neutral ground IN over the tone (rather than fading the tone OUT to nothing), so the
-    /// composite stays opaque the whole way down — the plane's job is to BE the ground, not to tint one.</summary>
+    /// <summary>Hero-only mode: the tone paints ONLY the hero band and fades to nothing below it. Under the
+    /// translucent-plane model this is a tone BAND, not a ground-overpaint: below the fade the page is simply the
+    /// unpainted content stack (FileArea over live Mica), the same breathing surface every other page has — which is
+    /// exactly what "limit page color to the hero" should mean on a Mica window.</summary>
     static Element? HeroOnlyVeil(Props p)
     {
         float pageH = p.PageHeight > 1f ? p.PageHeight : 0f;
         if (pageH <= 1f) return null;
+        if (Resolve(p) is not { } tone) return null;
+        float alpha = Tok.Theme == ThemeKind.Light ? PlaneAlphaLight : PlaneAlphaDark;
         float band = DetailVerticalLayout.BackdropBandFor(p.HeroBand);
         float start = Math.Clamp(band / pageH, 0.12f, 0.80f);
         float end = MathF.Min(1f, start + 0.22f);
-        ColorF ground = WaveeColors.ContentSurface;
         return new BoxEl
         {
             HitTestVisible = false,   // sized by the ZStack (no explicit extent ⇒ full bleed)
             Gradient = GradientDown(
-                new GradientStop(0f, ground with { A = 0f }),
-                new GradientStop(start, ground with { A = 0f }),
-                new GradientStop(end, ground),
-                new GradientStop(1f, ground)),
+                new GradientStop(0f, tone with { A = alpha }),
+                new GradientStop(start, tone with { A = alpha }),
+                new GradientStop(end, tone with { A = 0f }),
+                new GradientStop(1f, tone with { A = 0f })),
         };
     }
 }

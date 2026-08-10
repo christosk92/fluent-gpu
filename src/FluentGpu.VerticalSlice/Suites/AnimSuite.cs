@@ -3252,6 +3252,51 @@ static class AnimSuite
         Check("58b. container hover stops at nested rows but still drives that row's clickable reveal",
             ancestorStopped && rowScoped && lazyMountedOn,
             $"ancestorStopped={ancestorStopped} rowScoped={rowScoped} lazyMountedOn={lazyMountedOn}");
+
+        // ── 58c: the PRESS twin ──────────────────────────────────────────────────────────────────────────────────────
+        // SetPressDescendants used to recurse UNCONDITIONALLY, so one press on a container (and a container owning only
+        // a context flyout IS a hit target — ContextBit is in Hit's hit-anywhere mask) drove PressTarget through every
+        // nested BUTTON's subtree: the whole cluster's plates lit at once. Press now stops at the SAME boundary hover
+        // stops at — the boundary node itself still presses when it owns an interact row, its descendants do not.
+        var pressScene = new SceneStore();
+        var pressAnim = new AnimEngine(pressScene);
+        var pressRecon = new TreeReconciler(pressScene, strings) { Anim = pressAnim };
+        pressRecon.ReconcileRoot(new BoxEl
+        {
+            OnPointerMoveWithin = static _ => { },
+            Children =
+            [
+                new BoxEl { Key = "container-reveal", Opacity = 0f, PressedOpacity = 1f },
+                new BoxEl
+                {
+                    Key = "nested-button",
+                    OnClick = static () => { }, PressScale = 0.96f,
+                    Children = [new BoxEl { Key = "button-glyph", Opacity = 0f, PressedOpacity = 1f }],
+                },
+            ],
+        }, null);
+        var pressRoot = pressScene.Root;
+        var containerReveal = pressScene.FirstChild(pressRoot);
+        var nestedButton = pressScene.NextSibling(containerReveal);
+        var buttonGlyph = pressScene.FirstChild(nestedButton);
+
+        pressAnim.SetPress(pressRoot, true);
+        bool revealDriven = pressScene.TryGetInteract(containerReveal, out var revealDown) && revealDown.PressTarget > 0.99f;
+        bool boundaryDriven = pressScene.TryGetInteract(nestedButton, out var buttonDown) && buttonDown.PressTarget > 0.99f;
+        bool beneathBoundaryQuiet = pressScene.TryGetInteract(buttonGlyph, out var glyphDown) && glyphDown.PressTarget < 0.01f;
+
+        // The button's OWN press edge (what input dispatch delivers on a direct hit) still reaches its glyph.
+        pressAnim.SetPress(nestedButton, true);
+        bool ownScopeDrivesGlyph = pressScene.TryGetInteract(buttonGlyph, out var glyphOwn) && glyphOwn.PressTarget > 0.99f;
+
+        pressAnim.SetPress(pressRoot, false);
+        bool releases = pressScene.TryGetInteract(containerReveal, out var revealUp) && revealUp.PressTarget < 0.01f
+            && pressScene.TryGetInteract(nestedButton, out var buttonUp) && buttonUp.PressTarget < 0.01f;
+
+        Check("58c. container press stops at nested interactive boundaries (boundary itself still presses)",
+            revealDriven && boundaryDriven && beneathBoundaryQuiet && ownScopeDrivesGlyph && releases,
+            $"reveal={revealDriven} boundary={boundaryDriven} beneathQuiet={beneathBoundaryQuiet} " +
+            $"ownScope={ownScopeDrivesGlyph} releases={releases}");
     }
 
     static void BrushTransitionChecks(StringTable strings)

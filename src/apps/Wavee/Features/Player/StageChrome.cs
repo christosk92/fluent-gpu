@@ -132,6 +132,43 @@ static class StageChrome
         ],
     };
 
+    /// <summary>The on-media SCRIM FAB — the shape for a control that sits directly on ARTWORK rather than on the
+    /// scrim's ground: a 40-DIP circle carrying the on-media scrim plate AT REST, the hairline on-media ring, and the
+    /// ink ladder's secondary→primary glyph. It is the <c>MediaCard</c> cover-FAB recipe verbatim
+    /// (<c>ScrimRest/ScrimHover/ScrimPressed</c> + <see cref="WaveeOnMedia.Stroke"/>), and circles are the sanctioned
+    /// on-media shape.
+    /// <para>WHY IT EXISTS. <see cref="Glyph"/> is plateless — <c>GlassRest</c> is alpha ZERO — which is correct for a
+    /// control standing on the scrim's own deepening (the transport, the column). The surface's TOP band is not that:
+    /// it is the thinnest part of the scrim and it sits over whatever the cover happens to be, so a plateless close
+    /// button over bright art is an invisible way out. This shape brings its own ground.</para></summary>
+    public const float FabBox = 40f;
+
+    /// <inheritdoc cref="FabBox"/>
+    public static BoxEl ScrimFab(string glyph, Action onClick, float glyphSize, ColorF accent, bool latched = false,
+                                 float box = FabBox) => new()
+    {
+        Width = box, Height = box, Shrink = 0f,
+        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+        Corners = Radii.Circle(box),
+        Fill = WaveeOnMedia.ScrimRest,
+        HoverFill = WaveeOnMedia.ScrimHover,
+        PressedFill = WaveeOnMedia.ScrimPressed,
+        BorderWidth = 1f, BorderColor = WaveeOnMedia.Stroke,
+        BrushTransitionMs = WaveeMotion.Faster,
+        HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
+        Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
+        OnClick = onClick, Cursor = CursorId.Hand,
+        Children =
+        [
+            new TextEl(glyph)
+            {
+                Size = glyphSize, FontFamily = Theme.IconFont,
+                Color = latched ? accent : WaveeOnMedia.InkSecondary,
+                HoverColor = latched ? accent : WaveeOnMedia.Ink,
+            },
+        ],
+    };
+
     /// <summary>A transport SATELLITE (shuffle / repeat) — a toggle, so it speaks the app's wave-4 toggle grammar: a
     /// subtle plate plus an ACCENT glyph while latched, and a completely unpainted box while it is not. Same rule as
     /// <c>PlayerBarContent.Transport</c>, translated to the on-media ladder (glass instead of <c>Tok.FillSubtle*</c>).</summary>

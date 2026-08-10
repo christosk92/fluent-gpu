@@ -328,9 +328,12 @@ public class StageLayoutTests
 
     static readonly Regex RawColor = new(@"ColorF\.(FromRgba|FromRgb)\s*\(", RegexOptions.Compiled);
 
-    /// <summary>NO PLATES. The stage's only fills are the on-media GLASS interaction ramp, the one filled play button
-    /// and the accent — never the theme's card / solid / subtle plate ladders, which is what would turn a surface whose
-    /// premise is "ink on the scrim" back into a panel of boxes.</summary>
+    /// <summary>NO PLATES — meaning no THEME plates. The stage's only fills are the on-media GLASS interaction ramp,
+    /// the one filled play button, the accent, and the on-media SCRIM ramp for a control that stands on ARTWORK rather
+    /// than on the scrim's own deepened ground (<c>StageChrome.ScrimFab</c>, the way out). Never the theme's card /
+    /// solid / subtle ladders, which is what would turn a surface whose premise is "ink on the scrim" back into a panel
+    /// of boxes. The distinction is the LADDER SOURCE, not the presence of a fill: every value above comes off
+    /// <c>WaveeOnMedia</c>, so it is theme-invariant by construction and moves with one token.</summary>
     [Fact]
     public void NoStageRenderer_PaintsAPlateLadder()
     {
@@ -376,7 +379,11 @@ public class StageLayoutTests
     }
 
     /// <summary>Every stage surface reaches the interaction ramp through the on-media GLASS rungs, and those rungs are
-    /// derived from the on-media ink rather than minted as a fourth white.</summary>
+    /// derived from the on-media ink rather than minted as a fourth white.
+    /// <para>GLASS IS A HOVER RAMP, NOT A GROUND: its rest rung is alpha ZERO. That is the property that makes it
+    /// correct for a control standing on the scrim's own deepening and WRONG for one standing on artwork — which is
+    /// why the exit uses the SCRIM ramp instead, whose rest rung is a real plate. Both ladders live in
+    /// <c>WaveeOnMedia</c>; the second half of this test pins that they are two ramps and not one.</para></summary>
     [Fact]
     public void TheGlassRamp_IsDerivedFromTheOnMediaInk()
     {
@@ -387,6 +394,12 @@ public class StageLayoutTests
         Assert.True(WaveeOnMedia.GlassHover.A < WaveeOnMedia.GlassPressed.A);
         // "White ~10%" — a hover rung any louder is a plate.
         Assert.True(WaveeOnMedia.GlassHover.A <= 0.12f);
+
+        // The SCRIM ramp: a real ground at rest, monotone through hover and press, and a ring that is not the ink.
+        Assert.True(WaveeOnMedia.ScrimRest.A > 0f, "a plate whose rest rung is transparent is not a plate");
+        Assert.True(WaveeOnMedia.ScrimRest.A < WaveeOnMedia.ScrimHover.A);
+        Assert.True(WaveeOnMedia.ScrimHover.A < WaveeOnMedia.ScrimPressed.A);
+        Assert.True(WaveeOnMedia.Stroke.A > 0f && WaveeOnMedia.Stroke.A < 0.5f);
     }
 
     /// <summary>The pane pivot speaks the SHARED rung — the context band's text-action metrics and its underline
@@ -544,21 +557,117 @@ public class StageLayoutTests
 
     // ── the column's composition ─────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The identity cluster is BOTTOM-ANCHORED, and <c>Grow</c> is what makes that true. A component's element
-    /// is mounted under a host node carrying the scene's default layout, so a column that only declares
-    /// <c>Justify = End</c> takes its MEASURED height, sits at the top of a full-height host and distributes no free
-    /// space at all — the cover pinned top-left with the window's lower half empty.</summary>
+    /// <summary>The identity cluster is optically CENTRED in its column, and <c>Grow</c> is what makes that possible. A
+    /// component's element is mounted under a host node carrying the scene's default layout, so a column that only
+    /// declares a <c>Justify</c> takes its MEASURED height, sits at the top of a full-height host and distributes no
+    /// free space at all — the cover pinned top-left with the window's lower half empty.
+    /// <para>Anchoring it to the FLOOR (the shape this replaced) is not a neutral alternative: it puts a 300-DIP cover
+    /// under the caption band on a short window and leaves a cover's worth of dead scrim above it on a tall one. A
+    /// centre is only a centre if the gutters agree, so the padding is pinned SYMMETRIC here too — the previous shape
+    /// carried 28 at the bottom and 0 at the top.</para></summary>
     [Fact]
-    public void TheIdentityColumn_GrowsIntoItsHostAndEndsAtTheBottom()
+    public void TheIdentityColumn_GrowsIntoItsHostAndCentresTheCluster()
     {
         string root = AppSourceRoot();
         if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
 
         string identity = File.ReadAllText(StagePath(root, "StageIdentity.cs"));
-        // Both halves, in the same element: the Grow that gives the column the host's height, and the End that spends
-        // it downward. Either one alone is the bug (End without Grow is silently inert; Grow without End stretches the
-        // whitespace instead of the cluster).
-        Assert.Matches(new Regex(@"Grow = 1f, MinHeight = 0f,\s*Direction = 1, Justify = FlexJustify\.End,"), identity);
+        // Both halves, in the same element: the Grow that gives the column the host's height, and the Justify that
+        // spends it. Either one alone is the bug (a Justify without Grow is silently inert; Grow without a Justify
+        // stretches the whitespace instead of placing the cluster).
+        Assert.Matches(new Regex(@"Grow = 1f, MinHeight = 0f,\s*Direction = 1, Justify = FlexJustify\.Center,"), identity);
+        // …and the vertical gutter is ONE constant, spent at both ends.
+        Assert.Matches(new Regex(@"Padding = new Edges4\(ColumnPadX, ColumnPadY, L\.ColumnFalloff \+ ColumnPadX, ColumnPadY\)"),
+            identity);
+        Assert.DoesNotContain("ColumnPadBottom", identity);
+    }
+
+    /// <summary>THE GROW LEAK. <c>StageIdentity</c>'s wide column declares <c>Grow = 1</c> so it can fill its host and
+    /// spend the free space VERTICALLY. But a component's anchor MIRRORS that <c>FlexGrow</c>
+    /// (<c>Reconciler.MirrorParticipation</c>) and the anchor is also the flex item in the stage BAND — which is a ROW
+    /// on the wide stage, where the very same number reads as "and half the free WIDTH". A declared <c>Width</c> is a
+    /// flex BASIS, not a cap (<c>FlexLayout.ClampMain</c> clamps to Min/Max only), so the identity region silently grew
+    /// past <see cref="StageLayout.LayoutWidth"/> and the pane region got less than the arithmetic anywhere else
+    /// assumed — which is how a lyric line ended up clipping mid-word.
+    /// <para>The band therefore OWNS the identity's horizontal participation: a wrapper with the authored width, no
+    /// grow and no shrink, and <c>Direction = 1</c> so the anchor's mirrored grow can only ever be vertical.</para></summary>
+    [Fact]
+    public void TheIdentityRegion_ClaimsNoWidthBeyondItsColumn()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string surface = File.ReadAllText(StagePath(root, "ImmersiveLyricsSurface.cs"));
+        Assert.Matches(new Regex(
+                @"Key = ""stage:identity"",\s*Direction = 1, MinHeight = 0f, MinWidth = 0f,\s*Grow = 0f, Shrink = 0f,"),
+            surface);
+        // The width is the ladder's, and it is NOT authored in the compact shape (which claims no column at all).
+        Assert.Contains("Width = L.Wide ? L.LayoutWidth : float.NaN", surface);
+    }
+
+    /// <summary>The READING COLUMN IS MEASURED, NEVER PREDICTED. It used to author its own <c>Width</c> from a
+    /// viewport FORMULA — a second, private copy of the band's arithmetic — and any disagreement between that copy and
+    /// the real layout lands as a column authored WIDER than the pane it sits in: the column shrinks flush to the
+    /// window edge while the lyric rows inside keep the width they were measured at, and the text clips mid-word. It
+    /// now GROWS into whatever the pane actually gives it, capped by <see cref="ImmersiveLyricsSurface.ColumnMaxW"/>,
+    /// with the gutter spelled as real padding — and <c>FlexLayout</c> re-measures a grown row child at its FINAL main
+    /// size, so a pre-shrink width is not representable.</summary>
+    [Fact]
+    public void TheReadingColumn_IsMeasuredNotPredicted()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string panes = File.ReadAllText(StagePath(root, "StagePanes.cs"));
+        Assert.Contains("MaxWidth = ImmersiveLyricsSurface.ColumnMaxW", panes);
+        Assert.Contains("ImmersiveLyricsSurface.ColumnGutter * 0.5f", panes);
+        // The formula is GONE, and so is the viewport signal it needed: no CODE in this file predicts a width. (The
+        // prose still names what it replaced — hence the Code() scan, exactly like the ink rules above.)
+        var predictors = new List<string>();
+        string[] paneLines = File.ReadAllLines(StagePath(root, "StagePanes.cs"));
+        for (int i = 0; i < paneLines.Length; i++)
+        {
+            string l = Code(paneLines[i]);
+            if (l.Contains("_viewport", StringComparison.Ordinal) || l.Contains("LayoutWidth", StringComparison.Ordinal))
+                predictors.Add($"StagePanes.cs:{i + 1}: {paneLines[i].Trim()}");
+        }
+        Assert.True(predictors.Count == 0,
+            "the reading column is measured — a viewport formula here is the clipping bug coming back:\n  "
+            + string.Join("\n  ", predictors));
+
+        // The pivot band appears three times and only three times: it IS the band (its height), and BOTH panes reserve
+        // it at their bottom — so neither list's last row can sit under the pivot.
+        Assert.Equal(3, Regex.Matches(panes, @"StageChrome\.PivotBandH").Count);
+    }
+
+    /// <summary>THE WAY OUT HAS TO BE VISIBLE. The stage's default control (<c>StageChrome.Glyph</c>) is PLATELESS —
+    /// its rest fill is <c>GlassRest</c> at alpha ZERO — which is right on the scrim's deepened ground and wrong in the
+    /// top band, the thinnest part of the scrim, sitting directly over whatever the cover happens to be. The exit is
+    /// therefore a scrim-plated FAB at REST: a circle (the sanctioned on-media shape) carrying the on-media scrim ramp
+    /// and the hairline ring, exactly as <c>MediaCard</c>'s cover FABs do over the same problem.</summary>
+    [Fact]
+    public void TheStageExit_IsAScrimPlatedFabNotAPlatelessGlyph()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string chrome = File.ReadAllText(StagePath(root, "StageChrome.cs"));
+        Assert.Contains("public static BoxEl ScrimFab(", chrome);
+        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?Fill = WaveeOnMedia\.ScrimRest"), chrome);
+        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?BorderColor = WaveeOnMedia\.Stroke"), chrome);
+        Assert.Matches(new Regex(@"ScrimFab\([\s\S]{0,900}?Corners = Radii\.Circle\(box\)"), chrome);
+        // 40 DIP: the on-media FAB rung, comfortably past the 32 icon-button minimum because this one has to be found
+        // over arbitrary artwork rather than merely clicked.
+        Assert.Contains("public const float FabBox = 40f;", chrome);
+
+        // The surface's top band uses it for BOTH of its buttons, and no longer reaches for the plateless glyph.
+        // (Code-only: the prose above the call site names the shape it replaced.)
+        string surface = File.ReadAllText(StagePath(root, "ImmersiveLyricsSurface.cs"));
+        Assert.Contains("StageChrome.ScrimFab(", surface);
+        foreach (string line in File.ReadAllLines(StagePath(root, "ImmersiveLyricsSurface.cs")))
+            Assert.DoesNotContain("StageChrome.Glyph(", Code(line));
+        // Escape stays the keyboard half of the same affordance.
+        Assert.Contains("Keys.Escape", surface);
     }
 
     /// <summary>Every full-width row in the column is wrapped in a COLUMN, never the BoxEl default row. A row wrapper
@@ -614,10 +723,15 @@ public class StageLayoutTests
     /// <summary>EVERY BUTTON IS ITS OWN HOVER/PRESS SCOPE. An <c>OnContextRequested</c> handler sets ContextBit, which
     /// is in the dispatcher's hit-anywhere mask — so a menu attached straight to the identity column made the column
     /// itself the hit for every gap between controls, and the engine's hover cascade (reveal/scale descendants) plus its
-    /// press cascade (UNCONDITIONAL, every descendant with an interact row) lit the whole cluster at once. The fix is
-    /// structural and this pins it: the menu goes on a ZStack SHELL whose first layer is a CHILDLESS shield that always
-    /// wins the hit, so the cascade from the hit node reaches nothing while the shell stays an ancestor for the "⋯"
-    /// button's ClickRequestsContext walk. The shield staying childless is the whole contract.</summary>
+    /// press cascade (then UNCONDITIONAL, every descendant with an interact row) lit the whole cluster at once. The fix
+    /// is structural and this pins it: the menu goes on a ZStack SHELL whose first layer is a CHILDLESS shield that
+    /// always wins the hit, so the cascade from the hit node reaches nothing while the shell stays an ancestor for the
+    /// "⋯" button's ClickRequestsContext walk. The shield staying childless is the whole contract.
+    /// <para>The engine has since grown the press half of the boundary (<c>AnimSuite</c> 58c: a container press stops at
+    /// a nested interactive boundary). That does NOT retire the shield — the container is still the HIT, so it still
+    /// owns the press and the hover for every gap, and its own non-boundary reveal descendants still follow it. Nor may
+    /// the shell claim layout of its own beyond the content's: see
+    /// <see cref="TheIdentityRegion_ClaimsNoWidthBeyondItsColumn"/>, the grow leak this shell is on the path of.</para></summary>
     [Fact]
     public void TheIdentityRegion_LeavesEveryButtonItsOwnHoverScope()
     {

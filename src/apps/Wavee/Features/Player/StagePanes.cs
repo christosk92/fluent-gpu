@@ -33,15 +33,8 @@ namespace Wavee;
 /// </summary>
 sealed class StagePanes : Component
 {
-    readonly IReadSignal<StageLayout> _layout;
-    readonly IReadSignal<Size2> _viewport;
-
-    public StagePanes(IReadSignal<StageLayout> layout, IReadSignal<Size2> viewport)
-    {
-        _layout = layout;
-        _viewport = viewport;
-    }
-
+    // No layout/viewport signal is held any more: the reading column is MEASURED (see LyricsColumn), so this component
+    // has nothing left to predict and nothing to re-solve on resize.
     public override Element Render()
     {
         var ui = UseContext(ShellUi.Slot);
@@ -91,22 +84,30 @@ sealed class StagePanes : Component
     // rungs onto WaveeOnMedia's theme-invariant whites. That flag is the reason the stage's scrim can be one dark thing
     // in both themes: the lyrics were the ONLY thing on the surface that painted theme ink. The rail keeps the default
     // (theme-following) — it is on a panel, not on media.
+    // THE READING COLUMN IS MEASURED, NEVER PREDICTED. It used to author its own Width from a viewport FORMULA —
+    // `viewportW − StageLayout.LayoutWidth − ColumnGutter`, clamped to ColumnMaxW — which is a second, private copy of
+    // the band's arithmetic. Any disagreement between that copy and the real layout lands as a column authored WIDER
+    // than the pane it sits in; the column shrinks (Shrink = 1, MinWidth = 0) flush to the window edge while the lyric
+    // rows inside it keep the width they were measured at (Shrink = 0, Trim.None by design), and the text clips
+    // mid-word. The identity's grow leak was one such disagreement — but the class of bug is the formula itself, so
+    // the formula is gone: the column now GROWS into whatever the pane actually gives it, capped by MaxWidth, centred
+    // by the wrapper, with the gutter spelled as real padding. FlexLayout re-measures a grown row child at its FINAL
+    // main size, so the rows can never carry a pre-shrink width.
     Element LyricsColumn(ShellUi? ui) => new BoxEl
     {
         Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
         Justify = FlexJustify.Center, AlignItems = FlexAlign.Stretch,
+        // The gutter, as PADDING rather than as a term subtracted from a predicted width — and the pivot band's own
+        // height reserved at the bottom, so the last lyric line clears the "Lyrics · Queue" row exactly the way the
+        // queue pane reserves it (see StageQueuePane's body padding).
+        Padding = new Edges4(ImmersiveLyricsSurface.ColumnGutter * 0.5f, 0f,
+                             ImmersiveLyricsSurface.ColumnGutter * 0.5f, StageChrome.PivotBandH),
         Children =
         [
             new BoxEl
             {
-                Direction = 1, Grow = 0f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
-                // Bound, not a render-time literal: the reading column re-solves on resize (and on the stage's own
-                // wide/compact flip, which changes how much width the pane region has) without re-rendering this.
-                Width = Prop.Of(() =>
-                {
-                    float paneW = MathF.Max(1f, _viewport.Value.Width - _layout.Value.LayoutWidth);
-                    return MathF.Max(160f, MathF.Min(ImmersiveLyricsSurface.ColumnMaxW, paneW - ImmersiveLyricsSurface.ColumnGutter));
-                }),
+                Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
+                MaxWidth = ImmersiveLyricsSurface.ColumnMaxW,
                 Children =
                 [
                     Embed.Comp(() => new LyricsView(large: true, onMedia: true, visible: () =>

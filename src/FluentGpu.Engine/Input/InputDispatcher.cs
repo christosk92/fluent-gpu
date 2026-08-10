@@ -2133,10 +2133,11 @@ public sealed class InputDispatcher
                              & (InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit)) != 0;
         NodeHandle dragReorder = (hasDrag || hasSwipe) ? NodeHandle.Null : NearestCanDrag(_down);   // DragController arms only off non-OnDrag chains
         // The touch long-press (Hold → context flyout) walks from the deepest VISUAL under the contact, not just the
-        // interactively-hit _down: a context-request handler (ContextBit) is NOT in the Hit interaction mask (a box with
-        // only OnContextRequested is hit-test-transparent to clicks), so a context-ONLY node would otherwise enroll no
-        // Hold. This mirrors the mouse right-click path, which also resolves its context target via HitTestAny (the
-        // any-node hit). When _down is set (a clickable+context row) the chain from it is identical.
+        // interactively-hit _down. ContextBit IS in Hit's hit-anywhere mask (see Hit()), so a context-only node is
+        // resolvable in its own right — but _down is only set when the DOWN route produced a press target, and a
+        // context-only node under a pass-through/disabled arm (or one whose press was suppressed) leaves _down null,
+        // which would enroll no Hold at all. HitTestAny is the same any-node resolution the mouse right-click path
+        // uses, so the two agree. When _down is set (a clickable+context row) the chain from it is identical.
         NodeHandle holdHit = _touchSuppressTap ? NodeHandle.Null : (_down.IsNull ? HitTestAny(e.PositionPx) : _down);
         NodeHandle holdChain = NearestContextOrHold(holdHit);
         // UseGesture (§13): the nearest self-or-ancestor that declared a gesture hook. Only probed when the scene has ANY

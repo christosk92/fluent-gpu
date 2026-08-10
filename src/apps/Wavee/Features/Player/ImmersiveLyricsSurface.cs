@@ -17,7 +17,7 @@ namespace Wavee;
 /// out of. Two regions over one drifting, baked-blur cover backdrop:
 /// <list type="bullet">
 ///   <item>LEFT — <see cref="StageIdentity"/>: the cover, the identity, the seek, the transport, volume and the output
-///     device, in a fixed bottom-anchored column (or a header row below <see cref="StageLayout.WideEnterW"/>).</item>
+///     device, centred in a fixed-width column (or a header row below <see cref="StageLayout.WideEnterW"/>).</item>
 ///   <item>RIGHT — <see cref="StagePanes"/>: the SAME <see cref="LyricsView"/> at <c>large: true</c> and the queue,
 ///     cross-faded in place, with the "Lyrics · Queue" pivot in the band along the bottom edge.</item>
 /// </list>
@@ -190,7 +190,7 @@ sealed class ImmersiveLyricsSurface : Component
                             Children =
                             [
                                 TopBar(track, ui, svc?.Settings, secondary, secondaryAvailable),
-                                StageBody(stage, vpSig),
+                                StageBody(stage),
                             ],
                         },
                     ],
@@ -214,7 +214,7 @@ sealed class ImmersiveLyricsSurface : Component
     // mid-sweep emits a gradient glyph run at all (Split >= 1 and Split <= 0 both fall into the cheap plain-glyph
     // batch). Even at a 1044-DIP viewport the stage shows ~20 rows and exactly ONE of them is wiping, so a worst-case
     // ~40 gradient glyphs sits two orders of magnitude inside MaxGradGlyphs = 1024 — no cap change is warranted.
-    static Element StageBody(IReadSignal<StageLayout> stage, IReadSignal<Size2> vpSig)
+    static Element StageBody(IReadSignal<StageLayout> stage)
     {
         var L = stage.Value;
         return new BoxEl
@@ -224,12 +224,33 @@ sealed class ImmersiveLyricsSurface : Component
             AlignItems = FlexAlign.Stretch,
             Children =
             [
-                Embed.Comp(() => new StageIdentity(stage)) with { Key = "stage:identity" },
+                // ── THE IDENTITY'S PARTICIPATION LIVES HERE, not inside the component ─────────────────────────────────
+                // The GROW LEAK, and why this wrapper is not ceremony. StageIdentity's wide column declares Grow = 1 so
+                // it can fill its host and spend the free space vertically (Justify). A component's element is mounted
+                // under an ANCHOR whose layout the reconciler MIRRORS from it (Reconciler.MirrorParticipation), and the
+                // scene default for that anchor is a COLUMN — so inside the anchor Grow = 1 means "fill the height",
+                // which is what the column wants. But the anchor is ALSO the flex item in THIS band, and when the band
+                // is a ROW (wide) the very same FlexGrow reads as a HORIZONTAL claim: the identity took its 352 + 120
+                // basis and then half of the row's free space on top, because a declared Width is a flex BASIS, not a
+                // cap (FlexLayout.ClampMain clamps to Min/Max only). The pane region got whatever was left, which is
+                // narrower than StagePanes' own arithmetic assumed — the whole of the "lyrics clip mid-word" report.
+                // The wrapper resolves the ambiguity by OWNING the horizontal participation (Grow 0, the authored
+                // width, no shrink) and being a COLUMN itself, so the anchor's mirrored Grow can only ever be vertical.
+                new BoxEl
+                {
+                    Key = "stage:identity",
+                    Direction = 1, MinHeight = 0f, MinWidth = 0f,
+                    Grow = 0f, Shrink = 0f,
+                    // Compact claims no column at all (StageLayout.CompactStage.LayoutWidth is 0) — the header row is
+                    // full-bleed and auto-height, so the wrapper must not author a width there.
+                    Width = L.Wide ? L.LayoutWidth : float.NaN,
+                    Children = [Embed.Comp(() => new StageIdentity(stage)) with { Key = "stage:identity-comp" }],
+                },
                 new BoxEl
                 {
                     Key = "stage:panes",
                     Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
-                    Children = [Embed.Comp(() => new StagePanes(stage, vpSig))],
+                    Children = [Embed.Comp(() => new StagePanes())],
                 },
             ],
         };
@@ -268,15 +289,17 @@ sealed class ImmersiveLyricsSurface : Component
     }
 
     // One shape for the two buttons in this band, so the secondary-line toggle and the close button read as a pair.
-    // GEOMETRY: row 1 of WaveeCta's icon-button table (32 × 32, Radii.Control, 16-DIP glyph) — the same control the rail
-    // header uses, so the pair does not change size when the user promotes the panel to fullscreen. INK is the on-media
-    // ladder (StageChrome.Glyph), because this band sits on the caption veil rather than on the theme scrim.
-    static Element GlyphButton(string glyph, string tip, Action onClick, ColorF accent, bool active = false) => ToolTip.Wrap(
-        active
-            ? StageChrome.Satellite(glyph, onClick, enabled: true, latched: true, accent: accent,
-                box: WaveeCta.IconButtonSize, glyphSize: RightRail.HeaderGlyph)
-            : StageChrome.Glyph(glyph, onClick, WaveeCta.IconButtonSize, RightRail.HeaderGlyph),
-        tip);
+    //
+    // THE WAY OUT HAS TO BE VISIBLE. These two used to be StageChrome.Glyph — the stage's PLATELESS control, whose rest
+    // fill is GlassRest at alpha ZERO. That is right for a button standing on the scrim's own deepening (the transport,
+    // the column), and wrong here: this band is the thinnest part of the scrim and it sits directly over whatever the
+    // cover happens to be, so on bright art the only exit from a fullscreen surface was an unplated white glyph on
+    // white — invisible until you hovered the pixel it occupies. They are now StageChrome.ScrimFab: 40-DIP CIRCLES
+    // (the sanctioned on-media shape) carrying the on-media scrim plate AT REST plus the hairline ring — the same
+    // recipe MediaCard's cover FABs use over the same problem. Escape still closes the surface; this is the pointer's
+    // half of that affordance. The latched arm keeps the accent glyph the rail header's toggle speaks.
+    static Element GlyphButton(string glyph, string tip, Action onClick, ColorF accent, bool active = false) =>
+        ToolTip.Wrap(StageChrome.ScrimFab(glyph, onClick, RightRail.HeaderGlyph, accent, latched: active), tip);
 
     // The "leave fullscreen" glyph — the deliberate counterpart of the rail header's Icons.FullScreen expand button.
     static Element CloseButton(Action onClick, ColorF accent) =>

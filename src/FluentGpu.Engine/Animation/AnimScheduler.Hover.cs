@@ -32,18 +32,29 @@ public sealed partial class AnimEngine
         SetPressDescendants(node, on);
     }
 
+    // ── the ONE cascade boundary, shared by hover and press ──────────────────────────────────────────────────────────
+    //
+    // A nested control owns a NEW interaction scope. The dispatcher publishes HoverWithin for every interactive
+    // ancestor, so allowing a pane/list ancestor to recurse through an interactive row made that ancestor turn on the
+    // reveal affordances of EVERY sibling row (all sidebar ellipses at once). A boundary can itself be the row-owned
+    // affordance, though (TrackRow's clickable play surface), so both cascades DRIVE that node and STOP beneath it.
+    //
+    // Press used to recurse UNCONDITIONALLY, with no boundary at all. Its de-facto reach filter was SetPressCore's
+    // interact-row gate (force: false ⇒ a node with no InteractionAnim row is skipped) — and rows exist only for
+    // scale/reveal/duration props, so the press-reachable set was already ≈ the hover-reachable set MINUS the boundary
+    // rule. That difference is the whole defect: one press on a container that happens to own a handler (a context
+    // flyout puts ContextBit in the hit-anywhere mask, so its own background is a hit) drove PressTarget through every
+    // nested BUTTON's subtree. Press now stops where hover stops. Note the two filters are deliberately NOT identical:
+    // hover additionally asks FollowsContainerHover, because a fill-only control tracks the real pointer; press does
+    // not need that question asked twice — the interact-row gate below IS that filter (no row ⇒ no press channel).
     private void SetHoverDescendants(NodeHandle node, bool on)
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            // A nested control owns a NEW hover scope. The dispatcher publishes HoverWithin for every interactive
-            // ancestor, so allowing a pane/list ancestor to recurse through an interactive row made that ancestor turn
-            // on the reveal affordances of EVERY sibling row (all sidebar ellipses at once). A boundary can itself be
-            // the row-owned reveal, though (TrackRow's clickable play surface), so drive that node and stop beneath it.
             bool boundary = IsNestedHoverBoundary(c);
             // Only a REVEAL/scale affordance follows its CONTAINER's hover (a list-row #-cell play glyph fading in on row
             // hover via HoverOpacity, a part that scales). A pure-fill control (♥/like: HoverFill, no HoverOpacity/scale)
-            // tracks the ACTUAL pointer, so the container hover must not light it up. Recurse unconditionally.
+            // tracks the ACTUAL pointer, so the container hover must not light it up.
             if (FollowsContainerHover(c)) SetHoverCore(c, on, force: false);
             if (boundary) continue;
             SetHoverDescendants(c, on);
@@ -69,7 +80,12 @@ public sealed partial class AnimEngine
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
+            // Same shape as hover: drive the child (the interact-row gate inside SetPressCore is the reach filter),
+            // then stop at a nested interactive boundary — the boundary node itself still presses if it owns a row
+            // (a RadioButton's PressedFill ring, TrackRow's play surface), its SUBTREE does not.
+            bool boundary = IsNestedHoverBoundary(c);
             SetPressCore(c, on, force: false);
+            if (boundary) continue;
             SetPressDescendants(c, on);
         }
     }
