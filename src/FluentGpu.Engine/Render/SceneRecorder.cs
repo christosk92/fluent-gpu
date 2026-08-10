@@ -827,7 +827,12 @@ public static class SceneRecorder
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
         ref InteractionInfo interaction = ref scene.Interaction(node);
-        const int interactiveMask = InteractionInfo.ClickBit | InteractionInfo.PointerBit;
+        // Same mask as the cascade's IsNestedHoverBoundary (AnimScheduler.Hover.cs) — "does this node own its own
+        // interaction scope". PressedBit belongs in it: a selection row that handles only OnPointerPressed/Released is a
+        // control in its own right, and leaving the bit out made it a cascade boundary that nonetheless INHERITED its
+        // ancestor's progress here at record time. The dispatcher publishes HoverWithin for PressedBit nodes, so such a
+        // node still lights from its own hover (:838 below).
+        const int interactiveMask = InteractionInfo.ClickBit | InteractionInfo.PointerBit | InteractionInfo.PressedBit;
         bool nodeInteractive = (interaction.HandlerMask & interactiveMask) != 0;
         InteractionAnim localInteraction = default;
         bool hasOwnInteraction = hasInteractionAnim && scene.TryGetInteract(node, out localInteraction);

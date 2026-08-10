@@ -158,6 +158,7 @@ public sealed class InputDispatcher
     private uint _lastDownMs;
     private Point2 _lastDownPos;
     private int _lastDownButton = -1;
+    private NodeHandle _lastDownOwner;   // the previous press's gesture owner — a chain requires the SAME owner
     private byte _clickCount = 1;
     private KeyModifiers _pressMods;
     private PointerKind _pressKind;
@@ -1031,11 +1032,13 @@ public sealed class InputDispatcher
                         break;
                     }
 
-                    TrackClickCount(in e);
+                    // Hit FIRST: the click-count chain is keyed on the press's gesture owner, so the target has to be
+                    // resolved before the counter runs (HitTest is a pure geometric walk — no dependency on the count).
+                    _down = HitTest(e.PositionPx);
+                    TrackClickCount(in e, _down);
                     _pressClickCount = _clickCount;
                     _pressMods = e.Mods;
                     _pressKind = e.Pointer;
-                    _down = HitTest(e.PositionPx);
                     SetState(ref _pressed, _down, NodeFlags.Pressed);
                     // A true blank-area press has no interaction-gated hit at all. It is still an explicit click-away:
                     // clear keyboard focus even though there is no `_down` node to enter the normal focus branch below.
@@ -1560,7 +1563,7 @@ public sealed class InputDispatcher
         // slop window + DoubleClickMs promotes _clickCount to 2 (then 3), so an editor/selectable text leaf word-selects
         // on a double-tap exactly like a mouse double-click (the press args below carry the live count). Tracked here on
         // the touch down edge, mirroring the mouse PointerDown — without it every tap delivered ClickCount=1.
-        if (!_touchSuppressTap) TrackClickCount(in e);
+        if (!_touchSuppressTap) TrackClickCount(in e, _down);
         if (!_touchSuppressTap) { _pressClickCount = _clickCount; _pressMods = e.Mods; _pressKind = e.Pointer; }
         // A press anywhere outside the selection's node dismisses a live (mouse/pen) selection, same as a mouse press.
         if (!_touchSuppressTap && !_selText.IsNull && _selText != _down) ClearTextSelection();
@@ -2788,30 +2791,63 @@ public sealed class InputDispatcher
         return NodeHandle.Null;
     }
 
-    /// <summary>Deliver the release to the nearest enabled self-or-ancestor that took a pointer press/release handler —
-    /// the same ancestor walk <see cref="DispatchMiddleRelease"/> already used for the middle button, and for the same
-    /// reason: an inert child (a CanDrag label, a cursor-only glyph) must not swallow its plate's release. Stops at the
-    /// FIRST <c>PressedBit</c> node whether or not it took the Released half, so a release never leaks past an
-    /// intervening pressed-handler node to its grandparent.</summary>
+    /// <summary>Deliver the release to the node that OWNS this pointer gesture: the nearest enabled self-or-ancestor
+    /// carrying EITHER a press/release handler (<c>PressedBit</c>) OR a click handler (<c>ClickBit</c>), whichever comes
+    /// first up the chain. The release is delivered only when that owner took the press/release half — a CLICK-owning
+    /// child terminates the walk without delivering.
+    /// <para>ONE RELEASE, ONE OWNER (input-a11y.md §6.5). <see cref="NearestClickOwner"/> already stops at the first
+    /// activation owner precisely so "a nested clickable [does not] double-fire with its ancestor" — but this walk used
+    /// to test <c>PressedBit</c> alone, which made a child holding only <c>OnClick</c> look like an inert glyph and let
+    /// the release sail past it. Both walks then ran on the same release with no shared handled state, so the child owned
+    /// the click while the ancestor owned the release. That is how double-clicking a track row's expand chevron ALSO
+    /// raised the ROW's double-tap (the drawer toggled twice and the track played): two owners, one gesture.</para>
+    /// <para>The original reason for the walk is unchanged and still holds — a genuinely inert child (a CanDrag label, a
+    /// cursor-only glyph, a selectable run) must not swallow its plate's release, and does not: those bits are
+    /// hit-testability, not activation ownership. Same shape as <see cref="DispatchMiddleRelease"/> /
+    /// <see cref="DispatchContextRequest"/>, and self-first like <c>DragController.TryArm</c>'s barrier.</para></summary>
     private void DispatchPointerReleased(NodeHandle node, Point2 positionPx)
     {
+        var owner = NearestGestureOwner(node);
+        // A click-only owner ends the resolution with NO release: it owns this gesture outright, and an ancestor's
+        // press/release handler is not part of it. (ClickRequestsContext implies ClickBit, so a "…" overflow button is an
+        // owner too — pressing it must not also select the row it sits in.)
+        if (owner.IsNull || (_scene.Interaction(owner).HandlerMask & InteractionInfo.PressedBit) == 0) return;
+        _scene.GetPointerReleased(owner)?.Invoke(new PointerEventArgs
+        {
+            Local = LocalPos(owner, positionPx), ClickCount = _pressClickCount, Mods = _pressMods,
+            Button = 0, Kind = _pressKind,
+        });
+    }
+
+    /// <summary>The node that owns a POINTER GESTURE started at <paramref name="node"/>: the nearest enabled
+    /// self-or-ancestor carrying a press/release handler or a click handler. The single definition of gesture ownership,
+    /// shared by <see cref="DispatchPointerReleased"/> and <see cref="TrackClickCount"/> so a release and the click-count
+    /// chaining that feeds it can never disagree about who is acting. Broader than
+    /// <see cref="NearestClickOwner"/> (which answers "who ACTIVATES") because a node may own a gesture through
+    /// <c>OnPointerPressed</c>/<c>OnPointerReleased</c> alone — a selection row does exactly that.</summary>
+    private NodeHandle NearestGestureOwner(NodeHandle node)
+    {
+        const uint owns = InteractionInfo.PressedBit | InteractionInfo.ClickBit;
         for (var n = node; !n.IsNull; n = _scene.Parent(n))
         {
             if ((_scene.Flags(n) & NodeFlags.Disabled) != 0) continue;
-            if ((_scene.Interaction(n).HandlerMask & InteractionInfo.PressedBit) == 0) continue;
-            _scene.GetPointerReleased(n)?.Invoke(new PointerEventArgs
-            {
-                Local = LocalPos(n, positionPx), ClickCount = _pressClickCount, Mods = _pressMods,
-                Button = 0, Kind = _pressKind,
-            });
-            return;
+            if ((_scene.Interaction(n).HandlerMask & owns) != 0) return n;
         }
+        return NodeHandle.Null;
     }
 
-    /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).</summary>
-    private void TrackClickCount(in InputEvent e)
+    /// <summary>Promote consecutive same-button presses inside the slop window into double/triple clicks (capped at 3).
+    /// <para>Chained only when both presses resolve to the SAME gesture owner. The window is 500ms and the slop 4px, so
+    /// two presses that straddle the boundary between a row and its own expand chevron used to promote to a double-click
+    /// on whichever one the second press landed in — a node-agnostic counter cannot tell "the user double-clicked the
+    /// row" from "the user clicked two different controls quickly". Comparing the OWNER rather than the raw hit node is
+    /// what keeps a plate with inert children double-clickable: pressing its label and then its padding is two presses on
+    /// one owner. A recycled node fails the compare (the handle carries a generation), which is the safe direction.</para></summary>
+    private void TrackClickCount(in InputEvent e, NodeHandle target)
     {
+        var owner = NearestGestureOwner(target);
         bool chained = _lastDownButton == e.Button
+                       && owner == _lastDownOwner
                        && e.TimestampMs - _lastDownMs <= DoubleClickMs
                        && MathF.Abs(e.PositionPx.X - _lastDownPos.X) <= ClickSlopPx
                        && MathF.Abs(e.PositionPx.Y - _lastDownPos.Y) <= ClickSlopPx;
@@ -2819,6 +2855,7 @@ public sealed class InputDispatcher
         _lastDownMs = e.TimestampMs;
         _lastDownPos = e.PositionPx;
         _lastDownButton = e.Button;
+        _lastDownOwner = owner;
     }
 
     // Reused context-request args (0 steady-state alloc; filled per invocation — handlers copy what they keep).

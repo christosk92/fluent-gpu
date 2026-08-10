@@ -1497,6 +1497,70 @@ static class ControlsSuite
                 string.Join(",", counts));
         }
 
+        // E2.n — ONE RELEASE, ONE OWNER (input-a11y.md §6.5). A nested CLICK-only child owns the gesture outright, so an
+        // ancestor's OnPointerReleased must not also fire. Regression gate for the chevron class: the release walk used to
+        // test PressedBit alone, which made an OnClick-only child look inert and let the release sail past it to the row —
+        // two owners for one gesture, so double-clicking a track row's expand chevron toggled the drawer AND played the
+        // track (the row read ClickCount 2 as its double-tap-to-invoke). The second half of the check is the regression
+        // guard in the other direction: the row's OWN double-click must still arrive.
+        {
+            var scene = new SceneStore();
+            int childClicks = 0;
+            var rowReleases = new List<byte>();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1, Width = 200f, Height = 100f,
+                OnPointerReleased = e => rowReleases.Add(e.ClickCount),
+                Children = [new BoxEl { Width = 40f, Height = 40f, OnClick = () => childClicks++ }],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            void Click(Point2 at, uint ms)
+            {
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, at, 0, 0, TimestampMs: ms) });
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, at, 0, 0, TimestampMs: ms + 40) });
+            }
+            var onChild = new Point2(20f, 20f);
+            var onRow = new Point2(120f, 80f);
+            Click(onChild, 1000); Click(onChild, 1100);   // double-click the nested affordance
+            bool childOwned = childClicks == 2 && rowReleases.Count == 0;
+            Click(onRow, 3000); Click(onRow, 3100);       // the row's own double-click is untouched
+            bool rowUnaffected = rowReleases.Count == 2 && rowReleases[1] == 2 && childClicks == 2;
+            Check("E2.n one release, one owner: a nested click-only child takes the release, the row's own double-click still lands",
+                childOwned && rowUnaffected,
+                $"childClicks={childClicks} rowReleases=[{string.Join(",", rowReleases)}]");
+        }
+
+        // E2.o — the click-count chain is per-OWNER, not per-position. Two presses inside DoubleClickMs *and* inside the
+        // 4px slop but resolving to different gesture owners must both read 1: a node-agnostic counter promoted whichever
+        // control the second press landed in, so a press pair straddling a row/child boundary read as a double-click on
+        // the row. Owner-keyed (not hit-node-keyed) so a plate with inert children stays double-clickable.
+        {
+            var scene = new SceneStore();
+            var childCounts = new List<byte>();
+            var rowCounts = new List<byte>();
+            new TreeReconciler(scene, strings).ReconcileRoot(new BoxEl
+            {
+                Direction = 1, Width = 200f, Height = 100f,
+                OnPointerPressed = e => rowCounts.Add(e.ClickCount),
+                Children = [new BoxEl { Width = 200f, Height = 40f, OnPointerPressed = e => childCounts.Add(e.ClickCount) }],
+            }, null);
+            new FlexLayout(scene, fonts).Run(scene.Root);
+            var disp = new InputDispatcher(scene);
+            void Press(Point2 at, uint ms)
+            {
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, at, 0, 0, TimestampMs: ms) });
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerUp, at, 0, 0, TimestampMs: ms + 40) });
+            }
+            Press(new Point2(20f, 38f), 1000);   // the child (y < 40)
+            Press(new Point2(20f, 42f), 1100);   // the row — 4px away, inside the slop, DIFFERENT owner
+            Press(new Point2(20f, 42f), 1200);   // the row again — same owner, so this one promotes
+            Check("E2.o click-count chains per gesture owner: crossing into a different owner inside the slop resets to 1",
+                childCounts.Count == 1 && childCounts[0] == 1
+                && rowCounts.Count == 2 && rowCounts[0] == 1 && rowCounts[1] == 2,
+                $"child=[{string.Join(",", childCounts)}] row=[{string.Join(",", rowCounts)}]");
+        }
+
         // E2.f/g — right-click release fires OnContextRequested (left never does); the Menu key (VK_APPS) fires it
         // on the focused node at its centre.
         {
@@ -3864,6 +3928,35 @@ static class ControlsSuite
                 $"cued={cued} silent={silentOverNothing} accept={acceptUnaffected} swap={swapped} cleared={clearedAtEnd} glyph=({glyphOnRefusal},{noGlyphOverNothing},{noGlyphOverTarget})");
         }
 
+        // e5dragdrop.chip.resting-caption — THE CHIP ALWAYS SAYS WHAT THE DROP WILL DO, including while travelling.
+        // DragDropContext.Move clears the session caption on every target change, so most of a gesture — the part spent
+        // between targets — had NO caption at all and the card named only the thing being dragged. The spec's
+        // RestingCaption is the floor for exactly that phase; a live target's caption, and a refusal's reason, both win.
+        {
+            var spec = new DragChipSpec(Title: "Song", Subtitle: "Artist", Count: 1,
+                                        RestingCaption: "Drag onto a playlist to add");
+
+            // Travelling: nothing under the pointer ⇒ the resting verb is what the card says.
+            bool restingShown = HasChipText(DragChip.Render(spec, new DragState(true, "k", default, "p")),
+                                           "Drag onto a playlist to add");
+            // Over an ACCEPTING target: the target's caption supersedes it, and the resting verb is gone (not stacked).
+            var over = DragChip.Render(spec, new DragState(true, "k", default, "p", DropEffect.Copy, "Add to 90s Love Songs"));
+            bool targetWins = HasChipText(over, "Add to 90s Love Songs")
+                              && !HasChipText(over, "Drag onto a playlist to add");
+            // REFUSED: the reason supersedes it too — a refusal must never be narrated as an invitation.
+            var refusedChip = DragChip.Render(spec,
+                new DragState(true, "k", default, "p", DropEffect.None, "You can't edit this playlist", Refused: true));
+            bool refusalWins = HasChipText(refusedChip, "You can't edit this playlist")
+                               && !HasChipText(refusedChip, "Drag onto a playlist to add");
+            // A spec that supplies none keeps the previous behaviour exactly: no caption row while travelling.
+            bool optIn = !HasChipText(DragChip.Render(new DragChipSpec(Title: "Song"), new DragState(true, "k", default, "p")),
+                                      "Drag onto a playlist to add");
+
+            Check("e5dragdrop.chip.resting-caption the chip states the drag's PURPOSE while travelling (DragChipSpec.RestingCaption), and a live target's caption / a refusal's reason both supersede it",
+                restingShown && targetWins && refusalWins && optIn,
+                $"resting={restingShown} targetWins={targetWins} refusalWins={refusalWins} optIn={optIn}");
+        }
+
         // e5dragdrop.transparent — the OTHER kind of "no" (B2). CanAccept=false is a REFUSAL: the user aimed at this
         // surface and it owes them a reason, which is what the gate above publishes. DropTargetSpec.Transparent is
         // "this gesture is none of my business": a page body while the user reorders INSIDE its own list, a track
@@ -4573,6 +4666,20 @@ static class ControlsSuite
             case TextEl t: return t.Text == DragChip.NotAllowedGlyph;
             case BoxEl b:
                 foreach (var c in b.Children) if (HasNotAllowedGlyph(c)) return true;
+                return false;
+            default: return false;
+        }
+    }
+
+    /// <summary>Does this rendered subtree contain a text leaf with exactly <paramref name="text"/>?</summary>
+    static bool HasChipText(Element? e, string text)
+    {
+        switch (e)
+        {
+            case null: return false;
+            case TextEl t: return t.Text == text;   // Prop<string> defines == against string (see HasNotAllowedGlyph)
+            case BoxEl b:
+                foreach (var c in b.Children) if (HasChipText(c, text)) return true;
                 return false;
             default: return false;
         }

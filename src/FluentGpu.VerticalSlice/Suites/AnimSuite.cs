@@ -3253,11 +3253,19 @@ static class AnimSuite
             ancestorStopped && rowScoped && lazyMountedOn,
             $"ancestorStopped={ancestorStopped} rowScoped={rowScoped} lazyMountedOn={lazyMountedOn}");
 
-        // ── 58c: the PRESS twin ──────────────────────────────────────────────────────────────────────────────────────
-        // SetPressDescendants used to recurse UNCONDITIONALLY, so one press on a container (and a container owning only
-        // a context flyout IS a hit target — ContextBit is in Hit's hit-anywhere mask) drove PressTarget through every
-        // nested BUTTON's subtree: the whole cluster's plates lit at once. Press now stops at the SAME boundary hover
-        // stops at — the boundary node itself still presses when it owns an interact row, its descendants do not.
+        // ── 58c: the PRESS twin — CASCADE THE REVEAL, NEVER THE CONTROL'S OWN STATE ─────────────────────────────────
+        // SUPERSEDES the original 58c, which asserted `boundaryDriven == true` (a nested clickable took its container's
+        // PressTarget as long as it owned an interact row). That was the residual left behind when the press cascade
+        // gained hover's boundary: both cascades computed the boundary and then drove the child anyway, stopping only
+        // BENEATH it. Shipped consequence — press-and-holding a home card rendered its whole Play / Shuffle / ♥ / "…"
+        // cluster pressed, and hovering it grew all four, because each carries a Hover/PressScale. Canon was always the
+        // other way: backdrop-effects-animation.md §7 scales a node "by the eased hover/press of its nearest interactive
+        // ancestor", and a nested button IS its own nearest interactive ancestor.
+        //
+        // The rule now splits by LEG, which is why this is not simply "boundaries inherit nothing":
+        //   · a REVEAL (Hover/PressedOpacity) follows its container ACROSS the boundary — it is the container's own
+        //     affordance appearing, and the pointer is by definition not on it (TrackRow's clickable play surface);
+        //   · a SCALE follows only a NON-interactive part (a thumb, an AnimatedIcon wrapper, an artwork zoom).
         var pressScene = new SceneStore();
         var pressAnim = new AnimEngine(pressScene);
         var pressRecon = new TreeReconciler(pressScene, strings) { Anim = pressAnim };
@@ -3267,6 +3275,9 @@ static class AnimSuite
             Children =
             [
                 new BoxEl { Key = "container-reveal", Opacity = 0f, PressedOpacity = 1f },
+                // A boundary that is ALSO a reveal: clickable, so its own scope — but the reveal leg still follows the
+                // container, because that is the whole mechanism behind a hover-revealed row/card button.
+                new BoxEl { Key = "boundary-reveal", OnClick = static () => { }, Opacity = 0f, PressedOpacity = 1f },
                 new BoxEl
                 {
                     Key = "nested-button",
@@ -3277,26 +3288,65 @@ static class AnimSuite
         }, null);
         var pressRoot = pressScene.Root;
         var containerReveal = pressScene.FirstChild(pressRoot);
-        var nestedButton = pressScene.NextSibling(containerReveal);
+        var boundaryReveal = pressScene.NextSibling(containerReveal);
+        var nestedButton = pressScene.NextSibling(boundaryReveal);
         var buttonGlyph = pressScene.FirstChild(nestedButton);
 
         pressAnim.SetPress(pressRoot, true);
         bool revealDriven = pressScene.TryGetInteract(containerReveal, out var revealDown) && revealDown.PressTarget > 0.99f;
-        bool boundaryDriven = pressScene.TryGetInteract(nestedButton, out var buttonDown) && buttonDown.PressTarget > 0.99f;
+        bool boundaryRevealDriven = pressScene.TryGetInteract(boundaryReveal, out var brDown) && brDown.PressTarget > 0.99f;
+        // THE FIX: a nested control's own press state is not its container's to set.
+        bool boundaryScaleQuiet = pressScene.TryGetInteract(nestedButton, out var buttonDown) && buttonDown.PressTarget < 0.01f;
         bool beneathBoundaryQuiet = pressScene.TryGetInteract(buttonGlyph, out var glyphDown) && glyphDown.PressTarget < 0.01f;
 
-        // The button's OWN press edge (what input dispatch delivers on a direct hit) still reaches its glyph.
+        // The button's OWN press edge (what input dispatch delivers on a direct hit) still drives it and its glyph.
         pressAnim.SetPress(nestedButton, true);
-        bool ownScopeDrivesGlyph = pressScene.TryGetInteract(buttonGlyph, out var glyphOwn) && glyphOwn.PressTarget > 0.99f;
+        bool ownScopeDrives = pressScene.TryGetInteract(nestedButton, out var buttonOwn) && buttonOwn.PressTarget > 0.99f
+            && pressScene.TryGetInteract(buttonGlyph, out var glyphOwn) && glyphOwn.PressTarget > 0.99f;
 
         pressAnim.SetPress(pressRoot, false);
         bool releases = pressScene.TryGetInteract(containerReveal, out var revealUp) && revealUp.PressTarget < 0.01f
-            && pressScene.TryGetInteract(nestedButton, out var buttonUp) && buttonUp.PressTarget < 0.01f;
+            && pressScene.TryGetInteract(boundaryReveal, out var brUp) && brUp.PressTarget < 0.01f;
+        // Symmetry of the same rule: the container RELEASING must not clear a nested control's own press either — the
+        // button's release arrives on its own edge from input dispatch.
+        bool ownScopeSurvivesContainerRelease =
+            pressScene.TryGetInteract(nestedButton, out var buttonAfter) && buttonAfter.PressTarget > 0.99f;
 
-        Check("58c. container press stops at nested interactive boundaries (boundary itself still presses)",
-            revealDriven && boundaryDriven && beneathBoundaryQuiet && ownScopeDrivesGlyph && releases,
-            $"reveal={revealDriven} boundary={boundaryDriven} beneathQuiet={beneathBoundaryQuiet} " +
-            $"ownScope={ownScopeDrivesGlyph} releases={releases}");
+        Check("58c. container press drives a nested boundary's REVEAL but never its own scale (and its release is the button's, not the container's)",
+            revealDriven && boundaryRevealDriven && boundaryScaleQuiet && beneathBoundaryQuiet
+            && ownScopeDrives && releases && ownScopeSurvivesContainerRelease,
+            $"reveal={revealDriven} boundaryReveal={boundaryRevealDriven} boundaryScaleQuiet={boundaryScaleQuiet} " +
+            $"beneathQuiet={beneathBoundaryQuiet} ownScope={ownScopeDrives} releases={releases} " +
+            $"ownScopeSurvives={ownScopeSurvivesContainerRelease}");
+
+        // ── 58d: the mount path obeys the same rule ─────────────────────────────────────────────────────────────────
+        // Reconciler's lazy-affordance seed (a card's play FAB mounts on the hover-triggered render, after the enter
+        // cascade) used to call SetHover(node, true) — the force:true arm — so a nested BUTTON mounting or re-keying
+        // inside a hovered card lit up with no pointer edge at all. It now applies the cascade's rule instead.
+        var mountScene = new SceneStore();
+        var mountAnim = new AnimEngine(mountScene);
+        var mountRecon = new TreeReconciler(mountScene, strings) { Anim = mountAnim };
+        var mountBefore = new BoxEl { OnClick = static () => { }, Children = [] };
+        mountRecon.ReconcileRoot(mountBefore, null);
+        var mountRoot = mountScene.Root;
+        mountScene.Flags(mountRoot) |= NodeFlags.HoverWithin;
+        mountAnim.SetHover(mountRoot, true);
+        mountRecon.ReconcileRoot(new BoxEl
+        {
+            OnClick = static () => { },
+            Children =
+            [
+                new BoxEl { Key = "lazy-reveal", Opacity = 0f, HoverOpacity = 1f },
+                new BoxEl { Key = "lazy-button", OnClick = static () => { }, HoverScale = 1.04f },
+            ],
+        }, mountBefore);
+        var lazyRevealOnMount = mountScene.FirstChild(mountRoot);
+        var lazyButtonOnMount = mountScene.NextSibling(lazyRevealOnMount);
+        bool mountedRevealOn = mountScene.TryGetInteract(lazyRevealOnMount, out var mrIa) && mrIa.HoverTarget > 0.99f;
+        bool mountedButtonQuiet = !mountScene.TryGetInteract(lazyButtonOnMount, out var mbIa) || mbIa.HoverTarget < 0.01f;
+        Check("58d. a lazy affordance mounting into a hovered scope seeds a REVEAL but never a nested control's scale",
+            mountedRevealOn && mountedButtonQuiet,
+            $"reveal={mountedRevealOn} buttonQuiet={mountedButtonQuiet}");
     }
 
     static void BrushTransitionChecks(StringTable strings)

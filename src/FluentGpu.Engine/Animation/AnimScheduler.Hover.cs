@@ -32,62 +32,85 @@ public sealed partial class AnimEngine
         SetPressDescendants(node, on);
     }
 
-    // ── the ONE cascade boundary, shared by hover and press ──────────────────────────────────────────────────────────
+    // ── the ONE cascade rule, shared by hover and press ──────────────────────────────────────────────────────────────
     //
-    // A nested control owns a NEW interaction scope. The dispatcher publishes HoverWithin for every interactive
-    // ancestor, so allowing a pane/list ancestor to recurse through an interactive row made that ancestor turn on the
-    // reveal affordances of EVERY sibling row (all sidebar ellipses at once). A boundary can itself be the row-owned
-    // affordance, though (TrackRow's clickable play surface), so both cascades DRIVE that node and STOP beneath it.
+    // CASCADE THE REVEAL, NEVER THE CONTROL'S OWN STATE. Two legs with genuinely different semantics:
     //
-    // Press used to recurse UNCONDITIONALLY, with no boundary at all. Its de-facto reach filter was SetPressCore's
-    // interact-row gate (force: false ⇒ a node with no InteractionAnim row is skipped) — and rows exist only for
-    // scale/reveal/duration props, so the press-reachable set was already ≈ the hover-reachable set MINUS the boundary
-    // rule. That difference is the whole defect: one press on a container that happens to own a handler (a context
-    // flyout puts ContextBit in the hit-anywhere mask, so its own background is a hit) drove PressTarget through every
-    // nested BUTTON's subtree. Press now stops where hover stops. Note the two filters are deliberately NOT identical:
-    // hover additionally asks FollowsContainerHover, because a fill-only control tracks the real pointer; press does
-    // not need that question asked twice — the interact-row gate below IS that filter (no row ⇒ no press channel).
+    //   REVEAL (HoverOpacity / PressedOpacity) — follows its container ACROSS a boundary. A hover-revealed child is the
+    //   CONTAINER's affordance appearing (a row's #-cell play glyph, a card's "…" corner, a track row's heart): the whole
+    //   point is that the pointer is NOT on it yet, so it cannot possibly drive itself.
+    //
+    //   SCALE (HoverScale / PressScale) — follows its container ONLY when the child is not itself interactive. An
+    //   interactive node is its OWN interaction scope: the dispatcher already gives it Hovered / HoverWithin / Pressed
+    //   when the pointer is genuinely on it, so it needs no inheritance. This is what canon has always said —
+    //   backdrop-effects-animation.md §7 and controls.md scale a node "by the eased hover/press of its nearest
+    //   interactive ancestor", and a nested button IS its own nearest interactive ancestor.
+    //
+    // Both cascades used to compute the boundary and then drive the child ANYWAY, stopping only BENEATH it. So every
+    // nested control carrying a scale grew when any interactive ancestor was hovered and dipped when it was pressed:
+    // hovering a home card's copy area grew its Play / Shuffle / ♥ / "…" cluster, and press-and-holding the card rendered
+    // all four pressed. (Registered as a named residual when the press cascade gained hover's boundary; this is the
+    // follow-up.) A container needs no such inheritance to light a REVEAL, which is the case the old ordering was
+    // protecting — hence the split rather than a blanket "boundaries inherit nothing".
+    //
+    // A fill-only control (♥/like: HoverFill with no HoverOpacity/scale) is in NEITHER leg and never was: it owns no
+    // InteractionAnim row, so it tracks the actual pointer. Press now applies the SAME predicate as hover rather than its
+    // looser interact-row gate, so the two can no longer disagree about who is being driven.
     private void SetHoverDescendants(NodeHandle node, bool on)
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
             bool boundary = IsNestedHoverBoundary(c);
-            // Only a REVEAL/scale affordance follows its CONTAINER's hover (a list-row #-cell play glyph fading in on row
-            // hover via HoverOpacity, a part that scales). A pure-fill control (♥/like: HoverFill, no HoverOpacity/scale)
-            // tracks the ACTUAL pointer, so the container hover must not light it up.
-            if (FollowsContainerHover(c)) SetHoverCore(c, on, force: false);
+            if (FollowsContainer(c, boundary)) SetHoverCore(c, on, force: false);
             if (boundary) continue;
             SetHoverDescendants(c, on);
         }
-    }
-
-    private bool IsNestedHoverBoundary(NodeHandle node)
-    {
-        const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
-        return (_scene.Interaction(node).HandlerMask & interactive) != 0;
-    }
-
-    /// <summary>A descendant follows its container's hover only for a reveal (HoverOpacity/PressedOpacity) or a
-    /// hover/press scale — not for a fill-only control (which tracks the real pointer).</summary>
-    private bool FollowsContainerHover(NodeHandle node)
-    {
-        ref NodePaint p = ref _scene.Paint(node);
-        if (!float.IsNaN(p.HoverOpacity) || !float.IsNaN(p.PressedOpacity)) return true;
-        return _scene.TryGetInteract(node, out var ia) && (ia.HoverScale != 1f || ia.PressScale != 1f);
     }
 
     private void SetPressDescendants(NodeHandle node, bool on)
     {
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            // Same shape as hover: drive the child (the interact-row gate inside SetPressCore is the reach filter),
-            // then stop at a nested interactive boundary — the boundary node itself still presses if it owns a row
-            // (a RadioButton's PressedFill ring, TrackRow's play surface), its SUBTREE does not.
             bool boundary = IsNestedHoverBoundary(c);
-            SetPressCore(c, on, force: false);
+            if (FollowsContainer(c, boundary)) SetPressCore(c, on, force: false);
             if (boundary) continue;
             SetPressDescendants(c, on);
         }
+    }
+
+    /// <summary>Does this node own its own interaction scope? Click / pointer / pressed handlers make it a control in its
+    /// own right rather than a part of its container.</summary>
+    private bool IsNestedHoverBoundary(NodeHandle node)
+    {
+        const uint interactive = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+        return (_scene.Interaction(node).HandlerMask & interactive) != 0;
+    }
+
+    /// <summary>Whether a descendant's hover/press progress is driven by its CONTAINER. A reveal always is; a scale is
+    /// only when the node is not its own interaction scope (see the cascade-rule comment above).</summary>
+    private bool FollowsContainer(NodeHandle node, bool ownsScope)
+    {
+        ref NodePaint p = ref _scene.Paint(node);
+        if (!float.IsNaN(p.HoverOpacity) || !float.IsNaN(p.PressedOpacity)) return true;   // reveal — crosses boundaries
+        if (ownsScope) return false;                                                       // its own control state
+        return _scene.TryGetInteract(node, out var ia) && (ia.HoverScale != 1f || ia.PressScale != 1f);
+    }
+
+    /// <summary>Seed a NEWLY MOUNTED node's hover from the container scope it mounted into — the reconciler's lazy
+    /// hover-affordance path (a media-card play FAB mounts after its card already took the pointer-enter edge). Applies
+    /// the SAME rule as the cascade, which the old path bypassed by going through <see cref="SetHover"/>'s
+    /// <c>force: true</c> arm: a reveal is seeded, a nested interactive control is not, so a button that mounts (or
+    /// re-keys) inside a hovered card no longer lights up with no pointer edge at all.
+    /// <para>Returns false when nothing was seeded, so a caller without an <see cref="AnimEngine"/> equivalent can tell
+    /// the node was deliberately left at rest.</para></summary>
+    public bool TrySeedHoverFromContainer(NodeHandle node)
+    {
+        if (node.IsNull || !_scene.IsLive(node)) return false;
+        bool boundary = IsNestedHoverBoundary(node);
+        if (!FollowsContainer(node, boundary)) return false;
+        SetHoverCore(node, true, force: true);
+        if (!boundary) SetHoverDescendants(node, true);
+        return true;
     }
 
     private void SetHoverCore(NodeHandle node, bool on, bool force)

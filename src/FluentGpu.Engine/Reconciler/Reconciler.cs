@@ -3792,6 +3792,7 @@ public sealed class TreeReconciler
 
 
 
+                bool seedHoverOnMount = false;
                 if (b.HoverScale != 1f || b.PressScale != 1f || !float.IsNaN(b.HoverOpacity) || !float.IsNaN(b.PressedOpacity)
                     || !float.IsNaN(b.HoverDurationMs) || !float.IsNaN(b.PressDurationMs))
                 {
@@ -3802,16 +3803,9 @@ public sealed class TreeReconciler
                     ia.PressDurationMs = float.IsNaN(b.PressDurationMs) ? InteractionAnim.ControlFasterMs : b.PressDurationMs;
                     ia.HoverEasing = b.HoverEasing;
                     ia.PressEasing = b.PressEasing;
-
-                    // A lazy hover affordance can mount AFTER its card/row received the pointer-enter edge (media-card
-                    // play FABs are the canonical case). Seed it from the NEAREST interactive ancestor's live scope;
-                    // stopping at that ancestor is load-bearing, otherwise a hovered list/pane would light newly mounted
-                    // reveals in every sibling row. Existing nodes keep their own eased progress untouched.
-                    if (isMount && MountsInsideHoveredScope(node))
-                    {
-                        if (Anim is { } hoverAnim) hoverAnim.SetHover(node, true);
-                        else ia.HoverT = ia.HoverTarget = 1f;
-                    }
+                    // DEFERRED to the end of this case (see the seed block): the decision needs this node's OWN
+                    // HandlerMask — "is it its own interaction scope?" — and the handler-mask writes have not run yet.
+                    seedHoverOnMount = isMount;
                 }
 
                 ref LayoutInput li = ref _scene.Layout(node);
@@ -4052,6 +4046,32 @@ public sealed class TreeReconciler
                 // moves IsTabStop between reused items frame-to-frame — a set-only mark would leave stale flags behind.
                 if (ii.Focusable) _scene.Mark(node, NodeFlags.Focusable);
                 else _scene.Flags(node) &= ~NodeFlags.Focusable;
+
+                // A lazy hover affordance can mount AFTER its card/row received the pointer-enter edge (media-card play
+                // FABs are the canonical case). Seed it from the NEAREST interactive ancestor's live scope; stopping at
+                // that ancestor is load-bearing, otherwise a hovered list/pane would light newly mounted reveals in every
+                // sibling row. Existing nodes keep their own eased progress untouched.
+                //
+                // Runs HERE, not next to the InteractionAnim writes above, because the rule is the CASCADE's rule
+                // (AnimScheduler.Hover.cs): a REVEAL follows the container it mounted into, a nested interactive control
+                // is its own scope and must not — a button mounting (or re-keying) inside a hovered card would otherwise
+                // light up with no pointer edge at all. That question is `ii.HandlerMask`, which is only final now.
+                if (seedHoverOnMount && MountsInsideHoveredScope(node))
+                {
+                    if (Anim is { } hoverAnim) hoverAnim.TrySeedHoverFromContainer(node);
+                    else
+                    {
+                        const uint ownsScope = InteractionInfo.PointerBit | InteractionInfo.ClickBit | InteractionInfo.PressedBit;
+                        bool reveal = !float.IsNaN(b.HoverOpacity) || !float.IsNaN(b.PressedOpacity);
+                        bool scaleFollows = (ii.HandlerMask & ownsScope) == 0
+                                            && (b.HoverScale != 1f || b.PressScale != 1f);
+                        if (reveal || scaleFollows)
+                        {
+                            ref InteractionAnim seed = ref _scene.InteractRef(node);
+                            seed.HoverT = seed.HoverTarget = 1f;
+                        }
+                    }
+                }
                 break;
             }
             case ScrollEl s:

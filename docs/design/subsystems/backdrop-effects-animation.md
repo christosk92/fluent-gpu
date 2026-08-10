@@ -753,6 +753,34 @@ documented in §7 cross-cutting — not used by any animation this subsystem own
 > hit-test** (HitTest reads `Bounds`, not `LocalTransform`). Both honor reduced-motion (§5.8). These add no new
 > column (they ride `LocalTransform`/the existing brush columns) and no new opcode.
 
+**The descendant cascade — CASCADE THE REVEAL, NEVER THE CONTROL'S OWN STATE (canonical; this doc owns it).**
+A hover/press edge on a container propagates `HoverTarget`/`PressTarget` into its subtree, and the two effect legs
+have deliberately different reach:
+
+- **REVEAL** (`HoverOpacity` / `PressedOpacity`) — follows its container **across an interaction boundary**. A
+  hover-revealed child *is* the container's affordance appearing (a list row's `#`-cell play glyph, a card's corner
+  "…", a track row's heart): the pointer is by definition not on it yet, so it cannot drive itself.
+- **SCALE** (`HoverScale` / `PressScale`) — follows its container **only when the child is not itself interactive**.
+  This is the "nearest **interactive** ancestor" wording above taken literally: a nested button *is* its own nearest
+  interactive ancestor, and the dispatcher already gives it `Hovered` / `HoverWithin` / `Pressed` when the pointer is
+  genuinely on it. Only a non-interactive **part** inherits (a slider thumb, an `AnimatedIcon` wrapper, an artwork
+  zoom inside an inert stack).
+- **FILL-ONLY** (`HoverFill`/`PressedFill` with no reveal and no scale) — never cascades; it owns no
+  `InteractionAnim` row and tracks the real pointer.
+
+The **boundary** is `HandlerMask & (ClickBit | PointerBit | PressedBit)` — "does this node own its own interaction
+scope" — and it gates the scale leg *and* the recursion, never the reveal leg. Hover and press apply the **same**
+predicate (press formerly used a looser bare interact-row gate, so the two could disagree about who was driven), and
+the reconciler's lazy-affordance mount seed applies it too — otherwise a button that mounts or re-keys inside a hovered
+card lights up with no pointer edge at all. `SceneRecorder`'s record-time `nodeInteractive` test uses the same mask.
+
+Both cascades formerly computed the boundary and then drove the child **anyway**, stopping only *beneath* it, so every
+nested control carrying a scale grew when any interactive ancestor was hovered and dipped when it was pressed — a
+container's whole button cluster responding to a gesture aimed at the container. A node carrying **both** a reveal and a
+scale is driven (the reveal leg wins): opting into a container-driven reveal *is* the declaration that the container
+drives it, which is why a reveal-and-zoom affordance keeps working unchanged. Gated by VerticalSlice `58b` (hover),
+`58c` (press, superseding its own earlier assertion that a boundary is driven) and `58d` (the mount seed).
+
 ```csharp
 // POD seed passed to AnimEngine.Seed — picks the mode; stackalloc-friendly, [InlineArray] for multi-channel.
 public readonly struct TrackSeed
