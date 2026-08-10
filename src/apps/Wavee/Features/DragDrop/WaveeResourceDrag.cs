@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Localization;
 using Wavee.Core;
 
 namespace Wavee;
@@ -202,7 +203,13 @@ static class WaveeResourceDrag
         var model = payload.ChipModel();
         return new DragChipSpec(
             ArtSource: model.ArtUrl, Title: model.Title, Subtitle: model.Subtitle,
-            Count: model.Count, Glyph: GlyphFor(payload.Kind));
+            Count: model.Count, Glyph: GlyphFor(payload.Kind),
+            // The RESTING verb — what the chip says while travelling, before anything accepts. Reported as part of
+            // "drag & drop is unclear" (2026-08-10): the card showed a song title and an artist and never a verb, so the
+            // gesture gave no evidence it was even armed for a playlist. A live target's caption supersedes it the moment
+            // one accepts, and a refusal reason supersedes it when one refuses. Loc.Get is a table lookup of an interned
+            // string — no interpolation, so this stays safe inside the 0-alloc frame region.
+            RestingCaption: payload.CanCopyTracks ? Loc.Get(Strings.Drag.DragOntoPlaylist) : null);
     }
 
     /// <summary>The one preview mounted at the shell root (<c>DragPreviewLayer.Of</c>).</summary>
@@ -272,6 +279,13 @@ static class WaveeResourceDrop
                                      object? payload, int? insertionIndex)
         => _ = DepositTracksAsync(acts, targetUri, targetName, payload, insertionIndex);
 
+    /// <summary>Deposit without the built-in confirmation toast, for a caller that owns a BETTER one. A drop that CREATED
+    /// the playlist it just filled wants "Open" (the new playlist needs a name), not the generic "Added to {name}" — and
+    /// two toasts for one gesture reads as a bug.</summary>
+    public static Task<bool> DepositTracksSilentAsync(ActionServices acts, string targetUri, object? payload,
+                                                      int? insertionIndex)
+        => DepositTracksAsync(acts, targetUri, "", payload, insertionIndex, toast: false);
+
     /// <summary>The awaitable deposit seam used by live insertion previews. The library mutation source publishes its
     /// optimistic snapshot synchronously before the returned network task completes, so callers can hand visual ownership
     /// to the real list immediately while still retaining an error-completion edge.
@@ -280,7 +294,7 @@ static class WaveeResourceDrop
     /// closes the gap, so the refusals must be answerable SYNCHRONOUSLY wherever possible (they are, except the empty
     /// track resolve) or the preview waits on a handoff that never comes.</para></summary>
     public static Task<bool> DepositTracksAsync(ActionServices acts, string targetUri, string targetName,
-                                                object? payload, int? insertionIndex)
+                                                object? payload, int? insertionIndex, bool toast = true)
     {
         if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { } resource)
             return Task.FromResult(false);
@@ -318,7 +332,7 @@ static class WaveeResourceDrop
                         await lib.AddTracksAsync(targetUri, tracks).ConfigureAwait(false);
                 }
 
-                if (!moved)
+                if (!moved && toast)
                     acts.Post?.Invoke(() => Toast.Show(Strings.Detail.AddedToPlaylist(targetName),
                         new ToastOptions { Severity = InfoBarSeverity.Success }));
                 return true;

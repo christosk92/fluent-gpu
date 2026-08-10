@@ -235,20 +235,17 @@ public static class Menus
         };
 
         s.Store?.EnsurePlaylists();
-        var pls = s.Store?.Playlists.Value.Peek();
-        if (pls is { Count: > 0 })
+        // MOST-RECENTLY-FILED FIRST. The inline rows used to be rootlist order truncated to ten, which for anyone with
+        // more than ten playlists is the same ten forever — very often not the one they are reaching for, so the common
+        // case degraded into "More playlists… → type the name". PlaylistDepositTargets owns the order AND the eligibility
+        // filter, shared with the picker and the tab drop rules (they used to be three separate copies).
+        var ordered = PlaylistDepositTargets.Order(s.Store?.Playlists.Value.Peek(), RecentDeposits(s), excludeUri);
+        int inline = Math.Min(ordered.Count, MaxInlinePlaylists);
+        for (int i = 0; i < inline; i++)
         {
-            int shown = 0;
-            for (int i = 0; i < pls.Count && shown < MaxInlinePlaylists; i++)
-            {
-                var p = pls[i];
-                if (!p.CanEdit || !p.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
-                if (excludeUri is { Length: > 0 } && string.Equals(p.Uri, excludeUri, StringComparison.Ordinal)) continue;
-                var uri = p.Uri;
-                var name = p.Name;
-                items.Add(new MenuFlyoutItem(name, null, canAdd, () => deposit(uri, name)));
-                shown++;
-            }
+            var uri = ordered[i].Uri;
+            var name = ordered[i].Name;
+            items.Add(new MenuFlyoutItem(name, null, canAdd, () => deposit(uri, name)));
         }
 
         items.Add(MenuFlyoutItem.Separator);
@@ -258,12 +255,45 @@ public static class Menus
         return MenuFlyoutItem.SubMenu(title, items, icon, enabled: canAdd);
     }
 
+    /// <summary>The persisted most-recently-filed-into playlist uris (newest first), or empty when there is no settings
+    /// seam — the ordering then falls back to plain rootlist order, which is exactly the previous behaviour.</summary>
+    internal static IReadOnlyList<string> RecentDeposits(ActionServices s)
+        => s.Svc is { } svc ? PlaylistDepositTargets.Parse(svc.Settings.Get(WaveeSettings.PlaylistDepositRecents))
+                            : Array.Empty<string>();
+
+    /// <summary>Record a successful deposit so it leads the list next time. Idempotent-ish: an unchanged MRU is not
+    /// written, so re-filing into the playlist already at the front costs no storage write.</summary>
+    internal static void RememberDeposit(ActionServices s, string uri)
+    {
+        if (s.Svc is not { } svc) return;
+        string current = svc.Settings.Get(WaveeSettings.PlaylistDepositRecents);
+        string next = PlaylistDepositTargets.Serialize(PlaylistDepositTargets.Remember(PlaylistDepositTargets.Parse(current), uri));
+        if (!string.Equals(next, current, StringComparison.Ordinal))
+            svc.Settings.Set(WaveeSettings.PlaylistDepositRecents, next);
+    }
+
+    /// <summary>The confirmation toast for a completed deposit. Its ONE action slot spends itself on <b>Undo</b>, not
+    /// "Open": the user is mid-flow on the page they filed from and rarely wants to leave it, whereas the recoverable
+    /// mistake — wrong playlist, wrong row, a multi-selection they had forgotten about — is both common and, until now,
+    /// only recoverable by going to find the notification panel. A create-then-add toasts <b>Open</b> instead
+    /// (see <see cref="CreateAndAdd"/>): you just made a playlist and probably want to name it.</summary>
+    internal static void ToastDeposited(ActionServices s, string name, long activityId)
+    {
+        var nc = s.Svc?.Notifications;
+        Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+        {
+            Severity = InfoBarSeverity.Success,
+            ActionLabel = nc is not null && activityId >= 0 ? Loc.Get(Strings.Notifications.Undo) : null,
+            OnAction = nc is not null && activityId >= 0 ? () => _ = nc.UndoByIdAsync(activityId) : null,
+        });
+    }
+
     /// <summary>"New playlist" for a deposit whose payload is not in hand (a container): create, then run the same
     /// deposit the named rows run. The track path keeps <see cref="CreateAndAdd"/>, which can add inside one flow.</summary>
     static void CreateAndDeposit(ActionServices s, Action<string, string> deposit)
     {
         if (s.Library is not { } lib) return;
-        string name = Loc.Get(Strings.Detail.NewPlaylist);
+        string name = NextPlaylistName(s);
         var post = s.Post;
         _ = Run();
         async Task Run()
@@ -272,7 +302,7 @@ public static class Menus
             try { uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false); }
             catch (Exception ex)
             {
-                ContainerActions.Post(post, () => Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }));
+                ContainerActions.Post(post, () => PlaylistEditErrors.Toast(ex));
                 return;
             }
             ContainerActions.Post(post, () => deposit(uri, name));
@@ -317,20 +347,23 @@ public static class Menus
             {
                 await lib.AddTracksAsync(uri, tracks).ConfigureAwait(false);
                 await lib.RemovePlaylistRowsAsync(from, rows, refs).ConfigureAwait(false);
+                RememberDeposit(s, uri);
                 Toast.Show(Strings.Menu.MovedToPlaylist(name), new ToastOptions
                 {
                     Severity = InfoBarSeverity.Success,
                     ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
                 });
             }
-            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
+            // Mapped, not raw: PlaylistEditErrors turns "offline", "revision conflict" and the rest into a sentence a
+            // listener can act on, where ex.Message is engine prose.
+            catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
         }
     }
 
     static void CreateAndMove(ActionServices s, IReadOnlyList<Track> tracks, PlaylistHost host)
     {
         if (s.Library is not { } lib || tracks.Count == 0) return;
-        string name = Loc.Get(Strings.Detail.NewPlaylist);
+        string name = NextPlaylistName(s);
         _ = Run();
         async Task Run()
         {
@@ -339,28 +372,44 @@ public static class Menus
                 string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                 MoveTo(s, uri, name, tracks, host);
             }
-            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
+            catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
         }
     }
 
-    /// <summary>Add to an existing playlist — the PlaylistPickerPanel.AddTo behavior verbatim (fire the write, toast
-    /// with a Go-to-playlist action; failures surface through the activity log / fail-loud mutation seam).</summary>
+    /// <summary>Add to an existing playlist. AWAITED, then confirmed — the old shape fired the write and toasted
+    /// "Added to X" unconditionally, so a failed add (offline, revoked permissions, a rejected revision) reported
+    /// SUCCESS and the only trace was an entry flipped to Failed in a panel nobody was looking at. That is a trust bug in
+    /// the middle of the flow this whole pass is about, so the correct shape (await → map the exception through
+    /// PlaylistEditErrors) is now shared by every add path.</summary>
     static void AddTo(ActionServices s, string uri, string name, IReadOnlyList<Track> tracks)
     {
         if (s.Library is not { } lib || tracks.Count == 0) return;
-        _ = lib.AddTracksAsync(uri, tracks);
-        Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+        var post = s.Post;
+        _ = Run();
+        async Task Run()
         {
-            Severity = InfoBarSeverity.Success,
-            ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
-        });
+            try
+            {
+                long id = await lib.AddTracksTrackedAsync(uri, tracks).ConfigureAwait(false);
+                ContainerActions.Post(post, () =>
+                {
+                    RememberDeposit(s, uri);
+                    ToastDeposited(s, name, id);
+                });
+            }
+            catch (Exception ex) { ContainerActions.Post(post, () => PlaylistEditErrors.Toast(ex)); }
+        }
     }
 
-    /// <summary>"New playlist" — the PlaylistPickerPanel.CreateAndAdd behavior verbatim.</summary>
+    /// <summary>"New playlist" for tracks in hand: create with the next unused "<c>My Playlist #N</c>" name, add, then
+    /// toast with <b>Open</b> — the one deposit where leaving IS what the user wants next (the new playlist needs a name,
+    /// and inline rename lives on its page). Every "New playlist" used to create another playlist literally called
+    /// "New playlist", so a few of them were indistinguishable in the sidebar.</summary>
     static void CreateAndAdd(ActionServices s, IReadOnlyList<Track> tracks)
     {
         if (s.Library is not { } lib || tracks.Count == 0) return;
-        string name = Loc.Get(Strings.Detail.NewPlaylist);
+        string name = NextPlaylistName(s);
+        var post = s.Post;
         _ = Run();
         async Task Run()
         {
@@ -368,15 +417,24 @@ public static class Menus
             {
                 string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
                 await lib.AddTracksAsync(uri, tracks).ConfigureAwait(false);
-                Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                ContainerActions.Post(post, () =>
                 {
-                    Severity = InfoBarSeverity.Success,
-                    ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
+                    RememberDeposit(s, uri);
+                    Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                    {
+                        Severity = InfoBarSeverity.Success,
+                        ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => s.Go?.Invoke("pl:" + uri, name),
+                    });
                 });
             }
-            catch (Exception ex) { Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }); }
+            catch (Exception ex) { ContainerActions.Post(post, () => PlaylistEditErrors.Toast(ex)); }
         }
     }
+
+    /// <summary>The name a one-click "New playlist" gets: the next unused "<c>{localized base} #N</c>". Nothing computed
+    /// this before — every new playlist was called "New playlist" verbatim.</summary>
+    internal static string NextPlaylistName(ActionServices s)
+        => PlaylistDepositTargets.NextDefaultName(s.Store?.Playlists.Value.Peek(), Loc.Get(Strings.Sidebar.NewPlaylist));
 
     /// <summary>"More playlists…" — the full existing PlaylistPickerPanel, hosted in a centered ContentDialog (the
     /// originating menu is gone by invoke time, so there is no anchor rect to open a flyout at).

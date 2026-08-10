@@ -553,6 +553,7 @@ internal static class TrackRow
         Role = AutomationRole.Button, Focusable = true, Cursor = CursorId.Hand,
         FocusVisualMargin = new Edges4(1f, 1f, 1f, 1f),
         OnClick = onToggle,
+        BlocksDragArm = true,   // its own affordance — a press here opens the drawer, it never drags the row
         Children =
         [
             // Glyph swap rather than a rotation: icons are TEXT here, and WinUI's own Expander swaps the chevron
@@ -713,21 +714,43 @@ internal static class TrackRow
     // through the caller's LibraryBridge (optimistic). Null onLike (skeleton / overscan rows) → a static, non-interactive heart.
     // `pop` (a caller-detected like EDGE, see LikeEdge) attaches the overshoot Enter to the keyed glyph for that ONE
     // render; any other render — recycling included — mounts the (possibly key-changed) glyph with Animate = null → snap.
-    internal static Element Heart(bool saved, Action? onLike, bool pop = false) => new BoxEl
+    //
+    // SAVED IS A FACT, LIKING IS AN ACTION. A filled ♥ is visible AT REST whenever the track is saved — that is the whole
+    // question a listener asks while scanning a tracklist, and it must be answerable with no interaction at all. An
+    // UNSAVED heart is an action, so it stays hidden until row hover: the lane then costs nothing visually on the rows
+    // that have nothing to state. (Before this, album/playlist pages emitted no heart lane at all on the hero/vertical
+    // profile and dropped it early on the standard one, so "is this liked?" was simply unanswerable there.)
+    internal static Element Heart(bool saved, Action? onLike, bool pop = false)
     {
-        Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = Radii.Circle(28f),
-        Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
-        Children =
-        [
-            new BoxEl
-            {
-                Key = saved ? "hg:on" : "hg:off",              // keyed CHILD of the stable circle (keys live in child arrays)
-                Animate = pop && saved ? HeartPopIn : null,
-                Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
-            },
-        ],
-    }.Interactive(Interaction.Subtle);
+        var heart = new BoxEl
+        {
+            Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = Radii.Circle(28f),
+            Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
+            // Its own affordance, not a handle for dragging the row (rows are Drag.Source): without this a press on the
+            // heart arms the row drag and the like never fires. Same rule as MoreButton / the queue panel's row buttons.
+            BlocksDragArm = true,
+            Children =
+            [
+                new BoxEl
+                {
+                    Key = saved ? "hg:on" : "hg:off",              // keyed CHILD of the stable circle (keys live in child arrays)
+                    Animate = pop && saved ? HeartPopIn : null,
+                    Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, 14f, saved ? Tok.AccentTextPrimary : Tok.TextTertiary)],
+                },
+            ],
+        }.Interactive(Interaction.Subtle);
+        // The reveal rides a NON-INTERACTIVE wrapper, exactly like MoreButton. The heart itself owns a click, which makes
+        // it its own interaction scope — a boundary the hover cascade will not drive (backdrop-effects-animation.md §7:
+        // reveal crosses a boundary, control state never does). Put the HoverOpacity on the heart and it would only light
+        // from the pointer being on it, which is the one case where it is already visible.
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Opacity = saved ? 1f : 0f, HoverOpacity = 1f,
+            Children = [heart],
+        };
+    }
 
     // The trailing row "..." overflow button (Apple Music / Spotify): revealed on ROW hover — the same interactive-ancestor
     // reveal the # cell's play/pause transport uses (the recorder drives the fade off the nearest interactive ancestor, the
@@ -745,16 +768,26 @@ internal static class TrackRow
             HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Cursor = enabled ? CursorId.Hand : (CursorId?)null, ClickRequestsContext = enabled,
             Role = AutomationRole.Button,
+            BlocksDragArm = true,   // its own affordance — a press here opens the menu, it never drags the row
             Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
         }.Interactive(Interaction.Subtle);
-        // Hidden at rest; fades in on row hover (Opacity 0 → HoverOpacity 1, inherited from the row's hover progress).
+        // QUIET at rest, full on row hover (inherited from the row's hover progress). Fully hidden at rest was the
+        // discoverability half of "adding to playlist is unclear" (user report 2026-08-10): every per-row verb — add to
+        // playlist, go to album, share, remove — lives behind this glyph, and a control that does not exist until you
+        // happen to point at the row cannot be found. 0.45 states "there is a menu on every row" without competing with
+        // the title; a fully opaque "…" on 1500 rows is real scanning cost, which is why this is a rung and not a flip.
+        // A disabled placeholder (skeleton / overscan) stays invisible so the shimmer reserves the lane without drawing.
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Opacity = 0f, HoverOpacity = enabled ? 1f : 0f,
+            Opacity = enabled ? MoreRestOpacity : 0f, HoverOpacity = enabled ? 1f : 0f,
             Children = [btn],
         };
     }
+
+    /// <summary>The at-rest opacity of a row's trailing "…" — quiet enough not to compete with the title, present enough
+    /// that the row's verbs are discoverable without hovering. The one calibration knob for row-menu discoverability.</summary>
+    internal const float MoreRestOpacity = 0.45f;
 
     // The recommendation-row "add to this playlist" button (Spotify's playlist-extender "+"): a bordered round button that
     // leads the trailing cluster, before the duration. Mirrors Heart — a null onAdd yields a non-interactive button.
@@ -764,13 +797,19 @@ internal static class TrackRow
         Corners = Radii.Circle(28f), BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
         Cursor = onAdd is null ? (CursorId?)null : CursorId.Hand, OnClick = onAdd,
+        BlocksDragArm = true,   // its own affordance — see MoreButton
         Children = [Icon(Icons.Add, 15f, Tok.TextPrimary)],
     }.Interactive(Interaction.Subtle);
 
-    /// <summary>Video lane that doubles as the row More affordance: film icon (or empty) at rest, bare "…" on row
-    /// hover. Same interactive-ancestor HoverOpacity swap as <see cref="NumberCell"/> — no circular chrome on the
-    /// ellipsis (the dedicated <see cref="MoreButton"/> keeps that look for Actions-only surfaces). Click raises
-    /// <c>ClickRequestsContext</c> so the row context menu opens anchored at this cell.</summary>
+    /// <summary>Video lane that doubles as the row More affordance: film icon at rest when this track HAS a video, else
+    /// the quiet "…" — then the full-strength "…" on row hover either way. Same interactive-ancestor HoverOpacity swap as
+    /// <see cref="NumberCell"/> — no circular chrome on the ellipsis (the dedicated <see cref="MoreButton"/> keeps that
+    /// look for Actions-only surfaces). Click raises <c>ClickRequestsContext</c> so the row context menu opens anchored
+    /// at this cell.
+    /// <para>FACTS AT REST, ACTIONS ON HOVER: a video is a property of the track, so it wins the at-rest slot. A row
+    /// WITHOUT one has nothing to state there, so the lane spends it on the quiet menu glyph instead of rendering empty —
+    /// the whole lane is reserved on every row as soon as any track in the list has a video, and leaving most of those
+    /// rows blank is what made the row menu undiscoverable on exactly the album pages that report it.</para></summary>
     internal static Element VideoMoreCell(bool hasVideo, bool moreEnabled)
     {
         Element rest = hasVideo ? Icon(Icons.Movie, 13f, Tok.TextTertiary) : new BoxEl();
@@ -787,10 +826,13 @@ internal static class TrackRow
                 new BoxEl
                 {
                     Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-                    Opacity = 0f, HoverOpacity = moreEnabled ? 1f : 0f,
+                    // Only a row that has no film to show spends its resting slot on the quiet menu glyph.
+                    Opacity = moreEnabled && !hasVideo ? MoreRestOpacity : 0f,
+                    HoverOpacity = moreEnabled ? 1f : 0f,
                     Cursor = moreEnabled ? CursorId.Hand : (CursorId?)null,
                     ClickRequestsContext = moreEnabled,
                     Role = AutomationRole.Button,
+                    BlocksDragArm = true,   // its own affordance — see MoreButton
                     Children = [Icon(Icons.More, 16f, Tok.TextSecondary)],
                 },
             ],

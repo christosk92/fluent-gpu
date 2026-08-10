@@ -290,10 +290,15 @@ sealed class SidebarPaneSlot : Component
         WaveeResourceDragPayload? drag = null;
         if (!reordering && !track)
             drag = resource ?? WaveeResourceDragPayload.FromEntry(snapshot, _o.Acts?.Svc, rootlistItem);
-        DropTargetSpec? drop = (snapshot.Kind == SidebarEntryKind.Playlist && snapshot.CanEdit) || resource is not null
+        // A NON-editable playlist row now takes the resource spec too. It still refuses a track deposit — but it does so
+        // with a REASON ("you can't edit this playlist") instead of the bare not-allowed glyph it used to show, which is
+        // the difference between "no, and here's why" and "this feature is broken". Every other row kind keeps the pin
+        // spec and, through the resource spec's `transparent` arm, stays silent while a drag merely crosses it.
+        bool playlistRow = snapshot.Kind == SidebarEntryKind.Playlist;
+        DropTargetSpec? drop = playlistRow || resource is not null
             ? _o.ResourceDropSpec(row.SectionId, PinSlot(row.SectionId, index),
-                snapshot.Kind == SidebarEntryKind.Playlist && snapshot.CanEdit ? snapshot.Uri : null,
-                snapshot.Name, resource, index)
+                playlistRow && snapshot.CanEdit ? snapshot.Uri : null,
+                snapshot.Name, resource, index, isPlaylistRow: playlistRow)
             : PinSpec(section, row.SectionId, index);
 
         var spec = new SidebarRowSpec
@@ -961,6 +966,21 @@ sealed class SidebarPaneSlot : Component
     {
         Action? click = null;
         if (_o.Config.OnCreatePlaylist is not null) click = _o.CreatePlaylist;
+        // …and it is a DROP DESTINATION: drop a song (or a whole album) here to create a playlist FROM it. See
+        // SidebarPane.CreatePlaylistFromDrag for why this row rather than a drag-only one — it is already present and
+        // already labelled, so the labelled create target costs no mid-gesture reflow and no new chrome.
+        var drop = click is null ? null : Drop.Target<WaveeResourceDragPayload>(
+            WaveeDragKinds.Resource,
+            accepts: static p => p.CanCopyTracks,
+            // Transparent for anything that is not a track set: a pin, a rootlist filing and a folder move are all just
+            // crossing this row on their way to a band that wants them, and a refusal there would be an accusation.
+            transparent: static p => !p.CanCopyTracks,
+            caption: static _ => Loc.Get(Strings.Drag.NewPlaylistFromThis),
+            onEnter: (_, _) => _createDropActive.Value = true,
+            onOver: (_, _) => _createDropActive.Value = true,
+            onLeave: _ => _createDropActive.Value = false,
+            onDrop: (_, s) => { _createDropActive.Value = false; _o.CreatePlaylistFromDrag(s.Payload); },
+            visualPolicy: DropTargetVisualPolicy.Spotlight);
         return SidebarEntityRow.Create(new SidebarRowSpec
         {
             Key = section.Id + ":create",
@@ -969,8 +989,15 @@ sealed class SidebarPaneSlot : Component
             Height = SidebarPaneMetrics.RowHeight(section),
             Glyph = Icons.Add,
             OnClick = click,
+            DropTarget = drop,
+            // The row's own lit-plate cue, bound (this runs while a drag is live) — SidebarEntityRow reads it per frame.
+            DropActive = drop is null ? null : () => _createDropActive.Value,
         });
     }
+
+    /// <summary>Is the PlaylistTree "Create playlist" row the armed drop destination? One flag per slot: the section has
+    /// exactly one create row.</summary>
+    readonly Signal<bool> _createDropActive = new(false);
 
     // ── shared row plumbing ──────────────────────────────────────────────────────────────────────────────────────────
 

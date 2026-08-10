@@ -90,6 +90,7 @@ public sealed class PlaylistPickerPanel : Component
         var store = UseContext(LibraryStore.Slot);
         var lib = UseContext(LibraryBridge.Slot);
         var go = UseContext(HistoryStore.NavCtx);
+        var acts = UseContext(ActionServices.Slot);
         store?.EnsurePlaylists();
 
         var query = UseSignal("");
@@ -99,53 +100,70 @@ public sealed class PlaylistPickerPanel : Component
         var close = Close;
         var deposit = Deposit;
         string? exclude = ExcludeUri;
+        var post = UsePost();
 
         void AddTo(string uri, string name)
         {
             if (deposit is not null) { deposit(uri, name); close(); return; }
             if (lib is null) return;
-            _ = lib.AddTracksAsync(uri, getTracks());
             close();
-            Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+            _ = Run();
+            // AWAITED, then confirmed — this used to fire the write and toast "Added to X" unconditionally, so a failed
+            // add reported success. Same correction as Menus.AddTo; the toast's action is Undo for the same reason.
+            async System.Threading.Tasks.Task Run()
             {
-                Severity = InfoBarSeverity.Success,
-                ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
-            });
+                try
+                {
+                    long id = await lib.AddTracksTrackedAsync(uri, getTracks()).ConfigureAwait(false);
+                    post(() =>
+                    {
+                        if (acts is not null) { Menus.RememberDeposit(acts, uri); Menus.ToastDeposited(acts, name, id); }
+                        else Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions { Severity = InfoBarSeverity.Success });
+                    });
+                }
+                catch (Exception ex) { post(() => PlaylistEditErrors.Toast(ex)); }
+            }
         }
 
         void CreateAndAdd()
         {
             if (lib is null) return;
-            string name = Loc.Get(Strings.Detail.NewPlaylist);
+            // The next unused "My Playlist #N" rather than another playlist literally called "New playlist".
+            string name = acts is not null
+                ? Menus.NextPlaylistName(acts)
+                : PlaylistDepositTargets.NextDefaultName(pls, Loc.Get(Strings.Sidebar.NewPlaylist));
             _ = Run();
             async System.Threading.Tasks.Task Run()
             {
                 try
                 {
                     string uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false);
-                    if (deposit is not null) { deposit(uri, name); close(); return; }
+                    if (deposit is not null) { post(() => { deposit(uri, name); close(); }); return; }
                     await lib.AddTracksAsync(uri, getTracks()).ConfigureAwait(false);
-                    close();
-                    Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                    post(() =>
                     {
-                        Severity = InfoBarSeverity.Success,
-                        ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
+                        close();
+                        if (acts is not null) Menus.RememberDeposit(acts, uri);
+                        // Open, not Undo: a freshly created playlist needs a name, and inline rename lives on its page.
+                        Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                        {
+                            Severity = InfoBarSeverity.Success,
+                            ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist), OnAction = () => go?.Invoke("pl:" + uri, name),
+                        });
                     });
                 }
-                catch (Exception ex)
-                {
-                    Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error });
-                }
+                catch (Exception ex) { post(() => PlaylistEditErrors.Toast(ex)); }
             }
         }
 
-        var rows = new List<Element>(pls.Count);
-        for (int i = 0; i < pls.Count; i++)
+        // MOST-RECENTLY-FILED FIRST, then rootlist order — the SAME ordering + eligibility the "Add to playlist ▸"
+        // submenu uses, so "More playlists…" continues the list the submenu truncated instead of reshuffling it.
+        var ordered = PlaylistDepositTargets.Order(
+            pls, acts is not null ? Menus.RecentDeposits(acts) : null, exclude, q);
+        var rows = new List<Element>(ordered.Count);
+        for (int i = 0; i < ordered.Count; i++)
         {
-            var p = pls[i];
-            if (!IsRealPlaylist(p.Uri) || !p.CanEdit) continue;
-            if (exclude is { Length: > 0 } && string.Equals(p.Uri, exclude, StringComparison.Ordinal)) continue;
-            if (q.Length > 0 && p.Name.IndexOf(q, StringComparison.OrdinalIgnoreCase) < 0) continue;
+            var p = ordered[i];
             rows.Add(PlaylistRow(p, () => AddTo(p.Uri, p.Name)));
         }
 
@@ -176,8 +194,6 @@ public sealed class PlaylistPickerPanel : Component
             ],
         };
     }
-
-    static bool IsRealPlaylist(string uri) => uri.StartsWith("spotify:playlist:", StringComparison.Ordinal);
 
     static Image? CoverOf(PlaylistSummary p)
     {

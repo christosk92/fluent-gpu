@@ -137,6 +137,29 @@ sealed class SidebarPane : Component
     readonly ItemsViewController _listController = new();
     readonly Signal<int> _resourceDropRow = new(-1);
 
+    /// <summary>DRAG PEEK: a TRANSIENT expansion of a collapsed pane, held only for the duration of one drag.
+    /// <para>The reported bug (2026-08-10) is that dragging a song with the sidebar collapsed dims the whole app to 55%
+    /// and cuts out nothing but the player bar: the 56-DIP rail declares no drop targets at all, and the expanded rows
+    /// that DO are correctly pruned from both hit-testing and the scrim by the engine's reachability guard
+    /// (<c>SceneStore.IsHitReachable</c>) because the hidden layer is <c>HitTestVisible = false</c>. So the app makes the
+    /// scrim's promise — "these cutouts are your options" — and then points at nothing. Dwelling on the rail slides the
+    /// pane open for the rest of the gesture, which turns every playlist back into a real, labelled destination.</para>
+    /// <para>Deliberately NOT a write to <c>SidebarPreferences.Collapsed</c>: the user asked for a collapsed sidebar and a
+    /// drag must not silently redecide that. It is cleared when the SESSION ends (not on leave — once peeked, travelling
+    /// right onto the rows must not collapse the pane out from under the pointer), by
+    /// <see cref="SidebarDragPeekWatcher"/>.</para></summary>
+    readonly Signal<bool> _dragPeek = new(false);
+
+    /// <summary>The rail TILE currently armed as a drop destination, by playlist uri (null = none). Separate from
+    /// <see cref="_resourceDropRow"/> because a rail tile has no row in the expanded plan. Read through a BOUND prop
+    /// (<c>SidebarRailItem.Art</c>) — the rail subtree is memoized, so a cue that needed a render would never appear.</summary>
+    readonly Signal<string?> _railDropUri = new(null);
+
+    /// <summary>Is this rail tile the armed drop destination? Called from a bound prop, so it must stay a plain signal
+    /// read — no allocation, no interpolation (it runs inside the 0-alloc frame region while a drag is live).</summary>
+    internal bool IsRailDropActive(string uri)
+        => string.Equals(_railDropUri.Value, uri, StringComparison.Ordinal);
+
     /// <summary>One <c>Reorderable</c> per in-place-reorderable section id (§C5.1). Created lazily and kept for the
     /// component's life — a Reorderable holds gesture state and must not be rebuilt.</summary>
     readonly Dictionary<string, Reorderable> _reorder = new(StringComparer.Ordinal);
@@ -233,7 +256,9 @@ sealed class SidebarPane : Component
         // section flags, V3's filter/sort state) subscribe this pane.
         var sourceDoc = Config.Document();
 
-        bool compact = !_inDrawer && _compact.Value;    // the drawer always renders the EXPANDED pane (§C5.3)
+        // The drawer always renders the EXPANDED pane (§C5.3). A live DRAG PEEK also presents expanded — see _dragPeek:
+        // reading it here is the pane's subscription, and it flips at most twice per drag (spring-load, session end).
+        bool compact = !_inDrawer && _compact.Value && !_dragPeek.Value;
         string search = _search.Value;                  // subscribe → the pinned head re-plans as you type
 
         var stage = UseMemo(() => BuildStage(sourceDoc, search), PlanDep(search));
@@ -323,16 +348,26 @@ sealed class SidebarPane : Component
                     SelectedRoutePeek),
                 DepKey.From(bandVersion, bandCount)));
 
-        var children = new List<Element>(2) { expanded };
+        var children = new List<Element>(3) { expanded };
         if (!_inDrawer)
             children.Add(new BoxEl
             {
                 Key = "compact-layer", Direction = 1, Grow = 1f, Shrink = 0f, Width = 56f,
                 Opacity = compact ? 1f : 0f, HitTestVisible = compact,
+                // DRAG PEEK: dwelling anywhere on the rail opens the pane for the rest of the gesture. springLoadOnly is
+                // exactly the right shape — the dnd contract makes such a node a pure WAYPOINT: never a destination,
+                // never a refusal — so this band can span the whole rail without ever swallowing a deposit that belongs
+                // to a tile beneath it. 250ms rather than the 500ms container convention: this is not "open a folder you
+                // might not have meant", it is "show me the labels", and the pane it opens is itself full of targets.
+                DropTarget = RailPeekDropSpec(),
                 // As Classic always did: the rail's overlay scrollbar occupies the same gutter as the shell's resize seam
                 // and reads as a page-spanning border, so wheel/touch scrolling stays and the bar does not paint.
                 Children = [compactRail],
             });
+        // Zero-size, renders nothing: it exists to own the one UseDragState() subscription that ends a peek, so the PANE
+        // subscribes only to _dragPeek (2 flips per drag) instead of to the drag epoch (which bumps on every target and
+        // caption change) — the same "one reader on behalf of many" split the pane already uses for playback and route.
+        if (!_inDrawer) children.Add(Embed.Comp(() => new SidebarDragPeekWatcher(this)) with { Key = "drag-peek" });
 
         var root = new BoxEl
         {
@@ -1368,8 +1403,14 @@ sealed class SidebarPane : Component
     internal DropTargetSpec ResourceDropSpec(string sectionId, int slot, string? playlistUri, string? playlistName,
                                              WaveeResourceDragPayload? rootTarget = null,
                                              int rootPlanIndex = -1,
-                                             Action? onSpringLoad = null)
+                                             Action? onSpringLoad = null,
+                                             string? railCueUri = null,
+                                             bool isPlaylistRow = false)
     {
+        // "Is this row a playlist AT ALL" — deliberately separate from `playlistUri`, which the callers set only for an
+        // EDITABLE one. The distinction is the whole refusal-vs-transparent split below: a playlist you cannot write to
+        // owes the user a reason, an album owes them silence.
+        bool IsPlaylistRow = isPlaylistRow || playlistUri is { Length: > 0 };
         bool Compatible(WaveeResourceDragPayload source)
         {
             if (rootTarget is not null && source.RootlistItem
@@ -1390,7 +1431,10 @@ sealed class SidebarPane : Component
         // cadence a pointer-dependent caption needs.
         void Hover(WaveeResourceDragPayload p, DragSession s)
         {
-            _resourceDropRow.Value = Compatible(p) ? rootPlanIndex : -1;
+            bool ok = Compatible(p);
+            _resourceDropRow.Value = ok ? rootPlanIndex : -1;
+            // The rail's cue is keyed by URI, not by plan index: a rail TILE has no row in the expanded plan.
+            if (railCueUri is { Length: > 0 }) _railDropUri.Value = ok ? railCueUri : null;
             s.Caption = CaptionFor(p, s);
         }
 
@@ -1417,7 +1461,13 @@ sealed class SidebarPane : Component
             if (slot >= 0 && p.CanPin) return Strings.Drag.Pin(p.Name);
             return null;
         }
-        void Leave(DragSession _) { if (_resourceDropRow.Peek() == rootPlanIndex) _resourceDropRow.Value = -1; }
+        void Leave(DragSession _)
+        {
+            if (_resourceDropRow.Peek() == rootPlanIndex) _resourceDropRow.Value = -1;
+            if (railCueUri is { Length: > 0 }
+                && string.Equals(_railDropUri.Peek(), railCueUri, StringComparison.Ordinal))
+                _railDropUri.Value = null;
+        }
 
         void CommitDrop(WaveeResourceDragPayload source, DragSession s)
         {
@@ -1450,20 +1500,46 @@ sealed class SidebarPane : Component
             if (slot >= 0) AcceptForeign(sectionId, s.Payload, slot);
         }
 
-        // The refusal cue is deliberately NARROW: only a row that IS a track destination explains itself, and only for
-        // the one refusal a user can act on — a payload with no tracks behind it. Every other refusal here means "this
-        // row was never a destination for this thing", where a sentence would be noise on top of the chip's glyph.
+        // ── the "no" is TWO different answers, and conflating them is what made this surface read as broken ────────────
+        //
+        // TRANSPARENT = "none of my business". A row that was never a track destination — an album, an artist, a show, an
+        // app route — must sit the gesture out entirely: the drag is merely CROSSING it on the way somewhere, and a
+        // not-allowed cue there is an accusation. This row passed no `transparent` at all, unlike its two siblings
+        // (DetailShell's page body and DetailTracks' insertion list), so every incompatible row on the way to the target
+        // flickered a refusal.
+        //
+        // REFUSED = "you aimed here, and here is why not". A playlist row the user cannot write to — someone else's, an
+        // editorial one — deserves a sentence, because they aimed at a playlist and a playlist is exactly the thing that
+        // normally accepts. Before this it refused SILENTLY: WhyRefused was gated on `playlistUri` being set, which is
+        // only true for an EDITABLE playlist, so a non-editable one produced the not-allowed glyph with no reason at all —
+        // precisely the failure mode the refusal-caption contract exists to prevent, on the one playlist surface that did
+        // not consult the shared PlaylistDropRefusalRules.
+        bool Transparent(WaveeResourceDragPayload source)
+        {
+            // A pin-band insertion or a rootlist filing is this row's own business, so it is never transparent.
+            if (slot >= 0 && source.CanPin) return false;
+            if (rootTarget is not null && source.RootlistItem) return false;
+            // A track-bearing payload over a row that is not a playlist at all: not a destination, not a refusal.
+            return source.CanCopyTracks && !IsPlaylistRow;
+        }
+
         string? WhyRefused(WaveeResourceDragPayload source)
-            => playlistUri is { Length: > 0 } && !source.CanCopyTracks
+        {
+            // Not writable, but it IS a playlist — the refusal that was silent.
+            if (IsPlaylistRow && playlistUri is not { Length: > 0 } && source.CanCopyTracks)
+                return Loc.Get(Strings.Drag.CantEditPlaylist);
+            return playlistUri is { Length: > 0 } && !source.CanCopyTracks
                 // Locked decision: an artist has no single obvious track set, so we refuse rather than guess. Future
                 // work is a picker that lets the USER choose what to deposit (top tracks / a release).
                 ? Loc.Get(source.Kind == WaveeResourceKind.Artist
                     ? Strings.Drag.CantAddArtist
                     : Strings.Drag.NothingToAdd)
                 : null;
+        }
 
         return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
             accepts: Compatible, onDrop: CommitDrop, onEnter: Hover, onOver: Hover, onLeave: Leave,
+            transparent: Transparent,
             visualPolicy: DropTargetVisualPolicy.Spotlight,
             refusalCaption: WhyRefused,
             // Spring-load (a COLLAPSED folder row supplies the callback): dwelling opens the container so the user can
@@ -1475,6 +1551,46 @@ sealed class SidebarPane : Component
 
     internal bool IsResourceDropActive(int planIndex)
         => planIndex >= 0 && _resourceDropRow.Value == planIndex;
+
+    // ── drag peek ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The rail's spring-load band: dwell 250ms with a sidebar-relevant payload ⇒ present the pane expanded for
+    /// the rest of the gesture. A pure waypoint (<c>springLoadOnly</c>) — it accepts nothing itself, so the rail's own
+    /// tiles keep every deposit.
+    /// <para>Armed only for a payload that could actually LAND somewhere in the sidebar. Opening the pane for a drag it
+    /// has no destination for would be motion that promises something, which is the class of bug this whole change is
+    /// fixing.</para></summary>
+    DropTargetSpec RailPeekDropSpec() => Drop.Target<WaveeResourceDragPayload>(
+        WaveeDragKinds.Resource,
+        accepts: static _ => false,          // never a destination — the tiles and the expanded rows are
+        springLoadOnly: true,
+        springLoadMs: DragPeekMs,
+        onSpringLoad: (p, _) => { if (p.CanCopyTracks || p.CanPin) SetDragPeek(true); });
+
+    /// <summary>Dwell before a collapsed pane peeks open. Shorter than <c>WaveeResourceDrag.SpringLoadMs</c> (500ms, the
+    /// macOS/WinUI spring-loaded-container convention) because the two gestures differ: opening a FOLDER commits you to a
+    /// container you may not have meant, whereas this only reveals labels for destinations that were already there.</summary>
+    internal const float DragPeekMs = 250f;
+
+    internal void SetDragPeek(bool on)
+    {
+        if (_dragPeek.Peek() != on) _dragPeek.Value = on;
+    }
+
+    /// <summary>Owns the ONE <c>UseDragState()</c> subscription that ends a <see cref="_dragPeek"/>. Renders nothing.
+    /// <para>The peek is cleared on SESSION END, never on leave: once the pane is open the pointer travels off the rail
+    /// and onto the rows, and collapsing there would yank every target out from under it mid-gesture. Session end covers
+    /// drop, cancel and Escape alike, so there is no path that leaves the pane stuck open.</para></summary>
+    sealed class SidebarDragPeekWatcher(SidebarPane owner) : Component
+    {
+        public override Element Render()
+        {
+            // Active stays true across the ~250ms settle window a Stationary lift publishes, so the pane holds its peek
+            // until the chip has finished animating home rather than snapping shut under it.
+            if (!UseDragState().Active) owner.SetDragPeek(false);
+            return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+        }
+    }
 
     RootlistDropPlacement RootlistPlacementFor(int planIndex, bool folder, bool allowInsidePlaylist, Point2 pointer)
     {
@@ -1537,6 +1653,50 @@ sealed class SidebarPane : Component
     internal void OpenCustomizer() => Config.OnCustomize?.Invoke();
 
     internal void CreatePlaylist() => Config.OnCreatePlaylist?.Invoke();
+
+    /// <summary>DROP TO CREATE: make a playlist out of the thing being dragged.
+    /// <para>"What if I want to make a new playlist with that song?" (user report 2026-08-10). Seeding a playlist from a
+    /// song is how playlists actually get born — you hear something and it is the first member of an idea that has no
+    /// name yet — and the capability existed only three levels into a right-click menu, reachable from no drop target
+    /// anywhere. The destination is the PlaylistTree section's existing "Create playlist" row: it is ALWAYS present and
+    /// already labelled, so unlike a drag-only row materialising in the list it costs no reflow mid-gesture and no new
+    /// chrome. On a collapsed pane the drag peek opens the pane within 250ms, which is what puts this row in reach.</para>
+    /// <para>Create-then-add is two awaited calls (Spotify exposes no atomic "create with items"), so a failed add can
+    /// leave an empty playlist behind — pre-existing, and surfaced through <c>PlaylistEditErrors</c> rather than hidden.
+    /// The confirmation spends its action on OPEN, not Undo: a brand-new playlist needs a name, and inline rename lives on
+    /// its page.</para></summary>
+    internal void CreatePlaylistFromDrag(object? payload)
+    {
+        if (Acts is not { } acts || acts.Library is not { } lib) return;
+        if (WaveeResourceDrag.Unwrap(payload) is not { CanCopyTracks: true }) return;
+        string name = Menus.NextPlaylistName(acts);
+        var post = acts.Post;
+        _ = Run();
+
+        async Task Run()
+        {
+            string uri;
+            try { uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false); }
+            catch (Exception ex) { Post(post, () => PlaylistEditErrors.Toast(ex)); return; }
+
+            // Silent deposit: this caller owns the confirmation, and two toasts for one gesture reads as a bug.
+            bool ok = await WaveeResourceDrop.DepositTracksSilentAsync(acts, uri, payload, insertionIndex: null)
+                                             .ConfigureAwait(false);
+            if (!ok) return;   // DepositTracksAsync already toasted the mapped failure
+            Post(post, () =>
+            {
+                Menus.RememberDeposit(acts, uri);
+                Toast.Show(Strings.Detail.AddedToPlaylist(name), new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Success,
+                    ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist),
+                    OnAction = () => Navigate("pl:" + uri, name),
+                });
+            });
+        }
+
+        static void Post(Action<Action>? post, Action a) { if (post is not null) post(a); else a(); }
+    }
 
     /// <summary>Play a single track (a Track item row / a track feed row / a rail track tile). A track has no detail route
     /// — this is the whole reason tracks are excluded from pins and navigation (§C1.8.3).</summary>

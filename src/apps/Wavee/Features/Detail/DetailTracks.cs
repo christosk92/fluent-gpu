@@ -335,19 +335,24 @@ sealed class TrackList : Component
     // (ColumnSet — which optional columns are present at a tier — is the shared TrackRow.ColumnSet, so the header here and
     // every shared cell agree on the build order: # · ♥ · (thumb) · Title · Album · AddedBy · DateAdded · Plays · Tempo · Duration · Video.)
     //
-    // Drop order as the area narrows (most expendable first): Added-by (≥1) → Album (≥2) → Plays/Date (≥3) → ♥ (≥4) →
-    // art-thumb (≥5) → the trailing Video/"…" lane (6). Plays exists only on album surfaces; Video follows any hydrated
+    // Drop order as the area narrows (most expendable first): Added-by (≥1) → Album (≥2) → Plays/Date (≥3) →
+    // art-thumb (≥5) → ♥ (≥5) → the trailing Video/"…" lane (6). Plays exists only on album surfaces; Video follows any hydrated
     // list that has one and is the LAST thing to go (28 DIP, and the row's only statement that a video exists).
     // Album/By/Date exist only on playlists. Compact playlist tiers retain Album in the title metadata subline.
     // Derived from the SNAPSHOT, never from the parent's mutable fields: a persistent row re-renders on its own
     // subscriptions (index rebind, sort, now-playing, and now the tier), so it must be able to derive its column set
     // without depending on this parent having published _cfg/_model first. Same contract as TrackRowsSnapshot itself.
     ColumnSet SetFor(in TrackRowsSnapshot s, int tier) => _verticalHeader
-        // Vertical (Apple Music) profile: a simplified # · (thumb) · Song(title + artist subline) · (Album) · Time · [⋯]
+        // Vertical (Apple Music) profile: a simplified # · ♥ · (thumb) · Song(title + artist subline) · (Album) · Time · [⋯]
         // table. The artist rides the title subline (Spotify-style, per config), never its own lane; Album appears at wide
         // tiers (playlists/Liked) on the SAME gate as the standard profile; album surfaces retain their Plays lane so
-        // stacked and automatic layouts expose the same hydrated metadata. No heart lane (liking stays via hover ⋯ /
-        // context menu).
+        // stacked and automatic layouts expose the same hydrated metadata.
+        // The heart follows the SAME tier gate as the standard profile. It used to be hard-false here with "liking stays
+        // via hover ⋯ / context menu" — but this profile is FORCED at every width by the "Hero" page-layout setting
+        // (DetailShell), so an album/playlist page in that layout could not state whether a song was saved at all, at any
+        // width (user report 2026-08-10: "on album/playlist pages it's not visible if a song is liked or not"). Saved-ness
+        // is a FACT the row owes the reader; the lane is invisible on unsaved rows (TrackRow.Heart), so it costs nothing
+        // where there is nothing to state, and the menu/swipe verbs remain the a11y path.
         // By/Date follow the SAME tier gates as the standard profile: the vertical SYSTEM is forced at every width by
         // the "Hero" page-layout setting (DetailShell), so hard-false here silently dropped Date-added/Added-by on WIDE
         // hero pages (user report 2026-07-23). At genuinely narrow widths the tiers hide them exactly as before; the
@@ -358,7 +363,7 @@ sealed class TrackList : Component
         // is reserved ONCE (More rides IN the Video lane when Video is on).
         ? new(Album: s.Config.ShowAlbumColumn && tier < 2, By: s.Model.HasAddedBy && tier < 1, Date: s.Model.HasDateAdded && tier < 3,
               Video: s.Model.HasVideo && tier < 6,
-              Plays: s.Config.ShowPlays && tier < 3, Heart: false,
+              Plays: s.Config.ShowPlays && tier < 3, Heart: tier < 5,
               Thumb: s.Config.ShowArtThumb && tier < 5,
               Actions: tier < 6 && !(s.Model.HasVideo && tier < 6), Tier: tier,
               Tempo: s.Config.ShowTempo && s.TempoColumn, Expand: s.Config.ShowVersions && tier < 6)
@@ -371,7 +376,10 @@ sealed class TrackList : Component
             // the glyph a wide-window luxury and forced the fact into the artist subline below — one fact in two lanes.
             Video: s.Model.HasVideo && tier < 6,
             Plays: s.Config.ShowPlays && tier < 3,
-            Heart: tier < 4,
+            // Survives to tier 4 (was < 4) — the lane is now invisible on unsaved rows, so it stops competing for width
+            // on the rows that have nothing to state, and a 40-DIP lane that answers "is this in my library?" earns its
+            // place further down the ladder than one that showed an empty outline heart on every row.
+            Heart: tier < 5,
             Thumb: s.Config.ShowArtThumb && tier < 5,
             // Video lane hosts More (rest=Movie / hover=bare "…") — reserve the trailing Actions track only when
             // Video is off. EXACT complement of the Video expression above, so the trailing lane is reserved once and

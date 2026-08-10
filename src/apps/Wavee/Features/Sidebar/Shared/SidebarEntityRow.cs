@@ -309,7 +309,14 @@ static class SidebarEntityRow
             // THE 4-STATE SELECTION-AWARE RAMP (F.1.4). Defined here, once, for every sidebar row in every design.
             // Selected takes the accent plate and its states only ever go UP — see WaveeColors.SelectedRest for the
             // inversion this replaces and why hovered-selected is composed over the plate rather than swapped under it.
-            Fill = enabled && selected ? WaveeColors.SelectedRest : ColorF.Transparent,
+            // An ARMED DROP reads as a lit PLATE, not a hairline. The spotlight scrim dims the rest of the app to 55%
+            // black and cuts this row out of it, so the row is being presented as one of a handful of answers — a single
+            // 1-DIP accent border was far too quiet to carry that, especially next to SidebarPinDropZone's dashed accent
+            // card. Bound, never re-rendered: this runs while a drag is live, inside the 0-alloc frame region.
+            Fill = dropActive is null
+                ? (enabled && selected ? WaveeColors.SelectedRest : ColorF.Transparent)
+                : Prop.Of(() => dropActive() ? Tok.AccentDefault with { A = 0.18f }
+                              : enabled && selected ? WaveeColors.SelectedRest : ColorF.Transparent),
             HoverFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
             PressedFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             BorderWidth = dropActive is null ? 0f : 1f,

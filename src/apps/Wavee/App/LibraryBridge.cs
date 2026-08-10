@@ -77,9 +77,17 @@ public sealed class LibraryBridge : IUndoTarget
     /// routes <c>wavee:playlist:*</c> to the local source and <c>spotify:playlist:*</c> to the real Spotify path; it
     /// fails loud (never silently no-ops) if a real backend isn't wired, which is intended.</summary>
     public Task AddTracksAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
+        => AddTracksTrackedAsync(playlistUri, tracks, ct);
+
+    /// <summary>The same add, returning the ACTIVITY ID of the entry it recorded (-1 when recording is suppressed) so the
+    /// caller can offer Undo on its OWN confirmation toast — see <c>NotificationCenterBridge.UndoByIdAsync</c>. Undo for a
+    /// playlist add has always existed; it was only reachable from the notification panel, which is not where anyone looks
+    /// the moment they realise they filed a song into the wrong list.</summary>
+    public async Task<long> AddTracksTrackedAsync(string playlistUri, IReadOnlyList<Track> tracks, CancellationToken ct = default)
     {
         long id = _activity.IsSuppressed ? -1 : _activity.Record(ActivityKind.PlaylistAddTracks, playlistUri, null, PayloadFor(tracks));
-        return WithFailure(_playlistEdits.AddTracksAsync(playlistUri, tracks, ct), id);
+        await WithFailure(_playlistEdits.AddTracksAsync(playlistUri, tracks, ct), id).ConfigureAwait(false);
+        return id;
     }
 
     /// <summary>Insert an ordered track batch at a visible playlist slot. The same activity/undo path as append is used;

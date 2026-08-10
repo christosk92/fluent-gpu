@@ -238,9 +238,90 @@ public class MenuGrammarTests
         Assert.DoesNotContain("<a ", plain, StringComparison.Ordinal);
     }
 
+    // ── the deposit paths must be HONEST ─────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>Every add-to-playlist path AWAITS its write and maps the failure. Both of these used to fire the mutation
+    /// and toast "Added to {name}" unconditionally, so an add that failed (offline, revoked permissions, a rejected
+    /// revision) reported SUCCESS and the only trace was an entry silently flipped to Failed in the notification panel.
+    /// Reporting a mutation that did not happen is the worst failure mode this flow has.</summary>
+    [Theory]
+    [InlineData("Actions", "Menus.cs", "static void AddTo(ActionServices s")]
+    [InlineData("Features/Detail", "PlaylistPicker.cs", "void AddTo(string uri, string name)")]
+    public void EveryAddToPlaylistPath_AwaitsAndMapsItsFailure(string dir, string file, string signature)
+    {
+        string body = Body(Source(dir, file), signature);
+
+        Assert.Contains("await ", body, StringComparison.Ordinal);
+        Assert.Contains("catch (Exception ex)", body, StringComparison.Ordinal);
+        Assert.Contains("PlaylistEditErrors.Toast(ex)", body, StringComparison.Ordinal);
+        // The fire-and-forget shape, verbatim: no `_ =` discard of the add.
+        Assert.DoesNotContain("_ = lib.AddTracksAsync", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>No deposit path leaks a raw <c>ex.Message</c> — engine prose is not a sentence a listener can act on, and
+    /// <c>PlaylistEditErrors</c> exists to map each failure to one that is.</summary>
+    [Fact]
+    public void NoDepositPathToastsARawExceptionMessage()
+    {
+        Assert.Equal(0, Count(Menus(), "Toast.Show(ex.Message"));
+        Assert.Equal(0, Count(Source("Features/Detail", "PlaylistPicker.cs"), "Toast.Show(ex.Message"));
+    }
+
+    /// <summary>A completed deposit offers <b>Undo</b>, not "Open": the user is mid-flow on the page they filed from and
+    /// rarely wants to leave, whereas the recoverable mistake — wrong playlist, wrong row, a forgotten multi-selection —
+    /// is common and was previously only recoverable by hunting down the notification panel. A CREATE-then-add is the
+    /// deliberate exception (a new playlist needs a name), so it keeps Open.</summary>
+    [Fact]
+    public void ACompletedDepositOffersUndo_AndACreateOffersOpen()
+    {
+        string toast = Body(Menus(), "internal static void ToastDeposited(");
+        Assert.Contains("Strings.Notifications.Undo", toast, StringComparison.Ordinal);
+        Assert.Contains("UndoByIdAsync", toast, StringComparison.Ordinal);
+
+        string create = Body(Menus(), "static void CreateAndAdd(ActionServices s");
+        Assert.Contains("Strings.Detail.GoToPlaylist", create, StringComparison.Ordinal);
+    }
+
+    /// <summary>The submenu, the picker and the tab drop rules all route through the ONE eligibility + ordering function.
+    /// Three hand-written copies of the filter is where this started, each with a comment warning about the other two.</summary>
+    [Fact]
+    public void EveryDepositSurface_RoutesThroughPlaylistDepositTargets()
+    {
+        Assert.Contains("PlaylistDepositTargets.Order(", Body(Menus(), "static MenuFlyoutItem PlaylistDepositItem("),
+            StringComparison.Ordinal);
+        Assert.Contains("PlaylistDepositTargets.Order(", Source("Features/Detail", "PlaylistPicker.cs"),
+            StringComparison.Ordinal);
+        Assert.Contains("PlaylistDepositTargets.IsDepositable", Source("Features/DragDrop", "WaveeDragRules.cs"),
+            StringComparison.Ordinal);
+        // The old inline copies are gone, not merely bypassed.
+        Assert.Equal(0, Count(Source("Features/Detail", "PlaylistPicker.cs"), "static bool IsRealPlaylist"));
+        Assert.Equal(0, Count(Menus(), "p.Uri.StartsWith(\"spotify:playlist:\""));
+    }
+
+    /// <summary>A one-click "New playlist" is named "{base} #N", never another playlist literally called "New playlist"
+    /// (three of those in a sidebar are indistinguishable).</summary>
+    [Theory]
+    [InlineData("static void CreateAndAdd(ActionServices s")]
+    [InlineData("static void CreateAndDeposit(ActionServices s")]
+    [InlineData("static void CreateAndMove(ActionServices s")]
+    public void EveryCreatePath_UsesTheNumberedDefaultName(string signature)
+    {
+        string body = Body(Menus(), signature);
+        Assert.Contains("NextPlaylistName(s)", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Loc.Get(Strings.Detail.NewPlaylist)", body, StringComparison.Ordinal);
+    }
+
     // ── source-scan plumbing ─────────────────────────────────────────────────────────────────────────────────────────
 
     static string Menus() => File.ReadAllText(Path.Combine(AppRoot(), "Actions", "Menus.cs"));
+
+    /// <summary>Any app source file, by forward-slash-separated directory + name.</summary>
+    static string Source(string dir, string file)
+    {
+        string path = Path.Combine(AppRoot(), Path.Combine(dir.Split('/')), file);
+        Assert.True(File.Exists(path), $"source not found (was it moved?): {path}");
+        return File.ReadAllText(path);
+    }
     static string SearchPage() => File.ReadAllText(Path.Combine(AppRoot(), "Features", "Search", "SearchPage.cs"));
 
     /// <summary>The body of the member whose declaration contains <paramref name="signature"/>: from the declaration to

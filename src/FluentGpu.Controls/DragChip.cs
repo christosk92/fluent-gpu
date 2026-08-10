@@ -19,13 +19,20 @@ namespace FluentGpu.Controls;
 /// <param name="Count">Number of items being dragged. ≥ 2 adds the corner count badge AND the stacked-card backdrop
 /// (Apple's "flocking" look); 0/1 render a single card.</param>
 /// <param name="Glyph">Optional leading glyph (Segoe Fluent) used when there is no artwork.</param>
+/// <param name="RestingCaption">What the chip says while the drag is TRAVELLING — no target under the pointer, so
+/// <see cref="DragState.Caption"/> is null. Most of a gesture is spent in that state, and without this the chip names
+/// only the thing being dragged and never states what the drag is FOR, which reads as "nothing is happening". A live
+/// target's caption (or a refusal reason) always WINS over it, so this is a floor, not an override.
+/// <para>Must be a precomputed/localized constant, never interpolated: the resolver runs inside the 0-alloc frame
+/// region while a drag is live.</para></param>
 public readonly record struct DragChipSpec(
     Element? Art = null,
     string? ArtSource = null,
     string? Title = null,
     string? Subtitle = null,
     int Count = 1,
-    string? Glyph = null)
+    string? Glyph = null,
+    string? RestingCaption = null)
 {
     /// <summary>"Nothing to show for this drag" — <see cref="DragChip.Resolve"/> maps it to a null preview.</summary>
     public static readonly DragChipSpec None = default;
@@ -102,7 +109,10 @@ public static class DragChip
         // <see cref="DropEffect.None"/> alone: that value also means "over empty space", and a glyph that shouts
         // "not allowed" at every gap between targets teaches the user to ignore it.
         bool refused = state.Refused;
-        string? caption = state.Caption;
+        // A live target's caption (or, while refused, its reason) always wins; the spec's resting caption is the FLOOR
+        // for the travelling phase, where DragDropContext has cleared the session caption because nothing is under the
+        // pointer. Without it the chip spends most of the gesture stating only what is being dragged.
+        string? caption = state.Caption ?? spec.RestingCaption;
 
         // ── the card itself: opaque surface + flyout-class elevation, capped at MaxWidth ──
         var content = new System.Collections.Generic.List<Element>(3);
@@ -121,8 +131,16 @@ public static class DragChip
             lines.Add(new TextEl(spec.Title!) { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Trim = TextTrim.CharacterEllipsis, MaxLines = 1 });
         if (!string.IsNullOrEmpty(spec.Subtitle))
             lines.Add(new TextEl(spec.Subtitle!) { Size = 12f, Color = Tok.TextSecondary, Trim = TextTrim.CharacterEllipsis, MaxLines = 1 });
+        // The caption is the only thing on the card that says what the drop will DO, so it takes the Caption rung (12/16
+        // Secondary) rather than the 11px Tertiary it used to — that was the quietest text in the app, on the third line
+        // of a card the user is actively steering by. A refusal escalates it to the critical colour, so the reason reads
+        // as the reason rather than as more metadata beside a glyph.
         if (!string.IsNullOrEmpty(caption))
-            lines.Add(new TextEl(caption!) { Size = 11f, Color = Tok.TextTertiary, Trim = TextTrim.CharacterEllipsis, MaxLines = 1 });
+            lines.Add(new TextEl(caption!)
+            {
+                Size = 12f, LineHeight = 16f, Color = refused ? Tok.SystemFillCritical : Tok.TextSecondary,
+                Trim = TextTrim.CharacterEllipsis, MaxLines = 1,
+            });
         if (lines.Count != 0)
             content.Add(new BoxEl { Direction = 1, Gap = 1f, Grow = 1f, Shrink = 1f, Justify = FlexJustify.Center, Children = lines.ToArray() });
 

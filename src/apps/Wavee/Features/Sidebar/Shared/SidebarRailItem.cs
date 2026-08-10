@@ -2,6 +2,8 @@ using System;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Input;
+using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -46,20 +48,57 @@ static class SidebarRailItem
 
     /// <summary>An ART tile — an entity pin or a playlist cover. <paramref name="art"/> comes from
     /// <see cref="SidebarCover"/> at <see cref="ArtEdge"/>; the 2-DIP accent border is the rail's selection cue (the
-    /// item-owned selection pill is expanded-only).</summary>
-    public static Element Art(string key, Element art, bool selected, Action? onClick, string? tooltip = null)
+    /// item-owned selection pill is expanded-only).
+    /// <para><paramref name="drop"/> makes the tile a real deposit destination while the pane is COLLAPSED — dragging a
+    /// song at a 56-DIP rail used to have nowhere to go at all (see <c>SidebarPane._dragPeek</c>). <paramref name="dropActive"/>
+    /// is its cue, and it must not be mistaken for selection: selection is a 2-DIP accent ring, so an armed drop adds an
+    /// accent WASH inside it. The tile's only label is its tooltip, which a drag never shows — so the chip's caption is
+    /// what actually names the target, and that is why it had to become legible in the same pass.</para></summary>
+    public static Element Art(string key, Element art, bool selected, Action? onClick, string? tooltip = null,
+                              DropTargetSpec? drop = null, Func<bool>? dropActive = null)
     {
-        var tile = new BoxEl
-        {
-            Key = key,
-            Width = Box, Height = Box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = CornerRadius4.All(8f),
-            BorderColor = selected ? Tok.AccentDefault : ColorF.Transparent, BorderWidth = selected ? 2f : 0f,
-            Role = onClick is null ? AutomationRole.None : AutomationRole.Button,
-            OnClick = onClick,
-            Children = [art],
-        }.Interactive(Interaction.Subtle);
-        return Tip(tile, tooltip);
+        // BOUND, not re-rendered. The whole rail subtree is memoized by SidebarPane on (plan version, route, theme,
+        // culture, band) — a drop cue that needed a render would simply never appear, because none of those move when the
+        // pointer crosses a tile mid-drag. Prop.Of makes it a compositor-only channel: no render, no reconcile, no alloc.
+        var tile = drop is null || dropActive is null
+            ? new BoxEl
+            {
+                Key = key,
+                Width = Box, Height = Box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(8f),
+                BorderColor = selected ? Tok.AccentDefault : ColorF.Transparent, BorderWidth = selected ? 2f : 0f,
+                Role = onClick is null ? AutomationRole.None : AutomationRole.Button,
+                OnClick = onClick,
+                Children = [art],
+            }
+            : new BoxEl
+            {
+                Key = key,
+                Width = Box, Height = Box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = CornerRadius4.All(8f),
+                // An armed drop borrows selection's accent ring, so a tile that is BOTH keeps one ring, not two. Only the
+                // COLOUR is bindable (BorderWidth is a plain float), so the stroke is always 2 DIP and simply paints
+                // nothing while transparent — visually identical to width 0, and it keeps the cue render-free.
+                BorderColor = Prop.Of(() => dropActive() || selected ? Tok.AccentDefault : ColorF.Transparent),
+                BorderWidth = 2f,
+                Role = onClick is null ? AutomationRole.None : AutomationRole.Button,
+                OnClick = onClick,
+                DropTarget = drop,
+                ZStack = true,
+                Children =
+                [
+                    art,
+                    // The wash sits OVER the cover — a tile is all artwork, so there is no plate to tint — and is
+                    // hit-transparent so it can never steal the tile's own drop hit. Always mounted with a BOUND fill
+                    // (transparent at rest) rather than conditionally added: a structural change would need a render.
+                    new BoxEl
+                    {
+                        Width = Box, Height = Box, Corners = CornerRadius4.All(8f), HitTestVisible = false,
+                        Fill = Prop.Of(() => dropActive() ? Tok.AccentDefault with { A = 0.35f } : ColorF.Transparent),
+                    },
+                ],
+            };
+        return Tip(tile.Interactive(Interaction.Subtle), tooltip);
     }
 
     /// <summary>The short centred rule that separates rail bands (24×1 at <c>Tok.TextTertiary</c> A=0.3).</summary>

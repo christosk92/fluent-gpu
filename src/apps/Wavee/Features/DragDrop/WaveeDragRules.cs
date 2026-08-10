@@ -138,11 +138,13 @@ static class PlaylistDropRefusalRules
 /// <c>DropTargetSpec</c> it configures is not.</para></summary>
 static class TabDropRules
 {
-    /// <summary>Only a REAL, writable Spotify playlist is a deposit destination. Mirrors <c>PlaylistPicker</c>'s
-    /// <c>IsRealPlaylist</c> and the add-to-playlist menu (<c>Menus</c>): pseudo-playlists (Liked Songs, an editorial
-    /// daylist) navigate like playlists but are not membership lists this app writes to.</summary>
-    public static bool IsDepositablePlaylistUri(string? uri)
-        => uri is { Length: > 0 } && uri.StartsWith("spotify:playlist:", System.StringComparison.Ordinal);
+    /// <summary>Only a REAL, writable Spotify playlist is a deposit destination: pseudo-playlists (Liked Songs, an
+    /// editorial daylist) navigate like playlists but are not membership lists this app writes to.
+    /// <para>DELEGATES to <see cref="PlaylistDepositTargets.IsDepositable"/> — the one predicate. This used to be a third
+    /// hand-written copy alongside <c>PlaylistPicker.IsRealPlaylist</c> and <c>Menus.PlaylistDepositItem</c>, with a
+    /// comment on each warning that changing one meant changing all three. Kept as a named member here because that is
+    /// what reads correctly at the tab-strip call sites.</para></summary>
+    public static bool IsDepositablePlaylistUri(string? uri) => PlaylistDepositTargets.IsDepositable(uri);
 
     /// <summary>May this payload be deposited on the tab standing for <paramref name="targetUri"/>?
     /// <para>The SAME-playlist exclusions are the point of this rule rather than a nicety. A tab drop can only ever

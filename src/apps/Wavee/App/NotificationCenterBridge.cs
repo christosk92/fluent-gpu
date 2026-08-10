@@ -120,6 +120,21 @@ public sealed class NotificationCenterBridge
             post(() => Toast.Show(Loc.Get(Strings.Notifications.UndoFailed), new ToastOptions { Severity = InfoBarSeverity.Warning }));
     }
 
+    /// <summary>Undo by ACTIVITY ID — the seam a CONFIRMATION TOAST uses. Undo already existed, but only as a button in
+    /// the notification panel, which is the wrong place to look for it: a filing mistake ("wrong playlist", "wrong row")
+    /// is noticed immediately, while the user is still on the page they filed from, and the escape has to be in the
+    /// confirmation itself. An unknown, aged-out or already-undone id is a NO-OP rather than an error — the panel may have
+    /// undone it first, and a toast that has been sitting on screen must not fail loudly for being late.</summary>
+    public Task UndoByIdAsync(long id)
+    {
+        if (id < 0) return Task.CompletedTask;
+        var entries = _log.Snapshot;
+        for (int i = 0; i < entries.Count; i++)
+            if (entries[i].Id == id)
+                return entries[i].IsUndoable ? UndoAsync(entries[i]) : Task.CompletedTask;
+        return Task.CompletedTask;
+    }
+
     void AdvanceRemoteLastSeen()
     {
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();

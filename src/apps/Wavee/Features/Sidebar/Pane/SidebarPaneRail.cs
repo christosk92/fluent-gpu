@@ -112,7 +112,18 @@ static class SidebarPaneRail
                 if (entry.IsTrack) click = () => owner.PlayTrack(snapshot.Uri);
                 else if (route is { Length: > 0 } r) click = () => owner.Navigate(r, snapshot.Name);
                 bool selected = route is { Length: > 0 } && string.Equals(route, sel, StringComparison.Ordinal);
-                return SidebarRailItem.Art(key, art, selected, click, label);
+                // An EDITABLE playlist cover is a real deposit target even at 56 DIP: the quick path for the two or three
+                // playlists a user keeps at the top of their rail, without waiting out the pane's peek dwell. Everything
+                // else (albums, artists, shows, routes) stays a pure navigation tile — it was never a track destination,
+                // and the drop machinery's `transparent` arm keeps a drag crossing it silent rather than refusing.
+                // It reuses the EXPANDED row's spec, so a rail deposit and a row deposit cannot diverge.
+                bool depositable = entry.Kind == SidebarEntryKind.Playlist && entry.CanEdit;
+                string depositUri = entry.Uri;
+                var drop = depositable
+                    ? owner.ResourceDropSpec(row.SectionId, slot: -1, depositUri, entry.Name, railCueUri: depositUri)
+                    : null;
+                return SidebarRailItem.Art(key, art, selected, click, label,
+                    drop, dropActive: depositable ? () => owner.IsRailDropActive(depositUri) : null);
             }
 
             // A folder cannot disclose inside a 56-DIP strip, so its tile EXPANDS THE PANE and opens that folder — the

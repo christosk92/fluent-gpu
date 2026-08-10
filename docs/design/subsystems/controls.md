@@ -813,12 +813,21 @@ coordinates. The facade is modelled on SwiftUI `draggable`/`dropDestination`, dn
   unwrap), and a transparent target is dropped from the spotlight set too, so it cannot advertise a destination it
   will not honour.
 - **The standard chip — `DragChipSpec` + `DragChip.Resolve` (`DragChip.cs`).** Apps supply chip **data**, never
-  elements and never positions: `DragChipSpec(Art | ArtSource, Title, Subtitle, Count, Glyph)`, wrapped by
-  `DragChip.Resolve(state => spec)` into the `Func<DragState, Element?>` a `DragPreviewLayer` consumes
+  elements and never positions: `DragChipSpec(Art | ArtSource, Title, Subtitle, Count, Glyph, RestingCaption)`, wrapped
+  by `DragChip.Resolve(state => spec)` into the `Func<DragState, Element?>` a `DragPreviewLayer` consumes
   (`DragChipSpec.None` ⇒ nothing rendered for that drag). The framework renders the researched premiere card: opaque,
   capped at `MaxWidth = 280` with a flyout-class shadow, at most three info pieces all ellipsized, a top-trailing
   `InfoBadge` count over a two-card stacked backdrop for `Count ≥ 2` (Apple's "flocking"), the target's
   `DragState.Caption` as a trailing row, and an explicit `NotAllowedGlyph` whenever `DragState.Refused`.
+  **The caption always says what the drop will DO, including while travelling.** Resolution is
+  `DragState.Caption ?? DragChipSpec.RestingCaption` — a live target's caption (or, while `Refused`, its
+  `RefusalCaption`) always wins, and the spec's `RestingCaption` is the FLOOR for the phase where nothing is under the
+  pointer (`DragDropContext.Move` clears the session caption on every target change, so an app-published default cannot
+  survive there). Without that floor the chip spends most of a gesture naming only the thing being dragged and never
+  states what the drag is for, which reads as "nothing is happening". The caption row takes the **Caption rung
+  (12/16 `TextSecondary`)**, escalating to `SystemFillCritical` while refused — it is the only text on the card that
+  answers the user's actual question, so it may not be the quietest thing on it. `RestingCaption` must be a
+  precomputed/localized constant: the resolver runs inside the 0-alloc frame region while a drag is live.
   **The tilt is a FLASH, not a pose:** the chip springs in at `TiltDeg = 4°` + `PickupScale = 1.02` (Trello) and eases
   to flat within `PickupFlashMs` (seeded as `MotionTokenId.ControlFast`) — held for the whole drag, a static rotation
   stops reading as "lifted" and starts reading as a misrendered card. The flash is keyed on the session's Active edge
