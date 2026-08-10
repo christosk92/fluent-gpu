@@ -188,7 +188,12 @@ sealed class SpotifyNotificationsService : ISpotifyNotificationsService, IDispos
         bool isNew = el.TryGetProperty("isNew", out var n) && n.ValueKind == JsonValueKind.True;
         string? storageId = Str(el, "storageId");
 
-        return new SocialNotification(id, ts, isNew, title, actionUri, actionType, imageUrl, userNames, storageId);
+        // The feed's own per-item discriminator, when it ships one. Optional on the wire and named inconsistently
+        // across payload revisions, so all three spellings are accepted and NONE is required: SpotifyUpdates.KindOf
+        // falls back to the action target, which is the shape this app has actually observed.
+        string? wireType = Str(el, "type") ?? Str(el, "notificationType") ?? Str(el, "category");
+
+        return new SocialNotification(id, ts, isNew, title, actionUri, actionType, imageUrl, userNames, storageId, wireType);
     }
 
     static string? Str(JsonElement obj, string name)

@@ -7,18 +7,24 @@ namespace Wavee.Core;
 /// <c>NotificationCenterBridge</c> is the thin reactive wrapper around it.</summary>
 public static class NotificationMerge
 {
+    /// <param name="readIds">The per-item read set (<see cref="NotificationReadIds"/>) — the OTHER half of the remote
+    /// feeds' local read state, written when a single row is marked seen anywhere in the app. Applied on top of the
+    /// watermarks so both halves answer through this one merge and every surface reads the same <c>IsUnread</c>.</param>
     public static (IReadOnlyList<WaveeNotification> Items, int Unread) Build(
         AppUpdateNotification? update,
         IReadOnlyList<SocialNotification> social, long ganderSeenMs,
         IReadOnlyList<NewReleaseNotification> whatsNew, long whatsNewSeenMs,
-        IReadOnlyList<ActivityEntry> activity)
+        IReadOnlyList<ActivityEntry> activity,
+        string? readIds = null)
     {
         var list = new List<WaveeNotification>(
             (update is null ? 0 : 1) + social.Count + whatsNew.Count + activity.Count);
 
         if (update is not null) list.Add(update);
-        foreach (var s in social) list.Add(s with { IsUnread = s.IsUnread && s.Timestamp > ganderSeenMs });
-        foreach (var n in whatsNew) list.Add(n with { IsUnread = n.IsUnread && n.Timestamp > whatsNewSeenMs });
+        foreach (var s in social)
+            list.Add(s with { IsUnread = s.IsUnread && s.Timestamp > ganderSeenMs && !NotificationReadIds.Contains(readIds, s.Id) });
+        foreach (var n in whatsNew)
+            list.Add(n with { IsUnread = n.IsUnread && n.Timestamp > whatsNewSeenMs && !NotificationReadIds.Contains(readIds, n.Id) });
         foreach (var e in activity) list.Add(new ActivityNotification(e));
 
         list.Sort(static (a, b) => b.Timestamp.CompareTo(a.Timestamp));

@@ -850,24 +850,30 @@ static class HomeCards
     // ── I · the what's-new timeline row ────────────────────────────────────────────────────────────────────────
     /// <summary>`.tlrow` — padding 8 with a 16 leading inset, a 7px pip straddling the day column's rule at `left:-4px`, art 40, a
     /// bordered kind tag, and a trailing "New" pill or a "Seen" count. The pip on a rule is what makes a list of
-    /// releases read as a chronology rather than another shelf: filled accent for unread, hollow once seen.</summary>
-    public static Element TimelineRow(NewReleaseNotification n, string kindLabel, string meta, Action onNav)
+    /// releases read as a chronology rather than another shelf: filled accent for unread, hollow once seen.
+    /// <para>Deliberately takes PLAIN FIELDS rather than a notification record: the timeline carries two sources (the
+    /// what's-new feed and the Spotify category's concert announcements) through this one anatomy, and the row must not
+    /// learn to type-test. <paramref name="artRadius"/> is the only shape that varies — an act's avatar is round where a
+    /// sleeve is square, exactly as the notification center draws the same two rows.</para></summary>
+    public static Element TimelineRow(string id, string? imageUrl, string title, string kindLabel, string meta,
+                                      bool unread, Action onNav, float artRadius = 0f)
     {
-        var cover = n.ImageUrl is { Length: > 0 } url ? new Image(url) : null;
+        var cover = imageUrl is { Length: > 0 } url ? new Image(url) : null;
+        float corners = artRadius > 0f ? artRadius : Radii.Control;
         var body = new BoxEl
         {
             Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center, MinWidth = 0f, Grow = 1f,
             Padding = new Edges4(Spacing.L, Spacing.S, Spacing.S, Spacing.S),
             Children =
             [
-                Surfaces.Artwork(cover, SpotifyExportMapper.Hash(n.Id), WaveeSize.Thumb40, WaveeSize.Thumb40,
-                    Radii.Control, decodePx: 64),
+                Surfaces.Artwork(cover, SpotifyExportMapper.Hash(id), WaveeSize.Thumb40, WaveeSize.Thumb40,
+                    corners, decodePx: 64),
                 new BoxEl
                 {
                     Direction = 1, Gap = 0f, Grow = 1f, Basis = 0f, MinWidth = 0f,
                     Children =
                     [
-                        BodyStrong(n.Name) with
+                        BodyStrong(title) with
                         {
                             MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
@@ -878,7 +884,7 @@ static class HomeCards
                         },
                     ],
                 },
-                n.IsUnread ? NewPill() : Count(Loc.Get(Strings.Home.Seen)),
+                unread ? NewPill() : Count(Loc.Get(Strings.Home.Seen)),
             ],
         };
         return new BoxEl
@@ -896,16 +902,16 @@ static class HomeCards
                     AlignSelf = FlexAlign.Center, JustifySelf = FlexAlign.Start,
                     Margin = new Edges4(-4f, 0f, 0f, 0f),
                     Corners = Radii.Circle(7f),
-                    Fill = n.IsUnread ? Tok.AccentDefault : Tok.FillLayerDefault,
+                    Fill = unread ? Tok.AccentDefault : Tok.FillLayerDefault,
                     BorderWidth = 1.5f,
-                    BorderColor = n.IsUnread ? Tok.AccentDefault : Tok.StrokeControlStrongDefault,
+                    BorderColor = unread ? Tok.AccentDefault : Tok.StrokeControlStrongDefault,
                     HitTestVisible = false,
                 },
             ],
         };
     }
 
-    /// <summary>`.kindtag` — a bordered eyebrow type label ("Release" / "Episode").</summary>
+    /// <summary>`.kindtag` — a bordered eyebrow type label ("Releases" / "Podcast" / "Concert").</summary>
     static Element KindTag(string text) => new BoxEl
     {
         Shrink = 0f, Padding = new Edges4(Spacing.XS, 0f, Spacing.XS, 0f),

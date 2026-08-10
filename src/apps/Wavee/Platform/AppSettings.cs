@@ -162,6 +162,10 @@ static class WaveeSettings
     // Local-only read-state for the gander + what's-new feeds (no server mark-read endpoint). Works on both backends.
     public static readonly SettingKey<long> NotificationsGanderLastSeenMs = new("notifications.gander.lastSeenMs", 0L);
     public static readonly SettingKey<long> NotificationsWhatsNewLastSeenMs = new("notifications.whatsnew.lastSeenMs", 0L);
+    // The PER-ITEM half of that read state: newline-separated ids marked seen ONE AT A TIME (a Home timeline row's
+    // click), applied on top of the watermarks by NotificationMerge. Bounded, and cleared whenever a watermark advance
+    // subsumes it. Codec + cap: Wavee.Core's NotificationReadIds.
+    public static readonly SettingKey<string> NotificationsReadIds = new("notifications.readIds", "");
     // Runtime log-level overrides for the Diagnostics panel (WaveeLogLevel as int; -1 = build default). The env vars
     // WAVEE_LOG_LEVEL / WAVEE_LOG_FILE_LEVEL still win over these (resolved inside WaveeLog.Configure).
     public static readonly SettingKey<int> LogMinLevel = new("diagnostics.log.minLevel", -1);

@@ -95,6 +95,10 @@
          lossless for the Zune-style section directory. -->
     <Compile Include="..\Wavee\Features\Home\HomeLandingProjection.cs" />
     <Compile Include="..\Wavee\Features\Home\HomeHeroLayout.cs" />
+    <!-- Home's what's-new timeline merge: which notifications belong on the module, in what order, in which day group,
+         and what the "N unheard of M" counter says. System + Wavee.Core only (the row RENDER stays in the component),
+         so HomeTimelineMergeTests drives the real gate/sort/grouping without a page, a feed or a clock. -->
+    <Compile Include="..\Wavee\Features\Home\HomeTimelineMerge.cs" />
     <!-- Home's shell-wash SOURCE selection: kind+ordinal only, payload-accent-first, never an invented colour. Pure by
          construction (Wavee.Core + the plane's Scheme + WaveePalette, both already source-included), so HomeWashSourceTests
          drive the real selection/derivation without a plane, a theme or a window. -->

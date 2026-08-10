@@ -11,19 +11,23 @@ using static FluentGpu.Dsl.Ui;
 namespace Wavee;
 
 // ── The what's-new timeline ──────────────────────────────────────────────────────────────────────────────────────────
-// New releases from followed artists, grouped by day. A FIXED row on Home for the same reason as the artist podium: the
-// data is the notification feed, not the home feed.
+// New releases from followed artists AND the Spotify category's concert/show announcements, grouped by day. A FIXED row
+// on Home for the same reason as the artist podium: the data is the notification feed, not the home feed.
 //
 // It costs no new request and no new subscription. NotificationCenterBridge is activated once at the app root
-// (WaveeApp.cs) and already owns the what's-new fetch, the unread diff against the persisted last-seen keys, and a signal
-// that republishes on the UI thread — so reading Items here is a subscribe, not a second feed. Deliberately NOT calling
-// EnsureFresh: go-live already primed it, and re-priming per Home mount would refetch on every navigation back.
+// (WaveeApp.cs) and already owns the what's-new fetch, the gander fetch, the unread diff against the persisted
+// last-seen keys, and a signal that republishes on the UI thread — so reading Items here is a subscribe, not a second
+// feed, and the concert rows arrive through the SAME one. Deliberately NOT calling EnsureFresh: go-live already primed
+// it, and re-priming per Home mount would refetch on every navigation back.
+//
+// WHAT JOINS AND WHAT DOES NOT is HomeTimelineMerge's decision, gated on a concrete kind (SpotifyUpdates.IsConcert) and
+// never on the center's display category — that category also holds followers and generic announcements, which are not
+// timeline material. With no concert items in the feed the module renders exactly what it rendered before.
 sealed class HomeTimeline : Component
 {
     // `.tlday { grid-template-columns: 96px minmax(0,1fr) }` — the day column is fixed so every rule lines up down the
     // module, which is what makes the pips read as one chronology.
     const float DayColumn = 96f;
-    const int MaxRows = 8;
 
     public override Element Render()
     {
@@ -32,27 +36,18 @@ sealed class HomeTimeline : Component
         var go = UseContext(HistoryStore.NavCtx);
         if (nc is null || svc is null) return new BoxEl();
 
-        var items = nc.Items.Value;          // subscribe: a landed feed re-renders exactly this module
-        int unread = nc.UnreadCount.Value;
-        var releases = new List<NewReleaseNotification>(MaxRows);
-        int total = 0;
-        for (int i = 0; i < items.Count; i++)
-            if (items[i] is NewReleaseNotification r)
-            {
-                total++;
-                if (releases.Count < MaxRows) releases.Add(r);
-            }
-        if (releases.Count == 0) return new BoxEl();
+        // ONE subscription: a landed feed (either feed) and a mark-read both republish Items, so the header's counter
+        // now comes out of the merge instead of a second read of the bell's badge — which counted every unread
+        // notification in the app, including app updates and follower rows this module never shows.
+        var feed = HomeTimelineMerge.Build(nc.Items.Value);
+        if (feed.IsEmpty) return new BoxEl();
+        int unread = feed.Unread, total = feed.Total;
 
-        // Day groups against LOCAL midnight — the feed's timestamps are UTC epoch ms, and bucketing them without the
-        // local-midnight conversion puts an evening release under "yesterday" for anyone east of UTC.
-        var groups = new List<Element>(4);
-        var rows = new List<Element>(MaxRows);
-        long lastDay = long.MinValue;
-
-        void Flush()
+        var groups = new List<Element>(feed.Groups.Length);
+        foreach (var group in feed.Groups)
         {
-            if (rows.Count == 0) return;
+            var rows = new List<Element>(group.Rows.Length);
+            foreach (var entry in group.Rows) rows.Add(RowFor(entry, nc, go));
             groups.Add(new BoxEl
             {
                 Direction = 0, Gap = Spacing.M, MinWidth = 0f, AlignItems = FlexAlign.Start,
@@ -63,7 +58,7 @@ sealed class HomeTimeline : Component
                     {
                         Width = DayColumn, Shrink = 0f, Direction = 1, Gap = 0f,
                         AlignItems = FlexAlign.End, Padding = new Edges4(0f, Spacing.M, 0f, 0f),
-                        Children = [.. DayLabel(lastDay)],
+                        Children = [.. DayLabel(group.DayTicks)],
                     },
                     // `.tlrows` carries the rule the pips straddle.
                     new BoxEl
@@ -84,19 +79,7 @@ sealed class HomeTimeline : Component
                     },
                 ],
             });
-            rows = new List<Element>(MaxRows);
         }
-
-        foreach (var release in releases)
-        {
-            long day = DayOf(release.Timestamp);
-            if (rows.Count > 0 && day != lastDay) Flush();
-            lastDay = day;
-            var r = release;
-            var row = HomeCards.TimelineRow(r, KindLabel(r), MetaLine(r), () => Navigate(r, go));
-            rows.Add(row is BoxEl b ? b with { Key = "home-timeline:" + r.Id } : row);
-        }
-        Flush();
 
         Element module = new BoxEl
         {
@@ -115,6 +98,32 @@ sealed class HomeTimeline : Component
             Padding = new Edges4(0f, 0f, 0f, HomeModuleLayout.Gap(width)),
             Children = [module],
         }, fallback: HomeModuleLayout.FallbackWidth);
+    }
+
+    // ── the two row legs ─────────────────────────────────────────────────────────────────────────────────────────────
+    // ONE anatomy (HomeCards.TimelineRow), two sources. Everything that differs — the badge word, the source line, the
+    // art shape and the click — is resolved here and handed over as plain values.
+    static Element RowFor(HomeTimelineRow entry, NotificationCenterBridge nc, Action<string, string?>? go)
+    {
+        Element row = entry.Kind == HomeTimelineKind.Concert && entry.Update is { } s
+            ? HomeCards.TimelineRow(
+                s.Id, s.ImageUrl, SpotifyUpdates.CleanTitle(s.Title),
+                Loc.Get(Strings.Concerts.Detail.Concert),
+                SpotifyUpdates.ActName(s) ?? Loc.Get(Strings.Concerts.LiveMusic),
+                s.IsUnread,
+                () =>
+                {
+                    // Read state is the notification center's, both ways: this WRITES through the one store (the panel
+                    // and the bell badge see it on the next rebuild), and the row's own unread pip READ it from there.
+                    nc.MarkRead(s.Id);
+                    // ...and the click itself is the center's own decision verbatim, not a second copy of it.
+                    NotificationPanel.ClickSocial(s, go, close: null);
+                },
+                artRadius: WaveeSize.Thumb40 / 2f)   // an act is a person: the center draws these round too
+            : entry.Release is { } r
+                ? HomeCards.TimelineRow(r.Id, r.ImageUrl, r.Name, KindLabel(r), MetaLine(r), r.IsUnread, () => Navigate(r, go))
+                : new BoxEl();
+        return row is BoxEl b ? b with { Key = "home-timeline:" + entry.Id } : row;
     }
 
     // "Release" / "Episode" — the server's coarse kind, not a guess from the title.
@@ -141,9 +150,6 @@ sealed class HomeTimeline : Component
         // player, which is exactly what NotificationPanel.ClickRelease does for this very notification.
         if (SpotifyLink.WebUrl(r.Uri) is { } web) LoginView.OpenUrl(web);
     }
-
-    static long DayOf(long unixMs)
-        => DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToLocalTime().Date.Ticks;
 
     // Today / Yesterday get the word alone; anything older gets the weekday+date with the relative form under it, which
     // is what lets the reader scan the column without doing arithmetic.
