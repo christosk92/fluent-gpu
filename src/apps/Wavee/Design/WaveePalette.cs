@@ -166,13 +166,29 @@ public static class WaveePalette
     /// <summary>The forced HSL lightness of the dark tone, and the cap on its HSL saturation.</summary>
     public const float PageToneDarkL = 0.15f, PageToneDarkSMax = 0.30f;
 
-    /// <summary>The forced HSL lightness of the light tone, and the cap on its HSL saturation.</summary>
-    public const float PageToneLightL = 0.89f, PageToneLightSMax = 0.42f;
+    /// <summary>The forced HSL lightness of the light tone, and the cap on its HSL saturation.
+    ///
+    /// <para>THE LIGHT ARM IS A WHISPER, and the numbers say so. The first light clamp (L 0.89 / S ≤ 0.42) was the dark
+    /// arm's clamp mirrored, and mirroring is exactly the mistake: the dark tone paints a hue at 15 % lightness where
+    /// 30 % saturation is a suggestion, while 42 % saturation at 89 % lightness is a full pastel — a green cover landed
+    /// on ≈<c>#D7EFD7</c> and REPLACED the page's ground with a coloured plane. In light there is no headroom to spend:
+    /// the ink is dark, the surfaces are near-white, and every chromatic step the ground takes is a step the ink and
+    /// every card on top of it has to survive. So the light tone is the same idea at a tenth of the volume — L 0.94
+    /// (four points above Mica Alt's own #EDEDED, so the page still reads as a PAGE and not as chrome) with saturation
+    /// capped at 0.16, which is enough for "this record is green" and not enough for "this app is green".</para></summary>
+    public const float PageToneLightL = 0.94f, PageToneLightSMax = 0.16f;
 
-    /// <summary>The hue-less answer: a near-black in dark, a WARM off-white in light (a neutral grey page reads as
-    /// "unfinished" beside every tinted one, and warm is the direction the app's light palette already leans).</summary>
+    /// <summary>The hue-less answer: a near-black in dark, the canon neutral off-white in light.
+    ///
+    /// <para>The light value used to be a WARM off-white (<c>#F6F4F1</c>) on the argument that a neutral grey page reads
+    /// as "unfinished" beside every tinted one. That argument was written against the old 0.42 saturation cap, where the
+    /// tinted pages really were pastel and a neutral one really did look unfinished next to them. Under the whisper
+    /// clamp above the tinted pages are barely tinted, so the warm tone stopped being the quiet member of a family and
+    /// became the app's one un-asked-for colour cast — a warm paper default in an app whose light identity is stock
+    /// Fluent. It is now <c>#F5F5F5</c>: achromatic, and within 5/255 of the clamp's own achromatic point
+    /// (L 0.94 ⇒ #F0F0F0), so a greyscale sleeve and a hued one produce pages of the same brightness.</para></summary>
     public static ColorF PageToneNeutralDark { get; } = ColorF.FromRgba(0x15, 0x15, 0x15);
-    public static ColorF PageToneNeutralLight { get; } = ColorF.FromRgba(0xF6, 0xF4, 0xF1);
+    public static ColorF PageToneNeutralLight { get; } = ColorF.FromRgba(0xF5, 0xF5, 0xF5);
 
     /// <summary>THE detail page's ground tone for a cover's grading, or null when there is no grading to build one
     /// from (the caller then paints nothing and the page keeps its neutral surface). See the contract above.</summary>
@@ -228,15 +244,45 @@ public static class WaveePalette
         }
     }
 
-    /// <summary>Neutral card fill under <see cref="Surfaces.HeroWash"/> — same as the shell content card on detail pages
-    /// (now the OPAQUE content surface, so the hero base no longer depends on what shows through it).</summary>
-    public static ColorF HeroBase(CoverColorPlane.Scheme? art) => WaveeColors.ContentSurface;
+    // ── DATA-ENCODING INK ───────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Hero-wash accent — same derivation as <c>DetailShell</c> (lifted accent in light, the dominant tone in dark).</summary>
-    public static ColorF HeroWashColor(CoverColorPlane.Scheme? art) =>
-        Tok.Theme == ThemeKind.Light
-            ? (art is { } p ? Lift(Accent(p)) : Tok.AccentDefault)
-            : BackgroundDark(art ?? Neutral);
+    /// <summary>Saturation and the two lightness rungs a data hue is forced to in LIGHT. See <see cref="DataDotInk"/>.</summary>
+    const float DataDotLightS = 0.65f, DataDotLightLDim = 0.30f, DataDotLightLBright = 0.40f;
+
+    /// <summary>The hue band whose members are intrinsically LIGHT — yellow through cyan. Fluent's shared-colour rule is
+    /// that darkening for a light surface is HUE-DEPENDENT, and this is the band that needs the extra rungs.</summary>
+    const float DataDotBandLo = 40f, DataDotBandHi = 200f;
+
+    /// <summary>A SERVER-SUPPLIED data hue (the Camelot wheel's key colours) rendered as ink for the CURRENT theme.
+    ///
+    /// <para>The wheel's colours arrive fully saturated and mid-to-high lightness — they were authored for a dark
+    /// surface, where a 6-DIP saturated dot at 0.85 opacity is a quiet identity mark. Painted UNCHANGED on a near-white
+    /// row the same dot is the loudest thing in the tracklist: a saturated yellow or cyan at L ≈ 0.5 has almost no
+    /// contrast against #FCFCFC, so it reads as a smear of colour rather than as a token, and the saturated reds and
+    /// magentas out-shout the title beside them.</para>
+    ///
+    /// <para>The correction is Fluent's own shared-colour principle and its awkward part is the part that matters:
+    /// darkening for a light surface is HUE-DEPENDENT. Yellow and cyan sit near the top of the luminance curve and need
+    /// roughly three rungs of darkening before they read as ink; red, blue and magenta sit near the bottom and need
+    /// about one, and darkening them as far as yellow turns the wheel into twelve browns. So the band
+    /// [<see cref="DataDotBandLo"/>°, <see cref="DataDotBandHi"/>°] — yellow through cyan — is forced to L 0.30 and
+    /// everything else to L 0.40, at a common S 0.65 that keeps adjacent keys distinguishable (the wheel's whole point
+    /// is that harmonically adjacent keys are adjacent hues).</para>
+    ///
+    /// <para>DARK IS A PASSTHROUGH, deliberately: the wire colours already are the dark-surface answer, and re-grading
+    /// them would break the one property the wheel guarantees.</para>
+    ///
+    /// <para>An input with no hue worth keeping (S ≤ <see cref="NeutralS"/>) returns a NEUTRAL at the same lightness
+    /// rung rather than being pushed to S 0.65, which would invent a red for a grey.</para></summary>
+    public static ColorF DataDotInk(uint argb, ThemeKind theme)
+    {
+        var c = ToColor(argb);
+        if (theme == ThemeKind.Dark) return c;
+        var (h, s, _) = ToHsl(c);
+        float l = h >= DataDotBandLo && h <= DataDotBandHi ? DataDotLightLDim : DataDotLightLBright;
+        // A greyscale swatch has no hue to preserve; forcing S here would fabricate one from HSL's h == 0 fallback.
+        return s <= NeutralS ? FromHsl(0f, 0f, l, c.A) : FromHsl(h, DataDotLightS, l, c.A);
+    }
 
     /// <summary>Neutral fallback when the plane has no grading yet (no current track / not fetched). Every role is
     /// greyscale ON PURPOSE — including <c>textBrightAccent</c>, which the real wire always grades to pure white in the

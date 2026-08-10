@@ -107,12 +107,35 @@ public class DetailPageToneTests
         // The neutral answers really are neutral. Measured as CHANNEL SPREAD, not HSL saturation: near white, S is a
         // ratio with a vanishing denominator and reports 0.22 for a colour whose channels are three points apart.
         Assert.True(Spread(WaveePalette.PageToneNeutralDark) < 0.02f);
-        Assert.True(Spread(WaveePalette.PageToneNeutralLight) < 0.04f);
-        // …and the light one is WARM (red channel above blue), the direction the app's light palette already leans.
-        Assert.True(WaveePalette.PageToneNeutralLight.R > WaveePalette.PageToneNeutralLight.B);
+        // …and the light one is now ACHROMATIC, not the old warm off-white. Under the whisper clamp the tinted pages
+        // are barely tinted, so a warm neutral stopped being the quiet member of a family and became the app's one
+        // un-asked-for colour cast.
+        Assert.Equal(0f, Spread(WaveePalette.PageToneNeutralLight), 3);
 
         static float Spread(ColorF c)
             => MathF.Max(c.R, MathF.Max(c.G, c.B)) - MathF.Min(c.R, MathF.Min(c.G, c.B));
+    }
+
+    /// <summary>THE LIGHT ARM IS A WHISPER — the pin that stops the clamp drifting back toward the dark arm's numbers.
+    /// The failure it protects against is not abstract: at the old L 0.89 / S ≤ 0.42 a green cover produced ≈#D7EFD7,
+    /// a full pastel that REPLACED the page's ground. Stated twice on purpose — once as the constants themselves (a
+    /// deliberate change has to come here and say so) and once as the property that actually matters, which is how far
+    /// the most saturated cover in the app can push the ground off neutral.</summary>
+    [Fact]
+    public void TheLightClamp_IsAWhisper_NotTheDarkArmMirrored()
+    {
+        Assert.Equal(0.94f, WaveePalette.PageToneLightL, 4);
+        Assert.Equal(0.16f, WaveePalette.PageToneLightSMax, 4);
+
+        foreach (var cover in new[] { SaturatedRed, SaturatedTeal })
+        {
+            var tone = WaveePalette.PageTone(cover, ThemeKind.Light)!.Value;
+            float spread = MathF.Max(tone.R, MathF.Max(tone.G, tone.B)) - MathF.Min(tone.R, MathF.Min(tone.G, tone.B));
+            // ≤ 8/255 of channel separation. The old clamp produced 24/255 on the same covers.
+            Assert.True(spread <= 0.031f, $"light tone channel spread {spread:F4} is a tint, not a whisper");
+            // …and it stays a LIGHT page: never darker than bare Mica Alt (#EDEDED), so it reads as page and not chrome.
+            Assert.True(ColorContrast.RelativeLuminance(tone) > ColorContrast.RelativeLuminance(ColorF.FromRgba(0xED, 0xED, 0xED)));
+        }
     }
 
     /// <summary>POLARITY, which is what lets the pages drop their on-media ink ladder entirely: whatever the cover,

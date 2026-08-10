@@ -685,9 +685,9 @@ sealed class SidebarPaneSlot : Component
             Direction = 0, Height = height, AlignItems = FlexAlign.Center, Gap = 12f,
             Padding = new Edges4(8f, 0f, 8f, 0f),
             Corners = CornerRadius4.All(Radii.Card),
-            Fill = selected ? Tok.FillSubtleSecondary : Tok.FillCardSecondary,
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            Fill = selected ? WaveeColors.SelectedRest : Tok.FillCardSecondary,
+            HoverFill = selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
+            PressedFill = selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             BorderWidth = selected ? 2f : 1f,
             BorderColor = selected ? Tok.AccentDefault : Tok.StrokeCardDefault,
             // R3.1.2: the pane owns the horizontal inset, so the card contributes only its vertical breathing room. Its

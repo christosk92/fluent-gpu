@@ -412,7 +412,7 @@ sealed class DetailShell : Component
         //
         // heroBand is what the blurred background extension occupies and where hero-only mode fades back to neutral.
         // The vertical arm publishes its MEASURED hero height; the two-column arm has no single measured hero, so it
-        // keeps the 55 % top band the wash it replaces already faded over (Surfaces.HeroWash's own fade stop) — same
+        // keeps the 55 % top band the wash it replaces already faded over (the deleted HeroWash's own fade stop) — same
         // footprint, different material.
         bool heroOnly = settings?.Get(WaveeSettings.DetailPageToneHeroOnly) ?? false;
         // The window viewport is the pre-measure stand-in: it is larger than the page (it includes the chrome rows),

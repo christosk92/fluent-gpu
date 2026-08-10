@@ -430,9 +430,9 @@ sealed class SidebarActionPickerBody : Component
             Padding = new Edges4(2f, 0f, Spacing.S, 0f), Corners = Radii.ControlAll,
             // The selection-aware 4-state ramp, set EXPLICITLY: `.Interactive(...)` would overwrite all three fills with
             // its recipe and erase the selected state.
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            Fill = selected ? WaveeColors.SelectedRest : ColorF.Transparent,
+            HoverFill = selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
+            PressedFill = selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             BrushTransitionMs = Motion.ControlFaster,
             Cursor = CursorId.Hand, Focusable = true, Role = AutomationRole.RadioButton,
             OnClick = () => _m.Choose(akey),

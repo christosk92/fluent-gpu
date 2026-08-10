@@ -307,9 +307,11 @@ static class SidebarEntityRow
             Padding = new Edges4(SidebarRowMetrics.IndentFor(spec.Depth), 0f, 8f, 0f),
             Corners = CornerRadius4.All(4f),
             // THE 4-STATE SELECTION-AWARE RAMP (F.1.4). Defined here, once, for every sidebar row in every design.
-            Fill = enabled && selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = !enabled ? ColorF.Transparent : selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = !enabled ? ColorF.Transparent : selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            // Selected takes the accent plate and its states only ever go UP — see WaveeColors.SelectedRest for the
+            // inversion this replaces and why hovered-selected is composed over the plate rather than swapped under it.
+            Fill = enabled && selected ? WaveeColors.SelectedRest : ColorF.Transparent,
+            HoverFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
+            PressedFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             BorderWidth = dropActive is null ? 0f : 1f,
             BorderColor = dropActive is null ? ColorF.Transparent
                 : Prop.Of(() => dropActive() ? Tok.AccentDefault : ColorF.Transparent),

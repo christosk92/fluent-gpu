@@ -33,9 +33,10 @@ static class SidebarRailItem
             Key = key,
             Width = Box, Height = Box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(6f),
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            // The selection ladder (WaveeColors.SelectedRest): accent plate at rest, states only ever go UP.
+            Fill = selected ? WaveeColors.SelectedRest : ColorF.Transparent,
+            HoverFill = selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
+            PressedFill = selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             Role = onClick is null ? AutomationRole.None : AutomationRole.Button,
             OnClick = onClick,
             Children = [Ui.Icon(glyph, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary)],

@@ -5,13 +5,15 @@ namespace Wavee;
 /// <summary>Wavee theme bootstrap helpers (palette id → <see cref="ThemePalette"/>, shared by Program + shell).</summary>
 static class WaveeTheme
 {
-    public static ThemePalette ResolvePalette(string id) => id switch
-    {
-        "slate" => Tok.SlatePalette,
-        "neutral" => Tok.NeutralPalette,
-        "accent" => Tok.AccentTintedPalette,
-        _ => Tok.NeutralPalette,
-    };
+    /// <summary>Palette id → the palette, for the four ids the Settings picker offers.
+    ///
+    /// <para>This DELEGATES to the engine's own <see cref="Tok.PaletteById"/> rather than restating its arms. The
+    /// restatement is what made the Warm preset unreachable: this switch carried "slate"/"neutral"/"accent" but not
+    /// "warm", while Settings has always offered a Warm swatch that persists <c>"warm"</c> — so choosing it fell
+    /// through the default arm to Neutral, silently, and every value <c>PaletteBuilder.BuildWarmLight</c> composes was
+    /// dead code the app could not reach. One resolver means adding a preset to the engine cannot leave the app behind
+    /// again; the default arm stays as the answer for an unknown/corrupt persisted id.</para></summary>
+    public static ThemePalette ResolvePalette(string id) => Tok.PaletteById(id) ?? Tok.NeutralPalette;
 
     public static void ApplyPalette(string id, IAppSettings? settings = null)
     {

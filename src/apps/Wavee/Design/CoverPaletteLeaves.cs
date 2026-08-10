@@ -71,7 +71,16 @@ sealed class CoverPageTonePlane : Component
     /// a mistake, not as a backdrop.</summary>
     const float BackdropSigmaDip = 72f, BackdropResolutionScale = 0.5f;
     const float BackdropSaturation = 1.35f;
-    const float BackdropAlphaDark = 0.40f, BackdropAlphaLight = 0.45f;
+
+    /// <summary>Opacity of the blurred cover behind the hero, per theme.
+    ///
+    /// <para>The light value was 0.45 — ABOVE dark's — and that was correct only for as long as the light page tone was
+    /// a pastel: a loud ground needs a loud backdrop or the art looks like a stain on it. Under the whisper clamp
+    /// (<see cref="WaveePalette.PageToneLightL"/>: L 0.94, S ≤ 0.16) the ground is a whisper and 0.45 of a
+    /// 1.35×-saturated blurred cover became the loudest thing on the page — the flashbang moved from the ground to the
+    /// art. 0.32 puts it back BELOW the dark arm, which is the correct relative order for the same reason every other
+    /// light-arm alpha in this app is lower: a dark surface absorbs a wash and a near-white one does not.</para></summary>
+    const float BackdropAlphaDark = 0.40f, BackdropAlphaLight = 0.32f;
 
     public override Element Render()
     {

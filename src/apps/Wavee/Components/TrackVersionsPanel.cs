@@ -184,7 +184,7 @@ sealed class TrackVersionsPanel : Component
                 meta.Add(new BoxEl
                 {
                     Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
-                    Fill = WaveePalette.ToColor(argb), AlignSelf = FlexAlign.Center, Shrink = 0f,
+                    Fill = WaveePalette.DataDotInk(argb, Tok.Theme), AlignSelf = FlexAlign.Center, Shrink = 0f,
                 });
             meta.Add(new TextEl(DetailFormat.Bpm(bpm)) { Size = 12f, Color = Tok.TextSecondary });
             if (KeyLabel(v) is { Length: > 0 } key)

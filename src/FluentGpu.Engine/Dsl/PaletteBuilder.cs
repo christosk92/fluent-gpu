@@ -88,13 +88,35 @@ public static class PaletteBuilder
         var inset = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80);   // CardBackgroundFillColorSecondary — the inset plate
         // Rows are neutral overlays (mirrors dark's white-alpha rows): the preset tint comes from the translucent
         // pane-on-plate beneath, so row states are preset-independent by construction.
-        return new(plate, plate, plate, layer, layer, inset,
-            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x32),
-            RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
-            RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
-            RowPressed:      ColorF.FromRgba(0x00, 0x00, 0x00, 0x0C),
-            RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x16));
+        return new(plate, plate, plate, layer, layer, inset, LightRowZebra, LightRowHover,
+            ColorContrast.Over(LightRowHover, LightRowZebra),
+            LightRowPressed,
+            ColorContrast.Over(LightRowPressed, LightRowZebra));
     }
+
+    // ── THE LIGHT ROW LADDER ────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // ONE ladder, shared by both light shells, in the ink the app actually paints.
+    //
+    // These were white-alpha (#32FFFFFF zebra, #20/#16 merged) plus a black-alpha hover/press pair — a stack that was
+    // DEAD in two different ways at once. The app never painted the white zebra (Wavee's WaveeColors.RowZebra derives
+    // the stripe from the subtle-fill ladder, i.e. BLACK alpha, because the white one collided with dark's hover), and
+    // it never painted the merged rungs either (it composes them with ColorContrast.Over). Yet the white zebra was
+    // still feeding the light TextTertiary contrast SOLVE below as one of the two candidate hosts — the palette was
+    // solving its ink against a surface no pixel ever wore.
+    //
+    // The values themselves were also solved against the wrong host. 0x09 hover / 0x0C press are the WinUI subtle
+    // rungs, correct against a near-white #FCFCFC pane; Wavee's detail pages put the same rows on an ART-DERIVED page
+    // tone, and 3.5 % of black over a chromatic ground is below the "did anything happen?" threshold. The light rungs
+    // are therefore RAISED — hover 0x0D (5.1 %), pressed 0x12 (7.1 %), zebra 0x08 (3.1 %) — and are solved against the
+    // tone at WaveePalette.PageToneLightL (L 0.94), which is the DARKEST light host a row can land on; on the brighter
+    // stock pane they are still comfortably inside WinUI's own subtle range.
+    //
+    // The invariant the old numbers broke and these keep: zebra < hover, and pressed > hover (a stripe must be quieter
+    // than the state that lands on it, or the row has no hover). DARK IS UNCHANGED.
+    static readonly ColorF LightRowZebra   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x08);
+    static readonly ColorF LightRowHover   = ColorF.FromRgba(0x00, 0x00, 0x00, 0x0D);
+    static readonly ColorF LightRowPressed = ColorF.FromRgba(0x00, 0x00, 0x00, 0x12);
 
     /// <summary>Stock WinUI neutral light shell, verbatim MUX tabbed-window ladder: an unpainted tab rail over real Mica
     /// Alt (≈<c>#EDEDED</c>) → a <c>LayerOnMicaBaseAltFillColorDefault</c> body plate (<c>#B3FFFFFF</c>, ≈<c>#FAFAFA</c>
@@ -105,12 +127,12 @@ public static class PaletteBuilder
         var plate = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0xB3);         // LayerOnMicaBaseAltFillColorDefault (light)
         var layer = ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x80);         // LayerFillColorDefault (light)
         var cardSecondary = ColorF.FromRgba(0xF6, 0xF6, 0xF6, 0x80); // CardBackgroundFillColorSecondary
-        return new(plate, plate, plate, layer, layer, cardSecondary,
-            RowZebra:        ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x32),
-            RowHover:        ColorF.FromRgba(0x00, 0x00, 0x00, 0x09),
-            RowHoverZebra:   ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x20),
-            RowPressed:      ColorF.FromRgba(0x00, 0x00, 0x00, 0x0C),
-            RowPressedZebra: ColorF.FromRgba(0xFF, 0xFF, 0xFF, 0x16));
+        // The light row ladder — see LightRowZebra/Hover/Pressed above for why it is black-alpha and why the merged
+        // rungs are COMPOSED rather than eyeballed.
+        return new(plate, plate, plate, layer, layer, cardSecondary, LightRowZebra, LightRowHover,
+            ColorContrast.Over(LightRowHover, LightRowZebra),
+            LightRowPressed,
+            ColorContrast.Over(LightRowPressed, LightRowZebra));
     }
 
     static ShellPalette BuildDarkShell(PaletteSeed seed)
@@ -168,6 +190,10 @@ public static class PaletteBuilder
         // old, inverted target: darker bg = easier ratio for dark-on-light text).
         // Flattened through BOTH shell rungs (pane on plate on bright Mica) — the same host the palette.contrast gate
         // builds; solving against a pane-on-Mica host would disagree with the gate by the plate's own lift.
+        // The zebra rung in that stack is now the BLACK-alpha stripe the app really paints (it used to be a white-alpha
+        // value no pixel wore), so the host is painted reality. It also makes the zebra host strictly DARKER than the
+        // bare pane, which means the `lightestHost` pick below can only ever resolve to the card — the honest reading
+        // being that on a light theme the hardest surface for dark ink is the near-white card, not a striped row.
         var shell = BuildLightShell(seed);
         var zebraHost = ColorContrast.Flatten(shell.RowZebra,
             ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, MicaRef.LightBright)));
@@ -366,7 +392,8 @@ public static class PaletteBuilder
         var controlHover = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x80);
         var controlPress = ColorF.FromRgba(0xF9, 0xF9, 0xF9, 0x4D);
         var solidBase = ColorF.FromRgba(0xF3, 0xF3, 0xF3);
-        // Pane on PLATE on bright Mica — both shell rungs, matching the palette.contrast gate's host.
+        // Pane on PLATE on bright Mica — both shell rungs, matching the palette.contrast gate's host. The zebra rung is
+        // the BLACK-alpha stripe the app paints (see BuildLight for the same note), so this host is painted reality.
         var fileFlat = ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, MicaRef.LightBright));
         var zebraHost = ColorContrast.Flatten(shell.RowZebra, fileFlat);
         var lightestHost = ColorContrast.RelativeLuminance(card) >= ColorContrast.RelativeLuminance(zebraHost) ? card : zebraHost;

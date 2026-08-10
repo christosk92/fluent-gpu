@@ -50,6 +50,29 @@ public static class Surfaces
             : ArtworkPlaceholder;
     }
 
+    // ── THE TWO GRADING HALVES, AND WHICH JOB TAKES WHICH ────────────────────────────────────────────────────────────
+    //
+    // Every cover is graded TWICE by the provider — a light half and a dark half — and the app reads BOTH, in opposite
+    // directions, from two functions that sit next to each other and differ by one boolean. That is not a leftover: it
+    // is the policy, and it is worth one paragraph because reading the wrong one is invisible in dark and glaring in
+    // light.
+    //
+    //   • SchemeFor  — the PAGE half. Follows the active theme (light theme ⇒ the light grading). Everything that
+    //     paints a SURFACE the page's own ink then sits on takes this: the page tone, the hero/blend washes, the shell
+    //     material tint, section spines. These are backgrounds, so they must be graded for the polarity of the theme
+    //     they are painted in, or the page's Tok ink tokens stop being correct on them.
+    //
+    //   • ChromeSchemeFor — the CHROME half, and it takes the OPPOSITE theme's grading ON PURPOSE. Everything that
+    //     paints a SOLID PLATE carrying on-accent ink takes this: the Play capsule, the Verified/Following pills, the
+    //     stage's filled transport. A CTA is not a background — it is a foreground object that has to hold its own
+    //     against the surface around it, and the provider's light grading is the softer, lower-chroma treatment (median
+    //     HSV S ≈ 0.45) while its dark grading carries the stronger chroma (median S ≈ 0.73). So a LIGHT page wants the
+    //     DARK grading's chroma for its one solid CTA, and a dark page wants the light grading's softness so the plate
+    //     does not glow. Both fall back to the other half when only one exists.
+    //
+    // The rule in one line: if the app's own ink lands ON it, grade it for the theme (SchemeFor); if it carries
+    // on-accent ink and has to be seen (WaveeAccent.Action), grade it against the theme (ChromeSchemeFor).
+
     /// <summary>The full graded roles behind a cover — for PAGE chrome (hero washes, accent bars, the Play button, the
     /// shell's published material tint) rather than a placeholder tile. Null until the plane has a grading for this theme.
     /// Callers that want the colour to appear the moment it lands must NOT read <c>Watch</c>/<c>Epoch</c> at page scope
@@ -71,30 +94,12 @@ public static class Surfaces
             ?? plane.TryGetScheme(url, lightTheme: pageIsLight);
     }
 
-    // A restrained, top-anchored accent fade (Spotify's top-of-page colour band): a soft tint over the header that
-    // fades out well before the tracklist, so the art colour reads as an accent — never a full-page flood. The peak
-    // alpha is low and the falloff is steep (transparent by ~55% down, clear below); the previous solid WinUI-parity
-    // fill (dark α≈0.235 / light α≈0.149, both stops equal — no fade) overpowered a strongly-coloured cover.
-    const float HeroWashDarkA = 0.15f;    // peak at the top edge; was 60f/255f ≈0.235 painted solid
-    // Light peaks slightly ABOVE dark, which looks backwards until you look at what each paints. Dark paints the art's
-    // `backgroundBase` — a near-black tone over a charcoal card, where a little alpha already reads. Light paints the
-    // LIFTED accent, whose strongest channel is pinned to 210 precisely so it cannot bruise the off-white card: a pale,
-    // low-chroma tone, and 0.10 of it over a near-white surface is below the "is there a wash at all?" threshold on
-    // anything but the most saturated cover. 0.16 is the smallest step that makes the band legible on desaturated art;
-    // 0.18+ starts to read as a coloured cast at the very top edge on saturated art. Note the stop schedule below:
-    // this alpha is the PEAK at y=0 and reaches 0 by HeroWashFade (55%), so the strong value only shows in the top band.
-    const float HeroWashLightA = 0.16f;   // peak at the top edge; was 0.10 (and before that 38f/255f ≈0.149 solid)
-    const float HeroWashFade = 0.55f;     // top→transparent by this fraction of the page; nothing below it
-
-    /// <summary>Page wash over the content surface — a soft top-anchored accent fade (not an edge-to-edge fill).</summary>
-    public static GradientSpec HeroWash(ColorF accent)
-    {
-        float a = Tok.Theme == ThemeKind.Light ? HeroWashLightA : HeroWashDarkA;
-        return GradientDown(
-            new GradientStop(0f, accent with { A = a }),
-            new GradientStop(HeroWashFade, accent with { A = 0f }),
-            new GradientStop(1f, accent with { A = 0f }));
-    }
+    // HeroWash — the top-anchored accent fade, and its three alpha constants — is DELETED along with
+    // WaveePalette.HeroBase / WaveePalette.HeroWashColor. All three lost their last call site when the detail pages
+    // moved to the ONE opaque art-derived page tone (WaveePalette.PageTone, mounted by CoverPaletteLeaves), and a
+    // tuned-but-unreachable wash is worse than no wash: it is a second, contradictory answer to "how much colour does a
+    // light page take" sitting a few lines from the real one. NowPlayingPanel has its own local HeroWashColor and is
+    // unaffected.
 
     /// <summary>Semantic copy protection over full-bleed artist photography. Both axes use exactly four stops (the
     /// recorder limit) and release to alpha zero at the hero seam. Peak alphas match the immersive detail hero

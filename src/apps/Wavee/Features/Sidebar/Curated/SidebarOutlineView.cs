@@ -326,9 +326,9 @@ sealed class SidebarOutlineView : Component
             // The section CARD (R3.2 item 2): an opaque card plate at rest, and the SELECTED card swaps to the subtle
             // plate plus its 3-DIP accent bar — the same selection-aware ramp the sidebar rows use, so the app reads as
             // one system (§C4.5).
-            Fill = selected ? Tok.FillSubtleSecondary : Tok.FillCardDefault,
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillCardSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            Fill = selected ? WaveeColors.SelectedRest : Tok.FillCardDefault,
+            HoverFill = selected ? WaveeColors.SelectedHover : Tok.FillCardSecondary,
+            PressedFill = selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             BorderWidth = 1f,
             BorderColor = selected ? Tok.AccentSubtle : Tok.StrokeCardDefault,
             BrushTransitionMs = Motion.ControlFaster,
@@ -440,9 +440,9 @@ sealed class SidebarOutlineView : Component
             Corners = Radii.ControlAll,
             // A divider is CHROME, not content: it keeps the flat, plateless treatment so the section cards beside it read
             // as the things that actually hold content.
-            Fill = selected ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            HoverFill = selected ? Tok.FillSubtleTertiary : Tok.FillSubtleSecondary,
-            PressedFill = selected ? Tok.FillSubtleSecondary : Tok.FillSubtleTertiary,
+            Fill = selected ? WaveeColors.SelectedRest : ColorF.Transparent,
+            HoverFill = selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
+            PressedFill = selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
             Opacity = spec.Hidden ? 0.6f : 1f,
             Cursor = CursorId.Hand,
             Role = AutomationRole.NavigationItem,

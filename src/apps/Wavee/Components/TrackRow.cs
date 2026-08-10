@@ -519,8 +519,10 @@ internal static class TrackRow
                 // title on an otherwise quiet row. Small and slightly veiled still reads as the key's colour identity.
                 // Both the 6-DIP box and its 1.5-DIP corner are deliberately BELOW their ramps' smallest rungs — this
                 // is a colour SWATCH, not a surface, and a 4-DIP corner on a 6-DIP box is a circle.
+                // The colour goes through DataDotInk, which is a PASSTHROUGH in dark and a hue-dependent darkening in
+                // light — the wire hues were authored for a dark surface and are unreadable smears on a light row.
                 Width = 6f, Height = 6f, Corners = CornerRadius4.All(1.5f), Opacity = 0.85f,
-                Fill = WaveePalette.ToColor(argb), AlignSelf = FlexAlign.Center,
+                Fill = WaveePalette.DataDotInk(argb, Tok.Theme), AlignSelf = FlexAlign.Center,
             });
         parts.Add(Caption(DetailFormat.Bpm(bpm)) with { Color = Tok.TextSecondary });
         if (KeyLabel(t) is { Length: > 0 } key)

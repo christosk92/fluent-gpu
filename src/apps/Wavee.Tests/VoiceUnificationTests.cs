@@ -173,15 +173,26 @@ public class VoiceUnificationTests
 
     // ── Zebra ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The stripe is DERIVED, not three hand-picked alphas per theme: it is the engine's subtle-fill ink at its
-    /// quietest rung. That drops the light/dark branch (the subtle ladder already flips black ink for white) and makes
-    /// the ordering below structural instead of coincidental.</summary>
+    /// <summary>The stripe is DERIVED, not three hand-picked alphas per theme.
+    ///
+    /// <para>DARK takes the engine's subtle-fill ink at its quietest rung, for the reason below: the dark SHELL zebra is
+    /// literally the dark hover fill, so a striped row would have had no hover.</para>
+    /// <para>LIGHT now takes the shell's own row ladder, which since the light-mode overhaul is a BLACK-alpha stripe
+    /// solved together with the light hover/press rungs (it used to be a white-alpha value the app could not use — the
+    /// dead field that nevertheless fed the light text-contrast solve). Taking it here is what keeps the palette
+    /// flattening the same value the app paints.</para></summary>
     [Theory]
     [InlineData(ThemeKind.Light)]
     [InlineData(ThemeKind.Dark)]
     public void RowZebra_IsTheSubtleFillLadder(ThemeKind theme)
     {
-        WithTheme(theme, () => Assert.Equal(Tok.FillSubtleTertiary, WaveeColors.RowZebra));
+        WithTheme(theme, () =>
+        {
+            var shell = theme == ThemeKind.Light ? Tok.Palette.LightShell : Tok.Palette.DarkShell;
+            Assert.Equal(theme == ThemeKind.Light ? shell.RowZebra : Tok.FillSubtleTertiary, WaveeColors.RowZebra);
+            // Either way the stripe is INK on the surface, never a lift off it: black in light, white in dark.
+            Assert.True(theme == ThemeKind.Light ? WaveeColors.RowZebra.R < 0.5f : WaveeColors.RowZebra.R > 0.5f);
+        });
     }
 
     /// <summary>The invariant the old literals BROKE in dark, where the stripe (0x0F) was exactly the hover fill: a

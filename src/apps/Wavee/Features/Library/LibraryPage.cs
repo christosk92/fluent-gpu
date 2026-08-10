@@ -331,8 +331,20 @@ sealed class LibraryPage : Component
     // must NOT be nested cards — that double-cards and reads heavy. Depth here is subtle + WinUI: the navigator gets a
     // faint recede layer, the detail panes stay on the base content surface, and a 1px hairline (the resize grip) divides
     // them. Outer corners come free from the content card's rounded clip, so the columns themselves stay square.
+    // THE THREE COINCIDENT WHITES, and why the fill alone cannot fix them. The navigator painted
+    // FillLayerDefault (#80FFFFFF), the crumb bar painted the same value, and the reading Pane painted NOTHING — so it
+    // showed the content region's own #80FFFFFF underlay. Three surfaces, effectively one colour, separated only by an
+    // α .059 divider: in light the whole master–detail browser read as one white sheet.
+    //
+    // The honest measurement, because it decides the fix: over the bare light ground the shell's plate lands ≈249.6,
+    // the content region's smoke ≈252.3, the navigator's layer on top of that ≈253.7 and a card rung ≈254.2. Light
+    // layering by white-alpha has RUN OUT OF HEADROOM — the whole remaining ladder is 2/255, and no choice of white
+    // fill separates these columns. That is not a reason to skip the rung; it is the reason the WinUI card recipe is a
+    // FILL PLUS A STROKE and not a fill. So: the reading pane takes the card rung (CardBackgroundFillColorDefault,
+    // the rung a content surface is supposed to be on), the navigator keeps the layer rung, and the 1-DIP
+    // StrokeCardDefault seam in the column grip does the separating work the fills physically cannot.
     static BoxEl NavPanel => new() { Direction = 1, ClipToBounds = true, Fill = Tok.FillLayerDefault };
-    static BoxEl Pane => new() { Direction = 1, ClipToBounds = true };
+    static BoxEl Pane => new() { Direction = 1, ClipToBounds = true, Fill = Tok.FillCardDefault };
 
     void Select(NavItem it)
     {
@@ -946,10 +958,27 @@ sealed class LibraryPage : Component
     // wrapper, else that Grow leaks into the horizontal row and the grip eats half the leftover width (the empty-gap bug).
     // The width is ColumnGrip.StripW (16), not a local number: the strip IS the hit target, and all three library
     // splitters plus the detail rail's must be the same target.
+    // THE SEAM. Every column boundary on this page is a Grip, so one 1-DIP StrokeCardDefault line centred in the strip
+    // separates nav|pane and pane|pane everywhere at once.
+    //
+    // ColumnGrip's own header records that it DELETED a permanent hairline, and this is not a re-litigation of that: it
+    // deleted a hairline "between two panes that already read as separate surfaces" — the complaint was a redundant
+    // line, plus a 7-DIP hit strip and a TEXT token used as a HoverFill, and both of those stay fixed. In light the
+    // premise turned out to be false (see NavPanel/Pane above: the columns separate by ≈0.5/255 of fill), so the seam
+    // is now carrying real work, and a card fill paired with a card stroke is WinUI's own recipe rather than a
+    // decoration. It sits BEHIND the grip's reveal indicator and is HitTestVisible = false, so the 16-DIP drag target
+    // is unchanged.
     static Element Grip(Signal<float> w, float min, float max, Action onCommit) => new BoxEl
     {
-        Width = ColumnGrip.StripW, Shrink = 0f, Direction = 1, AlignItems = FlexAlign.Stretch,
-        Children = [Embed.Comp(() => new ColumnGrip(w, min, max, onCommit))],
+        Width = ColumnGrip.StripW, Shrink = 0f, ZStack = true,
+        Children =
+        [
+            new BoxEl { Width = 1f, AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Center,
+                        HitTestVisible = false, Fill = Prop.Of(() => Tok.StrokeCardDefault) },
+            new BoxEl { Direction = 1, AlignItems = FlexAlign.Stretch,
+                        AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
+                        Children = [Embed.Comp(() => new ColumnGrip(w, min, max, onCommit))] },
+        ],
     };
 }
 

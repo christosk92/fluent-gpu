@@ -352,7 +352,12 @@ public static class ConcertUi
         const float bandH = 192f;
         bool dark = Tok.Theme == ThemeKind.Dark;
         ColorF baseFill = dark ? ColorF.FromRgba(0x14, 0x14, 0x16) : Tok.FillCardSecondary;
-        ColorF wash = accent is { } argb ? ColorF.Lerp(baseFill, WaveePalette.ToColor(argb), 0.5f) : baseFill;
+        // The pull toward the event's accent, per theme. It was 0.5 in BOTH, which is the usual light-arm mistake: half
+        // a saturated wire hue mixed into a near-black plate is a dark tint, and half of the same hue mixed into
+        // #F6F6F6 is a full-strength pastel band 192 DIP tall behind the title. Light pulls a third as far — enough to
+        // say "this event has a colour", not enough to become the page.
+        float pull = dark ? 0.5f : 0.18f;
+        ColorF wash = accent is { } argb ? ColorF.Lerp(baseFill, WaveePalette.ToColor(argb), pull) : baseFill;
 
         Element photo = image.Url is { Length: > 0 } url
             ? Ui.Image(url, ImageFit.Cover, aspect: width / bandH, decodePx: width, corners: 0f,

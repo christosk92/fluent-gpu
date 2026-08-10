@@ -221,8 +221,14 @@ public static class WaveeColors
     /// hand-picked alphas per theme. That derivation does two things the literals could not: it drops the light/dark
     /// branch (the subtle ladder already flips black ink for white), and it enforces the invariant the old numbers
     /// broke in DARK, where the stripe (0x0F) was EXACTLY the hover fill, so hovering a striped row moved the surface by
-    /// five alpha steps and read as nothing at all. A stripe MUST be quieter than hover or the row has no hover.</para></summary>
-    public static ColorF RowZebra => Tok.FillSubtleTertiary;
+    /// five alpha steps and read as nothing at all. A stripe MUST be quieter than hover or the row has no hover.</para>
+    /// <para>LIGHT now takes the shell's own row ladder instead (<c>ShellPalette.RowZebra</c>, black α 0.031). That
+    /// ladder used to be a white-alpha value the app could not use, which is exactly why this derivation existed; it is
+    /// now the black-alpha stripe solved TOGETHER with the light hover/press rungs against the art-derived page tone,
+    /// so taking it here keeps the three light rungs in one place and keeps the light text-contrast solve honest (the
+    /// palette flattens the same value it paints). DARK keeps the subtle-fill derivation for the reason above — its
+    /// shell zebra is still literally the hover fill.</para></summary>
+    public static ColorF RowZebra => Tok.Theme == ThemeKind.Light ? ActiveShell.RowZebra : Tok.FillSubtleTertiary;
 
     public static ColorF RowHover => Active.RowHover;
     public static ColorF RowPressed => Active.RowPressed;
@@ -235,6 +241,38 @@ public static class WaveeColors
 
     /// <inheritdoc cref="RowHoverZebra"/>
     public static ColorF RowPressedZebra => ColorContrast.Over(Active.RowPressed, RowZebra);
+
+    // ── THE SELECTION LADDER ─────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // "You are here" for a NAV row (WaveeAccent role 2, AccentSelection), and the ordering law that goes with it.
+    //
+    // THE BUG THIS REPLACES WAS AN INVERSION, not a tuning miss. Every sidebar row in every design painted the same
+    // trio: selected-at-rest = FillSubtleSecondary (light α 0.035), and hovering that selected row swapped DOWN to
+    // FillSubtleTertiary (light α 0.023). So pointing at the row you are already on made the app look like it had
+    // deselected it — the selected plate got QUIETER under the pointer — while an unselected row hovering to 0.035 was
+    // simultaneously the loudest thing in the pane. Selection read as less-than-hover, which is backwards for the one
+    // state that has to survive a glance.
+    //
+    // THE FIX IS THREE RUNGS THAT ONLY EVER GO UP, and it composes rather than swaps:
+    //   rest    = Tok.AccentSubtle — accent @ 14 % light / 16 % dark. The token existed with almost no call sites while
+    //             every nav row hand-rolled a neutral; a nav selection is exactly what WinUI ships it for.
+    //   hover   = the standard hover veil composed OVER that plate (one fill, ColorContrast.Over — a row paints a
+    //             single Fill, never two stacked plates), so hovered-selected is strictly stronger than at rest.
+    //   pressed = the quieter press veil over the same plate. Still above rest, still below hover, which is WinUI's own
+    //             rest → hover(up) → pressed(down-but-above-rest) shape rather than an invented one.
+    //
+    // BOTH THEMES take the accent plate. Dark's AccentSubtle is the light-blue ramp shade at 16 %, which lifts a
+    // #2C2C2C row into a legible blue-grey — a real step where the neutral 0x0F white it replaces was one rung off the
+    // hover it had to be distinguishable from. The accent is COLOUR only: the reserved selection GEOMETRY is still the
+    // 3-DIP pill (SidebarSelectionPill), and this plate never appears without it.
+    //
+    // BROWSE/LIST selection is deliberately NOT this. A track row, a library search hit and a suggestion row keep the
+    // neutral subtle-fill ladder — they are ItemContainer/SelectorVisual surfaces, and LibraryPage already recorded the
+    // decision that spending the page's accent on a row that is not an action makes the same state look like two
+    // different states depending on which list you are in.
+    public static ColorF SelectedRest => Tok.AccentSubtle;
+    public static ColorF SelectedHover => ColorContrast.Over(Tok.FillSubtleSecondary, Tok.AccentSubtle);
+    public static ColorF SelectedPressed => ColorContrast.Over(Tok.FillSubtleTertiary, Tok.AccentSubtle);
 
     public static ColorF ChromeHover => Tok.FillSubtleSecondary;
     public static ColorF ChromePressed => Tok.FillSubtleTertiary;

@@ -44,12 +44,37 @@ sealed class ShellMaterialLayer : Component
             var hero = Wash(wash.Hero, ShellWashGeometry.Hero, ShellWashGeometry.HeroAlpha(light), "shell.wash.hero");
             var weekly = Wash(wash.Weekly, ShellWashGeometry.Weekly, ShellWashGeometry.ShelfAlpha(light), "shell.wash.weekly");
             var mix = Wash(wash.Mix, ShellWashGeometry.Mix, ShellWashGeometry.ShelfAlpha(light), "shell.wash.mix");
-            kids = [Tint(state.Tint), .. Only(hero), .. Only(weekly), .. Only(mix)];
+            kids = [Tint(state.Tint), WashHost([.. Only(hero), .. Only(weekly), .. Only(mix)])];
         }
         else kids = [Tint(state.Tint)];
 
         return new BoxEl { Grow = 1f, ZStack = true, HitTestVisible = false, Children = kids };
     }
+
+    /// <summary>THE WASHES STOP AT THE DOCK LINE. The player dock paints nothing (it is a Mica-passthrough omission
+    /// like every other chrome band), so whatever the material layer paints under it IS the dock. The Mix wash is
+    /// bottom-anchored with its ellipse centre at window y = 1.00, i.e. its PEAK alpha landed exactly across the dock
+    /// band — which is what read as "the dock has a pastel gradient". It never had a gradient; it had the shell's.
+    ///
+    /// <para>The fix is a host box inset by <see cref="PlayerDock.Reserve"/> at the bottom, clipping what it holds. Of
+    /// the three placements only Mix hangs off the bottom edge (Hero and Weekly both clamp to y0 = 0 and are
+    /// TOP-anchored), so Hero and Weekly are bit-for-bit unmoved and Home's approved look above the dock — the D20–D23
+    /// decisions, which are about wash SOURCE and cross-fade identity, not geometry — is untouched. Mix translates up
+    /// by the dock height and is cut at that line.</para>
+    ///
+    /// <para>A MARGIN rather than a re-anchored ellipse, deliberately: <c>ShellWashPlacement.Center</c>/<c>Radius</c>
+    /// are node-relative CONSTANTS precisely because the box is a fraction of the window, and <c>GradientSpec</c> is
+    /// not a Prop — it can only change by re-rendering, which happens at navigation rate. Subtracting a fixed 72 DIP
+    /// from the box HEIGHT would make those two ratios viewport-dependent and they would go stale on the next resize.
+    /// Insetting the whole host keeps every ratio constant and costs one box.</para>
+    /// <para>The flat TINT stays full-bleed: it is a uniform low-alpha scrim with no peak to land anywhere, so the dock
+    /// carrying it is the page's colour reaching the whole window, which is the intent.</para></summary>
+    static Element WashHost(Element[] washes) => new BoxEl
+    {
+        Grow = 1f, ZStack = true, HitTestVisible = false, ClipToBounds = true,
+        Margin = new Edges4(0f, 0f, 0f, PlayerDock.Reserve),
+        Children = washes,
+    };
 
     static Element[] Only(Element? e) => e is null ? [] : [e];
 
