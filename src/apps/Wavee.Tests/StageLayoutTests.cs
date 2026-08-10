@@ -212,6 +212,67 @@ public class StageLayoutTests
         Assert.Contains(StageLayout.CompactStage, seen);
     }
 
+    // ── the scrim ladder ─────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The stage is SINGLE-THEME art-dark, and its scrim is ONE continuous vertical system: a deepening at the
+    /// top (the caption cluster), a deepening at the bottom (the pivot band and the transport), and a genuine PLATEAU at
+    /// the base value through the middle where the lyrics read. The stops are FRACTIONS of the body height on purpose —
+    /// that is what makes each deepening a feather hundreds of DIP long at any window size, where the boxed 88-DIP top
+    /// veil it replaced was a band you could point at.</summary>
+    [Fact]
+    public void TheScrim_IsOneContinuousSystemWithAPlateau()
+    {
+        Assert.True(StageLayout.ScrimTopA > StageLayout.ScrimBaseA, "the top must be DEEPER than the base");
+        Assert.True(StageLayout.ScrimBottomA > StageLayout.ScrimBaseA, "the bottom must be DEEPER than the base");
+        Assert.True(StageLayout.ScrimBaseA > 0f && StageLayout.ScrimTopA < 1f);
+
+        Assert.True(StageLayout.ScrimTopStop > 0f);
+        Assert.True(StageLayout.ScrimTopStop < StageLayout.ScrimBottomStop);
+        Assert.True(StageLayout.ScrimBottomStop < 1f);
+        // Long feathers, both ends: a fifth of the surface each, minimum.
+        Assert.True(StageLayout.ScrimTopStop >= 0.2f, "the top feather is too short to be edgeless");
+        Assert.True(1f - StageLayout.ScrimBottomStop >= 0.2f, "the bottom feather is too short to be edgeless");
+        // …and a real flat middle between them, not two ramps meeting.
+        Assert.True(StageLayout.ScrimBottomStop - StageLayout.ScrimTopStop >= 0.3f);
+    }
+
+    /// <summary>The column shade is a PAINT layer, not a layout one — which is exactly why it can be much wider than the
+    /// column BOX and feather to zero over a ramp the eye cannot locate. It must be wider than the box (otherwise it is
+    /// the old boxed veil again) and its falloff must be a long multiple of the box's layout gutter.</summary>
+    [Fact]
+    public void TheColumnShade_IsWiderThanTheBoxAndFeathersToZero()
+    {
+        Assert.Equal(StageLayout.WideColumnW + StageLayout.ColumnShadeFalloffW, StageLayout.ColumnShadeW);
+        Assert.True(StageLayout.ColumnShadeW > StageLayout.WideStage.LayoutWidth,
+            "the shade must overhang the column BOX — a shade that stops at the box edge IS the edge");
+        Assert.True(StageLayout.ColumnShadeFalloffW >= 2f * StageLayout.WideColumnFalloffW);
+        Assert.True(StageLayout.ColumnShadeFalloffW >= 240f, "a short ramp to zero still reads as a smear");
+
+        // The hold stop is exactly where the DESIGNED column ends inside the shade, so the type never sits on a moving
+        // value; the mid stop is strictly inside the feather, which is what curves the ramp (a straight alpha line is
+        // the shape the eye resolves as a Mach band).
+        Assert.Equal(StageLayout.WideColumnW / StageLayout.ColumnShadeW, StageLayout.ColumnShadeHoldStop, 4);
+        Assert.True(StageLayout.ColumnShadeMidStop > StageLayout.ColumnShadeHoldStop);
+        Assert.True(StageLayout.ColumnShadeMidStop < 1f);
+        Assert.True(StageLayout.ColumnShadeMidFrac > 0f && StageLayout.ColumnShadeMidFrac < 1f);
+        Assert.True(StageLayout.ColumnShadeA > 0f && StageLayout.ColumnShadeA < StageLayout.ScrimBaseA);
+
+        // The queue pane's local shade comes up out of ZERO before it is anywhere near the pane's content.
+        Assert.True(StageLayout.PaneShadeFeatherStop > 0.1f && StageLayout.PaneShadeFeatherStop < 0.5f);
+        Assert.True(StageLayout.PaneShadeA > 0f && StageLayout.PaneShadeA < StageLayout.ScrimBaseA);
+    }
+
+    /// <summary>The column's content span, and the reason it is authored in the pure allocator: the volume track is
+    /// DERIVED from it rather than guessed at the call site.</summary>
+    [Fact]
+    public void TheColumnContent_IsTheDesignedColumnLessItsGutters()
+    {
+        Assert.Equal(StageLayout.WideColumnW - 2f * StageLayout.ColumnPadX, StageLayout.ColumnContentW);
+        Assert.Equal(304f, StageLayout.ColumnContentW);
+        // It still carries the cover with room to spare — the reason the gutter is 24 in the first place.
+        Assert.True(StageLayout.ColumnContentW >= StageLayout.WideArtW);
+    }
+
     // ── the material rules, as source scans ──────────────────────────────────────────────────────────────────────────
 
     /// <summary>The stage's renderers, by name. <c>ImmersiveLyricsSurface</c> is the host: it is in the INK scans (its
@@ -410,6 +471,219 @@ public class StageLayoutTests
 
         foreach (string name in StageInkFiles)
             Assert.DoesNotContain("ToUpper", File.ReadAllText(StagePath(root, name)));
+    }
+
+    // ── the scrim's material rules, as source scans ──────────────────────────────────────────────────────────────────
+
+    /// <summary>THE decision, in code: the stage is single-theme art-dark, so NOTHING on it branches on the theme. The
+    /// deleted arm is the white light-theme base scrim — it is what forced every chrome region to bring its own boxed
+    /// dark veil, and what left the theme-invariant white title sitting on a near-white ground.</summary>
+    [Fact]
+    public void NoStageFile_BranchesOnTheTheme()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        var offenders = new List<string>();
+        foreach (string name in StageInkFiles)
+        {
+            string[] lines = File.ReadAllLines(StagePath(root, name));
+            for (int i = 0; i < lines.Length; i++)
+            {
+                string l = Code(lines[i]);
+                if (ThemeBranch.IsMatch(l)) offenders.Add($"{name}:{i + 1}: {lines[i].Trim()}");
+            }
+        }
+        Assert.True(offenders.Count == 0,
+            "the stage is ALWAYS art-dark — a theme branch here is the two-world collage coming back:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    static readonly Regex ThemeBranch = new(@"Tok\.Theme|ThemeKind\.", RegexOptions.Compiled);
+
+    /// <summary>ONE scrim system, not a patchwork. The chrome regions' boxed veils are GONE by name, and what replaced
+    /// them is two full-bleed layers authored in <c>StageChrome</c> and mounted once by the surface.</summary>
+    [Fact]
+    public void TheScrim_IsTwoFullBleedLayersAndNoRegionVeils()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string chrome = File.ReadAllText(StagePath(root, "StageChrome.cs"));
+        Assert.Contains("public static GradientSpec Scrim()", chrome);
+        Assert.Contains("public static GradientSpec ColumnShade()", chrome);
+        Assert.Contains("public static GradientSpec PaneShade()", chrome);
+        foreach (string gone in new[] { "TopVeil(", "BottomVeil(", "HeaderVeil(", "ColumnVeil(", "PaneVeil(" })
+            Assert.DoesNotContain(gone, chrome);
+
+        // Mounted ONCE, in the backdrop stack — the surface is the only file that paints them.
+        string surface = File.ReadAllText(StagePath(root, "ImmersiveLyricsSurface.cs"));
+        Assert.Contains("Gradient = StageChrome.Scrim()", surface);
+        Assert.Contains("Gradient = StageChrome.ColumnShade()", surface);
+        // No region of stage chrome carries a gradient of its own any more. The queue pane is the ONE exception and it
+        // is a mounted, cross-faded pane rather than a region — see StagePanes' header.
+        Assert.DoesNotContain("Gradient =", File.ReadAllText(StagePath(root, "StageIdentity.cs")));
+        Assert.Equal(1, Regex.Matches(File.ReadAllText(StagePath(root, "StagePanes.cs")), @"Gradient = ").Count);
+    }
+
+    /// <summary>Edge-invisibility, as a mechanism rather than a taste call: every shade either reaches its own boundary
+    /// at alpha ZERO after a long feather, or ends at a WINDOW edge where there is no outside to contrast with. The two
+    /// local shades are the first kind, and the assertion is on the literal terminating stop.</summary>
+    [Fact]
+    public void EveryShade_TerminatesAtZeroOrAWindowEdge()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string chrome = File.ReadAllText(StagePath(root, "StageChrome.cs"));
+        // The column shade's FAR edge is inside the surface ⇒ it must land on nothing.
+        Assert.Matches(new Regex(@"ColumnShade\(\)[\s\S]*?new GradientStop\(1f, Shade\(0f\)\)"), chrome);
+        // The queue shade's NEAR edge is inside the surface ⇒ it must come up out of nothing.
+        Assert.Matches(new Regex(@"PaneShade\(\)[\s\S]*?new GradientStop\(0f, Shade\(0f\)\)"), chrome);
+    }
+
+    // ── the column's composition ─────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The identity cluster is BOTTOM-ANCHORED, and <c>Grow</c> is what makes that true. A component's element
+    /// is mounted under a host node carrying the scene's default layout, so a column that only declares
+    /// <c>Justify = End</c> takes its MEASURED height, sits at the top of a full-height host and distributes no free
+    /// space at all — the cover pinned top-left with the window's lower half empty.</summary>
+    [Fact]
+    public void TheIdentityColumn_GrowsIntoItsHostAndEndsAtTheBottom()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string identity = File.ReadAllText(StagePath(root, "StageIdentity.cs"));
+        // Both halves, in the same element: the Grow that gives the column the host's height, and the End that spends
+        // it downward. Either one alone is the bug (End without Grow is silently inert; Grow without End stretches the
+        // whitespace instead of the cluster).
+        Assert.Matches(new Regex(@"Grow = 1f, MinHeight = 0f,\s*Direction = 1, Justify = FlexJustify\.End,"), identity);
+    }
+
+    /// <summary>Every full-width row in the column is wrapped in a COLUMN, never the BoxEl default row. A row wrapper
+    /// hands its single child the child's INTRINSIC main-axis size — which is what made the seek bar a stub, the volume
+    /// rail a dash, and the elapsed/remaining pair collapse together with no space for the spacer between them.</summary>
+    [Fact]
+    public void EveryStackWrapper_IsAColumnSoItsRowSpansTheColumn()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string[] lines = File.ReadAllLines(StagePath(root, "StageIdentity.cs"));
+        string[] keys = ["stage:identity-row", "stage:seek", "stage:transport", "stage:volume", "stage:device"];
+        var offenders = new List<string>();
+        int found = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string l = Code(lines[i]);
+            // `… with { Key = … }` is a re-KEYED element, not a stack wrapper — the compact header's identity row is a
+            // flex ITEM in a row and carries its own Grow/Basis, so it is deliberately out of this rule.
+            if (l.Contains("with {", StringComparison.Ordinal)) continue;
+            foreach (string k in keys)
+            {
+                if (!l.Contains("Key = \"" + k + "\"", StringComparison.Ordinal)) continue;
+                found++;
+                if (!l.Contains("Direction = 1", StringComparison.Ordinal))
+                    offenders.Add($"StageIdentity.cs:{i + 1}: {lines[i].Trim()}");
+            }
+        }
+        Assert.True(found >= keys.Length, $"expected every stack wrapper to still exist (found {found})");
+        Assert.True(offenders.Count == 0,
+            "a stack wrapper defaulted to a ROW — its child will take its intrinsic width, not the column's:\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>The volume rail is an AUTHORED length derived from the column's content span. <c>Slider.Create</c> takes
+    /// a track LENGTH, not a stretch: a NaN there is not "fill the row", it is a NaN width on every part of the slider
+    /// template — the whole of the "volume is a tiny dash" report.</summary>
+    [Fact]
+    public void TheVolumeTrack_IsDerivedFromTheColumnContentSpan()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string identity = File.ReadAllText(StagePath(root, "StageIdentity.cs"));
+        Assert.Contains("StageLayout.ColumnContentW - WaveeCta.IconButtonSize - Spacing.S", identity);
+        Assert.Contains("length: VolumeTrackW", identity);
+        Assert.DoesNotContain("length: float.NaN", identity);
+    }
+
+    // ── the hover/press scope ────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>EVERY BUTTON IS ITS OWN HOVER/PRESS SCOPE. An <c>OnContextRequested</c> handler sets ContextBit, which
+    /// is in the dispatcher's hit-anywhere mask — so a menu attached straight to the identity column made the column
+    /// itself the hit for every gap between controls, and the engine's hover cascade (reveal/scale descendants) plus its
+    /// press cascade (UNCONDITIONAL, every descendant with an interact row) lit the whole cluster at once. The fix is
+    /// structural and this pins it: the menu goes on a ZStack SHELL whose first layer is a CHILDLESS shield that always
+    /// wins the hit, so the cascade from the hit node reaches nothing while the shell stays an ancestor for the "⋯"
+    /// button's ClickRequestsContext walk. The shield staying childless is the whole contract.</summary>
+    [Fact]
+    public void TheIdentityRegion_LeavesEveryButtonItsOwnHoverScope()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string identity = File.ReadAllText(StagePath(root, "StageIdentity.cs"));
+        // The shield, spelled as ONE childless literal so "someone added a child to it" cannot pass unnoticed.
+        Assert.Contains("new BoxEl { Key = ContextShieldKey }.WithContextMenu(", identity);
+        // The shell is a ZStack (the shield must be able to sit UNDER the content, not beside it).
+        Assert.Matches(new Regex(@"static BoxEl ContextScope\([\s\S]{0,400}?ZStack = true"), identity);
+        // Exactly two attach points — the shell and the shield — and nothing else in the column owns a menu.
+        Assert.Equal(2, Regex.Matches(identity, @"\.WithContextMenu\(").Count);
+    }
+
+    // ── the lyrics ink seam ──────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>The lyrics were the ONLY thing on the stage painting theme ink, and that is the whole reason the base
+    /// scrim used to flip. <c>LyricsInk</c> is the seam: a MODE (not a captured colour, so the rail still follows a live
+    /// theme flip), passed by the stage as <c>onMedia: true</c> and left at its theme default by the rail.</summary>
+    [Fact]
+    public void TheStageLyrics_TakeTheOnMediaInkAndTheRailDoesNot()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string ink = File.ReadAllText(StagePath(root, "LyricsInk.cs"));
+        Assert.Contains("readonly record struct LyricsInk", ink);
+        Assert.Contains("WaveeOnMedia.Ink", ink);
+        Assert.Contains("Tok.TextPrimary", ink);   // the theme arm still exists — the rail is not on media
+
+        Assert.Contains("new LyricsView(large: true, onMedia: true", File.ReadAllText(StagePath(root, "StagePanes.cs")));
+
+        string rail = File.ReadAllText(StagePath(root, "RightRail.cs"));
+        Assert.Contains("new LyricsView(", rail);
+        Assert.DoesNotContain("onMedia:", rail);
+    }
+
+    /// <summary>…and the reading surface itself no longer names a theme rung anywhere. The ONE fenced exception is the
+    /// env-gated lyrics-search DEBUG panel, which is a developer surface on an opaque theme plate — white-on-media ink
+    /// over a light solid plate would be the very invisibility this seam exists to remove.</summary>
+    [Fact]
+    public void TheLyricsReadingSurface_PaintsNoThemeInk()
+    {
+        string root = AppSourceRoot();
+        if (root is null) { Assert.Skip("app sources not present (binary-only run)"); return; }
+
+        string[] lines = File.ReadAllLines(StagePath(root, "LyricsView.cs"));
+        var offenders = new List<string>();
+        bool fenced = false;
+        int fences = 0;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (lines[i].Contains("ink-scan: off", StringComparison.Ordinal)) { fenced = true; fences++; continue; }
+            if (lines[i].Contains("ink-scan: on", StringComparison.Ordinal)) { fenced = false; fences++; continue; }
+            if (fenced) continue;
+            if (ThemeInk.IsMatch(Code(lines[i]))) offenders.Add($"LyricsView.cs:{i + 1}: {lines[i].Trim()}");
+        }
+        Assert.Equal(2, fences);   // one fenced span, closed — an unclosed fence would hide the whole tail of the file
+        Assert.True(offenders.Count == 0,
+            "the lyrics reading surface takes its ink from LyricsInk, so the stage can be on media:\n  "
+            + string.Join("\n  ", offenders));
+
+        string view = File.ReadAllText(StagePath(root, "LyricsView.cs"));
+        Assert.Contains("_ink.Primary", view);
+        Assert.Contains("_ink.Secondary", view);
     }
 
     /// <summary>The pure allocator stays ENGINE-FREE, so this test class drives the real arithmetic instead of a copy

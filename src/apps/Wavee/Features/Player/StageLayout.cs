@@ -65,10 +65,20 @@ public readonly record struct StageLayout(
     /// stretch its whitespace.</summary>
     public const float WideColumnW = 352f;
 
-    /// <summary>How far the column's dark veil keeps fading PAST <see cref="WideColumnW"/> before it reaches the base
-    /// scrim. It is layout width (the column box is <see cref="LayoutWidth"/> wide and pads its content back to
-    /// <see cref="WideColumnW"/>), because a gradient that ends exactly where the content ends reads as an edge.</summary>
+    /// <summary>The gutter the column BOX reserves to the right of the designed column, so the pane region never starts
+    /// flush against the column's type. It is layout width only (the column box is <see cref="LayoutWidth"/> wide and
+    /// pads its content back to <see cref="WideColumnW"/>); the SHADE that deepens the scrim under the column is a
+    /// separate, wider, full-bleed layer (<see cref="ColumnShadeW"/>) and is deliberately NOT this number.</summary>
     public const float WideColumnFalloffW = 120f;
+
+    /// <summary>The column's internal gutter — the padding that puts the content back inside the designed
+    /// <see cref="WideColumnW"/>. Authored here rather than in the renderer so <see cref="ColumnContentW"/> (and the
+    /// volume track that spans it) is derived arithmetic rather than a second copy of the same number.</summary>
+    public const float ColumnPadX = 24f;
+
+    /// <summary>What the column's content actually gets: 352 − 2 × 24 = 304, which carries the 300 cover with a hairline
+    /// to spare AND is the span every full-width row in the column (the seek block, the volume rail) must fill.</summary>
+    public const float ColumnContentW = WideColumnW - 2f * ColumnPadX;
 
     /// <summary>The cover on the wide stage.</summary>
     public const float WideArtW = 300f;
@@ -94,6 +104,69 @@ public readonly record struct StageLayout(
     /// volume row and the output-device line lose their space entirely — all four are still reachable, one tap deeper.</summary>
     public const StageControl CompactFold =
         StageControl.Shuffle | StageControl.Repeat | StageControl.Volume | StageControl.OutputDevice;
+
+    // ── the scrim ladder ─────────────────────────────────────────────────────────────────────────────────────────────
+    //
+    // THE STAGE IS SINGLE-THEME: always art-dark, in BOTH themes. The room is lit by the playing track, like every
+    // art-forward player, and every rung below is therefore theme-INVARIANT — there is no light arm to keep in sync.
+    // (It used to have one: a WHITE base scrim in light theme, because LyricsView painted Tok.TextPrimary. That is what
+    // made the surface a two-world collage — dark chrome veils in patches over a white ground, with the theme-invariant
+    // white title landing on the near-white part and vanishing. The lyrics now paint the on-media ladder instead, which
+    // is what lets the scrim be one thing.)
+    //
+    // The numbers live HERE, in the pure allocator, for the same reason the width ladder does: they are the contract the
+    // tests drive. StageChrome turns them into the two GradientSpecs — it owns the spelling, not the values.
+    //
+    // EDGE-INVISIBILITY IS THE WHOLE MECHANISM. A veil is invisible iff it either (a) reaches its own boundary at alpha
+    // 0 after a feather long enough that the ramp is below the eye's banding threshold, or (b) ends at a WINDOW edge,
+    // where there is no "outside" to contrast with. Every stop below satisfies one of the two, and StageLayoutTests
+    // asserts it in DIP rather than in stop fractions.
+
+    /// <summary>The base scrim — what the artwork is dimmed to across the whole surface. One flat value, no theme
+    /// branch: this is the ground everything else deepens FROM.</summary>
+    public const float ScrimBaseA = 0.46f;
+
+    /// <summary>The scrim at the very top of the body band, under the caption cluster.</summary>
+    public const float ScrimTopA = 0.76f;
+
+    /// <summary>…and at the very bottom, under the pivot band and the transport.</summary>
+    public const float ScrimBottomA = 0.70f;
+
+    /// <summary>Where the top deepening has fully resolved into <see cref="ScrimBaseA"/>, as a fraction of the body
+    /// height. A FRACTION, not a DIP box, is what makes it edge-free by construction: at any window the feather is
+    /// hundreds of DIP long, where the deleted 88-DIP top veil was a band you could point at.</summary>
+    public const float ScrimTopStop = 0.22f;
+
+    /// <summary>Where the bottom deepening starts, same units.</summary>
+    public const float ScrimBottomStop = 0.62f;
+
+    /// <summary>How much darker the scrim goes behind the identity column, on top of <see cref="ScrimBaseA"/>.</summary>
+    public const float ColumnShadeA = 0.26f;
+
+    /// <summary>How far the column shade keeps fading past <see cref="WideColumnW"/> before it reaches exactly 0. It is
+    /// more than twice <see cref="WideColumnFalloffW"/> deliberately: the shade is a full-bleed PAINT layer with no
+    /// layout consequence at all, so its feather is free, and a 260-DIP ramp to zero has no locatable edge.</summary>
+    public const float ColumnShadeFalloffW = 260f;
+
+    /// <summary>The column shade layer's width. Not a layout width — see <see cref="WideColumnFalloffW"/>.</summary>
+    public const float ColumnShadeW = WideColumnW + ColumnShadeFalloffW;
+
+    /// <summary>The stop at which the shade stops holding <see cref="ColumnShadeA"/> and starts feathering.</summary>
+    public static float ColumnShadeHoldStop => WideColumnW / ColumnShadeW;
+
+    /// <summary>One mid stop inside the feather so the ramp is a CURVE rather than a straight line — a linear alpha
+    /// ramp is exactly the shape the eye resolves as a Mach band.</summary>
+    public static float ColumnShadeMidStop => ColumnShadeHoldStop + 0.55f * (1f - ColumnShadeHoldStop);
+
+    /// <summary>The mid stop's alpha, as a fraction of <see cref="ColumnShadeA"/>.</summary>
+    public const float ColumnShadeMidFrac = 0.34f;
+
+    /// <summary>How much darker the scrim goes under the QUEUE pane while it is up — its rows carry hover glass, and
+    /// glass needs something under it. Feathers to 0 on the pane's left; its deep end is the window edge.</summary>
+    public const float PaneShadeA = 0.24f;
+
+    /// <summary>Where the queue pane's shade has finished coming up out of 0.</summary>
+    public const float PaneShadeFeatherStop = 0.22f;
 
     /// <summary>The wide stage: nothing folded.</summary>
     public static readonly StageLayout WideStage = new(
