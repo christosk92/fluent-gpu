@@ -43,8 +43,6 @@ sealed class TrackList : Component
     const int VerticalHeroIndex = 0;
     const int VerticalChromeIndex = 1;
     const int VerticalTrackStart = 2;
-    const float VerticalHeaderFallbackHeight = 420f;
-    const float RowFlowVerticalHeaderFallbackHeight = 320f;
     const int TrackOverscanItems = 8;
 
     // The detail model is a Loadable: the HEADER bits (HasVideo, columns) read reactively from its current value
@@ -625,7 +623,8 @@ sealed class TrackList : Component
         var verticalLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
         // The flat list's layout. Stateful — hoisted so it survives re-renders and keeps its extent table.
         var flatLayout = UseMemo(() => new MeasuredStackVirtualLayout(rowH), rowH);
-        float verticalHeroH = _verticalHeader ? VerticalHeaderHeight(subscribe: true) : VerticalHeaderFallbackHeight;
+        // Only the vertical arm mounts a hero root; the two-column arm never reads this (its rail is a sibling column).
+        float verticalHeroH = _verticalHeader ? VerticalHeaderHeight(subscribe: true) : 0f;
         float verticalCollapse = DetailVerticalLayout.CollapseDistance(verticalHeroH);
         _selectedCount = UseComputed(() =>
         {
@@ -827,7 +826,18 @@ sealed class TrackList : Component
         // app-side geometry at all: the ItemsView owns viewport, scroll offset, MEASURED extents, prefix and slot. The
         // page-level gates (editable? sorted? filtered?) are answered LIVE by CanAccept, so a refused drop is a refusal
         // the engine can cue rather than a destination that silently never mounted.
-        Element list = Skel.Region(_full, () => RowsShimmer(set, tracks, rowH), _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
+        // D49 — WHAT THE SHIMMER HAS TO RESERVE. In the two-column arm the rail is a sibling COLUMN and the chrome is a
+        // sibling ROW of this boundary, so both are outside it and were always held open; only the rows shimmer. The
+        // vertical/hero arm is the opposite: hero and chrome are persistent PREFIX ITEMS of the virtualized list
+        // (VerticalList items 0 and 1), so they live INSIDE this boundary and simply did not exist while Pending — the
+        // page opened as rows at y=0 and the whole list was shoved down by several hundred DIP when content landed.
+        // The shimmer therefore leads with the hero band (same pure resolver, same parts, same sizes) and the REAL
+        // chrome element, then the rows. Reveal behaviour is untouched.
+        Element list = Skel.Region(_full,
+            () => _verticalHeader && !_cfg.HasTrailing
+                ? VerticalShimmer(set, tracks, sort, labeled, tier, checkInset, contentFilterBar, rowH)
+                : RowsShimmer(set, tracks, rowH),
+            _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
 
         // Key the list by density + filter → either REMOUNTS it (a clean slot template with the right row height /
         // filtered window). Sort is NOT in the key — each bound row re-skins itself to the new order via its
@@ -1330,10 +1340,29 @@ sealed class TrackList : Component
     {
         float h = subscribe ? _verticalHeaderHeight.Value : _verticalHeaderHeight.Peek();
         if (h > 1f) return h;
-        // Pre-measure fallback. Row flow is the SHORTER composition (the cover caps at 240 beside the copy instead of
-        // stacking a 280 square above it), so the two floors are not the same guess.
-        return _verticalHeroRowFlow ? RowFlowVerticalHeaderFallbackHeight : VerticalHeaderFallbackHeight;
+        // Pre-measure fallback — the SAME pure sum the loading skeleton reserves (DetailSkeleton.VerticalHeroBand), so
+        // the band the shimmer holds open and the band this hero's collapse binds assume are one number. It replaced a
+        // pair of hand-picked constants (420 stacked / 320 row flow) that were a function of nothing: at 400 DIP the
+        // artwork alone is 280 and the padding another 32, which left ~100 DIP for the entire identity column plus the
+        // toolbar row. See DetailVerticalLayout.HeroBandHeight.
+        return DetailVerticalLayout.HeroBandHeight(_verticalHeroW.Peek(), _verticalHeroRowFlow,
+            HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription());
     }
+
+    // ── the hero's own emit predicates, shared by the hero and its skeleton ───────────────────────────────────────
+    // Read exactly what DetailVerticalHero.Build branches on, so the reserved band contains the blocks the hero will
+    // actually compose for THIS model (an album's eyebrow, a playlist's owner row, a release blurb) and no others.
+    bool HeroHasEyebrow() => DetailRail.EyebrowText(_model, _cfg).Length > 0;
+
+    bool HeroHasAttribution()
+        => DetailRail.ShowCollaborators(_model) || _model.OwnerName is { Length: > 0 } || _model.Artists.Count > 0;
+
+    bool HeroHasMeta() => _model.MetaLine is { Length: > 0 };
+
+    bool HeroHasDescription()
+        => HeroEditable() || _model.Description is { Length: > 0 };
+
+    bool HeroEditable() => _model.Capabilities.CanEditMetadata && _model.ContextUri is { Length: > 0 };
 
     (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) SwipeCloseObserver()
         => (ProjectScrollState, ApplyScrollState);
@@ -2158,6 +2187,24 @@ sealed class TrackList : Component
         return new TrackSort(clicked, false);
     }
 
+    /// <summary>The vertical/hero arm's shimmer: the reserved hero band, the REAL chrome (built exactly as
+    /// <c>VerticalItemContent</c> builds list item 1 — same overload, same default inset — so the derived shimmer sits
+    /// on the same column origin the loaded header will), then the row shimmer. Those three ARE the vertical list's
+    /// item sequence, so a loaded page replaces each of them in place instead of appearing above them (D49).</summary>
+    Element VerticalShimmer(ColumnSet set, TrackSize[] tracks, TrackSort sort, bool labeled, int tier,
+                            bool checkInset, Element? contentFilterBar, float rowH) => new BoxEl
+    {
+        Direction = 1,
+        Children =
+        [
+            DetailSkeleton.VerticalHeroBand(
+                _verticalHeroW.Peek(), _verticalHeroRowFlow, TrackRow.PadXFor(tier),
+                HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription()),
+            Chrome(set, tracks, sort, labeled, tier, checkInset, contentFilterBar: contentFilterBar),
+            RowsShimmer(set, tracks, rowH),
+        ],
+    };
+
     // The shimmer source for the track list: N copies of the REAL Row built with an empty track. The engine derives the
     // grey shimmer bars from this (one source of truth — the row shape can never drift from the real rows).
     Element RowsShimmer(ColumnSet set, TrackSize[] tracks, float rowH)
@@ -2219,7 +2266,9 @@ sealed class TrackList : Component
         return new GridEl
         {
             Columns = tracks, ColGap = TrackRow.ColGapFor(set.Tier), RowHeight = rowH, Grow = 1f,
-            Padding = new Edges4(TrackRow.PadX - RowInset, 0f, TrackRow.PadX - RowInset, 0f),
+            // The tier-scaled inset, exactly like TrackRow.Grid — a constant PadX here put the ramp's placeholder row
+            // on a different column origin than the real row it is about to become at tiers 4+ (16 vs 12 vs 8).
+            Padding = new Edges4(TrackRow.PadXFor(set.Tier) - RowInset, 0f, TrackRow.PadXFor(set.Tier) - RowInset, 0f),
             Children = cells.ToArray(),
         };
     }

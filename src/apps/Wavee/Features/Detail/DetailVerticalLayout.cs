@@ -155,6 +155,63 @@ public static class DetailVerticalLayout
     /// touch taller when the copy owns the full column.</summary>
     public static int DescriptionMaxLines(bool rowFlow) => rowFlow ? 3 : 4;
 
+    // ── the hero BAND, as a height ───────────────────────────────────────────────────────────────────────────────
+    // ONE arithmetic for "how tall is this hero at this width", with TWO consumers that must never disagree:
+    //   · the LOADING skeleton reserves exactly this band, so the hero fades into a slot that was already its size
+    //     instead of arriving and shoving the toolbar, the column header and every row down the page (D49); and
+    //   · the loaded hero's own PRE-MEASURE fallback — the height its collapse binds assume on the frame before
+    //     OnBoundsChanged publishes the real one. That used to be two hand-picked constants (420 stacked / 320 row
+    //     flow) which were not a function of anything: at 400 DIP the artwork alone is 280 and the padding another
+    //     32, so 420 left ~100 DIP for a title, a rule, an attribution, a meta line, an action row and a toolbar.
+    // The blocks below are the natural heights of the runs DetailVerticalHero composes, in its order. They are
+    // nominal — the skeleton has no text to shape, so its natural height IS this sum by construction, and the loaded
+    // hero settles onto its measured height on the first layout pass either way.
+    public const float EyebrowRowHeight = 16f;        // WaveeType.Eyebrow, one line
+    public const float AccentRuleRowHeight = 4f;      // Surfaces.AccentRule (2) + its 2-DIP top margin
+    public const float AttributionRowHeight = 16f;    // owner / billed artists, 12px run on one line
+    public const float MetaRowHeight = 16f;           // "50 songs · 3 hr 12 min", one line
+    public const float ActionRowHeight = 40f;         // WaveeCta.Play (36) + the row's Spacing.XS top margin
+    public const float DescriptionLineHeight = 18f;   // the 13px expandable blurb
+    public const float IdentityGap = 4f;              // Spacing.XS — the identity column's inter-block gap
+    public const float ToolbarRowHeight = 32f;        // WaveeSize.ControlH — the list command bar's pill row
+    /// <summary>The hero title's wrap cap (DetailVerticalHero's <c>MaxLines</c>) — the band reserves the full two
+    /// lines, because a one-line title that becomes two is the shove this band exists to prevent.</summary>
+    public const int TitleMaxLines = 2;
+
+    /// <summary>The identity column's height: the blocks the hero actually composes for THIS model, at this width,
+    /// separated by <see cref="IdentityGap"/>. Title, accent rule and action row are unconditional; the rest are
+    /// present exactly when the hero would emit them.</summary>
+    public static float IdentityHeightFor(float colW, bool rowFlow,
+        bool eyebrow, bool attribution, bool meta, bool description)
+    {
+        float w = colW > 0f ? colW : FallbackW;
+        int blocks = 0;
+        float h = 0f;
+        if (eyebrow) { h += EyebrowRowHeight; blocks++; }
+        h += TitleLineHeightFor(TitleSizeFor(w)) * TitleMaxLines; blocks++;
+        h += AccentRuleRowHeight; blocks++;
+        if (attribution) { h += AttributionRowHeight; blocks++; }
+        if (meta) { h += MetaRowHeight; blocks++; }
+        h += ActionRowHeight; blocks++;
+        if (description) { h += DescriptionMaxLines(rowFlow) * DescriptionLineHeight; blocks++; }
+        return h + (blocks > 1 ? (blocks - 1) * IdentityGap : 0f);
+    }
+
+    /// <summary>The whole expanded hero band: the padded artwork/identity composition (stacked or side-by-side, the
+    /// same reflow <see cref="RowFlow(float)"/> selects) plus the list toolbar row that rides under it.</summary>
+    public static float HeroBandHeight(float colW, bool rowFlow,
+        bool eyebrow, bool attribution, bool meta, bool description)
+    {
+        float w = colW > 0f ? colW : FallbackW;
+        float pad = HeroPadFor(w);
+        float art = ArtworkFor(w, rowFlow);
+        float identity = IdentityHeightFor(w, rowFlow, eyebrow, attribution, meta, description);
+        // Row flow bottom-aligns the two columns, so the band is whichever is taller; stacked adds them over the gap.
+        float hero = rowFlow ? MathF.Max(art, identity) : art + HeroGapFor(w) + identity;
+        return pad + hero + HeroBottomPad
+             + ExpandedToolbarTopPad + ToolbarRowHeight + ExpandedToolbarBottomPad;
+    }
+
     /// <summary>Scroll distance over which the expanded hero becomes the 56-DIP context band.</summary>
     public static float CollapseDistance(float expandedHeight)
         => MathF.Max(1f, expandedHeight - CompactIdentityHeight);
