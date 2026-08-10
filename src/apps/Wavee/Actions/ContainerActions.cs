@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -45,6 +47,72 @@ public static class ContainerActions
         IsEnabled = static c => c.S.Library is not null && c.Target.Uri.Length > 0,
         Execute = static c => c.S.Library?.ToggleSaved(c.Target.Uri, c.Target.Name),
     };
+
+    // ── the container half of the TRANSPORT verbs (menu-grammar convergence, D48) ────────────────────────────────────
+    /// <summary>Play next, for a CONTAINER (album / playlist / mix card). Same label, same queue table and same toast as
+    /// <see cref="TrackActions.PlayNext"/> — the only difference is that the tracks are not in hand at menu-open time and
+    /// resolve through <see cref="ContainerTracks"/> at invoke. Absent (not disabled) on a kind with no resolver.</summary>
+    public static readonly AppAction PlayContextNext = new()
+    {
+        Id = ActionId.PlayContextNext, IconKey = ActionIcons.PlayNext,
+        Label = static c => Loc.Get(Strings.Detail.PlayNext),
+        IsEnabled = static c => c.S.Svc?.Player is not null && ContainerTracks.CanResolve(in c),
+        Execute = static c => ContainerTracks.Queue(in c, next: true),
+    };
+
+    /// <summary>Play after (add to the end of the queue), for a CONTAINER. The counterpart of
+    /// <see cref="TrackActions.AddToQueue"/>; see <see cref="PlayContextNext"/>.</summary>
+    public static readonly AppAction AddContextToQueue = new()
+    {
+        Id = ActionId.AddContextToQueue, IconKey = ActionIcons.Queue,
+        Label = static c => Loc.Get(Strings.Detail.PlayAfter),
+        IsEnabled = static c => c.S.Svc?.Player is not null && ContainerTracks.CanResolve(in c),
+        Execute = static c => ContainerTracks.Queue(in c, next: false),
+    };
+
+    /// <summary>An ALBUM card's "Go to artist". The card model carries a uri and a name and nothing else, so the artist
+    /// is resolved at INVOKE time through the same album reader the track resolver uses (cold — one read per click,
+    /// never per render), then navigated to with the app's own <c>artist:</c> route. The album's PRIMARY artist: an
+    /// album menu has no place to host a cascade the way a multi-artist TRACK row does, and Spotify's own album menu
+    /// navigates to the primary artist too.</summary>
+    public static readonly AppAction GoToAlbumArtist = new()
+    {
+        Id = ActionId.GoToAlbumArtist, IconKey = ActionIcons.Artist,
+        Label = static c => Loc.Get(Strings.Detail.GoToArtist),
+        // Post is REQUIRED, not optional: this verb's entire effect (the navigation) happens after an await, so a host
+        // without a UI-thread marshal could not complete it. Gating here renders the row disabled instead of dropping
+        // the click silently — unlike the queue verbs, whose effect lands without Post and whose only marshalled step
+        // is the confirmation toast.
+        IsEnabled = static c => c.S.Go is not null && c.S.Svc is not null && c.S.Post is not null
+                                && c.Target.Kind == TargetKind.Album && c.Target.Uri.Length > 0,
+        Execute = static c =>
+        {
+            if (c.S.Go is not { } go || c.S.Svc is not { } svc || c.Target.Uri is not { Length: > 0 } uri) return;
+            var post = c.S.Post;
+            _ = Run();
+
+            async Task Run()
+            {
+                Album? album;
+                try { album = await svc.Library.GetAlbumAsync(uri).ConfigureAwait(false); }
+                catch (Exception ex) { Post(post, () => Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error })); return; }
+
+                if (album?.Artists is not { Count: > 0 } artists || artists[0].Uri.Length == 0)
+                {
+                    Post(post, () => Toast.Show(Loc.Get(Strings.Menu.ArtistUnavailable),
+                        new ToastOptions { Severity = InfoBarSeverity.Warning }));
+                    return;
+                }
+                var a = artists[0];
+                Post(post, () => go("artist:" + a.Uri, a.Name));
+            }
+        },
+    };
+
+    /// <summary>Run a completion on the UI thread. A host without a marshal (the vertical slice, a test) simply does not
+    /// get the completion — the <c>WaveeResourceDrop.DepositTracks</c> precedent — rather than touching signals from a
+    /// pool thread.</summary>
+    internal static void Post(Action<Action>? post, Action work) => post?.Invoke(work);
 
     /// <summary>Start an artist radio (Apple-Music-style): resolves the artist seed → a radio playlist, parks it after
     /// the current track (never interrupting playback), and raises the "Radio started → Open playlist" toast. Artist
@@ -171,6 +239,93 @@ public static class ContainerActions
         {
             try { await lib.SetPlaylistVisibilityAsync(uri, isPublic).ConfigureAwait(false); }
             catch (Exception ex) { PlaylistEditErrors.Toast(ex); }
+        }
+    }
+}
+
+/// <summary>
+/// The container → ordered-track-set seam behind the CARD menu's transport and collection verbs (Play next / Play after
+/// / Add to playlist). It is deliberately the SAME resolver drag &amp; drop already deposits with
+/// (<see cref="WaveeResourceDragPayload.ResolverFor"/>), so "drop this album on a playlist" and "Add to playlist" from
+/// its menu can never disagree about what the album's tracks are — and no second reader path exists to drift.
+///
+/// <para>A PLAYLIST and an ALBUM resolve (the library reader). Every other kind resolves to NOTHING, by the locked
+/// decisions recorded on that resolver: an ARTIST has no single obvious track set, and a SHOW/EPISODE is not a
+/// <c>Track</c> at all. A menu therefore OMITS these rows for those kinds rather than offering a row that would have to
+/// invent an answer — the same "never a promise we are not keeping" rule the sidebar folder arm follows.</para>
+/// </summary>
+static class ContainerTracks
+{
+    public static Func<CancellationToken, Task<IReadOnlyList<Track>>>? ResolverFor(in ActionContext c)
+        => c.Target.Uri is { Length: > 0 } uri
+            ? WaveeResourceDragPayload.ResolverFor(WaveeDragKindMap.OfUri(uri), uri, c.S.Svc)
+            : null;
+
+    /// <summary>Does this target have a track set at all? The gate every container track-set row is built behind.</summary>
+    public static bool CanResolve(in ActionContext c) => ResolverFor(in c) is not null;
+
+    /// <summary>Resolve, then hand the tracks to the SAME <see cref="DetailQueueActions"/> table the track verbs ride —
+    /// including its batch cap and its "report what was issued" contract. Cold: one reader call per invoke.</summary>
+    public static void Queue(in ActionContext c, bool next)
+    {
+        if (ResolverFor(in c) is not { } resolve || c.S.Svc?.Player is not { } player) return;
+        var post = c.S.Post;
+        _ = Run();
+
+        async Task Run()
+        {
+            IReadOnlyList<Track> tracks;
+            try { tracks = await resolve(default).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                ContainerActions.Post(post, () => Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }));
+                return;
+            }
+
+            int n = next ? DetailQueueActions.PlayNext(player, tracks) : DetailQueueActions.AddToEnd(player, tracks);
+            if (n > 0)
+                ContainerActions.Post(post, () => Toast.Show(Strings.Detail.AddedToQueue(Strings.Detail.SongCount(n)),
+                    new ToastOptions { Severity = InfoBarSeverity.Success }));
+            else
+                ContainerActions.Post(post, () => Toast.Show(Loc.Get(Strings.Drag.NothingToAdd),
+                    new ToastOptions { Severity = InfoBarSeverity.Warning }));
+        }
+    }
+
+    /// <summary>Add a container's tracks to a playlist — the menu equivalent of dragging the card onto that playlist,
+    /// resolving through the same seam and landing on the same <c>AddTracksAsync</c> write (with the Add-to-playlist
+    /// toast every other add raises, "Go to playlist" action included).</summary>
+    public static void AddTo(ActionServices s, string targetUri, string targetName,
+                             Func<CancellationToken, Task<IReadOnlyList<Track>>> resolve)
+    {
+        if (s.Library is not { } lib) return;
+        var post = s.Post;
+        var go = s.Go;
+        _ = Run();
+
+        async Task Run()
+        {
+            try
+            {
+                var tracks = await resolve(default).ConfigureAwait(false);
+                if (tracks.Count == 0)
+                {
+                    ContainerActions.Post(post, () => Toast.Show(Loc.Get(Strings.Drag.NothingToAdd),
+                        new ToastOptions { Severity = InfoBarSeverity.Warning }));
+                    return;
+                }
+                await lib.AddTracksAsync(targetUri, tracks).ConfigureAwait(false);
+                ContainerActions.Post(post, () => Toast.Show(Strings.Detail.AddedToPlaylist(targetName), new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Success,
+                    ActionLabel = Loc.Get(Strings.Detail.GoToPlaylist),
+                    OnAction = () => go?.Invoke("pl:" + targetUri, targetName),
+                }));
+            }
+            catch (Exception ex)
+            {
+                ContainerActions.Post(post, () => PlaylistEditErrors.Toast(ex));
+            }
         }
     }
 }

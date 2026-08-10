@@ -107,15 +107,20 @@ public static class TrackActions
         },
     };
 
-    /// <summary>Single-artist direct navigation; multi-artist tracks get a submenu instead (Menus.Tracks).</summary>
+    /// <summary>Single-artist direct navigation; multi-artist tracks get a submenu instead (Menus.Tracks).
+    /// <para>A primary artist URI is REQUIRED, not just an artist entry: several producers carry a display NAME with no
+    /// uri (a projected sidebar row rebuilt by <c>Menus.TrackFromEntry</c>, a search row without an artist link). Gating
+    /// on <c>Artists.Count &gt; 0</c> alone offered those rows a live "Go to artist" that navigated to the route
+    /// <c>artist:</c> with an empty uri — a dead page. Same rule in <c>Menus.GoToArtistsItem</c>, which drops uri-less
+    /// artists from the cascade.</para></summary>
     public static readonly AppAction GoToArtist = new()
     {
         Id = ActionId.GoToArtist, IconKey = ActionIcons.Artist,
         Label = static c => Loc.Get(Strings.Detail.GoToArtist),
-        IsEnabled = static c => c.S.Go is not null && c.Target.Single is { Artists.Count: > 0 },
+        IsEnabled = static c => c.S.Go is not null && ActionRules.CanGoToArtist(in c.Target),
         Execute = static c =>
         {
-            if (c.Target.Single is not { Artists.Count: > 0 } t) return;
+            if (!ActionRules.CanGoToArtist(in c.Target) || c.Target.Single is not { } t) return;
             var a = t.Artists[0];
             c.S.Go?.Invoke("artist:" + a.Uri, a.Name);
         },

@@ -1521,6 +1521,7 @@
     "radioStarted": "Radio started",
     "openRadioPlaylist": "Open playlist",
     "radioUnavailable": "Couldn't start radio",
+    "artistUnavailable": "Couldn’t find this album’s artist",
     "radio": "Radio"
   },
   "videoOverride": {

@@ -26,6 +26,12 @@ public static class ActionRules
     public static bool CanViewCredits(in ActionTarget target)
         => target.Single is { Uri.Length: > 0, Artists: { Count: > 0 } artists } && artists[0].Uri.Length > 0;
 
+    /// <summary>Go-to-artist gate: a single track whose PRIMARY artist carries a uri. A name-only artist (a projected
+    /// sidebar row, a search row without an artist link) is not navigable — offering the row anyway would navigate to
+    /// an empty <c>artist:</c> route, i.e. a dead page.</summary>
+    public static bool CanGoToArtist(in ActionTarget target)
+        => target.Single is { Artists: { Count: > 0 } artists } && artists[0].Uri.Length > 0;
+
     /// <summary>Song-radio gate: exactly one track carrying a <c>spotify:track:</c> uri (a player-present check rides at
     /// the action). Radio seeds a single track — a multi-select or non-track uri is disabled.</summary>
     public static bool CanStartTrackRadio(in ActionTarget target)

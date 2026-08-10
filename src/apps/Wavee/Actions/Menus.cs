@@ -12,43 +12,88 @@ namespace Wavee;
 // Per-entity menu composition — plain code over the AppAction singletons, run lazily inside the ContextMenu.Attach
 // open-thunk (allocation at human rate, zero per-frame). Non-empty Primary → the Win11 Explorer command-bar body;
 // rows-only → a plain vertical menu. ONE builder per entity; selection semantics live in TrackContextMenu.
+//
+// ── THE MENU GRAMMAR (D48) ──────────────────────────────────────────────────────────────────────────────────────────
+// A right-click on the same KIND of thing offers the same verbs on every surface. Two menu builders for one kind that
+// each grew their own subset is the defect this grammar exists to prevent (a search song offered no Go-to-album; a home
+// mix card offered no Play-next/Add-to-playlist). The CORE set per kind is:
+//
+//   TRACK      Play · Play next · Play after · Save · Add to playlist ▸ · Go to album · Go to artist(s) · Share ▸
+//   CONTAINER  Play · Play next · Play after · Save · Add to playlist ▸ · Pin · Open · Go to artist · Share ▸
+//              (playlist / album / mix / generated; "Add to playlist" deposits the container's TRACKS)
+//   SHOW       Play · Open · Pin · Share ▸       (a show has no Track set — see ContainerTracks)
+//
+// and the ORDER is fixed, whether the verbs render as a command strip or as plain rows:
+//
+//   transport (Play · Play next · Play after) → state (Save) → collection (Add to playlist · Move · Pin)
+//   → navigation (Open · Go to album · Go to artist) → Share → surface extras → destructive LAST (behind a separator).
+//
+// Surface EXTRAS are additive and documented per builder (queue rows keep Move up/down + Remove from queue, an editable
+// playlist keeps its owner block, a track keeps credits/song-radio/Video ▸). A core verb may be OMITTED only where the
+// seam genuinely does not exist for that kind — and then with a comment naming the reason, never silently.
 public static class Menus
 {
     const int MaxInlinePlaylists = 10;   // Add-to-playlist submenu cap; the rest via "More playlists…" → the picker
 
     // ── Track set (detail rows, batch bar, eager lists, queue, now-playing) ─────────────────────────────────────────
-    /// <summary>The track(s) menu. Primary strip [Play · Play next · Add to queue · Like]; rows [Add to playlist ▸,
-    /// Go to album (single), Go to artist(s) (single), View credits (single, primary-artist), Share ▸, — , Remove from
-    /// this playlist (editable host) / Remove from queue (queue target)]. <paramref name="showGoToAlbum"/> is false on
-    /// album detail pages (you are already there).</summary>
-    public static ContextMenuModel Tracks(in ActionContext ctx, bool showGoToAlbum = true)
+    /// <summary>The track(s) menu. Primary strip [Play · Play next · Play after · Save]; rows per the grammar above.
+    /// <paramref name="showGoToAlbum"/> is false on album detail pages (you are already there); <paramref name="extras"/>
+    /// are the calling surface's own additions (the queue panel's Move up/down), inserted after Share and before the
+    /// destructive block.</summary>
+    public static ContextMenuModel Tracks(in ActionContext ctx, bool showGoToAlbum = true,
+                                          IReadOnlyList<MenuFlyoutItem>? extras = null)
+        => new(TrackTransportStrip(in ctx), TrackRows(in ctx, showGoToAlbum, extras), TrackHeader(ctx.Target.Tracks));
+
+    /// <summary>The four transport/state verbs as a labeled command strip (the Explorer command-bar body).</summary>
+    static AppBarCommand[] TrackTransportStrip(in ActionContext ctx) =>
+    [
+        TrackActions.Play.ToBarCommand(ctx),
+        TrackActions.PlayNext.ToBarCommand(ctx),
+        TrackActions.AddToQueue.ToBarCommand(ctx),
+        TrackActions.ToggleLike.ToBarCommand(ctx),
+    ];
+
+    /// <summary>The same four verbs as plain ROWS — for the rows-only track menus (a 240-DIP sidebar pane is not where
+    /// an Explorer-style labeled strip belongs, but the core verbs must still be there).</summary>
+    static void AddTrackTransportRows(List<MenuFlyoutItem> rows, in ActionContext ctx)
     {
-        var primary = new[]
-        {
-            TrackActions.Play.ToBarCommand(ctx),
-            TrackActions.PlayNext.ToBarCommand(ctx),
-            TrackActions.AddToQueue.ToBarCommand(ctx),
-            TrackActions.ToggleLike.ToBarCommand(ctx),
-        };
-        return new ContextMenuModel(primary, TrackRows(in ctx, showGoToAlbum), TrackHeader(ctx.Target.Tracks));
+        rows.Add(TrackActions.Play.ToMenuItem(ctx));
+        rows.Add(TrackActions.PlayNext.ToMenuItem(ctx));
+        rows.Add(TrackActions.AddToQueue.ToMenuItem(ctx));
+        rows.Add(TrackActions.ToggleLike.ToMenuItem(ctx));
     }
 
-    /// <summary>The track menu's vertical rows only (also the batch bar's overflow source).</summary>
-    public static IReadOnlyList<MenuFlyoutItem> TrackRows(in ActionContext ctx, bool showGoToAlbum = true)
+    /// <summary>The track menu's vertical rows only (also the batch bar's overflow source). Grammar order: collection →
+    /// navigation → Share → extras → destructive.</summary>
+    public static IReadOnlyList<MenuFlyoutItem> TrackRows(in ActionContext ctx, bool showGoToAlbum = true,
+                                                         IReadOnlyList<MenuFlyoutItem>? extras = null)
     {
-        var rows = new List<MenuFlyoutItem>(8) { AddToPlaylistItem(in ctx) };
+        var rows = new List<MenuFlyoutItem>(12) { AddToPlaylistItem(in ctx) };
         // MOVE is offered only where a source to move OUT of exists (an editable playlist context) — everywhere else
         // "move" and "add" would be the same verb twice.
         if (MoveToPlaylistItem(in ctx) is { } move) rows.Add(move);
 
+        // Navigation. A multi-selection has no single album/artist to go to, so these are single-target rows.
         if (ctx.Target.Single is { } single)
         {
             if (showGoToAlbum && single.Album is { Uri.Length: > 0 })
                 rows.Add(TrackActions.GoToAlbum.ToMenuItem(ctx));
-            if (single.Artists.Count == 1)
-                rows.Add(TrackActions.GoToArtist.ToMenuItem(ctx));
-            else if (single.Artists.Count > 1)
-                rows.Add(GoToArtistsItem(ctx.S, single.Artists));
+            var nav = NavigableArtists(single.Artists);
+            if (nav is { Count: 1 } one)
+                // The action navigates to the PRIMARY artist; when the only navigable one is a secondary (the primary
+                // came through name-only), the row has to carry that artist itself.
+                rows.Add(ActionRules.CanGoToArtist(in ctx.Target)
+                    ? TrackActions.GoToArtist.ToMenuItem(ctx)
+                    : GoToArtistItem(ctx.S, one[0]));
+            else if (nav is { Count: > 1 })
+                rows.Add(GoToArtistsItem(ctx.S, nav));
+        }
+
+        rows.Add(ShareItem(in ctx));
+
+        // Surface extras: the track kind's own (credits · song radio · Video ▸) then the caller's.
+        if (ctx.Target.Single is not null)
+        {
             if (ActionRules.CanViewCredits(in ctx.Target))
                 rows.Add(TrackActions.ViewCredits.ToMenuItem(ctx));
             if (ActionRules.CanStartTrackRadio(in ctx.Target))
@@ -56,15 +101,32 @@ public static class Menus
             if (VideoItem(in ctx) is { } video)
                 rows.Add(video);
         }
-
-        rows.Add(ShareItem(in ctx));
+        if (extras is { Count: > 0 })
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            for (int i = 0; i < extras.Count; i++) rows.Add(extras[i]);
+        }
 
         bool removeRow = TrackActions.RemoveFromThisPlaylist.EnabledFor(ctx);
-        bool removeQueue = ctx.Target.Kind == TargetKind.QueueEntry;
+        bool removeQueue = ctx.Target.Kind == TargetKind.QueueEntry && ctx.Target.RemoveFromDisplay is not null;
         if (removeRow || removeQueue) rows.Add(MenuFlyoutItem.Separator);
         if (removeRow) rows.Add(TrackActions.RemoveFromThisPlaylist.ToMenuItem(ctx));
         if (removeQueue) rows.Add(TrackActions.RemoveFromQueue.ToMenuItem(ctx));
         return rows;
+    }
+
+    /// <summary>The artists a menu can actually navigate to: those carrying a uri. Several producers hand back a display
+    /// NAME with no uri (a projected sidebar row, a search row without an artist link) — navigating those would land on
+    /// an empty <c>artist:</c> route. Returns null when none qualify, so the row is absent rather than dead.</summary>
+    static IReadOnlyList<ArtistRef>? NavigableArtists(IReadOnlyList<ArtistRef> artists)
+    {
+        int n = 0;
+        for (int i = 0; i < artists.Count; i++) if (artists[i].Uri.Length > 0) n++;
+        if (n == 0) return null;
+        if (n == artists.Count) return artists;
+        var kept = new List<ArtistRef>(n);
+        for (int i = 0; i < artists.Count; i++) if (artists[i].Uri.Length > 0) kept.Add(artists[i]);
+        return kept;
     }
 
     // ── Share ▸ (Copy link(s) + single-target Copy Spotify URI / Open in Spotify Web) ────────────────────────────────
@@ -110,7 +172,8 @@ public static class Menus
             ActionIcons.Resolve(ActionIcons.Video));
     }
 
-    /// <summary>Multi-artist track → a "Go to artists" cascade, one row per artist.</summary>
+    /// <summary>Multi-artist track → a "Go to artists" cascade, one row per artist. Callers pass an already-filtered
+    /// list (<see cref="NavigableArtists"/>): a uri-less artist has nowhere to go and must not get a row.</summary>
     static MenuFlyoutItem GoToArtistsItem(ActionServices s, IReadOnlyList<ArtistRef> artists)
     {
         var items = new MenuFlyoutItem[artists.Count];
@@ -122,19 +185,55 @@ public static class Menus
         return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Menu.GoToArtists), items, ActionIcons.Resolve(ActionIcons.Artist));
     }
 
+    /// <summary>"Go to artist" for ONE named artist that is not the target's primary (so the action singleton, which
+    /// always navigates to <c>Artists[0]</c>, cannot express it).</summary>
+    static MenuFlyoutItem GoToArtistItem(ActionServices s, ArtistRef a)
+        => new(Loc.Get(Strings.Detail.GoToArtist), ActionIcons.Resolve(ActionIcons.Artist),
+               s.Go is not null, () => s.Go?.Invoke("artist:" + a.Uri, a.Name));
+
     // ── Add to playlist ▸ (New playlist + up to 10 editable playlists + "More playlists…" → the picker) ─────────────
     static MenuFlyoutItem AddToPlaylistItem(in ActionContext ctx)
     {
         var s = ctx.S;
         var tracks = ctx.Target.Tracks;
         bool canAdd = s.Library is not null && tracks.Count > 0;
+        return PlaylistDepositItem(s, Loc.Get(Strings.Detail.AddToPlaylist), Icons.Add, canAdd,
+            deposit: (uri, name) => AddTo(s, uri, name, tracks),
+            createAndDeposit: () => CreateAndAdd(s, tracks),
+            excludeUri: null, pickerTracks: tracks);
+    }
 
+    /// <summary>Add to playlist ▸ for a CONTAINER (album / playlist / mix card): the same submenu, depositing the
+    /// container's TRACKS — resolved through the shared <see cref="ContainerTracks"/> seam, i.e. exactly what dropping
+    /// this card onto that playlist deposits. Null for a kind with no track set (an artist, a show — see
+    /// <see cref="ContainerTracks"/>), so the row is ABSENT rather than a disabled promise.</summary>
+    static MenuFlyoutItem? ContainerAddToPlaylistItem(in ActionContext ctx)
+    {
+        var s = ctx.S;
+        if (ContainerTracks.ResolverFor(in ctx) is not { } resolve) return null;
+        bool canAdd = s.Library is not null;
+        // Adding a playlist to ITSELF is the one deposit that is always a no-op duplicate — the same refusal
+        // WaveeResourceDrop.DepositTracksAsync makes for the container-on-itself drop.
+        string? exclude = ctx.Target.Kind == TargetKind.Playlist ? ctx.Target.Uri : null;
+        return PlaylistDepositItem(s, Loc.Get(Strings.Detail.AddToPlaylist), Icons.Add, canAdd,
+            deposit: (uri, name) => ContainerTracks.AddTo(s, uri, name, resolve),
+            createAndDeposit: () => CreateAndDeposit(s, (uri, name) => ContainerTracks.AddTo(s, uri, name, resolve)),
+            excludeUri: exclude, pickerTracks: Array.Empty<Track>());
+    }
+
+    /// <summary>The ONE playlist-deposit submenu shape behind Add-to-playlist (tracks), Add-to-playlist (container) and
+    /// Move-to-playlist: New playlist + up to <see cref="MaxInlinePlaylists"/> editable playlists + "More playlists…" →
+    /// the full picker. Only what a pick DOES differs, so only that is a parameter — the row filter (editable, real
+    /// <c>spotify:playlist:*</c>, the same one <c>PlaylistPickerPanel</c> applies) lives here once.</summary>
+    static MenuFlyoutItem PlaylistDepositItem(ActionServices s, string title, IconRef icon, bool canAdd,
+                                              Action<string, string> deposit, Action createAndDeposit,
+                                              string? excludeUri, IReadOnlyList<Track> pickerTracks)
+    {
         var items = new List<MenuFlyoutItem>(MaxInlinePlaylists + 3)
         {
-            new(Loc.Get(Strings.Detail.NewPlaylist), Icons.Add, canAdd, () => CreateAndAdd(s, tracks)),
+            new(Loc.Get(Strings.Detail.NewPlaylist), Icons.Add, canAdd, createAndDeposit),
         };
 
-        // The same filter as PlaylistPickerPanel: editable, real (spotify:playlist:*) playlists.
         s.Store?.EnsurePlaylists();
         var pls = s.Store?.Playlists.Value.Peek();
         if (pls is { Count: > 0 })
@@ -144,18 +243,40 @@ public static class Menus
             {
                 var p = pls[i];
                 if (!p.CanEdit || !p.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
+                if (excludeUri is { Length: > 0 } && string.Equals(p.Uri, excludeUri, StringComparison.Ordinal)) continue;
                 var uri = p.Uri;
                 var name = p.Name;
-                items.Add(new MenuFlyoutItem(name, null, canAdd, () => AddTo(s, uri, name, tracks)));
+                items.Add(new MenuFlyoutItem(name, null, canAdd, () => deposit(uri, name)));
                 shown++;
             }
         }
 
         items.Add(MenuFlyoutItem.Separator);
         items.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MorePlaylists), null,
-            canAdd && s.Overlay is not null, () => OpenPicker(s, tracks)));
+            canAdd && s.Overlay is not null, () => OpenPicker(s, pickerTracks, title, deposit, excludeUri)));
 
-        return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Detail.AddToPlaylist), items, Icons.Add, enabled: canAdd);
+        return MenuFlyoutItem.SubMenu(title, items, icon, enabled: canAdd);
+    }
+
+    /// <summary>"New playlist" for a deposit whose payload is not in hand (a container): create, then run the same
+    /// deposit the named rows run. The track path keeps <see cref="CreateAndAdd"/>, which can add inside one flow.</summary>
+    static void CreateAndDeposit(ActionServices s, Action<string, string> deposit)
+    {
+        if (s.Library is not { } lib) return;
+        string name = Loc.Get(Strings.Detail.NewPlaylist);
+        var post = s.Post;
+        _ = Run();
+        async Task Run()
+        {
+            string uri;
+            try { uri = await lib.CreatePlaylistAsync(name).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                ContainerActions.Post(post, () => Toast.Show(ex.Message, new ToastOptions { Severity = InfoBarSeverity.Error }));
+                return;
+            }
+            ContainerActions.Post(post, () => deposit(uri, name));
+        }
     }
 
     // ── Move to playlist ▸ (same picker, MOVE semantics: deposit into the target, then drop the source rows) ────────
@@ -170,36 +291,12 @@ public static class Menus
         var tracks = ctx.Target.Tracks;
         if (s.Library is null || tracks.Count == 0) return null;
         if (!ActionRules.CanRemoveFromPlaylist(ctx.Target.Host) || ctx.Target.Host is not { } host) return null;
-        string source = host.PlaylistUri;
 
-        var items = new List<MenuFlyoutItem>(MaxInlinePlaylists + 3)
-        {
-            new(Loc.Get(Strings.Detail.NewPlaylist), Icons.Add, true, () => CreateAndMove(s, tracks, host)),
-        };
-
-        s.Store?.EnsurePlaylists();
-        var pls = s.Store?.Playlists.Value.Peek();
-        if (pls is { Count: > 0 })
-        {
-            int shown = 0;
-            for (int i = 0; i < pls.Count && shown < MaxInlinePlaylists; i++)
-            {
-                var p = pls[i];
-                if (!p.CanEdit || !p.Uri.StartsWith("spotify:playlist:", StringComparison.Ordinal)) continue;
-                if (string.Equals(p.Uri, source, StringComparison.Ordinal)) continue;   // moving into itself is a no-op
-                var uri = p.Uri;
-                var name = p.Name;
-                items.Add(new MenuFlyoutItem(name, null, true, () => MoveTo(s, uri, name, tracks, host)));
-                shown++;
-            }
-        }
-
-        items.Add(MenuFlyoutItem.Separator);
-        items.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MorePlaylists), null, s.Overlay is not null,
-            () => OpenPicker(s, tracks, Loc.Get(Strings.Menu.MoveToPlaylist),
-                             (uri, name) => MoveTo(s, uri, name, tracks, host), source)));
-
-        return MenuFlyoutItem.SubMenu(Loc.Get(Strings.Menu.MoveToPlaylist), items, Icons.Forward);
+        // moving into the source playlist is a no-op → it is excluded from the list entirely.
+        return PlaylistDepositItem(s, Loc.Get(Strings.Menu.MoveToPlaylist), Icons.Forward, canAdd: true,
+            deposit: (uri, name) => MoveTo(s, uri, name, tracks, host),
+            createAndDeposit: () => CreateAndMove(s, tracks, host),
+            excludeUri: host.PlaylistUri, pickerTracks: tracks);
     }
 
     static void MoveTo(ActionServices s, string uri, string name, IReadOnlyList<Track> tracks, PlaylistHost host)
@@ -282,11 +379,13 @@ public static class Menus
     }
 
     /// <summary>"More playlists…" — the full existing PlaylistPickerPanel, hosted in a centered ContentDialog (the
-    /// originating menu is gone by invoke time, so there is no anchor rect to open a flyout at).</summary>
+    /// originating menu is gone by invoke time, so there is no anchor rect to open a flyout at).
+    /// <para>A <paramref name="deposit"/> override carries its own payload (a container resolves its tracks at deposit
+    /// time), so the empty-track guard applies only to the in-hand path.</para></summary>
     static void OpenPicker(ActionServices s, IReadOnlyList<Track> tracks,
                            string? title = null, Action<string, string>? deposit = null, string? exclude = null)
     {
-        if (s.Overlay is not { } overlay || s.Library is null || tracks.Count == 0) return;
+        if (s.Overlay is not { } overlay || s.Library is null || (deposit is null && tracks.Count == 0)) return;
         OverlayHandle? handle = null;
         handle = ContentDialog.Show(overlay, d =>
         {
@@ -305,15 +404,21 @@ public static class Menus
     }
 
     // ── Containers ───────────────────────────────────────────────────────────────────────────────────────────────────
-    /// <summary>A media-card menu inferred from the card's uri (cards carry only uri + title). Albums/artists/playlists
-    /// get Primary [Play · Save/Follow] + rows [Follow/Unfollow (artist only), Open, Pin/Unpin, Share ▸]; a track uri gets
-    /// the thin track shape (no Track object → no album/artist rows, and no pin row — tracks are never pinnable);
-    /// unknown schemes get no menu.</summary>
+    /// <summary>A media-card menu inferred from the card's uri (cards carry only uri + title) — the CONTAINER grammar:
+    /// Primary [Play · Play next · Play after · Save/Follow] + rows [Follow (artist), Add to playlist ▸, Open, Pin/Unpin,
+    /// Go to artist (album), Share ▸, artist radio (artist)].
+    ///
+    /// <para>Two kinds omit part of the core, each for a reason recorded at the seam rather than by silence:
+    /// an ARTIST has no resolvable track set (locked decision on <see cref="ContainerTracks"/>), so it gets neither the
+    /// queue verbs nor Add-to-playlist; a SHOW has no <c>Track</c> at all, so its arm is Play · Open · Pin · Share.
+    /// A track uri gets the thin track shape (<see cref="TrackUriCard"/>); an EPISODE uri gets no menu, because there is
+    /// no episode detail route to Open and no episode-aware deposit seam. Unknown schemes get no menu.</para></summary>
     public static ContextMenuModel? Card(ActionServices s, string uri, string name,
         Image? image = null, string? subtitle = null, bool circular = false)
     {
         if (uri is not { Length: > 0 }) return null;
         if (uri.Contains(":track:", StringComparison.Ordinal)) return TrackUriCard(s, uri, name, image, subtitle);
+        if (uri.Contains(":show:", StringComparison.Ordinal)) return ShowCard(s, uri, name, image, subtitle);
 
         bool liked = uri == "spotify:collection:tracks";
         ActionTarget target =
@@ -324,34 +429,94 @@ public static class Menus
         if (target.Kind == TargetKind.None) return null;
 
         var ctx = new ActionContext(target, s);
-        var primary = liked
-            ? new[] { ContainerActions.PlayContext.ToBarCommand(ctx) }   // Liked Songs can't be un-saved
-            : new[] { ContainerActions.PlayContext.ToBarCommand(ctx), ContainerActions.SaveContext.ToBarCommand(ctx) };
-        var rows = new List<MenuFlyoutItem>(5);   // Follow · ArtistRadio · Open · Pin/Unpin · Share
-        // Follow / Unfollow as a ROW on artist menus (Spotify shows it as a row, not only the strip toggle).
-        if (target.Kind == TargetKind.Artist)
-        {
-            rows.Add(ContainerActions.SaveContext.ToMenuItem(ctx));
-            rows.Add(ContainerActions.GoToArtistRadio.ToMenuItem(ctx));
-        }
-        rows.Add(ContainerActions.OpenItem.ToMenuItem(ctx));
-        // Pin/Unpin immediately after Open (F.5.3 / §3.2.11). A non-pinnable uri (a track card) gets no row at all —
-        // decided in ONE place by SidebarPinId, never per menu. Liked Songs inherits it for free through its own arm above.
-        if (PinActions.Row(in ctx) is { } pinRow) rows.Add(pinRow);
-        rows.Add(ShareItem(in ctx));
-        string kind = target.Kind switch
-        {
-            TargetKind.Album => "Album",
-            TargetKind.Artist => "Artist",
-            TargetKind.Playlist => "Playlist",
-            _ => "",
-        };
-        return new ContextMenuModel(primary, rows,
-            Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : kind, circular));
+        return new ContextMenuModel(ContainerStrip(in ctx, liked), ContainerRows(in ctx),
+            Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : KindLabel(target.Kind), circular));
     }
 
-    /// <summary>A card that is a bare track URI (search top-hits): Play + Like + Copy link — no album/artist rows
-    /// (the card model carries no Track).</summary>
+    /// <summary>The container transport strip: Play · Play next · Play after · Save. The queue pair is present exactly
+    /// when the kind HAS a track set (album/playlist — see <see cref="ContainerTracks"/>); Liked Songs drops Save
+    /// because it cannot be un-saved.</summary>
+    static AppBarCommand[] ContainerStrip(in ActionContext ctx, bool liked)
+    {
+        var strip = new List<AppBarCommand>(4) { ContainerActions.PlayContext.ToBarCommand(ctx) };
+        if (ContainerTracks.CanResolve(in ctx))
+        {
+            strip.Add(ContainerActions.PlayContextNext.ToBarCommand(ctx));
+            strip.Add(ContainerActions.AddContextToQueue.ToBarCommand(ctx));
+        }
+        if (!liked) strip.Add(ContainerActions.SaveContext.ToBarCommand(ctx));
+        return strip.ToArray();
+    }
+
+    /// <summary>The container rows, in grammar order: state → collection → navigation → Share → surface extras. Shared
+    /// by the card menu and the sidebar album/artist arms, so the two can never drift.</summary>
+    static List<MenuFlyoutItem> ContainerRows(in ActionContext ctx)
+    {
+        var rows = new List<MenuFlyoutItem>(7);
+        // Follow / Unfollow as a ROW on artist menus (Spotify shows it as a row, not only the strip toggle).
+        if (ctx.Target.Kind == TargetKind.Artist) rows.Add(ContainerActions.SaveContext.ToMenuItem(ctx));
+        if (ContainerAddToPlaylistItem(in ctx) is { } add) rows.Add(add);
+        rows.Add(ContainerActions.OpenItem.ToMenuItem(ctx));
+        // Pin/Unpin immediately after Open (F.5.3 / §3.2.11) — the one documented deviation from "collection before
+        // navigation": pin answers "where does this live", which reads as part of Open. A non-pinnable uri (a track
+        // card) gets no row at all — decided in ONE place by SidebarPinId, never per menu.
+        if (PinActions.Row(in ctx) is { } pinRow) rows.Add(pinRow);
+        // The album card's Go-to-artist: the artist is resolved at invoke (the card carries no artists) — see the action.
+        if (ctx.Target.Kind == TargetKind.Album) rows.Add(ContainerActions.GoToAlbumArtist.ToMenuItem(ctx));
+        rows.Add(ShareItem(in ctx));
+        if (ctx.Target.Kind == TargetKind.Artist) rows.Add(ContainerActions.GoToArtistRadio.ToMenuItem(ctx));
+        return rows;
+    }
+
+    static string KindLabel(TargetKind kind) => kind switch
+    {
+        TargetKind.Album => "Album",
+        TargetKind.Artist => "Artist",
+        TargetKind.Playlist => "Playlist",
+        _ => "",
+    };
+
+    /// <summary>A SHOW / podcast card: Play · Open · Pin · Share ▸. Built from explicit rows rather than a new
+    /// <c>TargetKind.Show</c> — the same explicit non-goal <see cref="SidebarEntry"/> records; if that kind ever lands,
+    /// this arm and the sidebar's migrate onto it together. No track-set verbs: a show's items are episodes, and
+    /// <c>Wavee.Core</c> models an episode as its own record, not a <c>Track</c>.</summary>
+    static ContextMenuModel ShowCard(ActionServices s, string uri, string name, Image? image, string? subtitle)
+        => new(ShowRows(s, uri, name, "show:" + uri,
+                        PinActions.RowForId(s, SidebarPinId.FromUri(uri), SidebarPinKind.Show, uri, name)),
+               Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : "Podcast"));
+
+    /// <summary>The show row list, shared by the card arm and the sidebar arm. <paramref name="pinRow"/> is passed in
+    /// because the two surfaces know their pin id differently (a card derives it from the uri, a projected row already
+    /// IS one) — same rule, same toasts, both through <see cref="PinActions"/>.</summary>
+    static List<MenuFlyoutItem> ShowRows(ActionServices s, string uri, string name, string? route, MenuFlyoutItem? pinRow)
+    {
+        var rows = new List<MenuFlyoutItem>(4)
+        {
+            new(Loc.Get(Strings.Detail.Play), ActionIcons.Resolve(ActionIcons.Play),
+                s.Svc?.Player is not null && uri.Length > 0, () => { _ = s.Svc?.Player.PlayAsync(uri); }),
+            new(Loc.Get(Strings.Menu.Open), ActionIcons.Resolve(ActionIcons.Open),
+                s.Go is not null && route is { Length: > 0 }, () => s.Go?.Invoke(route!, name)),
+        };
+        if (pinRow is { } pin) rows.Add(pin);
+        rows.Add(ShareItem(new ActionContext(LinkTarget(uri, name), s)));
+        return rows;
+    }
+
+    /// <summary>A SHARE-ONLY target: it carries the uri the Share submenu links and nothing else. <see cref="TargetKind.None"/>
+    /// is deliberate — no verb is enabled by it, and the three Share actions read only <c>Uri</c>/<c>Tracks</c>
+    /// (<see cref="SpotifyLink"/>). This is how a show gets the app-wide Share submenu without inventing the
+    /// <c>TargetKind.Show</c> the sidebar design lists as an explicit non-goal.</summary>
+    static ActionTarget LinkTarget(string uri, string name)
+        => new() { Kind = TargetKind.None, Tracks = Array.Empty<Track>(), Uri = uri, Name = name };
+
+    /// <summary>A card that is a bare track URI: the full track strip [Play · Play next · Play after · Save] + rows
+    /// [Add to playlist ▸, Share ▸, Go to song radio].
+    ///
+    /// <para><b>Go to album / Go to artist are absent here, and that is a LAST RESORT, not the shape a song menu should
+    /// have.</b> They need the track's album/artist URIs and this model carries a uri and a title. A surface that can
+    /// resolve the real <see cref="Track"/> must therefore attach <see cref="TrackAttach"/> (the full track menu)
+    /// instead of a card menu — which is exactly what the search results page does with the track already sitting in its
+    /// own <c>SearchResults.Tracks</c>. Song radio survives because it seeds off the <b>uri alone</b>.</para></summary>
     static ContextMenuModel TrackUriCard(ActionServices s, string uri, string name, Image? image, string? subtitle)
     {
         var target = ActionTarget.ForTracks(new[]
@@ -359,18 +524,10 @@ public static class Menus
             new Track("", uri, name, Array.Empty<ArtistRef>(), new AlbumRef("", "", ""), 0L, false, null),
         });
         var ctx = new ActionContext(target, s);
-        var primary = new[]
-        {
-            TrackActions.Play.ToBarCommand(ctx),
-            TrackActions.PlayNext.ToBarCommand(ctx),
-            TrackActions.AddToQueue.ToBarCommand(ctx),
-            TrackActions.ToggleLike.ToBarCommand(ctx),
-        };
-        return new ContextMenuModel(primary, new[]
-        {
-            AddToPlaylistItem(in ctx),
-            ShareItem(in ctx),
-        }, Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : "Song"));
+        var rows = new List<MenuFlyoutItem>(3) { AddToPlaylistItem(in ctx), ShareItem(in ctx) };
+        if (ActionRules.CanStartTrackRadio(in ctx.Target)) rows.Add(TrackActions.GoToSongRadio.ToMenuItem(ctx));
+        return new ContextMenuModel(TrackTransportStrip(in ctx), rows,
+            Header(image, uri, name, subtitle is { Length: > 0 } ? subtitle : "Song"));
     }
 
     /// <summary>The card attach helper for shared element factories: null when the action system isn't provided.</summary>
@@ -406,12 +563,23 @@ public static class Menus
         var ctx = new ActionContext(ActionTarget.ForPlaylist(uri, name, host), s);
 
         bool live = PlaylistInlineEdit.SpotifyEditsLive(s.Svc);
-        var rows = new List<MenuFlyoutItem>(10)
+        // Rows-only surface → the transport verbs are ROWS (the container grammar's core set: Play · Play next ·
+        // Play after · Save). They were missing here entirely: a sidebar playlist could be played but never queued.
+        var rows = new List<MenuFlyoutItem>(14)
         {
             ContainerActions.PlayContext.ToMenuItem(ctx),
-            ContainerActions.OpenItem.ToMenuItem(ctx),
-            MenuFlyoutItem.Separator,
         };
+        if (ContainerTracks.CanResolve(in ctx))
+        {
+            rows.Add(ContainerActions.PlayContextNext.ToMenuItem(ctx));
+            rows.Add(ContainerActions.AddContextToQueue.ToMenuItem(ctx));
+        }
+        // Liked Songs can't be un-saved (the card arm's rule, applied in both places).
+        if (!string.Equals(uri, SidebarPinId.LikedSongsUri, StringComparison.Ordinal))
+            rows.Add(ContainerActions.SaveContext.ToMenuItem(ctx));
+        if (ContainerAddToPlaylistItem(in ctx) is { } add) rows.Add(add);
+        rows.Add(ContainerActions.OpenItem.ToMenuItem(ctx));
+        rows.Add(MenuFlyoutItem.Separator);
         if (PinActions.Row(in ctx) is { } pinRow) rows.Add(pinRow);
         if (isOwner)
             rows.Add(ContainerActions.RenamePlaylist.ToMenuItem(ctx));
@@ -484,27 +652,25 @@ public static class Menus
     }
 
     /// <summary>Feed TRACK rows — the only producers are the track-yielding data sources (<c>wavee.queue</c>,
-    /// <c>wavee.nowPlaying</c>, <c>wavee.artist.topTracks</c>); <c>SidebarProjection</c> never emits one. Play next ·
-    /// Add to queue · — · Copy link.
+    /// <c>wavee.nowPlaying</c>, <c>wavee.artist.topTracks</c>); <c>SidebarProjection</c> never emits one. The TRACK
+    /// grammar as plain rows (a 240-DIP pane is not where an Explorer-style labeled strip belongs): Play · Play next ·
+    /// Play after · Save · then <see cref="TrackRows"/>.
     ///
-    /// <para>Three deliberate ABSENCES. No pin row: locked decision 4 keeps tracks unpinnable and
+    /// <para>Two deliberate ABSENCES survive the convergence. No pin row: locked decision 4 keeps tracks unpinnable and
     /// <c>SidebarPinId.FromEntry</c> refuses them, so a row here would be a promise the store rejects. No Open row: a
-    /// track has no detail route (<c>RouteKey</c> is null by construction). No Play row: activating the row already
-    /// plays it, and the queue verbs are the two things a click cannot do.</para></summary>
+    /// track has no detail route (<c>RouteKey</c> is null by construction). The old "no Play row either — activating the
+    /// row plays it" argument did NOT survive: it left this the one track menu in the app with a different core set, and
+    /// the click affordance is not a reason to withhold the verb (every other track surface is clickable too).</para>
+    ///
+    /// <para>Go-to-album/artist self-select: a projected row carries an artist NAME with no uri (see
+    /// <see cref="TrackFromEntry"/>), and <see cref="ActionRules.CanGoToArtist"/> / the album-uri check drop those rows
+    /// rather than navigating to an empty route.</para></summary>
     static ContextMenuModel SidebarTrackMenu(ActionServices s, in SidebarLibraryEntry e)
     {
         var ctx = new ActionContext(ActionTarget.ForTracks([TrackFromEntry(in e)]), s);
-        var rows = new List<MenuFlyoutItem>(4)
-        {
-            TrackActions.PlayNext.ToMenuItem(ctx),
-            TrackActions.AddToQueue.ToMenuItem(ctx),
-        };
-        if (SpotifyLink.WebUrl(e.Uri) is { } url)
-        {
-            rows.Add(MenuFlyoutItem.Separator);
-            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.CopyLink), ActionIcons.Resolve(ActionIcons.Link),
-                s.Clipboard is not null, () => CopyText(s, url, Strings.Menu.LinkCopied)));
-        }
+        var rows = new List<MenuFlyoutItem>(12);
+        AddTrackTransportRows(rows, in ctx);
+        rows.AddRange(TrackRows(in ctx));
         return new ContextMenuModel(rows, Header(e.Cover, e.Uri, e.Name,
             e.FirstArtistName is { Length: > 0 } artist ? artist : e.Creator is { Length: > 0 } ? e.Creator : null));
     }
@@ -523,27 +689,13 @@ public static class Menus
         Album: new AlbumRef("", "", ""),
         DurationMs: 0, IsExplicit: false, Image: e.Cover);
 
-    /// <summary>Show / podcast rows. Built explicitly (no <c>TargetKind.Show</c> — see <see cref="SidebarEntry"/>).</summary>
+    /// <summary>Show / podcast rows — the SAME list a podcast CARD gets (<see cref="ShowRows"/>), so the sidebar arm and
+    /// the card arm cannot drift. Built explicitly (no <c>TargetKind.Show</c> — see <see cref="SidebarEntry"/>). The
+    /// pin row comes from the entry (its <c>Id</c> already is the pin id) rather than from the uri.</summary>
     static ContextMenuModel SidebarShowMenu(ActionServices s, in SidebarLibraryEntry e)
     {
-        string uri = e.Uri;
-        string name = e.Name;
-        string? route = e.RouteKey;
-        var rows = new List<MenuFlyoutItem>(5)
-        {
-            new(Loc.Get(Strings.Detail.Play), ActionIcons.Resolve(ActionIcons.Play),
-                s.Svc?.Player is not null && uri.Length > 0, () => { _ = s.Svc?.Player.PlayAsync(uri); }),
-            new(Loc.Get(Strings.Menu.Open), ActionIcons.Resolve(ActionIcons.Open),
-                s.Go is not null && route is { Length: > 0 }, () => s.Go?.Invoke(route!, name)),
-        };
-        if (PinActions.RowForEntry(s, in e) is { } pinRow) rows.Add(pinRow);
-        if (SpotifyLink.WebUrl(uri) is { } url)
-        {
-            rows.Add(MenuFlyoutItem.Separator);
-            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.CopyLink), ActionIcons.Resolve(ActionIcons.Link),
-                s.Clipboard is not null, () => CopyText(s, url, Strings.Menu.LinkCopied)));
-        }
-        return new ContextMenuModel(rows, Header(e.Cover, uri, name,
+        var rows = ShowRows(s, e.Uri, e.Name, e.RouteKey, PinActions.RowForEntry(s, in e));
+        return new ContextMenuModel(rows, Header(e.Cover, e.Uri, e.Name,
             e.Publisher is { Length: > 0 } publisher ? publisher : Loc.Get(Strings.Sidebar.V3.Kind.Show)));
     }
 
@@ -575,16 +727,8 @@ public static class Menus
         return new ContextMenuModel(rows, Header(null, e.Id, name, null));
     }
 
-    /// <summary>Clipboard write + the shared "copied" toast/announcement (the <c>TrackActions.CopyLink</c> path, reused
-    /// so the show arm cannot invent a second clipboard behaviour).</summary>
-    static void CopyText(ActionServices s, string text, string toastLocKey)
-    {
-        if (s.Clipboard is not { } clip) return;
-        try { clip.SetText(text); }
-        catch (Exception ex) { PlaylistEditErrors.Toast(ex); return; }
-        InputHooks.Current.Default.Announce?.Invoke(Loc.Get(Strings.Auth.Copied), false);
-        Toast.Show(Loc.Get(toastLocKey), new ToastOptions { Severity = InfoBarSeverity.Success });
-    }
+    // (The local clipboard helper the show / sidebar-track arms used for their bare "Copy link" row is gone: both arms
+    // now carry the app-wide Share ▸ submenu, which runs the TrackActions.CopyLink path — one clipboard behaviour.)
 
     // Explicit absolute-state rows (not a toggle): the sidebar summary carries no live IsPublic, and a mis-checked
     // toggle would invert the user's intent. Each row SETS the named state.
@@ -599,9 +743,15 @@ public static class Menus
     }
 
     // ── Queue entry ─────────────────────────────────────────────────────────────────────────────────────────────────
-    /// <summary>Primary [Play now · Like] + rows [Go to album, Go to artist(s), Copy link, — , Remove from queue].
+    /// <summary>The TRACK grammar with the queue's own extras. Primary [Play now · Play next · Play after · Save];
+    /// rows = <see cref="TrackRows"/> (Add to playlist ▸ · Go to album · Go to artist(s) · Share ▸ · credits · song
+    /// radio) + the queue extras [Move up, Move down] + the destructive [Remove from queue].
+    ///
+    /// <para>Before the convergence this menu offered Go-to-album/artist and a bare Copy link and nothing else — no
+    /// Add-to-playlist, no Share submenu, no credits. Only <b>Play now</b> is queue-specific (a skip-in-place, which is
+    /// not what <c>Play</c> means anywhere else), so it replaces Play in the strip and the panel's closure drives it.</para>
     /// <paramref name="playNow"/> is the panel's skip-in-place; <paramref name="removeFromDisplay"/> the panel's
-    /// remove closure (null when a remote viewer — the row renders disabled).</summary>
+    /// remove closure (null when a remote viewer — the row is then absent).</summary>
     public static ContextMenuModel QueueEntry(ActionServices s, QueueEntry entry, Action? removeFromDisplay, Action playNow,
         Action? moveUp = null, Action? moveDown = null)
     {
@@ -609,32 +759,20 @@ public static class Menus
         var primary = new[]
         {
             new AppBarCommand(Icons.Play, Loc.Get(Strings.Menu.PlayNow), playNow),
+            TrackActions.PlayNext.ToBarCommand(ctx),
+            TrackActions.AddToQueue.ToBarCommand(ctx),
             TrackActions.ToggleLike.ToBarCommand(ctx),
         };
-        var rows = new List<MenuFlyoutItem>(9);
+        List<MenuFlyoutItem>? extras = null;
+        if (moveUp is not null)
+            (extras ??= new List<MenuFlyoutItem>(2)).Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
+                new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, true, moveUp));
+        if (moveDown is not null)
+            (extras ??= new List<MenuFlyoutItem>(2)).Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
+                new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, true, moveDown));
+        // TrackRows adds the Remove-from-queue row itself for a QueueEntry target with a remove closure.
+        var rows = TrackRows(in ctx, showGoToAlbum: true, extras);
         var t = entry.Track;
-        if (t.Album is { Uri.Length: > 0 })
-            rows.Add(TrackActions.GoToAlbum.ToMenuItem(ctx));
-        if (t.Artists.Count == 1)
-            rows.Add(TrackActions.GoToArtist.ToMenuItem(ctx));
-        else if (t.Artists.Count > 1)
-            rows.Add(GoToArtistsItem(s, t.Artists));
-        rows.Add(TrackActions.CopyLink.ToMenuItem(ctx));
-        if (moveUp is not null || moveDown is not null)
-        {
-            rows.Add(MenuFlyoutItem.Separator);
-            if (moveUp is not null)
-                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
-                    new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, true, moveUp));
-            if (moveDown is not null)
-                rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
-                    new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, true, moveDown));
-        }
-        if (removeFromDisplay is not null)
-        {
-            rows.Add(MenuFlyoutItem.Separator);
-            rows.Add(TrackActions.RemoveFromQueue.ToMenuItem(ctx));
-        }
         string section = entry.Provider switch
         {
             QueueProvider.Queue => "Next in queue",
@@ -670,10 +808,30 @@ public static class Menus
         return Header(first?.Image, first?.Uri ?? "", $"{tracks.Count} songs selected", summary);
     }
 
+    /// <summary>The ONE menu-header constructor — and therefore the ONE place a header string is made safe.
+    ///
+    /// <para><b>Every entity subtitle in this app can be an HTML FRAGMENT.</b> The Spotify mappers build card/row
+    /// subtitles as markup ("Song • &lt;a href=&quot;spotify:artist:…&quot;&gt;Name&lt;/a&gt;" —
+    /// <c>SpotifyExportMapper.ArtistLinks</c>) because the ROW renderers parse them with <c>RichText</c> into
+    /// individually clickable artist links. A menu header is a plain <c>TextEl</c>, so a producer that forwards the same
+    /// string verbatim renders the raw tag at the user (the reported defect: a search song's menu header read
+    /// <c>Song • &lt;a href="spotify:artist:2Q3eZMfD…</c>).</para>
+    ///
+    /// <para>Fixing it at each producer is a rule every future producer has to remember, so it is fixed HERE instead:
+    /// the header strips tags to text with the shared <c>SpotifyExportMapper.ToPlainText</c> walk (the same one the home
+    /// card path uses), which early-outs on the common no-markup string without allocating. A header needs NAMES, not
+    /// links.</para></summary>
     static ContextMenuHeader Header(Image? image, string key, string title, string? subtitle, bool circular = false)
     {
         Element? leading = image is null ? null : Surfaces.Artwork(
             image, key.GetHashCode() & 0x7fffffff, 38f, 38f, circular ? 19f : 6f, decodePx: 76);
-        return new ContextMenuHeader(leading, title, subtitle);
+        return new ContextMenuHeader(leading, PlainHeaderText(title) ?? title, PlainHeaderText(subtitle));
     }
+
+    /// <summary>Flatten a possibly-HTML header string: strip tags, THEN decode entities — the order
+    /// <c>RichText</c> itself uses, and the order the flattener's own docs demand (decoding first would turn an escaped
+    /// <c>&amp;lt;a&amp;gt;</c> into a live tag the stripper then eats). Decoding matters because the mappers
+    /// <c>Esc()</c> the names they embed, so an un-decoded header would read "AC&amp;amp;DC".</summary>
+    static string? PlainHeaderText(string? text)
+        => SpotifyExportMapper.HtmlText(SpotifyExportMapper.ToPlainText(text));
 }

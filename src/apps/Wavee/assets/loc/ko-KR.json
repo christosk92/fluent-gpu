@@ -626,6 +626,7 @@
   },
 
   "menu": {
+    "artistUnavailable": "이 앨범의 아티스트를 찾지 못했습니다",
     "moveUp": "위로 이동",
     "moveDown": "아래로 이동",
     "saveToLiked": "좋아요 표시한 곡에 저장",
