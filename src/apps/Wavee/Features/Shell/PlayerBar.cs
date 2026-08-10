@@ -645,6 +645,14 @@ sealed class PlayerBarContent : Component
     {
         if (st == PlayerState.Error) { b.InvokePlaybackErrorAction(); return; }
         if (st is PlayerState.NoTrack or PlayerState.Loading) return;
+        TogglePlayPause(b);
+    }
+
+    /// <summary>THE play/pause intent — optimistic (write the signal first so the UI is instant, then let the bridge
+    /// reconcile), exactly like <see cref="ToggleShuffle"/> and <see cref="CycleRepeat"/>. Shared with the immersive
+    /// stage's filled primary so the two surfaces cannot drift into two different play buttons.</summary>
+    internal static void TogglePlayPause(PlaybackBridge b)
+    {
         bool p = b.IsPlaying.Peek();
         b.IsPlaying.Value = !p;
         if (p) _ = b.Player.PauseAsync(); else _ = b.Player.ResumeAsync();
@@ -1041,7 +1049,11 @@ static class PlayerBarPrefs
 sealed class TimeText : Component
 {
     readonly PlaybackBridge _b; readonly bool _remaining;
-    public TimeText(PlaybackBridge b, bool remaining) { _b = b; _remaining = remaining; }
+    // The label's ink. NOT a seam and NOT an optional dependency — a presentation override, so the ONE time-label
+    // component can serve both the theme-token player bar and the immersive stage, where every glyph is theme-INVARIANT
+    // on-media white over a dark veil. Null = the bar's own Caption/Secondary rung (unchanged).
+    readonly ColorF? _ink;
+    public TimeText(PlaybackBridge b, bool remaining, ColorF? ink = null) { _b = b; _remaining = remaining; _ink = ink; }
 
     public override Element Render()
     {
@@ -1069,12 +1081,17 @@ sealed class TimeText : Component
             Width = 44f, Direction = 0, AlignItems = FlexAlign.Center,
             Justify = _remaining ? FlexJustify.Start : FlexJustify.End,
             Fill = ColorF.Transparent,
-            HoverFill = rightDuration ? Tok.FillSubtleSecondary : ColorF.Transparent,
-            PressedFill = rightDuration ? Tok.FillSubtleTertiary : ColorF.Transparent,
+            HoverFill = rightDuration ? (_ink is null ? Tok.FillSubtleSecondary : WaveeOnMedia.GlassHover) : ColorF.Transparent,
+            PressedFill = rightDuration ? (_ink is null ? Tok.FillSubtleTertiary : WaveeOnMedia.GlassPressed) : ColorF.Transparent,
             Corners = CornerRadius4.All(Radii.Control),
             OnClick = rightDuration ? ToggleDuration : null,
             Cursor = rightDuration ? CursorId.Hand : (CursorId?)null,
-            Children = [Caption(s).Secondary() with { Wrap = TextWrap.NoWrap }],
+            Children =
+            [
+                _ink is { } ink
+                    ? Caption(s) with { Color = ink, Wrap = TextWrap.NoWrap }
+                    : Caption(s).Secondary() with { Wrap = TextWrap.NoWrap },
+            ],
         };
     }
 }

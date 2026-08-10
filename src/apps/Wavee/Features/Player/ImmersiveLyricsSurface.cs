@@ -13,19 +13,30 @@ using Wavee.Core;
 namespace Wavee;
 
 /// <summary>
-/// The IMMERSIVE lyrics surface: the fullscreen twin of the rail's lyrics panel, hosting the SAME
-/// <see cref="LyricsView"/> at <c>large: true</c> over a drifting, baked-blur cover backdrop.
+/// The IMMERSIVE STAGE: the fullscreen now-playing surface, and the fullscreen twin of the rail's lyrics panel it grew
+/// out of. Two regions over one drifting, baked-blur cover backdrop:
+/// <list type="bullet">
+///   <item>LEFT — <see cref="StageIdentity"/>: the cover, the identity, the seek, the transport, volume and the output
+///     device, in a fixed bottom-anchored column (or a header row below <see cref="StageLayout.WideEnterW"/>).</item>
+///   <item>RIGHT — <see cref="StagePanes"/>: the SAME <see cref="LyricsView"/> at <c>large: true</c> and the queue,
+///     cross-faded in place, with the "Lyrics · Queue" pivot in the band along the bottom edge.</item>
+/// </list>
 ///
 /// <para>Mounted by <c>WaveeShell</c> as a full-bleed overlay layer while <see cref="ShellUi.ImmersiveLyrics"/> is true
 /// (above the content card, below the engine's toast / teaching-tip lane). Entry is the expand button in the rail's
-/// lyrics header; exit is Escape or the close button in this surface's top corner. Opening it does NOT disturb the
-/// rail — the rail simply sits underneath (and parks its own ticker, see RightRail).</para>
+/// lyrics header; exit is Escape or the close button in this surface's top corner — both UNCHANGED by the stage.</para>
 ///
 /// <para>CHROME BANDS. The surface deliberately leaves two strips of the shell live: the window caption band at the top
 /// (drag + minimize/maximize/close belong to the OS chrome, and a surface that ate them would strand the user — the
-/// lesson from the deleted fullscreen now-playing view, git ba43abbde) and the docked player bar at the bottom (this
-/// surface carries NO transport or progress chrome, per the reference capture, so the bar below has to stay reachable
-/// to pause/skip). Everything between them is ours.</para>
+/// lesson from the deleted fullscreen now-playing view, git ba43abbde) and the docked player bar at the bottom. The bar
+/// stays reachable even though the stage now carries a full transport of its own: it is the app's ONE persistent
+/// transport, and a surface that hid it would make closing the stage feel like losing playback control.</para>
+///
+/// <para>MATERIAL. The base scrim below is theme-FLIPPING (black in dark, white in light) because
+/// <see cref="LyricsView"/> paints <c>Tok.TextPrimary</c>, which flips too. The stage's own chrome does not flip — it is
+/// ON MEDIA and paints <see cref="WaveeOnMedia"/>'s theme-invariant white — so each chrome region brings its own
+/// always-dark VEIL (see <see cref="StageChrome"/>). That is why the lyrics column still reads in light theme while the
+/// identity column, the caption cluster and the pivot band are white-on-dark in both.</para>
 /// </summary>
 sealed class ImmersiveLyricsSurface : Component
 {
@@ -33,8 +44,9 @@ sealed class ImmersiveLyricsSurface : Component
     // A lyric line at 36 DIP wants a bounded measure; an ultra-wide window would otherwise lay a chorus out as one
     // 2000-DIP ribbon. The column is centred horizontally and clamped; LyricsView's own RowSidePad (64 DIP at large)
     // is the gutter INSIDE it, so the text block is ~570 DIP wide — roughly the reference's line length.
-    const float ColumnMaxW = 700f;
-    const float ColumnGutter = 96f;   // breathing room reserved either side before the clamp bites
+    // Internal: StagePanes owns the lyrics column now and clamps against the PANE's width, not the viewport's.
+    internal const float ColumnMaxW = 700f;
+    internal const float ColumnGutter = 96f;   // breathing room reserved either side before the clamp bites
 
     // ── the animated cover backdrop ──────────────────────────────────────────────────────────────────────────────────
     // The cover is drawn OVERSIZED and re-centred so the drift can never expose an edge: 130 % of the viewport leaves a
@@ -93,6 +105,21 @@ sealed class ImmersiveLyricsSurface : Component
         var hooks = UseContext(InputHooks.Current);
         var vpSig = UseContextSignal(Viewport.Size);
         _viewport = vpSig;
+
+        // ── the stage's ONE reflow flag ──────────────────────────────────────────────────────────────────────────────
+        // A COARSE band signal, resolved in an effect (the PlayerBar idiom): the surface re-renders on a wide⇄compact
+        // FLIP, never on a resize pixel, and the hysteresis in StageLayout.Resolve means dragging the window edge across
+        // the boundary flips it exactly once per crossing instead of thrashing a mounted LyricsView.
+        var stage = UseSignal(StageLayout.FromWidth(vpSig.Peek().Width));
+        var stageSeeded = UseRef(vpSig.Peek().Width > 0f);
+        UseSignalEffect(() =>
+        {
+            var prev = stage.Peek();
+            float w = vpSig.Value.Width;
+            var next = StageLayout.Resolve(w, stageSeeded.Value ? prev : null);
+            if (w > 0f) stageSeeded.Value = true;
+            if (!next.Equals(prev)) stage.Value = next;
+        });
 
         // The appearance epoch is what makes the Settings toggle apply LIVE to an already-open surface (the
         // DisableColorWashes / DisableMarquee idiom): the writer bumps it, this re-renders, the interval re-gates.
@@ -155,11 +182,11 @@ sealed class ImmersiveLyricsSurface : Component
                         Backdrop(vpSig, art, blurHash),
                         new BoxEl
                         {
-                            Grow = 1f, Direction = 1, MinHeight = 0f,
+                            Grow = 1f, Direction = 1, MinHeight = 0f, MinWidth = 0f,
                             Children =
                             [
                                 TopBar(track, ui, svc?.Settings, secondary, secondaryAvailable),
-                                LyricsBand(vpSig, ui),
+                                StageBody(stage, vpSig),
                             ],
                         },
                     ],
@@ -174,106 +201,82 @@ sealed class ImmersiveLyricsSurface : Component
         if (ui is not null) ui.ImmersiveLyrics.Value = false;
     }
 
-    // ── the lyrics column ────────────────────────────────────────────────────────────────────────────────────────────
-    // GRADIENT-GLYPH BUDGET. Since Wave A's settled-split fast path, only the line whose wipe is mid-sweep emits a
-    // gradient glyph run at all (Split >= 1 and Split <= 0 both fall into the cheap plain-glyph batch). Even at a
-    // 1044-DIP viewport the immersive surface shows ~20 rows and exactly ONE of them is wiping, so a worst-case
-    // ~40 gradient glyphs sits two orders of magnitude inside MaxGradGlyphs = 1024 — no cap change is warranted.
-    Element LyricsBand(IReadSignal<Size2> vpSig, ShellUi? ui) => new BoxEl
-    {
-        Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
-        Justify = FlexJustify.Center, AlignItems = FlexAlign.Stretch,
-        Children =
-        [
-            new BoxEl
-            {
-                Direction = 1, Grow = 0f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
-                // Bound (not a render-time literal): the column re-solves on resize without re-rendering this component.
-                Width = Prop.Of(() => MathF.Max(160f, MathF.Min(ColumnMaxW, vpSig.Value.Width - ColumnGutter))),
-                Children =
-                [
-                    // The visibility gate parks the 16 ms ticker the moment the surface closes — the signal, not a
-                    // constant `true`, because an exit transition keeps this subtree mounted for the fade's duration.
-                    Embed.Comp(() => new LyricsView(large: true, visible: () => ui is null || ui.ImmersiveLyrics.Value)),
-                ],
-            },
-        ],
-    };
-
-    // ── minimal top chrome: what is playing + the way out ────────────────────────────────────────────────────────────
-    // The secondary-line toggle sits immediately left of the close button — the same relative position it takes in the
-    // rail header (left of expand/close), so the one control the two surfaces share does not move when the user
-    // promotes the panel to fullscreen. Hidden entirely when the document carries neither layer.
-    static Element TopBar(Track? track, ShellUi? ui, IAppSettings? settings, int secondary, int secondaryAvailable) => new BoxEl
-    {
-        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Shrink = 0f,
-        Padding = new Edges4(Spacing.L, Spacing.M, Spacing.M, Spacing.M),
-        Children = secondaryAvailable == 0
-            ?
-            [
-                TrackIdentity(track),
-                CloseButton(() => Close(ui)),
-            ]
-            :
-            [
-                TrackIdentity(track),
-                // `active` = a second line is actually on screen (not merely "the mode is non-zero") — see the same
-                // note in RightRail.LyricsHeaderKids.
-                GlyphButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
-                    () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, secondaryAvailable)),
-                    active: (secondaryAvailable & LyricsPrefs.BitFor(secondary)) != 0),
-                CloseButton(() => Close(ui)),
-            ],
-    };
-
-    static Element TrackIdentity(Track? track) => new BoxEl
-    {
-        Grow = 1f, Shrink = 1f, MinWidth = 0f, Direction = 1, Gap = 2f, ClipToBounds = true,
-        Children =
-        [
-            // BodyStrong over Caption — the app's title/meta pair. Was 13/700.
-            new TextEl(track?.Title ?? Loc.Get(Strings.Player.NothingPlaying))
-            {
-                Size = 14f, LineHeight = 20f, Weight = 600, Color = Tok.TextSecondary,
-                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-            },
-            new TextEl(track is { Artists.Count: > 0 } t ? DetailFormat.ArtistNames(t.Artists) : "")
-            {
-                Size = 12f, LineHeight = 16f, Color = Tok.TextTertiary,
-                Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-            },
-        ],
-    };
-
-    // One shape for every glyph button in this top bar, so the secondary-line toggle and the close button read as a
-    // pair. `active` is the toggle's on-state affordance (accent tint) — the same treatment the rail header uses.
+    // ── the two regions ──────────────────────────────────────────────────────────────────────────────────────────────
+    // ONE tree, one reflow flag (StageLayout.Wide): the row direction is the only thing the band changes here, and the
+    // two children keep their KEYS across the flip so neither the identity column nor the mounted LyricsView/queue is
+    // ever remounted by a resize.
     //
-    // GEOMETRY: literally the same control as RightRail's header button, so it is literally the same geometry — row 1
-    // of WaveeCta's icon-button table (32 × 32, Radii.Control, 16-DIP glyph), sharing RightRail.HeaderGlyph. The pair
-    // used to be 36/14 here against 32/12 there: a bigger box wearing a smaller glyph than its twin, which is the
-    // combination that made the two surfaces read as two different apps. The 36 rung belongs to the CTA cluster only
-    // (WaveeCta.PillHeight), and this bar has no CTA in it.
-    static Element GlyphButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
+    // GRADIENT-GLYPH BUDGET (the lyrics pane). Since Wave A's settled-split fast path, only the line whose wipe is
+    // mid-sweep emits a gradient glyph run at all (Split >= 1 and Split <= 0 both fall into the cheap plain-glyph
+    // batch). Even at a 1044-DIP viewport the stage shows ~20 rows and exactly ONE of them is wiping, so a worst-case
+    // ~40 gradient glyphs sits two orders of magnitude inside MaxGradGlyphs = 1024 — no cap change is warranted.
+    static Element StageBody(IReadSignal<StageLayout> stage, IReadSignal<Size2> vpSig)
     {
-        Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
-        Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Corners = CornerRadius4.All(Radii.Control),
-        Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
-        Cursor = CursorId.Hand, OnClick = onClick,
-        Children =
-        [
-            new TextEl(glyph)
-            {
-                Size = RightRail.HeaderGlyph, FontFamily = Theme.IconFont,
-                Color = active ? Tok.AccentTextPrimary : Tok.TextSecondary,
-                HoverColor = active ? Tok.AccentTextPrimary : Tok.TextPrimary,
-            },
-        ],
-    }.Interactive(Interaction.Subtle), tip);
+        var L = stage.Value;
+        return new BoxEl
+        {
+            Direction = (byte)(L.Wide ? 0 : 1),
+            Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
+            AlignItems = FlexAlign.Stretch,
+            Children =
+            [
+                Embed.Comp(() => new StageIdentity(stage)) with { Key = "stage:identity" },
+                new BoxEl
+                {
+                    Key = "stage:panes",
+                    Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
+                    Children = [Embed.Comp(() => new StagePanes(stage, vpSig))],
+                },
+            ],
+        };
+    }
+
+    // ── minimal top chrome: the way out ──────────────────────────────────────────────────────────────────────────────
+    // The identity moved into the stage's left column, so this band is now only the surface's OWN controls, pushed to
+    // the right edge under the caption veil. The secondary-line toggle sits immediately left of the close button — the
+    // same relative position it takes in the rail header — and is shown only when a second line is actually available
+    // AND the lyrics pane is the one on screen (a translation toggle over a queue is chrome for a pane you cannot see).
+    static Element TopBar(Track? track, ShellUi? ui, IAppSettings? settings, int secondary, int secondaryAvailable)
+    {
+        bool lyricsPane = StagePane.Current.Value == StagePane.Lyrics;
+        var accent = StageChrome.AccentFor(track);
+        var kids = new System.Collections.Generic.List<Element>(3)
+        {
+            new BoxEl { Grow = 1f, MinWidth = 0f, HitTestVisible = false },
+        };
+        if (secondaryAvailable != 0 && lyricsPane)
+            // `active` = a second line is actually on screen (not merely "the mode is non-zero") — see the same
+            // note in RightRail.LyricsHeaderKids.
+            kids.Add(GlyphButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
+                () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, secondaryAvailable)), accent,
+                active: (secondaryAvailable & LyricsPrefs.BitFor(secondary)) != 0));
+        kids.Add(CloseButton(() => Close(ui), accent));
+
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Start, Gap = Spacing.S, Shrink = 0f,
+            Height = StageChrome.TopVeilH,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.M, Spacing.M),
+            // The caption veil: the stage's chrome is theme-invariant on-media ink, so it brings its own dark ground.
+            Gradient = StageChrome.TopVeil(),
+            Children = kids.ToArray(),
+        };
+    }
+
+    // One shape for the two buttons in this band, so the secondary-line toggle and the close button read as a pair.
+    // GEOMETRY: row 1 of WaveeCta's icon-button table (32 × 32, Radii.Control, 16-DIP glyph) — the same control the rail
+    // header uses, so the pair does not change size when the user promotes the panel to fullscreen. INK is the on-media
+    // ladder (StageChrome.Glyph), because this band sits on the caption veil rather than on the theme scrim.
+    static Element GlyphButton(string glyph, string tip, Action onClick, ColorF accent, bool active = false) => ToolTip.Wrap(
+        active
+            ? StageChrome.Satellite(glyph, onClick, enabled: true, latched: true, accent: accent,
+                box: WaveeCta.IconButtonSize, glyphSize: RightRail.HeaderGlyph)
+            : StageChrome.Glyph(glyph, onClick, WaveeCta.IconButtonSize, RightRail.HeaderGlyph),
+        tip);
 
     // The "leave fullscreen" glyph — the deliberate counterpart of the rail header's Icons.FullScreen expand button.
-    static Element CloseButton(Action onClick) =>
-        GlyphButton(Icons.BackToWindow, Loc.Get(Strings.Player.CloseLyrics), onClick);
+    static Element CloseButton(Action onClick, ColorF accent) =>
+        GlyphButton(Icons.BackToWindow, Loc.Get(Strings.Player.CloseLyrics), onClick, accent);
 
     // ── the backdrop stack ───────────────────────────────────────────────────────────────────────────────────────────
     // The backdrop fills the BODY band, not the whole window — the caption strip and the player bar are left to the

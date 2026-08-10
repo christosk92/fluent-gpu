@@ -67,6 +67,24 @@ public static class WaveeOnMedia
     /// <summary>Tertiary on-media ink: captions / meta over art. White @ 0.60.</summary>
     public static ColorF InkTertiary => Tok.OnMediaTertiary;
 
+    // ── Glass (the on-media INTERACTION ramp: hover/press on a control that carries NO resting plate) ───────────
+    // The scrim ladder above is a PLATE — a small dark surface a control sits on permanently. Glass is its opposite:
+    // nothing at rest, a breath of the on-media INK on hover, one rung more on press. It is what the immersive stage
+    // paints, where the rule is "everything is ink on the scrim" and the only filled control is the play button — a
+    // dark plate under every hovered row there would re-plate a surface whose whole premise is that it has none.
+    // Derived from Tok.OnMediaPrimary (not a hand-mixed white) for the same reason the light button ramp is: a palette
+    // preset that ever re-tints the on-media whites carries these with it.
+
+    /// <summary>Rest: nothing. Stated as a rung so a call site does not have to spell <c>ColorF.Transparent</c> and
+    /// accidentally read as "no state model".</summary>
+    public static ColorF GlassRest => ColorF.Transparent;
+
+    /// <summary>Hover — the on-media ink at 10%. The lightest fill that still reads as a surface over artwork.</summary>
+    public static ColorF GlassHover => Tok.OnMediaPrimary with { A = 0.10f };
+
+    /// <summary>Pressed — one rung on, at 16%. The ratio the subtle ladder keeps between its hover and pressed rungs.</summary>
+    public static ColorF GlassPressed => Tok.OnMediaPrimary with { A = 0.16f };
+
     // ── Backdrop treatments ────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>The dim laid over a BAKED-BLUR derivative so it reads as a backdrop rather than as a stretched square
