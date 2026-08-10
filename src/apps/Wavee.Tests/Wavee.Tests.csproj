@@ -178,6 +178,8 @@
          MergedChromeLayout above, so ContextBandLayoutTests drives the REAL arithmetic — the band's renderer
          (ContextBand.cs) is engine-bound and is deliberately NOT included. -->
     <Compile Include="..\Wavee\Features\Detail\ContextBandLayout.cs" />
+    <!-- the immersive stage's pure width ladder (StageLayoutTests drives the real allocator) -->
+    <Compile Include="..\Wavee\Features\Player\StageLayout.cs" />
     <!-- the pure surface-placement state machine (System only; moves to FluentGpu.Engine/Surfaces/ with SurfaceHost) — PlacementCoreTests -->
     <Compile Include="..\Wavee\App\PlacementCore.cs" Link="PlacementCore.cs" />
     <!-- the pure "no mid-track auto-swap" rule over that machine (System only) — PlacementCoreTests' deferred-upgrade section -->
