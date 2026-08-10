@@ -25,9 +25,11 @@ namespace Wavee;
 /// <c>LyricsView</c>'s measured document (and the queue's reorder lane) on every flip, and would change the hook shape
 /// of this component between renders, which is the reconciler crash the animation canon exists to prevent.</para>
 ///
-/// <para><b>The bottom band is the veil.</b> The pivot's on-media ink needs something dark under it in BOTH themes (the
-/// surface's base scrim is white in light theme — see <c>StageChrome</c>), so the pivot ROW carries the bottom veil as
-/// its own gradient. There is no separately anchored scrim layer to keep in sync with it.</para>
+/// <para><b>The pivot band carries no veil.</b> It used to: the surface's base scrim was white in light theme, so every
+/// region of on-media ink brought its own dark box. The stage is now single-theme art-dark and the scrim's own bottom
+/// deepening resolves under this band across a feather hundreds of DIP long — so the pivot row is just a row. The one
+/// local shade left on this side is the QUEUE pane's (<c>StageChrome.PaneShade</c>), which is genuinely local: it is
+/// mounted and cross-faded with the pane whose hover glass needs a floor, and it comes up out of ZERO on its left edge.</para>
 /// </summary>
 sealed class StagePanes : Component
 {
@@ -72,7 +74,7 @@ sealed class StagePanes : Component
                             AlignSelf = FlexAlign.Stretch, JustifySelf = FlexAlign.Stretch,
                             Opacity = lyrics ? 0f : 1f, Transition = MotionTok.ControlNormal,
                             HitTestVisible = !lyrics,
-                            Gradient = StageChrome.PaneVeil(),
+                            Gradient = StageChrome.PaneShade(),
                             Children = [Embed.Comp(() => new StageQueuePane())],
                         },
                     ],
@@ -82,10 +84,13 @@ sealed class StagePanes : Component
         };
     }
 
-    // ── the lyrics pane: the SAME LyricsView the rail and the old immersive surface mount ────────────────────────────
-    // Its behaviour is untouched — the blur-distance treatment, the wipe, click-to-seek, all of it. The only change is
-    // the visibility gate, which now also parks the 16 ms ticker while the QUEUE pane is up: two panes are mounted, and
-    // exactly one of them may be ticking.
+    // ── the lyrics pane: the SAME LyricsView the rail mounts, on the stage's INK ─────────────────────────────────────
+    // Its behaviour is untouched — the blur-distance treatment, the wipe, click-to-seek, all of it. Two things are
+    // passed in: the visibility gate (which parks the 16 ms ticker while the QUEUE pane is up — two panes are mounted,
+    // and exactly one of them may be ticking), and `onMedia`, which swaps the view's whole ink ladder from the theme
+    // rungs onto WaveeOnMedia's theme-invariant whites. That flag is the reason the stage's scrim can be one dark thing
+    // in both themes: the lyrics were the ONLY thing on the surface that painted theme ink. The rail keeps the default
+    // (theme-following) — it is on a panel, not on media.
     Element LyricsColumn(ShellUi? ui) => new BoxEl
     {
         Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
@@ -104,7 +109,7 @@ sealed class StagePanes : Component
                 }),
                 Children =
                 [
-                    Embed.Comp(() => new LyricsView(large: true, visible: () =>
+                    Embed.Comp(() => new LyricsView(large: true, onMedia: true, visible: () =>
                         (ui is null || ui.ImmersiveLyrics.Value) && StagePane.Current.Value == StagePane.Lyrics)),
                 ],
             },
@@ -118,7 +123,6 @@ sealed class StagePanes : Component
         Direction = 0, Height = StageChrome.PivotBandH, Shrink = 0f,
         AlignItems = FlexAlign.End, Justify = FlexJustify.End, Gap = ContextBandLayout.PivotGap,
         Padding = new Edges4(Spacing.XXL, 0f, Spacing.XXL, Spacing.L),
-        Gradient = StageChrome.BottomVeil(),
         Children =
         [
             StageChrome.PivotLink(Loc.Get(Strings.Player.Lyrics), lyrics, accent,

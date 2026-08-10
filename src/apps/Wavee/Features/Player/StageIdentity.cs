@@ -48,13 +48,22 @@ sealed class StageIdentity : Component
 
     const float CompactTitleSize = 16f, CompactTitleLine = 22f;
 
-    /// <summary>The column's internal gutter: 352 − 2 × 24 = 304, which carries the 300 cover with a hairline to spare.</summary>
-    const float ColumnPadX = 24f;
+    /// <summary>The column's internal gutter — <see cref="StageLayout.ColumnPadX"/>, which is where
+    /// <see cref="StageLayout.ColumnContentW"/> (304) comes from.</summary>
+    const float ColumnPadX = StageLayout.ColumnPadX;
     const float ColumnPadBottom = 28f;
     const float StackGap = 18f;
     const float TransportGap = 6f;
     const float VolumeThickness = 20f;
     const float VolumeGlyph = 15f;
+
+    /// <summary><c>Slider.Create</c> takes a track LENGTH, not a stretch — a NaN length is not "fill the row", it is a
+    /// NaN width on every part of the slider template, which is what collapsed the volume rail to a thumb-sized dash.
+    /// So the track is DERIVED: the column's content span, less the mute glyph and the gap beside it.</summary>
+    static readonly float VolumeTrackW = StageLayout.ColumnContentW - WaveeCta.IconButtonSize - Spacing.S;
+
+    /// <summary>The identity region's context-menu SHIELD (see <see cref="ContextShield"/>).</summary>
+    const string ContextShieldKey = "stage:context-shield";
 
     public StageIdentity(IReadSignal<StageLayout> layout) => _layout = layout;
 
@@ -92,11 +101,50 @@ sealed class StageIdentity : Component
         // SAME now-playing menu the player bar's cluster does. The factory Peeks at open time so it never serves the
         // render-time track capture.
         if (acts is { } a && menuOverlay is { } svc && body is BoxEl box)
-            body = box.WithContextMenu(svc, () =>
+            body = ContextScope(box, svc, () =>
                 b.CurrentTrack.Peek() is { } now ? Menus.NowPlaying(a, now) : (ContextMenuModel?)null);
 
         return body;
     }
+
+    // ── the hover/press SCOPE (the container trap, and why the menu is not attached to the column) ────────────────────
+    //
+    // THE DEFECT. Attaching the context menu straight to the column box made the whole cluster ONE hover family:
+    // hovering the gap between two transport buttons lit the heart, and pressing anywhere lit EVERY button's plate at
+    // once. Nothing in this file was wrong on its own — the mechanism is the engine's, and it is worth writing down:
+    //   1. `OnContextRequested` sets InteractionInfo.ContextBit, and ContextBit is in InputDispatcher's `hitAnywhere`
+    //      mask — an element with a context flyout is a hit-test target in its own right (the WinUI rule). So a pointer
+    //      over the column's own BACKGROUND (a gap between controls; the row padding) resolved the COLUMN as the hit.
+    //   2. `AnimScheduler.SetHover` then runs SetHoverDescendants from that node: a descendant that carries a
+    //      reveal/scale affordance follows its CONTAINER's hover — and every StageChrome button carries HoverScale.
+    //   3. `SetPress` is worse: SetPressDescendants recurses UNCONDITIONALLY, with no interactive boundary and no
+    //      reveal filter, so one press on the container drives PressTarget on every descendant that has an interact row.
+    //
+    // THE FIX, without losing right-click-anywhere. The menu goes on a SHELL (a ZStack) plus a childless full-bleed
+    // SHIELD layer beneath the content:
+    //   • the SHIELD always wins the hit over the shell's own box (InputDispatcher.Hit self-hits only when no child
+    //     matched), and it has NO CHILDREN — so the hover/press cascade from it reaches exactly nothing;
+    //   • the shell keeps ContextBit as an ANCESTOR, which is what the "⋯" button's ClickRequestsContext needs (the
+    //     context funnel walks self-or-ancestors) and what carries a right-click on the art / title / a button up to the
+    //     menu. An ancestor is safe: HoverWithin is published only for Pointer/Click/Pressed bits, never ContextBit, and
+    //     the press target is the deepest HIT node, which the shield now is.
+    //
+    // THE CONTRACT, for anything added here later: NO stage container that has several interactive descendants may own a
+    // pointer/click/press handler. Handlers live on the leaf controls; a container that must own one contains only its
+    // own reveal affordance. The shield is the one exception and it is allowed precisely because it is childless.
+    static BoxEl ContextScope(BoxEl content, IOverlayService svc, Func<ContextMenuModel?> factory) => new BoxEl
+    {
+        ZStack = true, MinHeight = 0f,
+        // The shell inherits the content's participation in the parent flex; the content becomes a stretched layer.
+        Width = content.Width, Grow = content.Grow, Shrink = content.Shrink,
+        Children = [ContextShield(svc, factory), content with { Width = float.NaN, Grow = 0f, Shrink = 0f }],
+    }.WithContextMenu(svc, factory);
+
+    /// <summary>The shield: ONE childless, full-bleed layer that takes the hit anywhere the content does not, so the
+    /// container above it is never the hover/press target. It must stay childless — see the note on
+    /// <see cref="ContextScope"/>; <c>StageLayoutTests</c> pins the literal construction below.</summary>
+    static BoxEl ContextShield(IOverlayService svc, Func<ContextMenuModel?> factory) =>
+        new BoxEl { Key = ContextShieldKey }.WithContextMenu(svc, factory);
 
     // ── WIDE: the fixed, bottom-anchored column ──────────────────────────────────────────────────────────────────────
 
@@ -119,20 +167,24 @@ sealed class StageIdentity : Component
                 Margin = new Edges4(0f, 0f, 0f, StackGap),
                 Children = [Surfaces.Artwork(track?.Image, SeedOf(track), L.ArtSize, L.ArtSize, Radii.Card, decodePx: 512)],
             },
+            // Every wrapper below is Direction = 1 ON PURPOSE. A BoxEl defaults to a ROW, and a row's single child takes
+            // its INTRINSIC main-axis size — which is what made the seek bar a ~120-DIP stub, the volume rail a dash and
+            // the "0:15  3:20" pair collapse into "0:15-3:20" (its Grow spacer had no space to spread). As columns, the
+            // wrapper's cross axis is horizontal and the default AlignItems = Stretch gives each row the full 304.
             new BoxEl
             {
-                Key = "stage:identity-row", Animate = WaveeEntrance.Row(rung++),
+                Key = "stage:identity-row", Direction = 1, Animate = WaveeEntrance.Row(rung++),
                 Children = [IdentityRow(track, saved, like, accent, go, wide: true)],
             },
             new BoxEl
             {
-                Key = "stage:seek", Animate = WaveeEntrance.Row(rung++),
+                Key = "stage:seek", Direction = 1, Animate = WaveeEntrance.Row(rung++),
                 Margin = new Edges4(0f, StackGap, 0f, 0f),
                 Children = [SeekBlock(b)],
             },
             new BoxEl
             {
-                Key = "stage:transport", Animate = WaveeEntrance.Row(rung++),
+                Key = "stage:transport", Direction = 1, Animate = WaveeEntrance.Row(rung++),
                 Margin = new Edges4(0f, Spacing.S, 0f, 0f),
                 Children = [TransportRow(in L, b, playing, canTransport, primaryEnabled, shuffle, repeat, accent)],
             },
@@ -140,26 +192,32 @@ sealed class StageIdentity : Component
         if (L.ShowVolume)
             kids.Add(new BoxEl
             {
-                Key = "stage:volume", Animate = WaveeEntrance.Row(rung++),
+                Key = "stage:volume", Direction = 1, Animate = WaveeEntrance.Row(rung++),
                 Margin = new Edges4(0f, StackGap, 0f, 0f),
                 Children = [VolumeRow(b)],
             });
         if (L.ShowDeviceLine)
             kids.Add(new BoxEl
             {
-                Key = "stage:device", Animate = WaveeEntrance.Row(rung),
+                Key = "stage:device", Direction = 1, Animate = WaveeEntrance.Row(rung),
                 Margin = new Edges4(0f, Spacing.S, 0f, 0f),
                 Children = [Embed.Comp(() => new StageDeviceLine(b))],
             });
 
         return new BoxEl
         {
-            // The BOX is the designed column plus its veil falloff; the padding puts the content back inside the
-            // designed 352 so the gradient has somewhere to fade that is not on top of the type.
+            // The BOX is the designed column plus the gutter that keeps the pane off its type; the padding puts the
+            // content back inside the designed 352. (The dark SHADE under the column is not here any more — it is a
+            // full-bleed layer in the backdrop stack, so it can feather more than twice as far for free.)
             Width = L.LayoutWidth, Shrink = 0f,
-            Direction = 1, Justify = FlexJustify.End, MinHeight = 0f,
+            // BOTTOM-ANCHORED, and Grow is what makes that true. A component's element is mounted UNDER a host node
+            // whose own layout is the scene default (a column, Grow 0), so this box was taking its MEASURED height and
+            // sitting at the top of a full-height host: Justify = End had no free space to distribute and was silently
+            // inert, which is why the cover read as pinned top-left with the window's whole lower half empty. Growing
+            // into the host's height gives End something to end against.
+            Grow = 1f, MinHeight = 0f,
+            Direction = 1, Justify = FlexJustify.End,
             Padding = new Edges4(ColumnPadX, 0f, L.ColumnFalloff + ColumnPadX, ColumnPadBottom),
-            Gradient = StageChrome.ColumnVeil(L.VeilHoldStop),
             Children = kids.ToArray(),
         };
     }
@@ -193,9 +251,10 @@ sealed class StageIdentity : Component
 
         return new BoxEl
         {
+            // No veil of its own: the scrim's top deepening is what this header sits on, and it resolves across a
+            // feather many times the header's height instead of ending at a boxed edge.
             Direction = 1, Shrink = 0f,
             Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.S),
-            Gradient = StageChrome.HeaderVeil(),
             Children =
             [
                 new BoxEl
@@ -206,7 +265,9 @@ sealed class StageIdentity : Component
                 },
                 new BoxEl
                 {
-                    Key = "stage:seek", Animate = WaveeEntrance.Row(1),
+                    // Direction = 1 for the same reason the wide column's wrappers are — see the note there. A row
+                    // wrapper would hand the seek block its intrinsic width instead of the header's.
+                    Key = "stage:seek", Direction = 1, Animate = WaveeEntrance.Row(1),
                     Margin = new Edges4(0f, Spacing.XS, 0f, 0f),
                     Children = [SeekBlock(b)],
                 },
@@ -325,13 +386,16 @@ sealed class StageIdentity : Component
         Children =
         [
             Embed.Comp(() => new StageVolumeGlyph(b)),
+            // The track is an authored LENGTH (see VolumeTrackW): Slider.Create has no stretch mode, and the NaN that
+            // sat here propagated into every Width in its template — which is the whole of the "volume is a tiny dash"
+            // report. Grow still lets the row absorb any rounding, but the rail's size is the derived number.
             new BoxEl
             {
                 Grow = 1f, Shrink = 1f, MinWidth = 0f,
                 Children =
                 [
                     Slider.Create(b.Volume, v => { _ = b.Player.SetVolumeAsync(v); },
-                        options: VolumeOptions, length: float.NaN, thickness: VolumeThickness, style: OnMediaSlider()),
+                        options: VolumeOptions, length: VolumeTrackW, thickness: VolumeThickness, style: OnMediaSlider()),
                 ],
             },
         ],

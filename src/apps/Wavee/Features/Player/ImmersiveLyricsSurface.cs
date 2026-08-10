@@ -32,11 +32,15 @@ namespace Wavee;
 /// stays reachable even though the stage now carries a full transport of its own: it is the app's ONE persistent
 /// transport, and a surface that hid it would make closing the stage feel like losing playback control.</para>
 ///
-/// <para>MATERIAL. The base scrim below is theme-FLIPPING (black in dark, white in light) because
-/// <see cref="LyricsView"/> paints <c>Tok.TextPrimary</c>, which flips too. The stage's own chrome does not flip — it is
-/// ON MEDIA and paints <see cref="WaveeOnMedia"/>'s theme-invariant white — so each chrome region brings its own
-/// always-dark VEIL (see <see cref="StageChrome"/>). That is why the lyrics column still reads in light theme while the
-/// identity column, the caption cluster and the pivot band are white-on-dark in both.</para>
+/// <para>MATERIAL — THE STAGE IS SINGLE-THEME: ALWAYS ART-DARK. In both themes. The room is lit by the playing track,
+/// the way every art-forward player lights it, and the whole surface (chrome AND lyrics) paints
+/// <see cref="WaveeOnMedia"/>'s theme-invariant white on top of it. There is no theme branch anywhere in this file.
+/// The stack is: the opaque <c>Tok.MediaStage</c> floor → the σ80 baked-blur artwork, full-bleed and drifting →
+/// <see cref="StageChrome.Scrim"/>, ONE continuous vertical gradient over the whole body → <see
+/// cref="StageChrome.ColumnShade"/>, ONE left-anchored layer that deepens the ground under the identity column and
+/// feathers to exactly zero → content. It replaces a theme-flipping base scrim plus a patchwork of boxed per-region
+/// veils, which in light theme read as a collage of dark patches with locatable edges over a white ground — and left
+/// the theme-invariant white title sitting on the near-white part, invisible.</para>
 /// </summary>
 sealed class ImmersiveLyricsSurface : Component
 {
@@ -56,8 +60,8 @@ sealed class ImmersiveLyricsSurface : Component
     // the bake the backdrop is an ordinary textured quad, so every frame of the drift is a pure transform write.
     const float BackdropSigmaDip = 80f;
     const float BackdropResolutionScale = 0.5f;
-    const float ScrimAlphaDark = 0.45f;    // dark theme: the reference's ~0.45 A black veil under white lyrics
-    const float ScrimAlphaLight = 0.62f;   // light theme: the same job, inverted — Tok.TextPrimary is dark there
+    // The scrim's own numbers live in StageLayout (the pure allocator) and are spelled as GradientSpecs by StageChrome.
+    // There is deliberately no alpha constant here any more, and no theme branch to pick between two of them.
 
     // Drift: two INCOMMENSURATE sinusoids (37 s and 53 s never re-phase inside a listening session), so the motion has
     // no discernible loop and — deliberately — no relation to the beat. Amplitude is a fraction of the viewport so the
@@ -179,7 +183,7 @@ sealed class ImmersiveLyricsSurface : Component
                     Fill = Prop.Of(() => Tok.FillSolidBase),
                     Children =
                     [
-                        Backdrop(vpSig, art, blurHash),
+                        Backdrop(vpSig, stage, art, blurHash),
                         new BoxEl
                         {
                             Grow = 1f, Direction = 1, MinHeight = 0f, MinWidth = 0f,
@@ -255,10 +259,10 @@ sealed class ImmersiveLyricsSurface : Component
         return new BoxEl
         {
             Direction = 0, AlignItems = FlexAlign.Start, Gap = Spacing.S, Shrink = 0f,
-            Height = StageChrome.TopVeilH,
+            Height = StageChrome.TopBandH,
             Padding = new Edges4(Spacing.L, Spacing.M, Spacing.M, Spacing.M),
-            // The caption veil: the stage's chrome is theme-invariant on-media ink, so it brings its own dark ground.
-            Gradient = StageChrome.TopVeil(),
+            // NO veil of its own. The scrim's top deepening already resolves under this band, across a feather many
+            // times its height — a boxed gradient here is exactly the dark band across the top that this wave removed.
             Children = kids.ToArray(),
         };
     }
@@ -284,12 +288,8 @@ sealed class ImmersiveLyricsSurface : Component
     static float BodyW(float vpW) => MathF.Max(1f, vpW);
     static float BodyH(float vpH) => MathF.Max(1f, vpH - TitleBar.ExpandedHeight - WaveeSize.PlayerBarH);
 
-    Element Backdrop(IReadSignal<Size2> vpSig, string art, string? blurHash)
+    Element Backdrop(IReadSignal<Size2> vpSig, IReadSignal<StageLayout> stage, string art, string? blurHash)
     {
-        ColorF scrim = Tok.Theme == ThemeKind.Dark
-            ? new ColorF(0f, 0f, 0f, ScrimAlphaDark)
-            : new ColorF(1f, 1f, 1f, ScrimAlphaLight);
-
         // One delegate per axis, shared by the frame's size AND its centring transform (cold path; no per-frame cost).
         Func<float> frameW = () => BodyW(vpSig.Value.Width) * Overscale;
         Func<float> frameH = () => BodyH(vpSig.Value.Height) * Overscale;
@@ -337,7 +337,23 @@ sealed class ImmersiveLyricsSurface : Component
                         },
                     ],
                 },
-                new BoxEl { Grow = 1f, HitTestVisible = false, Fill = scrim },
+                // ── the scrim system: TWO full-bleed paint layers, and that is the whole of it ────────────────────────
+                // One continuous vertical gradient over the entire body (deep top, flat middle, deep bottom), then one
+                // left-anchored layer that deepens the ground under the identity column and feathers to exactly zero.
+                // Both are theme-invariant. Every chrome region's own boxed veil is GONE — the two layers below are
+                // what the caption cluster, the column and the pivot band now sit on.
+                new BoxEl { Grow = 1f, HitTestVisible = false, Gradient = StageChrome.Scrim() },
+                new BoxEl
+                {
+                    // A PAINT layer, not a layout one: it is inside the full-bleed backdrop stack, so its 612-DIP width
+                    // costs the pane region nothing (the column BOX is still StageLayout.LayoutWidth). Bound rather than
+                    // read at render time so the wide⇄compact flip re-solves it without re-rendering the surface; 0 in
+                    // the compact shape, where there is no column to deepen under.
+                    Width = Prop.Of(() => stage.Value.Wide ? StageLayout.ColumnShadeW : 0f),
+                    AlignSelf = FlexAlign.Stretch,
+                    Shrink = 0f, HitTestVisible = false,
+                    Gradient = StageChrome.ColumnShade(),
+                },
             ],
         };
     }

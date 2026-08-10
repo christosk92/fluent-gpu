@@ -236,6 +236,10 @@ sealed class LyricsView : Component
     Services? _svc;
 
     readonly bool _large;
+    /// <summary>WHICH ink ladder this view paints with — theme rungs on the rail, on-media whites on the stage. See
+    /// <see cref="LyricsInk"/>: it is a MODE, resolved at the point of consumption, so the rail still follows a live
+    /// theme flip while the stage is theme-invariant by construction.</summary>
+    readonly LyricsInk _ink;
     readonly Func<bool>? _visible;
     // The focal band as a fraction of the lyrics viewport height, and its ONE owner. The immersive surface sits its
     // active line slightly HIGHER in the taller viewport (0.38 vs the rail's 0.40) so more of the upcoming document is
@@ -250,7 +254,12 @@ sealed class LyricsView : Component
     static readonly bool _lyricsDebug =
         Environment.GetEnvironmentVariable("WAVEE_LYRICS_DEBUG") is "1" or "true" or "TRUE";
     readonly Signal<bool> _debugOpen = new(false);
-    public LyricsView(bool large = false, Func<bool>? visible = null) { _large = large; _visible = visible; }
+    public LyricsView(bool large = false, bool onMedia = false, Func<bool>? visible = null)
+    {
+        _large = large;
+        _ink = onMedia ? LyricsInk.Media : LyricsInk.Theme;
+        _visible = visible;
+    }
 
     public override Element Render()
     {
@@ -388,8 +397,8 @@ sealed class LyricsView : Component
                     {
                         Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f,
                         Padding = new Edges4(11f, 7f, 13f, 7f), Corners = CornerRadius4.All(16f),
-                        Fill = Tok.FillSolidBase with { A = 0.92f }, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-                        HoverFill = Tok.FillSubtleSecondary, PressedFill = Tok.FillSubtleTertiary,
+                        Fill = _ink.Plate, BorderWidth = 1f, BorderColor = _ink.PlateStroke,
+                        HoverFill = _ink.PlateHover, PressedFill = _ink.PlatePressed,
                         PressScale = WaveeMotion.ScaleSubtle.Press, Cursor = CursorId.Hand,
                         OnClick = () => BeginResync(Context.Scene),
                         Role = AutomationRole.Button, Focusable = true, AllowFocusOnInteraction = false,
@@ -398,9 +407,9 @@ sealed class LyricsView : Component
                         Layout = LayoutTransition.Fade,
                         Children =
                         [
-                            ProgressRing.Create(_resyncProgress, size: 18f, foreground: Tok.AccentDefault,
-                                track: Tok.StrokeControlDefault with { A = 0.55f }),
-                            new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = 600, Color = Tok.TextPrimary },
+                            ProgressRing.Create(_resyncProgress, size: 18f, foreground: _ink.RingFill,
+                                track: _ink.RingTrack),
+                            new TextEl(label) { Size = 12f, LineHeight = 16f, Weight = 600, Color = _ink.Primary },
                         ],
                     }),
             ],
@@ -556,18 +565,17 @@ sealed class LyricsView : Component
             ],
         };
 
-        // One dot: a flat Tok.TextPrimary disc whose ALPHA is the bound per-dot signal, so the gap meter and the breath
+        // One dot: a flat primary-ink disc whose ALPHA is the bound per-dot signal, so the gap meter and the breath
         // are the same single number per dot — and no glow, no fill swap, nothing else to keep in sync. Driving the
         // node's OPACITY (rather than a colour) is what ties the two ends to the wipe's own vocabulary: a filled dot is
-        // exactly Tok.TextPrimary, the colour of a SUNG glyph, and an unfilled one is that colour at UnsungAlpha, the
-        // fraction the wipe dims an unsung glyph by. (In the light theme the token is itself 0.894 rather than opaque,
-        // so the dim end lands a few percent under the unsung glyph; the lit end, which is the one the eye reads, is
-        // exact in both themes.)
+        // exactly the ink of a SUNG glyph, and an unfilled one is that colour at UnsungAlpha, the fraction the wipe dims
+        // an unsung glyph by. (On the rail in light theme the theme token is itself 0.894 rather than opaque, so the dim
+        // end lands a few percent under the unsung glyph; the lit end, which is the one the eye reads, is exact.)
         Element Dot(int k, float size) => new BoxEl
         {
             Width = size, Height = size, Shrink = 0f,
             Corners = CornerRadius4.All(size * 0.5f),
-            Fill = Tok.TextPrimary,
+            Fill = _ink.Primary,
             Opacity = (Prop<float>)_dotAlpha[k],
         };
     }
@@ -717,16 +725,22 @@ sealed class LyricsView : Component
             return Skel.Region<LyricsDocument?>(
                 docL,
                 shimmerSource: () => LyricsShimmer(owner._large),
-                content: d => d is { Lines.Count: > 0 } readyDoc ? owner.LyricsContent(readyDoc) : Message("No lyrics available"),
+                content: d => d is { Lines.Count: > 0 } readyDoc ? owner.LyricsContent(readyDoc) : owner.Message("No lyrics available"),
                 reveal: SkelReveal.FadeOnly,
-                onFailed: () => Message("No lyrics available"),
+                onFailed: () => owner.Message("No lyrics available"),
                 isEmpty: d => d?.Lines is null || d.Lines.Count == 0,
-                onEmpty: () => Message("No lyrics available"),
+                onEmpty: () => owner.Message("No lyrics available"),
                 style: new SkeletonStyle(Tok.FillSubtleSecondary, RowGap: owner._large ? 18f : 14f, BarRadius: 6f, TextRatio: 0.86f),
                 smoothResize: false);
         }
     }
 
+    // ink-scan: off ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // Everything until the matching re-opening marker below is the ENV-GATED lyrics-search debug surface
+    // (WAVEE_LYRICS_DEBUG=1). Those two marker lines are the ONLY places the token may appear — the scan counts them.
+    // It is a developer panel on an opaque theme PLATE, not part of the reading surface, so it keeps the theme's text
+    // rungs on purpose — white-on-media ink over a light solid plate would be the very invisibility the ink seam exists
+    // to remove. StageLayoutTests scans the rest of this file for theme ink and skips exactly this span.
     Element DebugButton() => new BoxEl
     {
         // Full-bleed PASS-THROUGH positioner (its HitTestPassThrough is honoured — see FpsOverlay) pinning the pill
@@ -834,6 +848,8 @@ sealed class LyricsView : Component
 
         return new BoxEl { Direction = 1, Gap = Spacing.XS, Children = lines.ToArray() };
     }
+
+    // ink-scan: on ──────────────────────────────────────────────────────────────────────────────────────────────────
 
     void PrepareDocument(LyricsDocument doc, long posMs)
     {
@@ -1193,7 +1209,7 @@ sealed class LyricsView : Component
                     // The SIGNAL, not its value: the row reads it every render, so a toggle reaches rows that mounted
                     // long before it (component props freeze at mount — see the _secondary field block).
                     _secondary,
-                    fontSz, lineHt, rowPad, sidePad, _large,
+                    fontSz, lineHt, rowPad, sidePad, _large, _ink,
                     ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = "ll" + idx };
             },
             keyOf: i => "ll" + i,
@@ -1244,7 +1260,7 @@ sealed class LyricsView : Component
                         Weight = 700,
                         Wrap = TextWrap.Wrap,
                         LineHeight = lineHt,
-                        Color = Tok.TextPrimary with { A = 0.88f },
+                        Color = _ink.Primary with { A = 0.88f },
                         MaxLines = 0,
                         Trim = TextTrim.None,
                     },
@@ -2294,11 +2310,11 @@ sealed class LyricsView : Component
 
     static bool IsTimed(LyricsDocument doc) => doc.Sync is LyricsSyncKind.Line or LyricsSyncKind.Syllable;
 
-    static Element Message(string msg) => new BoxEl
+    Element Message(string msg) => new BoxEl
     {
         Grow = 1f, MinHeight = 0f, Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
         Padding = new Edges4(Spacing.XXL, 0f, Spacing.XXL, 0f),
-        Children = [new TextEl(msg) { Size = 14f, LineHeight = 20f, Color = Tok.TextSecondary, Wrap = TextWrap.Wrap }],
+        Children = [new TextEl(msg) { Size = 14f, LineHeight = 20f, Color = _ink.Secondary, Wrap = TextWrap.Wrap }],
     };
 }
 
@@ -2385,6 +2401,10 @@ sealed class LyricLineView : Component
     // wrapped and untrimmed, and BOTH anchor their emphasis scale at the left margin (TransformOriginX 0). All that is
     // left of the old distinction is the line-synced halo σ, which scales with the type size.
     readonly bool _large;
+    /// <summary>The ink ladder this row paints with, handed down from the view (theme rungs on the rail, on-media
+    /// whites on the stage). Safe to freeze at mount even though a theme can flip mid-session: it is a MODE, not a
+    /// colour — every rung below resolves its token at the point of consumption. See <see cref="LyricsInk"/>.</summary>
+    readonly LyricsInk _ink;
     readonly Action<int, NodeHandle> _reportNode;
     readonly Action<int, NodeHandle> _reportGlow;
     readonly Action<int, NodeHandle> _reportDof;
@@ -2399,13 +2419,14 @@ sealed class LyricLineView : Component
 
     public LyricLineView(int index, LyricLine line, Signal<int> emphasis, FloatSignal nowMs, Signal<LyricsFollowMode> followMode,
         FloatSignal? glowFade, Signal<int> secondary,
-        float fontSz, float lineHt, float rowPad, float sidePad, bool large, Action<int, NodeHandle> reportNode,
+        float fontSz, float lineHt, float rowPad, float sidePad, bool large, LyricsInk ink,
+        Action<int, NodeHandle> reportNode,
         Action<int, NodeHandle> reportGlow, Action<int, NodeHandle> reportDof, Func<int, float> softnessOf,
         Func<int, float> dofSigmaOf, Action onSeek)
     {
         _index = index; _line = line; _emphasis = emphasis; _nowMs = nowMs;
         _followMode = followMode; _glowFade = glowFade; _secondary = secondary;
-        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _large = large;
+        _fontSz = fontSz; _lineHt = lineHt; _rowPad = rowPad; _sidePad = sidePad; _large = large; _ink = ink;
         _reportNode = reportNode; _reportGlow = reportGlow; _reportDof = reportDof; _softnessOf = softnessOf;
         _dofSigmaOf = dofSigmaOf; _onSeek = onSeek;
     }
@@ -2500,9 +2521,10 @@ sealed class LyricLineView : Component
             // sung glyphs full-bright Primary (Before), unsung glyphs dim-but-readable (After = Primary @ UnsungAlpha),
             // sitting _wipeLift DIP low and rising as the feather sweeps them. The row group opacity spring (active-only
             // emphasis) dims the whole row once focus moves; this wipe does sung/unsung.
-            Element main = LineText(_line.Text, Tok.TextPrimary) with
+            ColorF sung = _ink.Primary;
+            Element main = LineText(_line.Text, sung) with
             {
-                Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = UnsungAlpha },
+                Wipe = new GlyphWipe(Before: sung, After: sung with { A = UnsungAlpha },
                     Split: split, Softness: softness, Lift: WipeLiftFor(_large)),
                 OnRealized = h => _reportNode(_index, h),
             };
@@ -2514,12 +2536,12 @@ sealed class LyricLineView : Component
             // disagreement would let the bloom float out from under the crisp text at the boundary.
             bool near = dist <= 2;
             Element glowText = (near
-                ? LineText(_line.Text, Tok.TextPrimary) with
+                ? LineText(_line.Text, sung) with
                   {
-                      Wipe = new GlyphWipe(Before: Tok.TextPrimary, After: Tok.TextPrimary with { A = 0f },
+                      Wipe = new GlyphWipe(Before: sung, After: sung with { A = 0f },
                           Split: split, Softness: softness, Lift: WipeLiftFor(_large)),
                   }
-                : LineText("", Tok.TextPrimary)) with { OnRealized = h => _reportGlow(_index, h) };
+                : LineText("", sung)) with { OnRealized = h => _reportGlow(_index, h) };
             // The wrapper's bound opacity is the per-line glow-fade signal: OnFrame ramps it in over ~240 ms as this line
             // becomes the voice and out as it leaves — the halo never appears/vanishes in one frame (the old handoff pop).
             Element glow = new BoxEl { Opacity = GlowOpacity(), HitTestVisible = false, Children = [glowText] };
@@ -2554,9 +2576,9 @@ sealed class LyricLineView : Component
                 BlurCachePolicy = BlurCachePolicy.HoldIfCached,
                 Opacity = GlowOpacity(),
                 HitTestVisible = false,
-                Children = [LineText(near ? _line.Text : "", Tok.TextPrimary with { A = 0.4f })],
+                Children = [LineText(near ? _line.Text : "", _ink.Primary with { A = 0.4f })],
             };
-            Element main = LineText(_line.Text, lit ? Tok.TextPrimary : Tok.TextSecondary) with
+            Element main = LineText(_line.Text, lit ? _ink.Primary : _ink.Secondary) with
             {
                 // ~150 ms brush cross-fade so the Primary↔Secondary color flip at the handoff never snaps in one frame.
                 BrushTransitionMs = WaveeMotion.Fast,
@@ -2653,7 +2675,7 @@ sealed class LyricLineView : Component
             Weight = 600,
             Wrap = TextWrap.Wrap,
             LineHeight = _lineHt * SecondaryFontRatio,
-            Color = Tok.TextSecondary,
+            Color = _ink.Secondary,
             MaxLines = 0,
             Trim = TextTrim.None,
             // The one piece of spacing: a hair of air under the lyric so the two read as a pair, not as one run-on

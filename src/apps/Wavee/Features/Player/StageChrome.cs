@@ -23,67 +23,76 @@ static class StagePane
 }
 
 /// <summary>
-/// The stage's shared chrome: its veils, its ink and its four button shapes.
+/// The stage's shared chrome: its scrim, its ink and its four button shapes.
 ///
-/// <para><b>Why the stage carries its own veils.</b> <c>ImmersiveLyricsSurface</c>'s base scrim FLIPS with the theme —
-/// black @ 0.45 in dark, white @ 0.62 in light — because the lyrics column it was built for paints
-/// <c>Tok.TextPrimary</c>, which flips too. The stage's chrome does not: it is ON MEDIA, so it paints the
-/// theme-INVARIANT <see cref="WaveeOnMedia"/> ink (white in both themes), and white ink over a white scrim is nothing at
-/// all. So every region that carries stage chrome carries its own always-dark VEIL — the caption strip, the identity
-/// column, and the pane region's bottom pivot band — while the lyrics column keeps the base scrim untouched and keeps
-/// reading in both themes. The veils are scrims (a gradient over artwork), not plates: the stage's material rule is
-/// "no plates except hover glass, the filled play, and the latched-satellite plate", and a gradient that fades to
-/// nothing is not a plate.</para>
+/// <para><b>THE STAGE IS SINGLE-THEME: always art-dark.</b> In both themes. The room is lit by the playing track, the
+/// way every art-forward player lights it, and the whole surface — chrome AND lyrics — paints the theme-INVARIANT
+/// <see cref="WaveeOnMedia"/> ink on top of it. There is no light arm anywhere in this file.</para>
 ///
-/// <para>Every veil colour is derived from <see cref="Tok.MediaStage"/> (the engine's opaque media near-black) rather
-/// than from a hand-mixed RGBA, for the same reason <see cref="WaveeOnMedia"/>'s light-button ramp is derived from the
-/// on-media ink: one token moves them all.</para>
+/// <para><b>What this replaced, and why.</b> The surface shipped with a theme-FLIPPING base scrim (black @ 0.45 dark,
+/// white @ 0.62 light) because <c>LyricsView</c> painted <c>Tok.TextPrimary</c>. The chrome could not sit on a white
+/// ground, so every chrome region brought its own always-dark BOXED veil — a caption strip, the identity column, the
+/// pivot band. In light theme that read as a two-world collage: dark patches with locatable edges (a band across the
+/// top, a vertical smear at the column's falloff) over a white ground, with the theme-invariant white title landing on
+/// the near-white part and disappearing outright. The lyrics now take an on-media ink (<c>LyricsInk</c>), which is what
+/// lets the scrim be ONE continuous thing.</para>
+///
+/// <para><b>The stack, bottom to top:</b> the opaque <see cref="Tok.MediaStage"/> floor → the σ80 baked-blur artwork →
+/// <see cref="Scrim"/> (one full-bleed, continuous vertical gradient: deepened at the top and the bottom, flat through
+/// the middle) → <see cref="ColumnShade"/> (one full-bleed, left-anchored layer that deepens the ground under the
+/// identity column and feathers to EXACTLY zero over 260 DIP) → content. Two paint layers, no patchwork. Only the
+/// QUEUE pane keeps a local shade (<see cref="PaneShade"/>), because it is mounted/cross-faded and its rows carry hover
+/// glass that needs a floor while it is up.</para>
+///
+/// <para><b>Edge-invisibility is a rule, not a taste call.</b> Every shade either reaches its own boundary at alpha 0
+/// after a long feather, or ends at a WINDOW edge where there is no outside to contrast with. The numbers live in
+/// <see cref="StageLayout"/> (the pure allocator) and <c>StageLayoutTests</c> asserts them in DIP; this file owns only
+/// the spelling. Every colour is derived from <see cref="Tok.MediaStage"/> rather than hand-mixed, for the same reason
+/// <see cref="WaveeOnMedia"/>'s light-button ramp is derived from the on-media ink: one token moves them all.</para>
 /// </summary>
 static class StageChrome
 {
-    // ── the veil ladder ──────────────────────────────────────────────────────────────────────────────────────────────
+    // ── the scrim system ─────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The veil at full strength — under the identity column's type and under the pivot.</summary>
-    public static ColorF VeilDeep => Tok.MediaStage with { A = 0.74f };
-    /// <summary>The veil's mid stop, so the falloff is a curve rather than a ramp.</summary>
-    public static ColorF VeilMid => Tok.MediaStage with { A = 0.40f };
-    /// <summary>Gone — the base scrim takes over here.</summary>
-    public static ColorF VeilClear => Tok.MediaStage with { A = 0f };
+    /// <summary>The near-black the whole system is mixed from, at an authored alpha.</summary>
+    static ColorF Shade(float a) => Tok.MediaStage with { A = a };
 
-    /// <summary>The caption-strip veil's height. Tall enough to carry the close cluster with the fade fully resolved
-    /// before the lyrics column's first line.</summary>
-    public const float TopVeilH = 88f;
+    /// <summary>The caption band's height. It carries the close cluster; it no longer carries a veil of its own — the
+    /// scrim's own top deepening does that job, across a feather many times this tall.</summary>
+    public const float TopBandH = 88f;
 
-    /// <summary>The pivot band's height — the bottom veil IS the pivot row, so there is no separately-anchored layer to
-    /// keep in sync with it.</summary>
+    /// <summary>The pivot band's height. Same story: the row is a row, the darkening under it is the scrim's.</summary>
     public const float PivotBandH = 72f;
 
-    /// <summary>Top-anchored: deep at the window edge, gone by <see cref="TopVeilH"/>.</summary>
-    public static GradientSpec TopVeil() => GradientDown(
-        new GradientStop(0f, VeilDeep), new GradientStop(0.55f, VeilMid), new GradientStop(1f, VeilClear));
+    /// <summary>THE scrim — one full-bleed, theme-invariant, continuous vertical gradient over the whole body band.
+    /// Deep at the top (the caption cluster), deep at the bottom (the pivot band and the transport), flat at
+    /// <see cref="StageLayout.ScrimBaseA"/> through the middle where the lyrics read. The two interior stops carry the
+    /// SAME value, which is what makes the middle a plateau rather than a slow sag — and what makes each deepening a
+    /// feather hundreds of DIP long instead of a boxed band.</summary>
+    public static GradientSpec Scrim() => GradientDown(
+        new GradientStop(0f, Shade(StageLayout.ScrimTopA)),
+        new GradientStop(StageLayout.ScrimTopStop, Shade(StageLayout.ScrimBaseA)),
+        new GradientStop(StageLayout.ScrimBottomStop, Shade(StageLayout.ScrimBaseA)),
+        new GradientStop(1f, Shade(StageLayout.ScrimBottomA)));
 
-    /// <summary>Bottom-anchored: the exact mirror of <see cref="TopVeil"/>.</summary>
-    public static GradientSpec BottomVeil() => GradientDown(
-        new GradientStop(0f, VeilClear), new GradientStop(0.45f, VeilMid), new GradientStop(1f, VeilDeep));
+    /// <summary>The identity column's deepening: left-anchored, held flat across the DESIGNED column so the column's
+    /// type never sits on a moving value, then curved to EXACTLY zero across
+    /// <see cref="StageLayout.ColumnShadeFalloffW"/>. It is a full-bleed paint layer with no layout consequence, so it
+    /// is free to be much wider than the column BOX — which is the entire reason its right edge cannot be found.</summary>
+    public static GradientSpec ColumnShade() => GradientRight(
+        new GradientStop(0f, Shade(StageLayout.ColumnShadeA)),
+        new GradientStop(MathF.Max(0.01f, StageLayout.ColumnShadeHoldStop), Shade(StageLayout.ColumnShadeA)),
+        new GradientStop(StageLayout.ColumnShadeMidStop,
+            Shade(StageLayout.ColumnShadeA * StageLayout.ColumnShadeMidFrac)),
+        new GradientStop(1f, Shade(0f)));
 
-    /// <summary>Left-anchored, held flat across the DESIGNED column and then faded across its falloff — so the column's
-    /// type never sits on a moving value and the veil still has no edge. <paramref name="holdStop"/> is
-    /// <see cref="StageLayout.VeilHoldStop"/>.</summary>
-    public static GradientSpec ColumnVeil(float holdStop) => LinearGradient(0f,
-        new GradientStop(0f, VeilDeep),
-        new GradientStop(MathF.Max(0.01f, holdStop), VeilDeep),
-        new GradientStop(1f, VeilClear));
-
-    /// <summary>The COMPACT header's veil. That header spans the whole width, so there is no horizontal falloff to
-    /// author — it holds deep under the type and gives way DOWNWARD into the pane below it.</summary>
-    public static GradientSpec HeaderVeil() => GradientDown(
-        new GradientStop(0f, VeilDeep), new GradientStop(0.7f, VeilDeep), new GradientStop(1f, VeilMid));
-
-    /// <summary>The queue pane's own veil. The queue is a list of rows with hover glass on them, and a row's glass has
-    /// to sit on something dark or it inverts in light theme — so the pane brings its floor with it, and takes it away
-    /// again when it cross-fades out to the lyrics.</summary>
-    public static GradientSpec PaneVeil() => LinearGradient(0f,
-        new GradientStop(0f, VeilClear), new GradientStop(0.18f, VeilMid), new GradientStop(1f, VeilDeep));
+    /// <summary>The QUEUE pane's floor. The queue is a list of rows with hover glass on them, and glass has to sit on
+    /// something — so the pane brings its floor with it and takes it away again when it cross-fades out to the lyrics.
+    /// It comes up out of ZERO on the pane's left; its deep end is the window edge.</summary>
+    public static GradientSpec PaneShade() => GradientRight(
+        new GradientStop(0f, Shade(0f)),
+        new GradientStop(StageLayout.PaneShadeFeatherStop, Shade(StageLayout.PaneShadeA * 0.4f)),
+        new GradientStop(1f, Shade(StageLayout.PaneShadeA)));
 
     // ── the accent ───────────────────────────────────────────────────────────────────────────────────────────────────
 
