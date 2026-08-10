@@ -231,7 +231,10 @@ sealed class NotificationPanel : Component
         };
     }
 
-    static void ClickSocial(SocialNotification s, Action<string, string?>? go, Action? close)
+    /// <summary>The Spotify-category row's navigation. INTERNAL because Home's timeline renders a subset of these same
+    /// rows (concert announcements) and must click through to exactly the same place — a second copy of this decision
+    /// is a second answer the moment either side learns a new uri form.</summary>
+    internal static void ClickSocial(SocialNotification s, Action<string, string?>? go, Action? close)
     {
         if (s.ActionType == SocialActionType.Navigate && s.ActionUri is { } uri && RichText.RouteForUri(uri) is { } route)
         {

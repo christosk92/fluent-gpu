@@ -24,10 +24,14 @@ public sealed record AppUpdateNotification(long Timestamp, bool IsUnread,
 /// <summary>How a social notification's click resolves: an in-app route, or an external web page (users/concerts).</summary>
 public enum SocialActionType { Navigate, NavigateWebview }
 
-/// <summary>A Spotify social notification (followers, concerts, announcements) from the gander feed.</summary>
+/// <summary>A Spotify social notification (followers, concerts, announcements) from the gander feed.
+/// <para><paramref name="WireType"/> is the feed's own per-item discriminator when the payload carried one (it is
+/// optional on the wire). It exists so a surface outside the center can gate on a CONCRETE kind — see
+/// <see cref="SpotifyUpdates.KindOf"/> — instead of on the display category, which lumps followers, announcements and
+/// concert dates into one pill.</para></summary>
 public sealed record SocialNotification(string Id, long Timestamp, bool IsUnread,
         string Title, string? ActionUri, SocialActionType ActionType, string? ImageUrl,
-        IReadOnlyList<string> UserNames, string? StorageId)
+        IReadOnlyList<string> UserNames, string? StorageId, string? WireType = null)
     : WaveeNotification(Id, Timestamp, IsUnread)
 {
     public override NotificationCategory Category => NotificationCategory.Social;
