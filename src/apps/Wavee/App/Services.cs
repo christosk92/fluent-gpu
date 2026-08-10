@@ -61,6 +61,18 @@ public sealed class Services
     /// "podcasts-following-chip"); null/empty = the unfiltered feed. Written by the home chip row, read by the live
     /// home fetch when it builds the <c>facet</c> request variable. Opaque server token — never synthesised.</summary>
     public Signal<string?> HomeFacet { get; } = new(null);
+    /// <summary>Monotonic Home-feed revision, published by the live Home cache. Bumped when a Home read resolves a NEW
+    /// daylist identity (so every OTHER mounted page learns its card was superseded) and when the store rewrites the
+    /// header of an identity the composed feed already depends on — which is exactly what opening the daylist detail
+    /// page does while Home sits KeepAlive-PARKED behind it. Home subscribes in an EFFECT (a bump re-reads and restarts
+    /// the poll; effects keep running while parked) and COMPARES it on reactivation, so a page that comes back cannot
+    /// render a feed the cache has already superseded. Never read in a page's Render — an epoch is a refresh trigger,
+    /// not a rendered value.</summary>
+    public Signal<int> HomeFeedEpoch { get; } = new(0);
+    /// <summary>The reactivation compare: head-probe the hydrated Home identities and publish <see cref="HomeFeedEpoch"/>
+    /// only if one has genuinely rolled over. Installed on go-live, null offline/fake (a page then simply skips the
+    /// compare). Called from Home's <c>UseActivation</c>, never from a render and never on a cadence.</summary>
+    public Func<System.Threading.CancellationToken, System.Threading.Tasks.Task>? HomeFeedRevalidate { get; internal set; }
     /// <summary>The engine-backed Mutations seam adapter (REAL backend only) — exposed so go-live can route its post-write
     /// drains through the sync loop (§6, <c>ScheduleDrain</c>) and GoOffline can reset them to inline.</summary>
     public Wavee.Backend.EngineMutationSource? RealMutationSource { get; private set; }
@@ -549,6 +561,7 @@ public sealed class Services
         }
         if (RealSpclientBaseUrl is { } baseUrl) baseUrl.Value = "";   // no spclient until the next go-live
         LiveHttp = null;
+        HomeFeedRevalidate = null;   // the head probe is session-bound (spclient + the session's store)
         RealSync = null;
         PlaylistTuning.Value = null;
         LiveHost = null;

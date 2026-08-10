@@ -21,6 +21,7 @@ public enum DiffOutcome { Applied, UpToDate, FellBackToFull }
 public sealed class PlaylistFetcher
 {
     const string Decorate = "?decorate=revision,attributes,length,owner,capabilities,picture";
+    const string DecorateRevisionOnly = "?decorate=revision";
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
@@ -51,6 +52,23 @@ public sealed class PlaylistFetcher
     {
         var slc = await GetAsync(playlistUri, ct).ConfigureAwait(false);
         if (slc.Attributes is { } attr) _store.UpsertPlaylist(HeaderOf(playlistUri, attr, slc));
+    }
+
+    /// <summary>The playlist HEAD read: GET <c>/playlist/v2/{path}?decorate=revision</c> → the current playlist4 base
+    /// revision (null when the server sends none). The cheapest authoritative answer to "has this playlist's content
+    /// rolled over", and the only one available to a surface whose own transport carries no revision — Pathfinder
+    /// <c>home</c> is GraphQL and exposes no playlist4 field, so the Home daylist hero has to ask here. Same
+    /// decorate-revision idiom the rootlist bootstrap already uses (<c>RootlistOps.BootstrapRootlistAsync</c>).
+    /// <para>Writes NOTHING to the store, deliberately: a head read must not be able to clobber a header, a membership
+    /// baseline, or the revision the sync loop owns. The caller compares the answer itself.</para></summary>
+    public async Task<byte[]?> FetchPlaylistRevisionAsync(string playlistUri, CancellationToken ct = default)
+    {
+        var url = _baseUrl() + "/playlist/v2/" + PathOf(playlistUri) + DecorateRevisionOnly;
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["Accept"] = "application/protobuf" };
+        using var resp = await _http.SendAsync(new HttpReq("GET", url, headers, null), ct).ConfigureAwait(false);
+        if (resp.Status != 200) throw new InvalidOperationException($"playlist revision fetch failed ({resp.Status}) for {playlistUri}");
+        var slc = Pl.SelectedListContent.Parser.ParseFrom(resp.Body);
+        return slc.HasRevision ? slc.Revision.ToByteArray() : null;
     }
 
     public async Task FetchRootlistAsync(string rootlistUri, CancellationToken ct = default)

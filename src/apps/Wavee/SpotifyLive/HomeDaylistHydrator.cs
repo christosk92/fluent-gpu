@@ -10,41 +10,112 @@ namespace Wavee.SpotifyLive;
 internal readonly record struct HomePlaylistHeader(
     string Title, string? Subtitle, string? OwnerName, Image? Cover, int TrackCount);
 
+/// <summary>The answer to one playlist HEAD read: the current playlist4 base revision, plus whether the read actually
+/// happened. The two are kept apart on purpose — a FAILED probe is "we learned nothing", which must behave differently
+/// from "the server says there is no revision", or a flaky network would turn into a per-read refresh storm.</summary>
+internal readonly record struct RevisionProbe(bool Ok, byte[]? Revision)
+{
+    public static readonly RevisionProbe Unknown = new(false, null);
+}
+
 /// <summary>
 /// Resolves provider-marked shallow Daylist cards before Home becomes Ready. Duplicate occurrences share one header
-/// read, the Home transport is requeried at most once per distinct resolved identity (never once per read — see
+/// read, the Home transport is requeried at most once per observed content ROLLOVER (never once per read — see
 /// <see cref="ClaimRequery"/>), and every overlay is applied to both presentation groups and the lossless section
-/// ledger. The class owns orchestration only; its three required seams keep it engine-free and directly testable
+/// ledger. The class owns orchestration only; its four required seams keep it engine-free and directly testable
 /// without weakening live wiring.
 /// </summary>
 /// <remarks>
-/// INSTANCE STATE: one hydrator must be held for the lifetime of the Home source it serves. A per-read instance would
-/// forget which identities it has already requeried and reintroduce the once-per-read invalidation this class exists
-/// to bound.
+/// <para>STALENESS IS THE PLAYLIST REVISION, and nothing else. A daylist is one URI whose title, artwork and contents
+/// roll over through the day behind a monotonically advancing playlist4 revision (4-byte big-endian counter + hash).
+/// Two weaker primitives were considered and are deliberately NOT used: a TTL on the header is a guess that is wrong in
+/// both directions (it refetches a card that did not move, and serves a card that did), and a (uri, title) identity
+/// diff is a proxy that misses every rollover which happens to keep the same title. The Pathfinder <c>home</c> response
+/// carries no revision of its own — it is GraphQL and exposes no playlist4 field — so the revision has to be READ, and
+/// that is what the head probe seam is for: one <c>?decorate=revision</c> GET per hydration-marked URI per Home read,
+/// coalesced, never per render and never on a cadence of its own.</para>
+/// <para>INSTANCE STATE: one hydrator must be held for the lifetime of the Home source it serves. A per-read instance
+/// would forget which revision the composed body reflects and reintroduce the once-per-read invalidation this class
+/// exists to bound.</para>
 /// </remarks>
 internal sealed class HomeDaylistHydrator
 {
+    /// <summary>How long a completed head probe answers a second caller. This is REQUEST COALESCING, not a freshness
+    /// policy: one logical refresh — a reactivation compare that finds a newer revision, then the Home read that
+    /// compare triggers — must cost one call rather than two. Nothing about staleness is decided by it.</summary>
+    public const long ProbeCoalesceMs = 5_000;
+
     readonly Func<string, HomePlaylistHeader?> _readHeader;
     readonly Func<string, CancellationToken, Task> _fetchHeader;
+    readonly Func<string, CancellationToken, Task<byte[]?>> _probeRevision;
     readonly Func<CancellationToken, Task<LiveHomeResult>> _refreshHome;
+    readonly Func<long> _nowMs;
 
-    // uri → the exact title we have already spent one invalidating Home requery on. Keyed by identity rather than by
-    // read, because the resident store answers every later read for free while the requery is an UNCACHED network
-    // fetch. The key space is the set of hydration-marked Home cards (Spotify marks only a daylist whose name is empty
-    // or equal to its daylist_pretitle), so this stays a handful of entries per session.
-    readonly Dictionary<string, string> _requeried = new(StringComparer.Ordinal);
+    // uri → the playlist4 revision the composed Home body currently REFLECTS. The key space is the set of
+    // hydration-marked Home cards (Spotify marks only a daylist whose name is empty or equal to its daylist_pretitle),
+    // so this stays a handful of entries per session. A missing key means "never resolved", which always resolves.
+    readonly Dictionary<string, byte[]?> _reflected = new(StringComparer.Ordinal);
+
+    // uri → the in-flight (or just-completed) head probe. See ProbeCoalesceMs.
+    readonly Dictionary<string, (Task<RevisionProbe> Task, long At)> _probes = new(StringComparer.Ordinal);
+
+    long _identityVersion;
 
     public HomeDaylistHydrator(
         Func<string, HomePlaylistHeader?> readHeader,
         Func<string, CancellationToken, Task> fetchHeader,
-        Func<CancellationToken, Task<LiveHomeResult>> refreshHome)
+        Func<string, CancellationToken, Task<byte[]?>> probeRevision,
+        Func<CancellationToken, Task<LiveHomeResult>> refreshHome,
+        Func<long>? nowMs = null)
     {
         ArgumentNullException.ThrowIfNull(readHeader);
         ArgumentNullException.ThrowIfNull(fetchHeader);
+        ArgumentNullException.ThrowIfNull(probeRevision);
         ArgumentNullException.ThrowIfNull(refreshHome);
         _readHeader = readHeader;
         _fetchHeader = fetchHeader;
+        _probeRevision = probeRevision;
         _refreshHome = refreshHome;
+        _nowMs = nowMs ?? (static () => Environment.TickCount64);
+    }
+
+    /// <summary>Monotonic count of observed content rollovers. The Home feed epoch is published off this: a step means
+    /// the card a mounted or KeepAlive-parked Home page is showing has been superseded, and an unchanged value means a
+    /// read produced nothing any page needs to re-render for.</summary>
+    public long IdentityVersion { get { lock (_reflected) return _identityVersion; } }
+
+    /// <summary>True once this hydrator has resolved <paramref name="uri"/> — i.e. this URI is one whose STORE header
+    /// the composed Home feed now depends on. The store-change watch filters on it, so a rewrite of some unrelated
+    /// playlist can never wake Home.</summary>
+    public bool Hydrated(string uri)
+    {
+        lock (_reflected) return _reflected.ContainsKey(uri);
+    }
+
+    /// <summary>The reactivation compare: head-probe every already-hydrated URI and answer whether any of them has
+    /// rolled over since the composed body was built. It resolves NOTHING itself — a true answer bumps the feed epoch,
+    /// and the epoch is what makes the page re-read through the one ordinary path. Costs one small GET per hydrated URI
+    /// (one, in practice) and zero when nothing has been hydrated yet.</summary>
+    public async Task<bool> RevalidateAsync(CancellationToken ct)
+    {
+        string[] uris;
+        lock (_reflected)
+        {
+            if (_reflected.Count == 0) return false;
+            uris = new string[_reflected.Count];
+            _reflected.Keys.CopyTo(uris, 0);
+        }
+
+        bool moved = false;
+        for (int i = 0; i < uris.Length; i++)
+        {
+            var probe = await ProbeAsync(uris[i], ct).ConfigureAwait(false);
+            if (!probe.Ok) continue;   // learned nothing — never report a rollover we did not observe
+            lock (_reflected)
+                if (_reflected.TryGetValue(uris[i], out var reflected) && !RevisionEquals(probe.Revision, reflected))
+                    moved = true;
+        }
+        return moved;
     }
 
     public async Task<LiveHomeResult> ResolveAsync(LiveHomeResult source, CancellationToken ct)
@@ -52,21 +123,38 @@ internal sealed class HomeDaylistHydrator
         var shallow = ShallowCards(source);
         if (shallow.Count == 0) return source;
 
+        // The head probes go out together: the map is already keyed by URI, so the fan-out is deduplicated before it
+        // starts, and in practice there is exactly one daylist card.
+        var probes = new Dictionary<string, RevisionProbe>(shallow.Count, StringComparer.Ordinal);
+        foreach (var pair in shallow) probes[pair.Key] = RevisionProbe.Unknown;
+        {
+            var keys = new string[shallow.Count];
+            probes.Keys.CopyTo(keys, 0);
+            var tasks = new Task<RevisionProbe>[keys.Length];
+            for (int i = 0; i < keys.Length; i++) tasks[i] = ProbeAsync(keys[i], ct);
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+            for (int i = 0; i < keys.Length; i++) probes[keys[i]] = tasks[i].Result;
+        }
+        ct.ThrowIfCancellationRequested();
+
         var exact = new Dictionary<string, HomePlaylistHeader>(shallow.Count, StringComparer.Ordinal);
         List<KeyValuePair<string, HomeCard>>? pending = null;
         foreach (var pair in shallow)
         {
             ct.ThrowIfCancellationRequested();
-            if (TryExact(pair.Value, _readHeader(pair.Key), out var resident)) exact.Add(pair.Key, resident);
+            // Residency is trusted IFF the revision the composed body reflects is still the server's. Otherwise the URI
+            // joins the header batch exactly as a miss would — which is also what a never-resolved URI does, so a cold
+            // start reads today's header instead of overlaying yesterday's, still-resident one onto today's feed.
+            if (IsCurrent(pair.Key, probes[pair.Key]) && TryExact(pair.Value, _readHeader(pair.Key), out var resident))
+                exact.Add(pair.Key, resident);
             else (pending ??= new List<KeyValuePair<string, HomeCard>>(shallow.Count)).Add(pair);
         }
 
         if (pending is { Count: > 0 })
         {
-            // The map is already keyed by URI, so the fan-out is deduplicated before it starts; issuing the misses
-            // together keeps first paint off an N-round-trip serial chain. Each miss swallows its own failure — one
-            // unavailable playlist must not fail or delete the rest of Home, and there is deliberately no title
-            // synthesis from tags — and cancellation is re-asserted once afterwards so an abandoned batch still
+            // Issuing the misses together keeps first paint off an N-round-trip serial chain. Each miss swallows its own
+            // failure — one unavailable playlist must not fail or delete the rest of Home, and there is deliberately no
+            // title synthesis from tags — and cancellation is re-asserted once afterwards so an abandoned batch still
             // propagates instead of surfacing as a silent partial hydration.
             if (pending.Count == 1)
             {
@@ -91,7 +179,7 @@ internal sealed class HomeDaylistHydrator
         // A resident header is already enough to RENDER the card; the Home requery only gives the transport body its own
         // chance to carry the exact identity. Because it invalidates and refetches UNCACHED, it must never ride the read
         // cadence: Home is polled on a 60 s timer, and firing per read pinned Home permanently off the Pathfinder TTL.
-        if (ClaimRequery(exact) is { } claimed)
+        if (ClaimRequery(exact, probes) is { } claimed)
         {
             try
             {
@@ -100,7 +188,7 @@ internal sealed class HomeDaylistHydrator
             }
             catch (OperationCanceledException)
             {
-                Unclaim(claimed);   // the attempt never completed; do not spend this identity's one requery on it
+                Unclaim(claimed);   // the attempt never completed; do not spend this rollover's one requery on it
                 throw;
             }
             catch
@@ -120,19 +208,51 @@ internal sealed class HomeDaylistHydrator
         catch { /* per-URI: the raw provider card stays the truthful fallback; ct is re-checked by the caller */ }
     }
 
-    /// <summary>Reserves the single Home requery owed to any identity in <paramref name="exact"/> that has not had one
-    /// yet, returning the newly claimed URIs, or null when every identity is already accounted for. A daylist retitles
-    /// through the day, so a NEW exact title for a known URI earns one more requery — an unchanged one earns none.</summary>
-    List<string>? ClaimRequery(Dictionary<string, HomePlaylistHeader> exact)
+    Task<RevisionProbe> ProbeAsync(string uri, CancellationToken ct)
+    {
+        lock (_probes)
+        {
+            if (_probes.TryGetValue(uri, out var existing)
+                && (!existing.Task.IsCompleted || (ulong)(_nowMs() - existing.At) < ProbeCoalesceMs))
+                return existing.Task;
+            var started = RunProbeAsync(uri, ct);
+            _probes[uri] = (started, _nowMs());
+            return started;
+        }
+    }
+
+    async Task<RevisionProbe> RunProbeAsync(string uri, CancellationToken ct)
+    {
+        // A failed head read reports Unknown rather than "no revision": every consumer treats Unknown as "keep serving
+        // what we have", so an unreachable spclient degrades to the previous answer instead of refetching every read.
+        try { return new RevisionProbe(true, await _probeRevision(uri, ct).ConfigureAwait(false)); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch { return RevisionProbe.Unknown; }
+    }
+
+    bool IsCurrent(string uri, RevisionProbe probe)
+    {
+        lock (_reflected)
+            return _reflected.TryGetValue(uri, out var reflected)
+                && (!probe.Ok || RevisionEquals(probe.Revision, reflected));
+    }
+
+    /// <summary>Reserves the single Home requery owed to any identity in <paramref name="exact"/> whose revision the
+    /// composed body does not already reflect, returning the newly claimed URIs, or null when every identity is already
+    /// accounted for. Revision equality IS the "already refreshed, do not requery again" answer, so a repeated read of
+    /// an unmoved daylist claims nothing while a genuine rollover claims exactly once.</summary>
+    List<string>? ClaimRequery(Dictionary<string, HomePlaylistHeader> exact, Dictionary<string, RevisionProbe> probes)
     {
         List<string>? claimed = null;
-        lock (_requeried)
+        lock (_reflected)
         {
             foreach (var pair in exact)
             {
-                if (_requeried.TryGetValue(pair.Key, out var seen)
-                    && string.Equals(seen, pair.Value.Title, StringComparison.Ordinal)) continue;
-                _requeried[pair.Key] = pair.Value.Title;
+                var probe = probes.TryGetValue(pair.Key, out var p) ? p : RevisionProbe.Unknown;
+                bool known = _reflected.TryGetValue(pair.Key, out var reflected);
+                if (known && (!probe.Ok || RevisionEquals(probe.Revision, reflected))) continue;
+                _reflected[pair.Key] = probe.Ok ? probe.Revision : reflected;
+                _identityVersion++;   // a rollover — the epoch every mounted/parked Home page compares against
                 (claimed ??= new List<string>(exact.Count)).Add(pair.Key);
             }
         }
@@ -141,9 +261,17 @@ internal sealed class HomeDaylistHydrator
 
     void Unclaim(List<string> claimed)
     {
-        lock (_requeried)
-            for (int i = 0; i < claimed.Count; i++) _requeried.Remove(claimed[i]);
+        lock (_reflected)
+        {
+            // Forget the reflection entirely rather than restoring the previous one: "never resolved" always resolves,
+            // which is the conservative answer for a rollover we started to adopt and then abandoned.
+            for (int i = 0; i < claimed.Count; i++) _reflected.Remove(claimed[i]);
+            _identityVersion -= claimed.Count;   // the attempt never completed; the version must not advertise it
+        }
     }
+
+    static bool RevisionEquals(byte[]? a, byte[]? b)
+        => a is null ? b is null : b is not null && a.AsSpan().SequenceEqual(b);
 
     static Dictionary<string, HomeCard> ShallowCards(LiveHomeResult source)
     {

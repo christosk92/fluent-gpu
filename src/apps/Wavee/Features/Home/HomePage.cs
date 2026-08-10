@@ -55,17 +55,26 @@ sealed class HomePage : Component
         // Every module's "Show all" flag, hoisted here: a UseState inside a module shell would be re-created on every
         // realization, so an expanded module would silently collapse the moment it scrolled out and back in.
         var more = UseMemo(static () => new HomeShowAll(), DepKey.Empty);
-        // Start the background home-refresh loop ONCE and tie it to this component's lifetime. A UseSignalEffect that
-        // reads no signals runs exactly once on mount; its Reactive.OnCleanup fires on unmount (KeepAlive eviction /
-        // navigation away). Without this, each cold remount of Home leaked an orphaned 60s PeriodicTimer loop that
-        // COMPOUNDED over a long session. Mirrors the LyricsTicker lifecycle pattern (Features/Player/LyricsView.cs).
-        // Deliberately NO CollectionsChanged subscription: a like/save emits several collection waves and re-fetching
-        // the whole feed per wave churned the page every time. Library-driven updates (e.g. the post-sign-in
-        // playlist-header hydration) land on the next 60s tick or a manual re-nav — an accepted trade.
+        // The background home-refresh loop, tied to this component's lifetime. Its Reactive.OnCleanup fires on unmount
+        // (KeepAlive eviction / a page whose cache entry was evicted) and before each re-run. Without it, each cold
+        // remount of Home leaked an orphaned 60s PeriodicTimer loop that COMPOUNDED over a long session. Mirrors the
+        // LyricsTicker lifecycle pattern (Features/Player/LyricsView.cs).
+        //
+        // The one signal it reads is the cache-published FEED EPOCH (Services.HomeFeedEpoch). A bump re-runs this
+        // effect, which cancels the old loop and starts a new one — i.e. exactly ONE immediate re-read plus a fresh
+        // 60 s cadence, never a poll in render and never a subscription to anything hot. This is what reaches a
+        // KeepAlive-PARKED page: park runs no cleanups, so the effect is still live, re-reads on the bump, and the
+        // page's deferred render replays the fresh feed the instant it is activated. Reading it HERE rather than in
+        // Render is deliberate — an epoch is a refresh trigger, not a rendered value.
+        // Still deliberately NO CollectionsChanged subscription: a like/save emits several collection waves and
+        // re-fetching the whole feed per wave churned the page every time. Library-driven updates that no epoch
+        // describes (e.g. the post-sign-in playlist-header hydration) land on the next 60s tick — an accepted trade.
+        var feedEpoch = svc.HomeFeedEpoch;
         Context.UseSignalEffect(() =>
         {
+            int epoch = feedEpoch.Value;
             var cts = new CancellationTokenSource();
-            StartHomeRefreshLoop(svc, home, post, cts.Token);
+            StartHomeRefreshLoop(svc, home, post, epoch, (e, feed) => ApplyFeed(home, e, feed), cts.Token);
             Reactive.OnCleanup(() => { cts.Cancel(); cts.Dispose(); });
         });
 
@@ -106,7 +115,23 @@ sealed class HomePage : Component
         // (a KeepAlive-cached page does not re-run its mount effect); CLEAR on park…
         UseEffect(() => SetWash(wash),
             DepKey.From(HashCode.Combine(colorWashesDisabled, HomeWashSource.Fingerprint(picks))));
-        UseActivation(onActivated: () => SetWash(wash), onDeactivated: ClearWash);
+        UseActivation(
+            onActivated: () =>
+            {
+                SetWash(wash);
+                // The epoch COMPARE, not a refetch. An epoch this page has not applied means the cache superseded the
+                // feed on screen, so re-read once; an epoch it HAS applied means nothing is known to have moved, and
+                // the only thing worth spending is the cheap head probe — which resolves nothing itself: if the
+                // daylist's revision has advanced it publishes the epoch, and the ordinary refresh effect below does
+                // the read. One mechanism, one call, and none of it on a cadence or in a render.
+                int at = feedEpoch.Peek();
+                if (at != _appliedFeedEpoch)
+                    _ = RefreshHomeOnce(svc, post, failIfInitial: false, at,
+                        (e, feed) => ApplyFeed(home, e, feed), home, default);
+                else if (svc.HomeFeedRevalidate is { } revalidate)
+                    _ = revalidate(default);
+            },
+            onDeactivated: ClearWash);
         // …and on UNMOUNT too, because onDeactivated fires only on PARK: a nav that evicts Home without parking it would
         // otherwise leave a wash owned by a gone page. Owner-gated, so it can never clobber the next page's material.
         UseEffect(() => (Action?)ClearWash, DepKey.Empty);
@@ -490,28 +515,46 @@ sealed class HomePage : Component
             content: VirtualHome);
     }
 
-    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post, CancellationToken ct)
+    // The feed epoch this page's rendered feed was read at. Instance state, like _facetFeed: two mounted HomePages
+    // (tabs) each track what THEY have consumed. -1 until the first read lands, so a fresh mount never skips one.
+    int _appliedFeedEpoch = -1;
+
+    /// <summary>Publish a read's feed, MONOTONICALLY IN THE EPOCH rather than in arrival order. A read superseded
+    /// mid-flight must not land on top of a newer one — but the read that PRODUCED a bump (the cache publishes the
+    /// epoch from inside the very read that observed the rollover) is itself the freshest answer, so gating on the
+    /// loop's cancellation instead would throw away exactly the feed the bump exists to deliver.</summary>
+    void ApplyFeed(Loadable<HomeFeed> home, int epoch, HomeFeed feed)
+    {
+        if (epoch < _appliedFeedEpoch) return;
+        _appliedFeedEpoch = epoch;
+        home.SetReady(feed);
+    }
+
+    static void StartHomeRefreshLoop(Services svc, Loadable<HomeFeed> home, Action<Action> post, int epoch,
+        Action<int, HomeFeed> apply, CancellationToken ct)
     {
         _ = Task.Run(async () =>
         {
             try
             {
-                await RefreshHomeOnce(svc, home, post, failIfInitial: true).ConfigureAwait(false);
+                await RefreshHomeOnce(svc, post, failIfInitial: true, epoch, apply, home, ct).ConfigureAwait(false);
                 using var timer = new PeriodicTimer(TimeSpan.FromSeconds(60));
                 while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
-                    await RefreshHomeOnce(svc, home, post, failIfInitial: false).ConfigureAwait(false);
+                    await RefreshHomeOnce(svc, post, failIfInitial: false, epoch, apply, home, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { /* Home unmounted → stop the refresh loop cleanly */ }
+            catch (OperationCanceledException) { /* Home unmounted / a newer epoch superseded this loop → stop cleanly */ }
         }, ct);
     }
 
-    static async Task RefreshHomeOnce(Services svc, Loadable<HomeFeed> home, Action<Action> post, bool failIfInitial)
+    static async Task RefreshHomeOnce(Services svc, Action<Action> post, bool failIfInitial,
+        int epoch, Action<int, HomeFeed> apply, Loadable<HomeFeed> home, CancellationToken ct)
     {
         try
         {
-            var feed = await svc.Library.GetHomeAsync(default).ConfigureAwait(false);
-            post(() => home.SetReady(feed));
+            var feed = await svc.Library.GetHomeAsync(ct).ConfigureAwait(false);
+            post(() => apply(epoch, feed));
         }
+        catch (OperationCanceledException) { /* superseded / unmounted — never a page failure */ }
         catch (Exception ex)
         {
             if (!failIfInitial) return;

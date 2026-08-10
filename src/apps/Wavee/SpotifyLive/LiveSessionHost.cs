@@ -29,6 +29,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
     SpotifyFriendActivityService? _friends;
     SpotifyNotificationsService? _notifications;
     SpotifyWhatsNewService? _whatsNew;
+    IDisposable? _homeCache;
 
     LiveSessionHost(LiveDealerTransport transport, LiveConnect connect, CancellationTokenSource cts)
     { _transport = transport; _connect = connect; _cts = cts; }
@@ -46,6 +47,11 @@ public sealed class LiveSessionHost : IAsyncDisposable
     /// in-flight fetches stop with the transport.</summary>
     internal void AttachNotifications(SpotifyNotificationsService notifications) => _notifications = notifications;
     internal void AttachWhatsNew(SpotifyWhatsNewService whatsNew) => _whatsNew = whatsNew;
+
+    /// <summary>Register the session-scoped live Home cache, disposed on logout so its store-change watch (the Home
+    /// feed epoch's second publisher) does not outlive the session that created it and accumulate one subscription per
+    /// login.</summary>
+    internal void AttachHomeCache(IDisposable homeCache) => _homeCache = homeCache;
 
     public LiveConnect Connect => _connect;
 
@@ -454,8 +460,15 @@ public sealed class LiveSessionHost : IAsyncDisposable
             // cards, track rows — resolves its colour from the plane, and a miss enqueues the IMAGE here, so no surface
             // has to remember to prefetch its own tints. Kind 179 fills the same plane for free from the row bundle.
             CoverColorPlane.Current.Filler = CoverColorFiller.Create(pathfinderResource, spclientLog);
+            // The epoch is a UI-thread Signal, so the cache publishes through the same postUi every other off-thread
+            // bridge write uses. Home subscribes to it in an EFFECT (effects keep running while a page is parked) and
+            // compares it on reactivation — see HomePage's refresh loop.
             var homeCache = new LiveHomeCache(pathfinderResource, () => svc.HomeFacet.Peek(), store,
-                fetcher.FetchPlaylistHeaderAsync);
+                fetcher.FetchPlaylistHeaderAsync,
+                fetcher.FetchPlaylistRevisionAsync,
+                () => postUi(() => svc.HomeFeedEpoch.Value++));
+            host.AttachHomeCache(homeCache);
+            svc.HomeFeedRevalidate = homeCache.RevalidateAsync;
             // Featured-card hover peek: the batched feedBaselineLookup preview-track cache (display-only, no Store).
             HomeBaselinePreviews.Install(pathfinderResource);
             // "What's New" feed (queryWhatsNewFeed) — display-only, rides the PathfinderResource TTL. Seeded now so the
@@ -602,6 +615,7 @@ public sealed class LiveSessionHost : IAsyncDisposable
         _friends?.Dispose();     // stop presence seed/deltas + watchdog
         _notifications?.Dispose();   // stop the gander in-flight fetch
         _whatsNew?.Dispose();        // stop the what's-new in-flight fetch
+        _homeCache?.Dispose();       // stop publishing the Home feed epoch off this session's store
         _router?.Dispose();      // stop decoding pushes
         if (_sync is not null) await _sync.DisposeAsync().ConfigureAwait(false);   // drain the loop to a stop before the transport
         _connect.Dispose();
@@ -1147,7 +1161,12 @@ public sealed class LiveSessionHost : IAsyncDisposable
         w.WriteBoolean("includeEpisodeContentRatingsV2", true);
     }
 
-    sealed class LiveHomeCache
+    /// <summary>The live Home transport cache and the single publisher of the Home feed EPOCH. A Home page acquires its
+    /// feed by READ, and a KeepAlive-parked page issues no reads, so without a published revision the only thing that
+    /// could ever correct a page that came back was its own 60 s poll tick. Both events that can supersede a rendered
+    /// feed are routed to one bump: a read resolving a new daylist identity, and the store rewriting the header of an
+    /// identity this cache has already hydrated (which is exactly what opening the daylist detail page does).</summary>
+    sealed class LiveHomeCache : IDisposable
     {
         readonly PathfinderResource _pf;
         readonly Func<string?> _facet;
@@ -1155,15 +1174,35 @@ public sealed class LiveSessionHost : IAsyncDisposable
         // ONE hydrator for the cache's lifetime. It remembers which daylist identities already cost an invalidating Home
         // requery; a per-read hydrator would forget that and make every 60 s Home poll an uncached network fetch.
         readonly HomeDaylistHydrator _hydrator;
+        readonly Action _bumpEpoch;
+        readonly IDisposable? _storeSub;
+        // -1 until the first resolve establishes the baseline, so a session's opening read (which always claims its
+        // first identity) does not publish a bump nobody needed.
+        long _publishedIdentity = -1;
 
         public LiveHomeCache(PathfinderResource pf, Func<string?> facet, IStore store,
-            Func<string, CancellationToken, Task> fetchHeader)
+            Func<string, CancellationToken, Task> fetchHeader,
+            Func<string, CancellationToken, Task<byte[]?>> probeRevision, Action? bumpEpoch = null)
         {
             _pf = pf;
             _facet = facet;
             _store = store;
-            _hydrator = new HomeDaylistHydrator(ReadHeader, fetchHeader,
+            _bumpEpoch = bumpEpoch ?? (static () => { });
+            _hydrator = new HomeDaylistHydrator(ReadHeader, fetchHeader, probeRevision,
                 c => FetchHomeAsync(_pf, _facet(), c, invalidate: true));
+            if (bumpEpoch is not null)
+                _storeSub = store.Changes.Subscribe(Observers.From<Wavee.Backend.StoreChange>(OnStoreChanged));
+        }
+
+        /// <summary>The reactivation compare a returning KeepAlive-parked Home page runs: head-probe the hydrated
+        /// daylist URI and, only if its revision has advanced, publish the epoch — which is what makes the page re-read
+        /// through the ordinary path. Equal revision ⇒ the cached body is served untouched and nothing re-renders.
+        /// Swallows its own failures: a compare is an optimisation, never a page state.</summary>
+        public async Task RevalidateAsync(CancellationToken ct)
+        {
+            try { if (await _hydrator.RevalidateAsync(ct).ConfigureAwait(false)) _bumpEpoch(); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+            catch { }
         }
 
         // The facet is read at FETCH time, not at construction: the chip row writes Services.HomeFacet and asks for a
@@ -1173,8 +1212,25 @@ public sealed class LiveSessionHost : IAsyncDisposable
         public async Task<LiveHomeResult> GetAsync(CancellationToken ct)
         {
             var source = await FetchHomeAsync(_pf, _facet(), ct).ConfigureAwait(false);
-            return await _hydrator.ResolveAsync(source, ct).ConfigureAwait(false);
+            var resolved = await _hydrator.ResolveAsync(source, ct).ConfigureAwait(false);
+            long identity = _hydrator.IdentityVersion;
+            long previous = Interlocked.Exchange(ref _publishedIdentity, identity);
+            if (previous >= 0 && previous != identity) _bumpEpoch();   // this read superseded every OTHER page's feed
+            return resolved;
         }
+
+        // Fires on the WRITER's thread, sometimes from inside the store's own lock, so this deliberately reads nothing
+        // back: the filter is a dictionary probe on the URIs the composed feed actually depends on, and the bump only
+        // wakes a Home read that is TTL-cached and re-decides for itself. A rewrite that changes nothing therefore
+        // costs one cache-hit recompose, not a network fetch.
+        void OnStoreChanged(Wavee.Backend.StoreChange change)
+        {
+            if (change.Uri.Length == 0) return;   // a bulk wave names no uri and says nothing about a specific header
+            if (!_hydrator.Hydrated(change.Uri)) return;
+            _bumpEpoch();
+        }
+
+        public void Dispose() => _storeSub?.Dispose();
 
         HomePlaylistHeader? ReadHeader(string uri)
         {
