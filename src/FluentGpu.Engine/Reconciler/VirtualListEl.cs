@@ -140,4 +140,9 @@ public sealed record VirtualListEl : Element
     /// For a huge virtualized list this is what makes a revisit land at the saved row on the FIRST realized window (the
     /// seed is applied before <c>RealizeWindow</c>), with no top-then-jump. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
+
+    /// <summary>CSS <c>scroll-timeline-name</c> — see <see cref="ScrollEl.ScrollTimeline"/> for the full contract (one
+    /// live publisher per name; scope it to the content identity, never a bare constant). Lets a node OUTSIDE this
+    /// viewport drive a <c>ScrollBindDsl.Timeline</c> bind from its offset.</summary>
+    public string? ScrollTimeline { get; init; }
 }

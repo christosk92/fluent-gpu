@@ -492,6 +492,10 @@ public sealed class TreeReconciler
             // reconcile paths — an identical-shape root re-render must not force a full solve.
         }
         _oldRoot = newRoot;
+        // Named-timeline binds link HERE, once the whole tree is baked — a bind and the scroller it names can be reached
+        // in either order (a ZStack backdrop sibling is baked before the page it backs), so neither side can resolve the
+        // other at its own bake time. Nav/render rate, and a no-op for the overwhelmingly common ancestor-resolved bind.
+        _scene.ScrollBinds.ResolveNamedTimelines(_scene);
         if (_root is not null) _root.Context.HostNode = _scene.Root;
     }
 
@@ -529,6 +533,9 @@ public sealed class TreeReconciler
         // host performs the same-frame reactive flush for the rewritten index signals. A queue left dirty PURELY by
         // budget exhaustion (visible already covered, window unchanged, no rebind) returns false, so the AppHost 2-pass
         // loops don't burn a pass re-checking it — the budget catch-up rides subsequent frames (HasBudgetDeferredVirtuals).
+        // A freshly realized row may carry a named-timeline bind (or BE the named scroller), so link the same way the
+        // root diff does. Guarded on an empty registry inside, so a run with no named timeline pays one dictionary count.
+        if (_realizeProgress) _scene.ScrollBinds.ResolveNamedTimelines(_scene);
         return _realizeProgress;
 
         static void SwapRemoveDirty(List<NodeHandle> list, int i)
@@ -1891,6 +1898,17 @@ public sealed class TreeReconciler
         sc.RestoreX = x; sc.RestoreY = y; sc.RestorePending = true;
     }
 
+    /// <summary>Publish/retire this viewport's NAMED scroll timeline (CSS <c>scroll-timeline-name</c>), so a node that is
+    /// not one of its descendants can drive a <see cref="ScrollBindDsl.Timeline"/> bind from it. Re-asserted on every
+    /// patch, like the snap/edge-fade columns, so a name that becomes null (or changes) retires the old registration
+    /// rather than stranding it.</summary>
+    private void ApplyScrollTimeline(NodeHandle node, string? name)
+    {
+        int idx = (int)node.Raw.Index;
+        if (name is { Length: > 0 }) _scene.ScrollBinds.PublishTimeline(idx, node, name);
+        else _scene.ScrollBinds.UnpublishTimeline(idx);
+    }
+
     /// <summary>Seed/save the viewport offset for its <see cref="ScrollState.ScrollKey"/>. At mount: stamp the slot scope +
     /// key and, if a saved offset exists, seed it + arm the restore latch (so the FIRST realize/layout lands at the saved
     /// position). On a content-identity change (same reused node, new key): save the outgoing offset, then seed the
@@ -3162,6 +3180,9 @@ public sealed class TreeReconciler
         int idx = (int)node.Raw.Index;
         Anim?.CancelAll(node);
         SaveScroll(node);   // persist this viewport's offset for its ScrollKey so a cold revisit can restore it
+        // Retire any named scroll timeline this viewport published. A useful name is CONTENT-scoped, so skipping this
+        // would leak one registry entry per page visited (and leave a dead handle that no bind can ever resolve).
+        _scene.ScrollBinds.UnpublishTimeline(idx);
         if (_morphKeyByNode.Remove(idx, out string? morphKey))
         {
             RemoveMorphKey(node, morphKey);
@@ -3287,7 +3308,11 @@ public sealed class TreeReconciler
             if ((_scene.Flags(p) & NodeFlags.Scrollable) != 0) { scroller = p; break; }
 
         table.ClearNode(nodeIdx);                                 // wholesale re-bake (slot reuse self-cleans)
-        if (dsls is null || dsls.Length == 0 || scroller.IsNull)
+        // A NAMED-timeline entry needs no ancestor scroller — that is the whole point of it — so the no-scroller bail
+        // must not swallow this node's binds when even one of them names a timeline. Named rows are added with a null
+        // scroller and linked by ResolveNamedTimelines once the whole tree is baked (either order is possible, and the
+        // consumer is commonly baked first).
+        if (dsls is null || dsls.Length == 0 || (scroller.IsNull && !AnyNamedTimeline(dsls)))
         {
             if (hadTrailing) ResetTrailingScrollSink(node);
             return;
@@ -3296,6 +3321,7 @@ public sealed class TreeReconciler
         foreach (var d in dsls)
         {
             var row = new FluentGpu.Animation.ScrollBind { Target = node, OnFlag = d.OnFlag, FlagBit = d.FlagBit };
+            AssertTimelineIsContainmentFree(d);
             if (d.PinTop is { } inset)
             {
                 row.PinKind = 1;
@@ -3346,11 +3372,57 @@ public sealed class TreeReconciler
                     row.Flags |= FluentGpu.Animation.ScrollBind.FlagGeometryAnchor;   // (re)bake at ArrangeViewport
                 else { row.RangeA = row.AnchorAv; row.RangeB = row.AnchorBv; }          // literal-px ⇒ bake now
             }
-            table.Add(nodeIdx, scroller, row);
+            // A named entry defers: it is added with NO scroller (so it joins the node's teardown chain but no eval
+            // chain) and carries the name for ResolveNamedTimelines to link once the publisher is known. It never falls
+            // back to the ancestor scroller — a name that resolves to nothing must stay inert rather than quietly ride
+            // whatever scroller happens to enclose the node.
+            if (d.Timeline is { Length: > 0 } timeline)
+            {
+                row.TimelineName = timeline;
+                table.Add(nodeIdx, NodeHandle.Null, row);
+            }
+            else table.Add(nodeIdx, scroller, row);
         }
 
         if (hadTrailing && (!willOwnTrailing || !table.NodeOwnsSink(nodeIdx, FluentGpu.Animation.BindSink.PresentedHTrailing)))
             ResetTrailingScrollSink(node);
+    }
+
+    private static bool AnyNamedTimeline(ScrollBindDsl[] dsls)
+    {
+        for (int i = 0; i < dsls.Length; i++)
+            if (dsls[i].Timeline is { Length: > 0 }) return true;
+        return false;
+    }
+
+    /// <summary>[Conditional("DEBUG")] tripwire for the one way a named timeline can be misused: pairing it with an op
+    /// that measures the target's position INSIDE the viewport. A named bind exists precisely so a NON-descendant can be
+    /// driven, and for such a node "where is it in the viewport" has no answer — a pin would clamp against a containing
+    /// block it does not have, a morph/SignedPhase would resolve a coordinate through a parent chain that never reaches
+    /// the scroller, and an Enter/Exit range would bake bounds from the wrong space. All silently produce a plausible
+    /// wrong number, so this is a throw rather than a fallback. Erased from the shipping AOT binary — in production,
+    /// safety == the CI gate that exercises this.</summary>
+    [System.Diagnostics.Conditional("DEBUG")]
+    private static void AssertTimelineIsContainmentFree(in ScrollBindDsl d)
+    {
+        if (d.Timeline is not { Length: > 0 }) return;
+        string? offender =
+            d.PinTop.HasValue ? nameof(d.PinTop)
+            : d.ClipTopAtViewport.HasValue ? nameof(d.ClipTopAtViewport)
+            : d.StretchFromTop ? nameof(d.StretchFromTop)
+            : d.MorphLeftTo.HasValue ? nameof(d.MorphLeftTo)
+            : d.MorphTopTo.HasValue ? nameof(d.MorphTopTo)
+            : d.From == FluentGpu.Animation.ScrollChannel.SignedPhase ? nameof(FluentGpu.Animation.ScrollChannel.SignedPhase)
+            // Frac / OverscrollBand anchors are SCROLLER-derived (max offset, band limit) and stay valid across trees;
+            // only the two node-relative ones are rejected.
+            : IsNodeRelativeAnchor(d.Range.A) || IsNodeRelativeAnchor(d.Range.B) ? "a NodeEnter/ExitViewport range"
+            : null;
+        if (offender is not null)
+            throw new System.InvalidOperationException(
+                $"ScrollBind '{d.Timeline}' combines a named timeline with {offender}, which measures the target's " +
+                "position inside the viewport. A named timeline drives a node that is NOT a descendant of the scroller, " +
+                "so there is no such position — use a literal ScrollRange.Px/Frac range with a transform / opacity / " +
+                "blur / clip sink, or drop the name and let the bind resolve its ancestor scroller.");
     }
 
     /// <summary>Detach realized bound slots into the exit-orphan layer before their backing items disappear, then remap
@@ -3564,6 +3636,13 @@ public sealed class TreeReconciler
 
     private static bool IsGeometryAnchor(FluentGpu.Animation.ScrollBindAnchor a)
         => a != FluentGpu.Animation.ScrollBindAnchor.OffsetPx;
+
+    /// <summary>The subset of geometry anchors that bake from the TARGET's position inside the viewport (as opposed to
+    /// <see cref="FluentGpu.Animation.ScrollBindAnchor.OffsetFrac"/> / <see cref="FluentGpu.Animation.ScrollBindAnchor.OverscrollBand"/>,
+    /// which bake from the scroller's own extent and so remain meaningful for a named cross-tree bind).</summary>
+    private static bool IsNodeRelativeAnchor(FluentGpu.Animation.ScrollBindAnchor a)
+        => a is FluentGpu.Animation.ScrollBindAnchor.NodeEnterViewport
+             or FluentGpu.Animation.ScrollBindAnchor.NodeExitViewport;
 
     /// <summary>Build a LayoutTransition from the new declarative Element fields (Enter/Exit/Transition/Layout/Stagger)
     /// so the rework's authoring surface routes through the existing FLIP/enter/exit seed lifecycle. Null when the node
@@ -4120,6 +4199,7 @@ public sealed class TreeReconciler
                 // exactly as they are, which is what keeps a control's/probe's post-mount SnapInterval write alive.
                 if (s.Snap is { } snapSpec) snapSpec.ApplyTo(ref ss);
                 ApplyScrollKey(node, ref ss, s.ScrollKey, isMount);   // seed (mount) / save+seed (content change) the offset
+                ApplyScrollTimeline(node, s.ScrollTimeline);
                 break;
             }
             case VirtualListEl v:
@@ -4159,6 +4239,7 @@ public sealed class TreeReconciler
                 // Declaration-gated, exactly as for ScrollEl above (see the ScrollState snap-field writer contract).
                 if (v.Snap is { } vSnapSpec) vSnapSpec.ApplyTo(ref sc);
                 ApplyScrollKey(node, ref sc, v.ScrollKey, isMount);   // seed BEFORE RealizeWindow → first window at saved row
+                ApplyScrollTimeline(node, v.ScrollTimeline);
                 break;
             }
             case GridEl g:

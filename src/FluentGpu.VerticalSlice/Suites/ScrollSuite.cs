@@ -69,6 +69,112 @@ static class ScrollSuite
         OcclusionCullChecks();
         ShadowOpacityGateChecks();
         WheelFallbackRelatchChecks(strings);
+        NamedScrollTimelineChecks(strings);
+    }
+
+    // ── gate.scroll.named-timeline — CSS scroll-timeline-name / animation-timeline ────────────────────────────────
+    //  A bind's driver is normally the nearest ANCESTOR scroller, which cannot express the page-root backdrop case: a
+    //  wash / artwork / parallax layer that must be a ZStack SIBLING of the scroller (something clips or paints over it)
+    //  yet has to move with that scroller's content. It resolves no ancestor scroller at all, and a driverless bind is
+    //  dropped — so before named timelines such a layer was permanently viewport-anchored.
+    //
+    //  Three things have to hold, and the middle one is what makes the gate meaningful rather than tautological:
+    //   (a) the NAMED sibling tracks the offset even though the consumer is baked BEFORE its publisher (ZStack child 0
+    //       precedes the scroller at child 2) — i.e. resolution really is deferred to the end of the pass;
+    //   (b) the identically-authored UNNAMED sibling is still dropped, so (a) is the name working and not some
+    //       incidental ancestor resolution;
+    //   (c) unmounting the publisher retires the name, so the registry cannot accumulate one dead entry per visited
+    //       page (a useful name is content-scoped) or strand a bind on a dead handle.
+    static void NamedScrollTimelineChecks(StringTable strings)
+    {
+        var fonts = new HeadlessFontSystem(strings);
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("named-timeline", new Size2(320, 240), 1f));
+        window.Show();
+
+        const string TimelineName = "gate.page";
+        const float Band = 200f;
+        NodeHandle named = NodeHandle.Null, unnamed = NodeHandle.Null;
+        var showScroller = new Signal<bool>(true);
+
+        // The bind both siblings declare, differing ONLY in whether it names a timeline: translate 1:1 against the
+        // offset over the band's own extent, so at offset Band the layer has parked exactly one band above its slot.
+        static ScrollBindDsl Ride(string? timeline) => new()
+        {
+            Timeline = timeline,
+            From = ScrollChannel.Offset,
+            To = BindSink.TransY,
+            Range = ScrollRange.Px(0f, Band),
+            OutStart = 0f,
+            OutEnd = -Band,
+        };
+
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Grow = 1f, ZStack = true,
+                Children =
+                [
+                    new BoxEl { Height = Band, ScrollBinds = [Ride(TimelineName)], OnRealized = h => named = h },
+                    new BoxEl { Height = Band, ScrollBinds = [Ride(null)], OnRealized = h => unnamed = h },
+                    showScroller.Value
+                        ? Ui.ScrollView(new BoxEl { Direction = 1, Children = [new BoxEl { Height = 1200f }] })
+                            with { Grow = 1f, ScrollTimeline = TimelineName }
+                        : new BoxEl { Grow = 1f },
+                ],
+            },
+        });
+        host.RunFrame();
+
+        var scene = host.Scene;
+        NodeHandle FindVp(NodeHandle n)
+        {
+            if (n.IsNull) return NodeHandle.Null;
+            if (scene.HasScroll(n)) return n;
+            for (var c = scene.FirstChild(n); !c.IsNull; c = scene.NextSibling(c)) { var r = FindVp(c); if (!r.IsNull) return r; }
+            return NodeHandle.Null;
+        }
+        var vp = FindVp(scene.Root);
+        bool resolved = !vp.IsNull && !named.IsNull && !unnamed.IsNull;
+
+        // Rest: both siblings sit at identity, so a difference below is the SCROLL and not a mount-time offset.
+        bool restIdentity = resolved
+            && Near(scene.Paint(named).LocalTransform.Dy, 0f, 1e-3f)
+            && Near(scene.Paint(unnamed).LocalTransform.Dy, 0f, 1e-3f);
+
+        // Drive the offset through the real chokepoint (a wheel over the viewport), never a raw scene write, so the
+        // continuous eval runs exactly as it does in the app.
+        var over = new Point2(160f, 200f);
+        window.QueueInput(new InputEvent(InputKind.PointerMove, over, 0, 0));
+        host.RunFrame();
+        window.QueueInput(new InputEvent(InputKind.Wheel, over, 0, 0, Band * 0.5f));
+        host.RunFrame();
+
+        float offsetMid = vp.IsNull ? 0f : scene.ScrollRef(vp).OffsetY;
+        float namedMid = resolved ? scene.Paint(named).LocalTransform.Dy : float.NaN;
+        float unnamedMid = resolved ? scene.Paint(unnamed).LocalTransform.Dy : float.NaN;
+        bool ridesOffset = resolved && offsetMid > 1f && Near(namedMid, -offsetMid, 1.5f);
+        bool unnamedInert = resolved && Near(unnamedMid, 0f, 1e-3f);
+
+        // Past the range end the clamp holds it parked (the plane's own clip is what hides it in the app).
+        window.QueueInput(new InputEvent(InputKind.Wheel, over, 0, 0, Band * 2f));
+        host.RunFrame();
+        bool clampedPark = resolved && Near(scene.Paint(named).LocalTransform.Dy, -Band, 1.5f);
+
+        Check("gate.scroll.named-timeline a ScrollBindDsl.Timeline drives a node that is a ZStack SIBLING of the named scroller (no ancestor scroller, and the consumer is baked BEFORE the publisher — so resolution is deferred to the end of the reconcile pass); its TransY tracks the offset 1:1 and clamps at the range end, while an identically-authored UNNAMED bind on the sibling beside it stays inert",
+            resolved && restIdentity && ridesOffset && unnamedInert && clampedPark,
+            $"resolved={resolved} restIdentity={restIdentity} offset={offsetMid:0.##} namedDy={namedMid:0.##} unnamedDy={unnamedMid:0.##} clampedPark={clampedPark}");
+
+        // (c) Retire on unmount: drop the scroller and the name must go with it, so a later bind cannot resolve a dead
+        // publisher and the registry cannot grow by one entry per page visited.
+        showScroller.Value = false;
+        host.RunFrame();
+        host.RunFrame();
+        bool retired = !scene.ScrollBinds.HasTimeline(TimelineName);
+
+        Check("gate.scroll.named-timeline-retire unmounting the publishing scroller retires its scroll-timeline name (a content-scoped name would otherwise leak one dead registry entry per page visited)",
+            retired, $"retired={retired}");
     }
 
     // Wave-6 Fix C: the §A wheel fallback used to be TERMINAL. If the slop-crossing packet's hit test found no scroller

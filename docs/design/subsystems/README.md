@@ -236,6 +236,7 @@ Localization) live where their owning doc places them — Engine folders or CI-o
 | **Node transform ownership** (exactly one `LocalTransform` writer: static matrix > decomposed Offset/Scale/Rotation; a bound `Transform` supersedes both; never combined with a transform-owning `ScrollBind` or a transform-channel animation; DEBUG tripwire) | scene-memory.md §2.2 (column + rule) / reconciler-hooks.md (the write site + tripwire) |
 | **Overlay-stack (ZStack) alignment** (`JustifySelf`/`AlignSelf` on both axes, container `Justify`/`AlignItems` fallback, desired-size-when-aligned for an auto-sized layer) | layout.md §3.7 |
 | **Programmatic bring-into-view** (`ScrollIntoView.Bring`/`BringInto`/`ScrollTo`; the sole sanctioned programmatic offset write; `LyricsView` follow-scroll is the documented exception) | layout.md §6.1 (semantics) / input-a11y.md (`ScrollIntegrator` offset chokepoint it writes through) |
+| **Named scroll timelines** (CSS `scroll-timeline-name`/`animation-timeline`: `ScrollEl`/`VirtualListEl`/`ScrollOptions.ScrollTimeline` publishes, `ScrollBindDsl.Timeline` consumes, so a NON-descendant — a page-root backdrop that must be a ZStack sibling — can be driven by a scroller the ancestor walk cannot reach; deferred resolution, one live publisher per name, continuous ops only) | `../../plans/generic-hookable-scroll-engine-design.md` §5.1 (owner) / scene-memory.md §2.2 (the `LocalTransform` single-writer rule it composes under) — registered in `SPEC-INDEX.md §2` |
 
 ---
 

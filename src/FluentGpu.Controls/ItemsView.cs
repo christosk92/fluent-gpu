@@ -460,6 +460,10 @@ public sealed class ItemsView : Component
     /// <summary>Scroll-position restoration key (see <see cref="VirtualListEl.ScrollKey"/>): a stable per-content identity
     /// so a revisit lands at the saved row on the first realized window. Forwarded onto the built VirtualListEl.</summary>
     public string? ScrollKey;
+    /// <summary>CSS <c>scroll-timeline-name</c> (see <see cref="VirtualListEl.ScrollTimeline"/>): publish this viewport's
+    /// offset under a NAME so a node OUTSIDE it can drive a <c>ScrollBindDsl.Timeline</c> bind from it. Forwarded onto the
+    /// built VirtualListEl.</summary>
+    public string? ScrollTimeline;
     /// <summary>Viewport-space top clip applied as one shared band to recyclable items after
     /// <see cref="PersistentPrefixCount"/>. NaN disables it.</summary>
     public float ItemClipTopInset = float.NaN;
@@ -520,6 +524,7 @@ public sealed class ItemsView : Component
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
+            ScrollTimeline = o.Scroll?.ScrollTimeline,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
@@ -577,6 +582,7 @@ public sealed class ItemsView : Component
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
             ScrollKey = o.Scroll?.ScrollKey,
+            ScrollTimeline = o.Scroll?.ScrollTimeline,
             ItemClipTopInset = o.Scroll?.ItemClipTopInset ?? float.NaN,
             ItemClipTopFadeBand = o.Scroll?.ItemClipTopFadeBand ?? 0f,
             EdgeCues = o.Scroll?.EdgeCues ?? ScrollEdgeCues.Auto,
@@ -1540,6 +1546,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                ScrollTimeline = ScrollTimeline,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
@@ -1562,6 +1569,7 @@ public sealed class ItemsView : Component
                 AutoEdgeFadeBand = AutoEdgeFadeBand,
                 SuppressScrollBar = SuppressScrollBar,
                 ScrollKey = ScrollKey,
+                ScrollTimeline = ScrollTimeline,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,

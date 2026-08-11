@@ -43,6 +43,26 @@ public readonly record struct ScrollBindDsl
 {
     /// <summary>Which scroller scalar drives this binding (offset / overscroll band / velocity / per-item signed phase).</summary>
     public ScrollChannel From { get; init; }
+    /// <summary>CSS <c>animation-timeline: --name</c>: drive this bind from the scroller that published
+    /// <c>ScrollEl.ScrollTimeline</c> / <c>ScrollOptions.ScrollTimeline</c> / <c>VirtualListEl.ScrollTimeline</c> under
+    /// this name, INSTEAD of the nearest ancestor scroller. Null (default) keeps the ancestor walk — the right answer
+    /// whenever the bound node is inside the scroller that drives it, which is the common case.
+    ///
+    /// <para>This exists for the case ancestry cannot express: a page-root backdrop / wash / parallax layer that must be
+    /// a SIBLING of the scroller (typically because something clips or paints over it) yet has to move with its content.
+    /// Such a node resolves no ancestor scroller at all, and a bind with no driver is dropped.</para>
+    ///
+    /// <para><b>Cross-tree binds are limited to the continuous ops.</b> <see cref="PinTop"/>,
+    /// <see cref="ClipTopAtViewport"/>, <see cref="StretchFromTop"/>, <see cref="MorphLeftTo"/>/<see cref="MorphTopTo"/>,
+    /// <see cref="ScrollChannel.SignedPhase"/> and the <see cref="ScrollRange.Enter"/> geometry anchors all measure the
+    /// target's position INSIDE the viewport, which is meaningless for a node that is not in it — combining any of them
+    /// with a timeline throws in DEBUG. Use a literal <see cref="ScrollRange.Px"/> or <see cref="ScrollRange.Frac"/>
+    /// range and a transform / opacity / blur / clip sink.</para>
+    ///
+    /// <para>Resolution is DEFERRED to the end of the reconcile pass, so declaration order does not matter: the
+    /// consumer may be baked before the named scroller exists (a ZStack backdrop sibling precedes the page it backs).
+    /// A name that never resolves is inert, not an error — the page simply paints without the effect.</para></summary>
+    public string? Timeline { get; init; }
     /// <summary>Which compositor property this binding writes (transform / opacity / clip / presented size).</summary>
     public BindSink To { get; init; }
     /// <summary>The active scroll interval; omit for the whole scroller (<c>[0, maxOffset]</c>).</summary>

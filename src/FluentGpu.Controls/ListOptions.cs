@@ -14,6 +14,11 @@ public sealed record ScrollOptions
     /// <summary>Scroll-position restoration key (see <c>VirtualListEl.ScrollKey</c>): a stable per-content identity so a
     /// revisit lands at the saved row on the first realized window. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
+    /// <summary>CSS <c>scroll-timeline-name</c> (see <c>VirtualListEl.ScrollTimeline</c>): publish this viewport's offset
+    /// under a NAME so a node OUTSIDE it can drive a <c>ScrollBindDsl.Timeline</c> bind from it — for a page-root backdrop
+    /// or parallax layer that must be a SIBLING of the scroller yet move with its content. Exactly one live publisher per
+    /// name, and scope it to the content identity the way <see cref="ScrollKey"/> is, never a bare constant.</summary>
+    public string? ScrollTimeline { get; init; }
     /// <summary>Never draw the conscious scrollbar for the virtualized viewport (a paged surface navigates by its pager).</summary>
     public bool SuppressScrollBar { get; init; }
     /// <summary>Scroll-edge cues for the virtualized viewport (controls.md §8.3) — the surface-colour fade at an

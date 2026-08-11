@@ -255,6 +255,11 @@ public readonly record struct ScrollBindDsl
                                                          // shows behind chrome pinned on that line. Owns the node's
                                                          // ClipRect; OnFlag observes the engage/release edge. Landed
                                                          // with VerticalSlice gate 23u3 (2026-07-12).
+    public string? Timeline { get; init; }               // CSS animation-timeline: --name — drive this bind from the
+                                                         // scroller that published ScrollEl/VirtualListEl.ScrollTimeline
+                                                         // under this name INSTEAD of the nearest ANCESTOR scroller.
+                                                         // See §5.1. Landed with VerticalSlice gates
+                                                         // gate.scroll.named-timeline{,-retire} (2026-08-11).
     // predicate-channel hook (fires only on a flag flip):
     public Action<bool>? OnFlag { get; init; }
     public byte FlagBit { get; init; }                   // which ScrollFlags bit OnFlag observes
@@ -263,6 +268,64 @@ public readonly record struct ScrollBindDsl
 // BoxEl / ImageEl gain ONE field, replacing ScrollStretchHeader + StickyTop + OnPinned:
 public ScrollBindDsl[] ScrollBind { get; init; } = [];   // empty [] lowers to Array.Empty<T>() — no alloc
 ```
+
+### 5.1 Named timelines — the one case ancestry cannot express *(AS-BUILT 2026-08-11)*
+
+A bind's driver is resolved by walking to the nearest **ancestor** `Scrollable`, and a bind that finds none is dropped. That
+is right for every case above, and wrong for exactly one: a **page-root backdrop** — a wash, blurred artwork, or parallax
+plate — that has to be a ZStack **sibling** of the scroller (because something clips it, or paints over it, or because a
+sticky band's clip is supposed to expose it) yet must still move with that scroller's content. Such a node has no ancestor
+scroller at all, so before this it was permanently viewport-anchored: a fixed top-bright/bottom-dark vignette the content
+slid through, at any scroll depth.
+
+CSS solved this with a **named timeline**, and the two halves port verbatim:
+
+| CSS | here |
+| --- | --- |
+| `scroll-timeline-name: --page` on the scroller | `ScrollEl.ScrollTimeline` / `VirtualListEl.ScrollTimeline` / `ScrollOptions.ScrollTimeline` |
+| `animation-timeline: --page` on the consumer | `ScrollBindDsl.Timeline` |
+
+```csharp
+// The scroller publishes. Content-SCOPED, never a bare constant (see the one-publisher rule below).
+Ui.ScrollView(content) with { ScrollTimeline = "detail.page:" + route.Name }
+
+// A ZStack SIBLING of that scroller rides it: translate 1:1 over the band's own extent, so it parks off the top.
+new BoxEl
+{
+    Height = band,
+    ScrollBinds =
+    [
+        new() { Timeline = "detail.page:" + route.Name, From = ScrollChannel.Offset, To = BindSink.TransY,
+                Range = ScrollRange.Px(0f, band), OutStart = 0f, OutEnd = -band }
+    ],
+}
+```
+
+**Resolution is deferred to the end of the reconcile pass** (`ScrollBindTable.ResolveNamedTimelines`, called from
+`RenderRootDiff` and `ReRealizeVirtuals`). It has to be: the consumer and the publisher can be baked in either order, and
+in the motivating case the consumer comes **first** — a ZStack backdrop is child 0 and the page it backs is child 2. A named
+row is therefore added with a null scroller, joins the node's teardown chain but no eval chain, and is linked once the name
+has a live publisher. A name that never resolves is **inert, not an error**: the page simply paints without the effect.
+
+Once linked, a named row is an **ordinary row that happens to hang off a scroller it is not inside** — the eval chain, the
+sinks, the change gate and the zero-alloc contract are all untouched.
+
+Two rules the seam cannot enforce for you:
+
+- **One live publisher per name.** Last registration wins, and two pages are co-mounted mid-navigation, so a bare constant
+  would make the owner reconcile-order-dependent. Scope the name to the content identity the way `ScrollKey` already is.
+  Nested scrollers must not share a name either — the inner one commonly sits at a permanent offset 0. An unmount retires
+  the name it published (a content-scoped name would otherwise leak one dead registry entry per page visited).
+- **Cross-tree binds are limited to the CONTINUOUS ops.** `PinTop`, `ClipTopAtViewport`, `StretchFromTop`, `MorphLeftTo`/
+  `MorphTopTo`, `ScrollChannel.SignedPhase` and the `ScrollRange.Enter` anchors all measure the target's position *inside*
+  the viewport, which has no answer for a node that is not in it — each would produce a plausible wrong number rather than
+  fail, so combining any of them with a `Timeline` **throws** in DEBUG. Use a literal `ScrollRange.Px`/`Frac` range with a
+  transform / opacity / blur / clip sink. `Frac` and `Overscroll` anchors stay valid: they bake from the *scroller's* own
+  extent, not the target's.
+
+Gates: `gate.scroll.named-timeline` (a sibling tracks the offset 1:1 and clamps at the range end, while an
+identically-authored **unnamed** bind on the sibling beside it stays inert — the control that keeps the gate from being
+tautological) and `gate.scroll.named-timeline-retire`.
 
 ### Example 1 — Sticky header (subsumes `StickyTop` + `OnPinned`)
 

@@ -860,6 +860,14 @@ public sealed record ScrollEl : Element
     /// scroll-to-top flash. Distinct content (a different key) starts at the top; the same content open in two tabs is
     /// kept separate automatically (the engine namespaces by the enclosing KeepAlive slot). Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }
+    /// <summary>CSS <c>scroll-timeline-name</c>: publish this viewport's scroll progress under a NAME so a node that is
+    /// NOT one of its descendants can drive a <see cref="ScrollBindDsl.Timeline"/> bind from it. Null (default) publishes
+    /// nothing — a descendant finds this scroller by ancestry and needs no name.
+    /// <para>Last registration wins, so a name must have exactly ONE live publisher. Scope it to the content identity
+    /// (the way <see cref="ScrollKey"/> is), never a bare constant: two pages are co-mounted mid-navigation, and a shared
+    /// name would make the owner reconcile-order-dependent. Nested scrollers must not share one either — the inner one
+    /// commonly sits at a permanent offset 0.</para></summary>
+    public string? ScrollTimeline { get; init; }
     /// <summary>Never draw the conscious scrollbar for this viewport (parity with <see cref="VirtualListEl"/>); the offset
     /// is still programmatically scrollable. Used to hide the rail while a region is loading its skeleton.</summary>
     public bool SuppressScrollBar { get; init; }

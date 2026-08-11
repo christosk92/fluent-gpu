@@ -53,7 +53,11 @@ public enum ScrollBindAnchor : byte
 public struct ScrollBind
 {
     public NodeHandle Target;     // the node whose paint field this edge writes (resolved at reconcile)
-    public int Scroller;          // node index of the enclosing scroll viewport (-1 = unresolved / no scroller)
+    public int Scroller;          // node index of the driving scroll viewport (-1 = unresolved / no scroller)
+    /// <summary>Set only for a NAMED-timeline bind (<c>ScrollBindDsl.Timeline</c>): the name whose publisher drives this
+    /// row instead of an ancestor scroller. A row still carrying a name with <see cref="Scroller"/> = -1 is awaiting
+    /// resolution — the publisher had not been baked yet (or does not exist) when this row was compiled.</summary>
+    public string? TimelineName;
     public NodeHandle ScrollerHandle; // the enclosing scroller's handle (gen-checked; the pin pass reads ScrollRef from it)
     public ScrollChannel Source;
     public BindSink Sink;
@@ -101,6 +105,10 @@ public sealed class ScrollBindTable
     private readonly System.Collections.Generic.Stack<int> _free = new();
     private readonly System.Collections.Generic.Dictionary<int, int> _headByVp = new();   // scroller idx → head slot
     private readonly System.Collections.Generic.Dictionary<int, int> _headByNode = new();  // node idx → head slot
+    // NAMED TIMELINES (CSS scroll-timeline-name): name → its publishing scroller, plus the reverse map that lets an
+    // unmount retire the name it published. Both are nav-rate, bounded by the number of live named scrollers.
+    private readonly System.Collections.Generic.Dictionary<string, NodeHandle> _timelines = new(System.StringComparer.Ordinal);
+    private readonly System.Collections.Generic.Dictionary<int, string> _timelineByNode = new();
 
     /// <summary>Live bind rows (census; excludes recycled free-list slots).</summary>
     public int Count => _count - _free.Count;
@@ -206,6 +214,78 @@ public sealed class ScrollBindTable
     /// <summary>True when <paramref name="nodeIndex"/> owns at least one bind (used by the reconciler to skip a re-bake
     /// of an empty `ScrollBind[]` on a node that never had any).</summary>
     public bool NodeHasBinds(int nodeIndex) => _headByNode.ContainsKey(nodeIndex);
+
+    // ── Named timelines (CSS scroll-timeline-name / animation-timeline) ───────────────────────────────────────────
+    //  The ancestor walk that resolves an ordinary bind's driver cannot express one real case: a backdrop / wash /
+    //  parallax layer that must be a SIBLING of the scroller it rides (something clips or paints over it, so it cannot
+    //  live inside) yet has to move with that scroller's content. Such a node resolves no ancestor scroller, and a bind
+    //  with no driver is dropped. A name closes exactly that gap and nothing more: the eval chain, the sinks and the
+    //  change gate are untouched — a resolved named row is an ordinary row that happens to hang off a scroller it is not
+    //  inside. Only the CONTINUOUS ops are meaningful across trees (see ScrollBindDsl.Timeline); the reconciler rejects
+    //  the containment-dependent ones in DEBUG.
+
+    /// <summary>Publish <paramref name="name"/> as <paramref name="scroller"/>'s timeline (idempotent). A node that
+    /// previously published a different name retires it first, so a re-render that changes the name cannot leave the old
+    /// one pointing here.</summary>
+    public void PublishTimeline(int nodeIndex, NodeHandle scroller, string name)
+    {
+        if (_timelineByNode.TryGetValue(nodeIndex, out string? prev))
+        {
+            if (string.Equals(prev, name, System.StringComparison.Ordinal)) { _timelines[name] = scroller; return; }
+            RetireName(nodeIndex, prev);
+        }
+        _timelineByNode[nodeIndex] = name;
+        _timelines[name] = scroller;
+    }
+
+    /// <summary>True when <paramref name="name"/> currently has a publisher (registration census — used by the gates to
+    /// prove an unmount retires it).</summary>
+    public bool HasTimeline(string name) => _timelines.ContainsKey(name);
+
+    /// <summary>Retire whatever timeline <paramref name="nodeIndex"/> published (unmount / it stopped declaring one).
+    /// Without this the registry would grow by one entry per visited page, since a useful name is content-scoped.</summary>
+    public void UnpublishTimeline(int nodeIndex)
+    {
+        if (_timelineByNode.TryGetValue(nodeIndex, out string? name)) RetireName(nodeIndex, name);
+    }
+
+    // Drop the name only if it still points at THIS node: a same-name republish by a newly mounted scroller (the keyed
+    // swap that mounts the incoming viewport before unmounting the outgoing one) has already claimed it, and stealing it
+    // back on the outgoing node's teardown would leave the live page with no publisher.
+    private void RetireName(int nodeIndex, string name)
+    {
+        _timelineByNode.Remove(nodeIndex);
+        if (_timelines.TryGetValue(name, out NodeHandle h) && (int)h.Raw.Index == nodeIndex) _timelines.Remove(name);
+    }
+
+    /// <summary>Link every row still waiting on a named timeline whose publisher now exists and is live. Called once per
+    /// reconcile pass, AFTER the whole tree is baked — which is what makes declaration order irrelevant: the consumer is
+    /// commonly baked before the publisher (a ZStack backdrop sibling precedes the page it backs), and neither order can
+    /// be relied on. Returns true when at least one row was linked.
+    /// <para>The pending set is derived by scanning the live node chains rather than tracked incrementally: a slot list
+    /// would have to be invalidated by every <see cref="ClearNode"/>, and the live-bind census is a handful of rows at
+    /// nav rate. An unresolvable name stays pending and simply never evaluates — inert, not an error.</para></summary>
+    public bool ResolveNamedTimelines(FluentGpu.Scene.SceneStore scene)
+    {
+        if (_timelines.Count == 0 || _headByNode.Count == 0) return false;
+        bool linked = false;
+        foreach (int head in _headByNode.Values)
+        {
+            for (int s = head; s >= 0; s = _binds[s].NodeNext)
+            {
+                ref ScrollBind b = ref _binds[s];
+                if (b.Scroller >= 0 || b.TimelineName is not { } name) continue;
+                if (!_timelines.TryGetValue(name, out NodeHandle vp) || vp.IsNull || !scene.IsLive(vp)) continue;
+                int vpIdx = (int)vp.Raw.Index;
+                b.Scroller = vpIdx;
+                b.ScrollerHandle = vp;
+                b.Next = _headByVp.TryGetValue(vpIdx, out int vh) ? vh : -1;
+                _headByVp[vpIdx] = s;
+                linked = true;
+            }
+        }
+        return linked;
+    }
 }
 
 /// <summary>SwiftUI <c>ScrollGeometry</c>-style POD passed to the change-only observer escape hatch
