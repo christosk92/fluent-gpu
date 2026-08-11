@@ -88,6 +88,8 @@
     <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
     <!-- the merged chrome row's PURE priority ladder (System only, exactly like its sibling above) — MergedChromeLayoutTests -->
     <Compile Include="..\Wavee\Features\Shell\MergedChromeLayout.cs" />
+    <!-- pinned workspace tabs are the only cross-session subset; source-generated JSON keeps the codec AOT-safe -->
+    <Compile Include="..\Wavee\Features\Shell\WorkspaceTabsPersistence.cs" />
     <!-- the shell wash clip solver (System + FluentGpu.Foundation.Point2 only) — ShellWashGeometryTests -->
     <Compile Include="..\Wavee\Features\Shell\ShellWashGeometry.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellNav.cs" />
@@ -153,6 +155,9 @@
     <Compile Include="..\Wavee\Features\Detail\TrackFilterModel.cs" />
     <!-- the same-list drag-reorder gate over that filter state (BCL only) — PlaylistReorderRulesTests -->
     <Compile Include="..\Wavee\Features\Detail\PlaylistReorderRules.cs" />
+    <!-- WHICH playlists a deposit may target and in WHAT ORDER (MRU-first), + the "{base} #N" naming: the ONE answer
+         shared by the Add-to/Move-to submenus and the picker (System + Wavee.Core only) — PlaylistDepositTargetsTests -->
+    <Compile Include="..\Wavee\Features\Detail\PlaylistDepositTargets.cs" />
     <!-- the "when does this album actually drop?" ladder (Wavee.Core + BCL only, split out of DetailConfig.cs for exactly
          this reason — DetailConfig drags FluentGpu.Controls + the Strings table) — PreReleaseModelTests -->
     <Compile Include="..\Wavee\Features\Detail\PreReleaseDerivation.cs" />

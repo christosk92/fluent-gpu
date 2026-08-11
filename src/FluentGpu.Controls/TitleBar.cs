@@ -27,6 +27,11 @@ public sealed record TitleBarOptions
     public Func<IReadSignal<float>, Element>? Content { get; init; }
     public Func<Element>? Tabs { get; init; }
     public Func<int>? TabsVersion { get; init; }
+    /// <summary>In merged mode, make the tabs island the row's ONE shrinkable lane: it still HUGS its content (so all
+    /// trailing slack stays caption drag band, never a Client region), but it is now the only island that gives when the
+    /// row overruns — the centre column stops flexing and becomes app-sized. Use with a tab strip that owns a real
+    /// horizontal viewport, so overflow clips and scrolls instead of squeezing the search field or the identity cluster.</summary>
+    public bool TabsElasticLane { get; init; }
     /// <summary>MERGED-ROW slot: the flexible, centred island that sits between the tab strip and the trailing island.
     /// Like <see cref="Content"/> the builder receives the LIVE measured width of its flexible column
     /// (<see cref="TitleBar.CenterAvail"/>) so an expanding search island can clamp itself. Setting this (or
@@ -34,6 +39,9 @@ public sealed record TitleBarOptions
     public Func<IReadSignal<float>, Element>? CenterContent { get; init; }
     /// <summary>MERGED-ROW slot: a hugging island immediately before the drag strip + caption buttons (identity/avatar).</summary>
     public Func<Element>? Trailing { get; init; }
+    /// <summary>MERGED-ROW slot immediately before the caption buttons. Unlike <see cref="Trailing"/>, this island is
+    /// placed after the drag strip so compact controls can sit flush against Minimize.</summary>
+    public Func<Element>? CaptionLeading { get; init; }
     /// <summary>Revision of the <see cref="CenterContent"/>/<see cref="Trailing"/> content — see
     /// <see cref="TitleBar.ContentVersion"/>. Bump it whenever an island CHANGES SIZE OR SHAPE.</summary>
     public Func<int>? ContentVersion { get; init; }
@@ -81,6 +89,8 @@ public sealed class TitleBar : Component
     public const string PartCenterContent = "CenterContent";
     /// <summary>MERGED ROW: the hugging trailing island (identity/avatar). Owned: OnRealized (island capture), Children.</summary>
     public const string PartTrailing = "Trailing";
+    /// <summary>MERGED ROW: the hugging client island directly before Minimize. Owned: OnRealized, Children.</summary>
+    public const string PartCaptionLeading = "CaptionLeading";
     /// <summary>The minimize caption button. Owned: OnClick, Role, OnRealized, Children.</summary>
     public const string PartCaptionMin = "CaptionMin";
     /// <summary>The maximize/restore caption button. Owned: OnClick, Role, OnRealized, Children.</summary>
@@ -141,6 +151,9 @@ public sealed class TitleBar : Component
     /// each render makes adding/removing/reordering a tab re-report the (now wider/narrower) strip island. Required with
     /// <see cref="Tabs"/>.</summary>
     public Func<int>? TabsVersion;
+    /// <summary>In merged mode, make the tabs island the row's ONE shrinkable lane (it still hugs — see
+    /// <see cref="TitleBarOptions.TabsElasticLane"/>).</summary>
+    public bool TabsElasticLane;
     /// <summary>MERGED ROW (the one-row chrome): the FLEXIBLE, centred island that lives between the tab strip and the
     /// trailing island — a window search box, a now-playing chip, … Setting this (or <see cref="Trailing"/>) switches the
     /// bar from the classic <c>Content</c>-XOR-<c>Tabs</c> shape into
@@ -156,6 +169,8 @@ public sealed class TitleBar : Component
     /// account cluster). Same hug contract as <see cref="CenterContent"/> — its laid-out rect IS the reported
     /// <see cref="TitleBarHit.Client"/> region.</summary>
     public Func<Element>? Trailing;
+    /// <summary>A hugging client island after the drag strip and directly before the caption buttons.</summary>
+    public Func<Element>? CaptionLeading;
     /// <summary>The measured CENTRE-column width as a LIVE signal — the merged-mode mirror of
     /// <see cref="ContentAvail"/> (they are the same underlying measurement: the bar has exactly one flexible column,
     /// and this is it). Content whose SIZE must track the column at runtime subscribes to this rather than reading the
@@ -179,7 +194,7 @@ public sealed class TitleBar : Component
 
     /// <summary>Merged mode = at least one of the merged-row slots is present. Mount-time (both fields freeze at mount),
     /// so the branch below is stable for the life of the instance.</summary>
-    bool Merged => CenterContent is not null || Trailing is not null;
+    bool Merged => CenterContent is not null || Trailing is not null || CaptionLeading is not null;
 
     /// <summary>The one canonical TitleBar factory (WS3 creation idiom). Wraps the property-init surface in a
     /// <see cref="TitleBarOptions"/> record; the options' <see cref="TitleBarOptions.Content"/> builder is handed the
@@ -195,8 +210,9 @@ public sealed class TitleBar : Component
                 ShowBackButton = options.ShowBackButton, BackEnabled = options.BackEnabled,
                 BackEnabledSignal = options.BackEnabledSignal, OnBack = options.OnBack,
                 ShowPaneToggle = options.ShowPaneToggle, OnPaneToggle = options.OnPaneToggle,
-                Tabs = options.Tabs, TabsVersion = options.TabsVersion,
-                Trailing = options.Trailing, ContentVersion = options.ContentVersion,
+                Tabs = options.Tabs, TabsVersion = options.TabsVersion, TabsElasticLane = options.TabsElasticLane,
+                Trailing = options.Trailing, CaptionLeading = options.CaptionLeading,
+                ContentVersion = options.ContentVersion,
                 ShowRailBaseline = options.ShowRailBaseline,
                 ShowCaptionButtons = options.ShowCaptionButtons, Parts = options.Parts,
             };
@@ -208,7 +224,7 @@ public sealed class TitleBar : Component
 
     // Captured part handles (OnRealized fires at mount; the component instance persists across re-renders, so plain
     // fields are the stable store) → the WM_NCHITTEST region report.
-    NodeHandle _root, _back, _pane, _contentCol, _content, _tabs, _centerCol, _center, _trailing, _min, _max, _close;
+    NodeHandle _root, _back, _pane, _contentCol, _content, _tabs, _centerCol, _center, _trailing, _captionLeading, _min, _max, _close;
     // Reused region buffer: filled in place on each relayout push — no steady-state allocation.
     // Merged-row worst case = back + pane + tabs + centre + trailing + 3 buttons + the whole-root Caption = 9
     // (+ the classic `content` island, which never coexists with `centre`, = 10); 12 leaves headroom.
@@ -251,8 +267,8 @@ public sealed class TitleBar : Component
         // — its viewport deps changed — so regions re-push without a rebuild). Key excludes the viewport on purpose.
         // Tok.Epoch is in the key so a live theme switch busts the cache — otherwise RethemeAll re-runs this effect but
         // the memo returns the OLD-theme tree (the caption glyphs/foregrounds would stay stale).
-        int key = unchecked((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397)
-            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0)));
+        int key = unchecked(((((((epoch * 397 ^ tabsVer) * 397 ^ contentVer) * 397 ^ _availDip.Peek().GetHashCode()) * 397 ^ Tok.Epoch) * 397))
+            ^ ((active ? 1 : 0) | (maximized ? 2 : 0) | (ShowBackButton ? 4 : 0) | (ShowPaneToggle ? 8 : 0) | (ShowCaptionButtons ? 16 : 0) | (backEnabled ? 32 : 0) | (ShowRailBaseline ? 64 : 0) | (TabsElasticLane ? 128 : 0)));
         if (_cachedTree is { } cached && key == _cacheKey) return cached;
 
         // WinUI back/pane: 40w × 44h with Margin 2 (the hover backplate spans y=2..46 of the 48px bar; adjacent
@@ -347,7 +363,8 @@ public sealed class TitleBar : Component
         // as a title bar half-lit on blur. Composited only; layout and hit-testing are untouched.
         BoxEl TabsIsland(Func<Element> f) => new()
         {
-            Direction = 0, AlignItems = FlexAlign.Stretch, Shrink = 1, MinWidth = 0f, Height = ExpandedHeight,
+            Direction = 0, AlignItems = FlexAlign.Stretch,
+            Shrink = 1, MinWidth = 0f, Height = ExpandedHeight,
             ClipToBounds = true,
             Opacity = active ? 1f : 0.5f,
             OnRealized = h => _tabs = h,
@@ -378,7 +395,10 @@ public sealed class TitleBar : Component
             {
                 // The row's ONE Grow+Shrink column: it absorbs all free space AND all overflow, so the caption cluster
                 // never moves or clips and the arranged width fed back through _availDip is honest in both directions.
-                Grow = 1, Shrink = 1, MinWidth = 0f, Direction = 0,
+                // TabsElasticLane hands both jobs to the tabs island instead: the flanking drag bands take the free
+                // space (keeping this island centred between the clusters) and the tab viewport takes the overflow, so
+                // an app-sized search field is never squeezed by a long tab strip.
+                Grow = TabsElasticLane ? 0f : 1f, Shrink = TabsElasticLane ? 0f : 1, MinWidth = 0f, Direction = 0,
                 AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                 Height = ExpandedHeight,
                 Opacity = active ? 1f : 0.5f,                      // WinUI deactivated content dim
@@ -451,9 +471,28 @@ public sealed class TitleBar : Component
             });
         }
 
+        // The guaranteed-grabbable drag strip. It stays FIXED even under TabsElasticLane: a CaptionLeading control is
+        // already flush against Minimize with the strip at full width, so shrinking it would trade real drag space for
+        // nothing.
         kids.Add(Tabs is not null || merged
             ? Band(MinDragStrip, 0f, 0f)
-            : new BoxEl { Width = MinDragStrip });                // the guaranteed-grabbable drag strip
+            : new BoxEl { Width = MinDragStrip });
+
+        if (CaptionLeading is { } captionLeadingFunc)
+        {
+            var captionLeading = new BoxEl
+            {
+                Direction = 0, AlignItems = FlexAlign.Center, Height = ExpandedHeight,
+                Opacity = active ? 1f : 0.5f,
+                Children = [captionLeadingFunc()],
+            };
+            var appliedCaptionLeading = Parts.Apply(PartCaptionLeading, captionLeading);
+            kids.Add(appliedCaptionLeading with
+            {
+                Children = captionLeading.Children,
+                OnRealized = TemplateParts.Chain<NodeHandle>(h => _captionLeading = h, appliedCaptionLeading.OnRealized),
+            });
+        }
 
         if (ShowCaptionButtons)
         {
@@ -527,6 +566,7 @@ public sealed class TitleBar : Component
         // Merged islands, LEFT-to-RIGHT and before the buttons (first match wins in WM_NCHITTEST).
         if (CenterContent is not null && !_center.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_center), TitleBarHit.Client);
         if (Trailing is not null && !_trailing.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_trailing), TitleBarHit.Client);
+        if (CaptionLeading is not null && !_captionLeading.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_captionLeading), TitleBarHit.Client);
         if (ShowCaptionButtons)
         {
             if (!_min.IsNull) _regions[n++] = new TitleBarRegion(rectOf(_min), TitleBarHit.MinButton);

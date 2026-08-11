@@ -12,6 +12,9 @@
     "addTo": "Add to {name}",
     "moveInto": "Move into {name}",
     "pin": "Pin {name}",
+    "$comment2": "The RESTING verb: what the chip says while the drag is travelling and no target is under the pointer. Most of a gesture is spent in that state, and without it the chip named only the song — so the drag never stated what it was FOR. Superseded per-target by the captions above the moment something accepts, and by a refusal reason when something refuses.",
+    "dragOntoPlaylist": "Drag onto a playlist to add",
+    "newPlaylistFromThis": "New playlist from this",
     "moveTracks": "{count, plural, one {Move # song} other {Move # songs}}",
     "addTracks": "{count, plural, one {Add # song} other {Add # songs}}",
     "dropOnListToReorder": "Drop on the list to reorder",
@@ -752,7 +755,13 @@
     "friends": "Friends",
     "notifications": "Notifications",
     "lightTheme": "Light theme",
-    "darkTheme": "Dark theme"
+    "darkTheme": "Dark theme",
+    "pinTab": "Pin tab",
+    "unpinTab": "Unpin tab",
+    "closeTab": "Close tab",
+    "closeOtherTabs": "Close other tabs",
+    "closeTabsRight": "Close tabs to the right",
+    "closeAllUnpinned": "Close all unpinned tabs"
   },
   "friends": {
     "title": "Friend Activity",

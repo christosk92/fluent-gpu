@@ -17,6 +17,10 @@ public enum AutoSuggestBoxChrome
     ElevatedPill,
 }
 
+/// <summary>Where suggestions are presented. Popup preserves the WinUI overlay behavior; Inline lets a composing
+/// flyout own the single surrounding surface while the box retains editing and keyboard semantics.</summary>
+public enum AutoSuggestBoxSuggestionPresentation : byte { Popup, Inline }
+
 /// <summary>
 /// State supplied to a custom AutoSuggestBox popup presenter. The box continues to own the anchor, popup lifetime,
 /// text editor, keyboard dismissal and query submission; the presenter owns only the popup's content.
@@ -178,6 +182,8 @@ public sealed class AutoSuggestBox : Component
     public AutoSuggestBoxPresenter? Presenter;
     /// <summary>The field's visual chrome. Interaction and popup behavior are identical across variants.</summary>
     public AutoSuggestBoxChrome Chrome;
+    /// <summary>Suggestion host. Inline never opens a nested overlay and mounts the presenter directly below the field.</summary>
+    public AutoSuggestBoxSuggestionPresentation SuggestionPresentation;
 
     public static Element Create(
         IReadOnlyList<string> suggestions,
@@ -204,7 +210,8 @@ public sealed class AutoSuggestBox : Component
         IReadSignal<IReadOnlyList<string>>? suggestionsSignal = null,
         IReadSignal<bool>? loadingSignal = null,
         AutoSuggestBoxPresenter? presenter = null,
-        AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard)
+        AutoSuggestBoxChrome chrome = AutoSuggestBoxChrome.Standard,
+        AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup)
         => Embed.Comp(() => new AutoSuggestBox
         {
             Suggestions = suggestions, SuggestionsSignal = suggestionsSignal, LoadingSignal = loadingSignal,
@@ -215,7 +222,7 @@ public sealed class AutoSuggestBox : Component
             OnQuerySubmitted = onQuerySubmitted, QueryIcon = queryIcon, MaxHeight = maxPopupHeight, DebounceMs = debounceMs,
             TextChanged = textChanged, UpdateTextOnSelect = updateTextOnSelect, Parts = parts, Field = field,
             FieldMinHeight = minHeight, FieldRadius = cornerRadius, BoldMatch = boldMatch, ItemGlyph = itemGlyph,
-            Presenter = presenter, Chrome = chrome,
+            Presenter = presenter, Chrome = chrome, SuggestionPresentation = suggestionPresentation,
         });
 
     // The rendered width — what sizes the inner editor and the popup. Reading it inside a Render subscribes THAT
@@ -304,6 +311,7 @@ public sealed class AutoSuggestBox : Component
         void OpenPopup()
         {
             open.Value = true;
+            if (SuggestionPresentation == AutoSuggestBoxSuggestionPresentation.Inline) return;
             if (handle.Value is { IsOpen: true }) return;
             handle.Value = svc.Open(
                 () => anchor.Value,
@@ -427,7 +435,10 @@ public sealed class AutoSuggestBox : Component
         {
             if (e.KeyCode != Keys.Down && e.KeyCode != Keys.Up) return;
 
-            if (handle.Value is not { IsOpen: true })
+            bool suggestionsOpen = SuggestionPresentation == AutoSuggestBoxSuggestionPresentation.Inline
+                ? open.Peek()
+                : handle.Value is { IsOpen: true };
+            if (!suggestionsOpen)
             {
                 if (e.KeyCode == Keys.Down && q.Length > 0 && HasSuggestionSource) { OpenPopup(); e.Handled = true; }
                 return;
@@ -631,14 +642,32 @@ public sealed class AutoSuggestBox : Component
         // form-validation.md: stack the reveal-animated error message row under the field (popup still anchors to `root`).
         // Fill mode: the wrapper fills width like the root (Width=NaN + Grow); no Basis=0 (this is a COLUMN, so Basis is
         // the vertical axis — zeroing it would collapse the field+message height) and no height lock (the message needs room).
+        Element field = root;
         if (Field is { } vfield)
-            return new BoxEl
+            field = new BoxEl
             {
                 Direction = 1,
                 Width = Grow > 0f ? float.NaN : width, Grow = Grow,
                 Children = [root, FieldVisuals.MessageRow(vfield.Error)],
             };
-        return root;
+
+        if (SuggestionPresentation != AutoSuggestBoxSuggestionPresentation.Inline || !open.Value)
+            return field;
+
+        Element suggestions = Presenter is { } inlinePresenter
+            ? inlinePresenter.Build(new AutoSuggestBoxPresenterContext(query, popupWidth, SubmitPresented, Close))
+            : Embed.Comp(() => new SuggestionsList
+            {
+                Owner = this, Query = userTyped, Highlight = highlight, OnChoose = ChooseAndSubmit,
+            });
+        return new BoxEl
+        {
+            Direction = 1,
+            Width = Grow > 0f ? float.NaN : width,
+            Grow = Grow,
+            MaxWidth = Grow > 0f && MaxFillWidth > 0f ? MaxFillWidth : float.NaN,
+            Children = [field, suggestions],
+        };
     }
 
     private void RaiseTextChanged(string text, TextChangeReason reason)

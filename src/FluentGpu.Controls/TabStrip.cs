@@ -13,6 +13,14 @@ namespace FluentGpu.Controls;
 /// marks it. Mount-time (a component's plain fields freeze at mount), so a strip never switches modes in place.</summary>
 public enum TabStripAppearance : byte { Chrome, Text }
 
+/// <summary>Overflow behavior for a header-only strip. Compress preserves the historical flex squeeze; Scroll keeps
+/// natural tab widths and lets a horizontal viewport own overflow.</summary>
+public enum TabStripOverflowMode : byte { Compress, Scroll }
+
+/// <summary>Coarse change-only geometry published by a scrolling <see cref="TabStrip"/>.</summary>
+public readonly record struct TabStripScrollMetrics(
+    float Offset, float ViewportExtent, float ContentExtent, bool CanScrollBackward, bool CanScrollForward);
+
 /// <summary>When the "+" new-tab button shows, in the <see cref="TabStripAppearance.Text"/> strip. Gated BY
 /// <see cref="TabStrip.IsAddTabButtonVisible"/> (false there means no add button whatever this says), and ignored
 /// entirely by <see cref="TabStripAppearance.Chrome"/>, which keeps the plain bool it always had.
@@ -50,6 +58,10 @@ public sealed class TabStrip : Component
     /// <summary>Text appearance only: WHEN the "+" shows (see <see cref="TabStripAddButtonVisibility"/>). The default
     /// reproduces the historical always-on button, so this is purely opt-in. MOUNT-TIME, like <see cref="Appearance"/>.</summary>
     public TabStripAddButtonVisibility AddButtonVisibility = TabStripAddButtonVisibility.Always;
+    /// <summary>Text-strip overflow behavior. The compatibility default remains <see cref="TabStripOverflowMode.Compress"/>.</summary>
+    public TabStripOverflowMode OverflowMode = TabStripOverflowMode.Compress;
+    /// <summary>Called only when coarse scroll geometry or an edge-availability bit changes.</summary>
+    public Action<TabStripScrollMetrics>? ScrollMetricsChanged;
     public TabViewCloseButtonOverlayMode CloseButtonOverlayMode = TabViewCloseButtonOverlayMode.Auto;
     public float TabWidth = 320f;
     public float MinTabWidth = 100f;
@@ -78,6 +90,8 @@ public sealed class TabStrip : Component
     internal const float TextTabHeight = 32f;   // the hit rect, independent of TextFontSize
     const float IndicatorThickness = 2f;
     const float IndicatorMinWidth = 8f;
+    /// <summary>A pinned text-strip cell: icon-only, so it is sized like a chip rather than by its (suppressed) label.</summary>
+    internal const float PinnedTabWidth = 36f;
 
     /// <summary>Text appearance: the strip-local y of a tab plate's BOTTOM edge — where the selection underline has to
     /// sit. The tab row is <see cref="TitleBar.ExpandedHeight"/> tall with <c>AlignItems=Center</c>, so a
@@ -95,6 +109,33 @@ public sealed class TabStrip : Component
     float[] _tabX = [];
     float[] _tabW = [];
     Action<RectF>[] _tabBounds = [];
+    NodeHandle[] _tabNodes = [];
+    NodeHandle _scrollViewport;
+    readonly Signal<TabStripScrollMetrics> _scrollMetrics = new(default);
+    readonly (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action) _scrollObserver;
+    bool _scrollSelectionSeeded;
+
+    public TabStrip()
+        => _scrollObserver = (ProjectScrollGeometry, AcceptScrollGeometry);
+
+    static long ProjectScrollGeometry(ScrollGeometry g)
+    {
+        int viewport = (int)MathF.Round(g.ViewportW / 4f);
+        int content = (int)MathF.Round(g.ContentW / 4f);
+        int edges = (g.OffsetX > 0.5f ? 1 : 0) | (g.OffsetX + g.ViewportW < g.ContentW - 0.5f ? 2 : 0);
+        return HashCode.Combine(viewport, content, edges);
+    }
+
+    void AcceptScrollGeometry(ScrollGeometry g)
+    {
+        var next = new TabStripScrollMetrics(
+            g.OffsetX, g.ViewportW, g.ContentW,
+            g.OffsetX > 0.5f,
+            g.OffsetX + g.ViewportW < g.ContentW - 0.5f);
+        if (_scrollMetrics.Peek() == next) return;
+        _scrollMetrics.Value = next;
+        ScrollMetricsChanged?.Invoke(next);
+    }
 
     // ── Text appearance: the hover-revealed "+" ────────────────────────────────────────────────────────────────────
     /// <summary>No tab (and no add button) is under the pointer — the resting value of the strip's hover signal.</summary>
@@ -186,6 +227,17 @@ public sealed class TabStrip : Component
             _addFadeArmed = true;
         }, DepKey.From(addRevealed ? 1 : 0));
 
+        UseLayoutEffect(() =>
+        {
+            if (Appearance != TabStripAppearance.Text || OverflowMode != TabStripOverflowMode.Scroll
+                || (uint)selected >= (uint)_tabNodes.Length || _scrollViewport.IsNull) return;
+            var node = _tabNodes[selected];
+            if (node.IsNull) return;
+            ScrollIntoView.BringInto(Context, _scrollViewport, node, Spacing.S,
+                animate: _scrollSelectionSeeded && !Motion.ReducedMotion);
+            _scrollSelectionSeeded = true;
+        }, DepKey.From(HashCode.Combine(selected, count, OverflowMode)));
+
         if (Appearance == TabStripAppearance.Text)
             return RenderText(items, count, selected, hovered, hoveredSig, geomVer, menuOverlay, Select, Close, Add,
                               addMounted, addRevealed);
@@ -270,7 +322,8 @@ public sealed class TabStrip : Component
         {
             new BoxEl
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Shrink = 1f, MinWidth = 0f,
+                Direction = 0, AlignItems = FlexAlign.Center, Justify = item.IsPinned ? FlexJustify.Center : FlexJustify.Start,
+                Grow = 1f, Shrink = 1f, MinWidth = 0f,
                 Draggable = item.Drag,
                 Children = main.ToArray(),
             },
@@ -435,7 +488,7 @@ public sealed class TabStrip : Component
 
         return new BoxEl
         {
-            Key = "tab#" + index,
+            Key = item.Key ?? "tab#" + index,
             ZStack = true,
             Width = tabW,
             MinWidth = MinTabWidth,
@@ -473,6 +526,7 @@ public sealed class TabStrip : Component
         if (_tabBounds.Length == count) return;
         Array.Resize(ref _tabX, count);
         Array.Resize(ref _tabW, count);
+        Array.Resize(ref _tabNodes, count);
         var handlers = new Action<RectF>[count];
         for (int i = 0; i < count; i++)
         {
@@ -494,43 +548,61 @@ public sealed class TabStrip : Component
     {
         EnsureTabGeometry(count, geomVer);
 
-        int tail = addMounted ? 1 : 0;
-        var kids = new Element[count + tail];
+        bool scrolling = OverflowMode == TabStripOverflowMode.Scroll;
+        // Pinned cells form an icon-only prefix. A hairline after the last one is what tells the eye the two runs are
+        // different KINDS of tab rather than one row where some labels failed to render.
+        int pinnedRun = 0;
+        while (pinnedRun < count && items[pinnedRun].IsPinned) pinnedRun++;
+        bool divider = pinnedRun > 0 && pinnedRun < count;
+        var tabs = new Element[count + (divider ? 1 : 0)];
         for (int i = 0; i < count; i++)
         {
             int index = i;
             // Hover-only close for EVERY tab, INCLUDING the selected one (Chrome keeps a standing × on the selected
             // plate; a text strip has no plate to anchor it, and a permanent × beside bold text reads as noise). Auto
             // therefore resolves to hover-gated here — only an explicit `Always` pins the button.
-            // The SLOT is reserved whenever the tab is closable, independent of hover: a text tab is content-hug, so a
-            // hover-MOUNTED × changed the tab's width and reflowed everything after it (and slid the underline) on
-            // every hover. Same reserved-slot contract as the '+' button — only the glyph's opacity/hit-test toggles.
-            bool closeSlot = items[index].IsClosable;
-            bool closeVisible = closeSlot &&
+            // The × is an OVERLAY at the tab's trailing edge, not a reserved slot: reserving one would widen every
+            // closable tab by ~26 DIP whether or not it is ever hovered, which inflates the strip's natural extent —
+            // the lane would then report overflow (and fade/scroll) while visibly holding empty gutters. Overlaying
+            // keeps the hover mount free of reflow too, which is what the reserved slot originally bought.
+            bool closable = items[index].IsClosable && !items[index].IsPinned;
+            bool closeVisible = closable &&
                                 (CloseButtonOverlayMode == TabViewCloseButtonOverlayMode.Always ||
                                  hovered == index);
-            kids[i] = TextTab(index, items[index], index == selected, closeSlot, closeVisible,
-                              () => select(index), () => close(index), hoveredSig, menuOverlay);
+            tabs[i + (divider && i >= pinnedRun ? 1 : 0)] =
+                TextTab(index, items[index], index == selected, closable, closeVisible,
+                        () => select(index), () => close(index), hoveredSig, menuOverlay);
         }
-        if (addMounted) kids[count] = TextAddButton(add, addRevealed, hoveredSig);
+        if (divider)
+            tabs[pinnedRun] = new BoxEl
+            {
+                Key = "pin-divider",
+                Width = 1f, Height = 20f, AlignSelf = FlexAlign.Center,
+                Margin = new Edges4(4f, 0f, 6f, 0f),
+                Fill = Tok.StrokeDividerDefault,
+                HitTestVisible = false,
+            };
 
-        // The strip HUGS (same contract as Chrome): TitleBar reports it wholesale as ONE TitleBarHit.Client island, so
-        // any Grow filler in here would turn caption drag space into dead client area.
+        // The tab row and indicator share content space. In Scroll mode this WHOLE stack is translated by the engine,
+        // so the underline follows the selected tab without subtracting the viewport offset in app code.
         var row = new BoxEl
         {
             Direction = 0,
             Height = TitleBar.ExpandedHeight,
             AlignItems = FlexAlign.Center,
-            Shrink = 1f,
+            Shrink = scrolling ? 0f : 1f,
             JustifySelf = FlexAlign.Start,
             AlignSelf = FlexAlign.Stretch,
-            Children = kids,
+            Children = tabs,
         };
 
         // The underline target, in the ROW's coordinate space — which is also the ZStack's, since the row is a
         // stack child at the origin. Inset by the label padding so the bar tracks the TEXT, not the hit rect.
+        // A PINNED cell has no text to track and is only PinnedTabWidth wide, so the label inset would park a stub off
+        // to its left; its selection is carried by the chip plate instead and the bar stays out of the way.
         float ux = 0f, uw = 0f;
-        if ((uint)selected < (uint)_tabW.Length && _tabW[selected] > 0f)
+        if ((uint)selected < (uint)_tabW.Length && _tabW[selected] > 0f
+            && !((uint)selected < (uint)count && items[selected].IsPinned))
         {
             ux = _tabX[selected] + TextTabPadX;
             uw = MathF.Max(_tabW[selected] - 2f * TextTabPadX, IndicatorMinWidth);
@@ -540,7 +612,7 @@ public sealed class TabStrip : Component
         {
             ZStack = true,
             Height = TitleBar.ExpandedHeight,
-            Shrink = 1f,
+            Shrink = scrolling ? 0f : 1f,
             Justify = FlexJustify.Start,
             Children =
             [
@@ -551,10 +623,102 @@ public sealed class TabStrip : Component
                     Embed.Comp(() => new TabTextIndicator { Fill = IndicatorFill, Parts = Parts })),
             ],
         };
-        return Parts.Apply(PartRoot, stack) with { Children = stack.Children };
+
+        if (!scrolling)
+        {
+            BoxEl compressed = stack;
+            if (addMounted)
+                compressed = new BoxEl
+                {
+                    Direction = 0, Height = TitleBar.ExpandedHeight, AlignItems = FlexAlign.Center, Shrink = 1f,
+                    Children = [stack, TextAddButton(add, addRevealed, hoveredSig)],
+                };
+            return Parts.Apply(PartRoot, compressed) with { Children = compressed.Children };
+        }
+
+        var metrics = _scrollMetrics.Value;
+        var viewport = new ScrollEl
+        {
+            // ContentSized + Shrink is the whole trick: the lane MEASURES to the natural tab extent, so while the tabs
+            // fit the strip hugs them (the '+' sits right after the last tab and every pixel after the strip stays the
+            // host's caption drag band), and once they don't, flex shrinks this viewport instead — it clips and scrolls.
+            // A Grow/Basis=0 lane would instead hug to ZERO inside a hugging host, and fill-the-row inside an elastic
+            // one, turning all that slack into a non-draggable Client region.
+            Horizontal = true,
+            ContentSized = true,
+            Shrink = 1f,
+            MinWidth = 0f,
+            Height = TitleBar.ExpandedHeight,
+            SuppressScrollBar = true,
+            AutoEdgeFade = true,
+            Content = stack,
+            OnScrollGeometryChanged = _scrollObserver,
+            OnRealized = h => _scrollViewport = h,
+        };
+
+        Element EdgePip(bool back)
+        {
+            bool present = back ? metrics.CanScrollBackward : metrics.CanScrollForward;
+            if (!present) return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+            return new BoxEl
+            {
+                Key = back ? "scroll-back" : "scroll-forward",
+                Width = 28f, Height = 28f,
+                AlignSelf = FlexAlign.Center,
+                JustifySelf = back ? FlexAlign.Start : FlexAlign.End,
+                AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                Corners = Radii.ControlAll,
+                Fill = Tok.FillSolidSecondary,
+                HoverFill = Tok.FillSolidTertiary,
+                PressedFill = Tok.FillSubtleTertiary,
+                Opacity = 0f, HoverOpacity = 1f,
+                Role = AutomationRole.Button,
+                OnClick = () => ScrollPage(back),
+                Children =
+                [
+                    new TextEl(back ? Icons.ChevronLeft : Icons.ChevronRight)
+                    {
+                        Size = 10f, FontFamily = Theme.IconFont, Color = Tok.TextSecondary,
+                    },
+                ],
+            };
+        }
+
+        var scrollStack = new BoxEl
+        {
+            ZStack = true,
+            Shrink = 1f, MinWidth = 0f,
+            Height = TitleBar.ExpandedHeight,
+            Children = [viewport, EdgePip(true), EdgePip(false)],
+        };
+        // Still HUGS, exactly like the compress path: the strip is reported wholesale as one TitleBarHit.Client island,
+        // so any Grow filler in here would hand would-be caption drag space to HTCLIENT — and would strand the '+' at
+        // the far end of the lane instead of beside the last tab.
+        var root = new BoxEl
+        {
+            Direction = 0,
+            Height = TitleBar.ExpandedHeight,
+            AlignItems = FlexAlign.Center,
+            Shrink = 1f,
+            MinWidth = 0f,
+            Children = addMounted
+                ? [scrollStack, TextAddButton(add, addRevealed, hoveredSig)]
+                : [scrollStack],
+        };
+        return Parts.Apply(PartRoot, root) with { Children = root.Children };
     }
 
-    Element TextTab(int index, TabViewItem item, bool selected, bool closeSlot, bool closeVisible,
+    void ScrollPage(bool back)
+    {
+        var scene = Context.Scene;
+        if (scene is null || _scrollViewport.IsNull || !scene.IsLive(_scrollViewport) || !scene.HasScroll(_scrollViewport)) return;
+        ref var sc = ref scene.ScrollRef(_scrollViewport);
+        float page = MathF.Max(MinTabWidth, sc.ViewportW - 40f);
+        ScrollIntoView.ScrollTo(Context, _scrollViewport, sc.OffsetX + (back ? -page : page),
+            animate: !Motion.ReducedMotion);
+    }
+
+    Element TextTab(int index, TabViewItem item, bool selected, bool closable, bool closeVisible,
                     Action select, Action close, Signal<int> hoveredSig, IOverlayService menuOverlay)
     {
         var main = new List<Element>(2);
@@ -564,54 +728,60 @@ public sealed class TabStrip : Component
             {
                 Size = 16f,
                 FontFamily = Theme.IconFont,
-                Margin = new Edges4(0f, 0f, 8f, 0f),
-                Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+                Margin = item.IsPinned ? default : new Edges4(0f, 0f, 8f, 0f),
+                Color = selected ? (item.IsPinned ? Tok.AccentTextPrimary : Tok.TextPrimary) : Tok.TextSecondary,
                 // A==0 on the selected tab ⇒ "no state color" (the recorder leaves Color alone), so a selected glyph
                 // simply stays primary instead of ramping toward a colour it is already at.
                 HoverColor = selected ? default : Tok.TextPrimary,
             });
         }
 
-        var label = new TextEl(item.Header)
+        if (!item.IsPinned)
         {
-            Size = TextFontSize,
-            // Selection is WEIGHT + the PRIMARY text token; de-selection is the SECONDARY token, ramping to primary
-            // under the pointer. See the section header for why this is a token ladder and not a plate opacity tier.
-            Weight = selected ? (ushort)650 : (ushort)0,
-            Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
-            HoverColor = selected ? default : Tok.TextPrimary,
-            Grow = 1f,
-            Shrink = 1f,
-            Trim = TextTrim.CharacterEllipsis,
-        };
-        main.Add(Parts.Apply(PartTabLabel, label));
-
-        var content = new List<Element>(2)
-        {
-            new BoxEl
+            var label = new TextEl(item.Header)
             {
-                Direction = 0, AlignItems = FlexAlign.Center, Grow = 1f, Shrink = 1f, MinWidth = 0f,
-                Draggable = item.Drag,
-                Children = main.ToArray(),
-            },
+                Size = TextFontSize,
+                // Selection is WEIGHT + the PRIMARY text token; de-selection is the SECONDARY token, ramping to primary
+                // under the pointer. See the section header for why this is a token ladder and not a plate opacity tier.
+                Weight = selected ? (ushort)650 : (ushort)0,
+                Color = selected ? Tok.TextPrimary : Tok.TextSecondary,
+                HoverColor = selected ? default : Tok.TextPrimary,
+                Grow = 1f,
+                Shrink = 1f,
+                Trim = TextTrim.CharacterEllipsis,
+            };
+            main.Add(Parts.Apply(PartTabLabel, label));
+        }
+
+        var contentRow = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Justify = item.IsPinned ? FlexJustify.Center : FlexJustify.Start,
+            Draggable = item.Drag,
+            Children = main.ToArray(),
         };
 
-        if (closeSlot)
+        // The × is an OVERLAY LAYER over the label, not a column beside it. Two consequences it exists for:
+        //   • a closable tab is exactly as wide as its content, so the strip's natural extent — and therefore the lane's
+        //     overflow/edge-fade decision — is honest instead of padded by ~26 DIP of never-used gutter per tab;
+        //   • it stays a DESCENDANT of the interactive plate. As a sibling it would steal hover from the plate, firing
+        //     the plate's OnPointerExit → hovered=-1 → the × un-hovers → mount/unmount flicker on approach.
+        // It is mounted whenever the tab is closable and only fades/disarms, so hover never remounts anything.
+        var layers = new List<Element>(2) { contentRow };
+        if (closable)
         {
-            // The slot is ALWAYS mounted for a closable tab; only the glyph fades and only a visible × takes hits.
-            // A hover-mounted × changed the content-hug tab's width — layout flicker on every hover (and the underline,
-            // anchored to the tab's measured width, slid with it).
+            // OPAQUE plate: it sits on live text, and a subtle wash would leave label strokes showing through the glyph.
             var closeButton = new BoxEl
             {
                 Direction = 0,
                 Width = 20f,
                 Height = 20f,
+                JustifySelf = FlexAlign.End,
+                AlignSelf = FlexAlign.Center,
                 AlignItems = FlexAlign.Center,
                 Justify = FlexJustify.Center,
-                Margin = new Edges4(6f, 0f, 0f, 0f),
                 Corners = Radii.ControlAll,
-                Fill = ColorF.Transparent,
-                HoverFill = Tok.FillSubtleSecondary,
+                Fill = Tok.FillSolidSecondary,
+                HoverFill = Tok.FillSolidTertiary,
                 PressedFill = Tok.FillSubtleTertiary,
                 Role = AutomationRole.Button,
                 OnClick = close,
@@ -629,17 +799,40 @@ public sealed class TabStrip : Component
                     },
                 ],
             };
-            content.Add(Parts.Apply(PartTabCloseButton, closeButton) with { OnClick = close, Role = AutomationRole.Button });
+            layers.Add(Parts.Apply(PartTabCloseButton, closeButton) with
+            {
+                OnClick = close, Role = AutomationRole.Button,
+                JustifySelf = FlexAlign.End, AlignSelf = FlexAlign.Center,
+                Opacity = closeVisible ? 1f : 0f, HitTestVisible = closeVisible,
+            });
         }
+
+        var content = new List<Element>(1)
+        {
+            new BoxEl
+            {
+                ZStack = true,
+                Grow = 1f, Shrink = 1f, MinWidth = 0f,
+                Height = TextTabHeight,
+                Children = layers.ToArray(),
+            },
+        };
 
         var plate = new BoxEl
         {
             Direction = 0,
             Height = TextTabHeight,                                  // the comfortable hit rect, whatever TextFontSize is
             AlignItems = FlexAlign.Center,
-            Padding = closeSlot
-                ? new Edges4(TextTabPadX, 0f, 6f, 0f)
-                : new Edges4(TextTabPadX, 0f, TextTabPadX, 0f),
+            // Symmetric, and the SAME whether or not the tab is closable: the × overlays the label's tail rather than
+            // occupying a reserved column, so a closable tab is exactly as wide as its content.
+            Padding = item.IsPinned ? default : new Edges4(TextTabPadX, 0f, TextTabPadX, 0f),
+            // A PINNED cell is the ONE exception to the no-plate rule below: with its label gone it would otherwise read
+            // as a gap in the strip rather than a tab. It gets a standing chip — accent-tinted while selected — which is
+            // also what carries its selection, since the text underline has no text to track (see RenderText).
+            Corners = item.IsPinned ? Radii.ControlAll : default,
+            Fill = item.IsPinned ? (selected ? Tok.AccentSubtle : Tok.FillSubtleSecondary) : default,
+            HoverFill = item.IsPinned ? (selected ? Tok.AccentSubtle : Tok.FillSubtleTertiary) : default,
+            PressedFill = item.IsPinned ? Tok.FillSubtleTertiary : default,
             // No Fill/HoverFill/PressedFill at all: a text strip has no plate. And no Opacity tier either — the state
             // ramp is the FOREGROUND TOKEN on the label/glyph above, so it composes with the theme instead of dimming
             // the whole subtree (icon and close glyph included) by a hard-coded alpha. This node stays the interactive
@@ -658,20 +851,24 @@ public sealed class TabStrip : Component
         };
         plate = Parts.Apply(PartTabItem, plate) with { OnClick = select, Role = AutomationRole.Tab, Children = plate.Children };
         if (item.ContextMenu is { } menu) plate = plate.WithContextMenu(menuOverlay, menu);
+        Element plateContent = item.IsPinned ? ToolTip.Wrap(plate, item.Header) : plate;
 
         // Content-hug between the MinTabWidth floor and the MaxTabWidth cap (no fixed Width — that is the Chrome
         // grammar). OnBoundsChanged on the WRAPPER is what feeds the underline.
         return new BoxEl
         {
-            Key = "tab#" + index,
+            Key = item.Key ?? "tab#" + index,
             ZStack = true,
-            MinWidth = MinTabWidth,
-            MaxWidth = MaxTabWidth,
+            Width = item.IsPinned ? PinnedTabWidth : float.NaN,
+            MinWidth = item.IsPinned ? PinnedTabWidth : MinTabWidth,
+            MaxWidth = item.IsPinned ? PinnedTabWidth : MaxTabWidth,
+            Margin = item.IsPinned ? new Edges4(0f, 0f, 2f, 0f) : default,   // chips breathe; text tabs abut
             Height = TextTabHeight,
-            Shrink = 1f,
+            Shrink = OverflowMode == TabStripOverflowMode.Scroll ? 0f : 1f,
             DropTarget = item.DropTarget,
             OnBoundsChanged = (uint)index < (uint)_tabBounds.Length ? _tabBounds[index] : null,
-            Children = [plate],
+            OnRealized = h => _tabNodes[index] = h,
+            Children = [plateContent],
         };
     }
 

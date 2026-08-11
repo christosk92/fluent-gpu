@@ -111,6 +111,16 @@ static class WaveeSettings
     // The saved / liked / followed library set (Mutations facet) — a newline-joined list of uris. The single in-process
     // outbox: every optimistic save/follow rewrites it. (A real source would reconcile server-side + revision conflicts.)
     public static readonly SettingKey<string> SavedLibrary = new("library.saved", "");
+    // ── Add-to-playlist recency (PlaylistDepositTargets) ──────────────────────────────────────────────────────────────
+    // The playlists most recently deposited into, newest first, newline-joined (the TipsSeen/SavedLibrary precedent),
+    // capped at PlaylistDepositTargets.MaxRecent. This is what makes the "Add to playlist ▸" submenu's ten inline rows
+    // the ten a user actually files into: rootlist order truncated to ten is the SAME ten forever for anyone with more
+    // than ten playlists, very often not the one they are reaching for. A remembered uri is a preference, never an
+    // assertion the playlist still exists — Order() skips any that no longer resolves. Empty = nothing filed yet.
+    public static readonly SettingKey<string> PlaylistDepositRecents = new("playlist.deposit.recents", "");
+    // The durable subset of the browser-style workspace: versioned JSON containing pinned route identities in visual
+    // order plus the last selected pinned ordinal. Ordinary open tabs remain session-only.
+    public static readonly SettingKey<string> WorkspacePinnedTabs = new("workspace.tabs.pinned", "");
     // ── the movable video surface: WHERE the user likes to watch, and where they put things. Deliberately NOT whether a
     // video is playing — a launch must never resume one on its own. See PlacementPersistence for the stored shapes.
     // Empty = never chosen ⇒ the surface's own default placement / its anchored home.

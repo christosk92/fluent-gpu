@@ -66,8 +66,9 @@ public static class ShellResponsiveLayout
     /// <summary>What <c>ShowName</c> ADDS to that chip: the 8-DIP gap + the display-name caption + the extra 6 DIP of
     /// right padding the named form carries. A nominal for a nominal name — the drag gutters absorb the error.</summary>
     public const float ChromeProfileNameW = 90f;
-    /// <summary>TitleBar's guaranteed-grabbable drag strip before the captions (TitleBar.MinDragStrip).</summary>
-    public const float ChromeMinDragStripW = 48f;
+    /// <summary>Wavee's minimum grabbable seam before its caption-adjacent search icon. The stock TitleBar retains a
+    /// 48-DIP strip; this merged row explicitly lets that elastic strip yield to the app chrome down to Spacing.XS.</summary>
+    public const float ChromeMinDragStripW = 4f;
     /// <summary>The caption cluster: 3 × <c>CaptionButton.Width</c> (46).</summary>
     public const float ChromeCaptionClusterW = 138f;
     /// <summary>Reserved on EACH flank of the centre island so the search never butts against the tabs strip or the
@@ -83,31 +84,21 @@ public static class ShellResponsiveLayout
     // Search: a real field between ChromeSearchMinW and ChromeSearchMaxW, else the click-expanding magnifier. These are
     // the only two numbers the search ladder has now — everything between them is whatever space is left over.
     public const float ChromeSearchMaxW = 420f;
-    public const float ChromeSearchMinW = 220f;
+    public const float ChromeSearchMinW = 280f;
+    public const float ChromeSearchWidthRatio = 0.28f;
     /// <summary>The MINIMUM GUARANTEED form of the search: a 32-DIP magnifier that CLICK-expands (LibraryV3Search's
     /// pattern). Tabs are measured against THIS, not against the field — the search yields all the way to an icon
     /// before a single tab is evicted.</summary>
     public const float ChromeSearchIconW = 32f;
-    /// <summary>The TARGET width of the click-expanded field in icon mode. The expansion claims this IN PLACE — the row
-    /// folds its lower-priority chrome (name → friends → tab width → tabs into the "⌄") to fund it, rather than the
-    /// field squeezing itself into whatever the collapsed row happened to leave over. See
-    /// <c>MergedChromeLayout.Resolve(width, tabCount, previous, searchExpanded)</c>.</summary>
-    public const float ChromeSearchExpandedW = 380f;
-    /// <summary>The HARD FLOOR of a click-expanded field: below this the affordance is not a search box, it is a
-    /// decoration, so the ladder folds all the way to one tab in the strip rather than emit less. A window narrower
-    /// than <c>MergedChromeLayout.MinimumExpandedWidthFor</c> (764 with one tab open, 800 with more) forces the
-    /// expansion to give up and keep the magnifier — see that member for why the floor sits above the app's own
-    /// 300-DIP minimum window rather than below it.
-    /// <para>THIS is what the folds buy, one rung at a time; the field then grows into whatever they returned, capped
-    /// at the target above. Folding on toward 380 would fold every identity bit at every width the expansion can be
-    /// reached from (an icon-mode row has under <c>ChromeSearchMinW</c> of spare by definition), which is a ladder
-    /// with only one rung.</para></summary>
-    public const float ChromeSearchExpandedMinW = 240f;
-
     // Tabs: the FLOOR is what the allocator counts with (a text tab narrower than this is unreadable); the CAP is what
     // a tab may grow to once the search is comfortable and there is still surplus.
     public const float ChromeTabMaxW = 200f;
     public const float ChromeTabMinW = 110f;
+    public const float ChromePinnedTabW = 40f;
+    public const float ChromeTabViewportMinW = 32f;
+    public const float ChromeTabComfortRatio = 0.78f;
+    public const float ChromeTabComfortMinW = 240f;
+    public const float ChromeTabComfortMaxW = 720f;
 
     // ── nav-pane (sidebar) width ─────────────────────────────────────────────────────────────────────────────────────
     // The single clamp bounds for the expanded pane. Every writer (the seam drag, the probe seam, the responsive default)

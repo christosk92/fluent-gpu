@@ -22,7 +22,7 @@ namespace Wavee;
 sealed class WaveeShell : Component
 {
     // One open browser-style tab: stable identity + route key, strip label/glyph, and route Arg (playlist display name).
-    private sealed record OpenTab(int Id, string Key, string Label, string Glyph, string? Arg);
+    private sealed record OpenTab(int Id, string Key, string Label, string Glyph, string? Arg, bool Pinned = false);
 
     readonly Signal<Route> _route = new(new Route("home"));
     readonly Signal<NavTransitionKind> _navMotion = new(NavTransitionKind.Forward);
@@ -67,24 +67,13 @@ sealed class WaveeShell : Component
     // recomputed on every viewport move but only PUBLISHED when a stage flips, exactly like the two-row toolbar's old
     // ToolbarLayout. Everything the bar's islands read comes from these signals, never from a frozen ctor arg.
     readonly Signal<MergedChromeLayout> _chromeLayout = new(MergedChromeLayout.FromWidth(0f, 1));
-    readonly Signal<bool> _searchExpanded = new(false);     // the icon-mode search's click-expand latch
-    // The UNEXPANDED ladder, and the ONE thing the hysteresis is carried in. The PUBLISHED layout above may be the
-    // click-expansion's overlay (name folded, friends in the menu, tabs in the "⌄" to fund the field), and feeding
-    // THAT back in as `previous` would record those transient folds as held demotions — the promotion reserve would
-    // then keep the row lean after the latch dropped. So the carrier is kept beside the signal and never published.
-    // A plain field, not a signal: nothing renders off it, and it is written only from the ladder effect (off-render).
-    MergedChromeLayout _chromeBase = MergedChromeLayout.FromWidth(0f, 1);
     readonly Signal<int> _searchFocusRequest = new(0);      // Ctrl+K → put the caret in the field (a monotonic ticket)
-    // The strip shows only the KeepTabs tabs the ladder allows, so it has its OWN index space (the visible slice). The
-    // projection effect in Render derives both from _selectedTab / _tabMru / KeepTabs; nothing else writes them.
-    readonly Signal<int> _stripSelected = new(0);
-    readonly Signal<int> _tabStripVersion = new(0);         // bumped when the visible SLICE changes, not just the tab set
-    readonly List<int> _visibleTabs = new();                // open-list indices in the strip, in OPEN order
-    readonly List<int> _tabMru = new();                     // tab IDs, most-recently-used first — who survives a squeeze
-    readonly HashSet<int> _keepIds = new();                 // RebuildVisibleTabs scratch (cold path, reused)
-    readonly List<ChromeTabRef> _hiddenScratch = new();     // HiddenTabs scratch — copied out by the chevron immediately
+    readonly Signal<bool> _searchFocused = new(false);
+    readonly Signal<bool> _searchFlyoutOpen = new(false);
+    readonly Signal<float> _tabNaturalExtent = new(ShellResponsiveLayout.ChromeTabMinW);
     MergedChromeRow? _chrome;
-    TabStrip? _strip;                                       // the MOUNTED strip: its Min/MaxTabWidth track the ladder
+    TabStrip? _strip;
+    int _lastSelectedPinnedTabId = -1;
 
     readonly Signal<string> _searchText = new("");
     // Sidebar state. Collapsed and (once pinned by a drag) width are seeded by SidebarPreferences' own constructor, from
@@ -231,6 +220,7 @@ sealed class WaveeShell : Component
     public WaveeShell(IAppSettings settings, SidebarPreferences sidebar)
     {
         _settings = settings;
+        RestorePinnedWorkspace();
         _sidebar = sidebar;
         // The service already seeded the ACTIVE design's pane triple in its own constructor (a dragged width verbatim, an
         // undragged one from that design's tier ladder at the pre-measure fallback), so the FIRST layout is already correct
@@ -298,9 +288,54 @@ sealed class WaveeShell : Component
         _historyStore.Init(HistoryFilePath());
         _historyStore.LoadFromDisk();
 
-        _historyStore.Add(new Route("home"));   // record this session's first visit
+        _historyStore.Add(_route.Peek());   // record this session's first visit
         if (_historyStore.Entries.Count == 1)   // only seed fake data on a fresh install (nothing loaded from disk)
             SeedFakeHistory();
+    }
+
+    void RestorePinnedWorkspace()
+    {
+        var snapshot = WorkspaceTabsPersistence.Decode(_settings.Get(WaveeSettings.WorkspacePinnedTabs));
+        _open.Clear();
+        for (int i = 0; i < snapshot.Tabs.Length; i++)
+        {
+            var saved = snapshot.Tabs[i];
+            var (title, glyph) = ShellNav.Dest(saved.Route, saved.Arg);
+            _open.Add(new OpenTab(_nextTabId++, saved.Route, title, glyph, saved.Arg, Pinned: true));
+        }
+
+        if (_open.Count == 0)
+        {
+            var (title, glyph) = ShellNav.Dest("home");
+            _open.Add(new OpenTab(_nextTabId++, "home", title, glyph, null));
+            _selectedTab.Value = 0;
+            _route.Value = new Route("home");
+            SeedTabExtent();
+            return;
+        }
+
+        int selected = Math.Clamp(snapshot.LastSelected, 0, _open.Count - 1);
+        _selectedTab.Value = selected;
+        _lastSelectedPinnedTabId = _open[selected].Id;
+        var tab = _open[selected];
+        _route.Value = new Route(tab.Key, tab.Arg);
+        if (tab.Key == "search" && tab.Arg is { Length: > 0 }) _searchText.Value = tab.Arg;
+        SeedTabExtent();
+    }
+
+    void SavePinnedWorkspace()
+    {
+        var pins = new List<PersistedWorkspaceTab>();
+        int selected = -1;
+        for (int i = 0; i < _open.Count; i++)
+        {
+            var tab = _open[i];
+            if (!tab.Pinned) continue;
+            if (tab.Id == _lastSelectedPinnedTabId) selected = pins.Count;
+            pins.Add(new PersistedWorkspaceTab(tab.Key, tab.Arg));
+        }
+        if (pins.Count > 0 && selected < 0) selected = 0;
+        _settings.Set(WaveeSettings.WorkspacePinnedTabs, WorkspaceTabsPersistence.Encode(pins, selected));
     }
 
     /// <summary>Publish the content region's absolute rect as the engine's drop-spotlight scrim scope. Idempotent and
@@ -506,36 +541,24 @@ sealed class WaveeShell : Component
             _shellUi.RailFits.SetIfChanged(fits);
         });
 
-        // ── the merged chrome row's two derivations ──────────────────────────────────────────────────────────────────
-        // (1) The priority ladder. Band-gated exactly like the retired ToolbarLayout: it reads the HOT viewport width
-        //     but only publishes when a stage actually flips, so a resize does not re-render the bar per pixel. The tab
-        //     count is a dependency because KeepTabs is clamped to it.
-        //     The EXPAND LATCH is a dependency too: the click-expanded search claims its width IN PLACE, so flipping
-        //     it re-resolves the whole ladder (the row folds name/friends/tabs to fund the field, and folds back on
-        //     release). The carrier `_chromeBase` is always the UNEXPANDED resolution — see its declaration for why
-        //     publishing the expanded one back into `previous` would poison every later resolve.
+        // ── merged chrome pressure projection ─────────────────────────────────────────────────────────────────────────
+        // The strip reports its real natural content extent. That measurement decides only whether search is a full
+        // field or the caption-adjacent icon; every tab remains mounted in the horizontal scroller.
         UseSignalEffect(() =>
         {
             float w = vpSig.Value.Width;
             _ = _tabsVersion.Value;
-            bool expanded = _searchExpanded.Value;
-            int tabs = _open.Count;
-            _chromeBase = MergedChromeLayout.Resolve(w, tabs, _chromeBase);
-            _chromeLayout.SetIfChanged(expanded
-                ? MergedChromeLayout.Resolve(w, tabs, _chromeBase, searchExpanded: true)
-                : _chromeBase);
-        });
-        // (2) The visible-tab projection — the ONE place the strip's index space is derived, and deliberately OFF-render
-        //     (computing it inside ItemsSource would mean writing _stripSelected from inside a render: a backwards
-        //     write). Re-runs on a tab-set change, a selection change and a KeepTabs change.
-        UseSignalEffect(() =>
-        {
-            int keep = _chromeLayout.Value.KeepTabs;
-            int sel = _selectedTab.Value;
-            _ = _tabsVersion.Value;
-            RebuildVisibleTabs(keep, sel);
-            _stripSelected.SetIfChanged(Math.Max(0, _visibleTabs.IndexOf(sel)));
-            _tabStripVersion.Value = _tabStripVersion.Peek() + 1;
+            float extent = _tabNaturalExtent.Value;
+            var old = _chromeLayout.Peek();
+            var next = MergedChromeLayout.Resolve(w, extent, old);
+            if (old.SearchMode != next.SearchMode)
+            {
+                if (old.SearchMode == MergedSearchMode.Field && _searchFocused.Peek())
+                    _searchFocusRequest.Value = _searchFocusRequest.Peek() + 1;
+                else if (old.SearchMode == MergedSearchMode.Icon && _searchFlyoutOpen.Peek())
+                    _searchFocusRequest.Value = _searchFocusRequest.Peek() + 1;
+            }
+            _chromeLayout.SetIfChanged(next);
         });
         // The row's island builders. Constructed once (it owns the measured-extent signals behind the centring guard);
         // its three ambient services are PLAIN FIELDS refreshed per render — a slot builder runs inside the BAR's render
@@ -543,8 +566,8 @@ sealed class WaveeShell : Component
         var chrome = _chrome ??= new MergedChromeRow(
             _canBack, _canForward, GoNav, Back, Forward,
             _searchText, ToggleTheme, _history, _forwardHistory,
-            _chromeLayout, _searchExpanded, _searchFocusRequest,
-            TabStripHost, TabStripItemsVersion, HiddenTabs, ActivateTab);
+            _chromeLayout, _searchFocusRequest, _searchFocused, _searchFlyoutOpen,
+            TabStripHost, TabStripItemsVersion);
         chrome.Bridge = _actions.Playback;
         chrome.Ui = _shellUi;
         chrome.Acts = _actions;
@@ -590,7 +613,9 @@ sealed class WaveeShell : Component
                         ShowRailBaseline = false,          // this chrome has no rail; the seam below is the app's own
                         Tabs = chrome.Tabs,
                         TabsVersion = TitleBarTabsVersion,
+                        TabsElasticLane = true,            // tabs absorb the overrun; the omnibar keeps its allocated width
                         Trailing = chrome.Trailing,
+                        CaptionLeading = chrome.CaptionLeading,
                         ContentVersion = chrome.ContentVersion,
                     };
                     // Hand the island the bar's LIVE centre-column measurement (the merged-mode mirror of ContentAvail)
@@ -1055,18 +1080,9 @@ sealed class WaveeShell : Component
                OverlayHost.Create(shellWithOverlays)))))))))));
     }
 
-    /// <summary>The strip, plus the per-render push of the ladder's tab metrics onto the MOUNTED instance. A component's
-    /// plain fields freeze at mount, so <c>MinTabWidth</c>/<c>MaxTabWidth</c> cannot be re-passed through the factory;
-    /// this host runs inside the TITLE BAR's render — i.e. before the strip's own — so the mutation always lands in the
-    /// same frame as the <see cref="TabStripItemsVersion"/> bump that makes the strip re-read them.</summary>
     Element TabStripHost()
     {
-        if (_strip is { } s)
-        {
-            float cap = _chromeLayout.Peek().TabMaxWidth;
-            s.MaxTabWidth = cap;
-            s.MinTabWidth = MathF.Min(ShellResponsiveLayout.ChromeTabMinW, cap);
-        }
+        if (_strip is { } s) s.IsAddTabButtonVisible = _chromeLayout.Peek().ShowNewTab;
         return Embed.Comp(BuildTabStrip);
     }
 
@@ -1078,6 +1094,7 @@ sealed class WaveeShell : Component
             // one strip-owned sliding 2-DIP accent underline marks it. That is what lets the tab strip share a 48-DIP
             // row with the search and the identity cluster; SelectedFill/TabWidth are Chrome-grammar and ignored here.
             Appearance = TabStripAppearance.Text,
+            OverflowMode = TabStripOverflowMode.Scroll,
             TextFontSize = 13f,
             // The "+" is back, but HOVER-ONLY: at rest it paints nothing (Ctrl+T stays the power affordance), and it
             // cross-fades in whenever the pointer is over the strip. Its 32-DIP slot is RESERVED at every moment
@@ -1085,7 +1102,7 @@ sealed class WaveeShell : Component
             // a mount-on-hover would move the reported rect on every pointer entry and would have to join
             // MergedChromeRow.ContentVersion. A permanently reserved slot inside an island that is already entirely
             // client-hit-tested keeps the region rect (and this fold) completely still.
-            IsAddTabButtonVisible = true,
+            IsAddTabButtonVisible = _chromeLayout.Peek().ShowNewTab,
             AddButtonVisibility = TabStripAddButtonVisibility.OnStripPointerOver,
             OnAddTabButtonClick = () => { OpenNewTab("home"); return null; },
             IndicatorFill = Prop.Of(() => Tok.AccentDefault),
@@ -1093,18 +1110,10 @@ sealed class WaveeShell : Component
             MaxTabWidth = ShellResponsiveLayout.ChromeTabMaxW,
             ItemsSource = BuildTabItems,
             ItemsVersion = TabStripItemsVersion,
-            // STRIP index space (the visible slice), not the open list — both handlers map back through _visibleTabs.
-            SelectedIndex = _stripSelected,
-            OnSelectionChanged = i =>
-            {
-                if ((uint)i >= (uint)_visibleTabs.Count) return;
-                int open = _visibleTabs[i];
-                if ((uint)open >= (uint)_open.Count) return;
-                TouchTab(open);
-                _selectedTab.SetIfChanged(open);
-                Go(_open[open].Key, _open[open].Arg, NavTransitionKind.Neutral);
-            },
-            OnTabCloseRequested = i => { if ((uint)i < (uint)_visibleTabs.Count) CloseTab(_visibleTabs[i]); },
+            SelectedIndex = _selectedTab,
+            OnSelectionChanged = ActivateTab,
+            OnTabCloseRequested = CloseTab,
+            ScrollMetricsChanged = OnTabStripMetrics,
         };
         // Embed.Comp runs its factory once and the reconciler mounts THAT instance, so the first one built is the live
         // one (and a defensive extra call still leaves this pointing at the mounted instance).
@@ -1116,62 +1125,38 @@ sealed class WaveeShell : Component
     {
         int version = _tabsVersion.Value;
         int selected = _selectedTab.Value;
-        int slice = _tabStripVersion.Value;
-        return unchecked((version * 397 ^ selected) * 397 ^ slice);
+        return unchecked(version * 397 ^ selected);
     }
 
-    /// <summary>The strip's own revision: the tab set, the visible SLICE, and the ladder's per-tab cap (which the strip
-    /// re-reads off its mutated fields). Read from the strip's render, so each of these subscribes it.</summary>
     int TabStripItemsVersion()
     {
         int version = _tabsVersion.Value;
-        int slice = _tabStripVersion.Value;
-        int cap = (int)_chromeLayout.Value.TabMaxWidth;
-        return unchecked((version * 397 ^ slice) * 397 ^ cap);
+        bool add = _chromeLayout.Value.ShowNewTab;
+        return unchecked(version * 397 ^ (add ? 1 : 0));
     }
 
-    /// <summary>Which open tabs are in the strip right now. The ACTIVE tab never leaves; the remaining slots go to the
-    /// most-recently-used tabs, and any slot the (short) MRU cannot fill goes in open order. Pure — it writes only the
-    /// plain scratch lists, so the off-render projection effect and the ItemsSource fallback can both call it.</summary>
-    void RebuildVisibleTabs(int keep, int selected)
+    void OnTabStripMetrics(TabStripScrollMetrics metrics)
     {
-        _visibleTabs.Clear();
-        int n = _open.Count;
-        if (n == 0) return;
-        if (keep >= n) { for (int i = 0; i < n; i++) _visibleTabs.Add(i); return; }
-        if (keep < 1) keep = 1;
-        if ((uint)selected >= (uint)n) selected = 0;
-
-        _keepIds.Clear();
-        _keepIds.Add(_open[selected].Id);
-        for (int i = 0; i < _tabMru.Count && _keepIds.Count < keep; i++)
-            if (IndexOfTabId(_tabMru[i]) >= 0) _keepIds.Add(_tabMru[i]);
-        for (int i = 0; i < n && _keepIds.Count < keep; i++) _keepIds.Add(_open[i].Id);
-        for (int i = 0; i < n; i++) if (_keepIds.Contains(_open[i].Id)) _visibleTabs.Add(i);
+        float extent = MathF.Max(ShellResponsiveLayout.ChromeTabMinW,
+            MathF.Round(metrics.ContentExtent / ShellResponsiveLayout.ChromeWidthQuantumW)
+            * ShellResponsiveLayout.ChromeWidthQuantumW);
+        _tabNaturalExtent.SetIfChanged(extent);
     }
 
-    /// <summary>The tabs the ladder folded out of the strip, MOST-RECENTLY-USED first (the order the user thinks in),
-    /// with anything the MRU has not seen appended in open order. Returns a reused list — callers copy out at once.</summary>
-    List<ChromeTabRef> HiddenTabs()
+    void SeedTabExtent()
     {
-        _hiddenScratch.Clear();
-        int n = _open.Count;
-        if (_visibleTabs.Count == 0) RebuildVisibleTabs(_chromeLayout.Peek().KeepTabs, _selectedTab.Peek());
-        if (_visibleTabs.Count >= n) return _hiddenScratch;
-        for (int i = 0; i < _tabMru.Count; i++)
-        {
-            int idx = IndexOfTabId(_tabMru[i]);
-            if (idx >= 0 && !_visibleTabs.Contains(idx)) AddHidden(idx);
-        }
-        for (int i = 0; i < n; i++) if (!_visibleTabs.Contains(i)) AddHidden(i);
-        return _hiddenScratch;
+        int pinned = 0;
+        for (int i = 0; i < _open.Count; i++) if (_open[i].Pinned) pinned++;
+        float estimate = MergedChromeLayout.EstimatedTabExtent(_open.Count, pinned);
+        if (estimate > _tabNaturalExtent.Peek()) _tabNaturalExtent.Value = estimate;
+    }
 
-        void AddHidden(int idx)
-        {
-            for (int k = 0; k < _hiddenScratch.Count; k++) if (_hiddenScratch[k].Index == idx) return;
-            var t = _open[idx];
-            _hiddenScratch.Add(new ChromeTabRef(idx, t.Label, t.Glyph));
-        }
+    void TabsChanged()
+    {
+        // The strip will publish its exact post-layout extent. Seed upward immediately so adding/unpinning tabs can
+        // collapse search in the same event turn instead of briefly squeezing the new tab behind a stale measurement.
+        SeedTabExtent();
+        _tabsVersion.Value = _tabsVersion.Peek() + 1;
     }
 
     int IndexOfTabId(int id)
@@ -1180,35 +1165,22 @@ sealed class WaveeShell : Component
         return -1;
     }
 
-    /// <summary>Mark a tab as just-used. The LRU squeeze reads this list, so every path that CHANGES which tab is
-    /// active has to go through it (strip click, spring-load, overflow pick, new tab, close).</summary>
-    void TouchTab(int index)
-    {
-        if ((uint)index >= (uint)_open.Count) return;
-        int id = _open[index].Id;
-        _tabMru.Remove(id);
-        _tabMru.Insert(0, id);
-    }
-
     IReadOnlyList<TabViewItem> BuildTabItems()
     {
-        // Fallback for the very first pass, before the projection effect has run: never render an empty strip.
-        if (_visibleTabs.Count == 0) RebuildVisibleTabs(_chromeLayout.Peek().KeepTabs, _selectedTab.Peek());
-        var items = new TabViewItem[_visibleTabs.Count];
-        for (int k = 0; k < items.Length; k++)
+        var items = new TabViewItem[_open.Count];
+        for (int i = 0; i < items.Length; i++)
         {
-            int i = _visibleTabs[k];
             var tab = _open[i];
             var destination = DestinationOf(tab);
-            // The closures below capture the OPEN-list index, so the drag payload, the spring-load activation and the
-            // context menu keep pointing at the right tab even though the strip's own index is `k`.
-            int index = i;
-            items[k] = new TabViewItem
+            int id = tab.Id;
+            items[i] = new TabViewItem
             {
+                Key = "tab#" + id,
                 Header = tab.Label,
                 Icon = tab.Glyph,
-                IsClosable = _open.Count > 1,
-                ContextMenu = destination is null ? null : () => TabMenu(tab),
+                IsClosable = !tab.Pinned && _open.Count > 1,
+                IsPinned = tab.Pinned,
+                ContextMenu = () => TabMenu(id),
                 // A tab is CLICK-PRIMARY: switching tabs is the constant intent, dragging one out the rare one. At the
                 // base 4px box a click landed while the mouse is still travelling promotes to a drag and its click is
                 // suppressed — the tab silently fails to select. WinUI widens the mouse box ×2 on list items for exactly
@@ -1228,7 +1200,7 @@ sealed class WaveeShell : Component
                 // them to that playlist without ever leaving the page you are on, the cross-tab deposit. The two
                 // coexist by construction: FindTarget resolves the spring host BEFORE acceptance, so the same spec both
                 // opens the tab on a dwell and takes the drop on a release.
-                DropTarget = TabDropTarget(destination, index),
+                DropTarget = TabDropTarget(destination, id),
             };
         }
         return items;
@@ -1237,7 +1209,7 @@ sealed class WaveeShell : Component
     /// <summary>One tab's drop target: always the spring-load waypoint, plus a track deposit when the tab stands for a
     /// playlist this user can write to (see <see cref="TabDropRules"/> for the decision and why the same-playlist cases
     /// are REFUSED rather than left to no-op inside the deposit).</summary>
-    DropTargetSpec TabDropTarget(SidebarDestination? destination, int index)
+    DropTargetSpec TabDropTarget(SidebarDestination? destination, int tabId)
     {
         var acts = _actions;
         if (destination is { Kind: SidebarPinKind.Playlist } d && WaveeRootlist.CanEditPlaylist(acts, d.Uri))
@@ -1253,11 +1225,11 @@ sealed class WaveeShell : Component
                 // The deposited feel: the lifted visual snaps home rather than gliding into a list it never joined.
                 settleOnDrop: false,
                 springLoadMs: WaveeResourceDrag.SpringLoadMs,
-                onSpringLoad: (_, _) => ActivateTab(index));
+                onSpringLoad: (_, _) => ActivateTabById(tabId));
         }
         return Drop.Target<WaveeResourceDragPayload>(WaveeDragKinds.Resource,
             springLoadMs: WaveeResourceDrag.SpringLoadMs,
-            onSpringLoad: (_, _) => ActivateTab(index),
+            onSpringLoad: (_, _) => ActivateTabById(tabId),
             springLoadOnly: true);
     }
 
@@ -1278,11 +1250,52 @@ sealed class WaveeShell : Component
         return SidebarDestination.FromRoute(tab.Key, tab.Arg, title);
     }
 
-    ContextMenuModel? TabMenu(OpenTab tab)
+    ContextMenuModel? TabMenu(int tabId)
     {
-        if (DestinationOf(tab) is not { } destination
-            || PinActions.RowForDestination(_actions, in destination) is not { } row) return null;
-        return new ContextMenuModel([row], new ContextMenuHeader(null, tab.Label));
+        int index = IndexOfTabId(tabId);
+        if ((uint)index >= (uint)_open.Count) return null;
+        var tab = _open[index];
+        var rows = new List<MenuFlyoutItem>(9)
+        {
+            new MenuFlyoutItem(
+                Loc.Get(tab.Pinned ? Strings.Shell.UnpinTab : Strings.Shell.PinTab),
+                ActionIcons.Resolve(tab.Pinned ? ActionIcons.Unpin : ActionIcons.Pin),
+                true, () => SetTabPinned(tabId, !tab.Pinned)),
+            MenuFlyoutItem.Separator,
+            new MenuFlyoutItem(Loc.Get(Strings.Shell.CloseTab), Icons.Cancel,
+                _open.Count > 1, () => CloseTabById(tabId)),
+            new MenuFlyoutItem(Loc.Get(Strings.Shell.CloseOtherTabs), default,
+                HasOtherUnpinned(tabId), () => CloseOtherTabs(tabId)),
+            new MenuFlyoutItem(Loc.Get(Strings.Shell.CloseTabsRight), default,
+                HasUnpinnedToRight(index), () => CloseTabsToRight(tabId)),
+            new MenuFlyoutItem(Loc.Get(Strings.Shell.CloseAllUnpinned), default,
+                HasAnyUnpinned(), CloseAllUnpinnedTabs),
+        };
+        if (DestinationOf(tab) is { } destination
+            && PinActions.RowForDestination(_actions, in destination) is { } pagePin)
+        {
+            rows.Add(MenuFlyoutItem.Separator);
+            rows.Add(pagePin);
+        }
+        return new ContextMenuModel(rows, new ContextMenuHeader(null, tab.Label));
+    }
+
+    bool HasAnyUnpinned()
+    {
+        for (int i = 0; i < _open.Count; i++) if (!_open[i].Pinned) return true;
+        return false;
+    }
+
+    bool HasOtherUnpinned(int tabId)
+    {
+        for (int i = 0; i < _open.Count; i++) if (_open[i].Id != tabId && !_open[i].Pinned) return true;
+        return false;
+    }
+
+    bool HasUnpinnedToRight(int index)
+    {
+        for (int i = index + 1; i < _open.Count; i++) if (!_open[i].Pinned) return true;
+        return false;
     }
 
     int ActiveTabId()
@@ -1366,7 +1379,8 @@ sealed class WaveeShell : Component
         if ((uint)i >= (uint)_open.Count) return;
         var (title, glyph) = ShellNav.Dest(r);
         _open[i] = _open[i] with { Key = r.Name, Label = title, Glyph = glyph, Arg = r.Arg };
-        _tabsVersion.Value = _tabsVersion.Peek() + 1;
+        TabsChanged();
+        if (_open[i].Pinned) SavePinnedWorkspace();
     }
 
     /// <summary>Select tab <paramref name="i"/> AND follow its route — the pair every tab activation needs (writing the
@@ -1374,10 +1388,20 @@ sealed class WaveeShell : Component
     void ActivateTab(int i)
     {
         if ((uint)i >= (uint)_open.Count || _selectedTab.Peek() == i) return;
-        TouchTab(i);
         _selectedTab.Value = i;
         var t = _open[i];
+        if (t.Pinned)
+        {
+            _lastSelectedPinnedTabId = t.Id;
+            SavePinnedWorkspace();
+        }
         Go(t.Key, t.Arg, NavTransitionKind.Neutral);
+    }
+
+    void ActivateTabById(int id)
+    {
+        int index = IndexOfTabId(id);
+        if (index >= 0) ActivateTab(index);
     }
 
     void OpenNewTab(string key)
@@ -1385,25 +1409,91 @@ sealed class WaveeShell : Component
         var (title, glyph) = ShellNav.Dest(key, null);
         _open.Add(new OpenTab(_nextTabId++, key, title, glyph, null));
         _selectedTab.Value = _open.Count - 1;
-        TouchTab(_open.Count - 1);
-        _tabsVersion.Value = _tabsVersion.Peek() + 1;
+        TabsChanged();
         Go(key, null, NavTransitionKind.Neutral);
     }
 
     void CloseTab(int i)
     {
         if (_open.Count <= 1 || (uint)i >= (uint)_open.Count) return;
-        _tabMru.Remove(_open[i].Id);
+        bool pinsChanged = _open[i].Pinned;
         _open.RemoveAt(i);
         int sel = _selectedTab.Peek();
         if (i < sel) sel--;
         else if (i == sel) sel = Math.Min(i, _open.Count - 1);
         sel = Math.Clamp(sel, 0, _open.Count - 1);
         _selectedTab.Value = sel;
-        TouchTab(sel);
-        _tabsVersion.Value = _tabsVersion.Peek() + 1;
+        if (_open[sel].Pinned) _lastSelectedPinnedTabId = _open[sel].Id;
+        else if (IndexOfTabId(_lastSelectedPinnedTabId) < 0) _lastSelectedPinnedTabId = FirstPinnedId();
+        TabsChanged();
+        if (pinsChanged) SavePinnedWorkspace();
         var t = _open[sel];
         Go(t.Key, t.Arg, NavTransitionKind.Neutral);
+    }
+
+    void CloseTabById(int id)
+    {
+        int index = IndexOfTabId(id);
+        if (index >= 0) CloseTab(index);
+    }
+
+    void SetTabPinned(int id, bool pinned)
+    {
+        int index = IndexOfTabId(id);
+        if (index < 0 || _open[index].Pinned == pinned) return;
+        int selectedId = ActiveTabId();
+        var tab = _open[index] with { Pinned = pinned };
+        _open.RemoveAt(index);
+        int boundary = 0;
+        while (boundary < _open.Count && _open[boundary].Pinned) boundary++;
+        _open.Insert(boundary, tab);
+        int selected = IndexOfTabId(selectedId);
+        _selectedTab.Value = Math.Max(0, selected);
+        if (pinned && selectedId == id) _lastSelectedPinnedTabId = id;
+        else if (!pinned && _lastSelectedPinnedTabId == id) _lastSelectedPinnedTabId = FirstPinnedId();
+        TabsChanged();
+        SavePinnedWorkspace();
+    }
+
+    int FirstPinnedId()
+    {
+        for (int i = 0; i < _open.Count; i++) if (_open[i].Pinned) return _open[i].Id;
+        return -1;
+    }
+
+    void CloseOtherTabs(int keepId)
+        => CloseTabSet(tab => tab.Id != keepId && !tab.Pinned);
+
+    void CloseTabsToRight(int tabId)
+    {
+        int index = IndexOfTabId(tabId);
+        if (index < 0) return;
+        var rightIds = new HashSet<int>();
+        for (int i = index + 1; i < _open.Count; i++) if (!_open[i].Pinned) rightIds.Add(_open[i].Id);
+        CloseTabSet(tab => rightIds.Contains(tab.Id));
+    }
+
+    void CloseAllUnpinnedTabs() => CloseTabSet(static tab => !tab.Pinned);
+
+    void CloseTabSet(Func<OpenTab, bool> remove)
+    {
+        int selectedId = ActiveTabId();
+        int oldSelected = _selectedTab.Peek();
+        for (int i = _open.Count - 1; i >= 0; i--) if (remove(_open[i])) _open.RemoveAt(i);
+        if (_open.Count == 0)
+        {
+            var (title, glyph) = ShellNav.Dest("home");
+            _open.Add(new OpenTab(_nextTabId++, "home", title, glyph, null));
+        }
+        int selected = IndexOfTabId(selectedId);
+        if (selected < 0) selected = Math.Clamp(oldSelected, 0, _open.Count - 1);
+        _selectedTab.Value = selected;
+        if (_open[selected].Pinned) _lastSelectedPinnedTabId = _open[selected].Id;
+        else if (IndexOfTabId(_lastSelectedPinnedTabId) < 0) _lastSelectedPinnedTabId = FirstPinnedId();
+        TabsChanged();
+        SavePinnedWorkspace();
+        var active = _open[selected];
+        Go(active.Key, active.Arg, NavTransitionKind.Neutral);
     }
 
     /// <summary>Template overrides for the merged chrome row. The bar lays its pane toggle out at x=4 (root padding 2 +
@@ -1430,7 +1520,6 @@ sealed class WaveeShell : Component
 
     void FocusSearch()
     {
-        if (_chromeLayout.Peek().SearchMode == MergedSearchMode.Icon) _searchExpanded.SetIfChanged(true);
         _searchFocusRequest.Value = _searchFocusRequest.Peek() + 1;
     }
 

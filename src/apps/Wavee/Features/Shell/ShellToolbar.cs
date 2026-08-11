@@ -141,9 +141,19 @@ sealed class FluentRichOmnibar : Component
     // The merged row's centre island passes a parts map so it can capture AutoSuggestBox.PartRoot and put the caret in
     // the field on the click-expand edge. Null = the field owns its own root (every other host).
     readonly TemplateParts? _parts;
+    readonly float _maxWidth;
+    readonly AutoSuggestBoxSuggestionPresentation _suggestionPresentation;
+    readonly bool _allowNarrowSuggestions;
 
-    public FluentRichOmnibar(Signal<string> text, Action<string, string?> go, TemplateParts? parts = null)
-    { _text = text; _go = go; _parts = parts; }
+    public FluentRichOmnibar(Signal<string> text, Action<string, string?> go, TemplateParts? parts = null,
+        float maxWidth = 480f,
+        AutoSuggestBoxSuggestionPresentation suggestionPresentation = AutoSuggestBoxSuggestionPresentation.Popup,
+        bool allowNarrowSuggestions = false)
+    {
+        _text = text; _go = go; _parts = parts; _maxWidth = maxWidth;
+        _suggestionPresentation = suggestionPresentation;
+        _allowNarrowSuggestions = allowNarrowSuggestions;
+    }
 
     public override Element Render()
     {
@@ -201,7 +211,7 @@ sealed class FluentRichOmnibar : Component
             Build: context => Embed.Comp(() => new OmnibarSuggestionsPopup(
                 _text, _suggestions, _loading, context.Width, _highlight,
                 selection => { if (InvokeSelection(selection)) context.Close(); },
-                close: context.Close)),
+                close: context.Close, allowNarrow: _allowNarrowSuggestions)),
             MoveSelection: MoveSelection,
             SubmitSelection: () => InvokeSelection(_highlight.Peek()),
             ResetSelection: () => _highlight.Value = -1);
@@ -209,9 +219,9 @@ sealed class FluentRichOmnibar : Component
         // Stock AutoSuggestBox metrics: a 32-DIP field at ControlCornerRadius (cornerRadius 0 resolves to Radii.Control
         // inside the box) with the control-default chrome — no pill, no elevation ring. 480 is the stock search cap.
         return AutoSuggestBox.Create(Array.Empty<string>(), Loc.Get(Strings.Shell.SearchPlaceholder),
-            grow: 1f, maxFillWidth: 480f, text: _text, onQuerySubmitted: Submit,
+            grow: 1f, maxFillWidth: _maxWidth, text: _text, onQuerySubmitted: Submit,
             minHeight: 32f, cornerRadius: 0f, presenter: presenter, parts: _parts,
-            chrome: AutoSuggestBoxChrome.Standard);
+            chrome: AutoSuggestBoxChrome.Standard, suggestionPresentation: _suggestionPresentation);
     }
 
     void StartFetch(Services? svc, Action<Action> post, string q)
@@ -243,6 +253,7 @@ sealed class OmnibarSuggestionsPopup : Component
     readonly Action? _close;
     readonly IReadSignal<int>? _highlight;
     readonly Action<int>? _choose;
+    readonly bool _allowNarrow;
 
     public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
         IReadSignal<float> width, Services? svc, Action<string, string?> go, Action close)
@@ -257,6 +268,13 @@ sealed class OmnibarSuggestionsPopup : Component
         _highlight = highlight; _choose = choose; _close = close;
     }
 
+    public OmnibarSuggestionsPopup(Signal<string> text, IReadSignal<SearchSuggestions> suggestions, IReadSignal<bool> loading,
+        IReadSignal<float> width, IReadSignal<int> highlight, Action<int> choose, Action? close, bool allowNarrow)
+    {
+        _text = text; _suggestions = suggestions; _loading = loading; _width = width;
+        _highlight = highlight; _choose = choose; _close = close; _allowNarrow = allowNarrow;
+    }
+
     public override Element Render()
     {
         string q = _text.Value.Trim();
@@ -267,7 +285,8 @@ sealed class OmnibarSuggestionsPopup : Component
         // can be crushed to ChromeSearchIconW when the centre column has no room — anchoring a 40-DIP dropdown that
         // renders every row as a vertical sliver. A popup is an overlay; it may be wider than its anchor. 400 keeps a
         // cover + title + trailing actions legible (the overlay layer clamps to the window edge like any flyout).
-        float width = MathF.Max(_width.Value > 0f ? _width.Value : 720f, 400f);
+        float measuredWidth = _width.Value > 0f ? _width.Value : 720f;
+        float width = _allowNarrow ? measuredWidth : MathF.Max(measuredWidth, 400f);
         // Live path (FluentRichOmnibar) does not pass Services/go — resolve them from ambient context so row actions
         // (Play / Like / context menu) work the same as the retained RichOmnibar constructor.
         var svc = _svc ?? UseContext(Services.Slot);

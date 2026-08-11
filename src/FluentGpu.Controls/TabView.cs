@@ -21,6 +21,8 @@ public enum TabViewCloseButtonOverlayMode : byte { Auto = 0, OnPointerOver = 1, 
 /// in the content area while this tab is selected.</summary>
 public sealed record TabViewItem
 {
+    /// <summary>Stable reconciliation identity for hosts whose collection can reorder. Null falls back to the item index.</summary>
+    public string? Key { get; init; }
     public string Header { get; init; } = "";
     /// <summary>Segoe Fluent Icons glyph (the IconSource analog): 16px, 10px right margin, foreground follows the
     /// header ramp (TabViewItemHeaderIconSize/IconMargin, TabView_themeresources.xaml:246-247; ramps :95-99).</summary>
@@ -28,6 +30,9 @@ public sealed record TabViewItem
     /// <summary>WinUI <c>TabViewItem.IsClosable</c> (idl:217-219, default true) — gates the close button, middle-click
     /// close and Ctrl+F4.</summary>
     public bool IsClosable { get; init; } = true;
+    /// <summary>Text-strip pinned state. Pinned headers render as compact icon-only cells and suppress their close slot;
+    /// closing remains available through the context menu.</summary>
+    public bool IsPinned { get; init; }
     /// <summary>Selected-tab content (WinUI TabViewItem.Content); invoked per render while selected.</summary>
     public Func<Element>? Content { get; init; }
     /// <summary>Optional lazy context menu for the tab header (right-click / Menu key / touch hold).</summary>
