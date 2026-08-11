@@ -230,6 +230,23 @@ sealed class LyricsView : Component
 
     LyricsDocument? _doc;
     LyricsDocument? _pendingUpgrade;
+
+    // Bumped by PrepareDocument on every NON-same-shape document swap, and folded into each row's reconciler key.
+    //
+    // Without it the row key is the bare index, so swapping a 62-line document for a 35-line one reconciles rows
+    // ll0..ll34 IN PLACE — same key, same component type — and component props FREEZE at mount, so each surviving row
+    // keeps the `_lineEmphasis[i]` / `_glowAlpha[i]` signal objects and the `LyricLine` it captured under the OLD
+    // document. PrepareDocument's !sameShape branch has meanwhile reallocated all of those arrays, so the rows are left
+    // subscribed to orphaned signals and their scene handles are never re-reported (a row reports them ONCE, at
+    // realization). The result is a document frozen at its last emphasis: every line stuck blurred, no line ever
+    // becoming active, for the rest of the track.
+    //
+    // The !sameShape branch is written on the premise that a genuine document change rebuilds the rows; this is what
+    // actually makes that true. The same-shape path deliberately does NOT bump — keeping those rows mounted (and their
+    // subscriptions live) is the whole point of that branch.
+    int _docEpoch;
+
+    string RowKey(int index) => "ll" + _docEpoch + ":" + index;
     Loadable<LyricsDocument?>? _docLoadable;
     LyricsMeasuredLayout? _layout;
     PlaybackBridge? _b;
@@ -593,21 +610,31 @@ sealed class LyricsView : Component
     // The interlude advance: an already-resolved (lead-shifted) `active` steps ON to the next line for the whole of a
     // real instrumental break, and gapStart/gapEnd come back as that break's bounds (equal ⇒ not in one).
     //
-    // Word-by-word ONLY — the same gate the old recede test used, and for a sharper reason now. A line-synced document
-    // has no syllable timing, so its sung-out point is an authored guess; retiring a line early off a guess would light
-    // the NEXT line fully white (a line-synced row has no wipe with which to look "unsung") seconds before it is sung.
-    // The last line is likewise never advanced past: there is nothing to move focus to, so it simply stays lit.
+    // The ADVANCE is word-by-word ONLY, and for a sharp reason: a line-synced document has no syllable timing, so
+    // retiring a line early would light the NEXT line fully white (a line-synced row has no wipe with which to look
+    // "unsung") seconds before it is sung. The last line is likewise never advanced past: there is nothing to move
+    // focus to, so it simply stays lit.
+    //
+    // The GAP is reported either way. Those used to be the same decision because a line-synced doc could never show a
+    // gap at all — DeriveEnds sets EndMs to the next line's start, so sungOut == nextStart by construction. That is no
+    // longer true: LyricsClean folds a removed ♪/blank row's timestamp into the line above it, which gives a line-synced
+    // document a genuine early sung-out point for the first time. Reporting the gap lights the dots through the break
+    // (the instrumental cue those ♪ rows used to carry) while the focus stays put, so neither half borrows the other's
+    // hazard.
     static int AdvancePastInterlude(LyricsDocument doc, int active, long nowMs, out long gapStart, out long gapEnd)
     {
         gapStart = 0L; gapEnd = 0L;
         if (active < 0 || active + 1 >= doc.Lines.Count) return active;
         var l = doc.Lines[active];
-        if (!l.IsWordByWord || l.Syllables.Count == 0) return active;
-        long sungOut = SungOutMs(doc, active);
+        bool wordSynced = l.IsWordByWord && l.Syllables.Count > 0;
+        // Absent syllables, only an AUTHORED end earlier than the next line is a real sung-out point; without one
+        // SungOutMs falls back to the next line's start and no gap can exist anyway.
         long nextStart = doc.Lines[active + 1].StartMs;
+        if (!wordSynced && !(l.EndMs is { } e && e < nextStart)) return active;
+        long sungOut = SungOutMs(doc, active);
         if (nowMs < sungOut || nextStart - sungOut < InterludeGapMs) return active;
         gapStart = sungOut; gapEnd = nextStart;
-        return active + 1;
+        return wordSynced ? active + 1 : active;
     }
 
     // The dots' per-frame lane: pure scalar math plus at most three value-gated signal writes and one transform write,
@@ -880,7 +907,9 @@ sealed class LyricsView : Component
         // are LIVE on emphasis + glow, but still wipe on the pre-upgrade timing. Closing that too would mean a
         // props-channel restructure of LyricLineView, which is deliberately out of scope.
         bool sameShape = previous is not null && SameLineShape(previous, doc);
-        if (!sameShape) _layout = null;
+        // A genuine document change must REMOUNT the rows, and only the key can force that (see RowKey). The
+        // reallocation below is safe exactly when the rows are rebuilt to pick the new objects up.
+        if (!sameShape) { _layout = null; _docEpoch++; }
         _doc = doc;
         ScanSecondaryLayers(doc);
         if (!sameShape)
@@ -1210,9 +1239,9 @@ sealed class LyricsView : Component
                     // long before it (component props freeze at mount — see the _secondary field block).
                     _secondary,
                     fontSz, lineHt, rowPad, sidePad, _large, _ink,
-                    ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = "ll" + idx };
+                    ReportLineNode, ReportGlowNode, ReportDofNode, SoftnessOfLine, DofDeclaredFor, () => SeekToLine(idx))) with { Key = RowKey(idx) };
             },
-            keyOf: i => "ll" + i,
+            keyOf: RowKey,
             // Realize the WHOLE document (a lyrics doc is at most a few hundred cheap rows): with a 4-5 row overscan,
             // lines cold-mounted mid-auto-scroll — text shaping + DoF layer popping in as the spring passed them (the
             // "future lines flicker in" report). Realized-but-offscreen lines cost nothing per frame (clip-culled).

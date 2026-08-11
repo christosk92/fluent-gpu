@@ -191,6 +191,14 @@ public sealed class LyricsDiskCache
         catch { }
     }
 
+    /// <summary>Drop ONE track's entry (positive or negative). Backs the lyrics inspector's "re-fetch from providers":
+    /// the next lookup has to MISS or the fan-out never runs and there is still no raw payload to show.</summary>
+    public void Forget(string trackId)
+    {
+        if (string.IsNullOrEmpty(trackId)) return;
+        try { TryDelete(PathFor(trackId)); } catch { }
+    }
+
     /// <summary>Enforce the size caps: oldest-first (by save time, which is the file's write time) down to 80% of both
     /// caps. Best-effort and synchronous — production reaches it through <see cref="ArmSweep"/>, off-thread, once.</summary>
     public void Sweep()

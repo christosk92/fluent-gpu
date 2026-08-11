@@ -36,6 +36,7 @@ public sealed class SpotifyNativeLyricsSource : ILyricCandidateSource
             + "?format=json&vocalRemoval=false&market=" + req.Market;
         string? json = await _get(url, ct).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(json)) return null;
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(url), "json", json);
 
         var doc = Parse(json!, req.TrackId);
         if (doc is null || doc.Lines.Count == 0) return null;

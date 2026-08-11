@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee.Backend.Lyrics;
 using Wavee.Core;
 
 namespace Wavee.Backend;
@@ -171,7 +172,7 @@ public sealed class LiveSpotifySession : ISpotifySession
 /// <summary>Stable lyrics facade (docs/lyrics-aggregator-reranker-plan.md §11): the UI binds <c>svc.Lyrics</c> once; on
 /// live login the composition root swaps the fake provider for the real <c>AggregatingLyricsProvider</c> via SetInner,
 /// without rebuilding the app tree. Mirrors <see cref="SwitchablePlayer"/>.</summary>
-public sealed class SwitchableLyrics : IUpgradingLyricsProvider
+public sealed class SwitchableLyrics : IUpgradingLyricsProvider, ILyricsRefetch
 {
     readonly object _gate = new();
     readonly Dictionary<string, LyricsDocument> _cache = new();
@@ -264,6 +265,23 @@ public sealed class SwitchableLyrics : IUpgradingLyricsProvider
         }
 
         return ct.CanBeCanceled ? task.WaitAsync(ct) : task;
+    }
+
+    /// <summary>Forget this track HERE too, then delegate. This facade keeps its own winner cache, so clearing only the
+    /// aggregator's would leave the stale document sitting one layer above and the re-fetch would look like a no-op.</summary>
+    public Task<LyricsDocument?> RefetchAsync(string trackId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(trackId)) return Task.FromResult<LyricsDocument?>(null);
+        ILyricsProvider inner;
+        lock (_gate)
+        {
+            _cache.Remove(trackId);
+            _inflight.Remove(trackId);
+            inner = _inner;
+        }
+        return inner is ILyricsRefetch refetchable
+            ? refetchable.RefetchAsync(trackId, ct)
+            : inner.GetLyricsAsync(trackId, ct);
     }
 
     async Task<LyricsDocument?> FetchAndCacheAsync(string trackId, ILyricsProvider provider)

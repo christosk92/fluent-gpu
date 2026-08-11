@@ -57,6 +57,7 @@ public sealed class AmllTtmlDbSource : ILyricCandidateSource
             _misses.TryAdd(req.TrackId, 0);
             return null;
         }
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(url), "ttml", ttml);
 
         var doc = LyricsText.ParseTtml(ttml!, req.TrackId, Id);
         if (doc.Lines.Count == 0)

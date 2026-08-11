@@ -94,6 +94,7 @@ public sealed class KugouSource : ILyricCandidateSource
     {
         string searchUrl = $"http://mobilecdn.kugou.com/api/v3/search/song?format=json&keyword={Uri.EscapeDataString(kw)}&page=1&pagesize=10&showtype=1";
         string? sj = await GreyHttp.Get(searchUrl, null, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(searchUrl), "json", sj);
         if (sj is null) return null;
 
         string? hash = null; long bestDelta = long.MaxValue; int n = 0;
@@ -116,6 +117,7 @@ public sealed class KugouSource : ILyricCandidateSource
 
         string lyrSearch = $"https://lyrics.kugou.com/search?ver=1&man=yes&client=pc&keyword={Uri.EscapeDataString(req.Title)}&duration={req.DurationMs}&hash={hash}";
         string? lj = await GreyHttp.Get(lyrSearch, null, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(lyrSearch), "json", lj);
         if (lj is null) { LyricsProbe.Note(Id, "matched song but lyric search HTTP failed"); return null; }
         string? id = null, accesskey = null;
         try
@@ -127,14 +129,32 @@ public sealed class KugouSource : ILyricCandidateSource
         catch { return null; }
         if (id is null || accesskey is null) { LyricsProbe.Note(Id, "matched song but kugou has no KRC lyric for it (no candidate)"); return null; }
 
-        string dl = $"https://lyrics.kugou.com/download?accesskey={accesskey}&fmt=krc&charset=utf8&kgid={id}";
+        // The download endpoint is PICKY, and gets it wrong quietly: the id parameter must be `id` (NOT `kgid`) and
+        // `ver=1` is mandatory. Miss either and it answers HTTP 200 carrying {"status":400,"info":"Bad Request"} with no
+        // content — which read as "this track has no KRC" and silently cost us every Kugou word-synced lyric. Verified
+        // against the live endpoint: kgid+ver → 400, id without ver → 400, id+ver → 200. `client=pc` is optional.
+        string dl = $"https://lyrics.kugou.com/download?ver=1&client=pc&id={id}&accesskey={accesskey}&fmt=krc&charset=utf8";
         string? dj = await GreyHttp.Get(dl, null, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(dl), "json", dj);
         if (dj is null) return null;
-        string? b64; try { using var d = JsonDocument.Parse(dj); b64 = GreyHttp.Str(d.RootElement, "content"); } catch { return null; }
-        if (string.IsNullOrEmpty(b64)) { LyricsProbe.Note(Id, "KRC download returned empty content"); return null; }
+        string? b64; string status = "";
+        try
+        {
+            using var d = JsonDocument.Parse(dj);
+            b64 = GreyHttp.Str(d.RootElement, "content");
+            // Carry the endpoint's OWN verdict into the breadcrumb. "empty content" hid a 400 for as long as it took to
+            // capture the payload and look.
+            if (d.RootElement.TryGetProperty("status", out var st) && st.ValueKind == JsonValueKind.Number)
+                status = $" (status {st.GetInt32()} {GreyHttp.Str(d.RootElement, "info") ?? ""})".TrimEnd();
+        }
+        catch { return null; }
+        if (string.IsNullOrEmpty(b64)) { LyricsProbe.Note(Id, "KRC download returned empty content" + status); return null; }
 
         string? krc = LyricCrypto.DecryptKrc(b64!);
         if (krc is null) { LyricsProbe.Note(Id, "matched song but KRC decrypt failed"); return null; }
+        // The DECRYPTED body, not the base64 envelope: this is the text the parser is handed, so it is the one that
+        // answers "did the provider's timings look like this, or did we mangle them?".
+        LyricsProbe.CaptureRaw(Id, "decrypted KRC (kgid " + id + ")", "krc", krc);
         var doc = LyricsWordFormats.ParseKrc(krc, req.TrackId, Id);
         if (doc.Lines.Count == 0) { LyricsProbe.Note(Id, "matched song but KRC parsed to 0 lines"); return null; }
         return new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc);
@@ -166,6 +186,7 @@ public sealed class NeteaseSource : ILyricCandidateSource
     {
         string searchUrl = $"https://music.163.com/api/search/get/web?type=1&offset=0&limit=10&s={Uri.EscapeDataString(kw)}";
         string? sj = await GreyHttp.Get(searchUrl, Headers, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(searchUrl), "json", sj);
         if (sj is null) return null;
 
         string? id = null; long bestDelta = long.MaxValue; int n = 0;
@@ -188,6 +209,7 @@ public sealed class NeteaseSource : ILyricCandidateSource
 
         string lyrUrl = $"https://music.163.com/api/song/lyric?id={id}&lv=1&kv=1&tv=1&yv=1";
         string? lj = await GreyHttp.Get(lyrUrl, Headers, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(lyrUrl), "json", lj);
         if (lj is null) return null;
         try
         {
@@ -236,6 +258,7 @@ public sealed class QqMusicSource : ILyricCandidateSource
     {
         string body = $"{{\"req_1\":{{\"method\":\"DoSearchForQQMusicDesktop\",\"module\":\"music.search.SearchCgiService\",\"param\":{{\"query\":{JsonString(kw)},\"page_num\":1,\"num_per_page\":10,\"search_type\":0}}}}}}";
         string? sj = await GreyHttp.PostJson("https://u.y.qq.com/cgi-bin/musicu.fcg", body, Headers, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, "POST musicu.fcg (DoSearchForQQMusicDesktop)", "json", sj);
         if (sj is null) return null;
 
         string? songid = null; long bestDelta = long.MaxValue; int n = 0;
@@ -265,6 +288,8 @@ public sealed class QqMusicSource : ILyricCandidateSource
         if (hex is null) { LyricsProbe.Note(Id, "matched song but qq has no QRC lyric for it (empty response)"); return null; }
         string? qrc = LyricCrypto.DecryptQrc(hex);
         if (qrc is null) { LyricsProbe.Note(Id, "matched song but QRC decrypt failed"); return null; }
+        // The decrypted QRC, not the hex blob the XML carries — see the KRC capture above for why.
+        LyricsProbe.CaptureRaw(Id, "decrypted QRC (musicid " + songid + ")", "qrc", qrc);
         var doc = LyricsWordFormats.ParseQrc(qrc, req.TrackId, Id);
         if (doc.Lines.Count == 0) { LyricsProbe.Note(Id, "matched song but QRC parsed to 0 lines"); return null; }
         return new LyricsCandidate(Id, Prior, MatchBasis.MetadataSearch, doc);
@@ -347,6 +372,7 @@ public sealed class MusixmatchSource : ILyricCandidateSource
     async Task<LyricsCandidate?> TryUrl(string url, MatchBasis basis, LyricsRequest req, CancellationToken ct)
     {
         string? json = await GreyHttp.Get(url, Headers, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(url), "json", json);
         if (json is null) return null;
         try
         {
@@ -355,11 +381,22 @@ public sealed class MusixmatchSource : ILyricCandidateSource
             if (TryGetRichsyncBody(d.RootElement, out var body))
             {
                 var doc = LyricsWordFormats.ParseRichsync(body, req.TrackId, Id);
-                if (doc.Lines.Count > 0) return new LyricsCandidate(Id, Prior, basis, doc);
+                // A richsync body whose word timing is not physically singable is WORSE than the LRC sitting in the very
+                // same response: word-sync is the top rerank tier, so it would out-rank a clean line-synced candidate on
+                // timing it does not actually have. Prefer the subtitle below when that happens — same request, no extra
+                // round-trip, and the line starts (the part such a body gets right) survive either way.
+                if (doc.Lines.Count > 0)
+                {
+                    if (!LyricsTiming.HasImplausibleWordTiming(doc, out int impossible, out int judged))
+                        return new LyricsCandidate(Id, Prior, basis, doc);
+                    LyricsProbe.Note(Id, $"richsync rejected — {impossible}/{judged} lines would have to be sung faster "
+                        + $"than {LyricsTiming.ImpossibleWordsPerSecond:0} words/second; falling back to the LRC subtitle");
+                }
             }
 
             // The same macro response normally also carries track.subtitles.get as LRC. Keep it as a line-synced fallback
-            // when richsync is missing or malformed instead of turning a valid Musixmatch hit into a miss.
+            // when richsync is missing, malformed or (above) not physically singable, instead of turning a valid
+            // Musixmatch hit into a miss.
             if (TryGetSubtitleBody(d.RootElement, out var lrc))
             {
                 var doc = LyricsText.ParseLrc(lrc, req.TrackId, Id);

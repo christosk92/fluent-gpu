@@ -29,6 +29,7 @@ public sealed class LrcLibSource : ILyricCandidateSource
             + "&album_name=" + Uri.EscapeDataString(req.Album)
             + (sec > 0 ? "&duration=" + sec : "");
         string? body = await _http.GetStringAsync(get, null, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(get), "json", body);
 
         LyricsDocument? doc = body is not null ? FromObject(body, req) : null;
         LyricsProbe.Note(Id, doc is not null ? "exact /api/get hit" : "exact /api/get miss → /api/search");
@@ -60,6 +61,7 @@ public sealed class LrcLibSource : ILyricCandidateSource
         string search = "https://lrclib.net/api/search?track_name=" + Uri.EscapeDataString(title)
             + (artist.Length > 0 ? "&artist_name=" + Uri.EscapeDataString(artist) : "");
         string? json = await _http.GetStringAsync(search, null, ct).ConfigureAwait(false);
+        LyricsProbe.CaptureRaw(Id, LyricsProbe.Redact(search), "json", json);
         if (json is null) return null;
         try
         {

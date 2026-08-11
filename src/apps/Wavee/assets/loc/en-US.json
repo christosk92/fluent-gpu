@@ -929,6 +929,8 @@
     "resyncLyrics": "Resync",
     "expandLyrics": "Expand lyrics",
     "closeLyrics": "Close lyrics",
+    "inspectLyrics": "Inspect lyrics source",
+    "lyricsInspector": "Lyrics source inspector",
     "lyricsSecondaryOff": "Second line: off",
     "lyricsSecondaryTranslation": "Second line: translation",
     "lyricsSecondaryRomanization": "Second line: romanization",
@@ -1480,6 +1482,7 @@
   "common": {
     "less": "Less",
     "more": "More",
+    "close": "Close",
     "retry": "Retry",
     "dismiss": "Dismiss",
     "undo": "Undo",

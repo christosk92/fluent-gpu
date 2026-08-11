@@ -346,4 +346,11 @@
     <Protobuf Include="..\Wavee.PlayPlay\Protos\playplay.proto" GrpcServices="None" ProtoRoot="..\Wavee.PlayPlay\Protos" Condition="Exists('..\Wavee.PlayPlay\Protos\playplay.proto')" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Real provider payloads captured through the lyrics inspector's evidence bundle. These are the actual bytes a
+         provider returned, kept verbatim so a parser change is regression-tested against reality rather than against a
+         synthetic body someone wrote to match their own assumptions. -->
+    <Content Include="Lyrics\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

@@ -156,7 +156,12 @@ sealed class RightRail : Component
         };
     }
 
-    // The lyrics header: title · (secondary-line toggle) · expand · close.
+    // The lyrics header: title · (secondary-line toggle) · inspect · expand · close.
+    //
+    // The inspector is its own component (LyricsInspectorButton) rather than a HeaderButton call here, because it needs
+    // the overlay service and the playing track id — reading either from this header would subscribe the WHOLE rail to
+    // track identity, re-rendering the panel chrome on every song change for a button that only needs the id at click
+    // time.
     //
     // The secondary-line toggle is rendered ONLY when the document on screen actually carries a translation or a
     // romanization (LyricsPrefs.Available, published once per doc by LyricsView) — a permanently-present control that
@@ -169,10 +174,11 @@ sealed class RightRail : Component
         _ = LyricsPrefs.Epoch.Value;
         int secondary = LyricsPrefs.Clamp(settings?.Get(WaveeSettings.LyricsSecondaryLine) ?? LyricsPrefs.None);
 
+        Element inspect = Embed.Comp(() => new LyricsInspectorButton());
         Element expand = HeaderButton(Icons.FullScreen, Loc.Get(Strings.Player.ExpandLyrics),
             () => ui.ImmersiveLyrics.Value = true);
         Element close = CloseButton(() => ui.RailOpen.Value = false);
-        if (available == 0) return [TitleText(RailMode.Lyrics), expand, close];
+        if (available == 0) return [TitleText(RailMode.Lyrics), inspect, expand, close];
 
         return
         [
@@ -183,6 +189,7 @@ sealed class RightRail : Component
             HeaderButton(Icons.Globe, LyricsPrefs.Tooltip(secondary),
                 () => LyricsPrefs.Set(settings, LyricsPrefs.Next(secondary, available)),
                 active: (available & LyricsPrefs.BitFor(secondary)) != 0),
+            inspect,
             expand,
             close,
         ];
@@ -203,7 +210,7 @@ sealed class RightRail : Component
     // GEOMETRY: row 1 of WaveeCta's icon-button table — 32 × 32, Radii.Control, 16-DIP glyph. The glyph used to be 12,
     // which is not a rung of anything: it made a full-size button look like a shrunken one, and it disagreed with the
     // immersive lyrics surface's twin (36 box / 14 glyph) even though the two are the same control on two surfaces.
-    static Element HeaderButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
+    internal static Element HeaderButton(string glyph, string tip, Action onClick, bool active = false) => ToolTip.Wrap(new BoxEl
     {
         Width = WaveeCta.IconButtonSize, Height = WaveeCta.IconButtonSize,
         Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,

@@ -12,7 +12,7 @@ namespace Wavee.Backend.Lyrics;
 /// best <see cref="LyricsDocument"/> (docs/lyrics-aggregator-reranker-plan.md §7). NOT first-hit: a later word-synced
 /// candidate can still beat an earlier line-synced one. A per-source miss/timeout/throw degrades to null for that source
 /// and never fails the aggregate. Winners are cached by track id; the decision is logged for explainability.</summary>
-public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
+public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider, ILyricsRefetch
 {
     const int UnsyncedFirstHitGraceMs = 6000;
     readonly IReadOnlyList<ILyricCandidateSource> _sources;
@@ -115,12 +115,38 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         if (_disk is { } disk)
         {
             var entry = await disk.TryLoadAsync(trackId, CancellationToken.None).ConfigureAwait(false);
-            if (entry.Outcome == LyricsCacheOutcome.Hit && entry.Document is { } fromDisk)
+            if (entry.Outcome == LyricsCacheOutcome.Hit && entry.Document is { } loaded)
             {
+                // A cached document NEVER passes through the reranker, so the word-timing gate would miss it entirely —
+                // including every entry an older build persisted before the gate existed. Without this repair a track
+                // whose broken karaoke was cached once keeps serving it forever: the read-through short-circuits the
+                // fan-out, and at richness 3 not even the background upgrade runs. Repair here and the entry drops to
+                // the line tier, which re-arms that upgrade on the very same call.
+                bool unsingable = loaded.Sync == LyricsSyncKind.Syllable
+                    && LyricsTiming.HasImplausibleWordTiming(loaded, out _, out _);
+                var fromDisk = unsingable ? LyricsTiming.StripWordTiming(loaded) : loaded;
+                // Same self-heal reasoning for junk lines: an entry cached before the cleaning pass existed still holds
+                // its blank/♪/credit rows, and a disk hit never reaches FetchOne. The header rule is metadata-driven and
+                // a disk hit deliberately never resolves the track, so it is skipped here — the other two families are
+                // metadata-free and cover the rows that actually render.
+                var swept = LyricsClean.Apply(fromDisk);
+                int junk = fromDisk.Lines.Count - swept.Lines.Count;
+                if (swept.Lines.Count > 0 && junk > 0) fromDisk = swept;
+                else junk = 0;
+                // Overwrite the file directly, NOT through SaveToDiskIfBetter: this is the one case where a "downgrade"
+                // is the correction, and the guard exists to stop exactly the write we want here.
+                if (unsingable || junk > 0)
+                {
+                    disk.Save(trackId, fromDisk);
+                    string why = unsingable && junk > 0 ? $"unsingable word timing + {junk} non-lyric line(s)"
+                        : unsingable ? "unsingable word timing (stripped to line sync)"
+                        : $"{junk} non-lyric line(s)";
+                    _log.Info($"lyrics: repaired the cached document for {trackId} — {why} — and re-persisted it");
+                }
                 lock (_gate)
                 {
                     _cache[trackId] = fromDisk; TouchLru(trackId);
-                    _diskGrade[trackId] = Grade(fromDisk);   // what the file already holds — no Save may go below it
+                    _diskGrade[trackId] = Grade(fromDisk);   // what the file now holds — no Save may go below it
                     EvictLru();
                 }
                 PublishDiskReport(trackId, fromDisk, entry.SavedAtUnixMs);
@@ -149,6 +175,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             LyricsDiagnostics.Publish(new LyricsSearchReport(trackId, "", "", "", 0L, null,
                 DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 "could not resolve track metadata — no title/artist to search with", Array.Empty<LyricsSourceTrace>()));
+            PublishInspection(trackId, EmptyProbed, null, null, "no request was ever built — the track's metadata could not be resolved");
             return null;
         }
 
@@ -212,7 +239,8 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             if (collected.TryGetValue(s.Id, out var pr))
                 traces.Add(new LyricsSourceTrace(s.Id, pr.Outcome, pr.Ms, pr.Detail,
                     pr.Cand?.Sync ?? LyricsSyncKind.None, pr.Cand?.LineCount ?? 0,
-                    dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? ""));
+                    dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? "",
+                    dec?.TextAgreement ?? 0d, dec?.Coverage ?? 0d, dec?.TimingScore ?? 0d, dec?.SyncScore ?? 0d));
             else
                 traces.Add(new LyricsSourceTrace(s.Id, LyricsOutcome.Skipped, 0L,
                     continueInBackground ? "background still checking richer sources" : "skipped — a faster match returned first",
@@ -236,6 +264,8 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
                 $"timing={b.TimingScore:F2} offset={b.AppliedOffsetMs}ms candidates=[{string.Join(",", candidates.Select(c => c.ProviderId))}] ({b.Reason})");
 
         var winner = ranked.Winner;
+        PublishInspection(trackId, collected, probe, winner,
+            continueInBackground ? "first pass — slower sources are still running in the background" : "complete");
         if (winner is not null) lock (_gate) { _cache[trackId] = winner; TouchLru(trackId); EvictLru(); }
         // ONE writer per request. Both Saves are fire-and-forget, so issuing the winner write here AND the upgrade
         // write from the continuation left two unordered file writes racing — the worse document could land last. When
@@ -252,7 +282,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
                 wdisk.SaveMissing(trackId);
         }
         if (willContinue)
-            _ = ContinueForUpgradeAsync(trackId, req, srcCts, pending, collected, winner!, startedAt);
+            _ = ContinueForUpgradeAsync(trackId, req, srcCts, pending, collected, winner!, startedAt, probe);
         else
         {
             srcCts.Cancel();
@@ -283,7 +313,7 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             var srcCts = owned;
             owned = null;   // handed over: ContinueForUpgradeAsync cancels and disposes it in its finally
             await ContinueForUpgradeAsync(trackId, req, srcCts, pending,
-                new Dictionary<string, Probed>(StringComparer.Ordinal), fromDisk, startedAt).ConfigureAwait(false);
+                new Dictionary<string, Probed>(StringComparer.Ordinal), fromDisk, startedAt, probe).ConfigureAwait(false);
         }
         catch (Exception e)
         {
@@ -323,7 +353,8 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         List<(ILyricCandidateSource Source, Task<Probed> Task)> pending,
         Dictionary<string, Probed> collected,
         LyricsDocument initialWinner,
-        long startedAt)
+        long startedAt,
+        LyricsProbe probe)
     {
         // The document this track must END UP persisted with. The caller deliberately skips its own winner Save when it
         // spawns us, so the single write in the finally below is the only one — and it has to happen even when the
@@ -366,8 +397,16 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             PublishReport(trackId, req, collected, ranked, candidates, "background complete");
             LogDecision(trackId, ranked, candidates);
 
+            // Final = what the UI is left holding, which is the INCUMBENT unless this pass actually beat it.
             var winner = ranked.Winner;
-            if (winner is null || !IsRicher(winner, initialWinner)) return;
+            if (winner is null || !IsRicher(winner, initialWinner))
+            {
+                PublishInspection(trackId, collected, probe, initialWinner,
+                    "background pass complete — nothing beat the first winner");
+                return;
+            }
+            PublishInspection(trackId, collected, probe, winner,
+                "background pass complete — it promoted a richer document");
             bestDoc = winner;
 
             bool promoted = false;
@@ -414,7 +453,8 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             if (collected.TryGetValue(s.Id, out var pr))
                 traces.Add(new LyricsSourceTrace(s.Id, pr.Outcome, pr.Ms, pr.Detail,
                     pr.Cand?.Sync ?? LyricsSyncKind.None, pr.Cand?.LineCount ?? 0,
-                    dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? ""));
+                    dec?.Score ?? 0d, dec is not null && s.Id == winnerId, dec?.Reason ?? "",
+                    dec?.TextAgreement ?? 0d, dec?.Coverage ?? 0d, dec?.TimingScore ?? 0d, dec?.SyncScore ?? 0d));
             else
                 traces.Add(new LyricsSourceTrace(s.Id, LyricsOutcome.Skipped, 0L,
                     suffix.Length > 0 ? suffix : "skipped — a faster match returned first",
@@ -455,7 +495,83 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
             : $"no lyrics anywhere — cached negative result from {when}";
         LyricsDiagnostics.Publish(new LyricsSearchReport(trackId, "", "", "", 0L, null,
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), summary, traces));
+        // Final only: a disk hit is by construction a NO-ROUND-TRIP answer, so there is no raw payload and no losing
+        // candidate to show. The inspector says exactly that, and offers the re-fetch that produces both.
+        PublishInspection(trackId, EmptyProbed, null, doc,
+            doc is not null
+                ? $"served from the on-disk cache (saved {when}) — no provider was contacted, so there is no raw response this session. Use “Re-fetch from providers”."
+                : $"the on-disk cache remembers (since {when}) that this track has no lyrics anywhere — no provider was contacted.");
         _log.Debug($"track={trackId} {summary}");
+    }
+
+    static readonly Dictionary<string, Probed> EmptyProbed = new(StringComparer.Ordinal);
+
+    /// <summary>Record the heavy half of this pass for the lyrics-source inspector: every payload the probe captured and
+    /// every candidate's PARSED document (winners and losers alike — the losers are the whole point), plus the document
+    /// the UI is left with. Cheap: the strings and documents already exist; this only keeps them reachable.</summary>
+    void PublishInspection(
+        string trackId,
+        IReadOnlyDictionary<string, Probed> collected,
+        LyricsProbe? probe,
+        LyricsDocument? final,
+        string note)
+    {
+        var candidates = new List<LyricsParsedCandidate>(collected.Count);
+        foreach (var pr in collected.Values)
+            if (pr.Cand is { } c)
+                candidates.Add(new LyricsParsedCandidate(c.ProviderId, c.Basis, c.Prior, c.Document));
+
+        var inspection = new LyricsInspection(
+            trackId,
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            note,
+            probe?.RawPayloads() ?? Array.Empty<LyricsRawPayload>(),
+            candidates,
+            final);
+        LyricsDiagnostics.PublishInspection(inspection);
+        AutoDump(trackId, inspection);
+    }
+
+    /// <summary>WAVEE_LYRICS_DUMP=1: write an evidence bundle for every track whose word timing trips the gate. One
+    /// broken track is an anecdote; the question that actually matters — is EVERY richsync body like this, or only
+    /// machine-generated ones for old catalogue tracks? — needs a corpus, and this collects one passively while the app
+    /// is simply used. Off by default (it writes provider payloads to disk), and skipped when there is no payload to
+    /// write, so a cache hit never produces an empty folder.</summary>
+    static readonly bool _autoDump =
+        Environment.GetEnvironmentVariable("WAVEE_LYRICS_DUMP") is "1" or "true" or "TRUE";
+
+    void AutoDump(string trackId, LyricsInspection inspection)
+    {
+        if (!_autoDump || inspection.Raw.Count == 0) return;
+        bool suspect = false;
+        foreach (var c in inspection.Candidates)
+            if (LyricsTiming.HasImplausibleWordTiming(c.Document, out _, out _)) { suspect = true; break; }
+        if (!suspect) return;
+
+        // Off the fetch path: this is diagnostics, and a slow disk must never lengthen a lyrics fetch.
+        var report = LyricsDiagnostics.ForTrack(trackId);
+        _ = Task.Run(() =>
+        {
+            string? folder = LyricsInspectionExport.WriteBundle(trackId, report, inspection);
+            if (folder is not null) _log.Info($"lyrics: implausible word timing for {trackId} — evidence written to {folder}");
+        });
+    }
+
+    /// <summary>Forget ONE track everywhere this provider caches it — memory, the never-downgrade grade ledger and the
+    /// on-disk entry — and fetch it again. The inspector's escape hatch: without it, a track played in any earlier
+    /// session answers from disk with no round-trip, so there is no raw payload to inspect. Joins an already-running
+    /// fan-out for the same track rather than starting a second one.</summary>
+    public Task<LyricsDocument?> RefetchAsync(string trackId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(trackId)) return Task.FromResult<LyricsDocument?>(null);
+        lock (_gate)
+        {
+            _cache.Remove(trackId);
+            _lru.Remove(trackId);
+            _diskGrade.Remove(trackId);   // the file is about to go, so what we knew about it goes too
+        }
+        _disk?.Forget(trackId);
+        return GetLyricsAsync(trackId, ct);
     }
 
     void LogReport(string trackId, LyricsRequest req, string summary, IReadOnlyList<LyricsSourceTrace> traces)
@@ -528,6 +644,19 @@ public sealed class AggregatingLyricsProvider : IUpgradingLyricsProvider
         {
             var c = await source.FetchAsync(req, cts.Token).ConfigureAwait(false);
             if (c is null) return new Probed(null, LyricsOutcome.Miss, Ms(), With("no match"));
+
+            // THE cleaning chokepoint. Every provider passes through here with the track's own metadata in scope, and
+            // the Spotify document used as the reranker's REFERENCE is itself a candidate — so both sides of every
+            // comparison are cleaned by one rule, and `coverage` finally counts lyrics rather than padding.
+            var cleaned = LyricsClean.Apply(c.Document, req.Title, req.ArtistsJoined);
+            int removed = c.Document.Lines.Count - cleaned.Lines.Count;
+            if (cleaned.Lines.Count == 0)
+                return new Probed(null, LyricsOutcome.Miss, Ms(), With("every line was provider metadata or instrumental filler"));
+            if (removed > 0)
+            {
+                LyricsProbe.Note(source.Id, $"dropped {removed} non-lyric line(s) (blank/♪/credits/title header)");
+                c = c with { Document = cleaned };
+            }
             return new Probed(c, LyricsOutcome.Hit, Ms(), With($"{c.Sync}, {c.LineCount} lines, basis={c.Basis}"));
         }
         catch (OperationCanceledException)
