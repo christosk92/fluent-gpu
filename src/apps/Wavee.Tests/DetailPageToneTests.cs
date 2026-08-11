@@ -53,24 +53,35 @@ public class DetailPageToneTests
         BackgroundBase: 0xFFC9A227, BackgroundTintedBase: 0xFFE6C233, TextBase: 0xFF1A1A1A,
         TextSubdued: 0xFF4D4D4D, TextBrightAccent: 0xFF1A1A1A);
 
-    [Fact]
-    public void TheDarkBackdrop_FallsAsTheCoverBrightens()
+    /// <summary>THE REGRESSION GUARD FOR THE REPORTED BUG. A bright sleeve and a dark sleeve must produce pages of the
+    /// SAME brightness — only the hue may differ.
+    ///
+    /// <para>This is what the deleted blurred-artwork backdrop broke. Its loudness was roughly the cover's own luminance
+    /// × its alpha, so a dark olive sleeve rendered an invisible band (the page read as the flat tone alone, calm) while
+    /// a neon sleeve rendered a haze across the top — and the two pages read as two different DESIGNS. It was reported
+    /// as album-pages-behave-differently-from-playlist-pages, but <c>DetailConfig</c> carries no colour field at all and
+    /// both kinds run identical code: what differed was the artwork. Three alpha tunings chased it (flat 0.40, flat 0.32
+    /// in light, an adaptive 0.34→0.14 in dark) and none converged, because no alpha can make a bright bitmap and a dark
+    /// one equally quiet. The band is deleted; the clamp is the whole mechanism now.</para>
+    ///
+    /// <para>The two backdrop-alpha tests that used to live here (<c>TheDarkBackdrop_FallsAsTheCoverBrightens</c>,
+    /// <c>TheDarkBackdrop_NoGradingFallsBackToTheMidpoint</c>) went with <c>WaveePalette.BackdropAlphaDark</c>.</para></summary>
+    [Theory]
+    [InlineData(ThemeKind.Dark)]
+    [InlineData(ThemeKind.Light)]
+    public void CoverBrightnessCannotChangeThePagesBrightness(ThemeKind theme)
     {
-        float moody = WaveePalette.BackdropAlphaDark(SaturatedRed);      // deep red — low luminance
-        float bright = WaveePalette.BackdropAlphaDark(BrightMustard);    // bright yellow — high luminance
-        Assert.True(bright < moody,
-            $"a bright sleeve must get LESS backdrop than a moody one (bright={bright:F3}, moody={moody:F3})");
-        // Both stay inside the published range, and the ordering spans a real gap, not a rounding artifact.
-        Assert.InRange(moody, WaveePalette.BackdropDarkAMin, WaveePalette.BackdropDarkAMax);
-        Assert.InRange(bright, WaveePalette.BackdropDarkAMin, WaveePalette.BackdropDarkAMax);
-        Assert.True(moody - bright > 0.05f, $"the adaptation must be perceptible (gap={moody - bright:F3})");
-    }
-
-    [Fact]
-    public void TheDarkBackdrop_NoGradingFallsBackToTheMidpoint()
-    {
-        Assert.Equal((WaveePalette.BackdropDarkAMax + WaveePalette.BackdropDarkAMin) * 0.5f,
-            WaveePalette.BackdropAlphaDark(null), 3);
+        float expected = theme == ThemeKind.Dark ? WaveePalette.PageToneDarkL : WaveePalette.PageToneLightL;
+        float moody = Hsl(WaveePalette.PageTone(SaturatedRed, theme)!.Value).L;      // deep red — low luminance
+        float bright = Hsl(WaveePalette.PageTone(BrightMustard, theme)!.Value).L;    // bright yellow — high luminance
+        Assert.Equal(expected, moody, 3);
+        Assert.Equal(expected, bright, 3);
+        // Stated as the user-visible property too, so a future change that merely loosens the clamp still trips here.
+        Assert.Equal(moody, bright, 3);
+        // …and the hue DOES still differ, or the pages would be indistinguishable rather than merely consistent.
+        Assert.True(MathF.Abs(Hsl(WaveePalette.PageTone(SaturatedRed, theme)!.Value).H
+                            - Hsl(WaveePalette.PageTone(BrightMustard, theme)!.Value).H) > 10f,
+            "the two records must still read as different colours");
     }
 
     /// <summary>The clamp box, stated as an assertion. A saturated cover lands INSIDE it in both themes — the tone is
@@ -236,9 +247,12 @@ public class DetailPageToneTests
         Assert.Contains("plane.Watch(", leaves);
         Assert.Contains("Fill = Prop.Of(", leaves);
         Assert.Contains("BrushTransitionMs = WaveeMotion.Standard", leaves);
-        // The background extension is the BAKED image blur (one derived texture, then an ordinary quad), never the
-        // per-frame self-blur layer.
-        Assert.Contains("BakedBlur", leaves);
+        // NOTHING IS SAMPLED FROM THE COVER AT PAGE SCALE. The plane is the clamped tone and (in hero-only mode) a
+        // gradient band of it — never a copy of the artwork. The blurred "background extension" that used to sit on top
+        // is deleted because its loudness tracked the SLEEVE's brightness, so the same page read two ways; see
+        // CoverPageTonePlane's tombstone and CoverBrightnessCannotChangeThePagesBrightness above. Both spellings are
+        // barred: the baked derived-texture blur AND the per-frame offscreen-RT Gaussian.
+        Assert.DoesNotContain("BakedBlur", leaves);
         Assert.DoesNotContain(" Blur = ", leaves);   // BoxEl.Blur — the per-frame offscreen-RT Gaussian
     }
 

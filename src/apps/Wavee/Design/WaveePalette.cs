@@ -190,22 +190,14 @@ public static class WaveePalette
     public static ColorF PageToneNeutralDark { get; } = ColorF.FromRgba(0x15, 0x15, 0x15);
     public static ColorF PageToneNeutralLight { get; } = ColorF.FromRgba(0xF5, 0xF5, 0xF5);
 
-    /// <summary>The dark theme's blurred-backdrop opacity range, adapted to the COVER'S OWN BRIGHTNESS. A flat alpha
-    /// tuned on moody sleeves (the old 0.40) turns a bright mustard daylist into a bloom: on a near-black tone the
-    /// backdrop's loudness is roughly its luminance × its alpha, so the alpha must fall as the cover's luminance rises
-    /// for the perceived wash to stay level. Linear lerp of the dominant role's WCAG relative luminance:
-    /// a charcoal cover (lum ≈ 0.05) sits near <see cref="BackdropDarkAMax"/>, a bright yellow one (lum ≈ 0.7+) lands
-    /// near <see cref="BackdropDarkAMin"/>. No-grading fallback = the midpoint. The LIGHT arm stays a flat constant
-    /// (see CoverPaletteLeaves) — on a near-white ground the loudness relationship inverts and the whisper tone keeps
-    /// the range too small to matter.</summary>
-    public const float BackdropDarkAMax = 0.34f, BackdropDarkAMin = 0.14f;
-
-    public static float BackdropAlphaDark(CoverColorPlane.Scheme? scheme)
-    {
-        if (scheme is not { } s) return (BackdropDarkAMax + BackdropDarkAMin) * 0.5f;
-        float lum = ColorContrast.RelativeLuminance(Accent(s));
-        return BackdropDarkAMax + (BackdropDarkAMin - BackdropDarkAMax) * Math.Clamp(lum, 0f, 1f);
-    }
+    // THE BLURRED-BACKDROP ALPHAS ARE GONE, and this note is the tombstone. BackdropAlphaDark + BackdropDarkAMax/AMin
+    // (0.34→0.14, lerped over the dominant role's WCAG relative luminance) existed to keep the detail page's blurred
+    // cover band level across sleeves, because that band's loudness was roughly its own luminance × its alpha. It is
+    // the only quantity in this file that was a function of the ARTWORK rather than of the theme, and that is exactly
+    // why it never converged: three tunings (flat 0.40, flat 0.32 in light, this adaptive pair in dark) and a bright
+    // sleeve still bloomed while a dark one showed nothing, so the same page read as two different designs depending on
+    // the record. The band itself is deleted (see CoverPageTonePlane's tombstone) — the page is now the clamped PageTone
+    // alone, whose whole point is that lightness and saturation are the PAGE'S and only the hue is the record's.
 
     /// <summary>THE detail page's ground tone for a cover's grading, or null when there is no grading to build one
     /// from (the caller then paints nothing and the page keeps its neutral surface). See the contract above.</summary>

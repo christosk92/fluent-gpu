@@ -405,15 +405,19 @@ sealed class DetailShell : Component
             };
 
         // ── THE PAGE TONE PLANE ─────────────────────────────────────────────────────────────────────────────────
-        // ONE opaque art-derived ground for BOTH arms, mounted at the shell root behind everything. It replaces the
+        // ONE flat art-derived ground for BOTH arms, mounted at the shell root behind everything. It replaces the
         // per-arm alpha washes (the deleted detail-wash leaf): those tinted the TOP of a neutral page, which is a
         // different thing from the page HAVING a tone, and the vertical arm needed a second "immersive" wash recipe
         // stacked on top of it to survive the full-bleed cover that is also gone.
         //
-        // heroBand is what the blurred background extension occupies and where hero-only mode fades back to neutral.
-        // The vertical arm publishes its MEASURED hero height; the two-column arm has no single measured hero, so it
-        // keeps the 55 % top band the wash it replaces already faded over (the deleted HeroWash's own fade stop) — same
-        // footprint, different material.
+        // MOSTLY MICA, not a painted surface — CoverPageTonePlane owns the alphas (0.20 dark / 0.30 light) and the
+        // ratchet that got there (opaque → 0.72 → 0.45/0.90 → here, every step a user report, never reversed). Nothing
+        // is sampled from the cover at page scale either: the blurred-artwork band this plane used to carry is deleted,
+        // because its loudness tracked the SLEEVE's brightness and made the same page read two ways. See that tombstone.
+        //
+        // heroBand is now consumed by ONE thing: where hero-only mode fades back to the neutral surface. The vertical
+        // arm publishes its MEASURED hero height; the two-column arm has no single measured hero, so it keeps the 55 %
+        // top band the wash it replaces already faded over (the deleted HeroWash's own fade stop).
         bool heroOnly = settings?.Get(WaveeSettings.DetailPageToneHeroOnly) ?? false;
         // The window viewport is the pre-measure stand-in: it is larger than the page (it includes the chrome rows),
         // so the first frame's fade lands slightly low and the first real Measure corrects it.
@@ -423,9 +427,9 @@ sealed class DetailShell : Component
             : pageH * TwoColumnHeroBandFraction;
         // Mounted BEHIND the page in the root ZStack (index 1, before the page at index 2), and it is NOT inside any
         // scroller — so it is exactly what the sticky band's clip exposes: the band's unpainted region shows this
-        // plane's tone and, at the top of the page, its blurred artwork backdrop.
+        // plane's tone.
         Element tonePlane = CoverPaletteLeaves.PageTonePlane(
-            paletteUrl, liveUrl, colorWashesDisabled, heroBand, pageH, heroOnly, m.Cover,
+            paletteUrl, liveUrl, colorWashesDisabled, heroBand, pageH, heroOnly,
             key: "detail-tone:" + route.Name + ":" + Tok.Theme);
 
         // HERO SYSTEM: item 0 owns the expanded identity and the custom retained shy-header morph; the chrome pins below

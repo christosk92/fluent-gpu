@@ -250,12 +250,10 @@ public static class DetailVerticalLayout
     public static int ArtworkDecodePx(float artworkSize)
         => artworkSize <= 128f ? 256 : artworkSize <= 288f ? 512 : 1024;
 
-    /// <summary>The blurred background extension's band height: the hero's own measured extent, floored so a
-    /// not-yet-measured hero still paints a plausible band rather than a hairline.</summary>
+    /// <summary>The hero band the page tone measures against: the hero's own measured extent, floored so a
+    /// not-yet-measured hero still yields a plausible band rather than a hairline. Sole consumer is hero-only mode's
+    /// fade start (<c>CoverPageTonePlane.HeroOnlyVeil</c>) — the blurred artwork band that used to share it is deleted,
+    /// and <c>BackdropFadeFraction</c> (its mask feather, 0.6) went with it.</summary>
     public static float BackdropBandFor(float heroHeight)
         => MathF.Max(CompactIdentityHeight * 2f, heroHeight);
-
-    /// <summary>How far up the band the blurred artwork survives before the mask has fully dissolved it into the page
-    /// tone. 0.6 leaves the top ~40 % at full strength and reaches zero at the hero's own lower edge.</summary>
-    public const float BackdropFadeFraction = 0.6f;
 }

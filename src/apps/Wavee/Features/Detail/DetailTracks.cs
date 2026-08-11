@@ -238,6 +238,11 @@ sealed class TrackList : Component
         _verticalHeroHeightOut = verticalHeroHeight;
     }
 
+    // No scroll timeline is published here any more. It existed for exactly one consumer — the page-tone plane's
+    // blurred artwork band, a ZStack sibling of this scroller that had to ride its offset — and that band is deleted
+    // (see CoverPageTonePlane). The engine seam it used (ScrollEl/VirtualListEl.ScrollTimeline + ScrollBindDsl.Timeline)
+    // is general and stays; nothing in Wavee needs it today.
+
     int TrackStart => _verticalHeader && !_cfg.HasTrailing ? VerticalTrackStart : 0;
 
     // The placeholder row the engine derives the shimmer from — the REAL Row(...) with an empty track, so the skeleton
