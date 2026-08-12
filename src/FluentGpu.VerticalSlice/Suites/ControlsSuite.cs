@@ -79,6 +79,76 @@ static class ControlsSuite
         PolylineStrokeChecks(strings);
         ContextMenuChecks(strings);
         ToolTipStableWrapChecks(strings);
+        SemanticZoomChecks(strings);
+    }
+
+    static void SemanticZoomChecks(StringTable strings)
+    {
+        var zoomOut = MotionRecipes.SemanticZoomOut;
+        var zoomIn = MotionRecipes.SemanticZoomIn;
+        bool recipes = zoomOut.Dynamics == MotionTok.StandardSpring.ToDynamics()
+            && zoomOut.Enter is { Active: true, Sx: 1.08f, Sy: 1.08f, Opacity: 0f, Blur: 0f }
+            && zoomOut.Exit is { Active: true, Sx: 0.94f, Sy: 0.94f, Opacity: 0f, Blur: 0f }
+            && zoomIn.Enter is { Active: true, Sx: 0.94f, Sy: 0.94f, Opacity: 0f, Blur: 0f }
+            && zoomIn.Exit is { Active: true, Sx: 1.08f, Sy: 1.08f, Opacity: 0f, Blur: 0f };
+        Check("gate.semantic-zoom.motion uses the standard spring for directional scale+opacity only (no root blur)",
+            recipes, $"out={zoomOut.Enter}->{zoomOut.Exit} in={zoomIn.Enter}->{zoomIn.Exit}");
+
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("semantic-zoom-control", new Size2(300, 180), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var probe = new SemanticZoomControlProbe();
+        using var host = new AppHost(app, window, device, new HeadlessFontSystem(strings), strings, probe);
+        host.RunFrame();
+        bool initial = HasGlyph(device, strings, "semantic-in") && !HasGlyph(device, strings, "semantic-out");
+
+        // Latest-wins: reverse before the first frame can present the staged overview. Only the reversal completes.
+        probe.Controller.ZoomOutTo(3);
+        probe.Controller.ZoomInTo(8);
+        for (int i = 0; i < 3; i++) host.RunFrame();
+        bool reversal = HasGlyph(device, strings, "semantic-in") && probe.Started.Count == 2
+            && probe.Completed.Count == 1
+            && probe.Started[0] is { From: SemanticZoomViewKind.ZoomedIn, To: SemanticZoomViewKind.ZoomedOut,
+                                     SourceIndex: 3, DestinationIndex: 13 }
+            && probe.Completed[0].OperationId == probe.Started[1].OperationId
+            && probe.Completed.All(c => c.OperationId != probe.Started[0].OperationId);
+
+        // A direct controlled-signal write goes through the same staged path. No ItemsView means readiness is immediate.
+        probe.IsZoomedOut.Value = true;
+        for (int i = 0; i < 3; i++) host.RunFrame();
+        bool external = HasGlyph(device, strings, "semantic-out")
+            && probe.Completed.Count == 2
+            && probe.Completed[^1].To == SemanticZoomViewKind.ZoomedOut;
+
+        // An invalid map removes anchoring, not the view change.
+        probe.Controller.ZoomInTo(9);
+        for (int i = 0; i < 3; i++) host.RunFrame();
+        bool invalidStillSwaps = HasGlyph(device, strings, "semantic-in")
+            && probe.Started[^1].DestinationIndex == -1
+            && probe.Completed[^1].OperationId == probe.Started[^1].OperationId;
+
+        Check("gate.semantic-zoom.control controlled signal + controller verbs, map/invalid-map, callbacks and rapid reversal are latest-wins",
+            initial && reversal && external && invalidStillSwaps,
+            $"initial={initial} reversal={reversal} external={external} invalid={invalidStillSwaps} "
+            + $"started=[{string.Join(',', probe.Started.Select(static x => x.OperationId))}] "
+            + $"completed=[{string.Join(',', probe.Completed.Select(static x => x.OperationId))}]");
+
+        using var disabledApp = new HeadlessPlatformApp();
+        var disabledWindow = new HeadlessWindow(new WindowDesc("semantic-zoom-disabled", new Size2(220, 120), 1f));
+        disabledWindow.Show();
+        var disabledDevice = new HeadlessGpuDevice();
+        var disabledProbe = new SemanticZoomControlProbe(canChangeViews: false);
+        using var disabledHost = new AppHost(disabledApp, disabledWindow, disabledDevice,
+            new HeadlessFontSystem(strings), strings, disabledProbe);
+        disabledHost.RunFrame();
+        disabledProbe.Controller.ZoomOutTo(4);
+        disabledProbe.IsZoomedOut.Value = true;
+        for (int i = 0; i < 2; i++) disabledHost.RunFrame();
+        bool disabled = HasGlyph(disabledDevice, strings, "semantic-in")
+            && disabledProbe.Started.Count == 0 && disabledProbe.Completed.Count == 0;
+        Check("gate.semantic-zoom.disabled CanChangeViews=false rejects controller and controlled-signal changes",
+            disabled, $"in={HasGlyph(disabledDevice, strings, "semantic-in")} started={disabledProbe.Started.Count}");
     }
 
     // gate.tooltip.stableWrap — ToolTip.Wrap vs ToolTip.WrapStable, the churn contract.
@@ -8245,4 +8315,38 @@ static class ControlsSuite
         Check("gate.media-card.pointer-move-within suppresses touch and active capture", touchSuppressed && captureSuppressed,
             $"touch={touchSuppressed} capture={captureSuppressed}");
     }
+}
+
+sealed class SemanticZoomControlProbe : Component
+{
+    public readonly Signal<bool> IsZoomedOut = new(false);
+    public readonly SemanticZoomController Controller = new();
+    public readonly List<SemanticZoomViewChange> Started = [];
+    public readonly List<SemanticZoomViewChange> Completed = [];
+    private readonly bool _canChangeViews;
+
+    public SemanticZoomControlProbe(bool canChangeViews = true) => _canChangeViews = canChangeViews;
+
+    public override Element Render() => SemanticZoom.Create(
+        new SemanticZoomSlots(
+            new SemanticZoomView(new BoxEl
+            {
+                Grow = 1f,
+                Children = [new TextEl("semantic-in")],
+            }),
+            new SemanticZoomView(new BoxEl
+            {
+                Grow = 1f,
+                Children = [new TextEl("semantic-out")],
+            })),
+        new SemanticZoomOptions
+        {
+            IsZoomedOut = IsZoomedOut,
+            MapInToOut = static index => index + 10,
+            MapOutToIn = static _ => -1,
+            ViewChangeStarted = Started.Add,
+            ViewChangeCompleted = Completed.Add,
+            Controller = Controller,
+            CanChangeViews = _canChangeViews,
+        });
 }

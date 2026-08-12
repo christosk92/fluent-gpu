@@ -475,6 +475,14 @@
   "recents": {
     "itemCount": "{count, plural, one {# item} other {# items}}",
     "playedCount": "{count, plural, one {Played # track} other {Played # tracks}}",
+    "savedCount": "{count, plural, one {# song added} other {# songs added}}",
+    "overview": "Overview",
+    "playCount": "{count, plural, one {# play} other {# plays}}",
+    "mostly": "mostly {title}",
+    "nothingPlayed": "Nothing played",
+    "busiest": "Busiest: {date} · {count, plural, one {# play} other {# plays}}",
+    "soFar": "so far",
+    "jumpToDay": "Jump to {date}",
     "chip": {
       "music": "Music",
       "podcasts": "Podcasts"

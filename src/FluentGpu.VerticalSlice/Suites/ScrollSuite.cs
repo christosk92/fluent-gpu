@@ -70,6 +70,163 @@ static class ScrollSuite
         ShadowOpacityGateChecks();
         WheelFallbackRelatchChecks(strings);
         NamedScrollTimelineChecks(strings);
+        ScrollControllerFoundationChecks(strings);
+    }
+
+    sealed class ControllerProbe : IScrollController
+    {
+        public int ValuesCalls, ScrollableCalls;
+        public float Min, Max, Offset, Viewport;
+        public bool Scrollable;
+        public event Action<ScrollToRequest>? ScrollToRequested;
+        public event Action<ScrollByRequest>? ScrollByRequested;
+
+        public void SetValues(float minOffset, float maxOffset, float offset, float viewportLength)
+        {
+            ValuesCalls++;
+            Min = minOffset; Max = maxOffset; Offset = offset; Viewport = viewportLength;
+        }
+
+        public void SetIsScrollable(bool isScrollable)
+        {
+            ScrollableCalls++;
+            Scrollable = isScrollable;
+        }
+
+        public void ScrollTo(float offset, bool animate = false)
+            => ScrollToRequested?.Invoke(new ScrollToRequest(offset, animate));
+        public void ScrollBy(float delta, bool animate = false)
+            => ScrollByRequested?.Invoke(new ScrollByRequest(delta, animate));
+    }
+
+    sealed class AsbLabelsHost : Component
+    {
+        public required AnnotatedScrollBarController Controller;
+        public required Signal<IReadOnlyList<AnnotatedScrollBarLabel>> Labels;
+        public required float Height;
+        public override Element Render()
+        {
+            var labels = Labels.Value;
+            return AnnotatedScrollBar.Create(Controller, new AnnotatedScrollBarOptions
+            {
+                Labels = labels,
+                Height = Height,
+            });
+        }
+    }
+
+    static void ScrollControllerFoundationChecks(StringTable strings)
+    {
+        // The engine intentionally owns ONE observer row per viewport. The Controls mux must preserve that contract
+        // while independently change-gating exact controller geometry and the app's coarse projection.
+        var probe = new ControllerProbe();
+        int appCalls = 0;
+        var mux = new ScrollGeometryObserverMux(probe,
+            (g => g.UserScrollActive ? 1L : 0L, _ => appCalls++));
+        var rest = new ScrollGeometry(0f, 20f, 100f, 200f, 100f, 1000f, 0f, 0f, 0, false);
+        _ = mux.Project(rest); mux.OnGeometryChanged(rest);
+        var user = new ScrollGeometry(0f, 20f, 100f, 200f, 100f, 1000f, 0f, 4f, 0, true);
+        _ = mux.Project(user); mux.OnGeometryChanged(user);
+        var resized = new ScrollGeometry(0f, 20f, 100f, 240f, 100f, 1000f, 0f, 0f, 0, true);
+        _ = mux.Project(resized); mux.OnGeometryChanged(resized);
+        Check("gate.scroll.controller-mux the single geometry observer composes controller + caller with independent gates (motion-only replays caller, resize-only pushes controller)",
+            probe.ValuesCalls == 2 && appCalls == 2 && probe.ScrollableCalls == 1
+            && Near(probe.Min, 0f) && Near(probe.Max, 760f) && Near(probe.Offset, 20f)
+            && Near(probe.Viewport, 240f) && probe.Scrollable,
+            $"values={probe.ValuesCalls} app={appCalls} scrollableCalls={probe.ScrollableCalls} range={probe.Min:0.#}..{probe.Max:0.#} offset={probe.Offset:0.#} viewport={probe.Viewport:0.#}");
+
+        var publicController = new AnnotatedScrollBarController();
+        ScrollToRequest to = default; ScrollByRequest by = default;
+        int toCalls = 0, byCalls = 0;
+        publicController.ScrollToRequested += r => { to = r; toCalls++; };
+        publicController.ScrollByRequested += r => { by = r; byCalls++; };
+        publicController.SetValues(0f, 800f, 120f, 200f);
+        publicController.SetIsScrollable(true);
+        publicController.ScrollTo(360f, animate: true);
+        publicController.ScrollBy(-40f);
+        Check("gate.scroll.controller-contract AnnotatedScrollBarController publishes read-only live range state and raises typed absolute/relative requests",
+            Near(publicController.MinimumOffset.Peek(), 0f) && Near(publicController.MaximumOffset.Peek(), 800f)
+            && Near(publicController.Offset.Peek(), 120f) && Near(publicController.ViewportLength.Peek(), 200f)
+            && publicController.IsScrollable.Peek() && toCalls == 1 && Near(to.Offset, 360f) && to.Animate
+            && byCalls == 1 && Near(by.Delta, -40f) && !by.Animate,
+            $"range={publicController.MinimumOffset.Peek():0.#}..{publicController.MaximumOffset.Peek():0.#} offset={publicController.Offset.Peek():0.#} viewport={publicController.ViewportLength.Peek():0.#} to={toCalls}/{to.Offset:0.#}/{to.Animate} by={byCalls}/{by.Delta:0.#}/{by.Animate}");
+
+        var metrics = new RailMetrics(10f, 810f, 200f, 248f, 3f);
+        float[] samples = [10f, 50f, 410f, 510f, 810f];
+        bool metricsRoundTrip = true;
+        foreach (float sample in samples)
+            metricsRoundTrip &= Near(metrics.RailYToContentOffset(metrics.ContentOffsetToRailY(sample)), sample, 0.01f);
+        Check("gate.scroll.annotated-metrics RailMetrics round-trips the scrollable domain while labels/ticks/requests clamp and the max-offset thumb reaches the end",
+            metricsRoundTrip && Near(metrics.ClampScrollOffset(1010f), 810f)
+            && Near(metrics.ScrollOffsetToThumbTop(810f), metrics.ThumbTravel),
+            $"roundTrip={metricsRoundTrip} clamp={metrics.ClampScrollOffset(1010f):0.#} maxThumb={metrics.ScrollOffsetToThumbTop(810f):0.#}/{metrics.ThumbTravel:0.#}");
+
+        bool ticksPlaced = Near(metrics.ContentOffsetToTickTop(510f),
+            metrics.ContentOffsetToRailY(510f) / metrics.RailHeight * metrics.ThumbTravel);
+        Check("gate.scroll.annotated-ticks tick placement shares the RailMetrics content mapping used by labels, detail, and clicks",
+            ticksPlaced, $"rail={metrics.ContentOffsetToRailY(510f):0.#} tick={metrics.ContentOffsetToTickTop(510f):0.#}");
+
+        var collapsed = RailLabelCollision.Collapse(
+        [
+            new RailLabelContainer(0, 0f, 14f),
+            new RailLabelContainer(1, 8f, 14f),
+            new RailLabelContainer(2, 30f, 14f),
+            new RailLabelContainer(3, 40f, 14f),
+        ], 54f);
+        Check("gate.scroll.annotated-label-collapse endpoint labels win and the reverse bottom-to-top pass removes overlapping or out-of-bounds labels",
+            collapsed.Length == 4 && collapsed[0] && !collapsed[1] && !collapsed[2] && collapsed[3],
+            $"visible={string.Join(',', collapsed.Select(x => x ? 1 : 0))}");
+
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("scroll-controller", new Size2(320, 240), 1f));
+        window.Show();
+        var controller = new ControllerProbe();
+        var itemsController = new ItemsViewController();
+        int observerCalls = 0;
+        using var host = new AppHost(app, window, new HeadlessGpuDevice(),
+            new HeadlessFontSystem(strings), strings, new W0fStaticProbe
+            {
+                Build = () => ItemsView.Create(100,
+                    i => new BoxEl { Height = 40f, Children = [new TextEl($"row {i}") { Size = 13f }] },
+                    RepeatLayout.Stack(40f),
+                    new ListOptions
+                    {
+                        Controller = itemsController,
+                        Selector = SelectorVisual.None,
+                        Scroll = new ScrollOptions
+                        {
+                            VerticalScrollController = controller,
+                            OnScrollGeometryChanged = (g => g.OffsetY >= 400f ? 1L : 0L, _ => observerCalls++),
+                        },
+                    }),
+            });
+        host.RunFrame();
+        host.RunFrame();
+        var vp = itemsController.Viewport;
+        bool initial = !vp.IsNull && controller.ValuesCalls > 0 && observerCalls == 1
+            && itemsController.TryGetItemIndex(0.5f, 0.5f, out int initialIndex)
+            && initialIndex >= 0;
+
+        int beforePushes = controller.ValuesCalls;
+        controller.ScrollTo(400f);
+        host.RunFrame();
+        host.RunFrame();
+        host.Scene.TryGetScroll(vp, out var state);
+        bool afterTo = Near(state.OffsetY, 400f, 0.5f) && Near(controller.Offset, state.OffsetY, 0.5f)
+            && controller.ValuesCalls > beforePushes && observerCalls == 2
+            && itemsController.TryGetItemIndex(0.5f, 0f, out int topIndex) && topIndex == 10
+            && topIndex != 99;
+
+        controller.ScrollBy(80f);
+        host.RunFrame();
+        host.RunFrame();
+        host.Scene.TryGetScroll(vp, out state);
+        bool afterBy = Near(state.OffsetY, 480f, 0.5f) && Near(controller.Offset, state.OffsetY, 0.5f)
+            && itemsController.TryGetItemIndex(0.5f, 0f, out int nextTop) && nextTop == 12;
+
+        Check("gate.scroll.controller-roundtrip ItemsView pushes exact geometry without stealing the caller observer, serves ScrollTo/ScrollBy through ScrollIntoView, and resolves viewport points against the live layout",
+            initial && afterTo && afterBy,
+            $"initial={initial} afterTo={afterTo} afterBy={afterBy} offset={state.OffsetY:0.#} controller={controller.Offset:0.#} observer={observerCalls}");
     }
 
     // ── gate.scroll.named-timeline — CSS scroll-timeline-name / animation-timeline ────────────────────────────────
@@ -5907,17 +6064,34 @@ static class ScrollSuite
             window.Show();
             var device = new HeadlessGpuDevice();
             var fonts = new HeadlessFontSystem(strings);
-            var pos = new Signal<float>(0.2f);
+            var controller = new AnnotatedScrollBarController();
+            controller.SetValues(0f, 800f, 200f, 200f);
+            controller.SetIsScrollable(true);
+            float requested = float.NaN;
+            controller.ScrollToRequested += r => { requested = r.Offset; controller.SetValues(0f, 800f, r.Offset, 200f); };
             var lastKind = (AnnotatedScrollBarScrollKind)255;
             var root = new W0fStaticProbe
             {
                 Build = () => new BoxEl
                 {
                     Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                    Width = 360f, Height = 340f,
                     Children =
                     [
-                        AnnotatedScrollBar.Create(new[] { ("A", 0.04f), ("M", 0.5f), ("Z", 0.96f) },
-                            pos, (to, kind) => { pos.Value = to; lastKind = kind; }, height: 280f),
+                        new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Width = 200f, Height = 280f, Fill = Tok.FillSubtleSecondary },
+                        AnnotatedScrollBar.Create(controller, new AnnotatedScrollBarOptions
+                        {
+                            Height = 280f,
+                            Labels =
+                            [
+                                new AnnotatedScrollBarLabel(40f, "A"),
+                                new AnnotatedScrollBarLabel(500f, "M"),
+                                new AnnotatedScrollBarLabel(960f, "Z"),
+                            ],
+                            TickOffsets = [250f, 500f, 750f],
+                            DetailLabelAtOffset = _ => new AnnotatedScrollBarLabel(0f, "Now"),
+                            Scrolling = (to, kind) => { lastKind = kind; return true; },
+                        }),
                     ],
                 },
             };
@@ -5931,36 +6105,64 @@ static class ScrollSuite
             var railR = host.Scene.AbsoluteRect(rail);
             var thumb = Child(host.Scene, host.Scene.LastChild(rail), 0);   // last rail layer = the live-thumb row
             var thumbR = host.Scene.AbsoluteRect(thumb);
-            // Height 280 − 2×16 button cells → rail 248; pos 0.2 → thumb Y = 0.2 × (248−3) = 49.
+            var asbWrap = host.Scene.Parent(asb);
+            var row = host.Scene.Parent(asbWrap);
+            var neighbor = Child(host.Scene, row, 0);
+            if (neighbor == asbWrap) neighbor = Child(host.Scene, row, 1);
+            float asbW0 = asbR.W, neighborW0 = neighbor.IsNull ? 0f : host.Scene.AbsoluteRect(neighbor).W;
+            // Height 280 − 2×16 button cells → rail 248; offset 200 / max 800 → thumb Y = .25 × (248−3).
             Check("cp4.8 — AnnotatedScrollBar hugs the 44px LabelsGridMinWidth (no full-width panel)",
                 Near(asbR.W, 44f, 0.6f), $"w={asbR.W:0.#}");
-            Check("cp4.9 — 30×3 accent thumb, right edge == rail right edge, Y proportional to position",
+            Check("cp4.9 — 30×3 accent thumb uses RailMetrics' scroll-range mapping",
                 Near(thumbR.W, 30f) && Near(thumbR.H, 3f) && Near(thumbR.Right, railR.Right, 0.6f)
-                && Near(thumbR.Y, railR.Y + 49f, 1f),
-                $"thumb={thumbR.W:0.#}x{thumbR.H:0.#} rightGap={railR.Right - thumbR.Right:0.#} y={thumbR.Y - railR.Y:0.#} (expect 49)");
+                && Near(thumbR.Y, railR.Y + new RailMetrics(0f, 800f, 200f, 248f, 3f).ScrollOffsetToThumbTop(200f), 1f),
+                $"thumb={thumbR.W:0.#}x{thumbR.H:0.#} rightGap={railR.Right - thumbR.Right:0.#} y={thumbR.Y - railR.Y:0.#}");
             var mLabel = FindTextNode(host.Scene, strings, asb, "M");
             var mR = mLabel.IsNull ? default(RectF) : host.Scene.AbsoluteRect(mLabel);
-            Check("cp4.10 — label text right-aligned to the labels-column edge, up-shifted 5 (LabelTemplate margin)",
-                !mLabel.IsNull && Near(mR.Right, railR.Right, 1.5f) && Near(mR.Y, railR.Y + 119f, 1.5f),
-                $"rightGap={railR.Right - mR.Right:0.#} y={mR.Y - railR.Y:0.#} (expect 119)");
+            Check("cp4.10 — label text right-aligns to the labels-column edge through the default element factory",
+                !mLabel.IsNull && Near(mR.Right, railR.Right, 1.5f),
+                $"rightGap={railR.Right - mR.Right:0.#} y={mR.Y - railR.Y:0.#}");
 
-            // Hover the rail → the ghost preview row mounts (PART_VerticalThumbGhost).
+            // Hover the rail → the ghost preview row stays mounted (always-on tip is an Opacity bind, not a remount).
             int layers0 = host.Scene.ChildCount(rail);
+            var tip = Child(host.Scene, rail, 4); // labels, ticks, tooltip rail, ghost, tip, thumb
+            var tipInner = Child(host.Scene, tip, 0);
             window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(railR.X + 22f, railR.Y + 60f), 0, 0));
             host.RunFrame();
-            Check("cp4.11 — rail hover mounts the ghost thumb preview", host.Scene.ChildCount(rail) == layers0 + 1,
+            var asbHover = host.Scene.AbsoluteRect(asb);
+            var neighborHover = host.Scene.AbsoluteRect(neighbor);
+            var tipR = host.Scene.AbsoluteRect(tipInner);
+            float tipLocalY = tipR.Y - railR.Y;
+            Check("cp4.11 — rail hover keeps the compositor ghost mounted", host.Scene.ChildCount(rail) == layers0,
                 $"layers {layers0}→{host.Scene.ChildCount(rail)}");
+            Check("gate.scroll.annotated-tip-compact hover keeps the 44px footprint, a compact flag, and pointer-following Y",
+                Near(asbHover.W, asbW0, 0.6f) && Near(asbHover.W, 44f, 0.6f)
+                && neighborW0 > 40f && Near(neighborHover.W, neighborW0, 0.6f)
+                && Near(tipR.H, 40f, 2f)
+                && tipR.H < railR.H * 0.5f
+                && Near(host.Scene.Paint(tip).Opacity, 1f, 0.05f)
+                && Near(tipLocalY, 60f - 40f * 0.5f, 3f),
+                $"asbW {asbW0:0.#}→{asbHover.W:0.#} neighborW {neighborW0:0.#}→{neighborHover.W:0.#} tipH={tipR.H:0.#} tipY={tipLocalY:0.#} op={host.Scene.Paint(tip).Opacity:0.00}");
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(railR.X + 22f, railR.Y + 180f), 0, 0));
+            host.RunFrame();
+            float tipLocalY2 = host.Scene.AbsoluteRect(tipInner).Y - railR.Y;
+            bool followed = tipLocalY2 > tipLocalY + 40f;
+            window.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
+            host.RunFrame();
+            Check("gate.scroll.annotated-tip-follow leaving the rail clears the flag (opacity 0) after Y tracked the pointer",
+                followed && Near(host.Scene.Paint(tip).Opacity, 0f, 0.05f),
+                $"y1={tipLocalY:0.#} y2={tipLocalY2:0.#} followed={followed} op={host.Scene.Paint(tip).Opacity:0.00}");
 
-            // Rail click-to-jump: local Y 124 of 248 → position 0.5, kind=Click; the thumb follows the same flush.
+            // Rail click-to-jump: local Y 124 of 248 → scroll-range position 0.5, kind=Click; thumb and ghost agree.
             window.QueueInput(new InputEvent(InputKind.PointerDown, new Point2(railR.X + 22f, railR.Y + 124f), 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerUp, new Point2(railR.X + 22f, railR.Y + 124f), 0, 0));
             host.RunFrame();
             thumb = Child(host.Scene, host.Scene.LastChild(rail), 0);
             var thumbR2 = host.Scene.AbsoluteRect(thumb);
-            Check("cp4.12 — rail click jumps: onScroll(0.5, Click), thumb lands at 0.5 × (railH−3) the next frame",
-                Near(pos.Peek(), 0.5f, 0.01f) && lastKind == AnnotatedScrollBarScrollKind.Click
-                && Near(thumbR2.Y, railR.Y + 122.5f, 1f),
-                $"pos={pos.Peek():0.00} kind={lastKind} y={thumbR2.Y - railR.Y:0.#} (expect 122.5)");
+            Check("cp4.12 — rail click maps to absolute offset 400, requests it through the controller, and the thumb follows the same geometry next frame",
+                Near(requested, 400f, 0.01f) && lastKind == AnnotatedScrollBarScrollKind.Click
+                && Near(thumbR2.Y, railR.Y + new RailMetrics(0f, 800f, 200f, 248f, 3f).ScrollOffsetToThumbTop(400f), 1f),
+                $"pos={controller.Offset.Peek():0.00} kind={lastKind} y={thumbR2.Y - railR.Y:0.#}");
 
             // Top (increment) ScrollButton: a 16×16 right-aligned transparent cell stepping by SmallChange (0.05).
             var b = host.Scene.AbsoluteRect(btnUp);
@@ -5970,9 +6172,184 @@ static class ScrollSuite
             window.QueueInput(new InputEvent(InputKind.PointerDown, CenterOf(host.Scene, btnUp), 0, 0));
             window.QueueInput(new InputEvent(InputKind.PointerUp, CenterOf(host.Scene, btnUp), 0, 0));
             host.RunFrame();
-            Check("cp4.14 — increment button steps −0.05 with kind=IncrementButton",
-                Near(pos.Peek(), 0.45f, 0.01f) && lastKind == AnnotatedScrollBarScrollKind.IncrementButton,
-                $"pos={pos.Peek():0.00} kind={lastKind}");
+            Check("cp4.14 — top button is VerticalDecrement and steps by −viewport/8",
+                Near(requested, 375f, 0.01f) && lastKind == AnnotatedScrollBarScrollKind.DecrementButton,
+                $"pos={controller.Offset.Peek():0.00} kind={lastKind}");
+
+            var ghostLayer = Child(host.Scene, rail, 3); // labels, ticks, tooltip rail, ghost, tip, thumb
+            var start = new Point2(railR.X + 22f, railR.Y + 80f);
+            var outside = new Point2(railR.X + 22f, railR.Bottom + 80f);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, start, 0, 0)); host.RunFrame();
+            window.QueueInput(new InputEvent(InputKind.PointerMove, outside, 0, 0)); host.RunFrame();
+            bool heldPreview = Near(host.Scene.Paint(ghostLayer).Opacity, 1f);
+            window.QueueInput(new InputEvent(InputKind.PointerUp, outside, 0, 0)); host.RunFrame();
+            Check("gate.scroll.annotated-drag-continuity captured OnDrag tracks beyond the rail; pointer exit cannot kill the preview mid-drag and requests clamp at max",
+                Near(requested, 800f) && lastKind == AnnotatedScrollBarScrollKind.Drag && heldPreview,
+                $"requested={requested:0.#} kind={lastKind} heldPreview={heldPreview}");
+            Check("gate.scroll.annotated-tip-drag-release drag-release after an outside move clears the detail flag",
+                Near(host.Scene.Paint(tip).Opacity, 0f, 0.05f),
+                $"op={host.Scene.Paint(tip).Opacity:0.00}");
+        }
+
+        // ── Label collision with measured content heights + snapshot stability across Labels identity changes ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-asb-labels", new Size2(360, 340), 1f));
+            window.Show();
+            var controller = new AnnotatedScrollBarController();
+            controller.SetValues(0f, 800f, 0f, 200f);
+            controller.SetIsScrollable(true);
+            AnnotatedScrollBarLabel[] MakeLabels() =>
+            [
+                new AnnotatedScrollBarLabel(0f, "January"),
+                new AnnotatedScrollBarLabel(30f, "February"),
+                new AnnotatedScrollBarLabel(60f, "March"),
+                new AnnotatedScrollBarLabel(400f, "June"),
+                new AnnotatedScrollBarLabel(800f, "December"),
+            ];
+            var labelsSig = new Signal<IReadOnlyList<AnnotatedScrollBarLabel>>(MakeLabels());
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(),
+                new HeadlessFontSystem(strings), strings, new AsbLabelsHost
+                {
+                    Controller = controller,
+                    Labels = labelsSig,
+                    Height = 280f,
+                });
+            host.RunFrame();
+            for (int i = 0; i < 8; i++) host.RunFrame(); // ContentLayoutDebounceMs=50; headless step 16ms
+
+            var asb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var btnUp = Child(host.Scene, asb, 0);
+            var rail = Child(host.Scene, asb, 1);
+            var btnDown = Child(host.Scene, asb, 2);
+            var labelsGrid = Child(host.Scene, rail, 0);
+            int n = host.Scene.ChildCount(labelsGrid);
+            var visible = new bool[n];
+            var compact = true;
+            for (int i = 0; i < n; i++)
+            {
+                var node = Child(host.Scene, labelsGrid, i);
+                visible[i] = host.Scene.Paint(node).Opacity > 0.5f;
+                compact &= host.Scene.Bounds(node).H < 40f;
+            }
+            var jan = FindTextNode(host.Scene, strings, asb, "January");
+            var dec = FindTextNode(host.Scene, strings, asb, "December");
+            var janWrap = jan.IsNull ? NodeHandle.Null : host.Scene.Parent(jan);
+            var decWrap = dec.IsNull ? NodeHandle.Null : host.Scene.Parent(dec);
+            var janR = janWrap.IsNull ? default(RectF) : host.Scene.AbsoluteRect(janWrap);
+            var decR = decWrap.IsNull ? default(RectF) : host.Scene.AbsoluteRect(decWrap);
+            var upR = host.Scene.AbsoluteRect(btnUp);
+            var downR = host.Scene.AbsoluteRect(btnDown);
+            bool firstLast = n >= 5 && visible[0] && visible[n - 1];
+            bool middlesCollapsed = n >= 5 && !visible[1];
+            bool clearOfButtons = !jan.IsNull && !dec.IsNull && !janR.Overlaps(upR) && !decR.Overlaps(downR);
+            Check("gate.scroll.annotated-label-measured-collapse first/last stay visible, overlapping middles collapse, labels stay clear of the 16×16 end buttons",
+                compact && firstLast && middlesCollapsed && clearOfButtons,
+                $"visible={string.Join(',', visible.Select(v => v ? 1 : 0))} compact={compact} jan={janR} dec={decR} up={upR} down={downR}");
+
+            var before = (bool[])visible.Clone();
+            labelsSig.Value = MakeLabels(); // new instance, same contents (Wavee re-render)
+            host.RunFrame();
+            bool flashed = false;
+            int visibleCount = 0;
+            for (int i = 0; i < n; i++)
+            {
+                var node = Child(host.Scene, labelsGrid, i);
+                bool now = host.Scene.Paint(node).Opacity > 0.5f;
+                if (now) visibleCount++;
+                if (now != before[i]) flashed = true;
+            }
+            Check("gate.scroll.annotated-label-snapshot-stable a replacement Labels array keeps the previous collision layout until debounce; never all-visible",
+                !flashed && visibleCount < n && visibleCount > 0,
+                $"flashed={flashed} visibleCount={visibleCount}/{n}");
+        }
+
+        // ── Wheel-through sticky overlay: HitTestPassThrough band still scrolls via OnPointerWheel → ScrollBy ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-wheel-overlay", new Size2(320, 280), 1f));
+            window.Show();
+            var listCtl = new ItemsViewController();
+            int overlayClicks = 0, overlayWheels = 0;
+            float lastWheelDelta = 0f;
+            const float Band = 48f;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(),
+                new HeadlessFontSystem(strings), strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Width = 280f, Height = 240f, ZStack = true, ClipToBounds = true,
+                        Children =
+                        [
+                            ItemsView.Create(40,
+                                i => new BoxEl { Height = 40f, Children = [new TextEl($"row {i}") { Size = 13f }] },
+                                RepeatLayout.Stack(40f),
+                                new ListOptions
+                                {
+                                    Controller = listCtl,
+                                    SelectionMode = ItemsSelectionMode.None,
+                                    Selector = SelectorVisual.None,
+                                    Grow = 1f,
+                                }),
+                            new BoxEl
+                            {
+                                Height = Band, HitTestPassThrough = true,
+                                OnPointerWheel = e =>
+                                {
+                                    overlayWheels++;
+                                    lastWheelDelta = e.Delta;
+                                    listCtl.ScrollBy(e.Delta);
+                                    e.Handled = true;
+                                },
+                                Children =
+                                [
+                                    new BoxEl { Height = Band, Grow = 1f, OnClick = () => overlayClicks++ },
+                                ],
+                            },
+                        ],
+                    },
+                });
+            host.RunFrame();
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            var below = new Point2(140f, 120f);
+            var onBand = new Point2(140f, 24f);
+            uint t = 16;
+            window.QueueInput(new InputEvent(InputKind.Wheel, below, 0, 0, ScrollDelta: 48f, TimestampMs: t));
+            host.RunFrame(); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scBelow);
+            float offBelow = scBelow.OffsetY;
+            int wheelsAfterBelow = overlayWheels;
+            window.QueueInput(new InputEvent(InputKind.Wheel, onBand, 0, 0, ScrollDelta: 48f, TimestampMs: t += 16));
+            host.RunFrame(); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scBand);
+            window.QueueInput(new InputEvent(InputKind.PointerDown, onBand, 0, 0));
+            window.QueueInput(new InputEvent(InputKind.PointerUp, onBand, 0, 0));
+            host.RunFrame();
+            float offBeforeHiRes = scBand.OffsetY;
+            window.QueueInput(new InputEvent(InputKind.Wheel, onBand, 0, 0, ScrollDelta: 2f, TimestampMs: t += 16));
+            host.RunFrame(); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var scHiRes);
+            Check("gate.scroll.wheel-through-sticky-overlay pass-through header band forwards wheel via OnPointerWheel→ScrollBy, still clicks, and routes high-res 2 DIP deltas",
+                offBelow > 1f && wheelsAfterBelow == 0
+                && overlayWheels >= 2 && scBand.OffsetY > offBelow
+                && overlayClicks == 1
+                && Near(lastWheelDelta, 2f, 0.01f) && scHiRes.OffsetY > offBeforeHiRes,
+                $"offBelow={offBelow:0.#} wheelsBelow={wheelsAfterBelow} wheels={overlayWheels} offBand={scBand.OffsetY:0.#} clicks={overlayClicks} lastΔ={lastWheelDelta:0.#} hiRes={scHiRes.OffsetY:0.#}");
+        }
+
+        // ── GroupedListVirtualLayout sticky vs IndexAt after a programmatic jump (Issue 2 candidate a) ──
+        {
+            var gl = new GroupedListVirtualLayout([0, 8, 16], headerExtent: 32f, itemEstimate: 48f);
+            const int n = 24; const float cross = 300f;
+            _ = gl.ContentExtent(n, cross);
+            float jumped = gl.OffsetOf(16, cross) + 20f;
+            gl.Window(n, cross, 200f, jumped, 2, out _, out _);
+            int sticky = gl.StickyHeaderIndexAt(jumped);
+            int at = gl.IndexAt(jumped, cross);
+            Check("gate.scroll.grouped-sticky-after-jump StickyHeaderIndexAt after ContentExtent/Window at a later-group offset returns that group's header, not 0",
+                sticky == 16 && sticky != 0 && at >= 16,
+                $"sticky={sticky} indexAt={at} jumped={jumped:0.#} hdr16={gl.OffsetOf(16, cross):0.#}");
         }
     }
     static void ScrollHoverVirtualCheck(StringTable strings)

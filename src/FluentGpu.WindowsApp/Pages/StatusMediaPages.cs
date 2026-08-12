@@ -125,34 +125,101 @@ sealed partial class VariableSizedWrapGridPage : Component
 [GalleryPage("AnnotatedScrollBar", "AnnotatedScrollBar", "Scrolling", Icon = Icons.More)]
 sealed partial class AnnotatedScrollBarPage : Component
 {
-    // The control is a NARROW (~44px-wide) rail (WinUI AnnotatedScrollBar.xaml:4 MinWidth = LabelsGridMinWidth 44):
-    // host it in a fixed-height ROW at the right edge of a content stand-in so it hugs its natural width — never
-    // let a stretching column blow it up to the page width.
-    static readonly Signal<float> _pos = new(0.2f);
+    const int ItemCount = 9_000;
+    const float RowExtent = 44f;
+    const float SampleHeight = 320f;
+
+    // One identity-stable controller is the entire two-way seam: ItemsView publishes its live geometry while the
+    // annotated rail sends absolute/relative requests back to that same viewport.
+    static readonly AnnotatedScrollBarController _scroll = new();
+    static readonly AnnotatedScrollBarLabel[] _labels =
+    [
+        new(0f, "A"),
+        new(1_800f * RowExtent, "F"),
+        new(3_600f * RowExtent, "M"),
+        new(5_400f * RowExtent, "S"),
+        new(7_200f * RowExtent, "Z"),
+    ];
+    static readonly float[] _ticks = BuildTicks();
 
     public override Element Render() => GalleryPage.Shell("AnnotatedScrollBar",
         "A scrollbar enhanced with labels/annotations alongside the rail.",
         ExampleCard.Show(BesideContentSample));
 
-    [Sample("An AnnotatedScrollBar beside a content region (click, drag, or hold the buttons)")]
-    static Element BesideContent() => VStack(8,
+    [Sample("An AnnotatedScrollBar controlling a 9,000-row virtual list", Description = "The list publishes live scroll geometry through IScrollController. Drag or click the rail, hover for the detail flag, click ticks, or use the buttons and keyboard.")]
+    static Element BesideContent() => VStack(Spacing.M,
         new BoxEl
         {
-            Direction = 0, Height = 280f, Gap = 12f,
+            Direction = 0,
+            Height = SampleHeight,
+            Gap = Spacing.M,
+            MinWidth = 0f,
             Children =
             [
-                new BoxEl { Width = 320f, Corners = Radii.ControlAll, Fill = Tok.FillCardSecondary },   // content stand-in
-                // The position signal is the live link to the scrolled content: writes move the thumb
-                // compositor-instantly; onScroll receives every user scroll (click/drag/button).
-                AnnotatedScrollBar.Create(new[]
+                new BoxEl
                 {
-                    ("A", 0.04f), ("F", 0.25f), ("M", 0.5f), ("S", 0.75f), ("Z", 0.96f),
-                }, _pos, (to, _) => _pos.Value = to, height: 280f,
-                detailLabel: p => p < 0.125f ? "Artists A–E" : p < 0.375f ? "Artists F–L"
-                              : p < 0.625f ? "Artists M–R" : p < 0.875f ? "Artists S–Y" : "Artists Z"),
+                    Grow = 1f,
+                    Basis = 0f,
+                    MinWidth = 0f,
+                    Height = SampleHeight,
+                    Corners = Radii.ControlAll,
+                    ClipToBounds = true,
+                    Fill = Tok.FillCardSecondary,
+                    Children =
+                    [
+                        ItemsView.Create(ItemCount, Row, RepeatLayout.Stack(RowExtent), new ListOptions
+                        {
+                            Grow = 1f,
+                            ItemText = static i => "Library item " + (i + 1),
+                            Scroll = new ScrollOptions
+                            {
+                                VerticalScrollController = _scroll,
+                                SuppressScrollBar = true,
+                            },
+                        }),
+                    ],
+                },
+                AnnotatedScrollBar.Create(_scroll, new AnnotatedScrollBarOptions
+                {
+                    Labels = _labels,
+                    TickOffsets = _ticks,
+                    DetailLabelAtOffset = static offset =>
+                    {
+                        int index = Math.Clamp((int)(offset / RowExtent), 0, ItemCount - 1);
+                        return new AnnotatedScrollBarLabel(index * RowExtent, "Library item " + (index + 1));
+                    },
+                    Height = SampleHeight,
+                }),
             ],
         },
-        GalleryPage.LiveText(() => "position " + _pos.Value.ToString("0.00")));
+        GalleryPage.LiveText(() =>
+            $"offset {_scroll.Offset.Value:0} / {_scroll.MaximumOffset.Value:0}   viewport {_scroll.ViewportLength.Value:0}"));
+
+    static Element Row(int index) => new BoxEl
+    {
+        Height = RowExtent,
+        Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
+        Fill = (index & 1) == 0 ? Tok.FillCardDefault : Tok.FillCardSecondary,
+        BorderColor = Tok.StrokeDividerDefault,
+        BorderWidth = 1f,
+        AlignItems = FlexAlign.Center,
+        Children =
+        [
+            new TextEl("Library item " + (index + 1))
+            {
+                Size = 14f,
+                Color = Tok.TextPrimary,
+            },
+        ],
+    };
+
+    static float[] BuildTicks()
+    {
+        const int stride = 225;
+        var ticks = new float[(ItemCount + stride - 1) / stride];
+        for (int i = 0; i < ticks.Length; i++) ticks[i] = i * stride * RowExtent;
+        return ticks;
+    }
 }
 
 [GalleryPage("SwipeControl", "SwipeControl", "Menus & toolbars", Icon = Icons.More)]

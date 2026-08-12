@@ -904,7 +904,9 @@ public static class MediaCard
                               Action onClick, Action onPlay,
                               string? eyebrow = null, ColorF? eyebrowColor = null, string? typeChip = null, Element? trailing = null, bool large = false,
                               string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false,
-                              MenuAttach? menu = null, DragSource? drag = null, string? morphKey = null)
+                              MenuAttach? menu = null, DragSource? drag = null, string? morphKey = null,
+                              Func<Element, Element>? leadingArtwork = null, Element? metaContent = null,
+                              bool plated = true)
     {
         var hovered = new Signal<bool>(false);
         float art = large ? 84f : WaveeSize.Thumb48;
@@ -912,7 +914,7 @@ public static class MediaCard
         // hero's 84px cover takes the card rung. The old 6 was on neither.
         float r = circular ? art / 2f : (large ? Radii.Card : Radii.Control);
         float fab = large ? 44f : 30f;
-        bool hasMeta = !large && meta is { Length: > 0 };
+        bool hasMeta = !large && (meta is { Length: > 0 } || metaContent is not null);
         bool hasDetail = !large && detail is { Length: > 0 };   // the audiobook blurb line under the subtitle (Spotify shows a 2-line description)
         bool belowArt = detailBelowArt && (hasMeta || hasDetail);
         var coverStack = new BoxEl
@@ -927,6 +929,7 @@ public static class MediaCard
                 LazyOverlay(hovered, uri, onPlay, fab, cover: true, art, centered: true),
             ],
         };
+        Element leading = leadingArtwork is null ? coverStack : leadingArtwork(coverStack);
         var textKids = new System.Collections.Generic.List<Element>(3);
         if (eyebrow is { Length: > 0 })
             textKids.Add(WaveeType.Eyebrow(eyebrow) with
@@ -936,16 +939,17 @@ public static class MediaCard
             : WaveeType.TrackTitle(title) with { Grow = 1f, Basis = 0f, Wrap = TextWrap.NoWrap, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         // Subtitle as a rich caption (matches the TrackMeta Caption style: 12px / secondary): anchor spans (artist/album)
         // become accent hyperlinks that navigate on their own, independent of the row's click. Plain text renders identically.
-        textKids.Add(RichText.OfRow(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, onSubtitleNav));
+        if (subtitle.Length > 0)
+            textKids.Add(RichText.OfRow(subtitle, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, onSubtitleNav));
         if (hasMeta && !belowArt)
-            textKids.Add(Caption(meta!) with
+            textKids.Add(metaContent ?? Caption(meta!) with
             { Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
         if (hasDetail && !belowArt)
             textKids.Add(Caption(detail!) with
             { Color = Tok.TextTertiary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
         var kids = new System.Collections.Generic.List<Element>(4)
         {
-            coverStack,
+            leading,
             new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Gap = large ? Spacing.S : Spacing.XXS, Children = textKids.ToArray() },
         };
         if (typeChip is { Length: > 0 }) kids.Add(RowChip(typeChip));
@@ -953,18 +957,19 @@ public static class MediaCard
         if (belowArt)
         {
             var belowKids = new System.Collections.Generic.List<Element>(2);
-            if (hasMeta) belowKids.Add(Caption(meta!) with { Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
+            if (hasMeta) belowKids.Add(metaContent ?? Caption(meta!) with { Weight = 600, Color = Tok.TextPrimary, Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis });
             if (hasDetail) belowKids.Add(Caption(detail!) with { Color = Tok.TextSecondary, Grow = 1f, Basis = 0f, MaxLines = 2, Wrap = TextWrap.Wrap, Trim = TextTrim.CharacterEllipsis });
 
             return new BoxEl
             {
                 Direction = 1, Height = float.NaN, MinHeight = 72f, Gap = Spacing.S,
                 Padding = Edges4.All(Spacing.S),
-                Corners = Radii.CardAll,
-                Fill = Tok.FillCardSecondary,
-                HoverFill = Tok.FillCardDefault,
+                Corners = plated ? Radii.CardAll : Radii.ControlAll,
+                Fill = plated ? Tok.FillCardSecondary : ColorF.Transparent,
+                HoverFill = plated ? Tok.FillCardDefault : Tok.FillSubtleSecondary,
                 PressedFill = Tok.FillSubtleTertiary,
-                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                BorderWidth = plated ? 1f : 0f,
+                BorderColor = plated ? Tok.StrokeCardDefault : ColorF.Transparent,
                 Role = AutomationRole.Button, OnClick = onClick, Draggable = drag,
                 OnPointerMoveWithin = _ => { if (!hovered.Peek()) hovered.Value = true; },
                 OnPointerExit = () => { if (hovered.Peek()) hovered.Value = false; },
@@ -985,12 +990,14 @@ public static class MediaCard
             Padding = large ? new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M)
                     : hasDetail ? Edges4.All(Spacing.S)
                     : new Edges4(Spacing.S, 0f, Spacing.S, 0f),
-            // ONE row radius: both arms carry the same filled + stroked card chrome, so the old 8-vs-6 split is gone.
-            Corners = Radii.CardAll,
-            Fill = Tok.FillCardSecondary,
-            HoverFill = Tok.FillCardDefault,
-            PressedFill = large ? Tok.FillCardDefault : Tok.FillSubtleTertiary,
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            // Plated (home/search) keeps the filled card. Recents and other list surfaces pass plated:false —
+            // transparent rest, subtle hover wash, no stroke — matching the Zune×Fluent row prototype.
+            Corners = plated ? Radii.CardAll : Radii.ControlAll,
+            Fill = plated ? Tok.FillCardSecondary : ColorF.Transparent,
+            HoverFill = plated ? Tok.FillCardDefault : Tok.FillSubtleSecondary,
+            PressedFill = plated ? (large ? Tok.FillCardDefault : Tok.FillSubtleTertiary) : Tok.FillSubtleTertiary,
+            BorderWidth = plated ? 1f : 0f,
+            BorderColor = plated ? Tok.StrokeCardDefault : ColorF.Transparent,
             // The row is the interactive ancestor (OnClick + a no-op pointer-exit), so the cover's hover-revealed play FAB
             // resolves off ROW hover — identical to the card behavior.
             Role = AutomationRole.Button, OnClick = onClick, Draggable = drag,

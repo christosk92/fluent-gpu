@@ -88,6 +88,14 @@
   "recents": {
     "itemCount": "{count, plural, one {# item} other {# items}}",
     "playedCount": "{count, plural, one {# nummer afgespeeld} other {# nummers afgespeeld}}",
+    "savedCount": "{count, plural, one {# nummer toegevoegd} other {# nummers toegevoegd}}",
+    "overview": "Overzicht",
+    "playCount": "{count, plural, one {# keer afgespeeld} other {# keer afgespeeld}}",
+    "mostly": "vooral {title}",
+    "nothingPlayed": "Niets afgespeeld",
+    "busiest": "Drukste dag: {date} · {count, plural, one {# keer} other {# keer}}",
+    "soFar": "tot nu toe",
+    "jumpToDay": "Ga naar {date}",
     "chip": {
       "music": "Muziek",
       "podcasts": "Podcasts"

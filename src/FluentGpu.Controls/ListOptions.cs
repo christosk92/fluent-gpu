@@ -11,6 +11,9 @@ namespace FluentGpu.Controls;
 /// </summary>
 public sealed record ScrollOptions
 {
+    /// <summary>Identity-stable two-way vertical scroll controller. The viewport pushes exact range values and serves
+    /// controller-originated absolute/relative requests through the engine's programmatic scroll seam.</summary>
+    public IScrollController? VerticalScrollController { get; init; }
     /// <summary>Scroll-position restoration key (see <c>VirtualListEl.ScrollKey</c>): a stable per-content identity so a
     /// revisit lands at the saved row on the first realized window. Null ⇒ no restoration.</summary>
     public string? ScrollKey { get; init; }

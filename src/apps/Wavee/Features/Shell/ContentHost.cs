@@ -16,6 +16,8 @@ enum NavTransitionKind : byte { Forward, Back, Neutral }
 // by the active browser tab, so same-route tabs never share page state.
 sealed class ContentHost : Component
 {
+    internal const string LegacyRecentsRoute = "home-section:spotify:list:recents:main";
+
     readonly record struct PageSlot(int TabId, Route Route, NavTransitionKind Motion);
 
     readonly Signal<Route> _route;
@@ -105,6 +107,12 @@ sealed class ContentHost : Component
 
     Element PageFor(Route r)
     {
+        // Older Home documents and persisted navigation history can still carry the synthetic section route. It was
+        // never page-able (spotify:list:recents:main is not a home-section resource); render the canonical playlist4
+        // Recents destination before the generic home-section arm can claim it.
+        if (string.Equals(r.Name, LegacyRecentsRoute, StringComparison.Ordinal))
+            r = new Route("recents", r.Arg);
+
         if (r.Name == "home")
             return new BoxEl { Key = "page:home", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HomePage()) ] };

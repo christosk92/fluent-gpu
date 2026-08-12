@@ -17,6 +17,7 @@ public sealed class ItemsViewController
 {
     internal Action<int, float, bool>? BringIntoViewImpl;
     internal Func<int>? GetCurrent;
+    internal TryGetItemIndexDelegate? TryGetItemIndexImpl;
     internal Action<float>? ScrollByImpl;
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
@@ -39,6 +40,9 @@ public sealed class ItemsViewController
     internal int DisclosureProgressBucket = -1;
     internal Action<ItemDisclosureDiagnostic>? DisclosureDiagnostic;
     private long _nextDisclosureOperationId;
+
+    internal delegate bool TryGetItemIndexDelegate(float horizontalViewportRatio, float verticalViewportRatio,
+                                                   out int index);
 
     /// <summary>The REALIZED virtualized viewport node (<c>Null</c> before mount and for a non-virtual host). The seam a
     /// composing control needs to write per-viewport <c>ScrollState</c> knobs that a frozen-at-mount options record cannot
@@ -66,6 +70,16 @@ public sealed class ItemsViewController
     /// snap immediately. Animated paging (e.g. a PagedShelf's chevrons) passes true.</summary>
     public void StartBringItemIntoView(int index, float alignmentRatio = float.NaN, bool animate = false)
         => BringIntoViewImpl?.Invoke(index, alignmentRatio, animate);
+
+    /// <summary>Resolve the item under a normalized viewport point without realizing or enumerating the collection.
+    /// Returns false before the virtual viewport has live layout geometry or when the point falls outside an item.</summary>
+    public bool TryGetItemIndex(float horizontalViewportRatio, float verticalViewportRatio, out int index)
+    {
+        var resolve = TryGetItemIndexImpl;
+        if (resolve is not null) return resolve(horizontalViewportRatio, verticalViewportRatio, out index);
+        index = -1;
+        return false;
+    }
 
     /// <summary>Nudge the virtualized viewport by <paramref name="delta"/> DIP along its scroll axis (clamped).
     /// The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
@@ -393,6 +407,8 @@ public sealed class ItemsView : Component
     public Action<int>? ItemInvoked;
     public Action? SelectionChanged;
     public ItemsViewController? Controller;
+    /// <summary>Identity-stable two-way controller for this view's vertical viewport.</summary>
+    public IScrollController? VerticalScrollController;
     /// <summary>WinUI <c>ItemTransitionProvider</c> (ItemsView.idl:45, template-bound onto the inner repeater,
     /// ItemsView.xaml:30): the collection transition stamped onto each realized container root — Adds/Removes
     /// fade, Moves FLIP, 167ms decelerate (<see cref="ItemCollectionTransition"/>).</summary>
@@ -523,6 +539,7 @@ public sealed class ItemsView : Component
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
             Controller = o.Controller,
+            VerticalScrollController = o.Scroll?.VerticalScrollController,
             OverscanItems = o.Overscan,
             ContainerFactory = o.ContainerFactory,
             KeyOf = o.KeyOf,
@@ -584,6 +601,7 @@ public sealed class ItemsView : Component
             ItemText = o.ItemText,
             IsItemEnabled = o.IsItemEnabled,
             Controller = o.Controller,
+            VerticalScrollController = o.Scroll?.VerticalScrollController,
             OverscanItems = o.Overscan,
             Grow = o.Grow,
             SuppressScrollBar = o.Scroll?.SuppressScrollBar ?? false,
@@ -816,6 +834,18 @@ public sealed class ItemsView : Component
         bool horizontal = spec.Horizontal;
 
         var sceneRef = Context.Scene;
+        ScrollGeometryObserverMux? geometryMux = UseMemo(
+            () => VerticalScrollController is null || horizontal
+                ? null
+                : new ScrollGeometryObserverMux(VerticalScrollController, OnScrollGeometryChanged),
+            DepKey.Combine(DepKey.FromRef(VerticalScrollController),
+                OnScrollGeometryChanged is { } observer
+                    ? DepKey.FromRef(observer.Project, observer.Action)
+                    : DepKey.Empty));
+        var geometryObserver = geometryMux is null
+            ? OnScrollGeometryChanged
+            : ((Func<ScrollGeometry, long>)geometryMux.Project,
+               (Action<ScrollGeometry>)geometryMux.OnGeometryChanged);
 
         if (insertion is { } ins)
         {
@@ -911,6 +941,36 @@ public sealed class ItemsView : Component
             ScrollIntoView.ScrollTo(Context, vp, target, animate);
         }
 
+        bool TryGetItemAtViewport(float horizontalRatio, float verticalRatio, out int index)
+        {
+            index = -1;
+            if (sceneRef is null || count <= 0
+                || !float.IsFinite(horizontalRatio) || !float.IsFinite(verticalRatio)) return false;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return false;
+            var liveLayout = sc.Layout;
+            if (liveLayout is null) return false;
+
+            float viewportW = MathF.Max(0f, sc.ViewportW), viewportH = MathF.Max(0f, sc.ViewportH);
+            float cross = horizontal ? sc.ContentH : sc.ContentW;
+            if (cross <= 0f) cross = horizontal ? viewportH : viewportW;
+            float main = horizontal
+                ? sc.OffsetX + Math.Clamp(horizontalRatio, 0f, 1f) * viewportW
+                : sc.OffsetY + Math.Clamp(verticalRatio, 0f, 1f) * viewportH;
+
+            int candidate;
+            if (liveLayout is IMeasuredVirtualLayout measured) candidate = measured.IndexAt(main, cross);
+            else liveLayout.Window(count, cross, 1f, main, 0, out candidate, out _);
+            candidate = Math.Clamp(candidate, 0, count - 1);
+
+            var rect = liveLayout.ItemRect(candidate, cross);
+            float contentX = sc.OffsetX + Math.Clamp(horizontalRatio, 0f, 1f) * viewportW;
+            float contentY = sc.OffsetY + Math.Clamp(verticalRatio, 0f, 1f) * viewportH;
+            if (!rect.Contains(new Point2(contentX, contentY))) return false;
+            index = candidate;
+            return true;
+        }
+
         // The REALIZED container node for an index: persistent-prefix indices map 1:1 to the leading children; a normal
         // index maps to prefix + index − FirstRealized (Null when outside the window). Non-virtual hosts (Wrap/Inline
         // fallback) have no scroll state: every container is a direct child of the captured host box, so ord == index.
@@ -996,6 +1056,22 @@ public sealed class ItemsView : Component
             // never re-rendered here — its RequestRerender is already wired to WakeFrame — so this makes the
             // controller-driven scroll behave like the input-driven one.)
             (Context.RequestFrame ?? Context.RequestRerender)();
+        }
+
+        void ControllerScrollTo(ScrollToRequest request)
+        {
+            if (horizontal || sceneRef is null) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return;
+            ScrollIntoView.ScrollTo(Context, vp, request.Offset, request.Animate);
+        }
+
+        void ControllerScrollBy(ScrollByRequest request)
+        {
+            if (horizontal || sceneRef is null) return;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return;
+            ScrollIntoView.ScrollTo(Context, vp, sc.OffsetY + request.Delta, request.Animate);
         }
 
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
@@ -1233,6 +1309,7 @@ public sealed class ItemsView : Component
         {
             // WinUI StartBringItemIntoView scrolls/realizes but does NOT move focus (ItemsView.cpp:119-127).
             ctl.BringIntoViewImpl = BringIntoView;
+            ctl.TryGetItemIndexImpl = TryGetItemAtViewport;
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
@@ -1255,6 +1332,39 @@ public sealed class ItemsView : Component
             ctl.DisclosureDiagnostic = Disclosure?.Diagnostic;
             ctl.ObserveInsertionMembershipImpl = insertion is null ? null : insertion.ObserveMembership;
         }
+
+        UseEffect(() =>
+        {
+            var controller = VerticalScrollController;
+            if (controller is null || horizontal) return null;
+            controller.ScrollToRequested += ControllerScrollTo;
+            controller.ScrollByRequested += ControllerScrollBy;
+            return () =>
+            {
+                controller.ScrollToRequested -= ControllerScrollTo;
+                controller.ScrollByRequested -= ControllerScrollBy;
+                controller.SetIsScrollable(false);
+            };
+        }, DepKey.FromRef(VerticalScrollController));
+
+        UseEffect(() =>
+        {
+            var ctl = Controller;
+            if (ctl is null) return null;
+            return () =>
+            {
+                ctl.BringIntoViewImpl = null;
+                ctl.TryGetItemIndexImpl = null;
+                ctl.GetCurrent = null;
+                ctl.ScrollByImpl = null;
+                ctl.GetViewportImpl = null;
+                ctl.GetOffsetImpl = null;
+                ctl.BeginRemovalImpl = null;
+                ctl.ObserveInsertionMembershipImpl = null;
+                ctl.CompleteDisclosureImpl = null;
+                ctl.Selection = null;
+            };
+        }, DepKey.FromRef(Controller));
 
         // Seed after the changed item model has reconciled and laid out, but before paint: an expanding range therefore
         // starts clipped at zero instead of flashing once at full height.
@@ -1557,8 +1667,8 @@ public sealed class ItemsView : Component
                 ScrollTimeline = ScrollTimeline,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
-                OnScrollGeometryChanged = OnScrollGeometryChanged,
-                OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window CHANGE, overscan included)
+                OnScrollGeometryChanged = geometryObserver,
+                OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window change)
                 Snap = Snap,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
@@ -1581,8 +1691,8 @@ public sealed class ItemsView : Component
                 ScrollTimeline = ScrollTimeline,
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
-                OnScrollGeometryChanged = OnScrollGeometryChanged,
-                OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window CHANGE, overscan included)
+                OnScrollGeometryChanged = geometryObserver,
+                OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window change)
                 Snap = Snap,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent

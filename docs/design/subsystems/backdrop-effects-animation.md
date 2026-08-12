@@ -483,6 +483,11 @@ vocabulary this doc owns), the `Dsl.Expressive` token set (durations/distances/s
 `Motion`/`MotionSprings`), and ~15 named recipes. It is an opt-in app-author palette; framework controls keep their
 Fluent curves. Origin-aware scale-open uses the existing `NodePaint.OriginX/OriginY` (`BoxEl.TransformOriginX/Y`).
 
+The named control-level directional pair `MotionRecipes.SemanticZoomOut/In` uses only the already-owned opacity and
+scale channels: zoom-out brings the overview from 1.08 to 1 while detail recedes from 1 to 0.94; zoom-in reverses those
+roles. It deliberately never requests self-blur or a root layer — page-sized blur is outside the frame budget. Reduced
+motion remains a value consumed by the token/animation machinery, so `SemanticZoom` never forks its control flow.
+
 **FA-2b (as-built — persistent baked blur for static image treatments).** A static artwork blur must not use the
 dynamic self-blur layer above. `ImageEl.BakedBlur = BakedBlurSpec(sigmaDip, resolutionScale)` requests a derived
 `ImageHandle` keyed only by `{source handle, bucketed output size, sigma, resolution scale}`; viewport position,

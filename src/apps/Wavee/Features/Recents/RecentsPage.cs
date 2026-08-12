@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
@@ -44,8 +45,13 @@ sealed class RecentsPage : Component
     /// <summary>MediaCard.Row's plain arm is a fixed 64-DIP row; the measured layout seeds from that and corrects on
     /// realize, so the (defensive) track arm may differ without the viewport mis-sizing.</summary>
     const float RowHeight = 64f;
+    /// <summary>Date-header band. ModuleHeader is 20/28; 48 DIP is the house thumb rung that fits that type plus
+    /// the prototype's label + rule + count row without clipping. Distinct from <see cref="TrackRow.HeaderHeight"/>
+    /// (36), which is a playlist section label.</summary>
+    const float DateHeaderHeight = WaveeSize.Thumb48;
+    const float ChildRowHeight = WaveeSize.Thumb40;
     const int OverscanRows = 6;
-    const float PageInset = Spacing.XXL;
+    const float PageInset = Spacing.PageWide;
     /// <summary>The summary line reserves its width instead of reflowing as the count/date resolve. This engine has NO
     /// tabular-figures seam (ConcertUi and FlipCountdown both say so in as many words), so a reserved measure is the
     /// app's established substitute for tabular numerals.</summary>
@@ -60,33 +66,48 @@ sealed class RecentsPage : Component
     const string FeatureId = "mdata_esperanto";
 
     /// <summary>The recycled-slot fallback: a bound slot transiently outside the range renders nothing.</summary>
-    static readonly RecentsRow EmptyRow = new(RecentsRowKind.Group, "", "", null, null, null, null, 0, 0,
-        RecentsEntityKind.Unknown);
+    static readonly RecentsFlatItem EmptyFlat = new(RecentsFlatItemKind.Row, -1, -1, -1);
+    static readonly RecentsSnapshot PendingSeed = CreatePendingSeed();
 
     // ── reactive surface (three signals; everything else is a plain field the slots read at render time) ──────────────
     /// <summary>Bumped when hydration lands in the STORE (or a snapshot is adopted). The bound projection carries it, so
     /// exactly the realized slots re-render — the DetailTracks mechanism.</summary>
     readonly Signal<int> _epoch = new(0);
+    /// <summary>Snapshot/filter shape only. Metadata hydration must never replace the stateful grouped layout.</summary>
+    readonly Signal<int> _shapeEpoch = new(0);
     /// <summary>The selected content-type TOKEN (wire spelling), null = "All". Never a label — the label is derived.</summary>
     readonly Signal<string?> _chip = new(null);
-    /// <summary>0 = loading · 1 = ready · 2 = settled empty (offline, or an account with no plays).</summary>
-    readonly Signal<int> _state = new(0);
+    /// <summary>Exactly one disclosure is open. The wire item id is the identity; entity URIs repeat.</summary>
+    readonly Signal<string> _expandedRow = new("");
+    readonly Signal<int> _stickyHeader = new(-1);
+    readonly Signal<float> _stickyPush = new(0f);
+    readonly Signal<bool> _isZoomedOut = new(false);
+    readonly Signal<DateOnly> _calendarDay = new(DateOnly.FromDateTime(DateTime.Now));
     readonly object _washOwner = new();
 
     // ── the snapshot, owned as plain arrays (never a signal: a 1,708-element list is not a value to diff) ─────────────
     // The rows stay POINTERS for their whole life. Nothing here is ever rewritten with hydrated text — that lives in the
     // store, which is shared, persisted and updated by every other surface too.
-    RecentsRow[] _rows = Array.Empty<RecentsRow>();          // wire order
-    RecentsRow[] _display = Array.Empty<RecentsRow>();       // the chip's cut of _rows (== _rows when nothing is selected)
-    int[] _displayToRow = Array.Empty<int>();
-    bool[] _morphable = Array.Empty<bool>();                 // first occurrence of each uri → may claim the shared-element tag
+    RecentsRow[] _rows;                                      // wire order
+    RecentsRow[] _display;                                   // the chip's cut of _rows (== _rows when nothing is selected)
+    bool[] _morphable;                                       // first occurrence of each uri → may claim the shared-element tag
+    RecentsSections _sections;
+    RecentsCalendar _calendar;
     string[] _chipTokens = Array.Empty<string>();
     string[] _chipLabels = Array.Empty<string>();
     string? _revision;
+    bool _hasSnapshot;
 
     /// <summary>The resident collection the viewport reads through. Snapshot-backed on purpose: recents arrives whole,
     /// so virtualization here is about MOUNTED UI, not remote paging.</summary>
-    readonly VirtualCollection<RecentsRow> _vc = VirtualCollection<RecentsRow>.FromSnapshot(ReadOnlyMemory<RecentsRow>.Empty);
+    readonly VirtualCollection<RecentsFlatItem> _vc;
+    readonly ItemsViewController _listController = new();
+    readonly ItemsViewController _calendarController = new();
+    readonly AnnotatedScrollBarController _scrollController = new();
+    readonly SemanticZoomController _zoomController = new();
+    GroupedListVirtualLayout? _groupedLayout;
+    /// <summary>Integration seam for SemanticZoom: inline and overlay day headers share this callback.</summary>
+    internal Action<DateOnly>? DateHeaderInvoked { get; set; }
 
     // ── hydration bookkeeping. UI-THREAD ONLY: every mutation happens in Render, in Pump, or in a posted continuation. ─
     // NOTE this is NOT a metadata cache — that is the chokepoint's job. It only stops the SAME uri being handed to
@@ -111,10 +132,42 @@ sealed class RecentsPage : Component
     /// <summary>The atomic value the bound rows observe: the hydration/adoption epoch, the collection's own version
     /// (bumped by a snapshot replacement), and the collection itself — so both selectors derive solely from ONE snapshot
     /// rather than reading mutable page fields.</summary>
-    readonly record struct RowsView(int Epoch, int Version, VirtualCollection<RecentsRow> Rows);
+    readonly record struct RowsView(int Epoch, int Version, VirtualCollection<RecentsFlatItem> Rows);
 
     /// <summary>What a row displays, resolved from the STORE at render time. Never stored on the row.</summary>
     readonly record struct RowFacts(string? Title, string? Subtitle, Image? Cover);
+
+    static RecentsSnapshot CreatePendingSeed()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var rows = new RecentsRow[8];
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = new RecentsRow(
+                RecentsRowKind.Group, "pending:" + i, "", null, null, null, null, 1,
+                now.AddMinutes(-i).ToUnixTimeMilliseconds(), RecentsEntityKind.Unknown,
+                RecentsReason.Played);
+        return new RecentsSnapshot(null, rows);
+    }
+
+    static RecentsRow[] CopyRows(IReadOnlyList<RecentsRow> incoming)
+    {
+        var rows = new RecentsRow[incoming.Count];
+        for (int i = 0; i < rows.Length; i++) rows[i] = incoming[i];
+        return rows;
+    }
+
+    public RecentsPage()
+    {
+        _rows = CopyRows(PendingSeed.Rows);
+        _display = _rows;
+        var displayToRow = RecentsView.Filter(_rows, null);
+        _morphable = RecentsView.FirstOccurrence(_rows);
+        var now = DateTimeOffset.Now;
+        _sections = RecentsView.BuildSections(_rows, displayToRow, now, CultureInfo.CurrentCulture);
+        _calendar = RecentsView.DayDensity(_rows, displayToRow, now, CultureInfo.CurrentCulture);
+        _vc = VirtualCollection<RecentsFlatItem>.FromSnapshot(_sections.Items);
+        DateHeaderInvoked = OpenOverview;
+    }
 
     public override Element Render()
     {
@@ -134,11 +187,12 @@ sealed class RecentsPage : Component
         if (svc is null) return new BoxEl { Grow = 1f };
 
         // ── the cold read. One page-scoped CTS also cancels every hydration batch on unmount. ─────────────────────────
+        var recents = UseResource(ct => FetchResourceAsync(svc.Recents, ct), PendingSeed);
+
         UseEffect(() =>
         {
             var cts = new CancellationTokenSource();
             _cts = cts;
-            _ = LoadAsync(svc.Recents, cts.Token);
             return (Action?)(() =>
             {
                 _cts = null;
@@ -158,7 +212,7 @@ sealed class RecentsPage : Component
         }, DepKey.FromRef(store));
 
         int epoch = _epoch.Value;          // subscribe: hydration re-renders the chrome (summary + wash) too
-        int state = _state.Value;
+        int shapeEpoch = _shapeEpoch.Value;
         string? token = _chip.Value;
 
         // ── the shell MATERIAL (Mica wash). Recents publishes ONE leg — the most recent hydrated cover — through the
@@ -195,7 +249,7 @@ sealed class RecentsPage : Component
                 SetWash(wash);
                 // Revision sync on REACTIVATION, never on a cadence: a null diff answer means "unchanged", and the
                 // correct response to that is to do nothing at all.
-                if (_cts is { } live) _ = RevalidateAsync(svc.Recents, live.Token);
+                if (_hasSnapshot) recents.Refresh();
             },
             onDeactivated: ClearWash);
         // …and on UNMOUNT too: onDeactivated fires only on PARK, so a nav that evicts this page without parking it
@@ -213,34 +267,45 @@ sealed class RecentsPage : Component
                 Loc.Get(Strings.Detail.Filter.All),
                 "recents.chips");
 
-        Element body = state switch
-        {
-            0 => LoadingRows(),
-            2 => EmptyState(),
-            _ => List(token),
-        };
+        Element body = Skel.Region(
+            recents.Loadable,
+            content: _ => Embed.Comp(() => new RecentsSemanticSurface(this, token, shapeEpoch)) with
+            { Key = "recents-semantic:" + (token ?? "all") + ":" + shapeEpoch },
+            reveal: SkelReveal.None,
+            isEmpty: snapshot => snapshot.Rows.Count == 0,
+            onEmpty: () => EmptyState.Build(Loc.Get(Strings.Sidebar.Section.EmptyRecents)),
+            onFailed: () => ErrorState.Build(recents.Loadable.Error, onRetry: () => recents.Refresh()));
 
         var kids = new List<Element>(3) { hero };
         if (chips is not null)
             kids.Add(new BoxEl { Padding = new Edges4(PageInset, 0f, PageInset, 0f), Children = [chips] });
         kids.Add(new BoxEl
         {
-            Grow = 1f, Direction = 1, MinHeight = 0f,
-            Padding = new Edges4(PageInset, 0f, PageInset, 0f),
+            Grow = 1f, Shrink = 1f, Direction = 1, MinWidth = 0f, MinHeight = 0f,
+            Padding = new Edges4(PageInset, 0f, PageInset, PlayerDock.Reserve + Spacing.L),
             // The FLIP: a chip switch changes the list's identity (below), and this wrapper glides the swap instead of
             // cutting to a differently-sized list. Motion.ReducedMotion is a VALUE, so this is a null vs a transition,
             // never a divergent hook path.
-            Layout = Motion.ReducedMotion
-                ? null
-                : new LayoutTransition(TransitionChannels.Position | TransitionChannels.Opacity,
-                    TransitionDynamics.Tween(220f, Easing.SmoothOut),
-                    Enter: new EnterExit(Dy: 6f, Opacity: 0f, Active: true),
-                    Exit: new EnterExit(Opacity: 0f, Active: true)),
+            Layout = new LayoutTransition(TransitionChannels.Position | TransitionChannels.Opacity,
+                MotionTok.ContentResize.ToDynamics(),
+                Enter: new EnterExit(Dy: Spacing.S, Opacity: 0f, Active: true),
+                Exit: new EnterExit(Opacity: 0f, Active: true)),
             Children = [body],
         });
 
         _ = epoch;   // read above; the explicit subscription this chrome depends on
-        return new BoxEl { Direction = 1, Grow = 1f, MinHeight = 0f, Children = kids.ToArray() };
+        return new BoxEl
+        {
+            Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+            Focusable = true,
+            OnKeyDown = e =>
+            {
+                if (e.Handled || e.KeyCode != Keys.Escape || !_isZoomedOut.Peek()) return;
+                _zoomController.ZoomInTo(-1);
+                e.Handled = true;
+            },
+            Children = kids.ToArray(),
+        };
     }
 
     // ── masthead ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -250,14 +315,24 @@ sealed class RecentsPage : Component
     {
         // The count is the page's ONE authored word on this line; the window either side of it stays culture-table
         // formatting (RecentsView owns no copy and is engine-free — see its Summary doc for the seam).
-        string summary = RecentsView.Summary(_rows, _now, _culture, static n => Strings.Recents.ItemCount(n));
+        string summary = _hasSnapshot
+            ? RecentsView.Summary(_rows, _now, _culture, static n => Strings.Recents.ItemCount(n))
+            : "";
+        var title = WaveeType.SurfaceDisplay(Loc.Get(Strings.Home.Recents)) with
+        {
+            MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+            Grow = 1f, Basis = 0f,
+            Enter = new EnterExit(Dy: 10f, Opacity: 0f, Active: true),
+            Transition = MotionTok.StandardEnter,
+        };
+        var overview = Button.Create(Loc.Get(Strings.Recents.Overview), OpenOverviewFromMasthead,
+            ButtonAppearance.Subtle, ControlSize.Small, glyph: Icons.Calendar) with { Shrink = 0f };
         var lines = new List<Element>(2)
         {
-            WaveeType.SurfaceDisplay(Loc.Get(Strings.Home.Recents)) with
+            new BoxEl
             {
-                MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                Enter = new EnterExit(Dy: 10f, Opacity: 0f, Active: true),
-                Transition = MotionTok.StandardEnter,
+                Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinWidth = 0f,
+                Children = [title, overview],
             },
         };
         if (summary.Length > 0)
@@ -274,89 +349,738 @@ sealed class RecentsPage : Component
         {
             Direction = 1, Gap = Spacing.XS,
             Padding = new Edges4(PageInset, Spacing.XXL, PageInset, Spacing.L),
-            Stagger = Motion.ReducedMotion ? 0f : HeroStaggerMs,
+            Stagger = HeroStaggerMs,
             Children = lines.ToArray(),
         };
     }
 
-    static Element EmptyState() => new BoxEl
+    // ── the list ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    void OpenOverviewFromMasthead()
     {
-        Grow = 1f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Children =
-        [
-            new TextEl(Loc.Get(Strings.Sidebar.Section.EmptyRecents))
-                { Size = 14f, LineHeight = 20f, Color = Tok.TextTertiary, MaxLines = 2, Wrap = TextWrap.Wrap },
-        ],
-    };
-
-    /// <summary>The cold shape: the REAL row skeleton, so the swap to content is a fill rather than a re-layout.</summary>
-    static Element LoadingRows()
-    {
-        var rows = new Element[8];
-        for (int i = 0; i < rows.Length; i++) rows[i] = SkeletonRow() with { Key = "recents-skel:" + i };
-        return new BoxEl { Direction = 1, Grow = 1f, MinHeight = 0f, Children = rows };
+        _calendarDay.Value = DateOnly.FromDateTime(_now.ToOffset(_now.Offset).DateTime);
+        _zoomController.ZoomOutTo(-1);
     }
 
-    // ── the list ──────────────────────────────────────────────────────────────────────────────────────────────────────
-    Element List(string? token)
+    void OpenOverview(DateOnly date)
     {
-        // Hoisted stateful layout: a measured layout carries the Fenwick extent table + the scroll anchor, so rebuilding
-        // one per render would throw that state away every frame.
-        var layout = UseMemo(static () => new MeasuredStackVirtualLayout(RowHeight), DepKey.Empty);
-        var view = UseComputed(() => new RowsView(_epoch.Value, _vc.Version.Value, _vc));
-        var items = UseMemo(() => BoundItems.Project(
-            view,
-            static s => s.Rows.CountOr0,
-            static (s, i) => s.Rows[i] ?? EmptyRow,
-            EmptyRow), DepKey.Empty);
+        _calendarDay.Value = date;
+        _zoomController.ZoomOutTo(HeaderFlatFor(date));
+    }
 
-        return ItemsView.CreateBound(
-            items,
-            scope => Embed.Comp(() => new RecentsRowSlot(this, scope)),
-            RepeatLayout.Measured(layout),
-            new ListOptions<RecentsRow>
+    int HeaderFlatFor(DateOnly date)
+    {
+        for (int i = 0; i < _sections.HeaderDates.Length; i++)
+            if (_sections.HeaderDates[i] == date) return _sections.HeaderIndices[i];
+        return -1;
+    }
+
+    int MonthFor(DateOnly date)
+    {
+        for (int i = 0; i < _calendar.Months.Length; i++)
+        {
+            var month = _calendar.Months[i];
+            if (month.Year == date.Year && month.Month == date.Month) return i;
+        }
+        return -1;
+    }
+
+    int MapInToOut(int flatIndex)
+    {
+        if ((uint)flatIndex >= (uint)_sections.Items.Length) return -1;
+        int day = _sections.Items[flatIndex].DayIndex;
+        return (uint)day < (uint)_sections.HeaderDates.Length ? MonthFor(_sections.HeaderDates[day]) : -1;
+    }
+
+    int MapOutToIn(int monthIndex)
+    {
+        DateOnly selected = _calendarDay.Peek();
+        int exact = HeaderFlatFor(selected);
+        if (exact >= 0 && MonthFor(selected) == monthIndex) return exact;
+        if ((uint)monthIndex >= (uint)_calendar.Months.Length) return -1;
+        var month = _calendar.Months[monthIndex];
+        for (int i = 0; i < _sections.HeaderDates.Length; i++)
+        {
+            var date = _sections.HeaderDates[i];
+            if (date.Year == month.Year && date.Month == month.Month) return _sections.HeaderIndices[i];
+        }
+        return -1;
+    }
+
+    sealed class RecentsSemanticSurface : Component
+    {
+        readonly RecentsPage _page;
+        readonly string? _token;
+        readonly int _shapeEpoch;
+
+        public RecentsSemanticSurface(RecentsPage page, string? token, int shapeEpoch)
+        {
+            _page = page; _token = token; _shapeEpoch = shapeEpoch;
+        }
+
+        public override Element Render()
+        {
+            Element detail = Embed.Comp(() => new RecentsListSurface(_page, _token, _shapeEpoch)) with
+            { Key = "recents-detail:" + (_token ?? "all") + ":" + _shapeEpoch };
+            Element rail = Embed.Comp(() => new RecentsRail(_page, _shapeEpoch)) with
+            { Key = "recents-rail:" + (_token ?? "all") + ":" + _shapeEpoch };
+            Element zoomedIn = new BoxEl
+            {
+                Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.M,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Direction = 1, Grow = 1f, Shrink = 1f, Basis = 0f, MinWidth = 0f, MinHeight = 0f,
+                        Children = [detail],
+                    },
+                    rail,
+                ],
+            };
+            Element zoomedOut = Embed.Comp(() => new CalendarOverviewSurface(_page, _shapeEpoch)) with
+            { Key = "recents-calendar:" + _shapeEpoch };
+            return SemanticZoom.Create(
+                new SemanticZoomSlots(
+                    new SemanticZoomView(zoomedIn, _page._listController),
+                    new SemanticZoomView(zoomedOut, _page._calendarController)),
+                new SemanticZoomOptions
+                {
+                    IsZoomedOut = _page._isZoomedOut,
+                    Controller = _page._zoomController,
+                    MapInToOut = _page.MapInToOut,
+                    MapOutToIn = _page.MapOutToIn,
+                });
+        }
+    }
+
+    /// <summary>Owns the annotated rail so extent-signal churn cannot rebuild label arrays. GroupedListVirtualLayout
+    /// ignores cross size (<c>OffsetOf</c>/<c>IndexAt</c> take 0); labels are memoized on <see cref="_shapeEpoch"/>.</summary>
+    sealed class RecentsRail : Component
+    {
+        readonly RecentsPage _page;
+        readonly int _shapeEpoch;
+        readonly Func<AnnotatedScrollBarLabel[]> _labels;
+        readonly Func<float[]> _ticks;
+        readonly Func<float, AnnotatedScrollBarLabel?> _detail;
+
+        public RecentsRail(RecentsPage page, int shapeEpoch)
+        {
+            _page = page;
+            _shapeEpoch = shapeEpoch;
+            _labels = page.RailLabels;
+            _ticks = page.RailTicks;
+            _detail = page.RailDetail;
+        }
+
+        public override Element Render()
+        {
+            var bounds = UseMeasuredBounds().Value;
+            float viewport = _page._scrollController.ViewportLength.Value;
+            float railHeight = bounds.H > 0f ? bounds.H : viewport > 0f ? viewport : WaveeSize.RailAlbum;
+            // Shape is the identity; the 0/1 bit lets the first post-layout render populate labels if this
+            // rail mounted before RecentsListSurface assigned _groupedLayout. Not a per-scroll key.
+            int layoutReady = _page._groupedLayout is null ? 0 : 1;
+            var labels = UseMemo(_labels, DepKey.From(_shapeEpoch, layoutReady));
+            var ticks = UseMemo(_ticks, DepKey.From(_shapeEpoch, layoutReady));
+            return new BoxEl
+            {
+                AlignSelf = FlexAlign.Stretch, MinHeight = 0f,
+                Children =
+                [
+                    AnnotatedScrollBar.Create(_page._scrollController, new AnnotatedScrollBarOptions
+                    {
+                        Labels = labels,
+                        TickOffsets = ticks,
+                        Height = railHeight,
+                        DetailLabelAtOffset = _detail,
+                    }),
+                ],
+            };
+        }
+    }
+
+    AnnotatedScrollBarLabel[] RailLabels()
+    {
+        var layout = _groupedLayout;
+        if (layout is null) return [];
+        var labels = new List<AnnotatedScrollBarLabel>();
+        int priorMonth = -1, priorYear = -1;
+        for (int i = 0; i < _sections.HeaderIndices.Length; i++)
+        {
+            DateOnly date = _sections.HeaderDates[i];
+            if (date == DateOnly.MinValue || date.Month == priorMonth && date.Year == priorYear) continue;
+            // The rail is LabelsMinWidth (44). Full month names ellipsis to "Augu.." and make the
+            // labels unreadable; abbreviated months fit, and the pointer flag carries the day.
+            string text = priorYear != date.Year
+                ? date.ToString("MMM yy", _culture)
+                : date.ToString("MMM", _culture);
+            labels.Add(new AnnotatedScrollBarLabel(layout.OffsetOf(_sections.HeaderIndices[i], 0f), text));
+            priorMonth = date.Month; priorYear = date.Year;
+        }
+        return labels.ToArray();
+    }
+
+    float[] RailTicks()
+    {
+        var layout = _groupedLayout;
+        if (layout is null) return [];
+        var ticks = new float[_sections.HeaderIndices.Length];
+        for (int i = 0; i < ticks.Length; i++) ticks[i] = layout.OffsetOf(_sections.HeaderIndices[i], 0f);
+        return ticks;
+    }
+
+    AnnotatedScrollBarLabel? RailDetail(float offset)
+    {
+        var layout = _groupedLayout;
+        if (layout is null || _sections.Items.Length == 0) return null;
+        int flat = Math.Clamp(layout.IndexAt(offset, 0f), 0, _sections.Items.Length - 1);
+        int day = _sections.Items[flat].DayIndex;
+        if ((uint)day >= (uint)_sections.HeaderLabels.Length) return null;
+        return new AnnotatedScrollBarLabel(layout.OffsetOf(_sections.HeaderIndices[day], 0f),
+            _sections.HeaderLabels[day]);
+    }
+
+    sealed class CalendarOverviewSurface : Component
+    {
+        readonly RecentsPage _page;
+        readonly int _shapeEpoch;
+        public CalendarOverviewSurface(RecentsPage page, int shapeEpoch) { _page = page; _shapeEpoch = shapeEpoch; }
+
+        public override Element Render()
+        {
+            _ = _page._epoch.Value;
+            DateOnly selected = _page._calendarDay.Value;
+            var calendar = _page._calendar;
+            Element months = ItemsView.Create(
+                calendar.Months.Length,
+                i => Embed.Comp(() => new CalendarMonthCard(_page, i)) with
+                { Key = "recents-month:" + calendar.Months[i].Year + ":" + calendar.Months[i].Month },
+                RepeatLayout.GridFit(WaveeSize.RailAlbum, Spacing.PageWide,
+                    WaveeSize.RailAlbum + WaveeSize.Thumb64 + Spacing.PageWide),
+                new ListOptions
+                {
+                    SelectionMode = ItemsSelectionMode.None,
+                    Selector = SelectorVisual.None,
+                    Controller = _page._calendarController,
+                    Grow = 1f,
+                    Overscan = 1,
+                    KeyOf = i => "recents-month:" + calendar.Months[i].Year + ":" + calendar.Months[i].Month,
+                    Scroll = new ScrollOptions
+                    {
+                        ScrollKey = "recents-calendar:" + _shapeEpoch,
+                        AutoEdgeFade = true,
+                    },
+                });
+            return new BoxEl
+            {
+                Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.L,
+                OnPointerExit = _page.ResetCalendarDay,
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Direction = 1, Shrink = 0f, Gap = Spacing.XXS,
+                        Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, 0f),
+                        Children =
+                        [
+                            Caption(selected.ToString("dddd d MMMM", _page._culture)) with
+                            { Weight = 600, Color = Tok.TextPrimary },
+                            Caption(_page.CalendarReadout(selected)) with
+                            { Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                        ],
+                    },
+                    months,
+                ],
+            };
+        }
+    }
+
+    sealed class CalendarMonthCard : Component
+    {
+        readonly RecentsPage _page;
+        readonly int _monthIndex;
+        public CalendarMonthCard(RecentsPage page, int monthIndex) { _page = page; _monthIndex = monthIndex; }
+
+        public override Element Render()
+        {
+            var month = _page._calendar.Months[_monthIndex];
+            DateOnly today = DateOnly.FromDateTime(_page._now.ToOffset(_page._now.Offset).DateTime);
+            var weekNames = new Element[7];
+            var firstDay = _page._culture.DateTimeFormat.FirstDayOfWeek;
+            for (int i = 0; i < weekNames.Length; i++)
+            {
+                int day = ((int)firstDay + i) % 7;
+                weekNames[i] = new BoxEl
+                {
+                    Grow = 1f, Basis = 0f, MinWidth = 0f, Height = Spacing.XXL,
+                    AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+                    Children = [Caption(_page._culture.DateTimeFormat.AbbreviatedDayNames[day]) with
+                    { Color = Tok.TextTertiary, MaxLines = 1 }],
+                };
+            }
+
+            var rows = new List<Element>(7)
+            {
+                new BoxEl { Direction = 0, Children = weekNames },
+            };
+            DateOnly first = new(month.Year, month.Month, 1);
+            DateOnly gridFirst = first.AddDays(-month.FirstDayOffset);
+            for (int week = 0; week < 6; week++)
+            {
+                var cells = new Element[7];
+                for (int column = 0; column < 7; column++)
+                {
+                    DateOnly date = gridFirst.AddDays(week * 7 + column);
+                    cells[column] = _page.CalendarCell(date, month, today, _monthIndex);
+                }
+                rows.Add(new BoxEl { Direction = 0, Children = cells });
+            }
+
+            string monthTitle = first.ToString("MMMM", _page._culture);
+            string total = Strings.Recents.PlayCount(month.TotalPlays);
+            string busiest = month.BusiestDay is { } busy
+                ? Strings.Recents.Busiest(busy.ToString("d MMMM", _page._culture), month.BusiestDayPlays)
+                : Loc.Get(Strings.Recents.NothingPlayed);
+            if (month.IsCurrentMonth) total += " · " + Loc.Get(Strings.Recents.SoFar);
+            return new BoxEl
+            {
+                Direction = 1, MinWidth = WaveeSize.RailAlbum, Gap = Spacing.S,
+                OnPointerExit = _page.ResetCalendarDay,
+                Children =
+                [
+                    WaveeType.ModuleHeader(monthTitle) with
+                    {
+                        Color = month.IsCurrentMonth ? WaveeAccent.Decor : Tok.TextPrimary,
+                        MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                    },
+                    Caption(total) with { Color = Tok.TextTertiary, MaxLines = 1 },
+                    Caption(busiest) with { Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                    new BoxEl { Direction = 1, Gap = Spacing.XS, Children = rows.ToArray() },
+                ],
+            };
+        }
+    }
+
+    RecentsCalendarDay? CalendarDay(DateOnly date)
+    {
+        int monthIndex = MonthFor(date);
+        if ((uint)monthIndex >= (uint)_calendar.Months.Length) return null;
+        var month = _calendar.Months[monthIndex];
+        int day = date.Day - 1;
+        return (uint)day < (uint)month.Days.Length ? month.Days[day] : null;
+    }
+
+    string CalendarReadout(DateOnly date)
+    {
+        var day = CalendarDay(date);
+        int plays = day?.PlayCount ?? 0;
+        string readout = Strings.Recents.PlayCount(plays);
+        if (day?.TopItem is { } top && (uint)top.OriginalRowIndex < (uint)_rows.Length
+            && FactsFor(_rows[top.OriginalRowIndex]).Title is { Length: > 0 } title)
+            readout += " · " + Strings.Recents.Mostly(title);
+        return readout;
+    }
+
+    string CalendarTooltip(DateOnly date)
+        => date.ToString("dddd d MMMM", _culture) + " · " + CalendarReadout(date);
+
+    void ResetCalendarDay()
+        => _calendarDay.Value = DateOnly.FromDateTime(_now.ToOffset(_now.Offset).DateTime);
+
+    static ColorF DensityFill(int level)
+    {
+        if (level <= 0) return ColorF.Transparent;
+        ColorF accent = WaveeAccent.Decor;
+        float t = Math.Clamp(level, 1, 5) / 5f;
+        float alpha = Tok.AccentSubtle.A + (accent.A - Tok.AccentSubtle.A) * t;
+        return accent with { A = alpha };
+    }
+
+    Element CalendarCell(DateOnly date, RecentsCalendarMonth month, DateOnly today, int monthIndex)
+    {
+        bool inMonth = date.Year == month.Year && date.Month == month.Month;
+        var day = inMonth ? CalendarDay(date) : null;
+        bool isToday = inMonth && date == today;
+        bool hasRows = inMonth && HeaderFlatFor(date) >= 0;
+        var numeral = Body(date.Day.ToString(_culture)) with
+        {
+            Weight = (ushort)(isToday ? 700 : 400),
+            Color = !inMonth ? Tok.TextDisabled : isToday ? WaveeAccent.Decor : Tok.TextPrimary,
+            MaxLines = 1,
+        };
+        var children = new List<Element>(2) { numeral };
+        if (isToday)
+            children.Add(new BoxEl
+            {
+                Width = Spacing.XS, Height = Spacing.XS, Corners = Radii.FullAll,
+                Fill = WaveeAccent.Decor, AlignSelf = FlexAlign.End,
+            });
+        var cell = new BoxEl
+        {
+            Grow = 1f, Basis = 0f, MinWidth = 0f, Height = WaveeSize.Thumb40,
+            Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = Radii.ControlAll,
+            Fill = inMonth ? DensityFill(day?.DensityLevel ?? 0) : Tok.FillSubtleTransparent,
+            BorderWidth = isToday ? Spacing.XXS : 0f,
+            BorderColor = isToday ? WaveeAccent.Decor : ColorF.Transparent,
+            Shadow = isToday ? new ShadowSpec(Spacing.M, 0f, 0f, Tok.AccentSubtle) : null,
+            Role = hasRows ? AutomationRole.Button : AutomationRole.None,
+            Focusable = hasRows,
+            TabStop = hasRows,
+            Cursor = hasRows ? CursorId.Hand : CursorId.Arrow,
+            OnHoverMove = inMonth ? _ => _calendarDay.SetIfChanged(date) : null,
+            OnClick = hasRows ? () =>
+            {
+                _calendarDay.Value = date;
+                _zoomController.ZoomInTo(monthIndex);
+            } : null,
+            OnFocusChanged = hasRows ? focused =>
+            {
+                if (focused) _calendarDay.SetIfChanged(date); else ResetCalendarDay();
+            } : null,
+            Children = children.ToArray(),
+        };
+        if (!inMonth) return cell;
+        // ToolTip.Wrap is layout-transparent on AlignSelf but does not carry Grow; the flex track owns the
+        // 7-column contract so the wrap cannot collapse the cell into a content-sized accent bar.
+        return new BoxEl
+        {
+            Grow = 1f, Basis = 0f, MinWidth = 0f, Height = WaveeSize.Thumb40, Direction = 1,
+            Children = [ToolTip.Wrap(cell, CalendarTooltip(date))],
+        };
+    }
+
+    sealed class RecentsListSurface : Component
+    {
+        readonly RecentsPage _page;
+        readonly string? _token;
+        readonly int _shapeEpoch;
+
+        public RecentsListSurface(RecentsPage page, string? token, int shapeEpoch)
+        {
+            _page = page; _token = token; _shapeEpoch = shapeEpoch;
+        }
+
+        public override Element Render()
+        {
+            var layout = UseMemo(
+                () => new GroupedListVirtualLayout(_page._sections.HeaderIndices, DateHeaderHeight, RowHeight),
+                DepKey.From(_shapeEpoch));
+            _page._groupedLayout = layout;
+            var view = UseComputed(() => new RowsView(_page._epoch.Value, _page._vc.Version.Value, _page._vc));
+            var items = UseMemo(() => BoundItems.Project(
+                view,
+                static s => s.Rows.CountOr0,
+                static (s, i) => s.Rows[i],
+                EmptyFlat), DepKey.Empty);
+
+            Element list = ItemsView.CreateBound<RecentsFlatItem>(
+                items,
+                (BoundItemScope<RecentsFlatItem> scope) => Embed.Comp(() => new RecentsRowSlot(_page, scope)),
+                RepeatLayout.Measured(layout),
+                new ListOptions<RecentsFlatItem>
             {
                 // The rows are cards with their own chrome; a list selector here would be a second, competing cue.
                 SelectionMode = ItemsSelectionMode.None,
                 Selector = SelectorVisual.None,
                 IsItemInvokedEnabled = true,
-                OnInvokedTyped = (_, row) => Open(row),
-                ItemTextTyped = (_, row) => FactsFor(row).Title ?? "",
+                OnInvokedTyped = (_, item) => _page.InvokeFlat(item),
+                ItemTextTyped = (_, item) => _page.TextFor(item),
+                Controller = _page._listController,
                 Overscan = OverscanRows,
                 Grow = 1f,
                 // One recycle pool per row KIND: a group card's slot must never rebind into the (defensive) track-grid
                 // shape — a cross-shape reuse forces a full rebuild instead of a cheap rebind.
-                ContentType = ContentTypeOf,
-                Scroll = new ScrollOptions { ScrollKey = "recents:" + (token ?? "all"), AutoEdgeFade = true },
+                ContentType = _page.ContentTypeOf,
+                Scroll = new ScrollOptions
+                {
+                    ScrollKey = "recents:" + (_token ?? "all"),
+                    AutoEdgeFade = true,
+                    VerticalScrollController = _page._scrollController,
+                    SuppressScrollBar = true,
+                    OnScrollGeometryChanged = (_page.ProjectSticky, _page.UpdateSticky),
+                },
                 // The engine's own cold-realize stagger: bounded to the REALIZED window by construction, which is the
                 // only kind of entrance a 1,708-row list may have.
-                Entrance = new EntranceOptions { StaggerColdRealize = !Motion.ReducedMotion },
+                Entrance = new EntranceOptions { StaggerColdRealize = true },
                 // The point of the page: the realized window moved → hydrate what it still misses.
-                OnVisibleRange = OnVisibleRange,
-            }) with { Key = "recents-list:" + (token ?? "all") };
+                OnVisibleRange = _page.OnVisibleRange,
+                KeyOf = _page.FlatKey,
+            }) with { Key = "recents-list:" + (_token ?? "all") + ":" + _shapeEpoch };
+
+            Element overlay = Embed.Comp(() => new StickyDayHeader(_page)) with
+            { Key = "recents-sticky:" + (_token ?? "all") + ":" + _shapeEpoch };
+            return new BoxEl
+            {
+                Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
+                ZStack = true, ClipToBounds = true,
+                Children = [list, overlay],
+            };
+        }
     }
 
     int ContentTypeOf(int index)
     {
-        var display = _display;
-        return (uint)index < (uint)display.Length ? (int)display[index].Kind : 0;
+        var sections = _sections;
+        if ((uint)index >= (uint)sections.Items.Length) return 0;
+        var flat = sections.Items[index];
+        if (flat.Kind == RecentsFlatItemKind.DateHeader) return 0;
+        int rowIndex = flat.OriginalRowIndex;
+        return (uint)rowIndex < (uint)_rows.Length ? 1 + (int)_rows[rowIndex].Kind : 1;
     }
 
     // ── rows ──────────────────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>A recents row is a card ONE realized slot renders. Its own component so the slot re-renders on its own
     /// item subscription (an index rebind, or a hydration epoch) without the page re-rendering.</summary>
-    sealed class RecentsRowSlot : Component
+    string FlatKey(int index)
+    {
+        var sections = _sections;
+        if ((uint)index >= (uint)sections.Items.Length) return "recents:missing:" + index;
+        var item = sections.Items[index];
+        if (item.Kind == RecentsFlatItemKind.DateHeader) return "recents:day:" + (uint)item.DayIndex;
+        int rowIndex = item.OriginalRowIndex;
+        return (uint)rowIndex < (uint)_rows.Length ? "recents:item:" + _rows[rowIndex].ItemId : "recents:missing:" + index;
+    }
+
+    void InvokeFlat(RecentsFlatItem item)
+    {
+        if (item.Kind != RecentsFlatItemKind.Row) return;
+        int rowIndex = item.OriginalRowIndex;
+        if ((uint)rowIndex >= (uint)_rows.Length) return;
+        var row = _rows[rowIndex];
+        if (CanExpand(row)) ToggleExpanded(row);
+        else Open(row);
+    }
+
+    string TextFor(RecentsFlatItem item)
+    {
+        if (item.Kind == RecentsFlatItemKind.DateHeader)
+            return (uint)item.DayIndex < (uint)_sections.HeaderLabels.Length ? _sections.HeaderLabels[item.DayIndex] : "";
+        int rowIndex = item.OriginalRowIndex;
+        return (uint)rowIndex < (uint)_rows.Length ? FactsFor(_rows[rowIndex]).Title ?? "" : "";
+    }
+
+    long ProjectSticky(ScrollGeometry geometry)
+    {
+        StickyMetrics(geometry, out int header, out float push);
+        int quantized = (int)MathF.Round(push / Spacing.XXS);
+        return ((long)(header + 1) << 32) | (uint)quantized;
+    }
+
+    void UpdateSticky(ScrollGeometry geometry)
+    {
+        StickyMetrics(geometry, out int header, out float push);
+        float quantized = MathF.Round(push / Spacing.XXS) * Spacing.XXS;
+        if (_stickyHeader.Peek() != header) _stickyHeader.Value = header;
+        if (!_stickyPush.Peek().Equals(quantized)) _stickyPush.Value = quantized;
+        ProbeStickyAlignment(geometry, header);
+    }
+
+    /// <summary>Issue 2 DEBUG probe: Today-over-July is not a grouping bug if the same PlayedAtMs feeds both
+    /// the sticky header and the realized rows. Fail when a row's calendar day disagrees with its section header,
+    /// or when the stuck header's day disagrees with the first visible row.</summary>
+    [Conditional("DEBUG")]
+    void ProbeStickyAlignment(ScrollGeometry geometry, int stickyFlat)
+    {
+        var layout = _groupedLayout;
+        var sections = _sections;
+        var rows = _rows;
+        if (layout is null || sections.Items.Length == 0) return;
+        TimeSpan offset = _now.Offset;
+        ProbeFlatDate(sections, rows, stickyFlat, offset, "sticky");
+        int at = layout.IndexAt(geometry.OffsetY, 0f);
+        for (int d = -2; d <= 2; d++)
+            ProbeFlatDate(sections, rows, at + d, offset, "visible");
+
+        if ((uint)stickyFlat >= (uint)sections.Items.Length) return;
+        int stickyDay = sections.Items[stickyFlat].DayIndex;
+        int visibleDay = -1;
+        int last = Math.Min(sections.Items.Length, at + 6);
+        for (int i = Math.Max(0, at); i < last; i++)
+        {
+            if (sections.Items[i].Kind != RecentsFlatItemKind.Row) continue;
+            visibleDay = sections.Items[i].DayIndex;
+            break;
+        }
+        if (visibleDay < 0 || stickyDay == visibleDay) return;
+        Debug.Fail($"recents sticky day {stickyDay} != first visible row day {visibleDay} (flat sticky={stickyFlat} at={at})");
+    }
+
+    [Conditional("DEBUG")]
+    static void ProbeFlatDate(RecentsSections sections, RecentsRow[] rows, int flat, TimeSpan offset, string where)
+    {
+        if ((uint)flat >= (uint)sections.Items.Length) return;
+        var item = sections.Items[flat];
+        if (item.Kind != RecentsFlatItemKind.Row) return;
+        if ((uint)item.OriginalRowIndex >= (uint)rows.Length) return;
+        if ((uint)item.DayIndex >= (uint)sections.HeaderDates.Length) return;
+        long unixMs = rows[item.OriginalRowIndex].PlayedAtMs;
+        DateOnly played = unixMs <= 0
+            ? DateOnly.MinValue
+            : DateOnly.FromDateTime(DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToOffset(offset).DateTime);
+        DateOnly header = sections.HeaderDates[item.DayIndex];
+        if (played == header) return;
+        Debug.Fail($"recents {where} flat {flat}: row day {played} != header {header} (DayIndex={item.DayIndex})");
+    }
+
+    void StickyMetrics(ScrollGeometry geometry, out int header, out float push)
+    {
+        var layout = _groupedLayout;
+        var sections = _sections;
+        if (layout is null || sections.HeaderIndices.Length == 0)
+        {
+            header = -1; push = 0f; return;
+        }
+        header = layout.StickyHeaderIndexAt(geometry.OffsetY);
+        if (header < 0 || (uint)header >= (uint)sections.Items.Length)
+        {
+            header = -1; push = 0f; return;
+        }
+        int day = sections.Items[header].DayIndex;
+        if ((uint)(day + 1) >= (uint)sections.HeaderIndices.Length)
+        {
+            push = 0f; return;
+        }
+        int next = sections.HeaderIndices[day + 1];
+        push = MathF.Min(0f,
+            layout.OffsetOf(next, geometry.ViewportW) - geometry.OffsetY - DateHeaderHeight);
+    }
+
+    void InvokeDay(int dayIndex)
+    {
+        if ((uint)dayIndex < (uint)_sections.HeaderDates.Length)
+            DateHeaderInvoked?.Invoke(_sections.HeaderDates[dayIndex]);
+    }
+
+    int CountForDay(int dayIndex)
+    {
+        var headers = _sections.HeaderIndices;
+        if ((uint)dayIndex >= (uint)headers.Length) return 0;
+        int start = headers[dayIndex];
+        int end = dayIndex + 1 < headers.Length ? headers[dayIndex + 1] : _sections.Items.Length;
+        return Math.Max(0, end - start - 1);
+    }
+
+    Element DayHeader(int dayIndex, bool overlay)
+    {
+        string label = (uint)dayIndex < (uint)_sections.HeaderLabels.Length ? _sections.HeaderLabels[dayIndex] : "";
+        int n = CountForDay(dayIndex);
+        return new BoxEl
+        {
+            Direction = 0, Height = DateHeaderHeight, Grow = overlay ? 1f : 0f, MinWidth = 0f,
+            AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
+            Fill = overlay ? Tok.FillLayerDefault : ColorF.Transparent,
+            Role = AutomationRole.Button, Focusable = true,
+            OnClick = () => InvokeDay(dayIndex),
+            Children =
+            [
+                WaveeType.ModuleHeader(label) with
+                {
+                    Shrink = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                },
+                new BoxEl
+                {
+                    Grow = 1f, Basis = 0f, MinWidth = 0f, Height = 1f, AlignSelf = FlexAlign.Center,
+                    Fill = Tok.StrokeDividerDefault, HitTestVisible = false,
+                },
+                Caption(n > 0 ? Strings.Recents.ItemCount(n) : "") with
+                {
+                    Color = Tok.TextTertiary, Shrink = 0f, MaxLines = 1,
+                },
+            ],
+        };
+    }
+
+    sealed class StickyDayHeader : Component
     {
         readonly RecentsPage _page;
-        readonly BoundItemScope<RecentsRow> _scope;
-
-        public RecentsRowSlot(RecentsPage page, BoundItemScope<RecentsRow> scope) { _page = page; _scope = scope; }
+        public StickyDayHeader(RecentsPage page) => _page = page;
 
         public override Element Render()
         {
-            var row = _scope.Item.Value;      // subscribe: the recycled index AND the hydration epoch resolve here
-            int index = _scope.Index.Value;
-            return _page.RowContent(row, index);
+            int flatIndex = _page._stickyHeader.Value;
+            int day = (uint)flatIndex < (uint)_page._sections.Items.Length
+                ? _page._sections.Items[flatIndex].DayIndex : -1;
+            return new BoxEl
+            {
+                Direction = 0, Grow = 1f, MinWidth = 0f,
+                Height = DateHeaderHeight,
+                HitTestVisible = day >= 0,
+                HitTestPassThrough = true,
+                Opacity = day >= 0 ? 1f : 0f,
+                Transform = Prop.Of(() => Affine2D.Translation(0f, _page._stickyPush.Value)),
+                OnPointerWheel = ForwardWheel,
+                Children = [_page.DayHeader(day, overlay: true)],
+            };
+        }
+
+        void ForwardWheel(WheelEventArgs e)
+        {
+            // WheelEventArgs.Delta is the same signed DIP the viewport path consumes (InputDispatcher.ScrollBy
+            // does offset + delta; ItemsView.ControllerScrollBy does OffsetY + request.Delta). Do not negate.
+            _page._scrollController.ScrollBy(e.Delta);
+            e.Handled = true;
+        }
+    }
+
+    sealed class RecentsRowSlot : Component
+    {
+        readonly RecentsPage _page;
+        readonly BoundItemScope<RecentsFlatItem> _scope;
+
+        public RecentsRowSlot(RecentsPage page, BoundItemScope<RecentsFlatItem> scope) { _page = page; _scope = scope; }
+
+        public override Element Render()
+        {
+            var flat = _scope.Item.Value;
+            _ = _scope.Index.Value;
+            if (flat.Kind == RecentsFlatItemKind.DateHeader) return _page.DayHeader(flat.DayIndex, overlay: false);
+            int rowIndex = flat.OriginalRowIndex;
+            if ((uint)rowIndex >= (uint)_page._rows.Length) return new BoxEl { Height = RowHeight };
+            var row = _page._rows[rowIndex];
+            return Embed.Comp(() => new HydratedRecentsRow(_page, row, rowIndex)) with
+            { Key = "recents-row:" + row.ItemId };
+        }
+    }
+
+    sealed class HydratedRecentsRow : Component
+    {
+        readonly RecentsPage _page;
+        readonly RecentsRow _initialRow;
+        readonly int _initialRowIndex;
+
+        public HydratedRecentsRow(RecentsPage page, RecentsRow initialRow, int initialRowIndex)
+        {
+            _page = page; _initialRow = initialRow; _initialRowIndex = initialRowIndex;
+        }
+
+        public override Element Render()
+        {
+            var facts = UseLoadable<RowFacts>();
+            int epoch = _page._epoch.Value;
+            RecentsRow row = LiveRow();
+            bool expanded = string.Equals(_page._expandedRow.Value, row.ItemId, StringComparison.Ordinal);
+            UseEffect(() =>
+            {
+                var resolved = _page.FactsFor(LiveRow());
+                if (resolved.Title is { Length: > 0 }) facts.SetReady(resolved);
+                else facts.SetPending(default);
+            }, DepKey.From(epoch));
+            return Skel.Region(facts,
+                content: resolved => _page.RowContent(LiveRow(), resolved, _initialRowIndex, expanded),
+                reveal: SkelReveal.FadeOnly,
+                smoothResize: false);
+        }
+
+        RecentsRow LiveRow()
+        {
+            if ((uint)_initialRowIndex < (uint)_page._rows.Length)
+            {
+                RecentsRow live = _page._rows[_initialRowIndex];
+                if (string.Equals(live.ItemId, _initialRow.ItemId, StringComparison.Ordinal))
+                    return live;
+            }
+            return _initialRow;
         }
     }
 
@@ -365,6 +1089,11 @@ sealed class RecentsPage : Component
     RowFacts FactsFor(RecentsRow row)
     {
         if (RecentsView.HydrationUri(row) is not { Length: > 0 } uri) return default;
+        return FactsFor(uri);
+    }
+
+    RowFacts FactsFor(string uri)
+    {
         var kind = RecentsList.EntityKindOf(uri);
         if (kind == RecentsEntityKind.Collection)
             return new RowFacts(Loc.Get(Strings.Detail.LikedSongs), null, null);
@@ -387,14 +1116,20 @@ sealed class RecentsPage : Component
         };
     }
 
-    Element RowContent(RecentsRow row, int displayIndex)
+    static readonly LayoutTransition DrawerReveal = new(
+        TransitionChannels.Size | TransitionChannels.Opacity | TransitionChannels.Position,
+        MotionTok.DisclosureExpand.ToDynamics(),
+        Enter: new EnterExit(Dy: -Spacing.S, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Dy: -Spacing.XS, Opacity: 0f, Active: true),
+        ExitDynamics: MotionTok.DisclosureCollapse.ToDynamics(),
+        Size: SizeMode.Reflow,
+        Anchor: SizeAnchor.Leading);
+
+    Element RowContent(RecentsRow row, RowFacts facts, int displayIndex, bool expanded)
     {
         if (row.ItemId.Length == 0) return new BoxEl { Height = RowHeight };
-        var facts = FactsFor(row);
         // Unhydrated: the REAL row geometry with neutral placeholder tiles. Never empty space, and never an invented
         // string — the wire genuinely does not know this row's name yet.
-        if (facts.Title is not { Length: > 0 }) return SkeletonRow();
-
         string uri = RecentsView.HydrationUri(row) ?? row.Uri;
         var kind = RecentsList.EntityKindOf(uri);
         // Liked Songs: the app's own cover art keys off the canonical collection uri, and `spotify:user:{id}:collection`
@@ -406,20 +1141,48 @@ sealed class RecentsPage : Component
         // the server truncates that list (a child_count of 11 arrived with 3 uris). A real PLURAL key, not a "×N"
         // glyph: the generator emits the typed Strings.Recents.PlayedCount(count) from the ICU template, so a language
         // whose one/other split differs from English gets its own branch instead of an English-shaped multiplier.
-        string meta = row.ChildCount > 1
-            ? (when.Length > 0 ? Strings.Recents.PlayedCount(row.ChildCount) + " · " + when
-                               : Strings.Recents.PlayedCount(row.ChildCount))
-            : when;
+        var metaDecision = RecentsView.MetaFor(row);
+        string phrase = metaDecision.Kind switch
+        {
+            RecentsMetaKind.PlayedCount => Strings.Recents.PlayedCount(metaDecision.Count),
+            RecentsMetaKind.SavedCount => Strings.Recents.SavedCount(metaDecision.Count),
+            _ => "",
+        };
+        // Prototype row: title + subtitle (two lines), time as its own trailing column — never a third meta line
+        // inside the 64-DIP band.
+        string owner = facts.Subtitle ?? "";
+        string sub = phrase.Length == 0 ? owner
+            : owner.Length == 0 ? phrase
+            : phrase + " · " + owner;
+        Element? savedLine = row.Reason == RecentsReason.Saved ? SavedMeta(sub.Length > 0 ? sub : phrase) : null;
 
-        if (row.Kind == RecentsRowKind.Single) return TrackRowContent(row, facts, displayIndex, uri);
+        if (row.Kind == RecentsRowKind.Single)
+            return new BoxEl { Direction = 1, MinWidth = 0f, Children = [TrackRowContent(row, facts, displayIndex, uri) with { Key = "row" }] };
+
+        bool canExpand = CanExpand(row);
+        Element chevron = canExpand
+            ? TrackRow.ExpandChevron(expanded, () => ToggleExpanded(row)) with { Transition = MotionTok.DisclosureChevron }
+            : new BoxEl { Width = Spacing.XXL, Height = Spacing.XXL, Shrink = 0f };
+        var trailingKids = new List<Element>(2);
+        if (when.Length > 0)
+            trailingKids.Add(Caption(when) with { Color = Tok.TextTertiary, Shrink = 0f, MaxLines = 1 });
+        trailingKids.Add(chevron);
+        Element trailing = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, Shrink = 0f,
+            Children = trailingKids.ToArray(),
+        };
 
         Element card = MediaCard.Row(
-            facts.Cover, facts.Title!, facts.Subtitle ?? "", artUri,
+            facts.Cover, facts.Title!, savedLine is null ? sub : "", artUri,
             circular: kind == RecentsEntityKind.Artist,
-            onClick: () => Open(row),
+            onClick: canExpand ? () => ToggleExpanded(row) : () => Open(row),
             onPlay: () => Play(uri),
             typeChip: KindLabel(kind),
-            meta: meta,
+            metaContent: savedLine,
+            trailing: trailing,
+            plated: false,
+            leadingArtwork: row.Reason == RecentsReason.Saved ? context => SavedArtwork(row, context) : null,
             // Shared-element source. Tagged for the FIRST occurrence of this uri only — uris repeat down a recents list
             // (~1,388 repeats on a real account) and two live nodes under one MorphId is a duplicate-key bug: the
             // engine's registry is last-writer-wins, and SetTaggedVisible/SetTaggedOpacity hide EVERY node carrying the
@@ -431,24 +1194,209 @@ sealed class RecentsPage : Component
             // DetailShell.cs's `MorphKey = null` for the full finding. This stays the source half of the pair, minted
             // through the ONE shared convention (MorphKeys.For) so the two sides cannot drift while it is dormant.
             morphKey: Morphable(displayIndex) ? MorphKeys.For(DetailKindOf(kind), uri) : null);
-        // The app's ONE card hover/press physics (lift + press scale on the shared motion token), applied to a plain
-        // wrapper because MediaCard.Row hands back an Element and the physics are a BoxEl transform. Under reduced
-        // motion the tokens collapse to no movement on their own — this is not a branch.
-        return MediaCard.ApplyCardPhysics(new BoxEl { Direction = 1, Children = [card] });
+        // Prototype rows are flat (transparent rest, hover wash). Card lift physics belong to plated home/search cards.
+        Element primary = new BoxEl { Key = "row", Direction = 1, Children = [card] };
+        Element? drawer = expanded && canExpand ? Drawer(row) : null;
+        return new BoxEl
+        {
+            Direction = 1, MinWidth = 0f,
+            Children = drawer is null ? [primary] : [primary, drawer],
+        };
     }
 
     /// <summary>The defensive single-play arm. Zero occurrences in real captured data (9,446 items → 1,708 headers,
     /// 7,738 collapsed members, 0 ungrouped singles), but the grouping transform can still emit one, so the path exists
     /// and reuses the shared track cell rather than inventing a second row vocabulary.</summary>
+    static Element SavedMeta(string text) => new BoxEl
+    {
+        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, MinWidth = 0f,
+        Children =
+        [
+            Icon(Icons.Check, 12f, Tok.SystemFillSuccess) with { Shrink = 0f },
+            Caption(text) with
+            {
+                Color = Tok.SystemFillSuccess, Weight = 600, Grow = 1f, Basis = 0f,
+                MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            },
+        ],
+    };
+
+    static bool CanExpand(RecentsRow row)
+    {
+        if (row.ChildCount <= 0 || row.ChildUris is not { Count: > 0 } children) return false;
+        for (int i = 0; i < children.Count; i++) if (children[i].Length > 0) return true;
+        return false;
+    }
+
+    void ToggleExpanded(RecentsRow row)
+    {
+        bool closing = string.Equals(_expandedRow.Peek(), row.ItemId, StringComparison.Ordinal);
+        _expandedRow.Value = closing ? "" : row.ItemId;
+        if (!closing) HydrateChildren(row, RecentsView.BatchCap);
+    }
+
+    Element Drawer(RecentsRow row)
+    {
+        var children = row.ChildUris!;
+        var rendered = new List<Element>(children.Count);
+        for (int i = 0; i < children.Count; i++)
+        {
+            string uri = children[i];
+            if (uri.Length == 0) continue;
+            rendered.Add(new BoxEl
+            {
+                Key = "child-wrap:" + row.ItemId + ":" + i,
+                Direction = 1,
+                Enter = new EnterExit(Dy: -Spacing.XS, Opacity: 0f, Active: true),
+                Transition = MotionTok.DisclosureExpand,
+                Children =
+                [
+                    Embed.Comp(() => new HydratedChildRow(this, uri, i)) with
+                    { Key = "child:" + row.ItemId + ":" + i },
+                ],
+            });
+        }
+        // Spine: a 1px divider descending from the parent art, children hanging off it (TrackVersionsPanel
+        // connector idiom; proto `.kid-wrap{margin-left:30px;padding-left:26px;border-left}`).
+        return new BoxEl
+        {
+            Key = "drawer:" + row.ItemId,
+            Direction = 0, MinWidth = 0f, ClipToBounds = true,
+            Margin = new Edges4(Spacing.XXL + Spacing.S, Spacing.XXS, 0f, Spacing.S),
+            Animate = DrawerReveal,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 1f, Shrink = 0f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false,
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                    Padding = new Edges4(Spacing.L + Spacing.S, 0f, Spacing.S, 0f),
+                    Stagger = WaveeMotion.StaggerMs,
+                    Children = rendered.ToArray(),
+                },
+            ],
+        };
+    }
+
+    sealed class HydratedChildRow : Component
+    {
+        readonly RecentsPage _page;
+        readonly string _initialUri;
+        readonly int _index;
+        public HydratedChildRow(RecentsPage page, string initialUri, int index)
+        {
+            _page = page; _initialUri = initialUri; _index = index;
+        }
+
+        public override Element Render()
+        {
+            var facts = UseLoadable<RowFacts>();
+            int epoch = _page._epoch.Value;
+            UseEffect(() =>
+            {
+                var resolved = _page.FactsFor(_initialUri);
+                if (resolved.Title is { Length: > 0 }) facts.SetReady(resolved);
+                else facts.SetPending(default);
+            }, DepKey.From(epoch));
+            return Skel.Region(facts, resolved => _page.ChildRowContent(_initialUri, resolved, _index),
+                reveal: SkelReveal.FadeOnly, smoothResize: false);
+        }
+    }
+
+    Element ChildRowContent(string uri, RowFacts facts, int index)
+    {
+        long duration = _store?.GetTrack(uri)?.DurationMs
+            ?? _store?.GetEpisode(uri)?.DurationMs ?? 0;
+        string time = duration > 0 ? DetailFormat.TrackTime(duration) : "";
+        string subtitle = facts.Subtitle ?? "";
+        var titleKids = new List<Element>(2)
+        {
+            WaveeType.TrackTitle(facts.Title ?? "") with
+            {
+                Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            },
+        };
+        if (subtitle.Length > 0)
+            titleKids.Add(Caption("· " + subtitle) with
+            {
+                Color = Tok.TextTertiary, Shrink = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+            });
+        return new BoxEl
+        {
+            Direction = 0, Height = ChildRowHeight, MinWidth = 0f,
+            AlignItems = FlexAlign.Center, Gap = Spacing.M,
+            Padding = new Edges4(Spacing.XS, 0f, Spacing.S, 0f),
+            Corners = Radii.ControlAll,
+            HoverFill = Tok.FillSubtleSecondary,
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = Spacing.XL, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
+                    Children =
+                    [
+                        Caption((index + 1).ToString(_culture)) with { Color = Tok.TextTertiary, MaxLines = 1 },
+                    ],
+                },
+                new BoxEl
+                {
+                    Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                    AlignItems = FlexAlign.Center, Gap = Spacing.XS,
+                    Children = titleKids.ToArray(),
+                },
+                Caption(time) with { Color = Tok.TextTertiary, Shrink = 0f },
+            ],
+        };
+    }
+
+    Element SavedArtwork(RecentsRow row, Element context)
+    {
+        var children = row.ChildUris;
+        var layers = new List<Element>(3);
+        if (children is not null)
+        {
+            int shown = 0;
+            for (int i = 0; i < children.Count && shown < 2; i++)
+            {
+                string uri = children[i];
+                if (uri.Length == 0) continue;
+                var facts = FactsFor(uri);
+                float x = shown == 0 ? Spacing.M : Spacing.L;
+                layers.Add(new BoxEl
+                {
+                    Width = WaveeSize.Thumb40, Height = WaveeSize.Thumb40,
+                    Transform = Affine2D.Translation(x, 0f),
+                    Children = [Surfaces.Artwork(facts.Cover, uri.GetHashCode() & 0x7fffffff,
+                        WaveeSize.Thumb40, WaveeSize.Thumb40, Radii.Control)],
+                });
+                shown++;
+            }
+        }
+        layers.Add(new BoxEl
+        {
+            Width = WaveeSize.Thumb48, Height = WaveeSize.Thumb48,
+            Transform = Affine2D.Translation(0f, Spacing.S),
+            Children = [context],
+        });
+        return new BoxEl
+        {
+            Width = WaveeSize.Thumb48 + Spacing.M, Height = WaveeSize.Thumb48 + Spacing.S,
+            Shrink = 0f, ZStack = true, Children = layers.ToArray(),
+        };
+    }
+
     Element TrackRowContent(RecentsRow row, RowFacts facts, int displayIndex, string uri)
     {
         _ = row;    // the single arm has no group facts to state — its identity is entirely the track's
         var track = _store?.GetTrack(uri)
-                    ?? new Track(HomeCardNav.Id(uri), uri, facts.Title!, Array.Empty<ArtistRef>(),
+                    ?? new Track(HomeCardNav.Id(uri), uri, facts.Title ?? "", Array.Empty<ArtistRef>(),
                                  new AlbumRef("", "", ""), 0L, false, facts.Cover);
         var columns = new ColumnSet(Album: false, By: false, Date: false, Video: false, Plays: false,
             Heart: false, Thumb: true, Actions: false);
-        Element title = WaveeType.TrackTitle(facts.Title!) with
+        Element title = WaveeType.TrackTitle(facts.Title ?? "") with
         { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f };
         return TrackRow.Grid(track, displayIndex, default, columns, SingleRowTracks, RowHeight, title,
             showTrackArtist: false, _go, onPlay: () => Play(uri));
@@ -459,34 +1407,10 @@ sealed class RecentsPage : Component
     static readonly TrackSize[] SingleRowTracks =
         [TrackSize.Px(36f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f)];
 
-    static Element SkeletonRow() => new BoxEl
+    bool Morphable(int rowIndex)
     {
-        Direction = 0, Height = RowHeight, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-        Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
-        Corners = Radii.CardAll,
-        Children =
-        [
-            // A null url resolves to the neutral opaque placeholder tile — the same one a real cover loads over.
-            Surfaces.Shimmer(null, 48, 48, WaveeSize.Thumb48, WaveeSize.Thumb48, Radii.Control),
-            new BoxEl
-            {
-                Direction = 1, Grow = 1f, Basis = 0f, Gap = Spacing.XS,
-                Children =
-                [
-                    Surfaces.Shimmer(null, 0, 0, 168f, 12f, 4f),
-                    Surfaces.Shimmer(null, 0, 0, 108f, 10f, 4f),
-                ],
-            },
-        ],
-    };
-
-    bool Morphable(int displayIndex)
-    {
-        var map = _displayToRow;
         var flags = _morphable;
-        if ((uint)displayIndex >= (uint)map.Length) return false;
-        int r = map[displayIndex];
-        return (uint)r < (uint)flags.Length && flags[r];
+        return (uint)rowIndex < (uint)flags.Length && flags[rowIndex];
     }
 
     static DetailKind DetailKindOf(RecentsEntityKind kind) => kind switch
@@ -536,7 +1460,7 @@ sealed class RecentsPage : Component
             // OwnerName, not Subtitle: PlaylistSummary's third slot IS the owner, and a playlist's store row already
             // resolves LIST_METADATA_V2's `source` into OwnerName for exactly that role.
             Meta: facts.Subtitle is { Length: > 0 } owner ? new HomeCardMeta(OwnerName: owner) : null);
-        HomeCardNav.Open(card, _preview, _go, u => _ = _svc?.Player.PlayTrackAsync(u));
+        HomeCardNav.Open(card, _preview, _go, playTrack: null);
     }
 
     void Play(string uri)
@@ -593,35 +1517,26 @@ sealed class RecentsPage : Component
     }
 
     // ── snapshot lifecycle ────────────────────────────────────────────────────────────────────────────────────────────
-    async Task LoadAsync(IRecentsSource source, CancellationToken ct)
+    async Task<RecentsSnapshot> FetchResourceAsync(IRecentsSource source, CancellationToken ct)
     {
-        RecentsSnapshot snapshot;
-        try { snapshot = await source.FetchAsync(ct).ConfigureAwait(false); }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        if (!_hasSnapshot)
         {
-            _post(() => { if (_rows.Length == 0) _state.Value = 2; });
-            return;
+            var initial = await source.FetchAsync(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            _post(() => Adopt(initial));
+            return initial;
         }
-        if (ct.IsCancellationRequested) return;
-        _post(() => Adopt(snapshot));
-    }
-
-    /// <summary>Revision-gated revalidation. A NULL answer means "unchanged" and the correct response is to do NOTHING —
-    /// no rebuild, no re-hydration, no scroll disturbance.</summary>
-    async Task RevalidateAsync(IRecentsSource source, CancellationToken ct)
-    {
-        if (_rows.Length == 0) return;
         byte[]? revision = null;
         if (_revision is { Length: > 0 } hex)
         {
             try { revision = Convert.FromHexString(hex); } catch (FormatException) { revision = null; }
         }
         var rows = _rows;
-        RecentsSnapshot? fresh;
-        try { fresh = await source.FetchDiffAsync(revision, rows, ct).ConfigureAwait(false); }
-        catch (Exception ex) when (ex is not OperationCanceledException) { return; }
-        if (fresh is null || ct.IsCancellationRequested) return;   // unchanged
+        var fresh = await source.FetchDiffAsync(revision, rows, ct).ConfigureAwait(false);
+        ct.ThrowIfCancellationRequested();
+        if (fresh is null) return new RecentsSnapshot(_revision, rows);
         _post(() => Adopt(fresh));
+        return fresh;
     }
 
     /// <summary>Install a snapshot. Hydration SURVIVES for free: the display facts live in the store, keyed by entity
@@ -629,12 +1544,11 @@ sealed class RecentsPage : Component
     /// the network only for the genuinely new pointers.</summary>
     void Adopt(RecentsSnapshot snapshot)
     {
-        var incoming = snapshot.Rows;
-        var rows = new RecentsRow[incoming.Count];
-        for (int i = 0; i < rows.Length; i++) rows[i] = incoming[i];
+        var rows = CopyRows(snapshot.Rows);
         _rows = rows;
         _morphable = RecentsView.FirstOccurrence(rows);
         _revision = snapshot.Revision;
+        _hasSnapshot = true;
 
         var tokens = RecentsView.ContentTypes(rows);
         _chipTokens = new string[tokens.Count];
@@ -646,7 +1560,6 @@ sealed class RecentsPage : Component
 
         _inflight.Clear();
         Recut(token);
-        _state.Value = rows.Length == 0 ? 2 : 1;
         _epoch.Value++;
     }
 
@@ -666,9 +1579,15 @@ sealed class RecentsPage : Component
             display = new RecentsRow[map.Length];
             for (int i = 0; i < map.Length; i++) display[i] = rows[map[i]];
         }
-        _displayToRow = map;
         _display = display;
-        _vc.ReplaceSnapshot(display);
+        _sections = RecentsView.BuildSections(rows, map, _now, _culture);
+        _calendar = RecentsView.DayDensity(rows, map, _now, _culture);
+        _calendarDay.Value = DateOnly.FromDateTime(_now.LocalDateTime);
+        _vc.ReplaceSnapshot(_sections.Items);
+        _expandedRow.Value = "";
+        _stickyHeader.Value = -1;
+        _stickyPush.Value = 0f;
+        _shapeEpoch.Value++;
     }
 
     // ── viewport hydration ────────────────────────────────────────────────────────────────────────────────────────────
@@ -690,9 +1609,28 @@ sealed class RecentsPage : Component
         if (_storeDirty) { _storeDirty = false; _epoch.Value++; }
         if (_metadata is not { } metadata || _cts is not { } cts) return;
         _batch.Clear();
-        RecentsView.CollectRange(_rows, _displayToRow, _rangeFirst, _rangeEnd, Pending, _batch);
+        RecentsView.CollectRange(_rows, _sections.FlatToRow, _rangeFirst, _rangeEnd, Pending, _batch);
+        int hi = Math.Min(_rangeEnd, _sections.FlatToRow.Length);
+        for (int i = Math.Max(0, _rangeFirst); i < hi && _batch.Count < RecentsView.BatchCap; i++)
+        {
+            int rowIndex = _sections.FlatToRow[i];
+            if ((uint)rowIndex >= (uint)_rows.Length || _rows[rowIndex].Reason != RecentsReason.Saved) continue;
+            RecentsView.CollectChildUris(_rows[rowIndex], Pending, _batch,
+                Math.Min(2, RecentsView.BatchCap - _batch.Count));
+        }
         if (_batch.Count == 0) return;
         var uris = _batch.ToArray();
+        for (int i = 0; i < uris.Length; i++) _inflight.Add(uris[i]);
+        _ = HydrateAsync(metadata, uris, cts.Token);
+    }
+
+    void HydrateChildren(RecentsRow row, int cap)
+    {
+        if (_metadata is not { } metadata || _cts is not { } cts || cap <= 0) return;
+        var pending = new List<string>(Math.Min(cap, RecentsView.BatchCap));
+        RecentsView.CollectChildUris(row, Pending, pending, Math.Min(cap, RecentsView.BatchCap));
+        if (pending.Count == 0) return;
+        var uris = pending.ToArray();
         for (int i = 0; i < uris.Length; i++) _inflight.Add(uris[i]);
         _ = HydrateAsync(metadata, uris, cts.Token);
     }

@@ -40,6 +40,7 @@ static class NavSuite
         NavigationChecks();
         PageHostChecks(strings);
         KeepAliveChecks(strings);
+        SemanticZoomNavigationChecks(strings);
         ParkBeforeRenderChecks(strings);
         UnparkReplayBudgetChecks(strings);
         NavRouterChecks(strings);
@@ -256,6 +257,89 @@ static class NavSuite
                || anim.TryGetTrackValue(node, AnimChannel.SizeH, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutW, out _)
                || anim.TryGetTrackValue(node, AnimChannel.LayoutH, out _);
+    }
+
+    static void SemanticZoomNavigationChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("semantic-zoom-anchor", new Size2(280, 180), 1f));
+        window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var probe = new SemanticZoomItemsProbe();
+        using var host = new AppHost(app, window, device, fonts, strings, probe);
+        host.RunFrame();
+        var focusedIn = FindRole(host.Scene, host.Scene.Root, AutomationRole.Button);
+        host.Input.SetFocus(focusedIn, visual: true);
+
+        probe.Zoom.ZoomOutTo(70);
+        bool startedBeforeCommit = probe.Started.Count == 1 && probe.Completed.Count == 0
+            && probe.Started[0] is { SourceIndex: 70, DestinationIndex: 70 };
+        bool oldFrameIntact = HasGlyph(device, strings, "zoom-in-0") && !HasGlyph(device, strings, "zoom-out-70");
+        host.RunFrame();
+        float firstPresentationOffset = probe.OutItems.ScrollOffset;
+        bool parkedOnFirstPresentation = MathF.Abs(firstPresentationOffset
+            - 70f * SemanticZoomItemsProbe.RowExtent) < 0.5f && host.Animation.HasActive;
+        for (int i = 0; i < 3; i++) host.RunFrame();
+        bool anchored = parkedOnFirstPresentation && HasGlyph(device, strings, "zoom-out-70")
+            && probe.OutItems.ScrollOffset >= 70f * SemanticZoomItemsProbe.RowExtent - 1f
+            && probe.Completed.Count == 1
+            && probe.Completed[0].OperationId == probe.Started[0].OperationId;
+        bool focusRestored = !host.Input.Focused.IsNull;
+
+        // Escape bubbles to the stable SemanticZoom root and anchors the detail view before presenting it.
+        window.QueueInput(new InputEvent(InputKind.Key, default, 0, Keys.Escape));
+        for (int i = 0; i < 4; i++) host.RunFrame();
+        bool escaped = HasGlyph(device, strings, "zoom-in-70")
+            && probe.Completed.Count == 2
+            && probe.Completed[^1].To == SemanticZoomViewKind.ZoomedIn;
+
+        Check("gate.semantic-zoom.anchor the view-change callback leads the swap, the incoming layout effect parks the mapped item before its first animation tick, then completion publishes; focus survives and Escape reverses",
+            startedBeforeCommit && oldFrameIntact && anchored && focusRestored && escaped,
+            $"started={startedBeforeCommit} oldFrame={oldFrameIntact} anchored={anchored} "
+            + $"firstOff={firstPresentationOffset:0.#} outOff={probe.OutItems.ScrollOffset:0.#} "
+            + $"focus={focusRestored} escape={escaped}");
+
+        // KeepAlive retains each viewport. Invalid maps intentionally skip StartBringItemIntoView, so a warm return
+        // must reveal the overview at its previous scroll offset rather than resetting it.
+        using var preserveApp = new HeadlessPlatformApp();
+        var preserveWindow = new HeadlessWindow(new WindowDesc("semantic-zoom-preserve", new Size2(280, 180), 1f));
+        preserveWindow.Show();
+        var preserveDevice = new HeadlessGpuDevice();
+        var preserveProbe = new SemanticZoomItemsProbe(noAnchor: true);
+        using var preserveHost = new AppHost(preserveApp, preserveWindow, preserveDevice,
+            new HeadlessFontSystem(strings), strings, preserveProbe);
+        preserveHost.RunFrame();
+        preserveProbe.Zoom.ZoomOutTo(10);
+        for (int i = 0; i < 3; i++) preserveHost.RunFrame();
+        preserveProbe.OutItems.ScrollBy(420f);
+        preserveHost.RunFrame();
+        float before = preserveProbe.OutItems.ScrollOffset;
+        preserveProbe.Zoom.ZoomInTo(10);
+        for (int i = 0; i < 3; i++) preserveHost.RunFrame();
+        preserveProbe.Zoom.ZoomOutTo(10);
+        for (int i = 0; i < 3; i++) preserveHost.RunFrame();
+        float after = preserveProbe.OutItems.ScrollOffset;
+        bool preserved = before > 1f && MathF.Abs(after - before) < 0.5f
+            && preserveProbe.Started.All(static c => c.DestinationIndex == -1);
+        Check("gate.semantic-zoom.scroll-preservation both KeepAlive viewports stay warm and an unanchored return preserves the overview offset",
+            preserved, $"offset={before:0.#}->{after:0.#} changes={preserveProbe.Started.Count}");
+
+        bool oldReduced = Motion.ReducedMotion;
+        try
+        {
+            Motion.ReducedMotion = true;
+            preserveProbe.Zoom.ZoomInTo(10);
+            bool stillOldBeforeFrame = preserveDevice.LastGlyphs.Any(
+                g => strings.Resolve(g.Text).StartsWith("zoom-out-", StringComparison.Ordinal));
+            for (int i = 0; i < 3; i++) preserveHost.RunFrame();
+            bool reducedCommitted = preserveProbe.Completed[^1].To == SemanticZoomViewKind.ZoomedIn
+                && !preserveHost.Animation.HasActive;
+            Check("gate.semantic-zoom.reduced-motion keeps callback/anchoring semantics and snaps transform motion",
+                stillOldBeforeFrame && reducedCommitted,
+                $"held={stillOldBeforeFrame} committed={reducedCommitted} tracks={preserveHost.Animation.HasActive}");
+        }
+        finally { Motion.ReducedMotion = oldReduced; }
     }
 
     // gate.reconciler.park-before-render — the flush ORDERING guarantee (ReactiveCore: structural queue before normal).
@@ -900,6 +984,54 @@ static class NavSuite
 // (an artist page: a per-frame overlay, cover shimmers, chart rows, shelves). Every debtor tracks ONE shared channel, so
 // a single write while parked leaves all N owing a render. Each registers itself at construction, in mount (== tree)
 // order, so the gate can reach the LAST one — the deepest in the drip queue — and re-render it imperatively.
+sealed class SemanticZoomItemsProbe : Component
+{
+    public const float RowExtent = 24f;
+
+    public readonly SemanticZoomController Zoom = new();
+    public readonly ItemsViewController InItems = new();
+    public readonly ItemsViewController OutItems = new();
+    public readonly List<SemanticZoomViewChange> Started = [];
+    public readonly List<SemanticZoomViewChange> Completed = [];
+    private readonly bool _noAnchor;
+
+    public SemanticZoomItemsProbe(bool noAnchor = false) => _noAnchor = noAnchor;
+
+    public override Element Render()
+    {
+        Element List(string prefix, ItemsViewController controller, string scrollKey)
+            => ItemsView.Create(
+                160,
+                i => new BoxEl
+                {
+                    Height = RowExtent,
+                    Children = [new TextEl(prefix + i)],
+                },
+                RepeatLayout.Stack(RowExtent),
+                new ListOptions
+                {
+                    SelectionMode = ItemsSelectionMode.None,
+                    Selector = SelectorVisual.None,
+                    Controller = controller,
+                    Scroll = new ScrollOptions { ScrollKey = scrollKey, SuppressScrollBar = true },
+                });
+
+        Func<int, int>? map = _noAnchor ? static _ => -1 : null;
+        return SemanticZoom.Create(
+            new SemanticZoomSlots(
+                new SemanticZoomView(List("zoom-in-", InItems, "semantic-gate-in"), InItems),
+                new SemanticZoomView(List("zoom-out-", OutItems, "semantic-gate-out"), OutItems)),
+            new SemanticZoomOptions
+            {
+                MapInToOut = map,
+                MapOutToIn = map,
+                ViewChangeStarted = Started.Add,
+                ViewChangeCompleted = Completed.Add,
+                Controller = Zoom,
+            });
+    }
+}
+
 sealed class UnparkDebtorPage : Component
 {
     readonly Signal<int> _shared;

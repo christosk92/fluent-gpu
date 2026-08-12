@@ -198,6 +198,23 @@ public static class MotionRecipes
         Enter: new EnterExit(Opacity: 0f, Active: true),
         Exit: new EnterExit(Opacity: 0f, Active: true));
 
+    /// <summary>Semantic zoom from a detail view to its overview. The overview comes forward from 1.08 while the
+    /// outgoing detail recedes to 0.94; both cross-fade on the standard spring. There is deliberately no root blur:
+    /// page-sized blur groups are outside the frame budget.</summary>
+    public static LayoutTransition SemanticZoomOut => new(
+        TransitionChannels.Opacity,
+        MotionTok.StandardSpring.ToDynamics(),
+        Enter: new EnterExit(Sx: 1.08f, Sy: 1.08f, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Sx: 0.94f, Sy: 0.94f, Opacity: 0f, Active: true));
+
+    /// <summary>Semantic zoom from an overview back to detail. This is the exact directional reverse of
+    /// <see cref="SemanticZoomOut"/>: detail advances from 0.94 and the overview departs toward 1.08.</summary>
+    public static LayoutTransition SemanticZoomIn => new(
+        TransitionChannels.Opacity,
+        MotionTok.StandardSpring.ToDynamics(),
+        Enter: new EnterExit(Sx: 0.94f, Sy: 0.94f, Opacity: 0f, Active: true),
+        Exit: new EnterExit(Sx: 1.08f, Sy: 1.08f, Opacity: 0f, Active: true));
+
     /// <summary>transitions.dev text-state swap: old text rises and blurs; replacement enters from below.</summary>
     public static LayoutTransition TextSwap => new(
         TransitionChannels.Opacity,

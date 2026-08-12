@@ -1,9 +1,65 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using FluentGpu.Localization;
 using Wavee.Core;
 
 namespace Wavee;
+
+/// <summary>The two recycle-pool kinds in the grouped Recents projection.</summary>
+enum RecentsFlatItemKind : byte { DateHeader, Row }
+
+/// <summary>One entry in the list passed to the grouped virtual layout. A header has no source row
+/// (<see cref="OriginalRowIndex"/> is -1); a row always points back into the unfiltered wire vector.</summary>
+readonly record struct RecentsFlatItem(
+    RecentsFlatItemKind Kind,
+    int OriginalRowIndex,
+    int DayIndex,
+    int MonthIndex);
+
+/// <summary>A filtered row vector with one synthetic header before each calendar day. All maps are indexed by the
+/// FLAT list, so the virtual list, sticky-header observer, calendar anchor and hydration pump share one projection.</summary>
+sealed record RecentsSections(
+    RecentsFlatItem[] Items,
+    int[] HeaderIndices,
+    string[] HeaderLabels,
+    DateOnly[] HeaderDates,
+    int[] FlatToRow,
+    int[] FlatToDay,
+    int[] FlatToMonth,
+    int[] RowToFlat,
+    int[] RowToDay);
+
+/// <summary>Which localized metadata branch a Recents row renders.</summary>
+enum RecentsMetaKind : byte { PlayedAt, PlayedCount, SavedCount }
+
+/// <summary>Pure reason/count decision; formatting and icons stay in the rendered half.</summary>
+readonly record struct RecentsMeta(RecentsMetaKind Kind, int Count);
+
+/// <summary>The item contributing the most played entries to one day. The source row identity is retained so the
+/// calendar can resolve live metadata without copying a title into the pure model.</summary>
+readonly record struct RecentsDayTopItem(int OriginalRowIndex, string ItemId, int PlayCount);
+
+/// <summary>One calendar day. <see cref="DensityLevel"/> is 0 for no plays and 1..5 for the logarithmic accent ramp.</summary>
+sealed record RecentsCalendarDay(
+    DateOnly Date,
+    int PlayCount,
+    int DensityLevel,
+    RecentsDayTopItem? TopItem);
+
+/// <summary>One newest-first calendar month, including days with no plays so the view can render a stable 7-column grid.</summary>
+sealed record RecentsCalendarMonth(
+    int Year,
+    int Month,
+    int FirstDayOffset,
+    int TotalPlays,
+    DateOnly? BusiestDay,
+    int BusiestDayPlays,
+    bool IsCurrentMonth,
+    RecentsCalendarDay[] Days);
+
+/// <summary>The calendar overview derived solely from the resident, filtered Recents rows.</summary>
+sealed record RecentsCalendar(RecentsCalendarMonth[] Months, int MaximumDayPlays);
 
 /// <summary>The Recents page's PURE half — every decision the page makes that is not a rendered element.
 ///
@@ -67,6 +123,86 @@ static class RecentsView
         return kept.ToArray();
     }
 
+    /// <summary>Insert one synthetic header before each calendar day in an ALREADY-filtered display map. Header and row
+    /// positions are returned together so every consumer anchors against the exact same grouped shape.</summary>
+    public static RecentsSections BuildSections(IReadOnlyList<RecentsRow> rows, IReadOnlyList<int> display,
+                                                DateTimeOffset now, CultureInfo culture,
+                                                Func<string, string>? localize = null)
+    {
+        var items = new List<RecentsFlatItem>(display.Count + Math.Min(display.Count, 64));
+        var headers = new List<int>();
+        var labels = new List<string>();
+        var dates = new List<DateOnly>();
+        var flatRows = new List<int>(items.Capacity);
+        var flatDays = new List<int>(items.Capacity);
+        var flatMonths = new List<int>(items.Capacity);
+        var rowToFlat = new int[rows.Count];
+        var rowToDay = new int[rows.Count];
+        Array.Fill(rowToFlat, -1);
+        Array.Fill(rowToDay, -1);
+
+        var months = new Dictionary<int, int>();
+        DateOnly prior = default;
+        bool havePrior = false;
+        int dayIndex = -1;
+        int monthIndex = -1;
+
+        for (int i = 0; i < display.Count; i++)
+        {
+            int rowIndex = display[i];
+            if ((uint)rowIndex >= (uint)rows.Count) continue;
+            RecentsRow row = rows[rowIndex];
+            DateOnly date = DateOf(row.PlayedAtMs, now.Offset);
+            if (!havePrior || date != prior)
+            {
+                havePrior = true;
+                prior = date;
+                dayIndex++;
+                monthIndex = MonthIndex(date, months);
+                headers.Add(items.Count);
+                labels.Add(date == DateOnly.MinValue
+                    ? ""
+                    : DayBucketLabel(date.ToDateTime(TimeOnly.MinValue), now, culture, localize));
+                dates.Add(date);
+                items.Add(new RecentsFlatItem(RecentsFlatItemKind.DateHeader, -1, dayIndex, monthIndex));
+                flatRows.Add(-1);
+                flatDays.Add(dayIndex);
+                flatMonths.Add(monthIndex);
+            }
+
+            rowToFlat[rowIndex] = items.Count;
+            rowToDay[rowIndex] = dayIndex;
+            items.Add(new RecentsFlatItem(RecentsFlatItemKind.Row, rowIndex, dayIndex, monthIndex));
+            flatRows.Add(rowIndex);
+            flatDays.Add(dayIndex);
+            flatMonths.Add(monthIndex);
+        }
+
+        return new RecentsSections(
+            items.ToArray(), headers.ToArray(), labels.ToArray(), dates.ToArray(),
+            flatRows.ToArray(), flatDays.ToArray(), flatMonths.ToArray(), rowToFlat, rowToDay);
+    }
+
+    /// <summary>Per-day bucket label: Today, Yesterday, the culture's weekday for days 2..6, then its abbreviated
+    /// month/day pattern. Calendar comparison happens in <paramref name="now"/>'s offset, including across a year edge.</summary>
+    public static string DayBucketLabel(DateTimeOffset at, DateTimeOffset now, CultureInfo culture,
+                                        Func<string, string>? localize = null)
+    {
+        DateTimeOffset localNow = now.ToOffset(now.Offset);
+        DateTimeOffset localAt = at.ToOffset(now.Offset);
+        int days = DateOnly.FromDateTime(localNow.DateTime).DayNumber - DateOnly.FromDateTime(localAt.DateTime).DayNumber;
+        Func<string, string> resolve = localize ?? Loc.Get;
+        if (days == 0) return resolve(Strings.Detail.Today);
+        if (days == 1) return resolve(Strings.Detail.Yesterday);
+        if ((uint)(days - 2) <= 4u) return culture.DateTimeFormat.GetDayName(localAt.DayOfWeek);
+        return localAt.ToString(ShortMonthDay(culture), culture);
+    }
+
+    /// <summary>Unix-ms convenience for <see cref="DayBucketLabel(DateTimeOffset,DateTimeOffset,CultureInfo,Func{string,string}?)"/>.</summary>
+    public static string DayBucketLabel(long atMs, DateTimeOffset now, CultureInfo culture,
+                                        Func<string, string>? localize = null)
+        => atMs <= 0 ? "" : DayBucketLabel(DateTimeOffset.FromUnixTimeMilliseconds(atMs), now, culture, localize);
+
     // ── hydration targets ─────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>The ONE uri a row is hydrated from, or null when it names nothing fetchable.
     ///
@@ -125,6 +261,121 @@ static class RecentsView
         return added;
     }
 
+    /// <summary>Append the decoded, usable child URIs of one expandable row. Empty entries and duplicates collapse;
+    /// <paramref name="pending"/> lets the page share the same misses-only rule as viewport hydration.</summary>
+    public static int CollectChildUris(RecentsRow row, Func<string, bool> pending, List<string> into,
+                                       int cap = BatchCap)
+    {
+        if (cap <= 0 || row.ChildUris is not { Count: > 0 } children) return 0;
+        int added = 0;
+        for (int i = 0; i < children.Count && added < cap; i++)
+        {
+            string uri = children[i];
+            if (uri.Length == 0 || !pending(uri)) continue;
+            bool duplicate = false;
+            for (int j = 0; j < into.Count; j++)
+                if (string.Equals(into[j], uri, StringComparison.Ordinal)) { duplicate = true; break; }
+            if (duplicate) continue;
+            into.Add(uri);
+            added++;
+        }
+        return added;
+    }
+
+    /// <summary>Select the metadata sentence from the wire reason. Saved entries always describe at least the row
+    /// itself; grouped plays preserve the server's authoritative child count; singles and unknown reasons show time.</summary>
+    public static RecentsMeta MetaFor(RecentsRow row)
+        => row.Reason switch
+        {
+            RecentsReason.Saved => new RecentsMeta(RecentsMetaKind.SavedCount, Math.Max(1, row.ChildCount)),
+            RecentsReason.Played when row.Kind == RecentsRowKind.Group
+                => new RecentsMeta(RecentsMetaKind.PlayedCount, Math.Max(0, row.ChildCount)),
+            _ => new RecentsMeta(RecentsMetaKind.PlayedAt, 0),
+        };
+
+    /// <summary>Build the newest-first calendar for the already-filtered display map. Only played rows contribute
+    /// heat: a grouped play contributes its authoritative child count (at least one), a played single contributes one,
+    /// and Saved/Unknown rows contribute zero. They still extend the visible date range.</summary>
+    public static RecentsCalendar DayDensity(IReadOnlyList<RecentsRow> rows, IReadOnlyList<int> display,
+                                             DateTimeOffset now, CultureInfo culture)
+    {
+        var byDay = new Dictionary<DateOnly, DayAccumulator>();
+        DateOnly today = DateOnly.FromDateTime(now.ToOffset(now.Offset).DateTime);
+        DateOnly oldest = today;
+        bool hasDatedRow = false;
+
+        for (int i = 0; i < display.Count; i++)
+        {
+            int rowIndex = display[i];
+            if ((uint)rowIndex >= (uint)rows.Count) continue;
+            var row = rows[rowIndex];
+            DateOnly date = DateOf(row.PlayedAtMs, now.Offset);
+            if (date == DateOnly.MinValue) continue;
+            if (!hasDatedRow || date < oldest) oldest = date;
+            hasDatedRow = true;
+            if (!byDay.TryGetValue(date, out var day))
+            {
+                day = new DayAccumulator();
+                byDay.Add(date, day);
+            }
+
+            int contribution = PlayContribution(row);
+            if (contribution <= 0) continue;
+            day.Plays += contribution;
+            if (day.Top is null || contribution > day.Top.Value.PlayCount)
+                day.Top = new RecentsDayTopItem(rowIndex, row.ItemId, contribution);
+        }
+
+        DateOnly firstMonth = new(today.Year, today.Month, 1);
+        DateOnly lastMonth = hasDatedRow && oldest < firstMonth
+            ? new DateOnly(oldest.Year, oldest.Month, 1)
+            : firstMonth;
+        int maximum = 0;
+        foreach (var day in byDay.Values) maximum = Math.Max(maximum, day.Plays);
+
+        var months = new List<RecentsCalendarMonth>();
+        for (DateOnly month = firstMonth; month >= lastMonth; month = month.AddMonths(-1))
+        {
+            int count = DateTime.DaysInMonth(month.Year, month.Month);
+            var days = new RecentsCalendarDay[count];
+            int total = 0, busiestCount = 0;
+            DateOnly? busiest = null;
+            for (int d = 1; d <= count; d++)
+            {
+                var date = new DateOnly(month.Year, month.Month, d);
+                byDay.TryGetValue(date, out var value);
+                int plays = value?.Plays ?? 0;
+                total += plays;
+                // Ascending day walk + >= makes an equal-count tie choose the newest date.
+                if (plays > 0 && plays >= busiestCount) { busiestCount = plays; busiest = date; }
+                days[d - 1] = new RecentsCalendarDay(date, plays, DensityLevel(plays, maximum), value?.Top);
+            }
+
+            int offset = ((int)new DateTime(month.Year, month.Month, 1).DayOfWeek
+                          - (int)culture.DateTimeFormat.FirstDayOfWeek + 7) % 7;
+            months.Add(new RecentsCalendarMonth(month.Year, month.Month, offset, total, busiest, busiestCount,
+                month.Year == today.Year && month.Month == today.Month, days));
+        }
+        return new RecentsCalendar(months.ToArray(), maximum);
+    }
+
+    static int PlayContribution(RecentsRow row)
+        => row.Reason != RecentsReason.Played ? 0
+            : row.Kind == RecentsRowKind.Group ? Math.Max(1, row.ChildCount) : 1;
+
+    static int DensityLevel(int count, int maximum)
+    {
+        if (count <= 0 || maximum <= 0) return 0;
+        double level = Math.Ceiling(Math.Log(1d + count) / Math.Log(1d + maximum) * 5d);
+        return Math.Clamp((int)level, 1, 5);
+    }
+
+    sealed class DayAccumulator
+    {
+        public int Plays;
+        public RecentsDayTopItem? Top;
+    }
+
     /// <summary>Which rows may claim the shared-element (connected-animation) tag for their cover.
     ///
     /// The morph key is derived from the entity uri, and uris REPEAT down a recents list (play one playlist on three
@@ -167,12 +418,29 @@ static class RecentsView
 
     /// <summary>The culture's month-day pattern with the FULL month name narrowed to the abbreviated one. There is no
     /// standard "abbreviated month + day" format specifier, and a row's meta lane cannot afford "12 September".</summary>
-    static string ShortMonthDay(CultureInfo culture)
+    internal static string ShortMonthDay(CultureInfo culture)
     {
         string pattern = culture.DateTimeFormat.MonthDayPattern;
         return pattern.Contains("MMMM", StringComparison.Ordinal)
             ? pattern.Replace("MMMM", "MMM", StringComparison.Ordinal)
             : pattern;
+    }
+
+    /// <summary>Calendar day of a wire unix-ms timestamp in <paramref name="offset"/>. 0/negative is
+    /// <see cref="DateOnly.MinValue"/> (unknown), never the Unix epoch. Internal so the page and tests share
+    /// this conversion rather than re-deriving it.</summary>
+    internal static DateOnly DateOf(long unixMs, TimeSpan offset)
+        => unixMs <= 0 ? DateOnly.MinValue
+            : DateOnly.FromDateTime(DateTimeOffset.FromUnixTimeMilliseconds(unixMs).ToOffset(offset).DateTime);
+
+    static int MonthIndex(DateOnly date, Dictionary<int, int> months)
+    {
+        if (date == DateOnly.MinValue) return -1;
+        int key = date.Year * 12 + date.Month - 1;
+        if (months.TryGetValue(key, out int existing)) return existing;
+        int index = months.Count;
+        months.Add(key, index);
+        return index;
     }
 
     /// <summary>The hero's thin metadata line: how many rows, and the window they span. Empty when there is nothing to

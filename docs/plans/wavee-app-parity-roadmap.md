@@ -68,7 +68,7 @@ player/action surfaces (mostly app-composition over landed primitives), and only
 - **Virtualization:** `VirtualListEl` + `StackVirtualLayout`/`MeasuredStackVirtualLayout` (Fenwick `ExtentTable`) +
   `GroupedListVirtualLayout` (`StickyHeaderIndexAt`/`IsHeader`) + grid layouts (`Scene/VirtualLayout.cs`); 10k rows →
   window, 0-alloc in-window scroll. `SelectionModel` (range-based, alloc-free), `Reorderable` (cross-list FLIP + edge
-  auto-scroll), `AnnotatedScrollBar`, `PagedShelf`, `Skel.Region` skeletons.
+  auto-scroll), `PagedShelf`, `Skel.Region` skeletons.
 - **Image residency:** `ImageCache` (dedup, ref-count pin/LRU, `SetPixelSink` exposing decoded **premultiplied BGRA8** at
   `ImageCache.cs:144`/`:341`) → `ImageTextureStore`/`WicImageCodec` real decode + GPU upload.
 - **Animation slab:** `AnimValue` (Translate/Scale/Rotation/Opacity/Blur/Clip/Hover/Press/BrushFade, analytical spring,

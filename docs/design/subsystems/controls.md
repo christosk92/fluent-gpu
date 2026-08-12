@@ -1060,7 +1060,7 @@ generational handles, and the portable seam interfaces.
 - **Control components (the kit):** `Button`, `Checkbox`, `RadioButton`/`RadioGroup`, `Switch`, `Slider`,
   `ProgressBar`/`ProgressRing`, `TextField`/`TextBox`, `ComboBox`, `ListView`/`GridView`, `TreeView`, `Tabs`,
   `Menu`/`MenuBar`/`ContextMenu`/`MenuItem`, `Dialog`/`Flyout`/`Popup`, `ToolTip`, `Scrollbar`, `Expander`, `InfoBar`,
-  plus their props structs and default templates.
+  `AnnotatedScrollBar`, `SemanticZoom`, plus their props structs and default templates.
 - **The per-control five-tuple contract** (composition / UIA pattern+ControlType / keyboard / name-role / motion-
   cursor-RTL) and the universal control contract (§4) that validation.md gates.
 
@@ -1109,6 +1109,24 @@ here. `VirtualListEl` stays in `Reconciler`.
 - **The reorder policy seams** — `ReorderList.BlockLength`/`BeginBlock`/`Sample`/`SlotAtOffset`/`BoundaryOffset` and
   `Reorderable.{DragStyle,CanAcceptForeign,ForeignRefusalCaption,ForeignCaption,RequireDropOnList}`, plus
   `TabViewItem.DropTarget`.
+
+**As built (2026-08) — scroll navigation and semantic zoom (this assembly OWNS these):**
+- **`IScrollController`** + `ScrollToRequest`/`ScrollByRequest`: the viewport pushes its exact live range and scrollable
+  state; the controller requests absolute or relative motion. `ScrollOptions.VerticalScrollController` composes that
+  exchange with `ItemsView`'s existing change-gated geometry observer, while `ScrollControllerAdapter.Attach` gives a
+  plain vertical `ScrollEl` the same contract. Requests use the existing `ScrollIntoView.ScrollTo` writer. Controller
+  identity is the one deliberately mount-stable value; the kit adds no engine opcode, scene column, layout or hook.
+- **`ItemsViewController.TryGetItemIndex(hRatio,vRatio,out index)`**: a read-only query over the live `ScrollState.Layout`
+  and realized window, used by pointer-position detail affordances without polling or realizing a row per pointer move.
+- **`AnnotatedScrollBar`** + `AnnotatedScrollBarController` + `RailMetrics`: a live rail with absolute-position labels,
+  independent dense ticks, debounced collision collapse, accent thumb, pointer detail flag, repeat buttons, keyboard
+  navigation and `TemplateParts` element factories. All coordinate conversion is owned by `RailMetrics`; caller chrome
+  is re-pushed through `UseProps<T>()`, so labels/ticks/height/detail callbacks do not freeze at mount.
+- **`SemanticZoom`** + `SemanticZoomView`/`SemanticZoomSlots`/`SemanticZoomOptions`/`SemanticZoomController`: exactly two
+  retained views on `Flow.KeepAlive(MaxEntries:2)`, controlled zoom state, bidirectional item-index maps, lifecycle
+  notifications, focus/Escape behavior and mapped `ItemsViewController` anchoring before the incoming view presents.
+  Each view preserves its own scroll state. Its `MotionRecipes.SemanticZoomOut/In` are owned by
+  backdrop-effects-animation.md; this control only selects the directional recipe.
 
 **Explicitly NOT owned here (referenced):** `DragLift`/`DragVisualStyle`/`DragSession`/`DragState`/`DropTargetSpec`
 (incl. `SpotlightWhen`/`RefusalCaption`/spring-load), `DragSourceOpacityOverride`, the settle window and the

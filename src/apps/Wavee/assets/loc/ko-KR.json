@@ -88,6 +88,14 @@
   "recents": {
     "itemCount": "{count, plural, other {#개 항목}}",
     "playedCount": "{count, plural, other {#곡 재생}}",
+    "savedCount": "{count, plural, other {#곡 추가}}",
+    "overview": "개요",
+    "playCount": "{count, plural, other {#회 재생}}",
+    "mostly": "주로 {title}",
+    "nothingPlayed": "재생 기록 없음",
+    "busiest": "가장 많이 재생한 날: {date} · {count, plural, other {#회}}",
+    "soFar": "현재까지",
+    "jumpToDay": "{date}(으)로 이동",
     "chip": {
       "music": "음악",
       "podcasts": "팟캐스트"

@@ -71,7 +71,11 @@ Element / IsEnabled as plain fields.
 `AutoSuggestBox` (plain list overload/Placeholder), `CalendarDatePicker`, `DatePicker`, `TimePicker`,
 `RatingControl`, `ToggleSplitButton`, `ContentDialog` (title/message/button texts), `TeachingTip`,
 `GenericFlyout` (trigger label), `ItemsView` (**ItemCount/Items** — the DiagnosticsPanel bug class),
-`PagedShelf` (count/title/header), `ScrollBar` float-overload, `AnnotatedScrollBar`.
+`PagedShelf` (count/title/header), `ScrollBar` float-overload.
+
+`AnnotatedScrollBar` has moved to **SAFE**: `Create` re-pushes an immutable props record and the core reads it through
+`UseProps<T>()`; controller identity alone is mount-stable. Async label/tick/detail changes and height changes therefore
+reconcile without remounting, while pointer position rides compositor bindings.
 
 **SAFE**: ~40 control files (Patterns A/B/C + documented mount-seed collections) + ~12 non-visual helpers.
 **Unverified**: `TabStrip.cs` (no public Create found; check its field surface in Phase C).

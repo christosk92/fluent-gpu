@@ -8,8 +8,9 @@
 
 $ErrorActionPreference = 'Stop'
 $galleryRoot = 'C:\WAVEE\WinUI-Gallery\WinUIGallery'
-$repo = Split-Path -Parent $PSScriptRoot
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $appDir = Join-Path $repo 'src\FluentGpu.WindowsApp'
+$pagesDir = Join-Path $appDir 'Pages'
 $assetDir = Join-Path $appDir 'assets\ControlImages'
 $controlsDir = Join-Path $repo 'src\FluentGpu.Controls'
 
@@ -75,11 +76,14 @@ foreach ($k in $keys) {
 
   # Which gallery page file hosts this control's sample page (class {Key}Page / {Key}ControlPage).
   $pageFile = $null
-  foreach ($f in Get-ChildItem $appDir -Filter '*.cs') {
+  foreach ($f in Get-ChildItem $pagesDir -Filter '*.cs' -Recurse) {
     $content = Get-Content $f.FullName -Raw
-    if ($content -match ("class\s+" + [regex]::Escape($k) + "(Control)?Page\b")) { $pageFile = $f.Name; break }
+    if ($content -match ("class\s+" + [regex]::Escape($k) + "(Control)?Page\b")) {
+      $pageFile = $f.FullName.Substring($repo.Length + 1).Replace('\', '/')
+      break
+    }
   }
-  $pageLit = if ($pageFile) { '"src/FluentGpu.WindowsApp/' + $pageFile + '"' } else { 'null' }
+  $pageLit = if ($pageFile) { '"' + $pageFile + '"' } else { 'null' }
 
   $tplLit = if ($it.SourcePath) { '"' + (Esc $it.SourcePath) + '"' } else { 'null' }
   $imgLit = if ($img) { '"' + $img + '"' } else { 'null' }
@@ -92,7 +96,7 @@ foreach ($k in $keys) {
 }
 [void]$sb.AppendLine('    ];')
 [void]$sb.AppendLine('}')
-Set-Content -Path (Join-Path $appDir 'PageInfoData.g.cs') -Value $sb.ToString() -Encoding UTF8
+Set-Content -Path (Join-Path $appDir 'Shell\PageInfoData.g.cs') -Value $sb.ToString() -Encoding UTF8
 
 # Full Segoe Fluent Icons catalog -> TSV (the new Iconography page parses this at mount; no JSON dependency).
 $icons = Get-Content (Join-Path $galleryRoot 'Samples\Iconography\IconsData.json') -Raw | ConvertFrom-Json

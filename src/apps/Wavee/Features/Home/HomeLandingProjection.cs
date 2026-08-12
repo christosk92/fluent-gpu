@@ -9,17 +9,17 @@ namespace Wavee;
 internal sealed record HomeLandingModule(HomeGroup Group, HomeSection? PrimarySection);
 
 /// <summary>The finite prototype rhythm projected from a lossless <see cref="HomeFeed"/>. Each visual kind has at most
-/// one landing module; every identified source section remains separately available in <see cref="Sections"/>.</summary>
+/// one landing module; identified source sections not already represented by one of those modules remain available in
+/// <see cref="Sections"/>.</summary>
 internal sealed class HomeLanding
 {
     readonly HomeLandingModule?[] _modules = new HomeLandingModule?[Enum.GetValues<HomeGroupKind>().Length];
 
-    public IReadOnlyList<HomeSection> Sections { get; }
-
-    public HomeLanding(IReadOnlyList<HomeSection> sections) => Sections = sections;
+    public IReadOnlyList<HomeSection> Sections { get; private set; } = Array.Empty<HomeSection>();
 
     public HomeLandingModule? Get(HomeGroupKind kind) => _modules[(int)kind];
     internal void Set(HomeGroupKind kind, HomeLandingModule module) => _modules[(int)kind] = module;
+    internal void SetSections(IReadOnlyList<HomeSection> sections) => Sections = sections;
 }
 
 /// <summary>Pure, engine-free Home landing projection. Source groups are concatenated in feed order and de-duplicated
@@ -40,20 +40,25 @@ internal static class HomeLandingProjection
 
     public static HomeLanding Project(HomeFeed feed, HomeModuleTitles titles)
     {
-        var landing = new HomeLanding(SectionDirectory(feed));
+        var landing = new HomeLanding();
+        var consumedSections = new HashSet<string>(StringComparer.Ordinal);
 
         var heroes = Groups(feed, HomeGroupKind.Hero);
         if (heroes.Count > 0)
         {
             var hero = heroes[0];
             landing.Set(HomeGroupKind.Hero, new HomeLandingModule(hero, PrimarySection(feed, [hero])));
+            MarkConsumed(consumedSections, [hero]);
         }
 
         var weekly = Groups(feed, HomeGroupKind.WeeklyPair);
-        var (pair, loneWeekly) = WeeklyPair(weekly);
+        var (pair, pairSources, loneWeekly, loneWeeklySource) = WeeklyPair(weekly);
         if (pair is not null)
+        {
             landing.Set(HomeGroupKind.WeeklyPair,
-                new HomeLandingModule(pair, PrimarySection(feed, weekly)));
+                new HomeLandingModule(pair, PrimarySection(feed, pairSources)));
+            MarkConsumed(consumedSections, pairSources);
+        }
 
         for (int i = 0; i < AggregatedKinds.Length; i++)
         {
@@ -71,9 +76,19 @@ internal static class HomeLandingProjection
             for (int g = 0; g < source.Count; g++) total = Math.Max(total, source[g].TotalCount);
             var group = new HomeGroup(kind, Title(kind, source, titles), cards,
                 TotalCount: total);
-            landing.Set(kind, new HomeLandingModule(group, PrimarySection(feed, source)));
+            IReadOnlyList<HomeGroup> contributors = source;
+            if (lone is not null && loneWeeklySource is not null)
+            {
+                var withLone = new List<HomeGroup>(source.Count + 1);
+                withLone.AddRange(source);
+                if (!withLone.Contains(loneWeeklySource)) withLone.Add(loneWeeklySource);
+                contributors = withLone;
+            }
+            landing.Set(kind, new HomeLandingModule(group, PrimarySection(feed, contributors)));
+            MarkConsumed(consumedSections, contributors);
         }
 
+        landing.SetSections(SectionDirectory(feed, consumedSections));
         return landing;
     }
 
@@ -100,17 +115,21 @@ internal static class HomeLandingProjection
     }
 
     /// <summary>The two-up module (both appointments present) or, failing that, the ONE appointment that does exist.</summary>
-    static (HomeGroup? Pair, HomeCard? Lone) WeeklyPair(IReadOnlyList<HomeGroup> groups)
+    static (HomeGroup? Pair, IReadOnlyList<HomeGroup> PairSources, HomeCard? Lone, HomeGroup? LoneSource)
+        WeeklyPair(IReadOnlyList<HomeGroup> groups)
     {
         HomeCard? discover = null, release = null;
+        HomeGroup? discoverSource = null, releaseSource = null;
         for (int g = 0; g < groups.Count; g++)
             for (int c = 0; c < groups[g].Cards.Count; c++)
             {
                 var card = groups[g].Cards[c];
                 switch (card.Meta?.Format)
                 {
-                    case "discover-weekly" when discover is null: discover = card; break;
-                    case "release-radar" when release is null: release = card; break;
+                    case "discover-weekly" when discover is null:
+                        discover = card; discoverSource = groups[g]; break;
+                    case "release-radar" when release is null:
+                        release = card; releaseSource = groups[g]; break;
                 }
             }
         // The prototype is a standing APPOINTMENT PAIR, so a singleton still gets NO two-up: half of an authored 1fr 1fr
@@ -118,10 +137,24 @@ internal static class HomeLandingProjection
         // formats EXCLUSIVELY to WeeklyPair, and a young account routinely has Discover Weekly weeks before its first
         // Release Radar, so the card would otherwise reach no landing module at all. It falls through to the shapeless
         // quick grid (where a card whose format named no module lands anyway); the feed's own WeeklyPair group, its kind
-        // and its ordinal are untouched, and its source page stays in the section directory.
+        // and its ordinal are untouched. Once shown by that fallback module, its source is deliberately not duplicated
+        // in the section directory.
         if (discover is not null && release is not null)
-            return (new HomeGroup(HomeGroupKind.WeeklyPair, null, [discover, release], TotalCount: 2), null);
-        return (null, discover ?? release);
+        {
+            IReadOnlyList<HomeGroup> sources = ReferenceEquals(discoverSource, releaseSource)
+                ? [discoverSource!]
+                : [discoverSource!, releaseSource!];
+            return (new HomeGroup(HomeGroupKind.WeeklyPair, null, [discover, release], TotalCount: 2),
+                sources, null, null);
+        }
+        return (null, Array.Empty<HomeGroup>(), discover ?? release, discoverSource ?? releaseSource);
+    }
+
+    static void MarkConsumed(HashSet<string> consumed, IReadOnlyList<HomeGroup> groups)
+    {
+        for (int i = 0; i < groups.Count; i++)
+            if (groups[i].Uri is { Length: > 0 } uri)
+                consumed.Add(uri);
     }
 
     static bool Holds(List<HomeCard> cards, string uri)
@@ -197,7 +230,7 @@ internal static class HomeLandingProjection
         return best;
     }
 
-    static IReadOnlyList<HomeSection> SectionDirectory(HomeFeed feed)
+    static IReadOnlyList<HomeSection> SectionDirectory(HomeFeed feed, HashSet<string> consumed)
     {
         var result = new List<HomeSection>();
         var uris = new HashSet<string>(StringComparer.Ordinal);
@@ -207,7 +240,7 @@ internal static class HomeLandingProjection
             {
                 var section = sections[i];
                 if (!HasIdentity(section)) continue;
-                if (section.Uri is { Length: > 0 } uri && !uris.Add(uri)) continue;
+                if (section.Uri is { Length: > 0 } uri && (consumed.Contains(uri) || !uris.Add(uri))) continue;
                 result.Add(section);
             }
             return result;
@@ -218,7 +251,7 @@ internal static class HomeLandingProjection
         {
             var group = feed.Groups[i];
             if (group.Title is not { Length: > 0 } && group.Uri is not { Length: > 0 }) continue;
-            if (group.Uri is { Length: > 0 } uri && !uris.Add(uri)) continue;
+            if (group.Uri is { Length: > 0 } uri && (consumed.Contains(uri) || !uris.Add(uri))) continue;
             result.Add(new HomeSection(group.Uri, group.Title, group.Subtitle, group.Cards,
                 Math.Max(group.TotalCount, group.Cards.Count), group.Cards.Count));
         }

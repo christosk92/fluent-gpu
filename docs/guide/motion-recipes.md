@@ -30,8 +30,9 @@ Context.Anim.PopIn(dot.Value, dirY: 1f, distance: 8f, blur: 2f);
 ```
 
 Multi-node recipes take a span (`anim.PopInStaggered(digits.Value, staggerMs: 70f)`). A couple of common mount cases
-also have own-node `Component` hooks (`this.UseSoftReveal()`), the counterpart to `MotionHooks.UseEntrance`. And three
-are `LayoutTransition` presets for `BoxEl.Animate` (`MotionRecipes.PageSlide`, `.CardResize`, `.PanelReveal`).
+also have own-node `Component` hooks (`this.UseSoftReveal()`), the counterpart to `MotionHooks.UseEntrance`. Named
+`LayoutTransition` presets include `MotionRecipes.PageSlide`, `.CardResize`, `.PanelReveal`, and the directional
+`.SemanticZoomOut`/`.SemanticZoomIn` pair.
 
 ## The recipe catalog
 
@@ -49,6 +50,7 @@ are `LayoutTransition` presets for `BoxEl.Animate` (`MotionRecipes.PageSlide`, `
 | **Page side-by-side** | `Animate = MotionRecipes.PageSlide` | slide between two pages (list ↔ detail) with a cross-fade |
 | **Card resize** | `Animate = MotionRecipes.CardResize` | tween a container's size through real layout (neighbours reflow), SmoothOut 300ms |
 | **Panel reveal** | `Animate = MotionRecipes.PanelReveal` | slide a panel in (open 400ms / close 350ms asymmetry) |
+| **Semantic zoom** | `Flow.KeepAlive(... TransitionFor: SemanticZoomOut/In)` | overview comes forward while detail recedes, reversed on return; opacity + scale only, no root blur |
 
 ## Decision rules — situation → recipe
 
@@ -66,6 +68,7 @@ Match the *visible element* first, then the verb (from transitions.dev's decisio
 - **Two screens, list ↔ detail or step 1 ↔ step 2** → page side-by-side (`PageSlide`).
 - **An element changes width/height** → card resize (`CardResize`).
 - **A panel slides into a region** → panel reveal (`PanelReveal`).
+- **Two retained views change semantic granularity** → directional `SemanticZoomOut` / `SemanticZoomIn` (normally via the `SemanticZoom` control).
 
 If two could fit, prefer the lower-overhead one.
 

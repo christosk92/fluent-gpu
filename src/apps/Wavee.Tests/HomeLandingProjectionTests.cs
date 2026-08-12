@@ -10,7 +10,7 @@ public sealed class HomeLandingProjectionTests
         Meta: new HomeCardMeta(Format: format));
 
     [Fact]
-    public void SameKindGroups_BecomeOneOrderedUniqueLandingModule_WithoutChangingLedger()
+    public void SameKindGroups_BecomeOneOrderedUniqueLandingModule_AndLeaveNoDuplicateDeckTiles()
     {
         var one = Card("one");
         var duplicate = Card("same");
@@ -33,7 +33,7 @@ public sealed class HomeLandingProjectionTests
         Assert.Equal(HomeModuleTitles.Default.JumpBackIn, quick.Group.Title);
         Assert.Equal(64, quick.Group.TotalCount);
         Assert.Same(sections[1], quick.PrimarySection);
-        Assert.Equal(2, landing.Sections.Count);
+        Assert.Empty(landing.Sections);
         Assert.Same(sections, feed.Sections);
     }
 
@@ -54,8 +54,9 @@ public sealed class HomeLandingProjectionTests
         var weekly = Assert.IsType<HomeLandingModule>(landing.Get(HomeGroupKind.WeeklyPair));
 
         Assert.Equal(["discover-weekly", "release-radar"], weekly.Group.Cards.Select(c => c.Meta!.Format));
-        Assert.Equal(2, landing.Sections.Count);
-        Assert.Contains(releaseB, landing.Sections[1].Cards);
+        var unconsumed = Assert.Single(landing.Sections);
+        Assert.Same(sections[1], unconsumed);
+        Assert.Contains(releaseB, unconsumed.Cards);
     }
 
     [Fact]
@@ -76,9 +77,9 @@ public sealed class HomeLandingProjectionTests
         Assert.Null(landing.Get(HomeGroupKind.WeeklyPair));
         var quick = Assert.IsType<HomeLandingModule>(landing.Get(HomeGroupKind.QuickGrid));
         Assert.Equal([release.Uri], quick.Group.Cards.Select(c => c.Uri));
-        // The weekly section's own label belongs to its drill page, not to the grid that absorbed one of its cards.
+        // Its section is represented by the fallback module, so the deck must not repeat it.
         Assert.Equal(HomeModuleTitles.Default.JumpBackIn, quick.Group.Title);
-        Assert.Same(section, Assert.Single(landing.Sections));
+        Assert.Empty(landing.Sections);
     }
 
     [Fact]
@@ -125,5 +126,21 @@ public sealed class HomeLandingProjectionTests
             new HomeFeed("", [], Sections: [a, b, duplicateA, noUri]), HomeModuleTitles.Default);
 
         Assert.Equal(["A", "B", "Local"], landing.Sections.Select(s => s.Title));
+    }
+
+    [Fact]
+    public void Directory_ExcludesTheRecentsSourceAlreadyConsumedByItsTypedModule()
+    {
+        const string recentsUri = "spotify:list:recents:main";
+        var recent = Card("recent");
+        var recents = new HomeGroup(HomeGroupKind.Recents, "Recents", [recent], Uri: recentsUri);
+        var recentsSection = new HomeSection(recentsUri, "Recents", null, [recent], 20, 20);
+        var extra = new HomeSection("spotify:section:extra", "Extra", null, [Card("extra")], 1, 1);
+
+        var landing = HomeLandingProjection.Project(
+            new HomeFeed("", [recents], Sections: [recentsSection, extra]), HomeModuleTitles.Default);
+
+        Assert.NotNull(landing.Get(HomeGroupKind.Recents));
+        Assert.Same(extra, Assert.Single(landing.Sections));
     }
 }
