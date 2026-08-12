@@ -39,8 +39,10 @@ public static class SidebarPinId
     /// <summary>The pre-seeded app routes shown by pickers. Dynamic route families (browse, concerts, extension pages,
     /// future registered routes) are also pinnable when reached; they are not enumerated here because their instances
     /// only exist at runtime.</summary>
+    /// <remarks>"recents" is the full recently-played page. It is offered by the CUSTOMIZER only and is deliberately NOT
+    /// in <c>SidebarCustomLayout.DefaultTopBar</c> — a destination a user may add, not one the shell mandates.</remarks>
     public static readonly string[] PinnableRoutes =
-        ["home", "search", "albums", "artists", "liked", "podcasts", "local", "history"];
+        ["home", "search", "albums", "artists", "liked", "podcasts", "local", "history", "recents"];
 
     /// <summary>Liked Songs is a ROUTE pin, not a playlist pin — matching <c>ActionRules.RouteFor</c>'s existing special
     /// case, so a pin made from the detail page and a pin made from a sidebar row are the SAME pin.</summary>

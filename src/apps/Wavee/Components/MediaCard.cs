@@ -904,7 +904,7 @@ public static class MediaCard
                               Action onClick, Action onPlay,
                               string? eyebrow = null, ColorF? eyebrowColor = null, string? typeChip = null, Element? trailing = null, bool large = false,
                               string? detail = null, Action<string>? onSubtitleNav = null, string? meta = null, bool detailBelowArt = false,
-                              MenuAttach? menu = null, DragSource? drag = null)
+                              MenuAttach? menu = null, DragSource? drag = null, string? morphKey = null)
     {
         var hovered = new Signal<bool>(false);
         float art = large ? 84f : WaveeSize.Thumb48;
@@ -920,7 +920,10 @@ public static class MediaCard
             Width = art, Height = art, Shrink = 0f, ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(r),
             Children =
             [
-                ArtworkOrLiked(cover, uri, art, art, r),
+                // morphKey (default null ⇒ byte-identical to the pre-seam row) tags this cover as a connected-animation
+                // participant, exactly like Shelf/Grid already do. A caller must guarantee the key is UNIQUE among the
+                // live nodes — two rows carrying one MorphId is a duplicate-key bug, not a nicer transition.
+                ArtworkOrLiked(cover, uri, art, art, r, morphKey),
                 LazyOverlay(hovered, uri, onPlay, fab, cover: true, art, centered: true),
             ],
         };

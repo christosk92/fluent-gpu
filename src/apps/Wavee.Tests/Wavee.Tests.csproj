@@ -54,6 +54,8 @@
     <!-- playlist membership + collection delta wire types (the Backend mapping logic is unit-tested here) -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist_permission.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\playlist4_external.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
+    <!-- the recents-page group_metadata payload (RecentsWireMapper decodes it) — RecentsWireMapper/RecentsGrouping tests build it -->
+    <Protobuf Include="..\Wavee\SpotifyLive\Protos\recents_group_metadata.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\collection2v2.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
     <!-- audio playback resolution: storage-resolve + AUDIO_FILES (FLAC) — LiveTrackResolverTests parse these -->
     <Protobuf Include="..\Wavee\SpotifyLive\Protos\storage-resolve.proto" GrpcServices="None" ProtoRoot="..\Wavee\SpotifyLive\Protos" />
@@ -97,6 +99,11 @@
          lossless for the Zune-style section directory. -->
     <Compile Include="..\Wavee\Features\Home\HomeLandingProjection.cs" />
     <Compile Include="..\Wavee\Features\Home\HomeHeroLayout.cs" />
+    <!-- Home's "Show all" cursor arithmetic: raw-vs-deduped offsets and the three termination rules (a null cursor, a
+         cursor at/behind the offset that produced it, and an all-duplicate page). System + Wavee.Core only — split out
+         of HomeSectionNavigation.cs, whose preview store is Context-bound — so HomeSectionPagingTests drives the real
+         rules without a page, a service or a response. -->
+    <Compile Include="..\Wavee\Features\Home\HomeSectionPaging.cs" />
     <!-- Home's what's-new timeline merge: which notifications belong on the module, in what order, in which day group,
          and what the "N unheard of M" counter says. System + Wavee.Core only (the row RENDER stays in the component),
          so HomeTimelineMergeTests drives the real gate/sort/grouping without a page, a feed or a clock. -->
@@ -105,6 +112,11 @@
          construction (Wavee.Core + the plane's Scheme + WaveePalette, both already source-included), so HomeWashSourceTests
          drive the real selection/derivation without a plane, a theme or a window. -->
     <Compile Include="..\Wavee\Features\Home\HomeWashSource.cs" />
+    <!-- The Recents page's PURE half: chip derivation from the wire content types, the client-side filter map, the
+         realized-window → URI batching rule, shared-element eligibility, and the culture-only played-at/summary
+         formatting. System + Wavee.Core only (the page itself is engine-bound and is deliberately NOT included), so
+         RecentsViewTests drive the REAL rules without a viewport, a service or a clock. -->
+    <Compile Include="..\Wavee\Features\Recents\RecentsView.cs" />
     <!-- the sidebar's engine-free model/data/persistence layer (System + Wavee.Core only). ShellNavDestTests carries
          its own minimal Icons/Route shims; Signal<T> is satisfied by VirtualCollectionSignalShim.cs (see above). -->
     <Compile Include="..\Wavee\Features\Sidebar\SidebarDesign.cs" />

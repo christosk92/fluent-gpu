@@ -170,6 +170,9 @@ public static class DetailVerticalLayout
     public const float AccentRuleRowHeight = 4f;      // Surfaces.AccentRule (2) + its 2-DIP top margin
     public const float AttributionRowHeight = 16f;    // owner / billed artists, 12px run on one line
     public const float MetaRowHeight = 16f;           // "50 songs · 3 hr 12 min", one line
+    // The daylist flip-countdown digit row (FlipCountdown.HeroRowHeight, restated — this file is engine-free and
+    // test-included, so it cannot reference the component).
+    public const float PulseRowHeight = 28f;
     public const float ActionRowHeight = 40f;         // WaveeCta.Play (36) + the row's Spacing.XS top margin
     public const float DescriptionLineHeight = 18f;   // the 13px expandable blurb
     public const float IdentityGap = 4f;              // Spacing.XS — the identity column's inter-block gap
@@ -182,7 +185,7 @@ public static class DetailVerticalLayout
     /// separated by <see cref="IdentityGap"/>. Title, accent rule and action row are unconditional; the rest are
     /// present exactly when the hero would emit them.</summary>
     public static float IdentityHeightFor(float colW, bool rowFlow,
-        bool eyebrow, bool attribution, bool meta, bool description)
+        bool eyebrow, bool attribution, bool meta, bool description, bool pulse = false)
     {
         float w = colW > 0f ? colW : FallbackW;
         int blocks = 0;
@@ -192,6 +195,7 @@ public static class DetailVerticalLayout
         h += AccentRuleRowHeight; blocks++;
         if (attribution) { h += AttributionRowHeight; blocks++; }
         if (meta) { h += MetaRowHeight; blocks++; }
+        if (pulse) { h += PulseRowHeight; blocks++; }   // the daylist countdown sits between meta and the action row
         h += ActionRowHeight; blocks++;
         if (description) { h += DescriptionMaxLines(rowFlow) * DescriptionLineHeight; blocks++; }
         return h + (blocks > 1 ? (blocks - 1) * IdentityGap : 0f);
@@ -200,12 +204,12 @@ public static class DetailVerticalLayout
     /// <summary>The whole expanded hero band: the padded artwork/identity composition (stacked or side-by-side, the
     /// same reflow <see cref="RowFlow(float)"/> selects) plus the list toolbar row that rides under it.</summary>
     public static float HeroBandHeight(float colW, bool rowFlow,
-        bool eyebrow, bool attribution, bool meta, bool description)
+        bool eyebrow, bool attribution, bool meta, bool description, bool pulse = false)
     {
         float w = colW > 0f ? colW : FallbackW;
         float pad = HeroPadFor(w);
         float art = ArtworkFor(w, rowFlow);
-        float identity = IdentityHeightFor(w, rowFlow, eyebrow, attribution, meta, description);
+        float identity = IdentityHeightFor(w, rowFlow, eyebrow, attribution, meta, description, pulse);
         // Row flow bottom-aligns the two columns, so the band is whichever is taller; stacked adds them over the gap.
         float hero = rowFlow ? MathF.Max(art, identity) : art + HeroGapFor(w) + identity;
         return pad + hero + HeroBottomPad

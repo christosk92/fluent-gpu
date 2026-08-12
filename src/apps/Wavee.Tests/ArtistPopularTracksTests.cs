@@ -95,7 +95,7 @@ public class SpotifyArtistPopularTracksServiceTests
     sealed class ProjectingSource : IMetadataSource
     {
         public int Calls;
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
         {
             Calls++;
             var landed = new List<string>(entities.Count);
@@ -293,7 +293,7 @@ public class SpotifyArtistPopularTracksServiceTests
 
     sealed class NoopSource : IMetadataSource
     {
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
             => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
     }
 }

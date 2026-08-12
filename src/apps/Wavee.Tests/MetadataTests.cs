@@ -118,7 +118,7 @@ public class MetadataServiceTests
             _project = project;
             _projectFilter = projectFilter;
         }
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
         {
             Calls++;
             TotalEntities += entities.Count;

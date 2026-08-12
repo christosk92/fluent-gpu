@@ -5,13 +5,13 @@ namespace Wavee.Tests;
 public class HomeHeroLayoutTests
 {
     [Theory]
-    // 344/304/296, one DIP under the pre-convergence 345/305/297: the hero's meta line moved from a bespoke 13/19 onto
-    // Body 14/20 and its margin from 18 onto the 4-grid's 16, so the block is 36 rather than 37. Every other block is
-    // byte-identical — the tag row in particular stayed at 32 because its padding grew exactly as its margin shrank.
-    [InlineData(699.9f, (byte)0, 296f, true)]
-    [InlineData(700f, (byte)1, 304f, false)]
-    [InlineData(979.9f, (byte)1, 304f, false)]
-    [InlineData(980f, (byte)2, 344f, false)]
+    // 384/344/336 = the pre-daylist 344/304/296 plus the 40-DIP pulse block (the 28-DIP flip-countdown digit row +
+    // its 12 margin) that HeroBand now reserves for every hero — the slot is always present so the virtual estimator
+    // and the renderer state the same geometry; non-daylist heroes collapse it to an empty BoxEl.
+    [InlineData(699.9f, (byte)0, 336f, true)]
+    [InlineData(700f, (byte)1, 344f, false)]
+    [InlineData(979.9f, (byte)1, 344f, false)]
+    [InlineData(980f, (byte)2, 384f, false)]
     public void TierGeometry_IsExact(float width, byte tier, float height, bool stacked)
     {
         var metrics = HomeHeroLayout.For(width);
@@ -27,9 +27,9 @@ public class HomeHeroLayoutTests
     [Fact]
     public void FlattenedSurface_PreservesThePreviousRendererEstimatorArithmetic()
     {
-        Assert.Equal(344f, HomeHeroLayout.ContentHeight(HomeHeroTier.Wide));
-        Assert.Equal(304f, HomeHeroLayout.ContentHeight(HomeHeroTier.Medium));
-        Assert.Equal(296f, HomeHeroLayout.ContentHeight(HomeHeroTier.Narrow));
+        Assert.Equal(384f, HomeHeroLayout.ContentHeight(HomeHeroTier.Wide));
+        Assert.Equal(344f, HomeHeroLayout.ContentHeight(HomeHeroTier.Medium));
+        Assert.Equal(336f, HomeHeroLayout.ContentHeight(HomeHeroTier.Narrow));
         Assert.Equal(96f, HomeHeroLayout.ArtworkFade);
     }
 
@@ -51,10 +51,11 @@ public class HomeHeroLayoutTests
         const float titleMargin = 12f;
         const float tagsBlock = 20f + 12f;   // Caption 12/16 + 2x2 padding, + a 12 margin
         const float metaBlock = 20f + 16f;   // Body 14/20 + a 16 margin
+        const float pulseBlock = 28f + 12f;  // the flip-countdown digit row (FlipCountdown.HeroRowHeight) + a 12 margin
         const float actionsBlock = 32f;      // the hero button row
 
         Assert.Equal(
-            2f * copyPaddingY + eyebrowBlock + titleBlock + titleMargin + tagsBlock + metaBlock + actionsBlock,
+            2f * copyPaddingY + eyebrowBlock + titleBlock + titleMargin + tagsBlock + metaBlock + pulseBlock + actionsBlock,
             HomeHeroLayout.ContentHeight(tier));
     }
 }

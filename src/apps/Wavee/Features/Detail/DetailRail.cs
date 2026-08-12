@@ -92,6 +92,9 @@ static class DetailRail
         if (cfg.Badges != BadgeStyle.TypeYear && m.MetaLine is { Length: > 0 })
             kids.Add(WaveeType.TrackMeta(m.MetaLine) with { Width = cover, MaxLines = 2, Trim = TextTrim.CharacterEllipsis });
 
+        // Daylist rollover countdown — the same flip strip the Home hero mounts, at rail scale.
+        if (DaylistCard(m, h, compact: true) is { } daylist) kids.Add(daylist);
+
         // CTA cluster: Play pill + a GROUP of shuffle/heart/share FABs. Wrap=true → at a wide rail they're one line; at a
         // narrow rail the FAB group wraps to the next line AS A UNIT (Play above, the three FABs together below) instead
         // of orphaning a single FAB on its own line.
@@ -282,6 +285,15 @@ static class DetailRail
         => m.UpcomingAt is { } end
             ? Embed.Comp(() => new PreReleaseCountdown { ReleaseAt = end, Accent = () => h.Accent })
                 with { Key = "prerelease:" + m.ContextUri + ":" + end.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture) }
+            : null;
+
+    /// <summary>The daylist rollover countdown, or null when this playlist carries no window. Shared by the rail
+    /// (compact) and the vertical hero (hero scale). Key = the window, so a rollover remounts with fresh frozen props;
+    /// the accent is a thunk because the art-derived palette lands after mount (PreReleaseCard's contract).</summary>
+    internal static Element? DaylistCard(DetailModel m, DetailHandlers h, bool compact)
+        => m.ExpiresAtMs > 0
+            ? Embed.Comp(() => new FlipCountdown { ExpiresAtMs = m.ExpiresAtMs, Accent = () => h.Accent, Compact = compact })
+                with { Key = "daylist:" + m.ContextUri + ":" + m.ExpiresAtMs.ToString(System.Globalization.CultureInfo.InvariantCulture) }
             : null;
 
     // The play cluster for the vertical (narrow) header: Play pill + shuffle / save / share, wrapping as a unit. The list

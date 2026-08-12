@@ -72,7 +72,11 @@ public sealed record DetailModel(
     // Playlist-only read model: resolved collaborators plus a lookup used by Added-by cells. Tracks keep the raw wire id.
     IReadOnlyList<Owner>? Collaborators = null, IReadOnlyDictionary<string, Owner>? UserProfilesById = null,
     bool IsPublic = true, string? BasePermissionRevision = null,
-    PlaylistTuning? Tuning = null)
+    PlaylistTuning? Tuning = null,
+    // Daylist rollover window (unix ms): from playlist4 format_attributes when the wire carries them, else the Home
+    // card's Pathfinder attributes carried in on the nav preview (DetailPreview.FromPlaylist / the DetailPage merge).
+    // 0 = not a daylist / unknown. Drives the FlipCountdown row on the rail and the vertical hero.
+    long ExpiresAtMs = 0, long CreatedAtMs = 0)
 {
     /// <summary>Shared-element (connected-animation) key for the cover art — set by <c>DetailPage</c> from the route
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>

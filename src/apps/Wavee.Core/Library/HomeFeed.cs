@@ -63,7 +63,14 @@ public sealed record HomeCardMeta(
     // True only when the provider explicitly identified this card as a shallow identity that needs one exact header
     // read before display. Spotify sets it for a daylist whose `name` is empty or byte-for-byte equal to its
     // `daylist_pretitle`; consumers must never synthesize a personalized title from the card's tags.
-    bool NeedsHydration = false);
+    bool NeedsHydration = false,
+    // Unix ms when a generated playlist's content rolls over (Spotify daylist `expires` attribute). 0 = unknown /
+    // not applicable.
+    long ExpiresAtMs = 0,
+    // Unix ms when the current content window began (daylist `created` attribute). 0 = unknown.
+    long CreatedAtMs = 0,
+    // Provider's authored full-bleed desktop header image (`header_image_url_desktop`), distinct from the square cover.
+    string? HeaderImageUrl = null);
 
 /// <summary>One home tile: a context URI + display metadata + its kind. Source-neutral (cover may be a remote CDN url).
 /// <paramref name="MosaicTiles"/> (when <paramref name="Image"/> is null) carries up to 4 album-cover URLs for a 2×2
@@ -102,6 +109,15 @@ public sealed record HomeSection(
     int RawItemCount,
     int UnsupportedCount = 0,
     int DuplicateCount = 0);
+
+/// <summary>One page of ONE home section (the "Show all" axis), as returned by Spotify's <c>homeSection</c> operation.
+/// <paramref name="Section"/> is the same lossless ledger the inline Home sections produce, so a fetched page folds into
+/// what Home already rendered without a second card model.
+/// <para><paramref name="NextOffset"/> is the SERVER's own cursor (<c>sectionItems.pagingInfo.nextOffset</c>) and is the
+/// only trustworthy terminator: null means "complete", and a value at or behind the offset just requested means the same
+/// thing (a complete 6-of-6 section really does answer <c>nextOffset: 0</c>). <see cref="HomeSection.TotalCount"/> must
+/// NOT be the terminator — it disagreed with the returned item count in 7 of 31 captured sections.</para></summary>
+public sealed record HomeSectionPageResult(HomeSection Section, int? NextOffset);
 
 /// <summary>One preview track of a home recommendation (the hover peek on a Featured editorial card): display name,
 /// cover art, and an optional 30s MP3 preview URL. Source-neutral — Spotify fills it from feedBaselineLookup.</summary>

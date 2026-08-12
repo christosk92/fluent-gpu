@@ -90,10 +90,16 @@ public static class SpotifyHomeComposer
 
                     case "HomeRecentlyPlayedSectionData":
                     {
-                        var mapped = FirstContentData(items) is { ValueKind: JsonValueKind.Object } listData
+                        var listData = FirstContentData(items);
+                        var mapped = listData is { ValueKind: JsonValueKind.Object }
                             ? RecentCards(listData)
                             : new MappedCards([], RawCount(items), RawCount(items), 0);
-                        var section = Section(uri, title ?? t.Recents, subtitle, totalCount, mapped);
+                        // This one section's sectionItems array holds a SINGLE `List` wrapper, not the recents — so its
+                        // sectionItems.totalCount is 1 (measured: items 1, totalCount 1) while the real count (20) sits
+                        // on the wrapped list's own items page. Reading the wrapper's 1 made TotalCount == 1 for a
+                        // 20-card shelf, which is exactly the comparison "Show all" arms on: it could never arm here.
+                        var section = Section(uri, title ?? t.Recents, subtitle,
+                            RecentsTotal(listData, totalCount), mapped);
                         sourceSections.Add(section);
                         groups.Add(Group(mapped.Cards.Count > 0 ? HomeGroupKind.Recents : HomeGroupKind.SectionEntry,
                             section, mapped.Cards, true));
@@ -119,6 +125,40 @@ public static class SpotifyHomeComposer
 
         return new HomeContribution(groups, Priority: 0, Chips: MapChips(homeRoot), Greeting: Greeting(homeRoot),
             Sections: sourceSections);
+    }
+
+    /// <summary>Map one <c>homeSection</c> response — the "Show all" paging axis for a single Home section — into the
+    /// same lossless <see cref="HomeSection"/> ledger <see cref="Compose"/> builds, plus the server's own paging cursor.
+    /// Returns null when the document carries no section at all (the caller treats that as a failed read, not as an
+    /// empty section).
+    /// <para>Shape: <c>data.homeSections.sections[0].sectionItems { items[], pagingInfo { nextOffset }, totalCount }</c>.
+    /// Each item is the SAME <c>{ content: { data } }</c> wrapper the inline Home sections use, which is why this reuses
+    /// <see cref="Cards"/> (and therefore <c>SpotifyExportMapper.CardFromEntity</c>) verbatim rather than owning a
+    /// second card mapper.</para>
+    /// <para><c>nextOffset</c> is genuinely nullable on the wire and is the ONLY terminator — see
+    /// <see cref="HomeSectionPageResult"/>.</para></summary>
+    public static HomeSectionPageResult? SectionPage(JsonElement root, string? fallbackTitle = null)
+    {
+        var rawSection = FirstSection(SpotifyExportMapper.Dig(root, "data", "homeSections", "sections"));
+        if (rawSection.ValueKind != JsonValueKind.Object) return null;
+
+        var data = SpotifyExportMapper.Dig(rawSection, "data");
+        var title = Str(data, "title", "transformedLabel") ?? Str(data, "title", "text") ?? fallbackTitle;
+        var subtitle = Str(data, "subtitle", "transformedLabel") ?? Str(data, "subtitle", "text");
+        var uri = Str(rawSection, "uri") ?? Str(data, "uri");
+        var mapped = Cards(SpotifyExportMapper.Dig(rawSection, "sectionItems", "items"));
+        int totalCount = IntAt(rawSection, "sectionItems", "totalCount");
+        return new HomeSectionPageResult(Section(uri, title, subtitle, totalCount, mapped),
+            NullableIntAt(rawSection, "sectionItems", "pagingInfo", "nextOffset"));
+    }
+
+    /// <summary>The single section a <c>homeSection</c> answer carries. The capture answers a bare ARRAY at
+    /// <c>homeSections.sections</c>; <c>home</c> wraps the equivalent list in an <c>items</c> object
+    /// (<c>sectionContainer.sections.items</c>), so both are accepted rather than silently mapping nothing.</summary>
+    static JsonElement FirstSection(JsonElement sections)
+    {
+        if (sections.ValueKind == JsonValueKind.Object) sections = SpotifyExportMapper.Dig(sections, "items");
+        return sections.ValueKind == JsonValueKind.Array && sections.GetArrayLength() > 0 ? sections[0] : default;
     }
 
     static void EmitSectionGroups(HomeSection section, List<HomeGroup> groups)
@@ -264,12 +304,29 @@ public static class SpotifyHomeComposer
         return new MappedCards(cards, raw, Math.Max(0, raw - mapped.Count), duplicates);
     }
 
+    /// <summary>The recents shelf's REAL server total, which lives on the WRAPPED list, not on the section wrapper.
+    /// <para>Once there is a list to read, the wrapper's own count is discarded rather than used as a fallback: it counts
+    /// the one <c>List</c> child (measured: items 1, totalCount 1), so keeping it would pin a twenty-card shelf at "1".
+    /// Zero lets <see cref="Section"/> fall through to the mapped card count, which is at least true.
+    /// <paramref name="wrapperTotal"/> survives only for a response that carried no list at all.</para></summary>
+    static int RecentsTotal(JsonElement listData, int wrapperTotal) =>
+        listData.ValueKind == JsonValueKind.Object ? IntAt(listData, "items", "totalCount") : wrapperTotal;
+
     static int RawCount(JsonElement items) => items.ValueKind == JsonValueKind.Array ? items.GetArrayLength() : 0;
 
     static JsonElement FirstContentData(JsonElement items) =>
         items.ValueKind == JsonValueKind.Array && items.GetArrayLength() > 0
             ? SpotifyExportMapper.Dig(items[0], "content", "data")
             : default;
+
+    /// <summary>A read where ABSENT and <c>null</c> mean something the caller must act on (<c>pagingInfo.nextOffset</c>:
+    /// "there is no next page"), so they cannot be flattened into 0 the way <see cref="IntAt"/> does — 0 is a legal
+    /// cursor value the server sends on a COMPLETE section.</summary>
+    static int? NullableIntAt(JsonElement element, params string[] path)
+    {
+        var value = SpotifyExportMapper.Dig(element, path);
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int result) ? result : null;
+    }
 
     static int IntAt(JsonElement element, params string[] path)
     {

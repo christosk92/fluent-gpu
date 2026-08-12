@@ -389,6 +389,7 @@
     "unplayed": "unplayed",
     "yourDaylist": "your daylist",
     "heroEyebrow": "{greeting}, {name} · {what}",
+    "nextUpdateAt": "Next update at {time}",
     "editorial": "Editorial",
     "oneSeries": "One series, {count} mixes",
     "mixesFromArtists": "{count} mixes built from artists you play",
@@ -469,6 +470,14 @@
     "sort": {
       "newest": "Newest",
       "oldest": "Oldest"
+    }
+  },
+  "recents": {
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "playedCount": "{count, plural, one {Played # track} other {Played # tracks}}",
+    "chip": {
+      "music": "Music",
+      "podcasts": "Podcasts"
     }
   },
   "library": {
@@ -1040,6 +1049,7 @@
     "likedSongs": "Liked Songs",
     "podcasts": "Podcasts",
     "localFiles": "Local files",
+    "recents": "Recents",
     "playlist": "Playlist",
     "album": "Album",
     "artist": "Artist",

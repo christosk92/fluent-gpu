@@ -117,6 +117,13 @@ sealed class ContentHost : Component
             return new BoxEl { Key = "page:history", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new HistoryPage()) ] };
 
+        // The full recently-PLAYED surface. Deliberately its own destination rather than a `home-section:` drill-in:
+        // it is backed by `/playlist/v2/list/recents/page` (the whole grouped snapshot), not by the home document's
+        // section paging, so nothing about the Home shelf's counts or URIs decides whether it can be reached.
+        if (r.Name == "recents")
+            return new BoxEl { Key = "page:recents", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
+                Children = [ Embed.Comp(() => new RecentsPage()) ] };
+
         if (r.Name == "settings")
             return new BoxEl { Key = "page:settings", Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Direction = 1,
                 Children = [ Embed.Comp(() => new SettingsPage()) ] };

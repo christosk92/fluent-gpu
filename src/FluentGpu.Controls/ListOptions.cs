@@ -279,6 +279,22 @@ public record ListOptions
     /// long scroll over many keep-alive rows from leaking retained subtrees.</summary>
     public int KeepAliveCap { get; init; } = 8;
 
+    // ── viewport-driven hydration (opt-in; null ⇒ byte-identical to the pre-hook path) ──
+    /// <summary>Prefetch / hydration hook forwarded onto the built <c>VirtualListEl.OnVisibleRange</c>: the realized
+    /// window moved → <c>(first, last)</c>, <c>last</c> EXCLUSIVE. This is the seam a page batches "hydrate the rows the
+    /// user is at" from (extended metadata over a long list) WITHOUT dropping to the raw <c>Virtual.Measured</c> factory
+    /// and losing selection, keyboard nav, the recycle pools and the entrance/insertion choreography this record owns.
+    /// Both factory paths forward it (<c>CreateBound</c>'s bound slots and <c>Create</c>'s templated items).
+    /// <para>Two semantics that otherwise bite the caller. (1) It fires ONLY when the realized window actually CHANGED —
+    /// a steady transform-only scroll frame never reaches it — so treat it as a change EDGE, never a per-frame tick, and
+    /// never rely on it to re-run for a window that did not move. (2) The pair is the REALIZED window INCLUDING the
+    /// overscan / cache halo (<see cref="Overscan"/>, <see cref="CacheExtentPx"/>), NOT the strictly-visible rows: it
+    /// deliberately runs ahead of the viewport so a prefetch lands before the row is on screen. A caller that needs the
+    /// exactly-visible band must narrow the range itself.</para>
+    /// <para>Called from the reconciler's realize path (cold edge, never paint or input), so keep the body allocation-free
+    /// and cheap — batch the URIs and hand them to an async pump rather than doing work inline.</para></summary>
+    public Action<int, int>? OnVisibleRange { get; init; }
+
     /// <summary>The shared default (Single selection, overscan 4, grow 1, Border selector).</summary>
     public static ListOptions Default { get; } = new();
 }

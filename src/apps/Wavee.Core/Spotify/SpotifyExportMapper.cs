@@ -1020,6 +1020,17 @@ public static class SpotifyExportMapper
                 // resolves the exact playlist header before it releases Home from its derived shimmer.
                 bool needsHydration = isDaylist && (name.Length == 0
                     || (pretitle is { Length: > 0 } && string.Equals(name, pretitle, StringComparison.Ordinal)));
+                // Daylist rollover / authored banner live only on that format's attributes[] — skip the walk for
+                // plain playlists. Absent or unparsable timestamps stay 0; empty header URLs normalize to null.
+                long expiresAtMs = 0, createdAtMs = 0;
+                string? headerImageUrl = null;
+                if (isDaylist)
+                {
+                    expiresAtMs = AttrUnixMs(data, "expires");
+                    createdAtMs = AttrUnixMs(data, "created");
+                    headerImageUrl = Attr(data, "header_image_url_desktop");
+                    if (headerImageUrl is { Length: 0 }) headerImageUrl = null;
+                }
                 // Owner and description are kept APART. Subtitle carries whichever the card displays (the description
                 // when there is one), and Meta.OwnerName always carries the owner — so a meta line can say "by Spotify"
                 // instead of "by <the whole description>".
@@ -1027,7 +1038,8 @@ public static class SpotifyExportMapper
                 return new HomeCard(uri, name, description ?? owner,
                     ImagesCover(data) ?? EntityImage(data), HomeCardKind.Playlist,
                     Meta: new HomeCardMeta(format, accent, (int)LongAt(data, "content", "totalCount"), seeds,
-                        OwnerName: owner, GenericTitle: pretitle, NeedsHydration: needsHydration));
+                        OwnerName: owner, GenericTitle: pretitle, NeedsHydration: needsHydration,
+                        ExpiresAtMs: expiresAtMs, CreatedAtMs: createdAtMs, HeaderImageUrl: headerImageUrl));
             }
             case "Artist":
                 // Artist entities expose their display name under profile.name (albums/playlists use top-level name).
@@ -1187,6 +1199,17 @@ public static class SpotifyExportMapper
         foreach (var a in attrs.EnumerateArray())
             if (string.Equals(StrAt(a, "key"), key, StringComparison.Ordinal)) return StrAt(a, "value");
         return null;
+    }
+
+    /// <summary>Parse an ISO-8601 UTC attribute into unix ms; 0 when absent or unparsable.</summary>
+    static long AttrUnixMs(JsonElement data, string key)
+    {
+        var s = Attr(data, key);
+        if (s is null || s.Length == 0) return 0;
+        if (!DateTimeOffset.TryParse(s, CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var dto))
+            return 0;
+        return dto.ToUnixTimeMilliseconds();
     }
 
     static IReadOnlyList<string>? SplitTerms(string? csv)

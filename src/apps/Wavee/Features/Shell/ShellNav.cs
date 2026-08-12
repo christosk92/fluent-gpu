@@ -43,6 +43,11 @@ static class ShellNav
             "podcasts" => (Loc.Get(Strings.Nav.Podcasts), Icons.RadioTower),
             "local"    => (Loc.Get(Strings.Nav.LocalFiles), Icons.Folder),
             "history"  => (Loc.Get(Strings.Nav.History.Title), Icons.Clock),
+            // Recently PLAYED (Features/Recents/RecentsPage) — a different destination from "history", which is the
+            // app's NAVIGATION log. Headphones rather than Clock for exactly that reason: two surfaces wearing one
+            // glyph in the tab strip and the sidebar would read as the same place. Spelled as a LITERAL like the two
+            // arms below — this file is source-included by src/apps/Wavee.Tests, which cannot see the engine-bound page.
+            "recents"  => (Loc.Get(Strings.Nav.Recents), Icons.Headphones),
             "settings" => ("Settings", Icons.Settings),
             "api-console" => ("API Console", Icons.Code),
             // The local-playback ("Spotify.dll") locate/verify report. Spelled as a LITERAL for the same reason as

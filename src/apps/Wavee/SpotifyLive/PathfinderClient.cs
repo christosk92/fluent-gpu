@@ -109,6 +109,18 @@ public static class PathfinderOps
     public const string Home = "home";
     public const string HomeHash = "9052ac65ff42aefe6d39c45c184d9144cf8dbcc233ea1a76f8649264ad3e7896";
 
+    // Paging the items INSIDE one Home section — the real endpoint behind Home's "Show all", which used to be routed
+    // through browseSection (a browse resource that has no business answering a spotify:section: Home URI).
+    // Capture proof (all_home.saz, Spotify desktop 1.2.95.453): session 020 (`home`) and session 480 (`homeSection`)
+    // carry the IDENTICAL persisted hash — ONE document hosts both operations and `operationName` selects the root
+    // (`data.home` vs `data.homeSections`). Exactly the queryArtistDiscographyOverview/All shape below: do not
+    // "de-duplicate" the pair, because the (name, hash) tuple is what identifies the call.
+    // NOTE: the capture's shared hash is 76243c78b0e20ecdbe41b794dec8cbe73f75e585b0a7201b8d2e84578412847a; Wavee pins a
+    // DIFFERENT app version's document (HomeHash above), and the "one document, two operations" property is what makes
+    // pinning HomeHash here correct rather than a copy of the capture's value.
+    public const string HomeSection = "homeSection";
+    public const string HomeSectionHash = HomeHash;
+
     public const string SearchTracks = "searchTracks";
     public const string SearchTracksHash = "59ee4a659c32e9ad894a71308207594a65ba67bb6b632b183abe97303a51fa55";
     // Recaptured 1.2.94.583 (omg.saz sid 0458/0706). The previous hash 5e7d2724… has ZERO wire support across the

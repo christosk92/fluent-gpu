@@ -4529,6 +4529,68 @@ static class ScrollSuite
                 $"realized={realized} modelWired={modelWired} selects={selects} invokeWired={(probe.Options!.OnInvoked is not null)}");
         }
 
+        // ── gate.list.visible-range: ListOptions.OnVisibleRange actually REACHES the engine through ItemsView, on BOTH
+        //    virtual construction paths (bound RowBind + templated RenderItem). Before this the only way to get at
+        //    VirtualListEl.OnVisibleRange was to drop to the raw Virtual.Measured factory, which forfeits selection,
+        //    keyboard nav, the recycle pools and the entrance/insertion choreography ItemsView owns — so a viewport-
+        //    hydrated long list (fetch extended metadata for the rows the user scrolled to) could not use CreateBound.
+        //    The gate pins the two semantics the doc promises: the pair is the REALIZED window (overscan halo included,
+        //    NOT the strictly-visible band) and it fires only on a window CHANGE (no consecutive duplicate ranges, and
+        //    an idle frame after settle is silent). ─────────────────────────────────────────────────────────────────
+        {
+            (bool Ok, string Detail) ProbeVisibleRange(bool bound)
+            {
+                const int N = 400;
+                using var app = new HeadlessPlatformApp();
+                var window = new HeadlessWindow(new WindowDesc(bound ? "lo-vr-bound" : "lo-vr-tpl", new Size2(360, 360), 1f));
+                window.Show();
+                var ranges = new List<(int First, int Last)>();
+                var probe = new ListOptProbe
+                {
+                    Count = N, Extent = 40f, Vh = 200f, Bound = bound,
+                    Options = new ListOptions
+                    {
+                        Overscan = 4, Grow = 1f,
+                        OnVisibleRange = (f, l) => ranges.Add((f, l)),
+                    },
+                };
+                using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+                host.RunFrame();
+                for (int k = 0; k < 8; k++) host.RunFrame();   // settle the E4 budget-spread realize waves
+                var vp = FindVp(host.Scene, N);
+                host.Scene.TryGetScroll(vp, out var sc0);
+
+                // (a) the hook landed on the built VirtualListEl and the last pair IS the realized window.
+                bool fired = ranges.Count > 0;
+                bool matchesRealized = fired && ranges[^1] == (sc0.FirstRealized, sc0.LastRealized);
+                // (b) the halo semantic: the reported band is wider than the ~5 strictly-visible rows of a 200px viewport.
+                bool halo = fired && ranges[^1].Last - ranges[^1].First > 5;
+                // (c) CHANGE-only: an idle frame over an unmoved window is silent.
+                int n0 = ranges.Count;
+                host.RunFrame();
+                bool idleQuiet = ranges.Count == n0;
+                // (d) a window-MOVING scroll delivers the new realized window.
+                ScrollTo(host, window, vp, 4_000f);
+                host.Scene.TryGetScroll(vp, out var sc1);
+                bool moved = sc1.FirstRealized > sc0.FirstRealized;
+                bool tracked = moved && ranges.Count > n0 && ranges[^1] == (sc1.FirstRealized, sc1.LastRealized);
+                // (e) CHANGE-only across the WHOLE log: no recorded pair repeats its predecessor.
+                bool noDupes = true;
+                for (int i = 1; i < ranges.Count; i++) noDupes &= ranges[i] != ranges[i - 1];
+
+                return (fired && matchesRealized && halo && idleQuiet && tracked && noDupes,
+                        $"{(bound ? "bound" : "tpl")} calls={ranges.Count} last={(fired ? ranges[^1].ToString() : "-")} "
+                      + $"realized=[{sc0.FirstRealized},{sc0.LastRealized})->[{sc1.FirstRealized},{sc1.LastRealized}) "
+                      + $"match={matchesRealized} halo={halo} idleQuiet={idleQuiet} moved={moved} tracked={tracked} noDupes={noDupes}");
+            }
+
+            var boundRes = ProbeVisibleRange(bound: true);
+            var tplRes = ProbeVisibleRange(bound: false);
+            Check("gate.list.visible-range ListOptions.OnVisibleRange reaches VirtualListEl through BOTH ItemsView paths: the delivered pair is the realized window (overscan included) and it fires only on a window change",
+                boundRes.Ok && tplRes.Ok,
+                $"{boundRes.Detail} | {tplRes.Detail}");
+        }
+
         // ── gate.list.bound-overlap-recycler: a small contiguous window shift rotates retained slots around the
         //    overlap. Exactly |delta| entering rows rebind; every overlapping logical item keeps its scene root. ───
         {

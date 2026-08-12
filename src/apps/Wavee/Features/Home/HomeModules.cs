@@ -33,11 +33,25 @@ static class HomeModules
             : [content],
     };
 
+    /// <summary>The `home-section:` drill-in header. The affordance is GATED on the group naming something the section
+    /// page can actually open — a URI, or a TotalCount it can page — because that page reads the home document and a
+    /// group with neither would drill into an empty surface.</summary>
     static Element ModuleHeader(HomeGroup group, string? subtitle, Element? tools, Action<HomeGroup>? openSection)
     {
         if (group.Title is not { Length: > 0 } title) return new BoxEl();
-        if (openSection is null || (group.Uri is not { Length: > 0 } && group.TotalCount <= 0))
-            return Surfaces.SectionHeader(title, subtitle, tools);
+        Action? open = openSection is null || (group.Uri is not { Length: > 0 } && group.TotalCount <= 0)
+            ? null
+            : () => openSection(group);
+        return ModuleHeader(title, subtitle, tools, open);
+    }
+
+    /// <summary>The header over a PLAIN open action, for a module whose drill-in is a fixed app ROUTE rather than a
+    /// `home-section:` page (Recents → the "recents" destination). None of the group-shaped gating above applies to
+    /// one of those: its page is backed by a different endpoint entirely, so the shelf's URI and counts have no say in
+    /// whether it can be opened. Same rendered header either way — one affordance, two ways of naming its target.</summary>
+    static Element ModuleHeader(string title, string? subtitle, Element? tools, Action? open)
+    {
+        if (open is null) return Surfaces.SectionHeader(title, subtitle, tools);
 
         Element label = subtitle is { Length: > 0 } sub
             ? WaveeType.ModuleHeader(title, sub)
@@ -50,7 +64,7 @@ static class HomeModules
                 new BoxEl
                 {
                     Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
-                    Shrink = 1f, MinWidth = 0f, OnClick = () => openSection(group),
+                    Shrink = 1f, MinWidth = 0f, OnClick = open,
                     Cursor = CursorId.Hand, Role = AutomationRole.Hyperlink, Focusable = true,
                     Children = [label, Icon(Icons.ChevronRight, 12f, Tok.TextTertiary)],
                 },
@@ -133,9 +147,16 @@ static class HomeModules
 
     // ── C · the recents rail ───────────────────────────────────────────────────────────────────────────────────
     /// <summary>A virtualized PagedShelf with the shared MediaCard height/physics. Artists keep circular artwork while
-    /// every entity participates in the same chevron paging and 24-DIP edge fade as the other browse-y modules.</summary>
+    /// every entity participates in the same chevron paging and 24-DIP edge fade as the other browse-y modules.
+    ///
+    /// <para><paramref name="openAll"/> is an <c>Action</c>, not the <c>Action&lt;HomeGroup&gt; openSection</c> every
+    /// other module takes, and that difference is the point: this shelf's "show all" opens the app's OWN Recents page
+    /// (<c>/playlist/v2/list/recents/page</c> — the whole grouped snapshot), not a <c>home-section:</c> drill-in built
+    /// from this group. There is no group to hand a callback, so it is not asked for one, and the affordance is armed
+    /// UNCONDITIONALLY: the landing projection's Recents group carries a null Uri, and gating on that would hide a
+    /// destination whose availability the shelf's payload has nothing to do with.</para></summary>
     public static Element Recents(HomeGroup g, Func<HomeCard, Action> nav, Func<HomeCard, string> kindLabel,
-                                  Func<HomeCard, HomeCardChrome> chrome, Action<HomeGroup>? openSection = null)
+                                  Func<HomeCard, HomeCardChrome> chrome, Action? openAll = null)
     {
         var shelf = PagedShelf.Create(g.Cards.Count,
             (i, cardW) =>
@@ -146,7 +167,7 @@ static class HomeModules
                     circular: c.Kind == HomeCardKind.Artist, menu: ch.Menu, drag: ch.Drag);
             },
             cardHeight: HomeModuleLayout.ShelfCardHeight,
-            header: ModuleHeader(g, null, null, openSection),
+            header: g.Title is { Length: > 0 } title ? ModuleHeader(title, null, null, openAll) : new BoxEl(),
             minCardW: HomeModuleLayout.ShelfCardMin, maxCardW: HomeModuleLayout.ShelfCardMax,
             gap: Spacing.M, edgeFade: HomeModuleLayout.ShelfEdgeFade,
             keyOf: i => HomeModuleLayout.SourceCardKey(g, g.Cards[i]));

@@ -7,7 +7,10 @@ namespace Wavee.Core;
 /// <paramref name="MosaicTiles"/> (when <paramref name="Cover"/> is null) carries up to 4 distinct album-cover URLs to
 /// compose a 2×2 mosaic, the way Spotify renders a cover-less playlist; recomputed from the live tracklist.</summary>
 public sealed record PlaylistSummary(string Uri, string Name, string OwnerName, int TrackCount, Image? Cover,
-    System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null, bool CanEdit = false, bool IsOwner = false);
+    System.Collections.Generic.IReadOnlyList<string>? MosaicTiles = null, bool CanEdit = false, bool IsOwner = false,
+    // Daylist rollover window (unix ms) when the producing surface knew it (the Home card's Pathfinder attributes);
+    // 0 elsewhere. Rides the click→detail preview so the countdown paints with the header.
+    long DaylistExpiresAtMs = 0, long DaylistCreatedAtMs = 0);
 
 /// <summary>A node in the sidebar playlist tree: either a single playlist or a folder of playlists (WaveeMusic's
 /// hierarchical Playlists section — flat leaves + collapsible folders).</summary>

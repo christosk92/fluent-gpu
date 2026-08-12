@@ -168,8 +168,11 @@ public sealed class ExtensionEtagCache
         return result;
     }
 
+    /// <param name="clientFeatureId">Optional <c>client-feature-id</c> attribution for whatever this call has to fetch.
+    /// A cache/304 hit sends nothing, so the header only ever rides a real miss.</param>
     public async Task<IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), CachedExtension>> GetAsync(
-        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, CancellationToken ct = default)
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, CancellationToken ct = default,
+        string? clientFeatureId = null)
     {
         if (requests.Count == 0)
             return new Dictionary<(string, Xm.ExtensionKind), CachedExtension>();
@@ -227,7 +230,7 @@ public sealed class ExtensionEtagCache
                 if (misses.Count > 0)
                 {
                     IReadOnlyDictionary<ExtensionKey, CachedExtension> fetched;
-                    try { fetched = await FetchBatchAsync(misses, ct).ConfigureAwait(false); }
+                    try { fetched = await FetchBatchAsync(misses, ct, clientFeatureId).ConfigureAwait(false); }
                     catch
                     {
                         // Offline/SWR: an expired exact-locale row remains usable. Never substitute another locale's raw
@@ -262,7 +265,7 @@ public sealed class ExtensionEtagCache
     }
 
     async Task<IReadOnlyDictionary<ExtensionKey, CachedExtension>> FetchBatchAsync(
-        IReadOnlyList<ExtensionKey> keys, CancellationToken ct)
+        IReadOnlyList<ExtensionKey> keys, CancellationToken ct, string? clientFeatureId = null)
     {
         var reqs = new (string Uri, Xm.ExtensionKind Kind, string? Etag)[keys.Count];
         for (int i = 0; i < keys.Count; i++)
@@ -273,7 +276,7 @@ public sealed class ExtensionEtagCache
             reqs[i] = (keys[i].Uri, keys[i].Kind, etag);
         }
 
-        var response = await _source.GetExtensionsWithHeadersAsync(reqs, ct).ConfigureAwait(false);
+        var response = await _source.GetExtensionsWithHeadersAsync(reqs, ct, clientFeatureId).ConfigureAwait(false);
         var result = new Dictionary<ExtensionKey, CachedExtension>(keys.Count);
         foreach (var key in keys)
         {

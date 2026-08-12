@@ -1359,7 +1359,7 @@ sealed class TrackList : Component
         // artwork alone is 280 and the padding another 32, which left ~100 DIP for the entire identity column plus the
         // toolbar row. See DetailVerticalLayout.HeroBandHeight.
         return DetailVerticalLayout.HeroBandHeight(_verticalHeroW.Peek(), _verticalHeroRowFlow,
-            HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription());
+            HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription(), HeroHasPulse());
     }
 
     // ── the hero's own emit predicates, shared by the hero and its skeleton ───────────────────────────────────────
@@ -1374,6 +1374,8 @@ sealed class TrackList : Component
 
     bool HeroHasDescription()
         => HeroEditable() || _model.Description is { Length: > 0 };
+
+    bool HeroHasPulse() => _model.ExpiresAtMs > 0;   // the daylist rollover countdown row
 
     bool HeroEditable() => _model.Capabilities.CanEditMetadata && _model.ContextUri is { Length: > 0 };
 
@@ -2212,7 +2214,7 @@ sealed class TrackList : Component
         [
             DetailSkeleton.VerticalHeroBand(
                 _verticalHeroW.Peek(), _verticalHeroRowFlow, TrackRow.PadXFor(tier),
-                HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription()),
+                HeroHasEyebrow(), HeroHasAttribution(), HeroHasMeta(), HeroHasDescription(), HeroHasPulse()),
             Chrome(set, tracks, sort, labeled, tier, checkInset, contentFilterBar: contentFilterBar),
             RowsShimmer(set, tracks, rowH),
         ],

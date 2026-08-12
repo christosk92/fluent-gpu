@@ -43,6 +43,9 @@ public class DesignTokenConvergenceTests
         { "RailHeader",        20f,   28f,   600 },
         { "ModuleHeader",      20f,   28f,   600 },
         { "PageHero",          28f,   36f,   600 },
+        // The library-surface masthead: one ramp rung above PageHero, in the display face at the LIGHT weight. It is on
+        // the ramp on purpose — a fourth "sanctioned divergence" is exactly what this file exists to prevent.
+        { "SurfaceDisplay",    40f,   52f,   400 },
         { "NowPlayingTitle",   20f,   28f,   600 },
     };
 
@@ -55,6 +58,7 @@ public class DesignTokenConvergenceTests
         "RailHeader" => WaveeType.RailHeader("x"),
         "ModuleHeader" => WaveeType.ModuleHeader("x"),
         "PageHero" => WaveeType.PageHero("x"),
+        "SurfaceDisplay" => WaveeType.SurfaceDisplay("x"),
         "NowPlayingTitle" => WaveeType.NowPlayingTitle("x"),
         "ArtistDisplay" => WaveeType.ArtistDisplay("x"),
         "ArtistTitle" => WaveeType.ArtistTitle("x"),

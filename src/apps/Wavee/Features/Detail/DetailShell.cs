@@ -166,6 +166,28 @@ sealed class DetailShell : Component
         // a later intentional cover change (playlist edit / live sync) still wins; the mount-time fallback only seeds
         // the first paint when the loadable value has no cover yet.
         var coverLatch = UseRef(new CoverLatch());
+        // MorphKey stays NULL, and it is not vestigial — investigated 2026-08-12, left deliberately:
+        //
+        //   1. It was introduced by 3b80bbcf8 ("…ship engine and shell polish", 2026-07-10), the SAME commit that
+        //      removed `UseContext(SharedTransition.Begin)` from this shell, dropped `this.UseSoftReveal(...)`, and cut
+        //      the `morph` argument off DetailNav.OpenAlbum/OpenPlaylist. Its stated reason is the class comment above:
+        //      ContentHost exclusively owns route-level entrance motion, and a cover fly must not compete with it.
+        //   2. Setting it back would change NOTHING, because the forward capture is gone repo-wide. ConnectedAnimation
+        //      only fills its pending-snapshot slot from Begin(); CaptureOnLeave is an explicit no-op ("reverse-fly
+        //      capture is Phase 6"). SharedTransition.Begin/BeginConfigured have ZERO callers outside AppHost's own
+        //      ambient registration — even WaveeShell.ProbeCardNav ignores its `doMorph` argument. No capture ⇒ no
+        //      pending snapshot ⇒ Tick65 never seeds a flight. Publishing a key here would only re-register this cover
+        //      as a tagged participant and make the pairing LOOK wired while still never flying.
+        //   3. The reason from (1) is still live. ContentHost's PageTransition is MotionRecipes.PageSlideForward/Back
+        //      (Position|Opacity, Dx = Expressive.DistBase = 8, Enter Opacity 0), and SceneStore.AbsoluteRect INCLUDES
+        //      ancestor LocalTransform.Dx — so the dest rect moves every frame of the slide. That drives
+        //      ConnectedAnimation.Settle's per-frame RetargetFlight, and the overlay would land on a page still fading
+        //      up from 0 (DestReady gates on image decode, not on page opacity).
+        //
+        // Re-enabling therefore means restoring the whole capture seam (a `morph` action back on DetailNav.OpenAlbum /
+        // OpenPlaylist, threaded from HomeCardNav and RecentsPage, plus UseContext(SharedTransition.Begin) here) AND
+        // deciding how the fly composes with the page slide — not flipping this null. The source half is already
+        // minted through MorphKeys.For (see RecentsPage), so the convention survives for whoever does that work.
         var m = raw with { MorphKey = null, Cover = ResolveStableCover(coverLatch, route.Name, raw.Cover, modelReady) };
 
         // ContentHost exclusively owns route-level entrance motion. Keep this shell free of a second full-page reveal so

@@ -242,12 +242,44 @@ public sealed class PlaylistFetcher
         // UserProfileService overlay (StoreLibrarySource.OverlayOwner) still WINS — Get(raw) ?? header.Owner upgrades this
         // seed to the resolved display name + avatar; the null-avatar seed only fills the gap until the profile lands.
         Owner? ownerChip = owner.Length > 0 ? new Owner(owner, owner, null) : null;
+        var daylist = DaylistWindowOf(attr);
         return new Playlist(IdOf(uri), uri, name, desc, owner, CoverOf(attr), len,
             Owner: ownerChip,
             Capabilities: CapabilitiesOf(attr, slc, owner),
             Format: attr.HasFormat ? attr.Format : null,
             Source: "spotify",
-            Tuning: TuningOf(attr, slc));
+            Tuning: TuningOf(attr, slc),
+            DaylistExpiresAtMs: daylist.ExpiresAtMs,
+            DaylistCreatedAtMs: daylist.CreatedAtMs);
+    }
+
+    /// <summary>The daylist rollover window from the header's format_attributes — (expires, created) as unix ms,
+    /// (0, 0) for every other format or when the keys are absent/unparsable. The Pathfinder home feed states these
+    /// attributes as ISO-8601 instants; the playlist4 shape for this format is unpinned by any capture, so the parse
+    /// accepts an epoch (seconds or ms) as well — whichever arrives, the same window comes out.</summary>
+    internal static (long ExpiresAtMs, long CreatedAtMs) DaylistWindowOf(Pl.ListAttributes attr)
+    {
+        if (!attr.HasFormat || !string.Equals(attr.Format, "daylist", StringComparison.Ordinal)) return (0, 0);
+        long expires = 0, created = 0;
+        for (int i = 0; i < attr.FormatAttributes.Count; i++)
+        {
+            var item = attr.FormatAttributes[i];
+            if (!item.HasKey || !item.HasValue) continue;
+            if (item.Key == "expires") expires = InstantMs(item.Value);
+            else if (item.Key == "created") created = InstantMs(item.Value);
+        }
+        return (expires, created);
+    }
+
+    /// <summary>Epoch seconds / epoch ms / ISO-8601 → unix ms; 0 when unparsable.</summary>
+    internal static long InstantMs(string value)
+    {
+        if (value.Length == 0) return 0;
+        if (long.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out long n))
+            return n <= 0 ? 0 : n < 100_000_000_000L ? n * 1000L : n;   // 11+ digits ⇒ already ms
+        return DateTimeOffset.TryParse(value, System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var dto)
+            ? dto.ToUnixTimeMilliseconds() : 0;
     }
 
     internal static PlaylistTuning? TuningOf(Pl.ListAttributes attr, Pl.SelectedListContent slc)

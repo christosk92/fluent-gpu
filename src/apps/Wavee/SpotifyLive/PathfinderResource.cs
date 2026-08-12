@@ -137,6 +137,10 @@ public sealed class PathfinderResource : IConcertPathfinder
     public static TimeSpan TtlFor(string operationName) => operationName switch
     {
         PathfinderOps.Home => TimeSpan.FromMinutes(15),
+        // Same document, same freshness: a section page is a WINDOW onto the very feed `home` just returned, so letting
+        // it fall through to the 10-minute default would make one Home turn over faster than the other. Explicit, not
+        // defaulted — the two must move together whenever either is retuned.
+        PathfinderOps.HomeSection => TimeSpan.FromMinutes(15),
         PathfinderOps.GetAlbum => TimeSpan.FromMinutes(10),
         PathfinderOps.GetTrack => TimeSpan.FromMinutes(10),
         PathfinderOps.SimilarAlbumsBasedOnThisTrack => TimeSpan.FromMinutes(30),

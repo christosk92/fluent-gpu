@@ -330,6 +330,46 @@ public class SpotifyHomeComposerTests
         Assert.Null(ordinary.Meta.GenericTitle);
     }
 
+    [Fact]
+    public void Daylist_MapsExpiresCreatedAndHeaderImageFromAttributes()
+    {
+        // Wire-verified Pathfinder daylist attributes: expires/created are ISO-8601 UTC; header_image_url_desktop is
+        // the authored full-bleed banner (distinct from the square cover). Plain playlists must leave all three at
+        // their defaults — the attr walk is gated on format == daylist.
+        const string expires = "2026-08-11T23:58:59.559688264Z";
+        const string created = "2026-08-11T20:58:59.559688264Z";
+        const string header = "https://daylist.spotifycdn.com/headers/desktop/night.jpg";
+        using var daylist = JsonDocument.Parse($$"""
+        { "__typename": "Playlist", "uri": "spotify:playlist:DAY", "name": "night drive",
+          "format": "daylist",
+          "attributes": [
+            { "key": "expires", "value": "{{expires}}" },
+            { "key": "created", "value": "{{created}}" },
+            { "key": "header_image_url_desktop", "value": "{{header}}" }
+          ] }
+        """);
+        var meta = SpotifyExportMapper.CardFromEntity(daylist.RootElement)!.Meta!;
+        Assert.Equal(DateTimeOffset.Parse(expires, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)
+            .ToUnixTimeMilliseconds(), meta.ExpiresAtMs);
+        Assert.Equal(DateTimeOffset.Parse(created, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)
+            .ToUnixTimeMilliseconds(), meta.CreatedAtMs);
+        Assert.Equal(header, meta.HeaderImageUrl);
+
+        using var plain = JsonDocument.Parse("""
+        { "__typename": "Playlist", "uri": "spotify:playlist:P", "name": "Mine", "format": "editorial",
+          "attributes": [
+            { "key": "expires", "value": "2026-08-11T23:58:59.559688264Z" },
+            { "key": "header_image_url_desktop", "value": "https://daylist.spotifycdn.com/headers/desktop/night.jpg" }
+          ] }
+        """);
+        var plainMeta = SpotifyExportMapper.CardFromEntity(plain.RootElement)!.Meta!;
+        Assert.Equal(0, plainMeta.ExpiresAtMs);
+        Assert.Equal(0, plainMeta.CreatedAtMs);
+        Assert.Null(plainMeta.HeaderImageUrl);
+    }
+
     const string Spotlight = """
     { "data": { "__typename": "HomeSpotlightSectionData", "title": { "transformedLabel": "Spotlight" } },
       "sectionItems": { "items": [ { "content": { "data": { "__typename": "Album", "uri": "spotify:album:S", "name": "Spot" } } } ] } }
@@ -406,10 +446,12 @@ public class SpotifyHomeComposerTests
     [Fact]
     public void RecentlyPlayed_RendersInlineFromHomeResponse_AsItsOwnKind()
     {
+        // The wrapper's own totalCount is 1 — it counts the single `List` child, exactly as the capture does. The
+        // shelf's real length (20) is on that list.
         const string json = """
         { "sectionContainer": { "sections": { "items": [
             { "data": { "__typename": "HomeRecentlyPlayedSectionData", "title": { "transformedLabel": "Recents" } },
-              "sectionItems": { "items": [ { "content": { "data": { "__typename": "List", "items": { "items": [
+              "sectionItems": { "totalCount": 1, "items": [ { "content": { "data": { "__typename": "List", "items": { "totalCount": 20, "items": [
                 { "entity": { "data": {
                     "entityTypeTrait": { "type": "ENTITY_TYPE_PLAYLIST" },
                     "identityTrait": { "name": "Daily Mix 3", "contributors": { "items": [ { "name": "Spotify", "uri": "spotify:user:spotify" } ] } },
@@ -432,6 +474,32 @@ public class SpotifyHomeComposerTests
         Assert.Equal(2, recents.Cards.Count);
         Assert.Equal(HomeCardKind.Playlist, recents.Cards[0].Kind);
         Assert.Equal(HomeCardKind.Artist, recents.Cards[1].Kind);
+        // 20, not the wrapper's 1. This is what "Show all" arms on, and reading the wrapper made a twenty-entry shelf
+        // claim a total of one — so the affordance could never appear for Recents.
+        Assert.Equal(20, recents.TotalCount);
+    }
+
+    [Fact]
+    public void RecentlyPlayed_TotalCount_ComesFromTheWrappedList_NotTheOneItemWrapper()
+    {
+        static string Json(string wrapperTotal, string listTotal) => $$"""
+        { "sectionContainer": { "sections": { "items": [
+          { "data": { "__typename": "HomeRecentlyPlayedSectionData", "title": { "transformedLabel": "Recents" } },
+            "sectionItems": { {{wrapperTotal}} "items": [ { "content": { "data": { "__typename": "List", "items": { {{listTotal}} "items": [
+              { "entity": { "data": { "entityTypeTrait": { "type": "ENTITY_TYPE_PLAYLIST" },
+                  "identityTrait": { "name": "One" }, "uri": "spotify:playlist:R1" } } },
+              { "entity": { "data": { "entityTypeTrait": { "type": "ENTITY_TYPE_ARTIST" },
+                  "identityTrait": { "name": "Two" }, "uri": "spotify:artist:R2" } } }
+            ] } } } } ] } }
+        ] } } }
+        """;
+
+        // The capture's own numbers: the section wrapper says 1 because its array holds exactly one `List`.
+        Assert.Equal(20, Assert.Single(Compose(Json("\"totalCount\": 1,", "\"totalCount\": 20,")).Sections!).TotalCount);
+        // No nested count to read: the wrapper's 1 is DISCARDED rather than kept as a fallback, because it counts
+        // wrappers and would pin a two-card shelf BELOW its own card count. The mapped cards are the honest floor.
+        Assert.Equal(2, Assert.Single(Compose(Json("\"totalCount\": 1,", "")).Sections!).TotalCount);
+        Assert.Equal(2, Assert.Single(Compose(Json("", "")).Sections!).TotalCount);
     }
 
     [Fact]
@@ -440,7 +508,7 @@ public class SpotifyHomeComposerTests
         const string json = """
         { "sectionContainer": { "sections": { "items": [
           { "data": { "__typename": "HomeRecentlyPlayedSectionData", "title": { "transformedLabel": "Recents" } },
-            "sectionItems": { "items": [ { "content": { "data": { "__typename": "List", "items": { "items": [
+            "sectionItems": { "totalCount": 1, "items": [ { "content": { "data": { "__typename": "List", "items": { "totalCount": 9, "items": [
               { "entity": { "data": { "entityTypeTrait": { "type": "ENTITY_TYPE_PLAYLIST" },
                   "identityTrait": { "name": "One" }, "uri": "spotify:playlist:R1" } } },
               { "entity": { "data": { "entityTypeTrait": { "type": "ENTITY_TYPE_PLAYLIST" },
@@ -458,6 +526,137 @@ public class SpotifyHomeComposerTests
         Assert.Equal(1, section.UnsupportedCount);
         Assert.Equal(section.RawItemCount,
             section.Cards.Count + section.DuplicateCount + section.UnsupportedCount);
+        // The server's total is the WRAPPED list's, and it is independent of the accounting above: the drill-in has 9
+        // to fetch even though this page yielded one card out of three raw items.
+        Assert.Equal(9, section.TotalCount);
+    }
+
+    // ── homeSection (the "Show all" paging axis) ──────────────────────────────────────────────────────────────
+    // One persisted document hosts both `home` and `homeSection`; operationName selects data.home vs data.homeSections.
+    // The section item wrapper is byte-identical to the one home's inline sections use, which is why the same card
+    // mapper serves both — these fixtures are shaped exactly like the captured responses.
+    static string SectionPage(string pagingInfo, string totalCount, params string[] items) => $$"""
+    { "data": { "homeSections": { "sections": [
+      { "uri": "spotify:section:S1", "data": { "__typename": "HomeGenericSectionData",
+          "title": { "transformedLabel": "Made for you" }, "subtitle": { "transformedLabel": "Picked today" } },
+        "sectionItems": { {{totalCount}} {{pagingInfo}} "items": [ {{string.Join(",", items)}} ] } }
+    ] } } }
+    """;
+
+    static string PlaylistItem(string uri, string name) => $$"""
+    { "uri": "{{uri}}", "data": null, "content": { "__typename": "HomeSectionItemResponseWrapper",
+      "data": { "__typename": "Playlist", "uri": "{{uri}}", "name": "{{name}}", "format": "editorial" } } }
+    """;
+
+    [Fact]
+    public void SectionPage_MapsTheItemsAndBothPagingNumbers()
+    {
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(SectionPage(
+            "\"pagingInfo\": { \"nextOffset\": 20 },", "\"totalCount\": 64,",
+            PlaylistItem("spotify:playlist:A", "Alpha"), PlaylistItem("spotify:playlist:B", "Beta"))).RootElement);
+
+        Assert.NotNull(page);
+        Assert.Equal("spotify:section:S1", page!.Section.Uri);
+        Assert.Equal("Made for you", page.Section.Title);
+        Assert.Equal("Picked today", page.Section.Subtitle);
+        Assert.Equal(["Alpha", "Beta"], page.Section.Cards.Select(c => c.Title));
+        // Straight through SpotifyExportMapper.CardFromEntity — the same meta the inline Home sections carry, not a
+        // second, thinner card model.
+        Assert.Equal("editorial", page.Section.Cards[0].Meta!.Format);
+        Assert.Equal(64, page.Section.TotalCount);
+        Assert.Equal(2, page.Section.RawItemCount);
+        Assert.Equal(20, page.NextOffset);
+    }
+
+    [Fact]
+    public void SectionPage_NullNextOffset_StaysNull_EvenWhenTheTotalClaimsMore()
+    {
+        // Measured in 7 of 31 captured sections: fewer items than totalCount, and no cursor. Flattening null to 0 here
+        // would be indistinguishable from the complete-section 0 below, and both must terminate.
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(SectionPage(
+            "\"pagingInfo\": { \"nextOffset\": null },", "\"totalCount\": 9,",
+            PlaylistItem("spotify:playlist:A", "Alpha"))).RootElement);
+
+        Assert.NotNull(page);
+        Assert.Null(page!.NextOffset);
+        Assert.Equal(9, page.Section.TotalCount);
+        Assert.Equal(1, page.Section.RawItemCount);
+    }
+
+    [Fact]
+    public void SectionPage_CompleteSectionAnsweringZero_IsCarriedVerbatim_NotAsNull()
+    {
+        // A COMPLETE section really does answer nextOffset: 0 (6 items / totalCount 6). The mapper reports what the
+        // server said; deciding that 0 means "stop" is HomeSectionPaging.CanAdvance's job, not the mapper's.
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(SectionPage(
+            "\"pagingInfo\": { \"nextOffset\": 0 },", "\"totalCount\": 6,",
+            PlaylistItem("spotify:playlist:A", "Alpha"))).RootElement);
+
+        Assert.Equal(0, Assert.IsType<HomeSectionPageResult>(page).NextOffset);
+    }
+
+    [Fact]
+    public void SectionPage_MissingPagingInfo_IsTreatedAsNoCursor()
+    {
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(SectionPage(
+            "", "\"totalCount\": 6,", PlaylistItem("spotify:playlist:A", "Alpha"))).RootElement);
+
+        Assert.NotNull(page);
+        Assert.Null(page!.NextOffset);
+    }
+
+    [Fact]
+    public void SectionPage_LedgerAccountsForUnsupportedAndDuplicateItems_LikeTheInlineSections()
+    {
+        const string notFound = """{ "content": { "data": { "__typename": "NotFound" } } }""";
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(SectionPage(
+            "\"pagingInfo\": { \"nextOffset\": 4 },", "\"totalCount\": 64,",
+            PlaylistItem("spotify:playlist:A", "Alpha"),
+            PlaylistItem("spotify:playlist:A", "Alpha again"),
+            notFound,
+            PlaylistItem("spotify:playlist:B", "Beta"))).RootElement);
+
+        Assert.NotNull(page);
+        var section = page!.Section;
+        Assert.Equal(4, section.RawItemCount);
+        Assert.Equal(2, section.Cards.Count);
+        Assert.Equal(1, section.DuplicateCount);
+        Assert.Equal(1, section.UnsupportedCount);
+        Assert.Equal(section.RawItemCount, section.Cards.Count + section.DuplicateCount + section.UnsupportedCount);
+    }
+
+    [Fact]
+    public void SectionPage_NoSection_IsNull_SoTheCallerCanTellRefusalFromEmptiness()
+    {
+        // A rejected persisted query answers 400 → no document at all; this covers the other shape: a 200 whose
+        // homeSections carried nothing. Both must read as "this did not work", never as "this section is empty".
+        Assert.Null(SpotifyHomeComposer.SectionPage(JsonDocument.Parse("""{"data":{"homeSections":{"sections":[]}}}""").RootElement));
+        Assert.Null(SpotifyHomeComposer.SectionPage(JsonDocument.Parse("""{"data":{}}""").RootElement));
+    }
+
+    [Fact]
+    public void SectionPage_EmptyItems_IsAnEmptySection_NotANullPage()
+    {
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(SectionPage(
+            "\"pagingInfo\": { \"nextOffset\": null },", "\"totalCount\": 0,")).RootElement);
+
+        Assert.NotNull(page);
+        Assert.Empty(page!.Section.Cards);
+        Assert.Equal(0, page.Section.RawItemCount);
+    }
+
+    [Fact]
+    public void SectionPage_TitlelessResponse_FallsBackToTheCallersLabel()
+    {
+        const string json = """
+        { "data": { "homeSections": { "sections": [
+          { "uri": "spotify:section:S9", "data": { "__typename": "HomeGenericSectionData" },
+            "sectionItems": { "totalCount": 1, "items": [
+              { "content": { "data": { "__typename": "Playlist", "uri": "spotify:playlist:Z", "name": "Zeta" } } } ] } }
+        ] } } }
+        """;
+        var page = SpotifyHomeComposer.SectionPage(JsonDocument.Parse(json).RootElement, "From the route");
+        Assert.Equal("From the route", Assert.IsType<HomeSectionPageResult>(page).Section.Title);
     }
 
     // ── greeting ──────────────────────────────────────────────────────────────────────────────────────────────

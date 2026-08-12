@@ -31,7 +31,7 @@ static class DetailSkeleton
     /// from — and the four flags are the hero's own emit predicates for THIS model (see
     /// <c>TrackList.HeroHas*</c>), so an album's eyebrow and a playlist's owner row each reserve their real row.</para></summary>
     public static Element VerticalHeroBand(float colW, bool rowFlow, float compactLeft,
-        bool eyebrow, bool attribution, bool meta, bool description)
+        bool eyebrow, bool attribution, bool meta, bool description, bool pulse = false)
     {
         float bw = DetailVerticalLayout.BucketW(colW);
         float pad = DetailVerticalLayout.HeroPadFor(bw);
@@ -53,6 +53,7 @@ static class DetailSkeleton
         });
         if (attribution) blocks.Add(Bar(Fraction(contentW, 0.4f), DetailVerticalLayout.AttributionRowHeight));
         if (meta) blocks.Add(Bar(Fraction(contentW, 0.62f), DetailVerticalLayout.MetaRowHeight));
+        if (pulse) blocks.Add(Bar(Fraction(contentW, 0.35f), DetailVerticalLayout.PulseRowHeight));
         blocks.Add(ActionRow());
         if (description) blocks.Add(DescriptionBlock(contentW, DetailVerticalLayout.DescriptionMaxLines(rowFlow)));
 
@@ -85,7 +86,7 @@ static class DetailSkeleton
             // The pure sum of everything above — a floor, never a cap, so a wrapped action row or a taller run can
             // still grow the band. It is the SAME number the loaded hero's collapse binds use before its first
             // measure, which is what makes "the skeleton reserved what the hero needs" a testable statement.
-            MinHeight = DetailVerticalLayout.HeroBandHeight(colW, rowFlow, eyebrow, attribution, meta, description),
+            MinHeight = DetailVerticalLayout.HeroBandHeight(colW, rowFlow, eyebrow, attribution, meta, description, pulse),
             Children =
             [
                 new BoxEl

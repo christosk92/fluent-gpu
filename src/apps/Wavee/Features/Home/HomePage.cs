@@ -397,8 +397,14 @@ sealed class HomePage : Component
                     return FeedGroup(landing, row) is { } quick
                         ? HomeModules.Quick(quick, NavOf, PlayOf, ChromeOf, more.For(quick, "quick")) : new BoxEl();
                 case HomeRow.Recents:
+                    // The ONE shelf whose header does not drill into a `home-section:` page. Recents has a page of its
+                    // own (ContentHost's "recents" arm), backed by /playlist/v2/list/recents/page rather than by the
+                    // home document, so it navigates to that route and never through OpenSection. Armed
+                    // UNCONDITIONALLY for the same reason: the landing projection's Recents group carries a null Uri,
+                    // and the destination's availability has nothing to do with this shelf's payload.
                     return FeedGroup(landing, row) is { } recents
-                        ? HomeModules.Recents(recents, NavOf, KindLabel, ChromeOf) : new BoxEl();
+                        ? HomeModules.Recents(recents, NavOf, KindLabel, ChromeOf, () => go("recents", null))
+                        : new BoxEl();
                 case HomeRow.MixBand:
                     return FeedGroup(landing, row) is { } mixes
                         ? HomeModules.MixBand(mixes, NavOf, ChromeOf) : new BoxEl();

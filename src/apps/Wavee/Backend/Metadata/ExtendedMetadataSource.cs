@@ -29,8 +29,46 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     // Show episode[] is NOW parsed (LeanShow.episode = 70); DiscardUnknownFields still skips unused show fields.
     static readonly MessageParser<Lean.LeanShow> ShowParser = Lean.LeanShow.Parser.WithDiscardUnknownFields(true);
     static readonly MessageParser<Lean.LeanEpisode> EpisodeParser = Lean.LeanEpisode.Parser.WithDiscardUnknownFields(true);
+    // A playlist has no V4 catalogue kind: its header rides LIST_METADATA_V2 (205). Without this arm every playlist uri
+    // handed to the chokepoint resolved to UnknownExtension and was DROPPED before the request was even built (see
+    // GzipRequest's `continue`), which is why a surface made of playlist pointers had no way to learn a single name.
+    static readonly MessageParser<Xm.ListMetadataV2> ListParser = Xm.ListMetadataV2.Parser.WithDiscardUnknownFields(true);
 
     const string Path = "/extended-metadata/v0/extended-metadata";
+
+    // ── the desktop client's HEADER-TRAIT bundle (opt-in; OFF for every pre-existing caller) ──────────────────────────
+    // A census of all 73 extended-metadata calls in the capture says the `client-feature-id` DECIDES the kind set, and
+    // for `mdata_esperanto` — the scroll-driven recents viewport hydrator Wavee imitates — the requested kinds are
+    // exactly these three:
+    //     178 IDENTITY_TRAIT · 179 VISUAL_IDENTITY_TRAIT · 220 ENTITY_TYPE_TRAIT
+    // Kind 220 was requested by `mdata_esperanto` and by NO other caller, over 176 entities (80 playlist, 53 album,
+    // 42 artist, 1 collection). Kinds 182/212/249 belong to `list_metadata_prefetcher` — a DIFFERENT caller (the
+    // upfront bulk prefetch) — and are deliberately NOT sent from the viewport hydrator. Calling {178,179,182,212,249}
+    // "the canonical bundle" conflates the two callers; it is not one bundle, it is two per-feature kind sets.
+    //
+    // THESE PAYLOADS ARE MOSTLY DISCARDED ON PURPOSE — this is NOT dead code to delete:
+    //   · 179 is the only one with a verified schema in this repo (SpotifyLive/Protos/visual_identity_trait.proto,
+    //     decoded by SpotifyTrackAdornmentService). It is available as a cover/colour FALLBACK for a catalogue kind
+    //     that yields none; this path does not wire that up yet (see the note in MetadataService.SyncAllConditionalAsync).
+    //   · 178 and 220 have NO schema here. Their field numbers are unknown, and guessing them would be an invention.
+    //     They are requested for WIRE FIDELITY and their payloads fall through ProjectParsed's `default: continue`.
+    //     The REQUEST is the point; "nothing reads the response" is not a reason to stop sending it.
+    //
+    // DELIBERATE DIVERGENCE from the real client: we still ask for the catalogue kind (ALBUM_V4 / ARTIST_V4 / SHOW_V4 /
+    // EPISODE_V4 / TRACK_V4 / LIST_METADATA_V2). The real client never requests 205 at all — it reads a playlist's name
+    // straight out of 178, which we cannot decode. Matching it exactly would leave every recents row nameless, so Wavee
+    // asks for BOTH: the traits for wire shape, the catalogue kind for facts it can actually read.
+    internal static readonly Xm.ExtensionKind[] HeaderTraitKinds =
+    [
+        Xm.ExtensionKind.IdentityTrait,         // 178
+        Xm.ExtensionKind.VisualIdentityTrait,   // 179
+        Xm.ExtensionKind.EntityTypeTrait,       // 220
+    ];
+
+    /// <summary>Upper-bound wire cost of the trait bundle under ONE uri: per query a field tag + length byte + the
+    /// kind's field tag + a 2-byte varint (178/179/220 all exceed 127). Feeds MetadataChunking so a trait-bearing
+    /// request is not under-estimated into an over-large body.</summary>
+    internal const int HeaderTraitBytesPerEntity = 3 * 6;
 
     readonly IHttpExchange _http;
     readonly Func<string> _baseUrl;
@@ -43,7 +81,8 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         _ctx = ctx;
     }
 
-    public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+    public async Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct,
+                                                              string? clientFeatureId = null, bool headerTraits = false)
     {
         var session = _ctx();
         var proj = new ProjCtx();   // memoizes repeated album/artist refs across the whole sync
@@ -51,11 +90,12 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         var bulk = entities.Count > 1 ? store.BeginBulk() : null;   // coalesce the per-entity change signals into one
         try
         {
-            foreach (var (start, count) in MetadataChunking.Ranges(entities))
+            foreach (var (start, count) in MetadataChunking.Ranges(entities,
+                         extraBytesPerEntity: headerTraits ? HeaderTraitBytesPerEntity : 0))
             {
-                var gz = GzipRequest(entities, start, count, session);
+                var gz = GzipRequest(entities, start, count, session, headerTraits);
                 if (gz is null) continue;   // the chunk had no supported entities
-                using var resp = await SendAsync(gz, ct).ConfigureAwait(false);
+                using var resp = await SendAsync(gz, ct, clientFeatureId).ConfigureAwait(false);
                 if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
                 ProjectResponse(resp.Body, store, proj, landed);   // resp.Body is the response stream → parsed without an LOH byte[]
             }
@@ -67,14 +107,20 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     // Serialize the BatchedEntityRequest STRAIGHT into gzip, REUSING one EntityRequest + ExtensionQuery across all entities
     // (10k entities → 3 request objects, not 20k), and no intermediate uncompressed array. Returns null for a chunk with no
     // supported entities. internal so a round-trip test can verify the hand-written framing against the generated parser.
-    internal static byte[]? GzipRequest(IReadOnlyList<EntityRef> entities, int start, int count, SessionContext ctx)
+    internal static byte[]? GzipRequest(IReadOnlyList<EntityRef> entities, int start, int count, SessionContext ctx,
+                                        bool headerTraits = false)
     {
         Span<byte> taskId = stackalloc byte[16];
         RandomNumberGenerator.Fill(taskId);
         var header = new Xm.BatchedEntityRequestHeader { Country = ctx.Market, Catalogue = ctx.Catalogue, TaskId = ByteString.CopyFrom(taskId) };
         var eq = new Xm.ExtensionQuery();
         var er = new Xm.EntityRequest();
-        er.Query.Add(eq);   // reused for every entity (one query each)
+        er.Query.Add(eq);   // reused for every entity (the per-entity catalogue kind)
+        // The trait bundle is CONSTANT per entity, so its queries are built ONCE and ride the same reused EntityRequest
+        // — the envelope simply carries 1 + 3 kinds under each uri group ("multiple kinds under a uri group as before"),
+        // and the per-entity allocation stays at zero. Only `eq` varies as the loop walks the chunk.
+        if (headerTraits)
+            foreach (var trait in HeaderTraitKinds) er.Query.Add(new Xm.ExtensionQuery { ExtensionKind = trait });
 
         using var ms = new MemoryStream();
         using (var gz = new GZipStream(ms, CompressionLevel.Fastest, leaveOpen: true))
@@ -106,10 +152,10 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         = new Dictionary<(string, Xm.ExtensionKind), ByteString>();
 
     public async Task<IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ByteString>> GetExtensionsAsync(
-        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, CancellationToken ct = default)
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind)> requests, CancellationToken ct = default, string? clientFeatureId = null)
     {
         if (requests.Count == 0) return NoExtensions;
-        using var resp = await SendAsync(GzipExtensionRequest(requests, _ctx()), ct).ConfigureAwait(false);
+        using var resp = await SendAsync(GzipExtensionRequest(requests, _ctx()), ct, clientFeatureId).ConfigureAwait(false);
         if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
         var parsed = Xm.BatchedExtensionResponse.Parser.ParseFrom(resp.Body);   // streamed, no LOH byte[]
         var result = new Dictionary<(string, Xm.ExtensionKind), ByteString>();
@@ -121,9 +167,9 @@ public sealed class ExtendedMetadataSource : IMetadataSource
     }
 
     /// <summary>Convenience for a single (uri, kind) read; null when the entity carried no such extension.</summary>
-    public async Task<ByteString?> GetExtensionAsync(string uri, Xm.ExtensionKind kind, CancellationToken ct = default)
+    public async Task<ByteString?> GetExtensionAsync(string uri, Xm.ExtensionKind kind, CancellationToken ct = default, string? clientFeatureId = null)
     {
-        var values = await GetExtensionsAsync(new[] { (uri, kind) }, ct).ConfigureAwait(false);
+        var values = await GetExtensionsAsync(new[] { (uri, kind) }, ct, clientFeatureId).ConfigureAwait(false);
         return values.TryGetValue((uri, kind), out var value) ? value : null;
     }
 
@@ -138,14 +184,14 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         = new Dictionary<(string, Xm.ExtensionKind), ExtensionResult>();
 
     public async Task<IReadOnlyDictionary<(string Uri, Xm.ExtensionKind Kind), ExtensionResult>> GetExtensionsWithHeadersAsync(
-        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> requests, CancellationToken ct = default)
+        IReadOnlyList<(string Uri, Xm.ExtensionKind Kind, string? Etag)> requests, CancellationToken ct = default, string? clientFeatureId = null)
     {
         if (requests.Count == 0) return NoResults;
         var session = _ctx();
         var result = new Dictionary<(string, Xm.ExtensionKind), ExtensionResult>(requests.Count);
         foreach (var (start, count) in ExtensionRanges(requests))
         {
-            using var resp = await SendAsync(GzipExtensionRequest(requests, start, count, session), ct).ConfigureAwait(false);
+            using var resp = await SendAsync(GzipExtensionRequest(requests, start, count, session), ct, clientFeatureId).ConfigureAwait(false);
             if (resp.Status != 200) throw new InvalidOperationException($"extended-metadata fetch failed ({resp.Status})");
             var parsed = Xm.BatchedExtensionResponse.Parser.ParseFrom(resp.Body);   // streamed, no LOH byte[]
             foreach (var array in parsed.ExtendedMetadata)
@@ -239,7 +285,9 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         return ms.ToArray();
     }
 
-    async Task<HttpResp> SendAsync(byte[] gzippedBody, CancellationToken ct)
+    // clientFeatureId (default null) stamps the desktop client's `client-feature-id` attribution header (e.g.
+    // "mdata_esperanto" from the recents viewport hydrator). Null = header omitted = current behaviour unchanged.
+    async Task<HttpResp> SendAsync(byte[] gzippedBody, CancellationToken ct, string? clientFeatureId = null)
     {
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -249,6 +297,7 @@ public sealed class ExtendedMetadataSource : IMetadataSource
             ["Accept-Encoding"] = "gzip, deflate, br",
             ["Accept-Language"] = SpotifyHeaders.NormalizeLanguage(_ctx().Locale),
         };
+        if (!string.IsNullOrEmpty(clientFeatureId)) headers["client-feature-id"] = clientFeatureId;
         return await _http.SendAsync(new HttpReq("POST", _baseUrl() + Path, headers, gzippedBody), ct).ConfigureAwait(false);
     }
 
@@ -259,6 +308,9 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         EntityKind.Artist => Xm.ExtensionKind.ArtistV4,
         EntityKind.Show => Xm.ExtensionKind.ShowV4,
         EntityKind.Episode => Xm.ExtensionKind.EpisodeV4,
+        // A playlist's header is LIST_METADATA_V2, not a V4 — see ProjectPlaylist. Mirrored in MetadataService.KindFor,
+        // which builds the conditional (etag) request list from the same mapping.
+        EntityKind.Playlist => Xm.ExtensionKind.ListMetadataV2,
         _ => Xm.ExtensionKind.UnknownExtension,
     };
 
@@ -292,6 +344,12 @@ public sealed class ExtendedMetadataSource : IMetadataSource
                         case Xm.ExtensionKind.ArtistV4: ProjectArtist(ArtistParser.ParseFrom(value), store); break;
                         case Xm.ExtensionKind.ShowV4: ProjectShow(ShowParser.ParseFrom(value), store); break;
                         case Xm.ExtensionKind.EpisodeV4: ProjectEpisode(EpisodeParser.ParseFrom(value), store); break;
+                        // A playlist header carries no gid, so unlike every arm above it must be told WHICH uri it is.
+                        // It also may not always write — see ProjectPlaylist — and a non-write must stay UNSEALED so the
+                        // next hydrate retries it (outcome seeding, not batch-membership seeding).
+                        case Xm.ExtensionKind.ListMetadataV2:
+                            if (!ProjectPlaylist(ListParser.ParseFrom(value), data.EntityUri, store)) continue;
+                            break;
                         default: continue;
                     }
                     if (data.EntityUri is { Length: > 0 } uri) landed.Add(uri);
@@ -467,6 +525,80 @@ public sealed class ExtendedMetadataSource : IMetadataSource
         string showName = ep.Show is { } s ? s.Name : "";   // the embedded show ref (gid+name); full show hydrates separately
         store.UpsertEpisode(new Episode(id, "spotify:episode:" + id, ep.Name, showName, PickImage(ep.CoverImage),
             ep.Duration, PublishedAt(ep.PublishTime), Description: NullIfEmpty(ep.Description)));
+    }
+
+    /// <summary>LIST_METADATA_V2 (205) → a playlist HEADER. Returns true when something was written.
+    ///
+    /// This is a HYDRATION write, not the header WRITER, and the difference is load-bearing.
+    /// <see cref="StoreEntityMerge.Playlist"/> treats Name/Description/Cover/Capabilities as AUTHORITATIVE — absence
+    /// means CLEAR, because its intended caller is <c>OpRebaseStrategy.ApplyHeaderPatch</c>, where a missing picture
+    /// really is ClearPicture. A name-and-cover hydrate arriving over a playlist that <c>PlaylistFetcher</c> already
+    /// filled would therefore blank its description, its capabilities and (when 205 carries no image) its cover.
+    ///
+    /// So the merge is done HERE, on the way in: every field this payload does not know is carried through from the
+    /// resident row, which makes the authoritative merge a no-op on exactly those fields. Membership
+    /// (<c>SetMembership</c>) is a separate plane and is not touched at all. The rule is the same "thin write must not
+    /// downgrade a rich row" discipline <see cref="ProjectArtist"/>'s stub-fold and <c>StoreEntityGaps</c> already
+    /// apply to albums and tracks.</summary>
+    static bool ProjectPlaylist(Xm.ListMetadataV2 meta, string uri, IStore store)
+    {
+        if (uri.Length == 0) return false;
+        var current = store.GetPlaylist(uri);
+        string name = meta.Name.Length > 0 ? meta.Name : current?.Name ?? "";
+        Image? cover = ListCover(meta) ?? current?.Cover;
+        string owner = meta.Source.Length > 0 ? meta.Source : current?.OwnerName ?? "";
+        // Nothing readable landed AND nothing resident to preserve ⇒ do not mint an empty header (it would seal
+        // freshness on a row that still knows nothing).
+        if (name.Length == 0 && cover is null && owner.Length == 0) return false;
+
+        store.UpsertPlaylist(new Playlist(
+            Id: current?.Id ?? IdOf(uri),
+            Uri: uri,
+            Name: name,
+            Description: NullIfEmpty(meta.Description) ?? current?.Description,
+            OwnerName: owner,
+            Cover: cover,
+            // Everything below is carried through verbatim: 205 states none of it, and the merge would otherwise read
+            // this write's defaults as an authoritative clear.
+            TrackCount: current?.TrackCount ?? 0,
+            Tracks: current?.Tracks,
+            Owner: current?.Owner,
+            Capabilities: current?.Capabilities ?? default,
+            // format_string is NOT mapped onto Playlist.Format: that field is the recommender format the playlist4
+            // format_attributes writer owns, and equating the two without a verified sample would be a guess.
+            Format: current?.Format,
+            Source: current?.Source,
+            Collaborators: current?.Collaborators,
+            IsPublic: current?.IsPublic ?? true,
+            BasePermissionRevision: current?.BasePermissionRevision,
+            Tuning: current?.Tuning,
+            DaylistExpiresAtMs: current?.DaylistExpiresAtMs ?? 0,
+            DaylistCreatedAtMs: current?.DaylistCreatedAtMs ?? 0));
+        return true;
+    }
+
+    /// <summary>205's image variants → one cover. "default"/"large" first (the balanced list render), else any variant
+    /// that carries a url at all.</summary>
+    static Image? ListCover(Xm.ListMetadataV2 meta)
+    {
+        var variants = meta.Images?.Variant;
+        if (variants is null) return null;
+        string? standard = null, any = null;
+        foreach (var v in variants)
+        {
+            if (v.Url.Length == 0) continue;
+            any ??= v.Url;
+            if (standard is null && (v.Format == "default" || v.Format == "large")) standard = v.Url;
+        }
+        string? pick = standard ?? any;
+        return pick is null ? null : new Image(pick);
+    }
+
+    /// <summary>The trailing id of a <c>spotify:kind:id</c> uri — a playlist header has no gid to base62-encode.</summary>
+    static string IdOf(string uri)
+    {
+        int i = uri.LastIndexOf(':');
+        return i >= 0 && i + 1 < uri.Length ? uri[(i + 1)..] : uri;
     }
 
     static string? NullIfEmpty(string? s) => string.IsNullOrEmpty(s) ? null : s;

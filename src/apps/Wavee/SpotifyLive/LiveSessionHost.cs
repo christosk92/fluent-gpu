@@ -370,6 +370,15 @@ public sealed class LiveSessionHost : IAsyncDisposable
             //     hydrator (MetadataService over the extended-metadata batch) replaces the no-op that left lists empty.
             //     em + md were built above for the context resolver — reuse them so the whole session shares one cache.
             var fetcher = new PlaylistFetcher(live.Pipeline, () => live.BaseUrl, store, (uris, c) => md.SyncAllAsync(uris, c), () => live.Username);
+            // The recents page's list read (/playlist/v2/list/recents/page[/diff]) — the same pipeline + baseUrl seam as
+            // the playlist fetcher, installed into the switchable identity the page binds to for the whole session. It is
+            // STATELESS (no revision, no rows), so nothing here has to be torn down beyond the GoOffline Reset().
+            svc.Recents.SetInner(new RecentsFetcher(live.Pipeline, () => live.BaseUrl));
+            // The extended-metadata chokepoint itself, published for the surfaces that hydrate ENTITY POINTERS rather
+            // than tracks-of-a-context (recents is the first). They call SyncAllAsync and read the store; going around
+            // it to ExtendedMetadataSource would forfeit the SWR cache, the in-flight dedup, the ETag/304s and the
+            // store projection that persists through CachedStore.
+            svc.Metadata = md;
 
             // The single library-sync writer loop (RC1): the collection fetcher (revision get/set → the SQLite cold tier,
             // mark-and-sweep shielded by the mutation outbox), the loop itself, and the dealer router that decode-and-enqueues
@@ -454,6 +463,9 @@ public sealed class LiveSessionHost : IAsyncDisposable
             svc.Concerts.SetInner(new SpotifyConcertService(pathfinderResource));
             // Browse: the category directory + category pages, cached by the shared Pathfinder resource TTLs.
             svc.Browse.SetInner(new SpotifyBrowseService(pathfinderResource, spclientLog));
+            // Home's "Show all" axis — the REAL homeSection operation, over the same resource (and the same persisted
+            // document as `home` itself). A separate seam from Browse: a spotify:section: URI is a HOME resource.
+            svc.HomeSections.SetInner(new SpotifyHomeSectionService(pathfinderResource, spclientLog));
             // Expanded-row drawer data (kinds 98/99 associations + kind 5 audio formats), fetched on expand only.
             svc.TrackExpansion.SetInner(new SpotifyTrackExpansionService(em, store, metadataLog));
             // The cover-colour plane's universal feed. Everything that shows art — grids, shelves, heroes, editorial

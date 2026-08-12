@@ -58,6 +58,17 @@ public static class WaveeMotion
     /// through <see cref="WaveeEntrance"/>, never multiplied by hand at a call site (that is what produced the
     /// uncapped, reduced-motion-blind entrances this rung replaced).</summary>
     public const float StaggerMs = 40f;
+
+    /// <summary>A drill-in surface's MASTHEAD stagger: the offset between the display line and the metadata line under
+    /// it, assigned to the two-child container's <c>Element.Stagger</c>.
+    /// <para>A separate rung from <see cref="StaggerMs"/> on purpose, and the distinction is mechanical rather than
+    /// aesthetic: that one is the per-ITEM offset of an unbounded list and is therefore capped by
+    /// <see cref="WaveeEntrance.StaggerCap"/>; this one offsets exactly TWO authored lines, so the engine's uncapped
+    /// <c>index × ms</c> spelling is safe and the cascade is bounded by construction. It lives here so the surfaces
+    /// that wear the masthead (RecentsPage, HomeSectionPage) read ONE number instead of authoring it twice.</para>
+    /// <para>Reduced motion is a VALUE at the call site (<c>Motion.ReducedMotion ? 0f : MastheadStaggerMs</c>), never a
+    /// branch — <c>Element.Stagger</c> is a plain float and takes no motion token.</para></summary>
+    public const float MastheadStaggerMs = 45f;
 }
 
 /// <summary>

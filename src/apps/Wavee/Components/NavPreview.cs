@@ -33,7 +33,10 @@ static class DetailPreview
         Title: p.Name, Cover: p.Cover, ContextUri: p.Uri,
         BadgeType: null, Year: null, OwnerName: p.OwnerName, OwnerImage: null,
         Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: Strings.Detail.SongCount(p.TrackCount),
-        Tracks: Array.Empty<Track>(), AboutArtist: null);
+        Tracks: Array.Empty<Track>(), AboutArtist: null,
+        // The daylist window the Home card already knew — the countdown paints with the header instead of waiting
+        // for the full load, and survives a playlist4 response that omits the format attributes.
+        ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs);
 
     static string AlbumBadge(AlbumKind k) => k switch
     {

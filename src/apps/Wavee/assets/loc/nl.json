@@ -52,6 +52,7 @@
     "unplayed": "niet gespeeld",
     "yourDaylist": "jouw daylist",
     "heroEyebrow": "{greeting}, {name} · {what}",
+    "nextUpdateAt": "Volgende update om {time}",
     "editorial": "Redactie",
     "oneSeries": "Één serie, {count} mixen",
     "mixesFromArtists": "{count} mixen op basis van artiesten die je speelt",
@@ -82,6 +83,15 @@
     "ep": "EP",
     "album": "Album",
     "compilation": "Compilatie"
+  },
+
+  "recents": {
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "playedCount": "{count, plural, one {# nummer afgespeeld} other {# nummers afgespeeld}}",
+    "chip": {
+      "music": "Muziek",
+      "podcasts": "Podcasts"
+    }
   },
 
   "settings": {
@@ -153,6 +163,7 @@
     "likedSongs": "Nummers die je leuk vindt",
     "podcasts": "Podcasts",
     "localFiles": "Lokale bestanden",
+    "recents": "Recent",
     "playlist": "Playlist",
     "album": "Album",
     "artist": "Artiest",

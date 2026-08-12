@@ -108,7 +108,7 @@ public class LiveContextResolverTests
 
     sealed class NullMetadataSource : IMetadataSource
     {
-        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct)
+        public Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct, string? clientFeatureId = null, bool headerTraits = false)
             => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
     }
 

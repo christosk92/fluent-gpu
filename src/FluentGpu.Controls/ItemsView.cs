@@ -470,6 +470,11 @@ public sealed class ItemsView : Component
     /// <summary>Top alpha-feather for the recyclable item band. Zero disables it.</summary>
     public float ItemClipTopFadeBand;
     public (Func<ScrollGeometry, long> Project, Action<ScrollGeometry> Action)? OnScrollGeometryChanged;
+    /// <summary>Viewport-hydration hook forwarded onto the built VirtualListEl (see <c>VirtualListEl.OnVisibleRange</c>):
+    /// the realized window moved → (first, last) exclusive. Fires only on a window CHANGE (never on a steady
+    /// transform-only scroll frame) and reports the realized window INCLUDING the overscan halo, not the strictly-visible
+    /// rows. Forwarded on BOTH virtual paths (RowBind and RenderItem).</summary>
+    public Action<int, int>? OnVisibleRange;
     /// <summary>Declarative scroll-snap points forwarded onto the built VirtualListEl (see <c>ScrollEl.Snap</c>). Frozen at
     /// mount like every other unpacked option — a width-reactive interval must be written through
     /// <see cref="ItemsViewController.Viewport"/> instead. Null ⇒ the reconciler never touches the snap fields.</summary>
@@ -531,6 +536,7 @@ public sealed class ItemsView : Component
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
+            OnVisibleRange = o.OnVisibleRange,
             Snap = o.Scroll?.Snap,
             Transition = o.Transition,
             Selector = o.Selector,
@@ -589,6 +595,7 @@ public sealed class ItemsView : Component
             AutoEdgeFade = o.Scroll?.AutoEdgeFade ?? false,
             AutoEdgeFadeBand = o.Scroll?.AutoEdgeFadeBand ?? 0f,
             OnScrollGeometryChanged = o.Scroll?.OnScrollGeometryChanged,
+            OnVisibleRange = o.OnVisibleRange,
             Snap = o.Scroll?.Snap,
             ItemDisplacement = o.Reorder?.ItemDisplacement,
             DisplacementVersion = o.Reorder?.DisplacementVersion,
@@ -666,6 +673,7 @@ public sealed class ItemsView : Component
             RepaintBoundary = o.RepaintBoundary,
             KeepAlive = o.KeepAlive,
             KeepAliveCap = o.KeepAliveCap,
+            OnVisibleRange = o.OnVisibleRange,
         };
 
         return CreateBound(
@@ -1550,6 +1558,7 @@ public sealed class ItemsView : Component
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
+                OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window CHANGE, overscan included)
                 Snap = Snap,
                 Grow = Grow,
                 OnRealized = h => viewportNode.Value = h,
@@ -1573,6 +1582,7 @@ public sealed class ItemsView : Component
                 ItemClipTopInset = ItemClipTopInset,
                 ItemClipTopFadeBand = ItemClipTopFadeBand,
                 OnScrollGeometryChanged = OnScrollGeometryChanged,
+                OnVisibleRange = OnVisibleRange,   // viewport-driven hydration (realized-window CHANGE, overscan included)
                 Snap = Snap,
                 // Grow rides through to the viewport: 1 = fill the parent (hard viewport, never content-measured);
                 // 0 = natural — FlexLayout.MeasureViewport sizes a non-flexing viewport to the layout's ContentExtent

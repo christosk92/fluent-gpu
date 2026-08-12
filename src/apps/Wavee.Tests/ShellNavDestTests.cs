@@ -22,6 +22,8 @@ namespace FluentGpu.Controls
         public const string RadioTower = "glyph:RadioTower";
         public const string Folder = "glyph:Folder";
         public const string Clock = "glyph:Clock";
+        /// <summary>Added with the "recents" arm: the recently-PLAYED destination's glyph (Clock is "history").</summary>
+        public const string Headphones = "glyph:Headphones";
         public const string Settings = "glyph:Settings";
         public const string Code = "glyph:Code";
         /// <summary>Added with the "sidebar-customize" arm (Wave 4a): the customizer's destination glyph.</summary>
@@ -117,6 +119,22 @@ namespace Wavee.Tests
             Assert.Equal((Loc.Get(Strings.Nav.Podcasts), Icons.RadioTower), Dest("podcasts"));
             Assert.Equal((Loc.Get(Strings.Nav.LocalFiles), Icons.Folder), Dest("local"));
             Assert.Equal((Loc.Get(Strings.Nav.History.Title), Icons.Clock), Dest("history"));
+            Assert.Equal((Loc.Get(Strings.Nav.Recents), Icons.Headphones), Dest("recents"));
+        }
+
+        // "recents" (the recently-PLAYED page) and "history" (the app's navigation log) are two different destinations.
+        // Sharing a glyph is the specific regression worth pinning: the tab strip, the breadcrumb and the pinned
+        // sidebar rows all render through this one table, so one glyph on two routes reads as one place.
+        [Fact]
+        public void Recents_IsItsOwnDestination_AndDoesNotShareHistorysGlyph()
+        {
+            var recents = Dest("recents");
+            var history = Dest("history");
+            var fallback = Dest("route-that-does-not-exist");
+            Assert.NotEqual(fallback.Title, recents.Title);
+            Assert.NotEqual(fallback.Glyph, recents.Glyph);
+            Assert.NotEqual(history.Title, recents.Title);
+            Assert.NotEqual(history.Glyph, recents.Glyph);
         }
 
         [Fact]

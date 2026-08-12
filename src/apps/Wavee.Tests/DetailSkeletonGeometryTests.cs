@@ -97,6 +97,9 @@ public class DetailSkeletonGeometryTests
             bare + DetailVerticalLayout.DescriptionMaxLines(rowFlow) * DetailVerticalLayout.DescriptionLineHeight
                  + DetailVerticalLayout.IdentityGap,
             DetailVerticalLayout.IdentityHeightFor(w, rowFlow, false, false, false, true));
+        // The daylist flip-countdown row costs exactly its row plus one gap, like every other optional block.
+        Assert.Equal(bare + DetailVerticalLayout.PulseRowHeight + DetailVerticalLayout.IdentityGap,
+            DetailVerticalLayout.IdentityHeightFor(w, rowFlow, false, false, false, false, pulse: true));
     }
 
     /// <summary>An album (eyebrow + billed artists + meta, no blurb) and a playlist (owner + meta + description) both

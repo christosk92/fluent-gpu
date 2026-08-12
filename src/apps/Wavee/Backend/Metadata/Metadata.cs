@@ -52,7 +52,16 @@ public interface IMetadataSource
     /// <summary>Fetch and project into the store. Returns the uris that actually landed (projection wrote an entity) —
     /// not merely requested. Omitted / failed entities stay out so <see cref="MetadataService"/> seals freshness on
     /// outcome only.</summary>
-    Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct);
+    /// <param name="clientFeatureId">Optional <c>client-feature-id</c> attribution header for the traffic this batch
+    /// generates — the desktop client stamps one per SURFACE. Null (every pre-existing caller) omits the header, so the
+    /// wire is byte-identical to the pre-seam behaviour.</param>
+    /// <param name="headerTraits">Opt-in: also request the desktop client's HEADER-TRAIT bundle
+    /// (<see cref="ExtendedMetadataSource.HeaderTraitKinds"/> — 178/179/220) alongside each entity's catalogue kind.
+    /// FALSE for every pre-existing caller, and deliberately so: this is the shared bulk path, and three extra kinds
+    /// per entity on a 500-uri discography prefetch or a 300-uri tracklist load is pure inflation. Only the surface
+    /// whose <paramref name="clientFeatureId"/> the census actually attributes the bundle to opts in.</param>
+    Task<IReadOnlyCollection<string>> FetchAsync(IReadOnlyList<EntityRef> entities, IStore store, CancellationToken ct,
+                                                 string? clientFeatureId = null, bool headerTraits = false);
 }
 
 /// <summary>Packs entities into request chunks by serialized BODY SIZE (not a fixed count), so each POST is pushed as
@@ -66,13 +75,16 @@ public static class MetadataChunking
     public static int EstimateBytes(in EntityRef e) => e.Uri.Length + 12;
 
     /// <summary>Yields (start, count) index ranges, each whose estimated body stays under maxBodyBytes (always ≥1 entity).</summary>
+    /// <param name="extraBytesPerEntity">Wire cost of any ADDITIONAL <c>ExtensionQuery</c> entries the caller packs under
+    /// each uri (the header-trait bundle). Keeps the estimate honest instead of under-counting a request that carries
+    /// four kinds per entity rather than one.</param>
     public static IEnumerable<(int Start, int Count)> Ranges(IReadOnlyList<EntityRef> entities,
-        int maxBodyBytes = DefaultMaxBodyBytes, int headerBytes = 64)
+        int maxBodyBytes = DefaultMaxBodyBytes, int headerBytes = 64, int extraBytesPerEntity = 0)
     {
         int start = 0, size = headerBytes;
         for (int i = 0; i < entities.Count; i++)
         {
-            int cost = EstimateBytes(entities[i]);
+            int cost = EstimateBytes(entities[i]) + extraBytesPerEntity;
             if (i > start && size + cost > maxBodyBytes)   // flush the current range (never split below 1 entity)
             {
                 yield return (start, i - start);

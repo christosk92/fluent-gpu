@@ -261,11 +261,13 @@ static class HomeCards
     // ── A · the daylist hero ───────────────────────────────────────────────────────────────────────────────────
     /// <summary>The Daylist identity as a compact relative of the artist masthead: the complete square cover is integrated
     /// into the trailing material under the same semantic copy veil, never stretched into a banner or repeated as a
-    /// separate thumbnail and ghost. The one card on Home whose TITLE is the copy, so everything else defers to it.
+    /// separate thumbnail and ghost — unless Pathfinder authored a desktop <c>header_image_url</c>, in which case the
+    /// surface becomes a full-bleed photo masthead (media → veil → copy) and the square cover is dropped.
     /// <para>The eyebrow carries the GREETING ("Good morning, Christos · your daylist"): the prototype has no standalone
     /// greeting block, because a page that opens with two stacked text blocks before any content wastes its best row.</para>
     /// <para>HomeHeroLayout flattens the former 16-DIP SectionBand inset into the copy padding, so the renderer and
-    /// virtual estimator retain the exact 345/305/297-DIP geometry while the artwork can touch the clipped surface.</para></summary>
+    /// virtual estimator retain the same geometry while the artwork can touch the clipped surface. The pulse row
+    /// (<see cref="FlipCountdown"/>) is reserved in that geometry for every hero; non-daylist mounts collapse it.</para></summary>
     public static Element HeroBand(HomeCard c, string eyebrow, string meta, Action onPlay, Action onShuffle,
                                    Action onNav, Action onLike, MenuAttach? menu, float width)
     {
@@ -277,6 +279,14 @@ static class HomeCards
             HomeHeroTier.Medium => WaveeType.ArtistCompactTitle(c.Title),
             _ => WaveeType.PageHero(c.Title),
         };
+
+        // Pulse slot always present so ContentHeight's PulseBlock matches the children list; empty when no daylist window.
+        Element pulse = c.Meta is { ExpiresAtMs: > 0 } m
+            ? Embed.Comp(() => new FlipCountdown
+              {
+                  ExpiresAtMs = m.ExpiresAtMs, Accent = () => accent, BottomMargin = Spacing.M,
+              }) with { Key = c.Uri + ":" + m.ExpiresAtMs }
+            : new BoxEl();
 
         var copy = new BoxEl
         {
@@ -315,6 +325,7 @@ static class HomeCards
                         Margin = new Edges4(0f, 0f, 0f, Spacing.L),
                     }
                     : new BoxEl(),
+                pulse,
                 // `.hero-actions` — the app's ONE primary-action grammar: an accent Play capsule on the daylist's own
                 // graded colour, a standard Shuffle capsule beside it, then the icon-only arm of the same capsule for
                 // like and overflow. This used to be a private 32px/13px cluster whose own doc comment declared the
@@ -339,16 +350,6 @@ static class HomeCards
             ],
         };
 
-        var artwork = new BoxEl
-        {
-            Width = metrics.ArtworkSize, Height = metrics.ArtworkSize, Shrink = 0f,
-            AlignSelf = FlexAlign.Center,
-            JustifySelf = metrics.Stacked ? FlexAlign.Center : FlexAlign.End,
-            OnClick = onNav, Cursor = CursorId.Hand, Role = AutomationRole.Button,
-            EdgeFade = metrics.Stacked ? null : new EdgeFadeSpec(EdgeMask.Left, HomeHeroLayout.ArtworkFade),
-            Children = [Art(c, metrics.ArtworkSize, metrics.ArtworkSize, 0f, decodePx: 512)],
-        };
-
         var foreground = new BoxEl
         {
             Width = width, Height = metrics.Height,
@@ -362,23 +363,59 @@ static class HomeCards
         var veilAxis = metrics.Stacked
             ? Wavee.Features.Detail.ArtistHeroVeilAxis.Vertical
             : Wavee.Features.Detail.ArtistHeroVeilAxis.Horizontal;
-        var surface = new BoxEl
+        var veil = new BoxEl
         {
-            ZStack = true, MinWidth = 0f, Height = metrics.Height, ClipToBounds = true,
-            Corners = CornerRadius4.All(Radii.Card),
-            BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Gradient = Surfaces.HomeHeroBackdrop(accent),
-            Children =
-            [
-                artwork,
-                new BoxEl
-                {
-                    Width = width, Height = metrics.Height, HitTestVisible = false,
-                    Gradient = Surfaces.ArtistHeroVeil(accent, veilAxis),
-                },
-                foreground,
-            ],
+            Width = width, Height = metrics.Height, HitTestVisible = false,
+            Gradient = Surfaces.ArtistHeroVeil(accent, veilAxis),
         };
+
+        // Authored desktop header → full-bleed photo ground (no HomeHeroBackdrop, no trailing square cover).
+        // Else: square cover + graded wash, unchanged.
+        BoxEl surface;
+        if (c.Meta?.HeaderImageUrl is { Length: > 0 } headerUrl)
+        {
+            int decodePx = Math.Clamp((int)MathF.Round(width), 320, 1920);
+            float aspect = width / MathF.Max(1f, metrics.Height);
+            var media = new BoxEl
+            {
+                Width = width, Height = metrics.Height,
+                OnClick = onNav, Cursor = CursorId.Hand, Role = AutomationRole.Button,
+                EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, HomeHeroLayout.ArtworkFade),
+                Children =
+                [
+                    Image(headerUrl, ImageFit.Cover, aspect: aspect, decodePx: decodePx, corners: 0f,
+                          placeholder: Surfaces.ArtworkPlaceholder,
+                          transition: ImageTransition.Fade(MotionTok.StandardEnter.DurationMs)),
+                ],
+            };
+            surface = new BoxEl
+            {
+                ZStack = true, MinWidth = 0f, Height = metrics.Height, ClipToBounds = true,
+                Corners = CornerRadius4.All(Radii.Card),
+                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Children = [media, veil, foreground],
+            };
+        }
+        else
+        {
+            var artwork = new BoxEl
+            {
+                Width = metrics.ArtworkSize, Height = metrics.ArtworkSize, Shrink = 0f,
+                AlignSelf = FlexAlign.Center,
+                JustifySelf = metrics.Stacked ? FlexAlign.Center : FlexAlign.End,
+                OnClick = onNav, Cursor = CursorId.Hand, Role = AutomationRole.Button,
+                EdgeFade = metrics.Stacked ? null : new EdgeFadeSpec(EdgeMask.Left, HomeHeroLayout.ArtworkFade),
+                Children = [Art(c, metrics.ArtworkSize, metrics.ArtworkSize, 0f, decodePx: 512)],
+            };
+            surface = new BoxEl
+            {
+                ZStack = true, MinWidth = 0f, Height = metrics.Height, ClipToBounds = true,
+                Corners = CornerRadius4.All(Radii.Card),
+                BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+                Gradient = Surfaces.HomeHeroBackdrop(accent),
+                Children = [artwork, veil, foreground],
+            };
+        }
         return menu is null ? surface : surface.WithMenu(menu);
     }
 

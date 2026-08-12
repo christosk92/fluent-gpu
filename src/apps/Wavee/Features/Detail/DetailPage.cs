@@ -58,7 +58,16 @@ sealed class DetailPage : Component
         // Stable per-instance loadable, re-driven by the route dep key — DetailShell freezes the model at construction,
         // so the loadable INSTANCE must be stable across route swaps (a fresh store-cache instance per route would leave
         // the reused shell pinned to the first item — the master-detail reactivity bug). KeepAlive caches the parked page.
-        var model = UseResource(ct => LoadAsync(svc, kind, id, ct), preview ?? PendingSeed(kind), route.Name).Loadable;
+        var model = UseResource(async ct =>
+        {
+            var loaded = await LoadAsync(svc, kind, id, ct).ConfigureAwait(false);
+            // The daylist rollover window may be absent from the playlist4 wire (unpinned by any capture); the Home
+            // card's Pathfinder attributes rode in on the nav preview — keep them when the full load returned none.
+            // (The loader closure is re-pointed each render, so a route swap merges against ITS route's preview.)
+            if (loaded.ExpiresAtMs == 0 && preview is { ExpiresAtMs: > 0 })
+                loaded = loaded with { ExpiresAtMs = preview.ExpiresAtMs, CreatedAtMs = preview.CreatedAtMs };
+            return loaded;
+        }, preview ?? PendingSeed(kind), route.Name).Loadable;
 
         // §4.1 — open-playlist LIVE in-place refresh (kills the skeleton flash). Subscribe the REAL store; when a push lands
         // for THIS playlist (or a Bulk), debounce the burst 150ms, re-run the SAME load off-thread, and SetReady the SAME
@@ -332,7 +341,8 @@ sealed class DetailPage : Component
             IsPublic: p.IsPublic,
             BasePermissionRevision: p.BasePermissionRevision,
             Tuning: p.Tuning,
-            ShareUrl: SpotifyPlaylistWebUrl(p.Uri));
+            ShareUrl: SpotifyPlaylistWebUrl(p.Uri),
+            ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs);
     }
 
     // ── the per-page-open association sweep (video.assoc.page) ────────────────────────────────────────────────────────

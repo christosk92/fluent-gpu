@@ -125,6 +125,19 @@ public static class WaveeType
     /// <summary>Page hero (playlist / album name). → Ui.Title (28 / 36 / 600).</summary>
     public static TextEl PageHero(string s) => Ui.Title(s);
 
+    /// <summary>A LIBRARY SURFACE's masthead — the name of a place rather than of a record ("Recents"). One rung above
+    /// <see cref="PageHero"/> on the SAME engine ramp (Ui.TitleLarge, 40 / 52), set in the display face at the LIGHT
+    /// weight so the word reads as typography over a Mica wash instead of as one more bold UI label.
+    /// <para>Deliberately NOT a fourth display-face divergence: it keeps the ramp's size/line-height pair and stays
+    /// inside the 400/600 weight policy — the face and the hair of negative tracking are the same two liberties
+    /// <see cref="ModuleHeader(string)"/> already takes, and nothing more.</para></summary>
+    public static TextEl SurfaceDisplay(string s) => Ui.TitleLarge(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        Weight = 400,
+        CharSpacing = -12f,
+    };
+
     /// <summary>Wide artist identity display: a larger, tightly tracked Display face for editorial heroes.
     /// 84 / 96 / <b>700</b> — one of the three sanctioned display-face divergences (see the class header).</summary>
     public static TextEl ArtistDisplay(string s) => Ui.Display(s) with

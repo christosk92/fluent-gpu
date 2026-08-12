@@ -257,6 +257,23 @@ public class SidebarPinStoreTests
         Assert.Null(SidebarPinId.FromRoute(null));
     }
 
+    // The full recently-played page is CUSTOMIZABLE, not mandatory: it seeds the picker (so it can be added), and it
+    // survives FromRoute (so a pin made from its own page chrome converges on the same record) — but the shell's
+    // built-in top-bar band still ships Home alone. Putting it there would push it on every user who never asked.
+    [Fact]
+    public void Recents_IsPinnable_ButIsNotInTheBuiltInTopBar()
+    {
+        Assert.Contains("recents", SidebarPinId.PinnableRoutes);
+        Assert.Equal("recents", SidebarPinId.FromRoute("recents"));
+        Assert.True(SidebarPinId.IsPinnableRoute("recents"));
+        Assert.Equal(SidebarPinKind.Route, SidebarPinId.KindOf("recents"));
+        Assert.Equal("recents", SidebarPinId.RouteOf("recents"));
+        Assert.Equal("", SidebarPinId.UriOf("recents"));            // a route pin carries no entity uri
+
+        foreach (var item in Wavee.Core.Sidebar.SidebarCustomLayout.DefaultTopBar)
+            Assert.NotEqual("recents", item.Key);
+    }
+
     [Fact]
     public void Destination_CanonicalizesSearch_AndRetainsBrowseIdentity()
     {

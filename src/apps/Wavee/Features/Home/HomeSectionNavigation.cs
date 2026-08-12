@@ -11,8 +11,8 @@ static class HomeSectionRoutes
 
     /// <summary>The scheme Home mints for a section the SERVER gave no URI for: <c>wavee:local:&lt;hash&gt;</c>. It is a
     /// purely LOCAL route identity — it addresses a <see cref="HomeSectionPreviewStore"/> entry and nothing else. It must
-    /// never reach a browse endpoint: <c>browseSection</c> answers null for it, which the section page used to surface as
-    /// a hard error page once the bounded preview store had evicted the seed.
+    /// never reach a paging endpoint: neither <c>homeSection</c> nor <c>browseSection</c> can resolve it, which the
+    /// section page used to surface as a hard error page once the bounded preview store had evicted the seed.
     /// <para>OWNER: this const. <c>HomePage.OpenSection</c> still builds the same string as a literal — that literal is
     /// redundant and should migrate here, so the minting side and the recognising side share one definition.</para>
     /// </summary>
@@ -29,8 +29,8 @@ static class HomeSectionRoutes
 }
 
 /// <summary>Click-to-section handoff. Home already holds the returned first page, so a drill route can paint it before
-/// attempting the inferred <c>browseSection</c> paging seam. The bounded entry remains available for Back/remount: a
-/// synthetic section without a server URI cannot be reconstructed once its preview is consumed.</summary>
+/// the <c>homeSection</c> read lands. The bounded entry remains available for Back/remount: a synthetic section without
+/// a server URI cannot be reconstructed once its preview is consumed.</summary>
 sealed class HomeSectionPreviewStore
 {
     public static readonly Context<HomeSectionPreviewStore?> Slot = new(null);
@@ -89,59 +89,17 @@ static class HomeCardNav
                 return;
             default:
                 // OwnerName, not Subtitle: PlaylistSummary's third slot IS the owner, and handing it a description
-                // puts the whole blurb where the detail page expects "Spotify".
+                // puts the whole blurb where the detail page expects "Spotify". The daylist window rides along so the
+                // detail countdown paints with the header even if playlist4 omits the format attributes.
                 DetailNav.OpenPlaylist(preview, go,
                     new PlaylistSummary(card.Uri, card.Title, card.Meta?.OwnerName ?? "", 0, card.Image,
-                        card.MosaicTiles));
+                        card.MosaicTiles,
+                        DaylistExpiresAtMs: card.Meta?.ExpiresAtMs ?? 0,
+                        DaylistCreatedAtMs: card.Meta?.CreatedAtMs ?? 0));
                 return;
         }
     }
 }
 
-/// <summary>The cursor arithmetic behind the Home section page's "Show all". Pure over <see cref="HomeSection"/> — no
-/// services, no elements — because the whole defect class here is arithmetic.
-/// <para>The load-bearing distinction is RAW vs DEDUPED. <see cref="HomeSection.Cards"/> is deduplicated (the ledger
-/// contract in <c>HomeFeed.cs</c>: <c>RawItemCount == Cards.Count + UnsupportedCount + DuplicateCount</c>), while the
-/// server's cursor counts everything it sent. Paging by <c>Cards.Count</c> therefore walks the cursor BACKWARDS by
-/// exactly the number of items we dropped, re-fetching what we just discarded; a page that is entirely already-seen
-/// URIs does not advance <c>Cards.Count</c> at all, so the offset — and the whole request — repeats forever while
-/// <c>TotalCount &gt; Cards.Count</c> keeps the button armed. Every quantity below is the RAW one.</para></summary>
-static class HomeSectionPaging
-{
-    /// <summary>The offset to request next: the raw number of items the endpoint has already handed us, duplicates and
-    /// unsupported entries included. Floored at <c>Cards.Count</c> so a section whose source under-reported its raw
-    /// count (or left it at zero) still asks for the page AFTER what it is showing rather than re-reading page one.
-    /// </summary>
-    public static int NextOffset(HomeSection section) => Math.Max(section.RawItemCount, section.Cards.Count);
-
-    /// <summary>Whether the server still has items past our cursor. Compared against the RAW count, so it agrees with
-    /// <see cref="NextOffset"/>: measuring the server's total against our deduped count claims there is more to fetch
-    /// for as long as we have dropped anything, which is what armed the no-progress loop.</summary>
-    public static bool HasMore(HomeSection section) => section.TotalCount > NextOffset(section);
-
-    /// <summary>Fold a fetched page into the section: append the URIs we have not seen, and advance the raw cursor by
-    /// the FULL page — duplicates included. That is the no-progress guard: a page that contributes zero new cards still
-    /// moves the cursor, so the next click asks for the following page instead of re-issuing the same request. (A page
-    /// with zero items cannot advance anything; the caller latches "exhausted" for that case, since the section carries
-    /// no such flag and <see cref="HomeSection.TotalCount"/> is the server's number, not ours to rewrite.)</summary>
-    public static HomeSection Append(HomeSection current, IReadOnlyList<HomeCard> pageCards, int pageTotal)
-    {
-        int raw = NextOffset(current);
-        var seen = new HashSet<string>(current.Cards.Count + pageCards.Count, StringComparer.OrdinalIgnoreCase);
-        var cards = new List<HomeCard>(current.Cards.Count + pageCards.Count);
-        foreach (var card in current.Cards) { seen.Add(card.Uri); cards.Add(card); }
-        int duplicates = 0;
-        for (int i = 0; i < pageCards.Count; i++)
-        {
-            var card = pageCards[i];
-            if (seen.Add(card.Uri)) cards.Add(card); else duplicates++;
-        }
-        return current with
-        {
-            Cards = cards,
-            TotalCount = Math.Max(current.TotalCount, pageTotal),
-            RawItemCount = raw + pageCards.Count,
-            DuplicateCount = current.DuplicateCount + duplicates,
-        };
-    }
-}
+// HomeSectionPaging — the cursor arithmetic — lives in its own engine-free file (HomeSectionPaging.cs) so
+// Wavee.Tests can source-include and drive it without this file's Context/Hooks dependencies.

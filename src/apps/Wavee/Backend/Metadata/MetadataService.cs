@@ -64,7 +64,25 @@ public sealed class MetadataService
     public Task SyncAllAsync(IReadOnlyList<string> uris, CancellationToken ct = default)
         => SyncAllAsync(uris, ct, closeRefs: true);
 
-    public async Task SyncAllAsync(IReadOnlyList<string> uris, CancellationToken ct, bool closeRefs)
+    /// <param name="clientFeatureId">Optional <c>client-feature-id</c> attribution for the traffic this call generates
+    /// (the desktop client stamps one per surface — e.g. <c>mdata_esperanto</c> for recents viewport hydration). Null =
+    /// header omitted = the pre-existing behaviour for every other caller. It rides through to the transport rather than
+    /// being fixed at construction because ONE MetadataService serves every surface.</param>
+    /// <param name="headerTraits">Opt-in: also request the header-trait bundle
+    /// (<see cref="ExtendedMetadataSource.HeaderTraitKinds"/>) alongside each entity's catalogue kind, matching the
+    /// desktop client's per-<c>client-feature-id</c> kind set.
+    ///
+    /// DEFAULT OFF, AND THE DEFAULT IS THE POINT. This method is the app's ONE extended-metadata chokepoint: the
+    /// discography prefetcher hands it 500 uris at a time and the tracklist loaders 300, and three extra kinds per
+    /// entity there would inflate every request in the app for payloads nobody reads. Only the surface the census
+    /// actually attributes the bundle to (the recents viewport hydrator) passes true.
+    ///
+    /// FRESHNESS IS UNAFFECTED. Seeding below keys on <c>landed</c>, which <see cref="ExtendedMetadataSource"/> only
+    /// fills for kinds it can PROJECT — a trait kind never lands, never seals, and never un-seals a uri. And the
+    /// per-uri freshness gate at the top of this method runs BEFORE any kind is chosen, so a uri that sealed on its
+    /// catalogue kind is skipped whole: its trait kinds are not re-requested either. There is no per-kind churn loop.</param>
+    public async Task SyncAllAsync(IReadOnlyList<string> uris, CancellationToken ct, bool closeRefs,
+                                   string? clientFeatureId = null, bool headerTraits = false)
     {
         var misses = new List<EntityRef>(uris.Count);   // the bulk path is cold-cache (mostly all-miss) → pre-size, no resizes
         foreach (var uri in uris)
@@ -77,9 +95,9 @@ public sealed class MetadataService
         {
             IReadOnlyCollection<string> landed;
             if (_extensionCache is not null)
-                landed = await SyncAllConditionalAsync(misses, ct).ConfigureAwait(false);
+                landed = await SyncAllConditionalAsync(misses, ct, clientFeatureId, headerTraits).ConfigureAwait(false);
             else
-                landed = await _source.FetchAsync(misses, _store, ct).ConfigureAwait(false);
+                landed = await _source.FetchAsync(misses, _store, ct, clientFeatureId, headerTraits).ConfigureAwait(false);
             foreach (var uri in landed) _res.Seed(Key(uri), _store.Version(uri));
         }
         // Closure scans the ORIGINAL request (fresh-skips included) — a row cached thin by an earlier session still heals.
@@ -136,28 +154,49 @@ public sealed class MetadataService
         }
     }
 
-    async Task<IReadOnlyCollection<string>> SyncAllConditionalAsync(IReadOnlyList<EntityRef> misses, CancellationToken ct)
+    async Task<IReadOnlyCollection<string>> SyncAllConditionalAsync(IReadOnlyList<EntityRef> misses, CancellationToken ct,
+                                                                    string? clientFeatureId, bool headerTraits)
     {
-        var extensionRequests = new List<(string Uri, Xm.ExtensionKind Kind)>(misses.Count);
+        int perEntity = headerTraits ? 1 + ExtendedMetadataSource.HeaderTraitKinds.Length : 1;
+        var extensionRequests = new List<(string Uri, Xm.ExtensionKind Kind)>(misses.Count * perEntity);
         var fallback = new List<EntityRef>();
         foreach (var entity in misses)
         {
             var kind = KindFor(entity.Kind);
-            if (kind == Xm.ExtensionKind.UnknownExtension) fallback.Add(entity);
-            else extensionRequests.Add((entity.Uri, kind));
+            if (kind == Xm.ExtensionKind.UnknownExtension) { fallback.Add(entity); continue; }
+            extensionRequests.Add((entity.Uri, kind));
+            // Mirrors ExtendedMetadataSource.GzipRequest's bundle on the CONDITIONAL arm. GzipExtensionRequest groups by
+            // uri (its byUri map), so these land as extra ExtensionQuery entries under the SAME EntityRequest as the
+            // catalogue kind — one POST, four kinds per uri, not a second round trip.
+            //
+            // ETAG BOOKKEEPING IS PER-(uri, kind) AND STAYS CORRECT. Each trait gets its own ExtensionEtagCache row,
+            // its own ETag and its own TTL; a 404 on 178 folds to a Missing row (24h) rather than re-asking, and
+            // Fold() already refuses to adopt an ETag onto a Missing row (the 304-forever trap). Nothing here can
+            // un-seal the catalogue kind, because ProjectCachedExtensions only reports uris a PROJECTION wrote.
+            //
+            // ONE HONEST CONSEQUENCE, stated rather than papered over: because the cache suppresses fresh keys, a
+            // re-hydrate of a uri whose catalogue row expired (MetadataService TTL, 1h) but whose trait rows have not
+            // (CachedExtension.DefaultTtl, 6h) sends the catalogue kind ALONE. The wire shape therefore matches the
+            // real client on a cold window and is a strict subset of it on a warm one. That is the ETag cache doing
+            // its job; re-asking for a payload we already hold to look more like the client would be waste.
+            if (headerTraits)
+                foreach (var trait in ExtendedMetadataSource.HeaderTraitKinds)
+                    extensionRequests.Add((entity.Uri, trait));
         }
 
         var landed = new HashSet<string>(StringComparer.Ordinal);
         if (extensionRequests.Count > 0)
         {
-            var cached = await _extensionCache!.GetAsync(extensionRequests, ct).ConfigureAwait(false);
+            var cached = await _extensionCache!.GetAsync(extensionRequests, ct, clientFeatureId).ConfigureAwait(false);
             foreach (var uri in ProjectCachedExtensions(cached, _store))
                 landed.Add(uri);
         }
 
         if (fallback.Count > 0)
         {
-            foreach (var uri in await _source.FetchAsync(fallback, _store, ct).ConfigureAwait(false))
+            // An UnknownExtension uri (e.g. `spotify:user:<id>:collection`) is dropped by GzipRequest before a query is
+            // written, so the flag rides along for consistency and is a no-op there.
+            foreach (var uri in await _source.FetchAsync(fallback, _store, ct, clientFeatureId, headerTraits).ConfigureAwait(false))
                 landed.Add(uri);
         }
         return landed;
@@ -170,6 +209,12 @@ public sealed class MetadataService
         foreach (var ((uri, kind), ext) in cached)
         {
             if (ext.Missing || ext.Payload is null || ext.Payload.IsEmpty) continue;
+            // Header-trait payloads are cached (so the next window's request stays conditional) but NOT re-serialized
+            // into the synthetic response below: ProjectParsed would only `default: continue` past them, and 178/220
+            // have no schema to decode anyway. 179 DOES (visual_identity_trait.proto) — reading it here as a cover
+            // fallback would mean a per-kind write into six different entity records under StoreEntityMerge's
+            // "absence means CLEAR" rule (see ProjectPlaylist), which is a bigger change than wire fidelity needs.
+            if (Array.IndexOf(ExtendedMetadataSource.HeaderTraitKinds, kind) >= 0) continue;
             if (!arrays.TryGetValue(kind, out var array))
             {
                 array = new Xm.EntityExtensionDataArray { ExtensionKind = kind };
@@ -197,6 +242,10 @@ public sealed class MetadataService
         EntityKind.Artist => Xm.ExtensionKind.ArtistV4,
         EntityKind.Show => Xm.ExtensionKind.ShowV4,
         EntityKind.Episode => Xm.ExtensionKind.EpisodeV4,
+        // A playlist header rides LIST_METADATA_V2 (205); it has no V4. Must stay identical to
+        // ExtendedMetadataSource.KindFor — this one picks the CONDITIONAL (etag-cached) request list, that one picks the
+        // plain batch, and a divergence would silently send playlists down the uncached arm.
+        EntityKind.Playlist => Xm.ExtensionKind.ListMetadataV2,
         _ => Xm.ExtensionKind.UnknownExtension,
     };
 }

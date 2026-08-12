@@ -38,6 +38,10 @@ internal static class HomeHeroLayout
     const float TagsBlock = 20f + Spacing.M;
     // Body 14/20 (was a bespoke 13/19) plus a 16 margin (was 18). One DIP shorter than before, per tier.
     const float MetaBlock = 20f + Spacing.L;
+    // The 28-DIP flip-countdown digit row (FlipCountdown.HeroRowHeight, restated — this file is engine-free and
+    // test-included, so it cannot reference the component) plus a 12 margin — reserved for every hero so the
+    // virtual-row estimator and HeroBand state the same geometry; non-daylist heroes collapse the slot to an empty BoxEl.
+    const float PulseBlock = 28f + Spacing.M;
     const float ActionsBlock = Spacing.XXXL;                    // the 32-DIP hero button row
 
     public static HomeHeroMetrics For(float width)
@@ -61,6 +65,6 @@ internal static class HomeHeroLayout
             HomeHeroTier.Medium => MediumTitleBlock,
             _ => NarrowTitleBlock,
         };
-        return 2f * CopyPaddingY + EyebrowBlock + title + TitleMargin + TagsBlock + MetaBlock + ActionsBlock;
+        return 2f * CopyPaddingY + EyebrowBlock + title + TitleMargin + TagsBlock + MetaBlock + PulseBlock + ActionsBlock;
     }
 }

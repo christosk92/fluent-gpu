@@ -144,6 +144,13 @@ public sealed class Services
     /// only; null offline/fake, in which case rows fall back to the neutral placeholder and hide the tempo column.
     /// Set on go-live, cleared on GoOffline.</summary>
     public Wavee.SpotifyLive.SpotifyTrackAdornmentService? TrackAdornments { get; internal set; }
+    /// <summary>THE extended-metadata chokepoint (SWR cache + in-flight dedup + partial-cache skip + ETag/304 +
+    /// projection into <see cref="RealStore"/>, which is what persists it through <c>CachedStore</c> for offline paint).
+    /// A surface that needs entities hydrated calls <c>SyncAllAsync</c> here and then READS THE STORE — it never talks to
+    /// <c>ExtendedMetadataSource</c> directly, because a page-local "already asked" set is lost on navigate-away and
+    /// shared with nobody. Live-only, exactly like <see cref="TrackAdornments"/>: set on go-live, cleared on GoOffline,
+    /// and null offline/fake (where a page simply does not hydrate rather than faking success).</summary>
+    public Wavee.Backend.Metadata.MetadataService? Metadata { get; internal set; }
     /// <summary>Spotify user profile cache for playlist owners and added-by contributors. Stable wrapper; offline/fake
     /// returns null so raw ids remain visible until a live resolver is installed.</summary>
     public SwitchableUserProfileService UserProfiles { get; }
@@ -172,6 +179,16 @@ public sealed class Services
     /// <summary>Alternate versions (music videos / live / remix) + available audio formats for the expanded track
     /// drawer. Everything it serves is fetched ON EXPAND, never with the row bundle.</summary>
     public Wavee.SpotifyLive.SwitchableTrackExpansionService TrackExpansion { get; }
+    /// <summary>The recents page's read seam (<c>GET /playlist/v2/list/recents/page[/diff]</c>). Stable identity; the
+    /// live <c>RecentsFetcher</c> is installed on go-live and reset on logout, so a mounted page holds this for the whole
+    /// session. Offline/fake it is <see cref="NullRecentsService"/> — the page renders its empty state rather than the UI
+    /// holding a null. The source is STATELESS: the page owns the last revision + rows it revalidates against.</summary>
+    public SwitchableRecentsService Recents { get; }
+    /// <summary>Home's "Show all" read seam (the <c>homeSection</c> Pathfinder operation). Stable identity; the live
+    /// adapter is installed on go-live and reset on logout. Offline/fake it is <see cref="NullHomeSectionService"/>, so
+    /// a drill-in shows whatever Home seeded and pages no further instead of the UI holding a null. Separate from
+    /// <see cref="Browse"/> on purpose: a <c>spotify:section:</c> URI is a HOME resource, not a browse one.</summary>
+    public SwitchableHomeSectionService HomeSections { get; }
     /// <summary>One-shot OS geolocation (the "Use my location" concert flow). App/OS-scoped → hand-wired here like the other
     /// OS services (never switchable). Requested ONLY on an explicit user action; constructing it prompts nothing.</summary>
     public FluentGpu.Pal.IGeolocationProvider Geolocation { get; }
@@ -268,6 +285,8 @@ public sealed class Services
         Concerts = new SwitchableConcertService(new NullConcertService());   // live Pathfinder adapter installed on go-live
         Browse = new Wavee.SpotifyLive.SwitchableBrowseService();            // ditto — Null until go-live
         TrackExpansion = new Wavee.SpotifyLive.SwitchableTrackExpansionService();
+        Recents = new SwitchableRecentsService();                            // ditto — the Null source until go-live
+        HomeSections = new SwitchableHomeSectionService();                   // ditto — Home's "Show all" paging axis
         Geolocation = new FluentGpu.WindowsApi.Location.WindowsGeolocationProvider();   // OS one-shot; no prompt until used
         AppUpdate = new NullAppUpdateService();
         Notifications = new NotificationCenterBridge(Activity, SpotifyNotifications, WhatsNew, AppUpdate, settings,
@@ -545,7 +564,10 @@ public sealed class Services
         Concerts.SetInner(new NullConcertService());   // concert discovery back offline until the next live login
         Browse.Reset();                               // browse directory/pages unavailable until the next live login
         TrackExpansion.Reset();                       // the row drawer shows no versions/formats while logged out
+        Recents.Reset();                              // …and the recents page has no list endpoint to read
+        HomeSections.Reset();                         // …and a Home section drill-in can page no further than its seed
         TrackAdornments = null;                       // row tint/tempo stop resolving; rows fall back to the neutral tile
+        Metadata = null;                              // …and the extended-metadata chokepoint goes with its session
         ArtistStats.SetInner(new NullArtistStatsService());   // drop the session-bound overview provider until the next live login
         ArtistPopularTracks.SetInner(new NullArtistPopularTracksService());   // …and its spclient/metadata-bound step two
         UserTop.SetInner(new NullUserTopService());            // …and the account-scoped top-artist ranking on Home

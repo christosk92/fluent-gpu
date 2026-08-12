@@ -49,6 +49,25 @@ public static class SpotifyHeaders
             ["spotify-dsa-mode-enabled"] = "false",
         }.AlsoOrigin(spclientBaseUrl);
 
+    // ── The playlist4 LIST-READ family for GET /playlist/v2/list/recents/page[/diff] ─────────────────────────────────
+    // A playlist4 LIST read (recents, podcast-chapters, …) is gated on the same client-identity tuple as the mutation
+    // routes, but adds two list-specific headers the desktop client sends: `x-accept-list-items` (the item types the
+    // client accepts in the list) and `spotify-playlist-sync-reason` — CAwQAQ== on the COLD page load, CAEQAQ== on a
+    // refresh/diff. The six always-on identity headers (Bearer, client-token, App-Platform, Spotify-App-Version,
+    // User-Agent, Accept-Language) are stamped by the HTTP middleware; only the list family is set here.
+    public static Dictionary<string, string> RecentsList(bool diff)
+    {
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Accept"] = "application/protobuf",
+            ["spotify-playlist-sync-reason"] = diff ? "CAEQAQ==" : "CAwQAQ==",
+            ["spotify-apply-lenses"] = "auto",
+            ["x-accept-list-items"] = "audio-track, audio-episode, video-episode, audiobook",
+        };
+        if (diff) headers["spotify-applied-lenses"] = "auto";   // the diff call echoes the applied lens set
+        return headers;
+    }
+
     /// <summary>Captured desktop header tuple for POST <c>/playlist/v2/playlist/{id}/signals</c>.</summary>
     public static Dictionary<string, string> PlaylistSignals(string language, string? spclientBaseUrl = null)
     {

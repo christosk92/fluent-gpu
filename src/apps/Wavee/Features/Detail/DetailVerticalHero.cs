@@ -155,6 +155,10 @@ static class DetailVerticalHero
                 MaxWidth = contentW, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             });
 
+        // Daylist rollover countdown — hero scale, between the meta line and the action row (the Home hero's slot).
+        // Null-safe: Add skips it for every non-daylist model, exactly like the optional blocks above.
+        Add("hero-pulse", DetailRail.DaylistCard(m, h, compact: false));
+
         // ── the action row ─────────────────────────────────────────────────────────────────────────────────────
         // The accent Play capsule LEADS (the same WaveeCta.Play builder and the same artwork accent the two-column
         // rail uses), then the quiet 32-DIP satellites. One grammar, no plates over media, nothing hand-rolled.

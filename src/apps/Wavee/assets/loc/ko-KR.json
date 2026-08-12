@@ -52,6 +52,7 @@
     "unplayed": "재생 안 함",
     "yourDaylist": "내 데이리스트",
     "heroEyebrow": "{name}님, {greeting} · {what}",
+    "nextUpdateAt": "다음 업데이트: {time}",
     "editorial": "에디토리얼",
     "oneSeries": "한 시리즈, 믹스 {count}개",
     "mixesFromArtists": "자주 듣는 아티스트로 만든 믹스 {count}개",
@@ -82,6 +83,15 @@
     "ep": "EP",
     "album": "앨범",
     "compilation": "컴필레이션"
+  },
+
+  "recents": {
+    "itemCount": "{count, plural, other {#개 항목}}",
+    "playedCount": "{count, plural, other {#곡 재생}}",
+    "chip": {
+      "music": "음악",
+      "podcasts": "팟캐스트"
+    }
   },
 
   "settings": {
@@ -153,6 +163,7 @@
     "likedSongs": "좋아요 표시한 곡",
     "podcasts": "팟캐스트",
     "localFiles": "로컬 파일",
+    "recents": "최근 항목",
     "playlist": "플레이리스트",
     "album": "앨범",
     "artist": "아티스트",

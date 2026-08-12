@@ -421,7 +421,9 @@ public sealed record Playlist(
     // Owner visibility from permission/base (authoritative; default true until fetched).
     bool IsPublic = true, string? BasePermissionRevision = null,
     // Server-driven automatic-playlist controls. Exposed only while this revision matches membership.
-    PlaylistTuning? Tuning = null);
+    PlaylistTuning? Tuning = null,
+    // Daylist rollover window (format_attributes `expires`/`created`, unix ms). 0 = unknown / not a daylist.
+    long DaylistExpiresAtMs = 0, long DaylistCreatedAtMs = 0);
 
 public enum QueueBucket { NowPlaying, UserQueue, NextUp, History }
 
