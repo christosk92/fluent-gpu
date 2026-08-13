@@ -311,7 +311,12 @@ public sealed class SidebarTemplateTests
         Assert.Equal(3, SidebarSectionKinds.DefaultDisplay(SidebarSectionKind.Concerts).MaxItems);
         Assert.Equal(SidebarDisplayOptions.Shortcuts,
             SidebarSectionKinds.DefaultDisplay(SidebarSectionKind.CollectionShortcuts));
-        Assert.Equal(SidebarDisplayOptions.Shortcuts,
+        // DEFECT 8 — StaticLinks has its OWN preset (`Links`), which is `Shortcuts with { CountBadges = false }`. The
+        // two kinds shared one preset, so every Links section was seeded a count flag `AllowsDisplayField` forbids: the
+        // panel never offered it and `SetDisplayOption` rejected it, yet the row renderer honoured it.
+        Assert.Equal(SidebarDisplayOptions.Links,
+            SidebarSectionKinds.DefaultDisplay(SidebarSectionKind.StaticLinks));
+        Assert.NotEqual(SidebarDisplayOptions.Shortcuts,
             SidebarSectionKinds.DefaultDisplay(SidebarSectionKind.StaticLinks));
     }
 

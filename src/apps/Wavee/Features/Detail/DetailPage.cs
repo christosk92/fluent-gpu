@@ -163,6 +163,7 @@ sealed class DetailPage : Component
                                 with { DeriveRenderedOutput = true },
                         ],
                     },
+                    reveal: SkelReveal.FadeOnly,
                     smoothResize: false),
             ],
         };

@@ -29,7 +29,7 @@ static class SidebarPickers
     /// <summary>Pick a ROUTE or a LIBRARY ENTITY and hand back a ready <see cref="SidebarItemSpec"/> (id minted by the
     /// reducer). <paramref name="entitiesOnly"/> hides the routes tab (an EntityEmbed spotlights an entity, never a
     /// page); <paramref name="kindFilter"/> narrows the entity list (an <c>artistUri</c> config field wants artists).</summary>
-    public static void OpenItem(SidebarCustomizerPage page, Action<SidebarItemSpec> onPick,
+    public static void OpenItem(ISidebarEditHost page, Action<SidebarItemSpec> onPick,
                                 bool entitiesOnly = false, SidebarEntryKind? kindFilter = null)
     {
         if (page.OverlaySvc is not { } overlay) return;
@@ -67,7 +67,7 @@ static class SidebarPickers
     /// time, so it cannot track the picker's live state. The <c>Footer</c> seam (the <c>PlaybackRuntimeSetupCard</c>
     /// precedent) is the supported way to own that, which is why body and footer now share one
     /// <see cref="SidebarActionPickerModel"/>.</para></summary>
-    public static void OpenAction(SidebarCustomizerPage page, SidebarActionBinding? existing,
+    public static void OpenAction(ISidebarEditHost page, SidebarActionBinding? existing,
                                   Action<SidebarActionBinding> onPick)
     {
         if (page.OverlaySvc is not { } overlay) return;
@@ -92,7 +92,7 @@ static class SidebarPickers
 /// <summary>The action picker's public entry point under the name the page calls.</summary>
 static class SidebarActionPicker
 {
-    public static void Open(SidebarCustomizerPage page, SidebarActionBinding? existing,
+    public static void Open(ISidebarEditHost page, SidebarActionBinding? existing,
                             Action<SidebarActionBinding> onPick)
         => SidebarPickers.OpenAction(page, existing, onPick);
 }
@@ -101,14 +101,14 @@ static class SidebarActionPicker
 /// dialog's own footer cannot see this component's selection.</summary>
 sealed class SidebarItemPickerBody : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly Action<SidebarItemSpec> _pick;
     readonly bool _entitiesOnly;
     readonly SidebarEntryKind? _kindFilter;
     readonly Signal<string> _query = new("");
     readonly Signal<int> _tab = new(0);
 
-    public SidebarItemPickerBody(SidebarCustomizerPage page, Action<SidebarItemSpec> pick, bool entitiesOnly,
+    public SidebarItemPickerBody(ISidebarEditHost page, Action<SidebarItemSpec> pick, bool entitiesOnly,
                                  SidebarEntryKind? kindFilter)
     {
         _page = page; _pick = pick; _entitiesOnly = entitiesOnly; _kindFilter = kindFilter;
@@ -240,7 +240,7 @@ sealed class SidebarItemPickerBody : Component
 /// signals that live inside the body). A plain holder: no hooks, no rendering, one instance per opened dialog.</summary>
 sealed class SidebarActionPickerModel
 {
-    public readonly SidebarCustomizerPage Page;
+    public readonly ISidebarEditHost Page;
     public readonly Signal<string?> Key;
     public readonly Signal<int> Mode;
     public readonly Signal<string?> TargetKey;
@@ -254,7 +254,7 @@ sealed class SidebarActionPickerModel
     public Action<SidebarActionBinding>? Commit;
     public Action? Cancel;
 
-    public SidebarActionPickerModel(SidebarCustomizerPage page, SidebarActionBinding? existing)
+    public SidebarActionPickerModel(ISidebarEditHost page, SidebarActionBinding? existing)
     {
         Page = page;
         Key = new Signal<string?>(existing is null ? null : WaveeExtensionRegistry.KeyOf(existing));

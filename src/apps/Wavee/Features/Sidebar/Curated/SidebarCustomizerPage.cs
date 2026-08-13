@@ -1,82 +1,78 @@
-﻿using System;
+using System;
+using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
-using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core.Sidebar;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
 
-// THE FULL-PAGE CUSTOMIZER (plan §C4 + REVISION 2's progressive three-region amendment). Route "sidebar-customize",
-// registered by ContentHost + ShellNav like any other destination, so it participates in tabs, back/forward and
-// KeepAlive.
+// PHASE 3 — THE COMPANION PAGE. Route "sidebar-customize", registered by ContentHost + ShellNav like any other
+// destination, so it still participates in tabs, back/forward and KeepAlive.
 //
-// ONE DOCUMENT, NO PREVIEW COPY (§C4.3). The page mounts no copy of the layout: it reads UseContext(SidebarPreferences
-// .Slot) and every edit goes through prefs.Dispatch(command) → reducer → undo pre-image → LayoutVersion bump → autosave.
-// The docked sidebar, this page's outline, its property panel AND its preview all re-render from that one signal in the
-// same frame — there is no apply step, no dirty state and no reconciliation risk.
+// WHAT THIS PAGE STOPPED BEING. It used to render an ABSTRACTION of the sidebar — an outline, a docked inspector, a
+// preview column and a bottom sheet, across a four-tier region ladder — while the real sidebar sat 24 DIP to its left,
+// live, unused. That is structurally the Windows 11 split-brain model the research pass identified as the disliked one,
+// and it is what produced the outline↔preview drift the reporter called "buggy". Decision B moved the editing surface
+// onto the docked pane (Phase 2: the pane IS the canvas and the preview), so this page keeps exactly the jobs a canvas
+// cannot do for itself:
 //
-// REGIONS (visual-remediation ladder; the rule itself is the pure, unit-tested
-// SidebarCustomizerLayout.Tier):
-//   ≥ 1320 DIP  Palette (232) + Outline (elastic) + Inspector (320) + persistent Preview (360)
-//   1000–1319   Palette + Outline + Inspector
-//   820–999     Outline + Inspector; Palette and Templates move to command overflow
-//   < 820       Outline only; the Inspector is a bottom sheet opened by selecting a section
+//   1. PRESETS (P7) — the three designs and the five templates, one click each. This also makes today's SILENT
+//      force-switch to Curated (SidebarLayoutMenu.Rows dispatches SwitchDesign before navigating) visible AND
+//      reversible, which it never was.
+//   2. THE PERSISTENT PALETTE — always visible, no popover and no accordion, with a Destinations group so "home"
+//      answers with Home.
+//   3. HIDDEN SECTIONS (P2) — a recovery list, so nothing a user hid is ever unreachable.
+//   4. RESET + the documented escape hatch to sidebar-layout.json.
 //
-// The Inspector is two tabs — Properties and Preview — and the Preview renders the REAL CuratedSidebar in Expanded /
-// Rail / Drawer form (§C4.8), mounted from the same document signal.
+// ONE SCROLLING COLUMN, at every width. There is no tier to resolve any more: the four regions that needed one are
+// gone, and a column that reflows is what let the old page hide the eyebrow, the saved-locally dot, the inline Reset
+// and the preview from anyone whose window was not ~1600 wide.
+//
+// ONE DOCUMENT, NO PREVIEW COPY. The page mounts no copy of the layout: it reads UseContext(SidebarPreferences.Slot)
+// and every edit goes through prefs.Dispatch(command) → reducer → undo pre-image → LayoutVersion bump → autosave. The
+// docked sidebar and this page re-render from that one signal in the same frame — no apply step, no dirty state.
 //
 // PROPS FREEZE AT MOUNT, so every sub-component takes THIS page (a reference-stable holder of signals + delegates) as
-// its single ctor arg — the landed CuratedRowSlot(this, scope) precedent. Each sub-component re-reads
-// prefs.LayoutVersion itself, so a document edit re-renders it without the page rebuilding its children.
-sealed class SidebarCustomizerPage : Component
+// its single ctor arg. Each sub-component re-reads prefs.LayoutVersion itself, so a document edit re-renders it without
+// the page rebuilding its children.
+sealed class SidebarCustomizerPage : Component, ISidebarEditHost
 {
-    const float CommandBarHeight = FluentGpu.Controls.CommandBar.CompactHeight;
-    const float RegionGap = Spacing.M;
-
-    /// <summary>The header is a two-line title lane (eyebrow over title) beside the command cluster, so it is taller than
-    /// the bare 48-DIP command bar it used to be (R3.2 item 1).</summary>
+    /// <summary>The header is a two-line title lane (eyebrow over title) beside the command cluster.</summary>
     const float HeaderHeight = 64f;
 
-    /// <summary>Width the inline Reset button + its gap take out of the command budget at the wide tiers. The pure fit
-    /// table (<c>SidebarCustomizerCommandWidths</c>) describes the NATIVE bar plus Done; Reset is external to it, so it is
-    /// subtracted from the available width instead of being added to that record (which would rewrite its tests for a
-    /// button the table never owned).</summary>
-    const float ResetReserve = 76f + Spacing.S;
-
-    /// <summary>Width the saved-locally indicator takes out of the same budget when it is shown.</summary>
-    const float SavedReserve = 108f + Spacing.S;
+    /// <summary>The one content column's max width. A settings-style column that runs the full width of a 2560-DIP
+    /// monitor is unreadable, and this page is a form, not a canvas — the canvas is the sidebar.</summary>
+    const float ColumnMaxWidth = 720f;
 
     // ── shared editor state (signals, so a sub-component subscribes exactly what it reads) ────────────────────────────
 
-    /// <summary>The selected section id — the outline's highlight and the inspector's subject.</summary>
+    /// <summary>The <see cref="ISidebarEditHost"/> subject. The page itself no longer HAS a selection surface (the
+    /// outline is gone and per-section options are a popover on the card, P3) — it is kept because the interface
+    /// requires it and because <c>SidebarPickers</c>/<c>SidebarPropertyPanel</c> are written against the interface.
+    /// The section the user is actually working on lives on the shared session; see <see cref="SelectedStaticLinks"/>.</summary>
     internal readonly Signal<string?> Selected = new(null);
 
-    /// <summary>The selected item inside the selected section (the items block's inline editors).</summary>
+    /// <summary>The selected item inside the selected section (the item pickers' subject).</summary>
     internal readonly Signal<string?> SelectedItem = new(null);
 
-    /// <summary>0 = Properties · 1 = Preview.</summary>
-    internal readonly Signal<int> InspectorTab = new(0);
-
-    /// <summary>0 = Expanded · 1 = Rail · 2 = Drawer (§C4.8).</summary>
-    internal readonly Signal<int> PreviewMode = new(0);
-
-    /// <summary>The palette's live search text (session-only, never persisted).</summary>
+    /// <summary>The palette's live search text (session-only, never persisted).
+    ///
+    /// <para>DEFECT 4 — the CLEARING POLICY, stated once, here. The old palette never cleared it, so a popover reopened
+    /// still filtered and looked empty. The palette is now persistent, so "on close" and "on collapse" no longer exist
+    /// as moments; the two that remain are: (a) after an accepted ADD, because the query described what the user was
+    /// looking for and they just found it, and (b) on entering/leaving the page, alongside the session's ergonomics
+    /// reset. It is deliberately NOT cleared when the palette switches into contribution-pick mode — that mode now
+    /// HONOURS the query (defect 5), so clearing it there would throw away the filter the user just typed.</para></summary>
     internal readonly Signal<string> PaletteQuery = new("");
 
     /// <summary>Bumped whenever <see cref="_rejectKey"/> changes — the inline reject strip's render dep AND the
     /// auto-dismiss timer's key.</summary>
     internal readonly Signal<int> RejectEpoch = new(0);
-
-    /// <summary>The bottom sheet's open state (Narrow tier only).</summary>
-    internal readonly Signal<bool> SheetOpen = new(false);
-
-    // The four inspector disclosure signals are GONE (R3.2 item 4): the property groups are always open, so there is no
-    // per-group state to own — and the accordion headers they drove were the `[sidebar.customizer.group.*]` bug.
 
     /// <summary>Banner dismissals + the health re-read nudge (the store's fault properties are not signals).</summary>
     readonly Signal<int> _bannerEpoch = new(0);
@@ -99,16 +95,30 @@ sealed class SidebarCustomizerPage : Component
     /// and therefore has no <see cref="HistoryStore.BackCtx"/> provider.</summary>
     internal HistoryStore? History;
 
-    /// <summary>The live tier, published as a plain field for the sub-components that shape themselves by it (they render
-    /// after this page, the CuratedSidebar precedent).</summary>
-    internal SidebarCustomizerTier Tier = SidebarCustomizerTier.Full;
-
-    int _lastTier = -1;
-    SidebarCustomizerCommandFit? _commandFit;
-    NodeHandle _commandAnchor;
-    OverlayHandle? _commandOverlay;
-
+    /// <summary>The route's one-shot <c>?topbar</c> argument, still parsed because <c>ContentHost</c> still passes
+    /// <c>r.Arg</c> and shell chrome may still navigate with it. It currently has NO reader: the surface it used to
+    /// focus was the outline's dedicated top-bar card, and Phase 1 turned the shortcut band into an ordinary section on
+    /// the CANVAS, which this page cannot reach into. Kept (rather than silently dropped) so the argument keeps a named
+    /// owner for whoever wires "reveal the Shortcuts card" on the pane side.</summary>
     internal bool FocusTopBarRequested { get; }
+
+    // ── PHASE 2 / DECISION B — this page as an `ISidebarEditHost` ────────────────────────────────────────────────────
+    //
+    // Purely ADDITIVE: not one existing member changed shape. The customizer's generated control set
+    // (`SidebarPropertyPanel` + the `Cz*` rows + the item/action pickers) used to take THIS TYPE; it now takes the small
+    // interface below so the very same controls can also be hosted by the live pane's per-section options popover
+    // (P3), driven by the shared `SidebarEditSession`. Explicit implementation keeps every call site inside this folder
+    // reading the concrete members it always did.
+    SidebarPreferences? ISidebarEditHost.Prefs => Prefs;
+    ActionServices? ISidebarEditHost.Acts => Acts;
+    WaveeExtensionRegistry? ISidebarEditHost.Registry => Registry;
+    IOverlayService? ISidebarEditHost.OverlaySvc => OverlaySvc;
+    Signal<int> ISidebarEditHost.RejectEpoch => RejectEpoch;
+    Signal<string?> ISidebarEditHost.Selected => Selected;
+    Signal<string?> ISidebarEditHost.SelectedItem => SelectedItem;
+    SidebarRejectReason ISidebarEditHost.Dispatch(SidebarCommand command) => Dispatch(command);
+    SidebarRejectReason ISidebarEditHost.DispatchTopBar(SidebarCommand command) => DispatchTopBar(command);
+    void ISidebarEditHost.Select(string? sectionId) => Select(sectionId);
 
     public SidebarCustomizerPage(string? focusTarget)
         => FocusTopBarRequested = string.Equals(
@@ -125,54 +135,56 @@ sealed class SidebarCustomizerPage : Component
         Back = UseContext(HistoryStore.BackCtx);
         History = UseContext(HistoryStore.Slot);
 
-        var widthSig = UseMeasuredWidth(4f);
-        var boundsSig = UseMeasuredBounds();
-
-        float width = widthSig.Value;
-        var tier = SidebarCustomizerLayout.Tier(width > 1f ? width : SidebarCustomizerLayout.FullEnterW, _lastTier);
-        _lastTier = (int)tier;
-        Tier = tier;
-
-        // Every accepted command bumps this: the command bar's undo/redo enablement, the empty state and the banners all
-        // read the document, so the page itself must subscribe it too.
+        // Every accepted command bumps this: the header's undo/redo enablement, the hidden list and the banners all read
+        // the document, so the page itself must subscribe it too.
         int layoutVersion = Prefs?.LayoutVersion.Value ?? 0;
         _ = layoutVersion;
         _ = _bannerEpoch.Value;
         int rejectEpoch = RejectEpoch.Value;
 
-        // Open on a useful editing state. A stale/deleted selection falls back to the first authored section; the Blank
-        // template remains unselected. This runs after render, so it never writes a signal from the render computation,
-        // and it does not auto-open the Narrow bottom sheet.
-        UseEffect(EnsureUsefulSelection, DepKey.From(layoutVersion));
+        // PHASE 2 / DECISION B — the page's ONE piece of canvas wiring: reset the edit session's ERGONOMICS (and, per
+        // defect 4, the palette query) on the way in and out, so a visit opens on a predictable state rather than on
+        // whatever card was open last time.
+        //
+        // It deliberately does NOT arm or disarm the canvas. Arming is derived from the active ROUTE in
+        // `CuratedSidebar.ReadEditSession`, because this page is a `Flow.KeepAlive` destination: Done / Back / a tab
+        // switch PARK it rather than unmounting it, so an unmount cleanup would not run until the page aged out of the
+        // 8-entry ring — and a flag cleared that late would leave structural drag armed on the live sidebar for the
+        // rest of the session. This effect is therefore allowed to be missed; the gate is not.
+        //
+        // The pane is a SIBLING in the tree, so the seam between the two is the shared session on `SidebarPreferences`
+        // and nothing else — the customizer never talks to the renderer (iron rule 6).
+        var editSession = Prefs?.Edit;
+        UseEffect(() =>
+        {
+            editSession?.ResetErgonomics();
+            PaletteQuery.SetIfChanged("");
+            return () =>
+            {
+                editSession?.ResetErgonomics();
+                PaletteQuery.SetIfChanged("");
+            };
+        }, DepKey.Empty);
 
-        // The inline reject strip auto-dismisses after 4 s (§C4.5). Keyed on the epoch, so each new rejection re-arms it.
+        // The inline reject strip auto-dismisses after 4 s. Keyed on the epoch, so each new rejection re-arms it.
         UseTimeout(ClearReject, 4000f, DepKey.From(rejectEpoch));
-
-        // Selecting a section at the Narrow tier opens the sheet; widening past it closes the sheet (the inspector is a
-        // column again). A layout effect, never a render-time signal write.
-        bool inlineInspector = SidebarCustomizerLayout.InspectorInline(tier);
-        UseLayoutEffect(() => { if (inlineInspector) SheetOpen.SetIfChanged(false); }, DepKey.From(inlineInspector));
-
-        float sheetHeight = SidebarCustomizerLayout.SheetHeight(boundsSig.Value.H);
 
         return new BoxEl
         {
             Key = "customizer", Grow = 1f, Shrink = 1f, Direction = 1, MinWidth = 0f, MinHeight = 0f,
             ClipToBounds = true,
-            Children =
-            [
-                HeaderBar(tier, width > 1f ? width : SidebarCustomizerLayout.FullEnterW),
-                Divider(),
-                Banners(),
-                Body(tier),
-                Sheet(tier, sheetHeight),
-            ],
+            Children = [HeaderBar(), Divider(), Banners(), Body()],
         };
     }
 
-    // ── the command bar (§C4.4) ──────────────────────────────────────────────────────────────────────────────────────
+    // ── the header (Back · title · Undo · Redo · Reset · Done) ───────────────────────────────────────────────────────
 
-    Element HeaderBar(SidebarCustomizerTier tier, float pageWidth)
+    /// <summary>The header is FIXED now — no priority-fit table, no overflow bar.
+    /// <para>The table existed because four regions plus a native <c>CommandBar</c> plus Done had to share a header at
+    /// four tiers. What is left is six affordances totalling well under 400 DIP, and the title lane is the only flexible
+    /// child (Grow 1 · Basis 0 · Shrink 1 · MinWidth 0), so under pressure the title ellipsizes and the cluster holds its
+    /// width. A fit table for six fixed buttons would be machinery describing nothing.</para></summary>
+    Element HeaderBar()
     {
         var prefs = Prefs;
         bool canUndo = prefs?.CanUndo ?? false;
@@ -184,79 +196,23 @@ sealed class SidebarCustomizerPage : Component
             ? Loc.Format(CzLoc.RedoOf, ("action", Loc.Get(r)))
             : Loc.Get(CzLoc.Redo);
 
-        // Reset is INLINE (a secondary button beside Done) only where the title lane is already generous; below that it
-        // stays in the command-bar overflow, where it has always been. The saved indicator follows the same rule as the
-        // rest of the supporting chrome.
-        bool wide = SidebarCustomizerLayout.SubtitleVisible(tier);
         var persistence = prefs?.PersistenceHealth.Value ?? SidebarWriteResult.Healthy;
-        bool showSaved = wide && persistence.Success;
 
-        var widths = SidebarCustomizerCommandWidths.Default;
-        float available = MathF.Max(0f,
-            pageWidth - Spacing.L * 2f - SidebarCustomizerLayout.TitleReserve(tier)
-            - BackReserve
-            - (wide ? ResetReserve : 0f)
-            - (showSaved ? SavedReserve : 0f));
-        var fit = SidebarCustomizerCommandLayout.Resolve(available, in widths, tier, _commandFit);
-        _commandFit = fit;
-
-        var primary = new System.Collections.Generic.List<AppBarCommand>(3);
-        if (fit.Has(SidebarCustomizerInlineCommand.Add))
-            primary.Add(new AppBarCommand(Icons.Add, Loc.Get(CzLoc.AddSection), OpenPaletteCommand));
-        if (fit.Has(SidebarCustomizerInlineCommand.Undo))
-            primary.Add(new AppBarCommand(Icons.Undo, undoTip, UndoStep, Enabled: canUndo));
-        if (fit.Has(SidebarCustomizerInlineCommand.Redo))
-            primary.Add(new AppBarCommand(Icons.Redo, redoTip, RedoStep, Enabled: canRedo));
-
-        var secondary = new System.Collections.Generic.List<AppBarCommand>(8);
-        if (!fit.Has(SidebarCustomizerInlineCommand.Add))
-            secondary.Add(new AppBarCommand(Icons.Add, Loc.Get(CzLoc.AddSection), OpenPaletteCommand));
-        if (!fit.Has(SidebarCustomizerInlineCommand.Undo))
-            secondary.Add(new AppBarCommand(Icons.Undo, undoTip, UndoStep, Enabled: canUndo));
-        if (!fit.Has(SidebarCustomizerInlineCommand.Redo))
-            secondary.Add(new AppBarCommand(Icons.Redo, redoTip, RedoStep, Enabled: canRedo));
-        secondary.Add(new AppBarCommand(Icons.Grid, Loc.Get(CzLoc.Templates), OpenTemplatesCommand));
-        if (!SidebarCustomizerLayout.PreviewInline(tier))
-            secondary.Add(new AppBarCommand(Icons.SplitView, Loc.Get(CzLoc.Preview), ShowPreview));
-        if (!wide)
-        {
-            secondary.Add(AppBarCommand.Separator);
-            secondary.Add(new AppBarCommand(Icons.Refresh, Loc.Get(CzLoc.Reset), ConfirmReset));
-        }
-
-        string commandKey = "native-commands:" + (int)tier + ":" + (int)fit.Inline + ":"
-            + (wide ? "w" : "-") + (canUndo ? "u" : "-") + (canRedo ? "r" : "-");
-        Element nativeBar = Embed.Comp(() => new FluentGpu.Controls.CommandBar
-        {
-            PrimaryCommands = primary,
-            SecondaryCommands = secondary,
-            ClosedDisplayMode = CommandBarDisplayMode.Compact,
-            LabelsOnOpen = false,
-        }) with { Key = commandKey };
-
-        var kids = new System.Collections.Generic.List<Element>(6)
+        var kids = new List<Element>(6)
         {
             BackButton(),
             new BoxEl
             {
-                Direction = 1,
-                Grow = 1f,
-                Basis = 0f,
-                Shrink = 1f,
-                MinWidth = 0f,
-                Justify = FlexJustify.Center,
+                Direction = 1, Grow = 1f, Basis = 0f, Shrink = 1f, MinWidth = 0f, Justify = FlexJustify.Center,
                 Children =
                 [
-                    // THE EYEBROW (R3.2 item 1): the ACTIVE template, which is the one piece of context the title cannot
-                    // carry — "Customize sidebar" is true of every document, "Wavee curated" says which one this is.
-                    // AccentDecor: accent as content colour on a localized template NAME (never caps-transformed).
-                    wide
-                        ? WaveeType.Eyebrow(Loc.Get(SidebarTemplates.NameLocKey(
-                              prefs?.Layout.TemplateId ?? SidebarTemplates.Curated))) with
-                        {
-                            Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-                        }
-                        : new BoxEl { Height = 0f },
+                    // THE EYEBROW: the ACTIVE template, which is the one piece of context the title cannot carry —
+                    // "Customize sidebar" is true of every document, "Wavee curated" says which one this is.
+                    WaveeType.Eyebrow(Loc.Get(SidebarTemplates.NameLocKey(
+                        prefs?.Layout.TemplateId ?? SidebarTemplates.Curated))) with
+                    {
+                        Color = WaveeAccent.Decor, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                    },
                     new TextEl(Loc.Get(CzLoc.Title))
                     {
                         Size = 16f, Weight = 600, Color = Tok.TextPrimary, MaxLines = 1,
@@ -266,68 +222,40 @@ sealed class SidebarCustomizerPage : Component
             },
         };
 
-        // THE COMMAND CLUSTER is its own centred row (round-3 defect 4): the overflow bar, Reset and Done used to be
-        // loose children of the header, so the 48-DIP CommandBar sat beside ~28-DIP buttons with the header's 8-DIP gap
-        // between them and read as a cramped, mismatched strip. Grouping them lets the cluster centre as ONE unit with its
-        // own tighter gap, and keeps the header's gap for the title↔cluster separation only.
-        var cluster = new System.Collections.Generic.List<Element>(4)
-        {
-            new BoxEl
-            {
-                Width = fit.NativeBarWidth,
-                Height = CommandBarHeight,
-                Shrink = 0f,
-                MinWidth = 0f,
-                ClipToBounds = true,
-                Children = [nativeBar],
-            },
-        };
-
-        if (wide)
-            cluster.Add(Button.Create(Loc.Get(CzLoc.Reset), ConfirmReset, ButtonAppearance.Subtle, ControlSize.Small)
-                with { Shrink = 0f });
-
-        cluster.Add(Button.Create(Loc.Get(CzLoc.Done), Done, ButtonAppearance.Accent, ControlSize.Small)
-            with { Shrink = 0f });
-
-        if (showSaved) kids.Add(SavedIndicator());
+        if (persistence.Success) kids.Add(SavedIndicator());
 
         kids.Add(new BoxEl
         {
-            Direction = 0,
-            Shrink = 0f,
-            Gap = Spacing.XS,
-            AlignItems = FlexAlign.Center,
-            Children = [.. cluster],
+            Direction = 0, Shrink = 0f, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                ToolTip.Wrap(IconButton.Create(Icons.Undo, UndoStep, size: ControlSize.Small,
+                    isEnabled: canUndo) with { Shrink = 0f }, undoTip),
+                ToolTip.Wrap(IconButton.Create(Icons.Redo, RedoStep, size: ControlSize.Small,
+                    isEnabled: canRedo) with { Shrink = 0f }, redoTip),
+                Button.Create(Loc.Get(CzLoc.Reset), ConfirmReset, ButtonAppearance.Subtle, ControlSize.Small)
+                    with { Shrink = 0f },
+                Button.Create(Loc.Get(CzLoc.Done), Done, ButtonAppearance.Accent, ControlSize.Small)
+                    with { Shrink = 0f },
+            ],
         });
 
         return new BoxEl
         {
-            Key = "cmdbar:" + (int)tier,
-            Direction = 0,
-            Height = HeaderHeight,
-            Shrink = 0f,
-            Gap = Spacing.S,
+            Key = "cmdbar", Direction = 0, Height = HeaderHeight, Shrink = 0f, Gap = Spacing.S,
             AlignItems = FlexAlign.Center,
-            // No Wrap: the title lane is the ONLY flexible child (Grow 1 · Basis 0 · Shrink 1 · MinWidth 0), so under
-            // pressure the title ellipsizes and the command cluster holds its width — the header can never reflow to a
-            // second line at any tier.
             Padding = new Edges4(Spacing.S, 0f, Spacing.L, 0f),
-            OnRealized = h => _commandAnchor = h,
             Children = [.. kids],
         };
     }
 
-    /// <summary>Width the back affordance takes out of the command budget.</summary>
-    const float BackReserve = 32f + Spacing.S;
-
     /// <summary>The customizer's back arrow invokes the shell's real browser-style Back callback. A standalone/headless
     /// mount falls back to the newest non-customizer visit without changing production navigation history.</summary>
-    /// <remarks>The extra wrapper box is LOAD-BEARING (round-3 defect 3): <c>ToolTip</c>'s own root declares
-    /// <c>AlignSelf = FlexAlign.Start</c> (ToolTip.cs:352-354), which OPTS OUT of the header row's
-    /// <c>AlignItems = Center</c> and pinned the arrow to the TOP of the 64-DIP header while the two-line title lane stayed
-    /// centred — reading as an arrow stacked above the title. This plain box has no AlignSelf of its own, so the header
-    /// centres IT, and inside it the tooltip's Start is a no-op because the box hugs the button's own height.</remarks>
+    /// <remarks>The extra wrapper box is LOAD-BEARING: <c>ToolTip</c>'s own root declares
+    /// <c>AlignSelf = FlexAlign.Start</c>, which OPTS OUT of the header row's <c>AlignItems = Center</c> and pinned the
+    /// arrow to the TOP of the 64-DIP header while the two-line title lane stayed centred — reading as an arrow stacked
+    /// above the title. This plain box has no AlignSelf of its own, so the header centres IT, and inside it the
+    /// tooltip's Start is a no-op because the box hugs the button's own height.</remarks>
     Element BackButton() => new BoxEl
     {
         Shrink = 0f,
@@ -339,6 +267,10 @@ sealed class SidebarCustomizerPage : Component
         ],
     };
 
+    /// <summary>The ONE "leave the customizer" path, shared by Back and <see cref="Done"/> (defect 12). It flushes the
+    /// coalesced document write, then returns the user WHERE THEY CAME FROM through <c>HistoryStore.BackCtx</c> — the
+    /// shell's real browser-style Back. Home is the last resort for a standalone/headless mount with no shell above it,
+    /// never the first choice.</summary>
     void GoBack()
     {
         Prefs?.Flush();
@@ -360,7 +292,14 @@ sealed class SidebarCustomizerPage : Component
         Go?.Invoke("home", null);
     }
 
-    /// <summary>The SAVED-LOCALLY indicator (R3.2 item 1): a 6-DIP success dot plus the label, shown only while
+    /// <summary>DEFECT 12 — Done used to hard-navigate <c>Go("home")</c> under a comment claiming "a page has no
+    /// reachable seam onto the shell's back stack", which the sibling Back button disproved on the very next screen:
+    /// <c>HistoryStore.BackCtx</c> carries <c>WaveeShell.Back</c> and has since the customizer shipped. Done and Back
+    /// are the same gesture with different words on it, so they are now literally the same method — two exits that can
+    /// never disagree about where "out" is.</summary>
+    void Done() => GoBack();
+
+    /// <summary>The SAVED-LOCALLY indicator: a 6-DIP success dot plus the label, shown only while
     /// <c>PersistenceHealth</c> is healthy. It deliberately says nothing on a fault — the error <c>InfoBar</c> in
     /// <see cref="Banners"/> owns failures, and two voices telling the same story is how a UI starts lying.</summary>
     static Element SavedIndicator() => new BoxEl
@@ -381,11 +320,11 @@ sealed class SidebarCustomizerPage : Component
         ],
     };
 
-    // ── banners: corruption (§C4.7), save fault, inline rejects ──────────────────────────────────────────────────────
+    // ── banners: corruption, save fault, inline rejects ──────────────────────────────────────────────────────────────
 
     Element Banners()
     {
-        var kids = new System.Collections.Generic.List<Element>(3);
+        var kids = new List<Element>(3);
         var prefs = Prefs;
         var persistence = prefs?.PersistenceHealth.Value ?? SidebarWriteResult.Healthy;
         if (persistence.Success) _dismissedPersistenceFault = SidebarPersistenceFault.None;
@@ -438,155 +377,25 @@ sealed class SidebarCustomizerPage : Component
         };
     }
 
-    // ── the regions ──────────────────────────────────────────────────────────────────────────────────────────────────
+    // ── the ONE column ───────────────────────────────────────────────────────────────────────────────────────────────
 
-    Element Body(SidebarCustomizerTier tier)
+    /// <summary>Presets · palette · hidden · advanced, top to bottom, in one scroller at every width.</summary>
+    Element Body() => ScrollView(new BoxEl
     {
-        var kids = new System.Collections.Generic.List<Element>(4);
-
-        if (SidebarCustomizerLayout.PaletteInline(tier))
-            kids.Add(Region("palette:" + (int)tier, SidebarCustomizerLayout.PaletteWidth,
-                Embed.Comp(() => new SidebarCustomizerPalette(this, inFlyout: false)),
-                pad: new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S)));
-
-        kids.Add(Region("outline:" + (int)tier, null,
-            Embed.Comp(() => new SidebarOutlineView(this)) with { Key = "outline-view:" + (int)tier }));
-
-        if (SidebarCustomizerLayout.InspectorInline(tier))
-            kids.Add(Region("inspector:" + (int)tier, SidebarCustomizerLayout.InspectorWidth,
-                Embed.Comp(() => new SidebarInspector(this, sheet: false))
-                    with { Key = "inspector-view:" + (int)tier }));
-
-        if (SidebarCustomizerLayout.PreviewInline(tier))
-            kids.Add(Region("preview:" + (int)tier, SidebarCustomizerLayout.PreviewWidth,
-                Embed.Comp(() => new SidebarLivePreview(this)) with { Key = "preview-view:" + (int)tier },
-                // Spacing.S, not M: the Drawer form is 360 DIP wide — the same as this column — so every DIP of padding is
-                // a DIP the preview well has to clip off the pane it is showing.
-                pad: new Edges4(Spacing.S, Spacing.S, Spacing.S, Spacing.S)));
-
-        return new BoxEl
-        {
-            Key = "body:" + (int)tier, Direction = 0, Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
-            Gap = RegionGap,
-            // NO page-level Fill: the surface under these cards is the shell's own content pane
-            // (WaveeColors.ContentSurface), and painting a second layer over it just repaints the same rung. The
-            // Settings page paints no background either; its cards float on the same surface.
-            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
-            Children = [.. kids],
-        };
-    }
-
-    /// <summary>One REGION as a distinct card (R3.2 item 6): the four columns used to be flat, undelimited stacks, so a
-    /// screenshot showed one undifferentiated field of controls. Fixed-width regions do not shrink; the outline
-    /// (<paramref name="width"/> null) is the elastic one.</summary>
-    static Element Region(string key, float? width, Element child, Edges4 pad = default) => new BoxEl
+        Direction = 1, Gap = Spacing.L, MaxWidth = ColumnMaxWidth, MinWidth = 0f,
+        Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.XL),
+        Children =
+        [
+            Embed.Comp(() => new SidebarPresetBlock(this)),
+            Embed.Comp(() => new SidebarCustomizerPalette(this)),
+            Embed.Comp(() => new SidebarHiddenSections(this)),
+            Embed.Comp(() => new SidebarAdvancedBlock(this)),
+        ],
+    }) with
     {
-        Key = key,
-        Direction = 1,
-        Grow = width is null ? 1f : 0f,
-        Shrink = width is null ? 1f : 0f,
-        Width = width ?? float.NaN,     // NaN = auto (the engine's "unset" sentinel), so the elastic region measures
-        MinWidth = 0f,
-        MinHeight = 0f,
-        Corners = Radii.CardAll,
-        Fill = Tok.FillCardDefault,
-        BorderWidth = 1f,
-        BorderColor = Tok.StrokeCardDefault,
-        ClipToBounds = true,
-        Padding = pad,
-        Children = [child],
+        Key = "customizer-column", Grow = 1f, Shrink = 1f, MinHeight = 0f, MinWidth = 0f,
+        AutoEdgeFade = true, ScrollKey = "customizer.column",
     };
-
-    /// <summary>The Narrow tier's inspector: an IN-PAGE bottom sheet rather than an <c>Overlay</c> popup — the overlay
-    /// service is anchor-relative (there is no full-width sheet presenter today), and an in-page sheet keeps the live
-    /// document, the tab order and the outline visible behind it. Always mounted (height 0 when closed) so opening it
-    /// never remounts the inspector and loses its tab.</summary>
-    Element Sheet(SidebarCustomizerTier tier, float height)
-    {
-        bool open = !SidebarCustomizerLayout.InspectorInline(tier) && SheetOpen.Value && Selected.Value is not null;
-        if (!open) return new BoxEl { Key = "sheet:" + (int)tier, Height = 0f, Shrink = 0f };
-        return new BoxEl
-        {
-            Key = "sheet:" + (int)tier, Direction = 1, Shrink = 0f, Height = height, ClipToBounds = true,
-            Fill = Tok.FillCardSecondary, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
-            Corners = new CornerRadius4(Radii.Card, Radii.Card, 0f, 0f),
-            Children =
-            [
-                new BoxEl
-                {
-                    Direction = 0, Height = 36f, Shrink = 0f, AlignItems = FlexAlign.Center,
-                    Padding = new Edges4(Spacing.M, 0f, Spacing.S, 0f),
-                    Children =
-                    [
-                        new TextEl(Loc.Get(CzLoc.Properties))
-                        {
-                            Size = 13f, Weight = 600, Color = Tok.TextSecondary, Grow = 1f, MaxLines = 1,
-                        },
-                        ToolTip.Wrap(
-                            IconButton.Create(Icons.ChromeClose, () => SheetOpen.Value = false, size: ControlSize.Small),
-                            Loc.Get(CzLoc.Done)),
-                    ],
-                },
-                Divider(),
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Shrink = 1f, MinHeight = 0f,
-                    Children = [Embed.Comp(() => new SidebarInspector(this, sheet: true))],
-                },
-            ],
-        };
-    }
-
-    // ── flyout content (Compact/Narrow) ──────────────────────────────────────────────────────────────────────────────
-
-    Element PaletteFlyout() => new BoxEl
-    {
-        Direction = 1, Width = 300f, MaxHeight = 520f, MinHeight = 0f, ClipToBounds = true,
-        Children = [Embed.Comp(() => new SidebarCustomizerPalette(this, inFlyout: true))],
-    };
-
-    Element TemplatesFlyout() => new BoxEl
-    {
-        Direction = 1, Width = 300f, MaxHeight = 520f, MinHeight = 0f, ClipToBounds = true,
-        Children = [Embed.Comp(() => new SidebarTemplateList(this))],
-    };
-
-    /// <summary>Open the "add a section" palette anchored to the element that ASKED for it (round-2 defect 5).
-    /// <para>It used to always anchor to <see cref="_commandAnchor"/> — the header row's node — so clicking the outline's
-    /// "Add a section" tail, several hundred DIP away, popped the flyout up at the top-right of the page looking detached
-    /// from anything. <see cref="OpenPaletteAt"/> takes the clicking element's realized node so the flyout lands on it;
-    /// the parameterless form keeps the header's right-aligned placement, because that IS where its button lives.</para></summary>
-    /// <remarks>Parameterless (NOT an optional-argument overload) because <c>AppBarCommand</c> takes a plain
-    /// <see cref="Action"/> and a method with optional parameters does not convert to one.</remarks>
-    internal void OpenPaletteCommand()
-        => OpenCommandSurface(PaletteFlyout, null, FlyoutPlacement.BottomEdgeAlignedRight);
-
-    /// <inheritdoc cref="OpenPaletteCommand"/>
-    internal void OpenPaletteAt(NodeHandle anchor)
-        => OpenCommandSurface(PaletteFlyout, anchor, FlyoutPlacement.BottomEdgeAlignedLeft);
-
-    void OpenTemplatesCommand() => OpenCommandSurface(TemplatesFlyout, null, FlyoutPlacement.BottomEdgeAlignedRight);
-
-    void OpenCommandSurface(Func<Element> content, NodeHandle? anchor, FlyoutPlacement placement)
-    {
-        if (OverlaySvc is null) return;
-        if (_commandOverlay is { IsOpen: true } open) { open.Close(); return; }
-        var at = anchor ?? _commandAnchor;
-        _commandOverlay = OverlaySvc.Open(
-            () => at,
-            content,
-            placement,
-            new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss,
-                             Chrome: PopupChrome.Popup) { ConstrainToRootBounds = true });
-        _commandOverlay.ClosedAction = () => _commandOverlay = null;
-    }
-
-    void ShowPreview()
-    {
-        InspectorTab.SetIfChanged(1);
-        if (!SidebarCustomizerLayout.InspectorInline(Tier) && Selected.Peek() is not null)
-            SheetOpen.SetIfChanged(true);
-    }
 
     // ── the editor's ONE mutation path ───────────────────────────────────────────────────────────────────────────────
 
@@ -594,7 +403,7 @@ sealed class SidebarCustomizerPage : Component
     /// The only mutation path in the whole page, so a rejected command can never look like an applied one.</summary>
     internal SidebarRejectReason Dispatch(SidebarCommand command) => Dispatch(command, topBar: false);
 
-    /// <summary>The same mutation path with the top-bar rejection vocabulary enabled.</summary>
+    /// <summary>The same mutation path with the shortcut band's rejection vocabulary enabled.</summary>
     internal SidebarRejectReason DispatchTopBar(SidebarCommand command) => Dispatch(command, topBar: true);
 
     SidebarRejectReason Dispatch(SidebarCommand command, bool topBar)
@@ -613,19 +422,40 @@ sealed class SidebarCustomizerPage : Component
         return reason;
     }
 
-    /// <summary>Which rejections have something honest to say inline. The rest (a no-op edit, an unknown id, a duplicate
-    /// item, the 40-section cap, a non-whitelisted icon) have no key in the catalog — surfacing "[key]" would be worse
-    /// than staying quiet, so they stay silent and are recorded in the wave's HANDOFF.</summary>
+    /// <summary>DEFECT 11 — every rejection the reducer can return now says something.
+    ///
+    /// <para>This table used to cover five reasons and let the other eight fall through to <c>null</c>, i.e. silence: the
+    /// 40-section cap, a duplicate item, a non-whitelisted icon, an unknown id and a no-op edit all produced a click that
+    /// did nothing and explained nothing. The old comment justified it as "surfacing [key] would be worse than staying
+    /// quiet", which was true of a catalog that lacked the strings — so the strings landed instead.</para>
+    ///
+    /// <para>The <c>topBar</c> arms come FIRST because the shortcut band has its own vocabulary for the same reasons
+    /// ("Shortcuts holds up to 6 items", not "your sidebar is full"). Everything else falls through to the general arm,
+    /// including Phase 1's <c>KindNotDuplicable</c> — a duplicate refused because the section reads a SHARED store
+    /// (Pinned / PlaylistTree), where two copies would render the same rows and both commit reorders into it.</para>
+    ///
+    /// <para>Still deliberately null: nothing. Every enum member is covered; the <c>_</c> arm exists only for a future
+    /// build's appended reason, which stays quiet rather than rendering a missing key.</para></summary>
     static string? RejectLocKey(SidebarRejectReason reason, bool topBar) => reason switch
     {
-        SidebarRejectReason.SectionCapReached when topBar => SidebarNavBandLoc.CapReached,
+        SidebarRejectReason.SectionCapReached when topBar => CzLoc.TopBarCapReached,
         SidebarRejectReason.DuplicateItem when topBar => CzLoc.TopBarDuplicate,
         SidebarRejectReason.InvalidIcon when topBar => CzLoc.TopBarInvalidIcon,
         SidebarRejectReason.UnknownItem when topBar => CzLoc.TopBarUnknownItem,
         SidebarRejectReason.NoChange when topBar => CzLoc.TopBarNoChange,
+
         SidebarRejectReason.NestingTooDeep or SidebarRejectReason.KindNotNestable => CzLoc.RejectNesting,
         SidebarRejectReason.ConfigTooLarge => CzLoc.RejectConfigTooLarge,
         SidebarRejectReason.ExtensionRefMissing => CzLoc.RejectExtensionRefMissing,
+        SidebarRejectReason.SectionCapReached => CzLoc.RejectSectionCap,
+        SidebarRejectReason.DuplicateItem => CzLoc.RejectDuplicateItem,
+        SidebarRejectReason.InvalidIcon => CzLoc.RejectInvalidIcon,
+        SidebarRejectReason.UnknownItem => CzLoc.RejectUnknownItem,
+        SidebarRejectReason.UnknownSection => CzLoc.RejectUnknownSection,
+        SidebarRejectReason.UnknownTemplate => CzLoc.RejectUnknownTemplate,
+        SidebarRejectReason.KindDoesNotAcceptItems => CzLoc.RejectNoItems,
+        SidebarRejectReason.KindNotDuplicable => CzLoc.RejectNotDuplicable,
+        SidebarRejectReason.NoChange => CzLoc.RejectNoChange,
         _ => null,
     };
 
@@ -657,43 +487,101 @@ sealed class SidebarCustomizerPage : Component
         BumpBanner();
     }
 
-    void CopyPath(string path)
+    internal void CopyPath(string path)
     {
         if (path.Length == 0) return;
         Acts?.Clipboard?.SetText(path);
     }
 
-    /// <summary>Done: flush any coalesced document write and leave. The customizer is an ordinary route, so the toolbar's
-    /// Back button is the real "return where I came from"; this button navigates HOME because a page has no reachable
-    /// seam onto the shell's back stack (wiring one means editing WaveeShell — outside this wave's ownership).</summary>
-    void Done()
-    {
-        Prefs?.Flush();
-        Go?.Invoke("home", null);
-    }
-
-    // ── selection + section adds (shared with the palette / outline / inspector) ──────────────────────────────────────
+    // ── selection + section adds (shared with the palette) ───────────────────────────────────────────────────────────
 
     internal void Select(string? sectionId)
     {
         Selected.SetIfChanged(sectionId);
         SelectedItem.SetIfChanged(null);
-        if (sectionId is not null && !SidebarCustomizerLayout.InspectorInline(Tier)) SheetOpen.Value = true;
     }
 
     /// <summary>Top-level section count — where the palette appends.</summary>
     internal int TopLevelCount => Prefs?.Layout.Sections.Count ?? 0;
+
+    /// <summary>The <c>StaticLinks</c> section a destination click should APPEND to, or null for "create a sibling".
+    ///
+    /// <para>WHICH signal means "selected" is worth being explicit about, because there are three candidates and only
+    /// two of them are honest. The canvas owns both: <c>OptionsSection</c> is the card whose options popover is open,
+    /// and <c>Expanded</c> is the card whose real rows are revealed. The popover CLEARS its subject on close
+    /// (<c>SidebarSectionOptionsButton</c>), so on its own it is only ever set for the seconds a popover is up — which
+    /// would make the append rule feel random. <c>Expanded</c> is the durable "this is the section I am working on", and
+    /// it is also the only one the user can see from the palette. So: the popover's subject when there is one, else the
+    /// expanded card. The page's own <see cref="Selected"/> is deliberately NOT in the chain — nothing sets it any more,
+    /// and a stale value there would silently redirect an add.</para></summary>
+    internal SidebarSectionSpec? SelectedStaticLinks()
+    {
+        if (Prefs is not { } prefs) return null;
+        var session = prefs.Edit;
+        string? id = session.OptionsSection.Value ?? session.Expanded.Value;
+        if (id is not { Length: > 0 }) return null;
+        // The sentinel Shortcuts band IS a StaticLinks section on screen and its items ARE editable — through
+        // `SidebarItemCommands`, which routes the sentinel to `AddTopBarItem`. That routing is never re-decided here.
+        if (SidebarIds.IsTopBar(id)) return null;
+        var spec = prefs.Layout.Find(id);
+        return spec is { Kind: SidebarSectionKind.StaticLinks } ? spec : null;
+    }
 
     /// <summary>Add a plain section of <paramref name="kind"/> at the end and select it.</summary>
     internal void AddSectionOfKind(SidebarSectionKind kind)
     {
         int at = TopLevelCount;
         if (Dispatch(new AddSection(kind, at)) != SidebarRejectReason.None) return;
-        SelectAt(at);
+        AfterAdd(at);
+    }
+
+    /// <summary>DEFECT 7 — a bare "Links" section used to be added EMPTY, planning as one generic grey hint with no
+    /// add-item affordance outside the property panel; adding it twice gave two identical dead rows (the screenshots).
+    /// The destination picker now opens FIRST and the section is created with that item already in it, so the gesture is
+    /// still exactly one <c>AddSection</c> — one undo step — and cancelling the picker adds nothing at all rather than
+    /// leaving a husk behind.</summary>
+    internal void AddLinksSection()
+    {
+        SidebarPickers.OpenItem(this, item =>
+        {
+            int at = TopLevelCount;
+            if (Dispatch(new AddSection(SidebarSectionKind.StaticLinks, at, Item: item))
+                != SidebarRejectReason.None) return;
+            AfterAdd(at);
+        });
+    }
+
+    /// <summary>PHASE 3 — one app PAGE as a shortcut.
+    ///
+    /// <para>Two outcomes, and the rule between them is the pure <c>SidebarPalette.AppendsToSelection</c>: with a
+    /// <c>StaticLinks</c> section selected on the canvas the route is APPENDED to it (through
+    /// <c>SidebarItemCommands.Add</c>, the ONE Add/Move/Remove chooser — never a raw <c>AddItem</c>, so the sentinel
+    /// band routes correctly if it ever becomes selectable); otherwise it becomes its own pre-seeded section. Either
+    /// way it is ONE command and therefore one undo step.</para>
+    ///
+    /// <para>No <c>IconOverride</c> is seeded: a Route item resolves its label AND its glyph from <c>ShellNav.Dest</c>
+    /// at the row site, so freezing one here would both duplicate that owner and risk an <c>InvalidIcon</c> rejection
+    /// for any glyph outside <c>SidebarIconNames.Allowed</c>.</para></summary>
+    internal void AddDestination(string routeKey)
+    {
+        if (routeKey.Length == 0) return;
+        var item = new SidebarItemSpec(SidebarIds.NewItem(), SidebarItemTarget.Route, routeKey);
+
+        if (SelectedStaticLinks() is { } into)
+        {
+            if (Dispatch(SidebarItemCommands.Add(into.Id, item, into.ItemList.Count))
+                == SidebarRejectReason.None) AfterAdd(-1);
+            return;
+        }
+
+        int at = TopLevelCount;
+        if (Dispatch(new AddSection(SidebarSectionKind.StaticLinks, at, Item: item))
+            != SidebarRejectReason.None) return;
+        AfterAdd(at);
     }
 
     /// <summary>Add a contributed (Extension) section for one contribution id, seeded with its schema defaults so the
-    /// feed is bounded before the inspector is touched.</summary>
+    /// feed is bounded before the options popover is touched.</summary>
     internal void AddContribution(string contributionId)
     {
         if (string.IsNullOrEmpty(contributionId)) return;
@@ -708,7 +596,7 @@ sealed class SidebarCustomizerPage : Component
         var xref = new SidebarExtensionRef(SidebarContributions.WaveeExtensionId, contributionId, schemaVersion, config);
         if (Dispatch(new AddSection(SidebarSectionKind.Extension, at, Extension: xref)) != SidebarRejectReason.None)
             return;
-        SelectAt(at);
+        AfterAdd(at);
     }
 
     /// <summary>"Recently played": a JumpBackIn section flipped to the play log. Two commands (and therefore two undo
@@ -721,7 +609,7 @@ sealed class SidebarCustomizerPage : Component
         string? id = IdAt(at);
         if (id is not null)
             Dispatch(new SetDisplayOption(id, SidebarDisplayField.RecentsSource, (int)SidebarRecentsSource.Played));
-        SelectAt(at);
+        AfterAdd(at);
     }
 
     /// <summary>An action shortcut: the picker first, then ONE <c>AddSection(StaticLinks, Item: the bound action)</c>, so
@@ -735,7 +623,7 @@ sealed class SidebarCustomizerPage : Component
                 Key: binding.ActionKey, Action: binding);
             if (Dispatch(new AddSection(SidebarSectionKind.StaticLinks, at, Item: item)) != SidebarRejectReason.None)
                 return;
-            SelectAt(at);
+            AfterAdd(at);
         });
     }
 
@@ -747,11 +635,22 @@ sealed class SidebarCustomizerPage : Component
             IconOverride: "Heart");
         if (Dispatch(new AddSection(SidebarSectionKind.StaticLinks, at, Item: item)) != SidebarRejectReason.None)
             return;
-        SelectAt(at);
+        AfterAdd(at);
     }
 
-    void SelectAt(int index)
+    /// <summary>What every ACCEPTED add does afterwards: clear the palette query (defect 4's policy) and record the new
+    /// section as this host's subject. A negative index means "the add went INTO an existing section", which has no new
+    /// id to point at.
+    ///
+    /// <para>It deliberately does NOT expand the new card on the canvas, tempting as that is. Phase 2 split the shared
+    /// session's ownership — the page owns <c>ShowContents</c>, the CANVAS owns <c>Expanded</c> and
+    /// <c>OptionsSection</c> — and a page that reaches across that line to open a card is the first crack in the seam
+    /// that keeps these two surfaces from becoming one tangled editor. The new section appears in the live sidebar in
+    /// the same frame regardless; that IS the feedback (P1).</para></summary>
+    void AfterAdd(int index)
     {
+        PaletteQuery.SetIfChanged("");
+        if (index < 0) return;
         if (IdAt(index) is { } id) Select(id);
     }
 
@@ -761,41 +660,7 @@ sealed class SidebarCustomizerPage : Component
         return sections is not null && (uint)index < (uint)sections.Count ? sections[index].Id : null;
     }
 
-    void EnsureUsefulSelection()
-    {
-        var sections = Prefs?.Layout.Sections;
-        if (sections is null || sections.Count == 0)
-        {
-            Selected.SetIfChanged(null);
-            SelectedItem.SetIfChanged(null);
-            return;
-        }
-
-        string? current = Selected.Peek();
-        if (current is not null && ContainsSection(sections, current)) return;
-
-        string? next = null;
-        for (int i = 0; i < sections.Count; i++)
-        {
-            if (sections[i].Kind != SidebarSectionKind.Divider) { next = sections[i].Id; break; }
-        }
-        next ??= sections[0].Id;
-        Selected.SetIfChanged(next);
-        SelectedItem.SetIfChanged(null);
-    }
-
-    static bool ContainsSection(System.Collections.Generic.IReadOnlyList<SidebarSectionSpec> sections, string id)
-    {
-        for (int i = 0; i < sections.Count; i++)
-        {
-            var section = sections[i];
-            if (string.Equals(section.Id, id, StringComparison.Ordinal)) return true;
-            if (ContainsSection(section.ChildList, id)) return true;
-        }
-        return false;
-    }
-
-    // ── templates (§C4.7 confirmations) ──────────────────────────────────────────────────────────────────────────────
+    // ── templates + reset (confirmations) ────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Apply a template. The confirmation is SKIPPED when the current document still equals a freshly built copy
     /// of its own template (modulo ids) — there is nothing to lose. Both paths dispatch exactly one command, so both cost
@@ -820,7 +685,7 @@ sealed class SidebarCustomizerPage : Component
             () => { Dispatch(new Wavee.Core.Sidebar.ApplyTemplate(templateId)); Select(null); });
     }
 
-    void ConfirmReset()
+    internal void ConfirmReset()
     {
         if (Prefs is not { } prefs) return;
         string name = Loc.Get(SidebarTemplates.NameLocKey(prefs.Layout.TemplateId));
@@ -867,85 +732,205 @@ sealed class SidebarCustomizerPage : Component
     }
 }
 
-/// <summary>A command-bar button that opens a bounded flyout (the Compact/Narrow palette + template lists). Its own
-/// component because it needs the overlay service, an anchor node and the open handle — the landed
-/// <c>SidebarLayoutMenuButton</c> shape.</summary>
-sealed class CzFlyoutButton : Component
+/// <summary>
+/// P7 — ONE DECISION BEATS AN EDITOR. The designs as a segmented control, then the five templates as cards.
+///
+/// <para>The segmented control also fixes a real dishonesty: <c>SidebarLayoutMenu.Rows</c>' "Customize sidebar" row
+/// calls <c>prefs.SwitchDesign(SidebarDesign.Curated)</c> before navigating here, silently, because the customizer
+/// edits the Curated document. A user who opened it from Library V3 therefore had their sidebar replaced by a page that
+/// never mentioned it and offered no way back. Now the switch is VISIBLE (the control shows Custom selected) and
+/// REVERSIBLE (picking another design switches back and leaves the document untouched, exactly as the menu's own radio
+/// rows do — through <c>SwitchDesign</c>, never a raw <c>Design.Value</c> write, so per-mode remembered state survives).</para>
+///
+/// <para>The caption states the consequence rather than hiding it: these sections apply to Custom.</para>
+/// </summary>
+sealed class SidebarPresetBlock : Component
 {
-    readonly string _glyph;
-    readonly string _labelKey;
-    readonly Func<Element> _content;
+    readonly SidebarCustomizerPage _page;
 
-    public CzFlyoutButton(SidebarCustomizerPage page, string glyph, string labelKey, Func<Element> content)
-    {
-        _ = page;   // the content closure already owns the page; the button itself only needs the overlay service
-        _glyph = glyph; _labelKey = labelKey; _content = content;
-    }
+    public SidebarPresetBlock(SidebarCustomizerPage page) => _page = page;
 
     public override Element Render()
     {
-        var anchor = UseRef<NodeHandle>(default);
-        var handle = UseRef<OverlayHandle?>(null);
-        var svc = UseContext(Overlay.Service);
+        var prefs = _page.Prefs;
+        int active = prefs is null ? 0 : SidebarDesignGating.IndexOf(prefs.Design.Value);
+        var index = UseSignal(active);
+        // Controlled against the service, never against the click: a design switch from anywhere else (the pane's quick
+        // menu, Settings) must move this control too. A LAYOUT effect, never a render-time signal write.
+        UseLayoutEffect(() => index.SetIfChanged(active), DepKey.From(active));
 
-        void Toggle()
-        {
-            if (svc is null) return;
-            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
-            handle.Value = svc.Open(
-                () => anchor.Value,
-                _content,
-                FlyoutPlacement.BottomEdgeAlignedLeft,
-                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss,
-                                 Chrome: PopupChrome.Popup) { ConstrainToRootBounds = false });
-            handle.Value.ClosedAction = () => handle.Value = null;
-        }
+        bool showContents = prefs?.Edit.ShowContents.Value ?? false;
+        var contents = UseSignal(showContents);
+        UseLayoutEffect(() => contents.SetIfChanged(showContents), DepKey.From(showContents ? 1 : 0));
 
-        var button = Button.Create(Loc.Get(_labelKey), Toggle, ButtonAppearance.Subtle, ControlSize.Small,
-            glyph: _glyph) with
+        var designs = new SegmentedItem[SidebarDesignInfo.Count];
+        for (int i = 0; i < designs.Length; i++)
+            designs[i] = new SegmentedItem(Loc.Get(SidebarDesignGating.TitleKey(SidebarDesignInfo.FromInt(i))));
+
+        var rows = new List<Element>(2)
         {
-            OnRealized = h => anchor.Value = h,
+            // The group's eyebrow already says "Sidebar design", so the ROW's label is the consequence instead of a
+            // second copy of the same noun — the one thing a user arriving from Library V3 needs told.
+            CzRow.Wide(Loc.Get(CzLoc.DesignsSub), null,
+                Segmented.Create(designs, index, SwitchDesign)),
+            // The companion's half of Phase 2's shared session: OFF means every section is a uniform card (and section
+            // drag is armed); ON reveals every visible section's body for item-level work. The canvas owns the rest.
+            CzRow.Prop(Loc.Get(CzLoc.ShowContents), null,
+                ToggleSwitch.Create(contents, SetShowContents)),
         };
-        return button;
+
+        return new BoxEl
+        {
+            Direction = 1, Shrink = 0f, Gap = Spacing.M,
+            Children =
+            [
+                CzRow.Group(CzLoc.Designs, rows),
+                Embed.Comp(() => new SidebarTemplateList(_page)),
+            ],
+        };
+    }
+
+    void SwitchDesign(int value)
+    {
+        // Through the service's own seam: SwitchDesign snapshots the outgoing design's pane + view state and reseeds the
+        // incoming one's before flipping (locked decision 3). A bare `Design.Value = …` would drop that silently.
+        _page.Prefs?.SwitchDesign(SidebarDesignGating.FromIndex(value));
+    }
+
+    void SetShowContents(bool on) => _page.Prefs?.Edit.ShowContents.SetIfChanged(on);
+}
+
+/// <summary>
+/// P2 — NOTHING VANISHES INTO AN INVISIBLE ELSEWHERE. Every hidden section in the document, with one Show action.
+///
+/// <para>"How do I get my toolbar back" is a top support thread in every ecosystem the research pass looked at, and the
+/// canvas already answers it for a section you can see (a hidden card stays put, dimmed, with its eye-off badge). This
+/// list answers it for the case the canvas cannot: a hidden section inside a collapsed group, or one the user scrolled
+/// past a week ago. It walks CHILDREN as well as top-level sections for exactly that reason.</para>
+///
+/// <para>An UNKNOWN kind (a section a newer build wrote, preserved verbatim by <c>SidebarWireCarry</c>) is listed like
+/// any other: it is in the user's document, it can be hidden, and refusing to show it here would be this build deciding
+/// that a section it does not understand is not the user's. It renders with the neutral mark and a generic name rather
+/// than crashing a list built over <c>Sections</c>.</para>
+/// </summary>
+sealed class SidebarHiddenSections : Component
+{
+    readonly SidebarCustomizerPage _page;
+
+    public SidebarHiddenSections(SidebarCustomizerPage page) => _page = page;
+
+    public override Element Render()
+    {
+        var prefs = _page.Prefs;
+        _ = prefs?.LayoutVersion.Value ?? 0;
+        _ = _page.RejectEpoch.Value;
+
+        var rows = new List<Element>(4);
+        if (prefs is not null) Append(prefs.Layout.Sections, rows);
+
+        if (rows.Count == 0)
+            rows.Add(CzRow.Prop(Loc.Get(CzLoc.HiddenNone), null, null, enabled: false));
+
+        return CzRow.Group(CzLoc.HiddenSections, rows, caption: Loc.Get(CzLoc.HiddenSectionsSub));
+    }
+
+    void Append(IReadOnlyList<SidebarSectionSpec> sections, List<Element> into)
+    {
+        for (int i = 0; i < sections.Count; i++)
+        {
+            var s = sections[i];
+            if (s.Hidden) into.Add(Row(s));
+            Append(s.ChildList, into);   // depth-1 by construction, so this recurses exactly once
+        }
+    }
+
+    Element Row(SidebarSectionSpec section)
+    {
+        string id = section.Id;
+        string title = CzGlyphs.TitleOf(section);
+        if (title.Length == 0) title = Loc.Get(CzLoc.UnknownSection);
+        return CzRow.Prop(title, Loc.Get(CzLoc.Hidden),
+            Button.Create(Loc.Get(CzLoc.Show), () => _page.Dispatch(new SetSectionHidden(id, false)),
+                ButtonAppearance.Standard, ControlSize.Small),
+            icon: CzGlyphs.ForKind(section.Kind));
     }
 }
 
-/// <summary>The customizer's loc KEYS as literals, in one place — the landed <c>CuratedLoc</c> precedent (this wave must
-/// not edit <c>assets/loc/*.json</c>, and a typo renders loudly as <c>[key]</c> instead of silently). As of R3.2 EVERY key
-/// below resolves: the four <c>group.*</c> keys and the seven that were marked NEW have all landed in
-/// <c>assets/loc/en-US.json</c> (nl/ko inherit through the en-US fallback link of the resolution chain).</summary>
+/// <summary>
+/// Reset, and the documented power-user escape hatch: where <c>sidebar-layout.json</c> lives.
+///
+/// <para>Surfacing the path is the honest half of "preserve, don't destroy": the document round-trips unknown kinds and
+/// members, the store keeps one rotated <c>.bak</c>, and a corrupt file is preserved rather than overwritten — none of
+/// which a user can act on without knowing where the file is. It offers BOTH affordances because they fail differently:
+/// Explorer can be unavailable (a locked-down box, a remote session) and the clipboard cannot.</para>
+/// </summary>
+sealed class SidebarAdvancedBlock : Component
+{
+    readonly SidebarCustomizerPage _page;
+
+    public SidebarAdvancedBlock(SidebarCustomizerPage page) => _page = page;
+
+    public override Element Render()
+    {
+        var prefs = _page.Prefs;
+        _ = prefs?.LayoutVersion.Value ?? 0;
+        string template = Loc.Get(SidebarTemplates.NameLocKey(prefs?.Layout.TemplateId ?? SidebarTemplates.Curated));
+        // Resolved once per render, not per frame: the store's path is a fixed %LOCALAPPDATA% composition.
+        string path = SidebarLayoutStore.DefaultPath();
+
+        return CzRow.Group(CzLoc.Advanced,
+        [
+            CzRow.Prop(Loc.Get(CzLoc.Reset), Loc.Format(CzLoc.ResetBody, ("template", template)),
+                Button.Create(Loc.Get(CzLoc.Reset), _page.ConfirmReset, ButtonAppearance.Standard,
+                    ControlSize.Small)),
+            CzRow.Wide(Loc.Get(CzLoc.LayoutFile), Loc.Get(CzLoc.LayoutFileSub), new BoxEl
+            {
+                Direction = 1, Gap = Spacing.S, Grow = 1f, Shrink = 1f, MinWidth = 0f,
+                Children =
+                [
+                    new TextEl(path)
+                    {
+                        Size = 11f, Color = Tok.TextTertiary, MaxLines = 2, Wrap = TextWrap.Wrap,
+                        Trim = TextTrim.CharacterEllipsis,
+                    },
+                    new BoxEl
+                    {
+                        Direction = 0, Gap = Spacing.S, Shrink = 0f,
+                        Children =
+                        [
+                            Button.Create(Loc.Get(CzLoc.ShowFile), () => ShellOpen.RevealInExplorer(path),
+                                ButtonAppearance.Standard, ControlSize.Small),
+                            Button.Create(Loc.Get(CzLoc.CopyPath), () => _page.CopyPath(path),
+                                ButtonAppearance.Subtle, ControlSize.Small),
+                        ],
+                    },
+                ],
+            }),
+        ]);
+    }
+}
+
+/// <summary>The customizer's loc KEYS as literals, in one place — the landed <c>CuratedLoc</c> precedent (a typo renders
+/// loudly as <c>[key]</c> instead of silently, and this file is read by surfaces the generated <c>Strings</c> table
+/// cannot reach).</summary>
 static class CzLoc
 {
     public const string Title = "sidebar.customizer.title";
-
-    /// <summary>UNUSED since R3.2: the header's second line is now the active-template eyebrow, and the preview's footer is
-    /// <see cref="PreviewHint"/>. Kept so the catalog entry has a named owner if a caller wants it back.</summary>
-    public const string Subtitle = "sidebar.customizer.subtitle";
     public const string Templates = "sidebar.customizer.templates";
     public const string AddSection = "sidebar.customizer.addSection";
-    public const string Outline = "sidebar.customizer.outline";
     public const string Properties = "sidebar.customizer.properties";
     public const string GroupGeneral = "sidebar.customizer.group.general";
     public const string GroupContent = "sidebar.customizer.group.content";
     public const string GroupAppearance = "sidebar.customizer.group.appearance";
     public const string GroupBehavior = "sidebar.customizer.group.behavior";
     public const string NoSelection = "sidebar.customizer.noSelection";
-    public const string Preview = "sidebar.customizer.preview";
-    public const string PreviewExpanded = "sidebar.customizer.previewExpanded";
-    public const string PreviewRail = "sidebar.customizer.previewRail";
-    public const string PreviewDrawer = "sidebar.customizer.previewDrawer";
     public const string Undo = "sidebar.customizer.undo";
     public const string Redo = "sidebar.customizer.redo";
     public const string UndoOf = "sidebar.customizer.undoOf";
     public const string RedoOf = "sidebar.customizer.redoOf";
     public const string Reset = "sidebar.customizer.reset";
     public const string Done = "sidebar.customizer.done";
-    public const string Empty = "sidebar.customizer.empty";
-    public const string EmptySub = "sidebar.customizer.emptySub";
-    public const string AddFirst = "sidebar.customizer.addFirst";
-    public const string StartFromTemplate = "sidebar.customizer.startFromTemplate";
     public const string RenameHint = "sidebar.customizer.renameHint";
-    public const string LiftHint = "sidebar.customizer.liftHint";
     public const string Hidden = "sidebar.customizer.hidden";
     public const string RejectNesting = "sidebar.customizer.rejectNesting";
     public const string RejectConfigTooLarge = "sidebar.customizer.rejectConfigTooLarge";
@@ -972,6 +957,7 @@ static class CzLoc
     public const string ResetTitle = "sidebar.customizer.resetTitle";
     public const string ResetBody = "sidebar.customizer.resetBody";
     public const string ResetConfirm = "sidebar.customizer.resetConfirm";
+
     /// <summary>The LIVE collapse row's label ("Collapse section") — it doubles as the undo label for the same command,
     /// which is exactly right: the control and the history entry should name one action.</summary>
     public const string Collapse = "sidebar.customizer.undo.collapseSection";
@@ -983,30 +969,24 @@ static class CzLoc
     public const string Hide = "sidebar.customizer.undo.hideSection";
     public const string ExtensionManage = "sidebar.extension.manage";
     public const string ItemCount = "sidebar.v3.itemCount";
-    public const string Position = "sidebar.pin.position";
     public const string SearchPlaceholder = "sidebar.v3.searchPlaceholder";
 
-    // R3.2's chrome captions. Verified present in assets/loc/en-US.json (the orchestrator landed them with the four
-    // group.* keys that used to render as "[key]" — the bug this wave removes).
     public const string SavedLocally = "sidebar.customizer.savedLocally";
-    public const string VisibleCount = "sidebar.customizer.visibleCount";
     public const string SectionCount = "sidebar.customizer.sectionCount";
-    public const string PreviewHint = "sidebar.customizer.previewHint";
-    public const string TopBar = "sidebar.customizer.topBar";
-    public const string TopBarGlobal = "sidebar.customizer.topBarGlobal";
-    public const string TopBarEmpty = "sidebar.customizer.topBarEmpty";
-    public const string TopBarAddItem = "sidebar.customizer.topBarAddItem";
-    public const string TopBarAddTrack = "sidebar.customizer.topBarAddTrack";
+
+    /// <summary>The band's own cap message. Under <c>sidebar.topbar.*</c>, not <c>sidebar.customizer.*</c>, because that
+    /// is where it has always lived — a key is the persisted identity of a string, and renaming it would orphan three
+    /// translations.</summary>
+    public const string TopBarCapReached = "sidebar.topbar.capReached";
     public const string TopBarDuplicate = "sidebar.customizer.topBarDuplicate";
     public const string TopBarInvalidIcon = "sidebar.customizer.topBarInvalidIcon";
     public const string TopBarUnknownItem = "sidebar.customizer.topBarUnknownItem";
     public const string TopBarNoChange = "sidebar.customizer.topBarNoChange";
-    public const string CuratedLayout = "sidebar.customizer.curatedLayout";
-    public const string CuratedInactive = "sidebar.customizer.curatedInactive";
+    public const string TopBarAddItem = "sidebar.customizer.topBarAddItem";
+    public const string TopBarAddTrack = "sidebar.customizer.topBarAddTrack";
 
     /// <summary>The back affordance's tooltip. REUSED from the auth flow rather than invented: it is the bare word "Back"
-    /// in all three locales, and a customizer-specific key would be a fourth spelling of one word (see the HANDOFF — a
-    /// shared <c>common.back</c> would be the tidy fix).</summary>
+    /// in all three locales, and a customizer-specific key would be a fourth spelling of one word.</summary>
     public const string Back = "auth.back";
 
     public const string PaletteSearch = "sidebar.customizer.paletteSearch";
@@ -1018,4 +998,45 @@ static class CzLoc
     public const string TargetTrack = "sidebar.customizer.targetTrack";
     public const string TargetRoute = "sidebar.customizer.targetRoute";
     public const string TargetNowPlaying = "sidebar.section.nowPlaying";   // reused, not new
+
+    // ── PHASE 3 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+    public const string Designs = "sidebar.customizer.designs";
+    public const string DesignsSub = "sidebar.customizer.designsSub";
+    public const string ShowContents = "sidebar.customizer.editShowContents";
+    public const string HiddenSections = "sidebar.customizer.hiddenSections";
+    public const string HiddenSectionsSub = "sidebar.customizer.hiddenSectionsSub";
+    public const string HiddenNone = "sidebar.customizer.hiddenNone";
+    public const string UnknownSection = "sidebar.customizer.unknownSection";
+    public const string Advanced = "sidebar.customizer.advanced";
+    public const string LayoutFile = "sidebar.customizer.layoutFile";
+    public const string LayoutFileSub = "sidebar.customizer.layoutFileSub";
+    public const string ShowFile = "sidebar.customizer.showFile";
+
+    /// <summary>DEFECT 6 — the palette's own empty-search line. It used to borrow V3's
+    /// <c>sidebar.v3.empty.search</c> as a HARD-CODED string, which said "No results for X" about a library the palette
+    /// is not; two surfaces sharing one key also means neither can be reworded without breaking the other.</summary>
+    public const string PaletteEmpty = "sidebar.customizer.paletteEmpty";
+
+    /// <summary>The one description every Destinations row shares.</summary>
+    public const string DestinationSub = SidebarPalette.DestinationSubLocKey;
+
+    /// <summary>Shown on the Destinations header while a StaticLinks section is selected on the canvas — the palette
+    /// says out loud that the next click APPENDS rather than creating a sibling.</summary>
+    public const string AppendsTo = "sidebar.customizer.appendsTo";
+
+    /// <summary>DEFECT 5 — a contribution the registry offers but no palette entry names. The row shows the
+    /// contribution's own id ONCE, under this label, instead of printing the raw id twice.</summary>
+    public const string ContributionUnnamed = "sidebar.customizer.contributionUnnamed";
+
+    // DEFECT 11 — the general (non-shortcut-band) rejection vocabulary.
+    public const string RejectSectionCap = "sidebar.customizer.rejectSectionCap";
+    public const string RejectDuplicateItem = "sidebar.customizer.rejectDuplicateItem";
+    public const string RejectInvalidIcon = "sidebar.customizer.rejectInvalidIcon";
+    public const string RejectUnknownItem = "sidebar.customizer.rejectUnknownItem";
+    public const string RejectUnknownSection = "sidebar.customizer.rejectUnknownSection";
+    public const string RejectUnknownTemplate = "sidebar.customizer.rejectUnknownTemplate";
+    public const string RejectNoItems = "sidebar.customizer.rejectNoItems";
+    public const string RejectNotDuplicable = "sidebar.customizer.rejectNotDuplicable";
+    public const string RejectNoChange = "sidebar.customizer.rejectNoChange";
 }

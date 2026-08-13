@@ -433,6 +433,14 @@ public sealed class SidebarPreferences
 
     // ─────────────────────── the Curated layout + editor ───────────────────────
 
+    /// <summary>PHASE 2 / Decision B — the live "customize" session, shared by the docked pane (the canvas) and the
+    /// companion page. It lives HERE because those two are siblings in the tree: neither can read a context the other
+    /// provides, and the customizer must never talk to the renderer (iron rule 6). This service is already the one
+    /// owner of sidebar state and is provided at the app root, so it is the shared-state seam both surfaces reach
+    /// through <see cref="Slot"/>. Session-only and never persisted — which section is expanded is editor ergonomics,
+    /// not document state.</summary>
+    public SidebarEditSession Edit { get; } = new();
+
     /// <summary>The current Curated document — an immutable snapshot, replaced wholesale. The live pane and the
     /// customizer both render from it, so there is exactly one document and one version signal.</summary>
     public SidebarCustomLayout Layout => _layout;

@@ -19,7 +19,7 @@ namespace Wavee;
 // The fix is geometry, not a second design: this file composes the SAME parts, at the SAME sizes, from the SAME pure
 // resolver the loaded hero uses (DetailVerticalLayout — artwork edge, identity measure, title rung, padding, gap,
 // description cap). Nothing here picks a number of its own. The engine's SkeletonDeriver turns these declared boxes
-// into shimmer bars, so the swap→real contract (Skel.Region + SkelReveal.StaggerRows) is untouched.
+// into shimmer bars, so the swap→real contract (Skel.Region + SkelReveal.FadeOnly) is untouched.
 static class DetailSkeleton
 {
     /// <summary>The vertical/hero arm's reserved band: the padded artwork + identity composition (stacked or

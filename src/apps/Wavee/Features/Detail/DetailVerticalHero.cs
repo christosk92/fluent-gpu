@@ -107,19 +107,17 @@ static class DetailVerticalHero
         };
 
         // ── the identity column ────────────────────────────────────────────────────────────────────────────────
-        // Each block is wrapped for the app's ONE entrance recipe (WaveeEntrance) with an EXPLICIT key, so a late
-        // arrival (a description that lands with the full model) inserts itself without shifting the reconciler's
-        // view of its siblings and replaying their entrances.
+        // Each block is keyed so a late arrival (a description that lands with the full model) inserts itself without
+        // shifting the reconciler's view of its siblings. No WaveeEntrance here: ContentHost already slides the page
+        // (Fluent/Zune page language). A second rise+blur cascade on the identity column is what made first-open
+        // dizzy and made Back feel like a different animation.
         var infoKids = new List<Element>(8);
-        int stagger = 0;
         void Add(string key, Element? e)
         {
             if (e is null) return;
             infoKids.Add(new BoxEl
             {
                 Key = key, Direction = 1, HitTestVisible = true,
-                TransformOriginX = 0f, TransformOriginY = 0f,
-                Animate = WaveeEntrance.Row(stagger++),
                 Children = [e],
             });
         }

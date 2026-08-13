@@ -85,9 +85,21 @@ public sealed class SidebarLayoutReducerTests
         Assert.Equal(SidebarDisplayOptions.Entities, list.Opts);
         Assert.StartsWith(SidebarIds.SectionPrefix, list.Id, StringComparison.Ordinal);
 
+        // DEFECT 8 — StaticLinks seeds `Links`, NOT `Shortcuts`. The two differ in exactly one field: `Shortcuts`
+        // carries `CountBadges = true`, which `AllowsDisplayField(StaticLinks, CountBadges)` forbids — so the old seed
+        // was a default the user could neither see nor change. Asserted as the whole options bag (not just the flag) so
+        // a future field that drifts between the two presets is caught here.
         var links = Apply(l, new AddSection(SidebarSectionKind.StaticLinks, 0)).Layout.Sections[0];
-        Assert.Equal(SidebarDisplayOptions.Shortcuts, links.Opts);
+        Assert.Equal(SidebarDisplayOptions.Links, links.Opts);
+        Assert.False(links.Opts.CountBadges);
+        Assert.False(SidebarSectionKinds.AllowsDisplayField(SidebarSectionKind.StaticLinks,
+                                                            SidebarDisplayField.CountBadges));
         Assert.Null(links.Query);
+
+        // …while CollectionShortcuts — which DOES allow count badges (Classic's Your Library counts) — keeps them.
+        var shortcuts = Apply(l, new AddSection(SidebarSectionKind.CollectionShortcuts, 0)).Layout.Sections[0];
+        Assert.Equal(SidebarDisplayOptions.Shortcuts, shortcuts.Opts);
+        Assert.True(shortcuts.Opts.CountBadges);
 
         // Collapsed seeds from CollapsedByDefault, and the feeds ship their spec'd top-N.
         Assert.Equal(4, Apply(l, new AddSection(SidebarSectionKind.NewReleases, 0)).Layout.Sections[0].Opts.MaxItems);
@@ -230,8 +242,13 @@ public sealed class SidebarLayoutReducerTests
         Assert.Empty(r.Layout.Sections[0].ChildList);
     }
 
+    /// <summary>DEFECT 10 — a clone that carries an authored <c>TitleLocKey</c> KEEPS IT and REFUSES the caller's
+    /// literal. The deciding question is recoverability: <c>RenameSection(null)</c> reverts to the KIND DEFAULT, not to
+    /// whatever key the section carried, so freezing "{name} (copy)" over a culture-following key would lose that key
+    /// for good — a copy of "Playlists" made under nl would read "Afspeellijsten (kopie)" in every language, forever.
+    /// The stated cost is that the copy reads the same as the original until the user renames it.</summary>
     [Fact]
-    public void DuplicateSection_DeepClonesWithFreshIds_AndLiteralTitle()
+    public void DuplicateSection_DeepClonesWithFreshIds_AndKeepsAnAuthoredTitleKey()
     {
         var l = Doc(
             Sec("sec_g", SidebarSectionKind.CustomGroup,
@@ -239,13 +256,16 @@ public sealed class SidebarLayoutReducerTests
                 children: [Sec("sec_c", SidebarSectionKind.Header, titleLocKey: "sidebar.section.header")]),
             Sec("sec_after", SidebarSectionKind.Divider));
 
+        // `Sec` seeds the kind default key when no title is given, so sec_g carries one — the defect-10 arm.
+        Assert.Equal(SidebarSectionKinds.DefaultTitleLocKey(SidebarSectionKind.CustomGroup), l.Sections[0].TitleLocKey);
+
         var r = Apply(l, new DuplicateSection("sec_g", "Group (copy)"));
         Assert.True(r.Changed);
         Assert.Equal(3, r.Layout.Sections.Count);
 
         var clone = r.Layout.Sections[1];                       // inserted immediately after the original
-        Assert.Equal("Group (copy)", clone.Title);
-        Assert.Null(clone.TitleLocKey);                          // the copy does not re-localize into the original's name
+        Assert.Null(clone.Title);                                // the literal is REFUSED…
+        Assert.Equal(l.Sections[0].TitleLocKey, clone.TitleLocKey);   // …and the culture-following key survives
         Assert.NotEqual("sec_g", clone.Id);
         Assert.Equal(2, clone.ItemList.Count);
         Assert.Equal("home", clone.ItemList[0].Key);
@@ -257,19 +277,65 @@ public sealed class SidebarLayoutReducerTests
         var ids = SidebarLayoutCompare.AllIds(r.Layout);
         Assert.Equal(ids.Count, new HashSet<string>(ids, StringComparer.Ordinal).Count);
 
-        // Everything except ids and the title is identical.
+        // Everything except the ids is identical — the naming included.
         Assert.True(SidebarLayoutCompare.EqualIgnoringIds(
-            new SidebarCustomLayout("t", [l.Sections[0] with { Title = "Group (copy)", TitleLocKey = null }]),
+            new SidebarCustomLayout("t", [l.Sections[0]]),
             new SidebarCustomLayout("t", [clone])));
+    }
+
+    /// <summary>…and the complementary arm: with NO authored key, nothing localized is at stake and the caller's
+    /// literal lands verbatim (clearing it later returns to exactly what the original shows).</summary>
+    [Fact]
+    public void DuplicateSection_OfAKeylessSection_TakesTheLiteralTitle()
+    {
+        var l = Doc(Sec("sec_g", SidebarSectionKind.CustomGroup, title: "My group", titleLocKey: null));
+        Assert.Null(l.Sections[0].TitleLocKey);
+
+        var clone = Apply(l, new DuplicateSection("sec_g", "My group (copy)")).Layout.Sections[1];
+        Assert.Equal("My group (copy)", clone.Title);
+        Assert.Null(clone.TitleLocKey);
     }
 
     [Fact]
     public void DuplicateSection_WithoutATitleOverride_KeepsTheOriginalNaming()
     {
-        var l = Doc(Sec("sec_a", SidebarSectionKind.Pinned, titleLocKey: "sidebar.pinned"));
+        // A HEADER, not Pinned: since defect 9 the store-backed kinds refuse duplication outright (below), so the
+        // "no override ⇒ keep the naming" rule has to be shown on a kind that can actually be cloned.
+        var l = Doc(Sec("sec_a", SidebarSectionKind.Header, titleLocKey: "sidebar.section.header"));
         var clone = Apply(l, new DuplicateSection("sec_a")).Layout.Sections[1];
-        Assert.Equal("sidebar.pinned", clone.TitleLocKey);
+        Assert.Equal("sidebar.section.header", clone.TitleLocKey);
         Assert.Null(clone.Title);
+    }
+
+    /// <summary>DEFECT 9 — a STORE-BACKED section cannot be duplicated. Its rows and their ORDER live in a shared store
+    /// (the pin store, the rootlist), not in the spec, so a clone is a second WRITER onto one list: both copies render
+    /// the same pins and both commit their reorders into the same store, so a drag in the copy silently reshuffles the
+    /// original. Fresh ids cannot separate them — the KIND is what binds a section to the store, never the id.</summary>
+    [Theory]
+    [InlineData(SidebarSectionKind.Pinned)]
+    [InlineData(SidebarSectionKind.PlaylistTree)]
+    public void DuplicateSection_OfAStoreBackedKind_IsRefused(SidebarSectionKind kind)
+    {
+        Assert.True(SidebarSectionKinds.IsStoreBacked(kind));
+        AssertRejected(Doc(Sec("sec_a", kind)), new DuplicateSection("sec_a", "copy"),
+            SidebarRejectReason.KindNotDuplicable);
+    }
+
+    /// <summary>…and one level down: a GROUP is refused when ANY child is store-backed, because cloning the group
+    /// clones that child with it. The group itself is duplicable — it is the child that decides.</summary>
+    [Theory]
+    [InlineData(SidebarSectionKind.Pinned)]
+    [InlineData(SidebarSectionKind.PlaylistTree)]
+    public void DuplicateSection_OfAGroupHoldingAStoreBackedChild_IsRefused(SidebarSectionKind childKind)
+    {
+        var l = Doc(Sec("sec_g", SidebarSectionKind.CustomGroup,
+            children: [Sec("sec_head", SidebarSectionKind.Header), Sec("sec_c", childKind)]));
+        AssertRejected(l, new DuplicateSection("sec_g", "copy"), SidebarRejectReason.KindNotDuplicable);
+
+        // The same group WITHOUT that child duplicates fine — the refusal is about the child, not about groups.
+        var safe = Doc(Sec("sec_g", SidebarSectionKind.CustomGroup,
+            children: [Sec("sec_head", SidebarSectionKind.Header)]));
+        Assert.True(Apply(safe, new DuplicateSection("sec_g", "copy")).Changed);
     }
 
     [Fact]
@@ -1583,6 +1649,8 @@ public sealed class SidebarLayoutReducerTests
             new AddSection(SidebarSectionKind.Header, 1),
             new AddSection(SidebarSectionKind.Header, 0, "sec_g"),
             new RemoveSection("sec_d"),
+            // sec_g's only child is a Header, so this EXECUTES the deep-clone path rather than bouncing off defect 9's
+            // KindNotDuplicable guard — a rejection would prove nothing here, because a rejection copies nothing.
             new DuplicateSection("sec_g", "copy"),
             new RenameSection("sec_p", "Mine"),
             new SetSectionHidden("sec_p", true),

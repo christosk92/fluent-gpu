@@ -30,7 +30,7 @@ It is now **one renderer and three documents**:
                                              │
                                     ┌────────▼─────────┐
                                     │   SidebarPane    │   one virtualized ItemsView
-                                    │  + SidebarPaneSlot │  13 row kinds
+                                    │  + SidebarPaneSlot │  14 row kinds
                                     │  + SidebarPaneRail │  the 56-DIP rail
                                     └──────────────────┘
 ```
@@ -57,6 +57,32 @@ narrow overlay drawer.
 in the same document). App routes, playlists, albums, artists, shows and playlist folders are pinnable; tracks are
 not.
 
+### The Shortcuts section is shared across all three designs too
+
+The document also carries **one global shortcut band** — `SidebarCustomLayout.TopBar`, whose wire member still spells
+the name it had when it lived in a shell toolbar. It is the app's primary navigation: Home lives there, and it is the
+only Home the built-in Classic document, the Curated default template and Library V3's synthesized document have.
+
+It is **materialised as an ordinary section**, not rendered by a bespoke component:
+`SidebarShortcutsSection.Prepend(document, topBar)` puts a `StaticLinks` section titled **Shortcuts** at the head of the
+document each design hands the renderer, carrying the sentinel id `SidebarIds.TopBarSection`. Consequences worth
+knowing:
+
+- The planner, the row slot, the 56-DIP rail (`ShowInRail`), the reorder band and the selection indicator all serve it
+  with **no** band-specific code, and Library V3 gains built-in navigation it never had.
+- The band is a RENDER-PATH projection only. The persisted document never contains the sentinel section — the reducer
+  has no arm for it, and every section-scoped command aimed at it is an `UnknownSection` rejection. Its **items** are
+  fully editable.
+- Because the section carries the sentinel, edits aimed at it must reach the band's own command family. That is one
+  decision in one place: `SidebarItemCommands.Add/Move/Remove` route the sentinel to
+  `AddTopBarItem`/`MoveTopBarItem`/`RemoveTopBarItem` and every real section id to `AddItem`/`MoveItem`/`RemoveItem`;
+  `ItemsIn`/`FindItem` are the matching read side.
+- **Nothing about the wire changed** — no schema change, no migration, the same 6-item cap, the same undo ring, the same
+  `SidebarWireCarry` handling. Model identifiers (`TopBar`, `AddTopBarItem`, the JSON member) stay; only the user-facing
+  strings became "Shortcuts".
+- An **empty** band contributes no section at all: emptying it is a legitimate choice, and `Prepend` then returns the
+  document unchanged.
+
 ### What `SidebarPaneConfig` may and may not carry
 
 Every member is a **delegate or a flag** — never a snapshot. The config is built once and frozen into the pane
@@ -71,6 +97,7 @@ var config = UseMemo(() => new SidebarPaneConfig
     SetSectionCollapsed = (id, c) => _prefs?.Dispatch(new SetSectionCollapsed(id, c)),
     ReadOnly        = false,
     SearchHead      = true,
+    Edit            = ReadEditSession,                 // Func<SidebarEditState?>; non-null ⇒ the pane IS the canvas
     OnCustomize     = OpenCustomizer,
     OnCreatePlaylist = CreatePlaylist,
 }, DepKey.Empty);
@@ -90,11 +117,16 @@ lacks, it becomes a config member or a planner-input option — never a `switch 
 ### Why the document is not rendered section by section
 
 `SidebarRowPlanner.Build(document, input, buffers)` flattens (document × projection) into ONE `SidebarRow[]`
-covering all 13 row kinds — `SectionHeader`, `HeaderLabel`, `Divider`, `IconRow`, `EntityRow`, `FolderHeader`,
+covering 13 row kinds — `SectionHeader`, `HeaderLabel`, `Divider`, `IconRow`, `EntityRow`, `FolderHeader`,
 `GridStrip`, `Placeholder`, `Empty`, `Skeleton`, `CreateAction`, `EntityCard`, `PromptRow` — and the pane renders
 that through one `ItemsView.CreateBound` over a measured variable-extent layout. That is what lets a 10 000-entry
 playlist tree or library query virtualize end to end; a `Grow=1` list inside an outer `ScrollView` cannot. There
 are therefore no nested scrollers and no `Flow.For` over the projection anywhere in the pane.
+
+The 14th kind, `SectionCard`, is emitted only by the second entry point `SidebarRowPlanner.BuildEdit` (§2). Edit mode
+obeys the same rule rather than substituting a hand-built card column for the list: a pane-level fork would have
+re-created the nested-scroller shape the unification deleted, and cost the cards virtualization, the reorder-band
+machinery and the section rhythm.
 
 Rows are POD: no string is allocated during planning. A projected row carries an index into the plan's entry list;
 a hand-placed row carries its item key. Metrics come from **one** ladder (`SidebarRowMetrics` —
@@ -105,25 +137,55 @@ padding `(8, 8, 8, 12)` is applied **once**, around the virtualized list, by `Si
 
 ## 2. The customizer
 
-Wavee Curated is edited in a full-page live editor at route `sidebar-customize`
-(`SidebarLayoutMenu.CustomizeRoute`). Four regions — templates + palette, the section outline, the property
-inspector, a live preview — collapsing progressively:
+Wavee Curated is edited **on the real sidebar**. There is no preview, because there is nothing to preview: the docked
+pane beside the page is already rendering the exact document being edited, so it *is* the canvas. Two surfaces, not
+four regions:
 
-| Tier | Enters at | Layout |
-|---|---|---|
-| `Canvas` | ≥ 1320 DIP | palette (232) + outline + inspector (320) + preview (360), all inline |
-| `Full` | ≥ 1000 DIP | palette + outline + inspector inline; preview inside the inspector's Preview tab |
-| `Compact` | ≥ 820 DIP | outline + inspector; palette/templates as command-bar flyouts |
-| `Narrow` | < 820 DIP | outline only; the inspector is a bottom sheet |
+**The canvas — the live pane in edit mode.** One new `SidebarPaneConfig` member turns it on: `Func<SidebarEditState?>?
+Edit` (a delegate, like every other member — the config freezes at mount). Non-null and the pane plans through
+`SidebarRowPlanner.BuildEdit` instead of `Build`: every top-level section becomes one uniform-height `SectionCard` row
+— grip · kind glyph · title · count · eye · "…" — and the ONE expanded section has its real body planned right
+underneath by the same per-kind planners the live pane always used. It is still one flat `SidebarRow[]` through one
+virtualized `ItemsView`, so edit mode costs neither virtualization nor the section rhythm.
 
-Widening promotes immediately; narrowing needs 24 DIP of hysteresis past the threshold, so a resize drag cannot
-strobe the layout. The whole ladder lives in the pure, unit-tested `Curated/SidebarCustomizerLayout.cs`.
+- One section expands at a time. A 60-row expanded sidebar makes section dragging a scroll-fight, and uniform card
+  pitch is what lets `Reorderable` work without variable-extent insertion geometry. A "Show section contents" switch on
+  the companion page reveals every body at once for item-level work, and deliberately **disarms** section drag — the
+  card run is no longer contiguous, so the slot math would address body rows as if they were cards.
+- **Hidden sections keep their card** (dimmed, eye-off) and never reveal a body. Nothing vanishes into an invisible
+  elsewhere; equally, the editor never draws rows the user's own sidebar does not have.
+- Section reorder commits `MoveSection`; item reorder inside an expanded section commits through
+  `SidebarItemCommands`, so a move inside the Shortcuts section emits `MoveTopBarItem`, not `MoveItem`. Grab, move,
+  drop and cancel are announced through the engine's live-region seam.
+- The **Shortcuts head** carries no grip, no eye and no "…": it is not in `Sections`, so those commands would be
+  `UnknownSection` rejections, and an affordance that silently rejects is worse than one that is not offered. Its items
+  are fully editable.
+- Per-section options open as a **popover anchored to that card's "…"**, reusing the generated control set from
+  `Curated/SidebarPropertyPanel.cs`. Only the host changed — from a docked column to a popover — so the options panel
+  can never be silently editing a different section than the one you clicked.
+- Structural drag is armed **only** in edit mode. Outside it, pin/unpin and pin reordering stay live as always.
+
+The pure rules behind all of that live in `Features/Sidebar/Data/SidebarEditPlan.cs` (`ShowsBody`,
+`SectionsReorderable`, `Fold`, `CardCount`, `IsPinnedCard`, `ToMoveSection`, `ToAddSection`) and are unit-tested. Two
+index spaces meet in the last two: band slots enumerate the plan's card rows (over the RENDER document, which carries
+the materialised Shortcuts head), while the commands index the PERSISTED document, which does not.
+
+**The companion page** at route `sidebar-customize` (`SidebarLayoutMenu.CustomizeRoute`) is one scrolling column at
+every window width — no tier ladder, no region that disappears when the window narrows. Top to bottom: the header
+(Back · title · Undo · Redo · Reset · Done, where Done returns through the shell's real back stack); the three designs
+as a preset control plus the five templates as cards; the **persistent palette**; the hidden-section recovery list; and
+an Advanced block pointing at `sidebar-layout.json`.
+
+The palette's first group is **Destinations** — the real app pages, generated from `SidebarPinId.PinnableRoutes` plus
+settings / API console / concerts, and labelled through `ShellNav.Dest` so they follow the UI culture and can never
+disagree with the tab strip or the breadcrumb. Typing "home" therefore answers with **Home**, and clicking it is one
+undoable `AddSection(StaticLinks, Item: route)` that produces a working row — not an empty "Links" section. With a
+`StaticLinks` section selected the same click appends into it instead. Palette chips are also `Drag.Source`s onto the
+canvas; clicking always works, so drag is never the only way.
 
 Every edit is a **command**. `SidebarPreferences.Dispatch(command)` reduces it, and if anything actually changed:
-pushes the pre-image onto a 50-step undo ring, clears redo, bumps `LayoutVersion`, and autosaves. The customizer
-therefore never talks to the renderer — it dispatches, and both the live sidebar and the customizer's own preview
-re-plan from the one document. The preview mounts the **real** `CuratedSidebar` component (which is why its
-constructor signature is frozen).
+pushes the pre-image onto a 50-step undo ring, clears redo, bumps `LayoutVersion`, and autosaves. The companion page
+therefore never talks to the renderer — it dispatches, and the live sidebar re-plans from the one document.
 
 Undo is a **pre-image snapshot**, not an inverse command: the document is immutable records, so an edit rebuilds
 only the spine and structurally shares the rest. That is why "apply template" and "reset" are ordinary single
@@ -379,7 +441,7 @@ run** when there is no overlay; a null overlay never degrades into an unconfirme
 A source declares its **capabilities** — item type, which filter facets it honours, which sorts it can serve, and
 whether it pages — so the customizer offers exactly those and never offers a control it would silently ignore. Its
 `ConfigSchema` (semantic field kinds only: string / int / bool / entity-uri / enum / uri-list — never a raw colour,
-pixel or duration) is what the inspector generates property controls from. Its health is surfaced verbatim as the
+pixel or duration) is what the options popover generates property controls from. Its health is surfaced verbatim as the
 planner's source state.
 
 `Fill(into, in request)` runs on the rebuild path: append into the caller's list, no LINQ, no closures, no per-row
@@ -531,7 +593,7 @@ label, and any state-detail key.
 window + availability verdict). Both suites already have a `StubSource : SidebarDataSourceBase` to copy.
 
 **Done.** A user adds it from the customizer's Extensions palette group; the section is stored as
-`{"kind": "extension", "extension": {"extensionId": "wavee", "contributionId": "madeForYou", …}}`; the inspector
+`{"kind": "extension", "extension": {"extensionId": "wavee", "contributionId": "madeForYou", …}}`; the options popover
 generates a "Include daily mixes" toggle from your schema; the planner draws skeletons, the quiet empty hint, or
 the rows. You wrote **no renderer code and no UI branch**.
 

@@ -27,11 +27,25 @@ namespace Wavee;
 // Every control here is CONTROLLED against the document (see the pattern note in SidebarCustomizerControls.cs): the row
 // re-renders on LayoutVersion and mirrors the document into its signal from a layout effect, so a rejected edit snaps
 // back instead of leaving a control that lies about the saved state.
+// PHASE 2 / DECISION B — SAME PANEL, TWO HOSTS. It took `SidebarCustomizerPage`; it now takes `ISidebarEditHost`, which
+// that page implements explicitly and the shared `SidebarEditSession` implements too. That is the whole of "only its
+// host changes from a docked column to a popover" (P3): the live pane's section card anchors this panel to the section
+// the user clicked, while the companion page keeps mounting it in its inspector column until Phase 3 removes that. Not
+// one line of the per-kind option table, the schema-generated extension rows or the controlled-input contract is
+// duplicated for the second host.
 sealed class SidebarPropertyPanel : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
 
-    public SidebarPropertyPanel(SidebarCustomizerPage page) => _page = page;
+    /// <summary>The body's scroll-restoration key. Two mounts of this panel — the docked inspector column and the
+    /// pane's options popover — must not fight over one saved offset, the same reason the pane suffixes its own key
+    /// with <c>".drawer"</c> for its second mount.</summary>
+    readonly string _scrollKey;
+
+    public SidebarPropertyPanel(ISidebarEditHost page, string scrollKey = "customizer.props")
+    {
+        _page = page; _scrollKey = scrollKey;
+    }
 
     /// <summary>The CONTENT group's trailing caption ("3 items"), set while the items block is built so the count can ride
     /// on the group label instead of occupying a body row (round-2 defect 4). A plain field: it is written and read inside
@@ -84,7 +98,7 @@ sealed class SidebarPropertyPanel : Component
             Children = [.. groups],
         }) with
         {
-            Grow = 1f, Shrink = 1f, MinHeight = 0f, AutoEdgeFade = true, ScrollKey = "customizer.props",
+            Grow = 1f, Shrink = 1f, MinHeight = 0f, AutoEdgeFade = true, ScrollKey = _scrollKey,
         };
 
         return new BoxEl
@@ -331,17 +345,18 @@ sealed class SidebarPropertyPanel : Component
 
 /// <summary>The section title row: Enter commits <c>RenameSection</c>, Escape reverts. Deliberately NOT per keystroke
 /// (§C3.3) — one rename is one undo step.
-/// <para>HONEST DEVIATION: the spec also wants a BLUR commit. <c>TextBox.Create</c> exposes <c>OnCommit</c> (Enter) and
-/// <c>OnCancel</c> (Escape) but no lost-focus seam, so blurring leaves the typed text uncommitted (the hint row says
-/// so). Wiring blur means exposing <c>EditableText.OnFocusChanged</c> through <c>TextBoxOptions</c> — an engine change
-/// this wave does not own.</para></summary>
+/// <para>The old honest deviation ("blurring leaves the typed text uncommitted") is CLOSED: the engine now exposes an
+/// opt-in <c>TextBoxOptions.CommitOnLostFocus</c>, which this row takes. It matters far more in the pane's options
+/// POPOVER than it ever did in a docked column — a light-dismiss surface is blurred by the very click that closes it,
+/// so without the blur commit a rename typed in the popover would be dropped every single time. Escape still reverts
+/// (it does not commit on the following blur), and an Enter that already committed is not re-published.</para></summary>
 sealed class CzTitleRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly Signal<string> _text = new("");
 
-    public CzTitleRow(SidebarCustomizerPage page, string sectionId)
+    public CzTitleRow(ISidebarEditHost page, string sectionId)
     {
         _page = page; _sectionId = sectionId;
     }
@@ -360,6 +375,7 @@ sealed class CzTitleRow : Component
                 Placeholder = spec is null ? "" : CzGlyphs.TitleOf(spec),
                 OnCommit = text => _page.Dispatch(new RenameSection(_sectionId, text)),
                 OnCancel = () => _text.SetIfChanged(title),
+                CommitOnLostFocus = true,
             }));
     }
 }
@@ -368,11 +384,11 @@ sealed class CzTitleRow : Component
 /// contributes no rows, no rail tiles and no projection work.</summary>
 sealed class CzHiddenRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly Signal<bool> _on = new(false);
 
-    public CzHiddenRow(SidebarCustomizerPage page, string sectionId)
+    public CzHiddenRow(ISidebarEditHost page, string sectionId)
     {
         _page = page; _sectionId = sectionId;
     }
@@ -394,11 +410,11 @@ sealed class CzHiddenRow : Component
 /// the reducer deliberately keeps decoupled from the live state and which therefore changed nothing visible.</summary>
 sealed class CzCollapsedRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly Signal<bool> _on = new(false);
 
-    public CzCollapsedRow(SidebarCustomizerPage page, string sectionId)
+    public CzCollapsedRow(ISidebarEditHost page, string sectionId)
     {
         _page = page; _sectionId = sectionId;
     }
@@ -423,7 +439,7 @@ sealed class CzCollapsedRow : Component
 /// scalar; the reducer then REPAIRS illegal combinations rather than rejecting them.</summary>
 sealed class CzQueryBlock : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly Signal<bool> _playlists = new(false), _albums = new(false), _artists = new(false), _shows = new(false);
     readonly Signal<int> _sort = new(0);
@@ -442,7 +458,7 @@ sealed class CzQueryBlock : Component
         "sidebar.option.qualifierMixed",
     ];
 
-    public CzQueryBlock(SidebarCustomizerPage page, string sectionId)
+    public CzQueryBlock(ISidebarEditHost page, string sectionId)
     {
         _page = page; _sectionId = sectionId;
     }
@@ -556,7 +572,7 @@ sealed class CzQueryBlock : Component
 /// section or schema remounts it.</summary>
 sealed class CzConfigRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly SidebarConfigField _field;
 
@@ -565,7 +581,7 @@ sealed class CzConfigRow : Component
     readonly Signal<bool> _flag = new(false);
     readonly Signal<int> _choice = new(0);
 
-    public CzConfigRow(SidebarCustomizerPage page, string sectionId, SidebarConfigField field)
+    public CzConfigRow(ISidebarEditHost page, string sectionId, SidebarConfigField field)
     {
         _page = page; _sectionId = sectionId; _field = field;
     }
@@ -761,13 +777,13 @@ sealed class CzItemRow : Component
     internal const float TopBarItemWidth = 320f;
     internal const float TopBarItemHeight = 52f;
 
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly string _itemId;
     readonly bool _compact;
     readonly Signal<string> _label = new("");
 
-    public CzItemRow(SidebarCustomizerPage page, string sectionId, string itemId, bool compact = false)
+    public CzItemRow(ISidebarEditHost page, string sectionId, string itemId, bool compact = false)
     {
         _page = page; _sectionId = sectionId; _itemId = itemId; _compact = compact;
     }
@@ -879,16 +895,10 @@ sealed class CzItemRow : Component
         ];
     }
 
-    SidebarItemSpec? Find()
-    {
-        IReadOnlyList<SidebarItemSpec>? items = SidebarIds.IsTopBar(_sectionId)
-            ? _page.Prefs?.TopBar
-            : _page.Prefs?.Layout.Find(_sectionId)?.ItemList;
-        if (items is null) return null;
-        for (int i = 0; i < items.Count; i++)
-            if (string.Equals(items[i].Id, _itemId, StringComparison.Ordinal)) return items[i];
-        return null;
-    }
+    /// <summary>The item this row edits. Which LIST a section id addresses (a section's items, or the global shortcut
+    /// band behind the sentinel) is one decision with one owner — <see cref="SidebarItemCommands"/> — shared with the
+    /// write side below, so the row can never read one list and write the other.</summary>
+    SidebarItemSpec? Find() => SidebarItemCommands.FindItem(_page.Prefs?.Layout, _sectionId, _itemId);
 
     IReadOnlyList<MenuFlyoutItem> ItemMenu()
     {
@@ -961,14 +971,11 @@ sealed class CzItemRow : Component
         return resolution.Available ? null : Loc.Get(resolution.ReasonLocKey ?? CzLoc.MissingEntity);
     }
 
+    /// <summary>Dispatch. The <c>IsTopBar</c> test here picks the REJECTION VOCABULARY (the band's own cap/duplicate
+    /// messages instead of the generic ones), NOT the command — command routing is
+    /// <see cref="SidebarItemCommands"/>'s single decision and is never re-made at a call site.</summary>
     SidebarRejectReason Send(SidebarCommand command)
         => SidebarIds.IsTopBar(_sectionId) ? _page.DispatchTopBar(command) : _page.Dispatch(command);
 
-    void Remove()
-    {
-        if (SidebarIds.IsTopBar(_sectionId))
-            _page.DispatchTopBar(new RemoveTopBarItem(_itemId));
-        else
-            _page.Dispatch(new RemoveItem(_sectionId, _itemId));
-    }
+    void Remove() => Send(SidebarItemCommands.Remove(_sectionId, _itemId));
 }

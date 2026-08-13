@@ -33,6 +33,11 @@ sealed class PreReleaseCountdown : Component
     /// so the ring re-tints when the palette arrives instead of staying frozen at the mount-time default.</summary>
     public required Func<ColorF> Accent { get; init; }
 
+    /// <summary>The tone panels mount this bare — their own plate + eyebrow already say what it is; a second card
+    /// ring inside a card is double chrome. When true, Render returns only the tiles / "out now" line: no plate
+    /// BoxEl, no Fill/Border/Padding, no ProgressRing, no eyebrow.</summary>
+    public bool Bare { get; init; }
+
     const float RingSize = 34f;
 
     // One rate, always: the seconds tile changes on every tick, so there is no interval at which a wake redraws an
@@ -54,6 +59,8 @@ sealed class PreReleaseCountdown : Component
         UseInterval(() => _nowTicks.Value = DateTimeOffset.UtcNow.UtcTicks, TickMs, enabled: !released);
 
         var accent = Accent();   // read inside Render → subscribes, so a late palette re-tints the ring
+
+        if (Bare) return released ? OutNow() : Tiles(remaining);
 
         return new BoxEl
         {

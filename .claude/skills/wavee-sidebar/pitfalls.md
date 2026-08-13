@@ -134,11 +134,31 @@ given row happens to carry a subtitle. Two consumers demand it: the `RepeatLayou
 `ItemExtent + Spacing` in content space (`FluentGpu.Controls/Reorderable.cs:438-457`). A mixed 40/44 band silently
 breaks both.
 
-Nuance: `Reorderable` *does* support variable extents via `ExtentOf` (`Reorderable.cs:95-99`) — the customizer's
-outline uses it — but **cross-list insertion math still assumes the uniform `ItemExtent` pitch**. The pane's bands
-are uniform-per-section by choice plus that constraint. Also: the pane sets `ShowInsertionLine = false`, because
-the built-in insertion line's geometry assumes one uniform pitch *from the list origin*, which a flat plan of
-mixed-height rows does not have.
+Nuance: `Reorderable` *does* support variable extents via `ExtentOf` — and since
+the C3 landing the WHOLE geometry family reads the sampled prefix sums, cross-list insertion included
+(`ReorderList.SlotAtOffset`/`BoundaryOffset`; gates `e5dragdrop.reorder.varextent[.samelist]`). An earlier revision
+of this file claimed the cross-list math still assumed a uniform pitch — it does not. The pane's bands stay
+uniform-per-section because the VIRTUALIZING host's extent and the section rhythm want it, not because `Reorderable`
+requires it. What *is* still true: the pane sets `ShowInsertionLine = false` because it never wraps a
+`Reorderable.List(...)` at all (each band is a run inside ONE virtualized plan list), and the built-in line is
+positioned inside that wrapper relative to item 0.
+
+### `Reorderable.Item` does not stretch its child — the wrapped row must fill the slot itself
+
+`Reorderable.Item` wraps content in a `BoxEl` that leaves `Direction` at its default **0 = ROW**, so the row sits on
+that wrapper's MAIN axis and — with no `Grow` — arranges at its own **measured content width**. Unwrapped rows fill
+(the bound slot's `Embed.Comp` anchor is a plain scene node, whose `LayoutInput.Default` is a COLUMN with
+`AlignItems = Stretch`), so only the REORDERABLE bands are affected: their hover/selected fill plate rendered at the
+title's width, which reads as "hover and selected are different widths" even though `Fill`/`HoverFill`/`PressedFill`
+all sit on the SAME `BoxEl` (`Shared/SidebarEntityRow.cs:301-341`) and cannot differ by state.
+
+Fix it **app-side, per call site** — never in the engine (iron rule 10; the wrapper is shared with `TabView`). The
+pattern is `content with { Grow = 1f, Shrink = 1f, MinWidth = 0f }` (`MinWidth = 0` keeps a long title ELIDING instead
+of pushing the row past the pane). `Pane/SidebarPaneSlot.cs` is now the ONLY owner of the pattern and carries it at
+**both** of its wrap sites — the item band and the edit-mode section-CARD band. (Historically the fix existed twice
+more, in the customizer outline's "FILL THE COLUMN (round-3 defect 1)" and as an explicit `Width` on the top-bar strip;
+Phase 3 deleted both files. If you go looking for those precedents, that is why they are gone.) Pinned by
+`SidebarPaneInvariantTests.ReorderBandRows_FillTheSlot`, which asserts both sites.
 
 ### `SidebarProjectionInput` ALIASES the binder's buffers
 
@@ -224,16 +244,25 @@ settle loops by frame count.
 ## Accessibility — the real limits
 
 Do not overclaim. Everything the sidebar exposes is `AutomationRole.Button` / `RadioButton` /
-`NavigationItem`; `SidebarSectionHeader` uses `AutomationRole.None`. There is **no** tree/list/group semantics,
-and the engine exposes **no live-region or announcement API at all** (zero `Announce`/`LiveRegion` references in
-the tree). Consequences:
+`NavigationItem`; `SidebarSectionHeader` uses `AutomationRole.None`. There is **no** tree/list/group semantics.
 
-- A keyboard-lift reorder has **no announcement channel** — the visible position caption
-  (`sidebar.pin.position`, rendered by `Curated/SidebarOutlineView.cs:305`) is the only a11y surface for it.
-  Documented as such at `SidebarOutlineView.cs:303`.
+There **is** a live-region seam: the engine's `InputHooks.Announce` (`FluentGpu.Engine/Hooks/Context.cs`) is a
+`(text, assertive)` delegate the Windows backend points at `UiaRaiseNotificationEvent`
+(`FluentGpu.Windows/Uia/Win32Uia.cs`), and `FluentGpu.Input.Announcer` is the coalescing front door over it
+(`Say` / `SayThrottled`, ~100 ms). What the sidebar does and does not do with it:
+
+- **Section-card reorder IS announced** (the customize canvas). `Pane/SidebarPane.cs` sets
+  `Reorderable.AnnounceText = SectionAnnounce` and `AnnounceAssertive = true` on the section band, composing one
+  sentence per milestone — grab / move / drop / cancel — from `SidebarPaneLoc.Reorder{Grabbed,Moved,Dropped,Cancelled}`
+  plus the position caption `SidebarPaneLoc.ReorderPosition` (= the loc key `sidebar.pin.position`). Composition is the
+  app's because only the app can name the section and owns the locale; delivery is coalesced by the engine, so a held
+  arrow key speaks once per ~100 ms rather than once per key repeat. That is what makes the keyboard lift (Space /
+  arrows / Space, Escape cancels) usable at all — the displacement is otherwise purely visual.
+- **The ITEM band is not announced yet.** Only the section-card band wires `AnnounceText`; a pin reorder or a
+  Shortcuts-item reorder still has no spoken feedback.
 - Section collapse/expand is not announced, and a virtualized pane exposes no set-size/position-in-set.
-- `SidebarPreferences.UndoLabel`/`RedoLabel` are described as "for the tooltip + a11y announcement", but there is
-  nothing to announce *to* yet — today they are tooltips.
+- `SidebarPreferences.UndoLabel`/`RedoLabel` are described as "for the tooltip + a11y announcement"; nothing
+  announces them yet — today they are tooltips.
 
 ---
 
@@ -256,12 +285,14 @@ Verified reference counts across all of `src/apps`, including the tests.
 
 | Candidate | Status |
 |---|---|
-| the `SidebarSelectionPill` **component** | **0** call sites — the measured overlay pill cannot work under recycling, so it is superseded by the in-row indicator. But `SidebarSelectionPill.PillH` (16f) has **3 live references** (`Pane/SidebarPaneSlot.cs:922`, `:927`; `Curated/SidebarOutlineView.cs:454`). Delete the class body, keep `PillH` (or move it), or the build breaks. |
-| `SidebarSectionHeader.Section` | **0** call sites (3 doc-comment mentions). `Rule()` and `RevealWrapper()` are called **only** by `Section`, so all three go together (and `Reveal` with them). `Label`, `Header`, `ExplicitDivider` and `Height` **are** live (`Pane/SidebarPaneSlot.cs:63`, `:65`, `:137`) — do not remove the file. |
-| `SidebarLayoutMenu.HeaderButton` | **0** invocations, including inside its own file. |
-| loc `sidebar.pin.showAll`, `sidebar.pin.showLess` | Present in all three locales, **0** C# references — the pinned list is virtualized and uncapped now, so the overflow row they labelled is gone. Safe to retire. |
-| loc `sidebar.pin.position` | **KEEP.** The handoff notes list it as unused; it is not. `CzLoc.Position` (`Curated/SidebarCustomizerPage.cs:890`) → `Curated/SidebarOutlineView.cs:305`, and it is the only a11y surface for a keyboard reorder. |
-| loc `sidebar.createPlaylist` | Present in all three locales, **0** C# references. Every call site uses the sibling `sidebar.createPlaylistTooltip` (`Strings.Sidebar.CreatePlaylistTooltip` at `Shared/SidebarPinDropZone.cs:137`, `Pane/SidebarPaneSlot.cs:867`, `Modes/LibraryV3/LibraryV3Chrome.cs:152`). |
+| the `SidebarSelectionPill` **component** | **NOT a candidate — this row was wrong.** It is MOUNTED: `Pane/SidebarPaneSlot.cs:1131` (`Indicator`) does `ZStack(row, Embed.Comp(() => new SidebarSelectionPill(_o, …)))`, and `SidebarSelectionPill.PillH` is read at `:1130` and at `Pane/SidebarPane.cs:1303`, `:1305`. Deleting the class body breaks the build **and** the selection indicator. |
+| `SidebarSectionHeader.Section` | **0** call sites (3 doc-comment mentions). `Rule()` and `RevealWrapper()` are called **only** by `Section`, so all three go together (and `Reveal` with them). `Label`, `Header`, `ExplicitDivider` and `Height` **are** live (`Pane/SidebarPaneSlot.cs`) — do not remove the file. |
+| `SidebarLayoutMenu.HeaderButton` | **Deleted** (defect 15). `SidebarLayoutMenu.cs` records why in a comment; do not re-add it. |
+| loc `sidebar.pin.showAll`, `sidebar.pin.showLess` | **Retired** — gone from all three locales. |
+| loc `sidebar.pin.position` | **KEEP — still live, but through a NEW owner.** The old path (`CzLoc.Position` → the customizer outline) died with the outline; the key is now `SidebarPaneLoc.ReorderPosition` (`Pane/SidebarPaneText.cs`), the position clause inside every section-card reorder ANNOUNCEMENT (`SidebarPane.SectionAnnounce`). Retiring it would silently render `[sidebar.pin.position]` into a screen-reader sentence. |
+| loc `sidebar.createPlaylist` | **Retired** — gone from all three locales. Every call site uses the sibling `sidebar.createPlaylistTooltip`. |
 | loc `sidebar.createFolder` | Already **gone** from all three source locales (it survives only in stale `bin/` output). |
+| loc `sidebar.customizer.{outline, preview, previewExpanded, previewRail, previewDrawer, previewHint, addFirst, startFromTemplate, liftHint, visibleCount, topBar, topBarGlobal, topBarEmpty, curatedLayout, curatedInactive}` | **Retired** — gone from all three locales. They labelled the outline / preview columns and the standalone "Top bar" card, all deleted in Phase 3. `sidebar.customizer.empty`/`emptySub` are **KEPT**: they are live through `SidebarPaneLoc.PaneEmpty`. |
+| `Shared/SidebarNavBandModel.cs` | **0 production references** since Phase 1 (the band renders as an ordinary section). Retained deliberately: its `KindOf`/`RouteKeyOf`/`SelectsRoute`/`Shape` are the band's pure shaping rules and `SidebarNavBandTests` drives them. Its own file header still describes a `SidebarNavBand` component that no longer exists. |
 | `AppActions.All` | Declared at `Actions/AppAction.cs:96-108` with **zero** code references anywhere — every mention is a doc comment. Dead-but-retained. Do not add the first reference; the registry is the path. |
 | loc `player.play` / `player.pause` in `nl`/`ko` | Dead override keys — not present in en-US and referenced nowhere. |

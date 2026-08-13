@@ -264,161 +264,187 @@ public static class MediaCard
         }).WithMenu(menu);
     }
 
-    // ── Artist Pick on-media chrome. The pick floats two SMALL surfaces over a full-bleed hero, so both plates use the
-    // canonical over-media idiom (WaveeOnMedia's one ladder — scrim + a white hairline + on-media ink) rather than
-    // theme card brushes: ink over artwork is theme-INVARIANT (theming.md's leaf-value rule — Tokens.cs "On-media ink +
-    // scrim"), which is why the plates stay dark in light mode too.
-    const float PickHeight = 260f;         // the hero's fixed extent; the rail column supplies the width
-    const float PickCommentMaxW = 300f;    // the comment pill's text budget — the pill hugs below it
-    const float PickItemMaxW = 400f;       // the entity card's cap on a wide rail (prototype ≈ 380–420)
-    const float PickItemTextMaxW = 240f;   // and its title/subtitle budget inside that cap
-    const float PickFab = 32f;             // compact play affordance (the 44px shelf FAB is too heavy here)
+    // ── Artist Pick: the "type on tone" panel (D). Quote leads on an accent-soft wash, photograph follows, the
+    // record(s) are footer rows. Photography is a field (no overlays, no Acrylic) — shown ONLY when a real wide image
+    // exists (the pin's authored campaign art, else the artist's header banner). The old blurred-square stand-in of
+    // the cover/avatar is gone on purpose: on this tone panel the wash carries identity when there is no wide art.
+    // Do not reintroduce overlays here, Acrylic included — that is still chrome on the photograph.
+    //
+    // ONE record per panel: an upcoming release that is not the pin never rides this card as a second footer row
+    // (tried, rejected — two stacked capsule rows read as a mini list, not a pick). When both exist, the upcoming
+    // announcement takes its own full-width band above Latest release (ArtistPage.cs Body → UpcomingCard).
+    const float PickPhotoHeight = 150f;    // rail photograph band; the column supplies the width
+    const float PickPhotoColumnW = 300f;   // horizontal arm: photography as a right column, stretched to panel height
 
-    /// <summary>The artist-authored pinned item: a full-bleed hero with a COMPACT comment pill pinned top-left and a
-    /// COMPACT entity card pinned bottom-left (space-between), both content-hugging — never full-width slabs.
-    ///
-    /// Backdrop precedence: the pin's own authored campaign art (<c>profile.pinnedItem.backgroundImageV2</c>) → the
-    /// artist's wide header banner (<c>visuals.headerImage</c>) → the pin's own COVER, blurred and dimmed, → the artist
-    /// avatar, likewise. The wire omits the first two for plenty of artists (that is what produced the flat card), and a
-    /// blurred square standing in for a missing banner is the same idiom the editorial card's frosted band uses
-    /// (BakedBlur + ColorOverlay — a bake-once derivative, not a per-frame layer). Only an artist with NO art at all
-    /// falls back to a flat, height-hugging plate, and even then it keeps the identical pill + entity composition.</summary>
+    /// <summary>The artist-authored pinned item as one tone panel: accent-soft wash, the artist speaking, optional
+    /// wide photograph, then the pinned record as a footer row. Photography is a field — no scrims, pills, FABs, or
+    /// on-media ink. Nested Play / Pre-save clicks win over the panel's navigate, same contract as PlayFab inside
+    /// CardShell.</summary>
     public static Element ArtistPick(PinnedItem pinned, string artistName, Image? artistImage, Image? artistBackground,
-                                     Action onClick, Action onPlay, DragSource? drag = null)
+                                     Action onClick, Action onPlay, Func<ColorF> accent,
+                                     bool horizontal = false, DragSource? drag = null)
     {
+        ColorF accentColor = accent();   // build-time read: wash, date ink, and the S1 Play capsule
         Image? background = pinned.BackgroundImage?.Url is { Length: > 0 }
             ? pinned.BackgroundImage
             : artistBackground?.Url is { Length: > 0 } ? artistBackground : null;
-        // The stand-in when neither wide image exists: the pinned entity's own cover, else the artist's avatar.
-        Image? backdrop = background
-            ?? (pinned.Cover?.Url is { Length: > 0 } ? pinned.Cover
-                : artistImage?.Url is { Length: > 0 } ? artistImage : null);
-        bool blurred = background is null && backdrop is not null;   // a square cover doing a wide banner's job
-        bool onMedia = backdrop is not null;
 
-        ColorF plate = onMedia ? WaveeOnMedia.ScrimRest : Tok.FillSubtleSecondary;
-        ColorF hairline = onMedia ? WaveeOnMedia.Stroke : ColorF.Transparent;
-        ColorF ink = onMedia ? WaveeOnMedia.Ink : Tok.TextPrimary;
-        ColorF inkDim = onMedia ? WaveeOnMedia.InkTertiary : Tok.TextSecondary;
-
-        // ── The comment pill (top-left): avatar + the artist's note, capsule corners, hugging its content. The text is
-        // Grow (no Basis) so the pill MEASURES to the copy but can never out-measure the rail: FlexLayout hands a grow
-        // child only the width left after the fixed siblings, so the pill's natural width is bounded by its own MaxWidth
-        // AND by the column that arranges it. Basis=0 would have collapsed the hug to just the avatar.
-        Element comment = new BoxEl
+        // ── Wash: the engine's accent-subtle rung (Tok.AccentSubtle alpha = 0.16), not a new alpha ladder.
+        var wash = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
-            AlignSelf = FlexAlign.Start, MaxWidth = PickCommentMaxW + 60f,
-            Padding = new Edges4(Spacing.XS, Spacing.XS, Spacing.L, Spacing.XS),
-            Corners = Radii.FullAll,
-            Fill = plate,
-            BorderWidth = onMedia ? 1f : 0f, BorderColor = hairline,
-            Shadow = onMedia ? Elevation.Card : default,
-            Children =
-            [
-                PersonPicture.Create("", 28f, displayName: artistName, imageSourcePath: artistImage?.Url,
-                                     fill: onMedia ? plate : null) with
-                {
-                    BorderColor = onMedia ? hairline : Tok.StrokeCardDefault,
-                },
-                Ui.Body(pinned.Comment.Length > 0 ? pinned.Comment : pinned.Eyebrow) with
-                {
-                    Grow = 1f, Shrink = 1f, MinWidth = 0f, MaxWidth = PickCommentMaxW,
-                    Color = ink, Wrap = TextWrap.Wrap, MaxLines = 2,
-                    Trim = TextTrim.CharacterEllipsis,
-                },
-            ],
+            Grow = 1f, HitTestVisible = false,
+            Gradient = GradientDown(
+                new GradientStop(0f, accentColor with { A = 0.16f }),
+                new GradientStop(0.55f, accentColor with { A = 0.05f }),
+                new GradientStop(0.85f, accentColor with { A = 0f })),
         };
 
-        // ── The entity card (bottom-left): cover + title + kind, hugging, capped, card corners — the prototype's dark
-        // smoke card, not a white slab. Play stays on the card, restyled to the compact over-media FAB.
-        Element item = new BoxEl
+        Element head = new BoxEl
         {
-            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M,
-            AlignSelf = FlexAlign.Start, MaxWidth = PickItemMaxW,
-            Padding = Edges4.All(Spacing.S),
-            Corners = Radii.CardAll,
-            Fill = plate,
-            BorderWidth = onMedia ? 1f : 0f, BorderColor = hairline,
-            Shadow = onMedia ? Elevation.Card : default,
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.L, Spacing.L, Spacing.L, 0f),
             Children =
             [
-                Surfaces.Artwork(pinned.Cover, Seed(pinned.Uri), 56f, 56f, Radii.Control, decodePx: 128),
+                PersonPicture.Create("", 32f, displayName: artistName, imageSourcePath: artistImage?.Url) with
+                {
+                    BorderColor = Tok.StrokeCardDefault, Shrink = 0f,
+                },
                 new BoxEl
                 {
-                    Direction = 1, Gap = Spacing.XS,
-                    Grow = 1f, Shrink = 1f, MinWidth = 0f, MaxWidth = PickItemTextMaxW,
+                    Direction = 1, MinWidth = 0f, Grow = 1f, Basis = 0f,
                     Children =
                     [
-                        WaveeType.TrackTitle(pinned.Title) with
+                        Ui.BodyStrong(artistName) with
                         {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Color = ink,
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
                         },
-                        WaveeType.TrackMeta(pinned.Subtitle) with
+                        Ui.Caption(Loc.Get(Strings.Artist.ArtistPick)) with
                         {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f, Color = inkDim,
+                            Color = Tok.TextSecondary, MaxLines = 1,
                         },
                     ],
                 },
-                onMedia
-                    ? CoverActionFab(onPlay, Icons.Play, Loc.Get(Strings.Detail.Play), PickFab)
-                    : PlayFab(onPlay, Icons.Play, PickFab),
             ],
         };
 
-        Element content;
-        if (backdrop?.Url is { Length: > 0 } backdropUrl)
+        string comment = pinned.Comment.Length > 0 ? pinned.Comment : pinned.Eyebrow;
+        Element quote = new BoxEl
         {
-            content = new BoxEl
+            Padding = new Edges4(Spacing.L, Spacing.S, Spacing.L, Spacing.L),
+            Grow = horizontal ? 1f : 0f,   // featured arm: quote eats leftover height so the foot rows sit on the bottom
+            Children =
+            [
+                WaveeType.PickQuote(comment) with
+                {
+                    Wrap = TextWrap.Wrap, MaxLines = 4, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                },
+            ],
+        };
+
+        // Photography only when a real wide image exists. Square corners — the panel clips. The band is a ZStack:
+        // that is what gives the stretch-fitted aspect image its extent (a plain flex box hands it no box at all
+        // and the placeholder renders forever — the pre-rework full-bleed hero used the same ZStack idiom).
+        Element? photo = background is { Url: { Length: > 0 } bgUrl }
+            ? new BoxEl
             {
-                Height = PickHeight, ZStack = true, ClipToBounds = true,
-                Corners = CornerRadius4.All(Radii.Card),
+                Height = horizontal ? float.NaN : PickPhotoHeight,
+                Width = horizontal ? PickPhotoColumnW : float.NaN,
+                Shrink = 0f,
+                AlignSelf = horizontal ? FlexAlign.Stretch : FlexAlign.Auto,
+                ZStack = true, ClipToBounds = true,
                 Children =
                 [
-                    Ui.Image(backdropUrl, ImageFit.Cover, aspect: 1.6f, decodePx: blurred ? 256 : 640,
-                        corners: Radii.Card, placeholder: Surfaces.ArtworkPlaceholder,
-                        blurHash: backdrop.BlurHash) with
-                        {
-                            AlignSelf = FlexAlign.Stretch,
-                            JustifySelf = FlexAlign.Stretch,
-                            // A stand-in cover is BAKED-blurred once into a derived image (shader channels, no scene
-                            // layer, no per-frame blur) and dimmed so it reads as a backdrop rather than a stretched
-                            // square. The authored/header banner is shown crisp.
-                            BakedBlur = blurred ? new BakedBlurSpec(30f, 0.5f) : (BakedBlurSpec?)null,
-                            ColorOverlay = blurred ? WaveeOnMedia.BackdropDim : ColorF.Transparent,
-                        },
-                    // The canonical media scrims (Tokens.cs) — top for the pill, bottom for the entity card — so the
-                    // white ink holds over a bright hero without dimming the middle of the image.
-                    new BoxEl
+                    Ui.Image(bgUrl, ImageFit.Cover, aspect: 1.6f, decodePx: 640, corners: 0f,
+                        placeholder: Surfaces.ArtworkPlaceholder, blurHash: background.BlurHash) with
                     {
-                        HitTestVisible = false, Corners = CornerRadius4.All(Radii.Card), Gradient = Tok.ScrimTop,
-                    },
-                    new BoxEl
-                    {
-                        HitTestVisible = false, Corners = CornerRadius4.All(Radii.Card), Gradient = Tok.ScrimBottom,
-                    },
-                    new BoxEl
-                    {
-                        Grow = 1f, Direction = 1, Justify = FlexJustify.SpaceBetween, AlignItems = FlexAlign.Start,
-                        Gap = Spacing.M, Padding = Edges4.All(Spacing.M),
-                        HitTestPassThrough = true,   // the card body stays clickable between the two plates
-                        Children = [comment, item],
+                        AlignSelf = FlexAlign.Stretch,
+                        JustifySelf = FlexAlign.Stretch,
                     },
                 ],
-            };
-        }
-        else
-        {
-            // No art at all: the SAME two compact plates, just on the card's own surface and hugging its height.
-            content = new BoxEl
-            {
-                Direction = 1, Gap = Spacing.M, AlignItems = FlexAlign.Start,
-                Padding = Edges4.All(Spacing.M),
-                Children = [comment, item],
-            };
-        }
+            }
+            : null;
 
-        return CardShell(content, onClick, persistent: true) with { Draggable = drag };
+        // S1 Play / S2 Pre-save. PROPS FREEZE AT MOUNT: the embed is keyed on the uri because this panel is rebuilt
+        // whenever extras arrive, and an unkeyed PreSaveButton would keep resolving (and pre-saving) whichever uri
+        // happened to be current at mount — the UpcomingMasthead contract.
+        Element pinnedTrailing = pinned.IsUpcoming
+            ? Embed.Comp(() => new PreSaveButton { Uri = pinned.TargetUri, Name = pinned.Title, Accent = accent })
+                with { Key = "pick-presave:" + pinned.TargetUri }
+            : WaveeCta.Play(accentColor, onPlay);
+        Element pinnedRow = PickFootRow(pinned.Cover, pinned.Uri, pinned.Title, pinned.Subtitle,
+            accentColor, pinned.ReleaseAt, pinnedTrailing);
+
+        Element copy = new BoxEl
+        {
+            Direction = 1,
+            Grow = horizontal ? 1f : 0f,
+            Basis = horizontal ? 0f : float.NaN,
+            MinWidth = horizontal ? 0f : float.NaN,
+            Children = !horizontal && photo is not null
+                ? [head, quote, photo, pinnedRow]
+                : [head, quote, pinnedRow],
+        };
+        Element content = horizontal && photo is not null
+            ? new BoxEl { Direction = 0, Children = [copy, photo] }
+            : copy;
+
+        return ApplyCardPhysics(new BoxEl
+        {
+            ZStack = true, ClipToBounds = true, Corners = CornerRadius4.All(Radii.Card),
+            Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
+            Shadow = Elevation.Card, OnClick = onClick, Cursor = CursorId.Hand, Draggable = drag,
+            Children = [wash, content],
+        });
+    }
+
+    // The pinned record's footer grammar (S1 Play / S2 Pre-save): 44 cover · title · kind (+ accent date when one
+    // exists) · trailing capsule.
+    static Element PickFootRow(Image? cover, string uri, string title, string kind,
+                               ColorF accentColor, DateTimeOffset? releaseAt, Element trailing)
+    {
+        Element metaKind = WaveeType.TrackMeta(kind) with
+        {
+            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+        };
+        return new BoxEl
+        {
+            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
+            Padding = new Edges4(Spacing.L, Spacing.M, Spacing.L, Spacing.M),
+            Children =
+            [
+                new BoxEl
+                {
+                    Width = 44f, Height = 44f, Shrink = 0f, ClipToBounds = true,
+                    Corners = Radii.ControlAll,
+                    Children = [Surfaces.Artwork(cover, Seed(uri), 44f, 44f, Radii.Control, decodePx: 96)],
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS,
+                    Children =
+                    [
+                        WaveeType.TrackTitle(title) with
+                        {
+                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                        },
+                        new BoxEl
+                        {
+                            Direction = 0, Gap = Spacing.XS, AlignItems = FlexAlign.Center,
+                            Children = releaseAt is { } date
+                                ? [
+                                    metaKind,
+                                    Ui.Caption(Strings.Detail.ReleasesOn(DetailFormat.ShortDate(date))) with
+                                    {
+                                        Color = accentColor, Weight = 600, MaxLines = 1,
+                                    },
+                                ]
+                                : [metaKind],
+                        },
+                    ],
+                },
+                new BoxEl { Shrink = 0f, Children = [trailing] }.Skeletonized(false),
+            ],
+        };
     }
 
     // Editorial home card: intentionally reserved for HomeFeedBaselineSectionData. Normal home sections keep the regular

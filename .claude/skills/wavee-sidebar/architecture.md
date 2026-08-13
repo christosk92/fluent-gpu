@@ -206,9 +206,22 @@ source that raises `Changed` mid-rebuild only marks the binder dirty.
 | `CommitReorder` | `Action<SidebarPaneReorder>?` | Null ⇒ `SidebarPaneReorderCommit.Default` (Pinned → the shared pin store; every other reorderable kind → the undoable `MoveItem`). |
 | `OnCustomize` | `Action?` | Null ⇒ those surfaces render without their action rather than with a dead one. |
 | `OnCreatePlaylist` | `Action?` | Null ⇒ the create row is still planned but inert. |
+| `Edit` | `Func<SidebarEditState?>?` | **PHASE 2 / Decision B.** Non-null *return* ⇒ the pane is the CUSTOMIZE CANVAS: it plans through `SidebarRowPlanner.BuildEdit` (one `SectionCard` per top-level section + the one expanded section's real body) instead of `Build`. A delegate, never a snapshot — the session changes several times a minute while the config is frozen at mount. Only `CuratedSidebar` supplies one; the renderer still learns nothing about `Design`. |
+
+There is **no** `NavBand` / `RailHead` member and there never should be again: Phase 1 materialises the shortcut band
+as an ordinary `StaticLinks` section (`SidebarShortcutsSection.Prepend`) at the head of every design's document, so the
+planner, the slot, the rail's `ShowInRail` pass, the reorder band and the selection indicator all serve it with no
+band-specific code. That also removed the documented **selection hack**: a band tile for `"home"` plus a plan row for
+`"home"` were two registrations under one route key, which forced the band to opt out of the pane's route-keyed
+selection transaction. With one row, the problem ceases to exist.
 
 `SidebarPaneReorder(Section, FromSlot, ToSlot, SlotCount, KeyAt)` carries everything a commit could need and
 nothing about the widget: the renderer knows the geometry, only the mode knows where the order *lives*.
+
+The band's ITEM edits route through `SidebarItemCommands` (Wavee.Core), the ONE Add/Move/Remove chooser: the sentinel
+id `SidebarIds.TopBarSection` picks `AddTopBarItem`/`MoveTopBarItem`/`RemoveTopBarItem`, every real section id picks
+`AddItem`/`MoveItem`/`RemoveItem`. Never re-decide that at a call site — a raw `MoveItem` at the sentinel is a silent
+`UnknownSection` rejection, i.e. a drag that snaps back with no message.
 
 ### Selection and motion (one mechanism for every mode)
 
@@ -310,27 +323,39 @@ and V3 has no empty-pins drop card.
 
 ### Wavee Curated — the user's document + the customizer
 
-`CuratedSidebar` is a thin shell: `Document = () => _prefs?.Layout ?? fallback`,
-`SetSectionCollapsed = (id, c) => _prefs?.Dispatch(new SetSectionCollapsed(id, c))`, `ReadOnly = false`,
-`SearchHead = true`, `OnCustomize`, `OnCreatePlaylist`. **Its ctor signature is frozen** — the customizer's live
-preview mounts it (`Curated/SidebarInspector.cs:127`).
+`CuratedSidebar` is a thin shell: `Document = () => _prefs?.Layout ?? fallback` (prepending the materialised Shortcuts
+section for the render path), `SetSectionCollapsed = (id, c) => _prefs?.Dispatch(new SetSectionCollapsed(id, c))`,
+`ReadOnly = false`, `SearchHead = true`, `Edit = ReadEditSession`, `OnCustomize`, `OnCreatePlaylist`.
 
-The customizer is a full-page route, `SidebarLayoutMenu.CustomizeRoute = "sidebar-customize"`, registered in
-`Features/Shell/ContentHost.cs:126-128` and labelled in `Features/Shell/ShellNav.cs:47`. Its pure model
-(`Curated/SidebarCustomizerLayout.cs`) is source-included by the tests and owns the tier ladder, the 18-entry
-`SidebarPalette.All` table (grouped by `SidebarPaletteGroup`), outline flattening, drag translation and the
-opaque-config rewriter (`SidebarConfigJson`). Live thresholds:
+**The docked pane IS the editing canvas** (Decision B). There is no preview column and no outline, because the sidebar
+beside the page is already rendering the exact document being edited — `SidebarLayoutMenu.Rows` switches to Curated
+before navigating, which is what made the outline↔preview duplication removable at all. Two surfaces:
 
-```csharp
-PaletteWidth 232 · InspectorWidth 320 · PreviewWidth 360 · OutlineMinWidth 320
-CanvasEnterW 1320 · FullEnterW 1000 · CompactEnterW 820 · HysteresisDip 24
-enum SidebarCustomizerTier : byte { Canvas = 0, Full = 1, Compact = 2, Narrow = 3 }
-```
+| Surface | Owns |
+|---|---|
+| the canvas — the live pane under `SidebarPaneConfig.Edit` | uniform `SectionCard` rows (grip · kind glyph · title · count · eye · "…"), ONE section expanded at a time, hidden sections dimmed-but-present, section reorder committing `MoveSection`, per-section options as a POPOVER anchored to the card's "…" (the generated control set from `Curated/SidebarPropertyPanel.cs`, re-hosted — not rewritten). Structural drag is armed ONLY here. |
+| the companion page (`sidebar-customize`) | ONE scrolling column at every width: header (Back · title · Undo · Redo · Reset · Done) · design presets + the five templates · the PERSISTENT palette · hidden-section recovery · Advanced (reset + the `sidebar-layout.json` escape hatch). |
 
-Widening promotes immediately; narrowing needs `HysteresisDip` past the threshold. `PaletteInline(tier) => tier <=
-Full`, `InspectorInline(tier) => tier != Narrow`, `PreviewInline(tier) => tier == Canvas`, and Narrow puts the
-inspector in a bottom sheet (`SheetHeight`). Extension sections' property controls are **generated** from
-`ISidebarDataSource.ConfigSchema` and written back through `SetExtensionConfig`.
+Registered in `Features/Shell/ContentHost.cs` and labelled in `Features/Shell/ShellNav.cs`.
+
+**The four-tier region ladder is GONE.** `SidebarCustomizerTier`, `SidebarCustomizerLayout` (the 1320/1000/820
+thresholds + `HysteresisDip`), the command-fit table and `SidebarOutlineRows`/`SidebarOutlineDrag` all died with the
+surfaces they described — do not re-add them. What `Curated/SidebarCustomizerLayout.cs` still owns (pure,
+source-included by the tests): the palette table + filter (`SidebarPalette`, now including the **Destinations** group —
+`SidebarPinId.PinnableRoutes` ∪ `{settings, api-console, concerts}`, labelled through `ShellNav.Dest`, rendered
+FIRST), `SidebarDisplayValues`, `SidebarQueryPanelShape`, `SidebarNumberEdit` and the opaque-config rewriter
+(`SidebarConfigJson`).
+
+The one section-drag translation that survives is **`SidebarEditPlan.ToMoveSection`** (with its sibling
+`ToAddSection` for palette drops), in `Features/Sidebar/Data/SidebarEditPlan.cs` alongside `ShowsBody`,
+`SectionsReorderable`, `Fold`, `CardCount`, `IsPinnedCard` and `SectionDragKind`. Its trap, spelled out because it is
+the one thing that breaks silently: band slots enumerate the plan's `SectionCard` rows — built over the **render**
+document, which carries the Shortcuts head at index 0 — while `MoveSection.NewIndex` / `AddSection.Index` index the
+**persisted** document, which does not. Always hand those two methods `SidebarPreferences.Layout`, never the document
+the pane planned from.
+
+Extension sections' property controls are still **generated** from `ISidebarDataSource.ConfigSchema` and written back
+through `SetExtensionConfig`; only their host changed.
 
 ---
 
@@ -402,7 +427,7 @@ and **refuses** to run when there is no overlay — a null overlay never degrade
 
 `ISidebarDataSource` declares its **capabilities** (`ItemType`, `SupportedFilters`, `SupportedSorts`, `Paging`)
 so the customizer offers only facets the source honours rather than offering some and silently ignoring them; its
-`ConfigSchema` is what the inspector generates controls from; and its `State`/`StateDetailLocKey`/`NeedsPrompt`
+`ConfigSchema` is what the section's options popover generates controls from; and its `State`/`StateDetailLocKey`/`NeedsPrompt`
 are the health the planner turns into rows. `Fill(into, in request)` appends on the rebuild path — no LINQ, no
 closures, no per-row allocation, never a blocking wait.
 

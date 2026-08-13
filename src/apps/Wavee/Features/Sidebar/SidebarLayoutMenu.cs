@@ -37,13 +37,12 @@ static class SidebarLayoutMenu
 
     // ── entry points ──────────────────────────────────────────────────────────────────────────────────────────────────
 
-    /// <summary>The 24-DIP hover/focus-revealed trailing button for a section header (Classic: the Pinned header).
-    /// <paramref name="revealed"/> is driven by the HEADER's hover (wire it through
-    /// <c>SidebarSectionHeader.Section(onHover: …)</c>); the button additionally forces itself visible while it holds
-    /// keyboard focus — an <c>HoverOpacity</c>-only reveal would hide a focused control, which is the bug this
-    /// construction avoids.</summary>
-    public static Element HeaderButton(SidebarPreferences? prefs, Action<string, string?> go, Signal<bool> revealed)
-        => Embed.Comp(() => new SidebarLayoutMenuButton(prefs, go, revealed, 24f, 14f));
+    // DEFECT 15 — `HeaderButton` is GONE. It was the 24-DIP hover/focus-revealed variant for a section header, and it
+    // had ZERO invocations anywhere in src/apps, including inside this file: the unification gave every mode the
+    // always-visible `Button` below (hung off the pane's FIRST section header by `SidebarPaneSlot.Header`), and the
+    // reveal-on-hover form never got a call site. The component behind it (`SidebarLayoutMenuButton`) still takes the
+    // `revealed` signal — that parameter is what `Button` passes null for, and it is the shape a future revealed
+    // caller would use, so the COMPONENT keeps it while the unused entry point goes.
 
     /// <summary>The always-visible button (Curated's header; V3 embeds <see cref="Rows"/> in its overflow menu instead).</summary>
     public static Element Button(SidebarPreferences? prefs, Action<string, string?> go, float box = 28f)
@@ -93,7 +92,7 @@ static class SidebarLayoutMenu
         => MenuFlyoutItem.RadioItem(Loc.Get(labelKey), active, () => prefs.SwitchDesign(design));
 }
 
-/// <summary>The icon button behind <see cref="SidebarLayoutMenu.HeaderButton"/> / <see cref="SidebarLayoutMenu.Button"/>.
+/// <summary>The icon button behind <see cref="SidebarLayoutMenu.Button"/>.
 /// A Component because it needs the overlay service, an anchor node and the open handle. Every ctor arg is mount-constant
 /// or a signal/stable delegate, per the component-props-freeze contract.</summary>
 sealed class SidebarLayoutMenuButton : Component

@@ -10,7 +10,8 @@ namespace Wavee;
 // F.1.4 — the shared 28-DIP sidebar section header + its always-mounted reveal wrapper.
 //
 // Every visual here is the landed WaveeSidebar `Section(...)` chrome, moved verbatim:
-//   • 28-DIP header, HoverFill = Tok.FillSubtleSecondary, Corners 4, padding (8,0,8,0), gap 4;
+//   • 28-DIP header, HoverFill = Tok.FillSubtleSecondary, Corners 4, gap 4, and SidebarPaneMetrics.RowInset — the
+//     landed chrome padded to a literal (8,0,8,0), which sat 2 DIP right of the rows it labels (see Header);
 //   • stock NavigationViewItemHeader typography — Caption-scale 12 at BodyStrong weight 600 in the SECONDARY text
 //     colour (11/Tertiary reads as disabled micro-copy rather than as a group label);
 //   • chevron at 10 DIP in Tok.TextTertiary, AFTER the optional trailing action slot. R3.1.7a replaced the
@@ -57,7 +58,7 @@ static class SidebarSectionHeader
         Height = Spacing.L,
         Shrink = 0f,
         AlignItems = FlexAlign.Center,
-        Padding = new Edges4(SidebarRowMetrics.IndentFor(0), 0f, 8f, 0f),
+        Padding = SidebarPaneMetrics.RowInset,
         Children =
         [
             new BoxEl { Grow = 1f, Height = 1f, Fill = Tok.StrokeDividerDefault },
@@ -113,7 +114,10 @@ static class SidebarSectionHeader
         return new BoxEl
         {
             Direction = 0, Height = SidebarSectionHeader.Height, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(8f, 0f, 8f, 0f), Corners = CornerRadius4.All(4f),
+            // THE ROW INSET, not the landed literal 8. Inside the plan list this header is a sibling of the rows, so a
+            // bare 8 put its title at PanePad+8 = 16 while every row's leading content sat at PanePad+6 = 14 — a 2-DIP
+            // drift inherited verbatim from the pre-unification WaveeSidebar body. One inset owner, one lane.
+            Padding = SidebarPaneMetrics.RowInset, Corners = CornerRadius4.All(4f),
             HoverFill = collapsible ? Tok.FillSubtleSecondary : ColorF.Transparent,
             Role = collapsible ? AutomationRole.Button : AutomationRole.None,
             OnClick = collapsible ? () => onToggle!(!open) : null,

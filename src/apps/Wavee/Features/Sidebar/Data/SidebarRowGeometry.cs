@@ -20,6 +20,34 @@ static class SidebarRowGeometry
     /// <summary>The Classic entity-row height (44) — the number every landed sidebar row already uses.</summary>
     public const float ClassicHeight = 44f;
 
+    // ── THE ONE CONTENT LANE ─────────────────────────────────────────────────────────────────────────────────────────
+    // The pane had a RAGGED LEFT EDGE because two families of surface computed their own inset from raw literals: the
+    // virtualized ROWS landed at PanePad.Left + IndentFor(0) = 14, while every FIXED CHROME BAND mounted above the list
+    // (Library V3's header / toolbar / chip rail / rule / breadcrumb) padded to a bare 8 and landed 6 DIP short of them.
+    // Naming the lane once — here, in the engine-free layer, where a test can reach it — is what stops the next band
+    // from inventing a third number: a band expresses its padding as ContentLane/ContentLaneEnd, never as a literal.
+
+    /// <summary>The pane's horizontal edge inset (8) — <c>SidebarPaneMetrics.PanePad</c>'s left/right. It is applied
+    /// ONCE, around the virtualized list, so a band mounted ABOVE that list sits outside it and must reproduce it as
+    /// part of <see cref="ContentLane"/> rather than padding to this number on its own.</summary>
+    public const float PaneEdge = 8f;
+
+    /// <summary>A row's OWN leading padding at depth 0 (6) — the base term of <see cref="IndentFor"/>.</summary>
+    public const float RowInsetLeft = 6f;
+
+    /// <summary>A row's OWN trailing padding (8) — the right-hand half of <c>SidebarPaneMetrics.RowInset</c>.</summary>
+    public const float RowInsetRight = 8f;
+
+    /// <summary>THE CONTENT LANE (14): the single x at which pane content begins — a row's selection gutter, a section
+    /// header's title, a chrome band's first glyph, a divider's hairline. Rows reach it as
+    /// <see cref="PaneEdge"/> + <see cref="IndentFor"/>(0); a fixed band above the list pads to it directly.</summary>
+    public const float ContentLane = PaneEdge + RowInsetLeft;
+
+    /// <summary>The lane's TRAILING twin (16): <see cref="PaneEdge"/> + <see cref="RowInsetRight"/>. It is 2 DIP wider
+    /// than <see cref="ContentLane"/> because the landed row padding is asymmetric (6 leading / 8 trailing) — carried
+    /// forward as-is, not re-derived, so nothing shifts horizontally while the lane is being named.</summary>
+    public const float ContentLaneEnd = PaneEdge + RowInsetRight;
+
     /// <summary>Row height by density. Compact suppresses subtitles outright (no room for a second line), so the three
     /// canonical heights are 32 (compact) / 40 (cozy) / 44 (cozy with subtitle); Comfortable adds 4 DIP on top of the
     /// cozy pair (44 without a subtitle — Classic's shortcut row — and 48 with one).</summary>
@@ -38,8 +66,8 @@ static class SidebarRowGeometry
         return HeightFor(o.Density, o.Subtitles);
     }
 
-    /// <summary>Left padding for a nesting depth: 6 DIP base + 12 per level, clamped at 4 levels.</summary>
-    public static float IndentFor(int depth) => 6f + (depth < 0 ? 0 : depth > 4 ? 4 : depth) * 12f;
+    /// <summary>Left padding for a nesting depth: <see cref="RowInsetLeft"/> base + 12 per level, clamped at 4 levels.</summary>
+    public static float IndentFor(int depth) => RowInsetLeft + (depth < 0 ? 0 : depth > 4 ? 4 : depth) * 12f;
 
     /// <summary>Subtitles are never rendered at Compact density.</summary>
     public static bool SubtitleVisible(SidebarDensity density, string? subtitle)

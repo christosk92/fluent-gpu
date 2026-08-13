@@ -12,7 +12,7 @@
 dotnet build Wavee.slnx
 dotnet build Wavee.slnx -c Release
 
-# 2 — the sidebar-and-neighbours filtered sweep (~770 test CASES; 536 methods, some [Theory])
+# 2 — the sidebar-and-neighbours filtered sweep (~840 test CASES; ~600 methods, some [Theory])
 dotnet test src/apps/Wavee.Tests/Wavee.Tests.csproj `
   --filter "FullyQualifiedName~Sidebar|FullyQualifiedName~Rootlist|FullyQualifiedName~PlayLog|FullyQualifiedName~ShellNav|FullyQualifiedName~WaveeExtension|FullyQualifiedName~LibraryV3"
 
@@ -38,7 +38,7 @@ only test invocation checked in is the whole-suite form in the `wavee` skill and
 
 ---
 
-## The test inventory (24 files, 25 classes, ~536 methods)
+## The test inventory (26 files, 27 classes, ~600 methods)
 
 All under `src/apps/Wavee.Tests/`.
 
@@ -46,8 +46,9 @@ All under `src/apps/Wavee.Tests/`.
 
 | File | Class | ~Methods | Covers |
 |---|---|---|---|
-| `SidebarLayoutReducerTests.cs` | `SidebarLayoutReducerTests` | 94 | One test per command-table row + the reducer invariants: never mutates its input, a rejection is a no-op, depth-1 nesting, `EntityEmbed` single item, query-legality repair, lazy Pinned-override prune. |
-| `SidebarTemplateTests.cs` | `SidebarTemplateTests` | 17 | The five seed layouts, pinned **row for row**. |
+| `SidebarLayoutReducerTests.cs` | `SidebarLayoutReducerTests` | 115 | One test per command-table row + the reducer invariants: never mutates its input, a rejection is a no-op, depth-1 nesting, `EntityEmbed` single item, query-legality repair, lazy Pinned-override prune. Also the three duplicate/seed defects: `StaticLinks` seeds the `Links` preset (not `Shortcuts`), a store-backed kind — or a group holding one — is `KindNotDuplicable`, and a clone with an authored `TitleLocKey` keeps the key instead of freezing a literal. |
+| `SidebarTemplateTests.cs` | `SidebarTemplateTests` | 17 | The five seed layouts, pinned **row for row**, plus the per-kind fact tables (`DefaultDisplay(StaticLinks)` is `Links`). |
+| `SidebarShortcutsSectionTests.cs` | `SidebarShortcutsSectionTests` | 16 | **Phase 1 / Decision A.** `SidebarShortcutsSection.From`/`Renders`/`Prepend`/`ContainsRoute`; the materialisation into Classic's and Library V3's documents (incl. V3 dropping its own `v3.liked` row exactly when the band carries a `liked` Route item); and `SidebarItemCommands`' sentinel routing — a move inside Shortcuts emits `MoveTopBarItem`, a raw `MoveItem` there is an `UnknownSection` rejection. |
 
 ### Persistence
 
@@ -78,7 +79,8 @@ All under `src/apps/Wavee.Tests/`.
 |---|---|---|---|
 | `SidebarBuiltInDocumentTests.cs` | `SidebarBuiltInDocumentTests` | 7 | Classic as a **locked** built-in document: its IA and the Cozy+Subtitles density intent behind the 44-DIP rows. |
 | `LibraryV3DocumentTests.cs` | `LibraryV3DocumentTests` + `LibraryV3ViewTests` | 23 + 15 | V3 as a synthesized ephemeral document (view state → sections + query + display) and the content **order** (tree re-grouping, drill slice, materialized custom order). |
-| `SidebarPaneInvariantTests.cs` | `SidebarPaneInvariantTests` | 7 | `SidebarPaneFrameSnapshot`: a settled rendered pane width is exactly 56 or a valid expanded width. |
+| `SidebarPaneInvariantTests.cs` | `SidebarPaneInvariantTests` | 13 | `SidebarPaneFrameSnapshot` (a settled rendered pane width is exactly 56 or a valid expanded width) **plus three SOURCE-SCAN drift guards** for rules that live in engine-bound, non-included files: the context menu hangs off a childless shield and not the pane root; every fixed chrome band expresses its inset through the one named content lane rather than the retired literal; and both `Reorderable` wrap sites in `SidebarPaneSlot` fill their slot. A source scan skips (not fails) on a binary-only run. |
+| `SidebarNavBandTests.cs` | `SidebarNavBandTests` | 19 | `SidebarNavBandModel` — the shortcut band's pure SHAPING rules (item target → tile shape, tile → the route key a selection mark reads, document order, the truncation bound). Named for the MODEL: the `SidebarNavBand` component it was written against is gone, and the model has no production caller left. Its materialisation into a section lives in `SidebarShortcutsSectionTests`. |
 | `SidebarModeStateTests.cs` | `SidebarModeStateTests` | 15 | Per-mode remembered state + per-design width tiers: `SidebarPaneState` snapshot/restore/latch behind `SwitchDesign`, `SidebarDesignInfo`, `ShellResponsiveLayout`, over `MemoryAppSettings`. |
 | `SidebarPinStoreTests.cs` | `SidebarPinStoreTests` | 19 | The shared pin store + `SidebarPinId` mapping (rides `VirtualCollectionSignalShim` for `Signal<int>`). |
 | `SidebarDesignGatingTests.cs` | `SidebarDesignGatingTests` | 19 | The one-time chooser gate + closing marker, the three preview cards' values, the "Customize sidebar" affordance rule. |
@@ -89,7 +91,8 @@ All under `src/apps/Wavee.Tests/`.
 | File | Class | ~Methods | Covers |
 |---|---|---|---|
 | `WaveeExtensionRegistryTests.cs` | `WaveeExtensionRegistryTests` | 40 | `WaveeRegistryTable<T>` namespaced keys + first-wins duplicates, action targeting, `PinRowRule`. |
-| `SidebarCustomizerLayoutTests.cs` | `SidebarCustomizerLayoutTests` | 34 | The customizer's pure model: tier ladder + hysteresis, searchable palette + filter, outline flattening / flat-index→`MoveSection`, display projection, the opaque extension-config rewriter. |
+| `SidebarCustomizerLayoutTests.cs` | `SidebarCustomizerLayoutTests` | 25 | The companion page's pure model: the searchable palette + filter, the **Destinations** group (the pinnable-routes ∪ three-extras set, its `dest:` ids, one seeded `AddSection` each, `AppendsToSelection`, `CanDrag`'s click-only rows), the display projection, the opaque extension-config rewriter. The tier-ladder, command-fit and outline cases were **deleted with their types** — do not re-add them. |
+| `SidebarEditPlanTests.cs` | `SidebarEditPlanTests` | 27 | **Phase 2 / Decision B.** `SidebarEditPlan`'s pure rules (`ShowsBody`, `HasBody`, `SectionsReorderable`, `Fold`, `CardCount`, `IsPinnedCard`, `SectionIdAt`) and the two band-slot → command translations. `ToMoveSection`/`ToAddSection` are driven over a row array built from the **render** document (Shortcuts head at plan index 0) while the command is asserted against the **persisted** one, so the off-by-one those two index spaces invite fails here. |
 
 Adjacent, one relevant test: `StoreLibrarySourceTests.GetPlaylists_OverlaysResolvedOwnerName_ForSidebarAndHomeSummaries`.
 

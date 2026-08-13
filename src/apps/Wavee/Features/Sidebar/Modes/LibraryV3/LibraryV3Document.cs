@@ -41,9 +41,18 @@ static class LibraryV3Document
     public const string LikedItemId = "v3.liked.item";
 
     /// <summary>Build the ephemeral document for one V3 view state.</summary>
-    public static SidebarCustomLayout Build(in LibraryV3DocState state)
+    /// <param name="topBar">PHASE 1 / Decision A — the shell's shortcut band (<c>SidebarPreferences.TopBar</c>), the
+    /// ONE global list on the Curated document. Non-empty ⇒ it is materialised as the FIRST section, ahead of the pin
+    /// band; this is what finally gives V3 navigation of its own (Decision C is satisfied BY Decision A, not by a
+    /// V3-specific branch). Null/empty ⇒ V3's document is exactly what it was.</param>
+    public static SidebarCustomLayout Build(in LibraryV3DocState state,
+        IReadOnlyList<SidebarItemSpec>? topBar = null)
     {
-        var sections = new List<SidebarSectionSpec>(3);
+        var sections = new List<SidebarSectionSpec>(4);
+
+        // 0 — THE SHORTCUT BAND, as an ordinary section. Above the pin band because it is the APP's navigation, not the
+        //     library's; V3's own chrome (header / toolbar / chips) still sits above the whole scroll surface.
+        if (SidebarShortcutsSection.Renders(topBar)) sections.Add(SidebarShortcutsSection.From(topBar));
 
         // 1 — the PIN BAND. The shaped projection already carries the surviving pins as its leading band (pin order,
         //     filter-aware), and the mode component hands exactly that band to the planner as `Pins`; this section renders
@@ -59,7 +68,14 @@ static class LibraryV3Document
         // 2 — LIKED SONGS, the surface's own row: placed right after the pin band when it is not itself pinned, scoped to
         //     the lenses where a saved-songs shortcut is truthful (§3.0 obligation 2). A route row, so it follows the UI
         //     culture through ShellNav rather than freezing a label into the document.
-        if (state.LikedVisible)
+        //
+        //     THE PLAN'S "drop v3.liked only if Liked is already a shortcut" RULE, decided here from the actual band:
+        //     the Shortcuts section three rows up may already carry a `liked` ROUTE item, and two rows to the same
+        //     destination a hand apart is the duplication Decision A exists to remove. It is NOT dropped
+        //     unconditionally — a user who removed Liked from their shortcuts still gets V3's own row, which is the
+        //     §3.0 obligation. (An ENTITY item whose uri maps onto Liked does not count: different art, different menu,
+        //     and SidebarShortcutsSection.ContainsRoute owns that distinction.)
+        if (state.LikedVisible && !SidebarShortcutsSection.ContainsRoute(topBar, LikedRouteKey))
             sections.Add(new SidebarSectionSpec(LikedId, SidebarSectionKind.StaticLinks,
                 Title: null, TitleLocKey: null,
                 Hidden: false, Collapsed: false,

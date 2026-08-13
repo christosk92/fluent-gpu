@@ -69,6 +69,8 @@ public sealed class ToolTip : Component
 
     public Element Target = new BoxEl();
     public string Text = "";
+    /// <inheritdoc cref="Wrap(Element, string, float)"/>
+    public float Grow;
     public bool OpenOnMount;   // deterministic visual-shot hook: open the real tooltip after first mount
     /// <summary>Lightweight per-part styling (CSS ::part): modifiers keyed by the <c>PartXxx</c> consts; see
     /// <see cref="TemplateParts"/> for the contract.</summary>
@@ -117,7 +119,7 @@ public sealed class ToolTip : Component
     /// dropped (the toggle-tooltip staleness bug). <see cref="Wrap"/> routes them through re-pushed props instead; when
     /// present they WIN over the fields and the ToolTip re-renders reactively (props are signal-backed). Read with
     /// <c>UsePropsOrDefault</c>.</summary>
-    public sealed record ToolTipSlots(Element Target, string Text)
+    public sealed record ToolTipSlots(Element Target, string Text, float Grow = 0f)
     {
         // The compiler-generated record equality walks the whole wrapped Element tree, field by field, EVERY time the
         // parent re-pushes props — and the delivery seam compares props on every parent render. For a shell that wraps
@@ -127,10 +129,10 @@ public sealed class ToolTip : Component
         // safe direction — a rebuilt target is unequal, so it still re-renders; only a genuinely identical instance
         // (the parent handed back the same element) short-circuits.
         public bool Equals(ToolTipSlots? other)
-            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text;
+            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow;
 
         public override int GetHashCode()
-            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text);
+            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow);
     }
 
     /// <summary>DEFERRED target slots: the wrapped element as a FACTORY instead of a built tree, so a parent that
@@ -145,19 +147,28 @@ public sealed class ToolTip : Component
     /// <para>The factory is invoked INSIDE the ToolTip's own render, which is what makes this safe rather than stale:
     /// any signal it reads subscribes the ToolTip, so live data still reaches the target with no re-push at all
     /// (component-props-contract.md — a frozen VALUE would be the bug; a delegate re-read each render is the fix).</para></summary>
-    public sealed record ToolTipStableSlots(Func<Element> Target, string Text)
+    public sealed record ToolTipStableSlots(Func<Element> Target, string Text, float Grow = 0f)
     {
         // Identity on the FACTORY, exactly like ToolTipSlots' reference compare on the built element — a delegate has no
         // meaningful value equality, and two lambdas with the same body are still different instances.
         public bool Equals(ToolTipStableSlots? other)
-            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text;
+            => other is not null && ReferenceEquals(Target, other.Target) && Text == other.Text && Grow == other.Grow;
 
         public override int GetHashCode()
-            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text);
+            => HashCode.Combine(RuntimeHelpers.GetHashCode(Target), Text, Grow);
     }
 
-    public static Element Wrap(Element target, string text)
-        => Embed.Comp(new ToolTipSlots(target, text), () => new ToolTip());
+    /// <summary>Wrap <paramref name="target"/> with the hover/focus/press tooltip mechanics.
+    ///
+    /// <para><paramref name="grow"/> is the FILL opt-in (the kit's usual <c>grow:</c> spelling — cf.
+    /// <c>ItemsView.List</c>, <c>Responsive.Of</c>, <c>AutoSuggestBox.Create</c>): 0, the default, is exactly today's
+    /// behaviour at every existing call site. Above 0 it makes the wrap layout-transparent on the MAIN axis as well as
+    /// the cross one — see the wrapper's own comment in <c>Render</c> for the bug it exists to cure (a wrapped ROW in a
+    /// column shrink-wrapped to its own title, so the sidebar's track / missing / unavailable rows painted narrower
+    /// fill plates than their unwrapped neighbours). Use it only where the target genuinely owns its parent's width; a
+    /// target that declares its own <c>Width</c> is left alone regardless.</para></summary>
+    public static Element Wrap(Element target, string text, float grow = 0f)
+        => Embed.Comp(new ToolTipSlots(target, text, grow), () => new ToolTip());
 
     /// <summary>Wrap a target that is built LAZILY, inside the ToolTip's render — the churn-free form of
     /// <see cref="Wrap"/> (see <see cref="ToolTipStableSlots"/>).
@@ -166,8 +177,8 @@ public sealed class ToolTip : Component
     /// in a <c>UseMemo</c>/<c>UseRef</c>. A lambda allocated per render is a fresh instance every time, which makes the
     /// props compare unequal and reintroduces exactly the churn this overload exists to remove (it stays CORRECT — just
     /// pointless). The factory runs on every ToolTip render, so it must be cheap and side-effect-free.</para></summary>
-    public static Element WrapStable(Func<Element> target, string text)
-        => Embed.Comp(new ToolTipStableSlots(target, text), () => new ToolTip());
+    public static Element WrapStable(Func<Element> target, string text, float grow = 0f)
+        => Embed.Comp(new ToolTipStableSlots(target, text, grow), () => new ToolTip());
 
     public override Element Render()
     {
@@ -177,6 +188,8 @@ public sealed class ToolTip : Component
         var slots = stable is null ? UsePropsOrDefault<ToolTipSlots>() : null;
         Element target = stable is not null ? stable.Target() : (slots?.Target ?? Target);
         string text = stable?.Text ?? slots?.Text ?? Text;
+        float grow = stable?.Grow ?? slots?.Grow ?? Grow;
+        if (grow > 0f) target = Fill(target, grow);
         var svc = UseContext(Overlay.Service);
         var hooks = UseContext(InputHooks.Current);
         var anchor = UseRef<NodeHandle>(default);
@@ -406,6 +419,17 @@ public sealed class ToolTip : Component
             // every wrapped toolbar button to the top of a centred row and every compact-rail tile to the left edge.
             // Auto preserves the alignment the target would have inherited before ToolTip.Wrap introduced this node.
             AlignSelf = FlexAlign.Auto,
+            // …and the MAIN axis is the OPT-IN half (`grow:`, default 0 = untouched). This wrapper is a flex ROW
+            // (BoxEl.Direction defaults to 0), so the target is main-axis sized inside it — its own content width, not
+            // the wrapper's. A wrapper stretched by a COLUMN parent therefore holds a shrink-wrapped target: the same
+            // class Reorderable.Item's call sites are fixed for, and why the sidebar's track / missing / unavailable
+            // rows painted narrower fill plates than their unwrapped neighbours. It stays OPT-IN because the fix cannot
+            // be global — every wrapped chip and icon button in a column would go full-bleed — and it grows the TARGET
+            // (see Fill) rather than making this a ZStack, because a ZStack would also stretch the second child, the
+            // live ToolTipClock, into a full-bleed hittable layer over the target (Reconciler.MirrorParticipation's
+            // note on bare anchors is the same hazard). Growing the wrapper too is what makes `grow:` mean the same
+            // thing here as everywhere else in the kit: fill the PARENT, whichever axis the parent runs on.
+            Grow = grow,
             OnRealized = x => anchor.Value = x,
             OnHoverMove = OnEnter,         // mouse-enter trigger (makes the target hit-testable for hover)
             OnPointerExit = OnLeave,       // mouse-leave → cancel pending / close open
@@ -414,6 +438,17 @@ public sealed class ToolTip : Component
             Children = clock is null ? [target] : [target, clock],
         };
     }
+
+    /// <summary>The <c>grow:</c> opt-in, applied to the TARGET so it fills this wrapper's main axis (the wrapper itself
+    /// grows into the parent — see the wrapper's comment). It sets ONLY <c>Grow</c>: nothing else about the target is
+    /// this parameter's business, and a target that declares its own <c>Width</c> — statically or through a bind — has
+    /// already stated its size, so it is returned untouched rather than silently overridden. A non-<c>BoxEl</c> target
+    /// (a bare <c>TextEl</c>/<c>ImageEl</c>) has no flex channel to set and is likewise left alone; wrap such a target
+    /// in a Box if it must fill.</summary>
+    static Element Fill(Element target, float grow)
+        => target is BoxEl b && !b.Width.IsBound && float.IsNaN(b.Width.Value)
+            ? b with { Grow = grow }
+            : target;
 
     // WinUI ToolTip bubble (ToolTip_themeresources.xaml DefaultToolTipStyle:42-76):
     //   Background = ToolTipBackgroundBrush = AcrylicInAppFillColorDefaultBrush (:14 dark / :40 light) —

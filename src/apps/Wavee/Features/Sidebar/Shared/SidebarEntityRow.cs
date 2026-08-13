@@ -426,9 +426,15 @@ static class SidebarEntityRow
     /// <summary>Name the activation of a TRACK row ("Play track"). The engine exposes no automation-name channel, so the
     /// only place a non-visual name can live is a tooltip — call this on every <see cref="SidebarRowSpec.Track"/> row
     /// (<c>Create</c> cannot: it returns a <see cref="BoxEl"/>, and <c>ToolTip.Wrap</c> returns a component wrapper).
-    /// One helper, one loc key, so the queue / now-playing / artist-top-tracks feeds all announce it identically.</summary>
+    /// One helper, one loc key, so the queue / now-playing / artist-top-tracks feeds all announce it identically.
+    ///
+    /// <para><c>grow: 1f</c> because the wrap is not free: <c>ToolTip.Wrap</c>'s service wrapper is a flex ROW, so an
+    /// unwrapped sibling row filled the pane's column while a WRAPPED one shrank to its own title — the track row's
+    /// hover/selected fill plate came out visibly narrower than the rows above and below it. The opt-in makes the wrap
+    /// layout-transparent on that axis; it is the ToolTip twin of the <c>Grow = 1f</c> the reorder-band and outline
+    /// call sites already carry for <c>Reorderable.Item</c>'s wrapper.</para></summary>
     public static Element WithPlayTrackHint(Element row)
-        => ToolTip.Wrap(row, Loc.Get(Strings.Sidebar.Item.PlayTrack));
+        => ToolTip.Wrap(row, Loc.Get(Strings.Sidebar.Item.PlayTrack), grow: 1f);
 
     static bool ShowsOverflow(in SidebarRowSpec spec)
         => spec.Overflow && spec.Enabled && spec.MenuOverlay is not null && spec.Menu is not null;

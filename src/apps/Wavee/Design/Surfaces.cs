@@ -102,18 +102,22 @@ public static class Surfaces
     // unaffected.
 
     /// <summary>Semantic copy protection over full-bleed artist photography. Both axes use exactly four stops (the
-    /// recorder limit) and release to alpha zero at the hero seam. Peak alphas match the immersive detail hero
-    /// (the deleted immersive detail hero's) rather than a near-opaque plate: the photography must stay READ as photography —
-    /// a 0.96 peak flattened the hero into what read as a solid painted band, the opposite of the album pages.</summary>
+    /// recorder limit) and release to alpha zero at the hero seam.
+    ///
+    /// <para>The HORIZONTAL arm is the original near-opaque left plate (theme-invariant 0.96 / 0.92 / 0.35): the copy
+    /// column sits on a real surface and the photography lives in the right half. A softened 0.42 pass (9 Aug) made
+    /// the plate a whisper in light themes, so the always-on bottom photo EdgeFade read as "the" fade — restored by
+    /// explicit user ruling ("like before, it was really beautiful"). The VERTICAL arm keeps the softened
+    /// immersive-hero peaks: it underlays copy stacked at a photo's bottom seam (Home's stacked photography heroes),
+    /// where a 0.96 band flattened the image into a painted plate.</para></summary>
     public static GradientSpec ArtistHeroVeil(ColorF accent, ArtistHeroVeilAxis axis)
     {
         ColorF layer = Tok.FillLayerDefault;
         float pull = Tok.Theme == ThemeKind.Light ? 0.16f : 0.24f;
         ColorF veil = ColorF.Lerp(layer, accent, pull);
-        float top = Tok.Theme == ThemeKind.Light ? 0.42f : 0.78f;
-        float mid = Tok.Theme == ThemeKind.Light ? 0.28f : 0.55f;
         if (axis == ArtistHeroVeilAxis.Vertical)
         {
+            float top = Tok.Theme == ThemeKind.Light ? 0.42f : 0.78f;
             return GradientDown(
                 new GradientStop(0f, veil with { A = 0f }),
                 new GradientStop(0.45f, veil with { A = 0.35f }),
@@ -121,9 +125,9 @@ public static class Surfaces
                 new GradientStop(1f, veil with { A = 0f }));
         }
         return GradientRight(
-            new GradientStop(0f, veil with { A = top }),
-            new GradientStop(0.30f, veil with { A = mid }),
-            new GradientStop(0.62f, veil with { A = 0.22f }),
+            new GradientStop(0f, veil with { A = 0.96f }),
+            new GradientStop(0.30f, veil with { A = 0.92f }),
+            new GradientStop(0.62f, veil with { A = 0.35f }),
             new GradientStop(1f, veil with { A = 0f }));
     }
 

@@ -30,6 +30,19 @@ public static class ArtistHeroLayout
     public const float CompactHeight = 540f;
     public const float NarrowHeight = 516f;
 
+    // Stacked (Compact/Narrow) photo band: the photograph is a FIELD at the top of the hero and the identity column
+    // sits BELOW it on the page surface — copy never floats over the picture on these tiers, so there is no overlay
+    // veil to size. The remainder of the fixed hero height (240/276) is the identity band; the totals stay
+    // CompactHeight/NarrowHeight so the collapse math (CollapseDistance/PresentedH) is untouched.
+    public const float CompactPhotoHeight = 300f;
+    public const float NarrowPhotoHeight = 240f;
+
+    /// <summary>The photograph's own extent inside the hero: the full hero on horizontal tiers, the top slice on
+    /// stacked tiers. Both the banner's media box and <c>HeroArt</c> derive from THIS, so they cannot disagree.</summary>
+    public static float PhotoHeightFor(in ArtistHeroMetrics m) => !m.Stacked ? m.MinHeight
+        : m.Tier == ArtistHeroTier.Compact ? CompactPhotoHeight
+        : NarrowPhotoHeight;
+
     public const float WideCopyMaxWidth = 1120f;
     public const float MediumCopyMaxWidth = 760f;
     public const float CompactCopyMaxWidth = 640f;

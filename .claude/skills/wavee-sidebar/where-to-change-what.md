@@ -145,23 +145,31 @@ tests' mirror of that table is `src/apps/Wavee.Tests/TestAppSettingsShim.cs`, wh
 
 ## The customizer
 
+There are **two** surfaces, not four regions: the docked pane in edit mode (the canvas) and a one-column companion
+page. The tier ladder, the outline and the docked inspector are **deleted** — do not look for them, and do not
+re-introduce a width below which the preview disappears (the whole point was to make the canvas unconditional).
+
 | Want to change | Edit |
 |---|---|
-| tier thresholds / region layout / command pressure | `Curated/SidebarCustomizerLayout.cs` (`CanvasEnterW 1320`, `FullEnterW 1000`, `CompactEnterW 820`, `HysteresisDip 24`, `SidebarCustomizerCommandLayout`) — pure, so `SidebarCustomizerLayoutTests` covers it |
-| the page shell, command bar, undo/redo, dispatch | `Curated/SidebarCustomizerPage.cs` (also owns `RejectEpoch` and `CzLoc`) |
-| the palette / template list | `Curated/SidebarCustomizerPalette.cs` + the `SidebarPalette.All` table |
-| the section outline (cards, reorder, rename) | `Curated/SidebarOutlineView.cs` (drag → `SidebarOutlineDrag.ToMove`) |
-| the Properties/Preview tabs container | `Curated/SidebarInspector.cs` (also `SidebarLivePreview`) |
+| whether the pane is in edit mode at all | `Pane/SidebarPaneConfig.cs` — the single `Func<SidebarEditState?>? Edit` member; supplied only by `Modes/CuratedSidebar.cs` |
+| the session state behind that delegate (expanded section, "show contents", the open popover's subject, dispatch + reject messaging) | `Features/Sidebar/SidebarEditSession.cs` (`SidebarEditSession` / `ISidebarEditHost`) |
+| the pure edit RULES (which sections reveal a body, when section drag is armed, the plan fold, card counts, band-slot → `MoveSection` / palette-drop → `AddSection`) | `Data/SidebarEditPlan.cs` — pure, so `SidebarEditPlanTests` covers it. **Hand `ToMoveSection`/`ToAddSection` the PERSISTED document**, never the render-path one (the Shortcuts head makes every index one too high) |
+| what the edit projection PLANS | `Data/SidebarRowPlanner.cs` → `BuildEdit` (+ the `SidebarRowKind.SectionCard` row) |
+| the section card itself + the options popover host | `Pane/SidebarPaneEditCard.cs` (the popover mounts `SidebarPropertyPanel`, 320 wide) |
+| the card band's drag wiring | `Pane/SidebarPane.cs` (`SectionReorder`, `TryEditSectionBand`) + `Pane/SidebarPaneSlot.cs` (the card wrap site) |
+| the companion page shell, presets, undo/redo, hidden list, dispatch | `Curated/SidebarCustomizerPage.cs` (also owns `RejectEpoch` and `CzLoc`) |
+| the palette / template list / Destinations rendering | `Curated/SidebarCustomizerPalette.cs` + the `SidebarPalette` tables in `Curated/SidebarCustomizerLayout.cs` |
+| the Destinations SET (which pages are offered) | `Data/SidebarPinId.PinnableRoutes` (the source of truth) + `SidebarPalette.ExtraDestinationRoutes`; labels come from `ShellNav.Dest`, never from a loc key on the entry |
 | property rows + generated extension config rows | `Curated/SidebarPropertyPanel.cs` |
 | the shared row/control vocabulary | `Curated/SidebarCustomizerControls.cs` (`CzRow.{Group, Prop, Wide, Ranged, Choice, Danger, Subject, Epoch}`, `CzToggleRow`, `CzSelectorRow`, `CzSliderRow`, `CzNumberRow`, `CzMenuButton`) |
 | the item / action pickers | `Curated/SidebarItemPickers.cs` |
-| the route itself | `SidebarLayoutMenu.CustomizeRoute`; registered at `Features/Shell/ContentHost.cs:126-128` and labelled at `Features/Shell/ShellNav.cs:47` |
+| the route itself | `SidebarLayoutMenu.CustomizeRoute`; registered in `Features/Shell/ContentHost.cs` and labelled in `Features/Shell/ShellNav.cs` |
 
-The live preview mounts the **real** `CuratedSidebar` — so `CuratedSidebar`'s ctor signature is frozen:
-
-```csharp
-Embed.Comp(() => new CuratedSidebar(_route, NoNav, _compact, _width, drawer)) with { Key = "preview-pane:" + mode }
-```
+Editing the **Shortcuts** section's items is not a special case at the call site — it is
+`SidebarItemCommands.Add/Move/Remove` (Wavee.Core), which routes the sentinel id `SidebarIds.TopBarSection` to
+`AddTopBarItem`/`MoveTopBarItem`/`RemoveTopBarItem`. Never hand-write that branch again; there is no
+`Shared/SidebarNavBand.cs` and no `SidebarPaneConfig.NavBand`/`RailHead` to wire either. (`Shared/SidebarNavBandModel.cs`
+survives as the band's pure SHAPING model + its tests, and has **no** production caller.)
 
 ---
 
@@ -179,9 +187,8 @@ Embed.Comp(() => new CuratedSidebar(_route, NoNav, _compact, _width, drawer)) wi
 | | 1085 | the narrow-drawer `SidebarHost` mount (`inDrawer: true`) |
 | `src/apps/Wavee/App/PlaybackBridge.cs` | `PushState` | the play-log hook, right after the `Identity.Value = new PlaybackIdentity(...)` write |
 
-`SidebarLayoutMenu` public surface: `CustomizeRoute`, `HeaderButton` (currently unreferenced — see
-[pitfalls.md](pitfalls.md)), `Button`, `Rows(prefs, go)` (the menu **model** — call at open time only),
-`Model(prefs, go)` (the pane-background context menu).
+`SidebarLayoutMenu` public surface: `CustomizeRoute`, `Button`, `Rows(prefs, go)` (the menu **model** — call at open
+time only), `Model(prefs, go)` (the pane-background context menu). `HeaderButton` is **deleted** (defect 15).
 
 Selection UX: `SidebarDesignPicker.{Row, Apply, Open}` · `SidebarDesignGating.{ShouldShowChooser, MarkChooserSeen,
 ActiveDesign, OffersCustomize, CanCustomize, IndexOf, FromIndex, TitleKey, SubtitleKey}` (all pure) ·

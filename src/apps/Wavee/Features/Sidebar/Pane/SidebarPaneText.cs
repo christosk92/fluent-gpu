@@ -183,6 +183,33 @@ static class SidebarPaneLoc
     public const string FilterPodcasts = "sidebar.v3.filter.podcasts";
     public const string FilterAlbums = "sidebar.v3.filter.albums";
     public const string FilterArtists = "sidebar.v3.filter.artists";
+
+    // ── PHASE 2 / Decision B — the customize canvas ───────────────────────────────────────────────────────────────────
+    /// <summary>The section-options popover's title — the SAME string the docked inspector's header uses, because it is
+    /// the same surface re-hosted, not a second one (P3).</summary>
+    public const string EditOptions = "sidebar.customizer.properties";
+    public const string EditHide = "sidebar.customizer.undo.hideSection";
+    public const string EditShow = "sidebar.customizer.undo.showSection";
+    public const string EditHidden = "sidebar.customizer.hidden";
+    public const string EditMoveUp = "sidebar.customizer.moveUp";
+    public const string EditMoveDown = "sidebar.customizer.moveDown";
+    public const string EditRemove = "sidebar.customizer.undo.removeSection";
+    public const string EditDuplicate = "sidebar.customizer.undo.duplicateSection";
+    public const string EditDuplicateSuffix = "sidebar.customizer.duplicateSuffix";
+
+    // PHASE 3 — the palette→canvas drop cues. Both are CONSTANT for the whole gesture (the card the pointer is over IS
+    // the insertion point, so there is no slot number to interpolate), which is what keeps the caption resolvers inside
+    // the 0-alloc frame region the dnd rules police.
+    public const string EditDropHere = "sidebar.customizer.dropHere";
+    public const string EditDropFull = "sidebar.customizer.dropFull";
+
+    /// <summary>REUSED, not re-spelled: "{index} of {count}" already exists as the pinned reorder's position caption,
+    /// and a second key for one sentence is how translations drift apart.</summary>
+    public const string ReorderPosition = "sidebar.pin.position";
+    public const string ReorderGrabbed = "sidebar.customizer.reorderGrabbed";
+    public const string ReorderMoved = "sidebar.customizer.reorderMoved";
+    public const string ReorderDropped = "sidebar.customizer.reorderDropped";
+    public const string ReorderCancelled = "sidebar.customizer.reorderCancelled";
 }
 
 /// <summary>Renders an action descriptor's <see cref="IconRef"/> as a leading element. Mirrors the engine's own single

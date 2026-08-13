@@ -40,6 +40,13 @@ property *binding* is a finer one. **No full-app re-render, no global dirty flag
 9. Zero managed allocation in paint phases 6–13: wire bindings/effects once at mount; never `new`/box/LINQ in a bind
    thunk or hot effect body.
 10. High-frequency scalar (slider/scroll)? Bind it (`Slider.Create(FloatSignal)` — the one slider API), don't `setState` per move.
+11. **A single-child wrapper `BoxEl` shrink-wraps its child on the MAIN axis.** `BoxEl.Direction` defaults to **0 = row**
+    (a bare scene node's `LayoutInput.Default` is a *column* — the two disagree), and a child with no `Grow` takes its own
+    content width, so a wrapper stretched by a column parent still holds a shrunken child. Bitten 5× (outline cards, the
+    sidebar's reorder rows, its tooltip-wrapped rows, "the spotlight doesn't stretch full-width"). Writing a wrapper: set
+    `Direction = 1` on it (`Controls/Responsive.cs:47`) or give the child `Grow = 1f, Shrink = 1f, MinWidth = 0f`
+    (`Sidebar/Curated/SidebarOutlineView.cs:313-322`). Consuming a SHARED one — `Reorderable.Item`, `ToolTip.Wrap` — fix it
+    at YOUR call site (`ToolTip.Wrap` carries an opt-in `grow:`); never flip a shared wrapper's axis for one caller.
 
 ## Author UI (cheat sheet)
 

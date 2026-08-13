@@ -120,70 +120,64 @@ Per-kind defaults:
 
 ### Customizer
 
-Use four measured DIP tiers with a 24-DIP narrowing hysteresis and immediate widening:
+**This section previously specified a four-tier region ladder (Canvas / Full / Compact / Narrow), an outline column
+beside a docked inspector and a preview column, and a command-fit resolver. None of that ships, and the numbers it
+printed never matched the build either — the tier thresholds shipped as 1320/1000/820, not 1480/1180, and the outline's
+rows shipped at 52/44 DIP, not 44/36. The ladder is now gone entirely rather than re-numbered.** What replaced it:
 
-| Tier | Width | Regions |
-|---|---:|---|
-| Canvas | >=1480 | Palette, Outline, Inspector, persistent Preview |
-| Full | 1180-1479 | Palette, Outline, Inspector; Preview is an inspector tab |
-| Compact | 820-1179 | Outline, Inspector; Palette/Templates move to overflow |
-| Narrow | <820 | Outline; Inspector is a bottom sheet; Palette/Preview use flyouts |
+**The docked sidebar IS the canvas and the preview.** "Customize" is a MODE over the live pane, not a page that redraws
+it. The pane gains edit affordances through ONE new `SidebarPaneConfig` member — `Func<SidebarEditState?>? Edit`, a
+delegate like every other config member — and plans through a second planner entry point,
+`SidebarRowPlanner.BuildEdit`, which emits one uniform `SectionCard` row per top-level section and plans the ONE
+expanded section's real body underneath it with the same per-kind planners the live pane uses. There is no second
+renderer, no nested scroller and no abstraction of the sidebar to drift from it. The pure rules live in
+`Features/Sidebar/Data/SidebarEditPlan.cs` (source-included by the tests): `ShowsBody`, `SectionsReorderable`, `Fold`,
+`CardCount`, `IsPinnedCard`, `ToMoveSection`, `ToAddSection`.
 
-The header has one elastic title lane and FluentGpu's native `CommandBar`:
+Canvas rules:
 
-- Canvas/Full primary: Add, Undo, Redo, Done.
-- Compact primary: icon-only Undo, Redo, labeled Done.
-- Narrow primary: Done.
-- Templates, Reset, Preview, and anything that cannot fit are secondary overflow commands.
-- Reset is never primary.
-- Subtitle is visible only in Canvas and Full.
-- Promotion uses measured localized widths plus 16-DIP hysteresis; narrowing demotes immediately.
-- Done remains fully inside the header at every supported width, locale, and scale.
+- Every section is a uniform-height header card — grip · kind glyph · title · count · eye · "…" — and ONE section
+  expands at a time to reveal its real rows. Two reasons: a 60-row expanded sidebar makes section dragging a
+  scroll-fight, and uniform card pitch means `Reorderable` needs no variable-extent insertion geometry. A "Show section
+  contents" switch on the companion page turns the collapse off for item-level work, and deliberately DISARMS section
+  drag (the card run is then no longer contiguous).
+- Section reorder is a `Reorderable(SidebarEditPlan.SectionDragKind)` over those cards, committing `MoveSection`. Item
+  reorder inside an expanded section commits through `SidebarItemCommands`, so a move inside the materialised Shortcuts
+  section emits `MoveTopBarItem` rather than `MoveItem`.
+- Hidden sections keep their card, dimmed with an eye-off badge, and never reveal a body — their rows are not in the
+  live sidebar, and drawing them would be the editor lying about the artifact it edits.
+- Per-section options are a POPOVER anchored to that card's "…", reusing the generated control set from
+  `SidebarPropertyPanel` (`CzRow.*`, `CzToggleRow`, `CzSelectorRow`, `CzNumberRow`, `CzQueryBlock`, `CzConfigRow`) —
+  only its host changed, from a docked column to a popover.
+- Structural drag is armed only in edit mode. Outside it, pin/unpin and pin reordering stay live as they always were.
+- Pointer, touch, keyboard lift/drop and the explicit Move up / Move down menu items dispatch the same reducer command,
+  so drag is one of several ways and never the only one.
+- Grab / move / drop / cancel are announced through the engine's live-region seam (`Reorderable.AnnounceText` over
+  `FluentGpu.Input.Announcer`), keys `sidebar.customizer.reorder{Grabbed,Moved,Dropped,Cancelled}`.
 
-Add a pure resolver:
+Companion page rules (`sidebar-customize`, one scrolling column at EVERY width — no tier, no region, nothing to demote):
 
-```csharp
-public static class SidebarCustomizerCommandLayout
-{
-    public static SidebarCustomizerCommandFit Resolve(
-        float availableWidth,
-        in SidebarCustomizerCommandWidths measured,
-        SidebarCustomizerTier tier,
-        SidebarCustomizerCommandFit? previous = null);
-}
-```
-
-Outline rules:
-
-- Top-level rows are 44 DIP; nested rows are 36 DIP.
-- Selection uses the live sidebar's accent indicator and interaction ramp.
-- Grippers/overflow controls are tertiary at rest and become primary on hover, focus, or lift.
-- Divider renders as a labeled hairline preview.
-- Hidden sections remain visible but dimmed with a compact tag.
-- A quiet Add section target follows the final authored row.
-- Pointer, touch, keyboard lift/drop, and menu movement dispatch the same reducer.
-
-Inspector rules:
-
-- One bounded surface replaces per-property bordered cards.
-- Properties group into General, Content, Appearance, and Behavior expanders.
-- General starts open; remaining expansion is session state.
-- Section identity/title forms a sticky inspector header.
-- Rename uses a normal enabled TextBox and clear focus treatment.
-- Duplicate/Remove move to the section overflow; Remove also appears as a quiet bottom danger action.
-- Inspector owns an independent `ScrollView`, `MinHeight=0`, and bottom padding above the player.
-- Preview mounts the real Curated renderer in Expanded, Rail, and Drawer modes, bounded and hit-test-disabled.
+- Header: Back · title · Undo · Redo · Reset · Done. `Done` returns through `HistoryStore.BackCtx`, not a hard
+  `Go("home")`.
+- Presets: the three designs as a segmented control (making the force-switch to Custom visible and reversible), then
+  the five `SidebarTemplates` as cards.
+- The palette is PERSISTENT — no popover, no accordion — grouped as `SidebarPalette.Groups`, with **Destinations
+  first**: real app pages generated from `SidebarPinId.PinnableRoutes` ∪ `{settings, api-console, concerts}` and
+  labelled through `ShellNav.Dest`, so typing "home" answers with **Home** instead of an empty "Links" section. Each is
+  one `AddSection(StaticLinks, Item: route)` — one undo step, a working row. Chips are `Drag.Source`s onto the canvas;
+  clicking still adds, so drag is never the only way.
+- Hidden sections are listed as a recovery surface, so nothing is ever unreachable.
+- Advanced: reset to default plus a link to `sidebar-layout.json` as the documented power-user escape hatch.
 
 ### Motion and reactivity
 
 - Design switch: keyed, opacity-only `MotionTok.ControlFast`.
 - Section expansion: `MotionTok.ContentResize`.
 - Reorder: `MotionTok.ItemPlacement`.
-- Inspector selection and drop activation: `MotionTok.ControlFaster`.
+- Section-card selection and drop activation: `MotionTok.ControlFaster`.
 - Drawer/flyouts use the existing overlay transition.
 - Reduced motion is handled by the motion-token policy, not component branches.
 - Drag, hover, width, scroll, and opacity use bindings/compositor transforms.
-- Tier-dependent children include the tier in their `Key`.
 - Lists stay virtualized; pending states use `Skel.Region` over the real row factory.
 - No signal writes occur during render and no constructor value is treated as live state.
 
@@ -274,7 +268,8 @@ per-row events. Projection logs a warning only above 8 ms.
    review.
 2. Correctness lane implements command fit, pane invariants, empty behavior, persistence health, logging, and pure tests.
 3. Curated lane refines shared/live primitives, row hierarchy, empty states, dividers, badges, rail, and motion.
-4. Customizer lane implements adaptive regions, native CommandBar integration, outline, inspector, preview, and focus.
+4. Customizer lane implements the live-pane edit canvas (section cards, section reorder, the options popover) and the
+   one-column companion page (presets, the persistent palette incl. Destinations, hidden sections), and focus.
 5. Coordinator integrates, runs the centralized verification, captures every visual state, and iterates before docs or
    extension-host work resumes.
 
@@ -284,7 +279,12 @@ Delegated lanes do not run builds or claim visual completion. The coordinator in
 
 Pure coverage:
 
-- `SidebarCustomizerCommandLayoutTests`: tier mapping, localized widths, Done in bounds, immediate demotion, hysteresis.
+- `SidebarCustomizerLayoutTests`: the palette table + filter, the Destinations set/order/drag rules, the display
+  projection, the opaque extension-config rewriter.
+- `SidebarEditPlanTests`: which sections reveal a body, when section drag is armed, the plan `DepKey` fold, card counts,
+  and the two band-slot → command translations (`ToMoveSection` / `ToAddSection`) against the PERSISTED indexes.
+- `SidebarShortcutsSectionTests`: the materialised Shortcuts section in all three documents, and the sentinel-id
+  routing that makes a move inside it emit `MoveTopBarItem`.
 - `SidebarPaneInvariantTests`: expanded/rail/drawer/mode switch/resize; a settled 24-DIP pane is invalid.
 - `SidebarEmptyBehaviorTests`: defaults, persistence, reducer, planner.
 - `SidebarPersistenceHealthTests`: I/O failure, recovery, post-to-UI, budgets, corruption, redaction.
@@ -296,7 +296,8 @@ Visual matrix:
 - 1395x1107 and 577x987 at 100%, 125%, 150%, and 200%.
 - Curated widths 240, 280, 320, 360, and 460.
 - Expanded, rail, drawer, and settled design-switch states.
-- Canvas, Full, Compact, and Narrow customizer tiers.
+- The customize mode at a narrow and a wide window: the docked pane is the canvas at BOTH (there is no width below
+  which the preview disappears, which was the whole point of removing the tier ladder).
 - English, Dutch, Korean, and long synthetic strings.
 - Light, dark, high contrast, and reduced motion.
 - Empty, pending, ready, stale, failed, corrupt-layout, and save-failed states.
@@ -304,13 +305,13 @@ Visual matrix:
 
 Required outcomes:
 
-- No command, row, pane, or inspector control clips.
+- No command, row, pane, or options-popover control clips.
 - Done is always fully visible.
 - Settled pane width is exactly 56 or within 240-460.
-- Inspector reaches its final control; nothing paints under the player.
+- The companion page reaches its final control; nothing paints under the player.
 - Automatic dividers are gone.
 - Empty Pinned stays one compact row until activation.
-- Divider has a semantic outline preview.
+- A Divider section's card names it rather than drawing a hairline with no label.
 - Selection retains an accent indicator at rest/hover/press.
 - No raw localization key or exception message reaches UI.
 - A 10,000-entry library realizes no more than 60 rows.

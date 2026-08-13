@@ -178,6 +178,19 @@ public static class WaveeType
     /// <summary>Now-playing track title. → Ui.Subtitle (20 / 28 / 600).</summary>
     public static TextEl NowPlayingTitle(string s) => Ui.Subtitle(s);
 
+    /// <summary>The artist SPEAKING — the pick card's quote, set as editorial typography rather than a UI label.
+    /// → Ui.Title's ramp pair (28 / 36) in the display face at REGULAR 400: stays on the engine ramp and inside the
+    /// 400/600 weight policy, taking only the same two liberties <see cref="SurfaceDisplay"/> already takes (the
+    /// display face + a hair of negative tracking). Regular at 28px is what makes a first-person sentence read as a
+    /// voice instead of a heading; the string keeps the artist's OWN casing (see <see cref="Eyebrow"/> — no
+    /// case-transform on authored text).</summary>
+    public static TextEl PickQuote(string s) => Ui.Title(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        Weight = 400,
+        CharSpacing = -12f,
+    };
+
     /// <summary>A ZUNE-style pivot tab header (All / Music / Podcasts / Artists) — the Display face at SemiLight, one
     /// rung under <see cref="RailHeader(string)"/>. 19 / 25 / <b>350</b> — the second sanctioned weight divergence (see
     /// the class header): the same SemiLight the engine's own <c>Pivot</c> control uses for its header row, carried

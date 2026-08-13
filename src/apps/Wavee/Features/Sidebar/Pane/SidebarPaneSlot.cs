@@ -38,6 +38,7 @@ sealed class SidebarPaneSlot : Component
     // a child component's ctor args FREEZE at mount and the slot recycles onto a different section every scroll.
     Func<bool>? _headerOpen;
     Func<bool>? _folderOpen;
+    Func<bool>? _cardOpen;
     Func<SidebarPillState>? _pillProbe;
     SidebarPillState _pillState;
 
@@ -78,13 +79,56 @@ sealed class SidebarPaneSlot : Component
             SidebarRowKind.CreateAction => CreateRow(section),
             SidebarRowKind.EntityCard => Card(section, row, sel, index),
             SidebarRowKind.PromptRow => Prompt(section),
+            // PHASE 2 / Decision B — the customize canvas. Only `SidebarRowPlanner.BuildEdit` emits this kind, so the
+            // arm is unreachable in every ordinary pane, and the row lands in its OWN recycle pool (`ContentType` is the
+            // row kind) rather than rebinding a header slot into a card's shape.
+            SidebarRowKind.SectionCard => SidebarPaneEditCard.Build(_o, section, index,
+                SidebarChevron.Section(_cardOpen ??= CardOpenLive)),
             _ => Blank,
         };
 
+        // PHASE 2 — the SECTION-CARD band. A separate branch, deliberately ahead of and disjoint from the item-band wrap
+        // below: `ReorderBand` never claims a `SectionCard` (its kind guard lists only the four item kinds), the two
+        // bands carry different DRAG KINDS, and one wrap site answering both questions is how a card ends up moving an
+        // item's slot. The `Grow/Shrink/MinWidth` treatment is the same and for the same reason — see the note below.
+        if (row.Kind == SidebarRowKind.SectionCard && _o.TryEditSectionBand(index, out var cardBand))
+            content = _o.SectionReorder.Item(index - cardBand.Start,
+                content is BoxEl card ? card with { Grow = 1f, Shrink = 1f, MinWidth = 0f } : content,
+                key: row.SectionId, transition: SidebarPane.Placement);
+
         // In-place reorder (§C5.1). The Reorderable owns the row's drag source, its keyboard lift and its position
         // track — which is exactly why the row itself carries no Drag payload and no Animate when wrapped.
+        //
+        // FILL THE SLOT. `Reorderable.Item` wraps its content in a BoxEl that leaves `Direction` at its default 0 =
+        // ROW, so the row sits on that wrapper's MAIN axis and — with no Grow — arranges at its own MEASURED CONTENT
+        // WIDTH under the pane's width cap. Every unwrapped row fills (the bound slot's component anchor is a COLUMN
+        // whose cross axis stretches by default), so a REORDERABLE band's rows drew visibly narrower plates than their
+        // neighbours: hovering a short "Hans Zimmer" painted a stub of a fill while a long, ellipsised title next to it
+        // painted full width — which reads as "hover and selected are different widths" even though Fill/HoverFill/
+        // PressedFill all sit on the SAME BoxEl (SidebarEntityRow.cs:301-341) and cannot differ by state. It affects
+        // Pinned / StaticLinks / CustomGroup in ALL THREE designs plus V3's PlaylistTree under Custom sort
+        // (SidebarPane.IsReorderableSection + LibraryV3Sidebar.IsSectionReorderable).
+        //
+        // HISTORICAL PRECEDENT, not a live path: this is the SAME defect the customizer's section OUTLINE had already
+        // fixed app-side once (the deleted `Curated/SidebarOutlineView.cs`, "FILL THE COLUMN (round-3 defect 1)"), and
+        // that the deleted top-bar strip (`Curated/SidebarTopBarCard.cs`) sidestepped with an explicit Width. Phase 3
+        // deleted both surfaces, so the pane's two wrap sites above are now the ONLY live call sites and this file is
+        // the pattern's owner. MinWidth 0 keeps a long title ELIDING rather than pushing the row past the pane, exactly
+        // as the outline's fix did.
+        //
+        // Phase 1 materialises the shortcut band as a StaticLinks "Shortcuts" section, which lands in a reorderable
+        // band — those rows would render narrow without this.
+        //
+        // `content` is a BoxEl on MOST wrapped kinds (SidebarEntityRow.Create returns BoxEl; Indicator returns
+        // Ui.ZStack, also a BoxEl) — but NOT on the tooltip-wrapped ones (a track row, a missing-entity row, an
+        // unavailable action row), where it is a ComponentEl. Those carry their own fill through
+        // `ToolTip.Wrap(grow: 1f)`, and the reconciler mirrors a component anchor's FlexGrow from its rendered child
+        // (Reconciler.MirrorParticipation), so the grow still reaches this wrapper. The type test is therefore a real
+        // branch, not just cast insurance: each shape owns its fill, and neither applies it twice.
         if (ReorderBand(row, index) is { } pair)
-            content = pair.Ro.Item(index - pair.Start, content, key: row.Key, transition: SidebarPane.Placement);
+            content = pair.Ro.Item(index - pair.Start,
+                content is BoxEl fill ? fill with { Grow = 1f, Shrink = 1f, MinWidth = 0f } : content,
+                key: row.Key, transition: SidebarPane.Placement);
         return content;
     }
 
@@ -131,7 +175,13 @@ sealed class SidebarPaneSlot : Component
         // target typing inside a conditional is exactly the shape that breaks when the target moves into an initializer.
         Action<bool>? toggle = null;
         Element? chevron = null;
-        if (_o.Config.SetSectionCollapsed is not null)
+        // PHASE 1 — the materialised Shortcuts section is NOT collapsible, in every mode. Not a design branch (this
+        // reads a SECTION ID, the same way MenuHostSectionId above does): the band is projected from
+        // `SidebarCustomLayout.TopBar`, which is not in `Sections`, so it has no persisted `Collapsed` bit and no
+        // section-scoped command that could write one — `SetSectionCollapsed("topbar")` is an `UnknownSection`
+        // rejection. Offering the chevron anyway would be a visible affordance that silently does nothing, which is
+        // strictly worse than not offering it.
+        if (_o.Config.SetSectionCollapsed is not null && !SidebarIds.IsTopBar(id))
         {
             toggle = o => _o.ToggleSection(id, !o);
             // R3.1.7a — ONE glyph whose Rotation animates, never a glyph swap.
@@ -189,6 +239,21 @@ sealed class SidebarPaneSlot : Component
         if ((uint)index >= (uint)rows.Count) return true;
         var section = _o.SectionOf(rows[index].SectionId);
         return section is null || _o.DisclosureOpen(section.Id, folder: false, fallback: !section.Collapsed);
+    }
+
+    /// <summary>The EDIT CARD's chevron state — same recycle-safe shape as <see cref="HeaderOpenLive"/>: it captures the
+    /// SLOT and never a section id, because a chevron is a hook-owning child component whose ctor args freeze at mount
+    /// while this slot recycles onto a different section on every scroll.
+    /// <para>It asks the pane about the session THE PUBLISHED PLAN WAS BUILT FROM, never the live signal, so the mark can
+    /// never claim "open" over a plan that has no body rows under this card.</para></summary>
+    bool CardOpenLive()
+    {
+        int index = _scope.Index.Value;
+        _ = _o.SubscribeRowEpoch(index);
+        var rows = _o.Plan.Rows;
+        if ((uint)index >= (uint)rows.Count) return false;
+        var section = _o.SectionOf(rows[index].SectionId);
+        return section is not null && _o.EditShowsBody(section);
     }
 
     /// <summary>The folder chevron's live expansion state — same recycle-safe shape as <see cref="HeaderOpenLive"/>.</summary>
@@ -575,7 +640,10 @@ sealed class SidebarPaneSlot : Component
             OnClick = click,
         };
         Element row = SidebarEntityRow.Create(spec);
-        return reason is { Length: > 0 } r ? ToolTip.Wrap(row, r) : row;
+        // grow: 1f — the tooltip wrapper is a flex ROW, so without it the DISABLED arm of this row (the only arm that
+        // gets a tooltip) shrank to its own label while the enabled arm, returned bare, filled the pane. One row kind
+        // rendering at two different widths depending on availability is the narrowest possible version of that bug.
+        return reason is { Length: > 0 } r ? ToolTip.Wrap(row, r, grow: 1f) : row;
     }
 
     static string Pick(string authored, string fallback) => authored.Length > 0 ? authored : fallback;
@@ -599,8 +667,11 @@ sealed class SidebarPaneSlot : Component
             string itemId = present.Id;
             menu = () => new ContextMenuModel(
             [
+                // Through SidebarItemCommands: a missing-entity row inside the materialised Shortcuts section is
+                // addressed at the SENTINEL id, where `RemoveItem` would be an UnknownSection rejection and the row
+                // would sit there refusing to go away. One owner for that choice (Phase 1).
                 new MenuFlyoutItem(Loc.Get(SidebarPaneLoc.RemoveItem), ActionIcons.Resolve(ActionIcons.Remove), true,
-                    () => _o.Dispatch(new RemoveItem(sectionId, itemId))),
+                    () => _o.Dispatch(SidebarItemCommands.Remove(sectionId, itemId))),
             ]);
         }
 
@@ -621,7 +692,10 @@ sealed class SidebarPaneSlot : Component
             MenuOverlay = _o.MenuOverlay,
             Menu = menu,
         };
-        return ToolTip.Wrap(SidebarEntityRow.Create(spec), Loc.Get(SidebarPaneLoc.MissingEntity));
+        // grow: 1f — see WithPlayTrackHint. A retention row is ALWAYS tooltip-wrapped, so without it the missing-entity
+        // row was the one row in a section that never filled: dimmed AND narrow, which reads as broken rather than as
+        // "this entity is unavailable".
+        return ToolTip.Wrap(SidebarEntityRow.Create(spec), Loc.Get(SidebarPaneLoc.MissingEntity), grow: 1f);
     }
 
     // ── the hero card (§C1.8.2) ──────────────────────────────────────────────────────────────────────────────────────

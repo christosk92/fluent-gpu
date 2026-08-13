@@ -79,8 +79,26 @@ public sealed class EditableText : Component
     // ── public surface (source-compatible with every existing call site) ─────────────────────────────────────────────
     public Signal<string>? Text;             // caller-owned (two-way); null → an internal signal seeded from Initial
     public string Initial = "";
-    public Action<string>? OnCommit;         // Enter (focus is KEPT — WinUI)
+    public Action<string>? OnCommit;         // Enter (focus is KEPT — WinUI), and blur iff CommitOnLostFocus
     public Action? OnCancel;                 // Escape (after the revert-to-snapshot; focus is dropped)
+
+    /// <summary>OPT-IN: also fire <see cref="OnCommit"/> when focus LEAVES the field carrying an uncommitted edit — the
+    /// inline-rename contract (type a name, click elsewhere, keep it). WinUI's TextBox has no such seam, so a rename
+    /// built on Enter alone silently DROPS a typed value on blur.
+    ///
+    /// <para>Two double-commits it must not cause, both settled here rather than at every call site:</para>
+    /// <list type="bullet">
+    /// <item>ESCAPE reverts to the focus-time snapshot and THEN blurs (<see cref="DoCancel"/>). That blur must not
+    /// commit — it would publish the reverted value as if the user had chosen it, turning a cancel into an edit.</item>
+    /// <item>ENTER commits and KEEPS focus (WinUI), so the eventual blur must not re-publish the same value. Every
+    /// commit records what it published and a blur commits only against that baseline, so blur-after-Enter is silent
+    /// while blur-after-Enter-then-more-typing still commits.</item>
+    /// </list>
+    ///
+    /// <para>Default false ⇒ byte-identical to the pre-seam control: the bookkeeping below runs either way, but with the
+    /// flag clear nothing reads it and no extra callback can fire.</para></summary>
+    public bool CommitOnLostFocus;
+
     public Action<bool>? OnFocusChanged;     // focus gained(true)/lost(false): NumberBox validate-on-blur / open-Compact
     public Func<string, string>? Sanitize;   // applied after every user edit (numeric/hex clamp); null = free text
     /// <summary>Optional validation binding (form-validation.md): when set, the chrome border swaps to the theme critical
@@ -253,6 +271,12 @@ public sealed class EditableText : Component
     private Action<bool> _setFocused = static _ => { };
     private bool _focusedNow;
     private string? _snapshot;               // text at focus-gain (the Escape revert target)
+    // CommitOnLostFocus bookkeeping. _committed is the last value OnCommit actually published (seeded at focus-gain, so
+    // an untouched field has nothing to commit); _cancelling marks DoCancel's own blur, which must never commit. Kept
+    // SEPARATE from _snapshot on purpose: _snapshot is the Escape revert target and moving it on Enter would silently
+    // change what Escape-after-Enter reverts to — a behaviour change for callers that never opted into blur commits.
+    private string? _committed;
+    private bool _cancelling;
     private bool _synced;                    // first signal→doc sync done (suppress the mount-time OnTextChanged)
     private NodeHandle _rootNode, _laneNode, _scrollerNode;
     private ImeSession? _ime;
@@ -530,6 +554,8 @@ public sealed class EditableText : Component
         {
             _focusedNow = true;
             _snapshot = _text?.Peek() ?? "";
+            _committed = _snapshot;   // nothing has been published this focus session — an untouched blur is silent
+            _cancelling = false;
             if (hooks is not null && !tn.IsNull)
                 hooks.CaretFocus?.Invoke(tn, hooks.TextInput?.CaretBlinkMs ?? 500);
             if (hooks?.TextInput is { } ti && !IsReadOnly)
@@ -553,6 +579,20 @@ public sealed class EditableText : Component
         else
         {
             _focusedNow = false;
+            // BLUR COMMIT (opt-in), before any teardown: an owner typically tears the editor down from OnFocusChanged,
+            // so the value has to be published while the field still exists. Suppressed for DoCancel's own blur (the
+            // revert is not a choice) and for a value that a previous Enter already published.
+            bool cancelled = _cancelling;
+            _cancelling = false;
+            if (CommitOnLostFocus && !cancelled && !IsReadOnly && OnCommit is { } blurCommit)
+            {
+                string current = _text?.Peek() ?? "";
+                if (!string.Equals(current, _committed ?? _snapshot ?? current, StringComparison.Ordinal))
+                {
+                    _committed = current;
+                    blurCommit(current);
+                }
+            }
             if (hooks?.TextInput is { } ti)
             {
                 ti.SetEditable(false);   // cancels any in-flight composition through the sink
@@ -563,6 +603,7 @@ public sealed class EditableText : Component
             hooks?.HideTouchKeyboard?.Invoke();
             if (hooks is not null && !tn.IsNull) hooks.CaretBlur?.Invoke(tn);
             _snapshot = null;
+            _committed = null;
             SyncVisual();                // selection STATE kept; SelectionActive off → highlight hides (simplified WinUI)
         }
         _setFocused(gained);
@@ -588,8 +629,15 @@ public sealed class EditableText : Component
             case TextEditCommand.PageDown: MoveVertical(+1, page: true, bind.Extend); break;
 
             case TextEditCommand.Commit:
-                OnCommit?.Invoke(_text?.Peek() ?? "");   // WinUI: Enter commits and KEEPS focus
+            {
+                // WinUI: Enter commits and KEEPS focus. Record what was published so a later blur under
+                // CommitOnLostFocus does not re-publish the identical value (see that field's remarks). Recorded even
+                // when the flag is off — it is one string assignment and it keeps the two paths from diverging.
+                string committing = _text?.Peek() ?? "";
+                _committed = committing;
+                OnCommit?.Invoke(committing);
                 break;
+            }
 
             case TextEditCommand.Cancel:
                 DoCancel();
@@ -792,6 +840,10 @@ public sealed class EditableText : Component
             PushDocToSignal(TextChangeReason.ProgrammaticChange);   // a revert is not a user edit
         }
         OnCancel?.Invoke();
+        // Escape's blur is NOT a choice: mark it so CommitOnLostFocus does not publish the reverted value as an edit
+        // (that would turn every cancel into a commit). Cleared by HandleFocus(false) — or by the next focus gain, for
+        // the pathological case where the blur never arrives.
+        _cancelling = true;
         _hooks?.RestoreFocus?.Invoke(NodeHandle.Null);   // blur — the dispatcher fires HandleFocus(false)
     }
 
@@ -832,6 +884,10 @@ public sealed class EditableText : Component
     /// whole value as ONE undo step, caret at end — the legacy caret-at-end shape), then the single signal write.</summary>
     private void AfterUserEdit()
     {
+        // A real edit means the pending cancel is over. _cancelling exists to mark DoCancel's OWN blur; if that blur
+        // somehow never arrives (a host with no RestoreFocus seam) the flag must not latch and swallow the NEXT edit's
+        // blur commit. One store per keystroke, on a cold input path.
+        _cancelling = false;
         if (Sanitize is { } san)
         {
             string raw = _core.Doc.GetText();

@@ -61,17 +61,28 @@ sealed record SidebarPaneConfig
     /// before <see cref="SearchHead"/>. Invoked in the pane's render.</summary>
     public Func<Element?>? Head { get; init; }
 
-    /// <summary>O3 — the customizable SHORTCUT BAND (<c>SidebarCustomLayout.EffectiveTopBar</c>) as the pane's topmost
-    /// chrome, ABOVE <see cref="Head"/>: it is the app's navigation band, so nothing mode-owned may sit above it. All
-    /// three designs set this identically (<c>SidebarNavBand.Head</c>) — it is not a mode affordance, it is the shell's
-    /// band rendered at its new site, which is exactly why it arrives as a config delegate rather than a renderer branch.
-    ///
-    /// <para>Null, or a delegate returning null, draws nothing — an EMPTY band is the user emptying it on purpose.</para></summary>
-    public Func<Element?>? NavBand { get; init; }
+    // PHASE 1 / Decision A — `NavBand` and `RailHead` are GONE. The shortcut band used to reach the renderer as two
+    // delegates all three modes set identically, which is the shape of a seam that should never have existed: the band
+    // is CONTENT, so it is now the first SECTION of the document each mode returns from `Document`
+    // (`SidebarShortcutsSection`). The expanded pane plans it like any other StaticLinks section, the 56-DIP rail draws
+    // it from `ShowInRail` through `SidebarRowPlanner.BuildRail`, and the selection indicator is the pane's ordinary
+    // route-keyed transaction — which also retires the documented opt-out the band needed while it was chrome.
 
-    /// <summary>The same band's 56-DIP form, PREPENDED to the rail's planned tiles (mirroring <see cref="RailFooter"/>'s
-    /// append). Null ⇒ no head tiles and no separating rule.</summary>
-    public Func<Element?>? RailHead { get; init; }
+    /// <summary>PHASE 2 / DECISION B — THE CANVAS SEAM. Non-null delegate returning a non-null state ⇒ this pane renders
+    /// as the CUSTOMIZE CANVAS: every section collapses to one uniform-height card (grip · kind glyph · title · count ·
+    /// eye · "…"), one section expands at a time to reveal its real rows, hidden sections stay in view dimmed, and the
+    /// section-card drag band is armed. Null (or a null return) ⇒ the ordinary sidebar, byte for byte.
+    ///
+    /// <para>A DELEGATE, per this config's one rule, and this member is the reason the rule exists: the session it reads
+    /// changes several times a minute while the config is frozen at mount, so a <c>SidebarEditState</c> VALUE here would
+    /// pin frame 1's session — the pane would render its first frame's edit state forever. It is invoked inside the
+    /// PANE's render, which is also what subscribes the pane to the session's signals
+    /// (<c>SidebarEditSession.Read</c>).</para>
+    ///
+    /// <para>Only <c>CuratedSidebar</c> supplies one — Classic's and V3's documents are read-only, so there is nothing
+    /// for an editor to edit. The RENDERER must never learn that: it reads the delegate and nothing else, exactly as it
+    /// never branches on <see cref="Design"/>.</para></summary>
+    public Func<SidebarEditState?>? Edit { get; init; }
 
     /// <summary>Hang the quick sidebar-layout menu off the pane's FIRST section header (§C6.4 — the design switch must be
     /// reachable from the pane itself). V3 embeds those rows in its own overflow menu instead.</summary>
@@ -136,7 +147,8 @@ readonly record struct SidebarPaneReorder(
 static class SidebarPaneReorderCommit
 {
     /// <summary>Pinned commits through the SHARED pin store (the order every design sees); every other reorderable kind
-    /// goes through the undoable, autosaved <c>MoveItem</c> command.</summary>
+    /// goes through the undoable, autosaved item command <see cref="SidebarItemCommands.Move"/> picks — <c>MoveItem</c>
+    /// for a real section, <c>MoveTopBarItem</c> for the materialised Shortcuts band.</summary>
     public static void Default(SidebarPreferences? prefs, in SidebarPaneReorder r)
     {
         if (prefs is null || r.FromSlot == r.ToSlot) return;
@@ -155,7 +167,11 @@ static class SidebarPaneReorderCommit
         int itemFrom = ItemIndexAt(r.Section, r.FromSlot);
         int itemTo = ItemIndexAt(r.Section, r.ToSlot);
         if (itemFrom < 0 || itemTo < 0) return;
-        prefs.Dispatch(new MoveItem(r.Section.Id, itemFrom, r.Section.Id, itemTo));
+        // PHASE 1 — the SENTINEL. A reorder inside the materialised Shortcuts section is addressed at
+        // `SidebarIds.TopBarSection`, which is not in `layout.Sections`, so a bare `MoveItem` would be an
+        // `UnknownSection` rejection: the row would snap back with no message. `SidebarItemCommands` owns that choice
+        // once, for this commit AND for the customizer's call sites.
+        prefs.Dispatch(SidebarItemCommands.Move(r.Section.Id, itemFrom, itemTo));
     }
 
     /// <summary>Band position → index in the section's ITEM list. The planner skips hidden items in order, so the n-th

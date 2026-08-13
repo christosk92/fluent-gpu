@@ -198,6 +198,19 @@ static class WaveeResourceDrag
     /// The resolution rules themselves live in the engine-free <see cref="WaveeDragChipModel"/>.</summary>
     public static DragChipSpec? Chip(DragState state)
     {
+        // PHASE 3 — the sidebar customizer's palette chips. A SECOND kind, deliberately handled in the ONE resolver the
+        // shell mounts: `DragPreviewLayer.Of` takes exactly one, so a surface whose kind is unknown here draws no moving
+        // visual at all (the dnd skill's "two visuals for one gesture" pitfall, in its other direction) and — because the
+        // chip is also the only caption surface — publishes neither its drop caption nor its refusal reason.
+        //
+        // The section-card REORDER band shares this kind but carries a `ReorderPayload` whose Item is null, so it falls
+        // through to null here and keeps its deliberate ghost lift (SidebarPane.SectionReorder's remarks).
+        if (string.Equals(state.Kind, SidebarEditPlan.SectionDragKind, StringComparison.Ordinal))
+            return state.Payload is SidebarSectionDropPayload section
+                ? new DragChipSpec(Title: section.Label, Glyph: CzGlyphs.ForKind(section.Kind), Count: 1,
+                                   RestingCaption: Loc.Get(SidebarPaneLoc.EditDropHere))
+                : null;
+
         if (!string.Equals(state.Kind, WaveeDragKinds.Resource, StringComparison.Ordinal)
             || Unwrap(state.Payload) is not { } payload) return null;
         var model = payload.ChipModel();

@@ -271,9 +271,22 @@ public sealed record SidebarDisplayOptions(
 {
     public static readonly SidebarDisplayOptions Default = new();
 
-    /// <summary>Icon-only rows (CollectionShortcuts / StaticLinks) with no artwork and no subtitle.</summary>
+    /// <summary>Icon-only rows for <see cref="SidebarSectionKind.CollectionShortcuts"/>: no artwork, no subtitle, and
+    /// the quiet count badge ON — a fixed collection destination (liked / albums / artists / podcasts) is exactly the
+    /// row for which a count exists, and <c>AllowsDisplayField(CollectionShortcuts, CountBadges)</c> lets the user turn
+    /// it off.</summary>
     public static readonly SidebarDisplayOptions Shortcuts =
         new(Density: SidebarDensity.Cozy, Artwork: false, Subtitles: false, CountBadges: true);
+
+    /// <summary>The same icon-only rows for <see cref="SidebarSectionKind.StaticLinks"/> — with counts OFF.
+    ///
+    /// <para>DEFECT 8. StaticLinks used to share <see cref="Shortcuts"/> verbatim, so every freshly added Links section
+    /// was seeded <c>CountBadges = true</c> while <c>AllowsDisplayField(StaticLinks, CountBadges)</c> says false: the
+    /// property panel never showed the field and <c>SetDisplayOption</c> rejected it as a NoChange, so the flag was a
+    /// default the user could neither see nor undo — yet the renderer honours it (<c>SidebarPaneSlot.CountBadge</c>
+    /// keys off the ROUTE, not the section kind), so a hand-picked "liked" link silently grew a number a hand-picked
+    /// "home" link could not. One preset per kind is the fix; the two presets differ in exactly one field.</para></summary>
+    public static readonly SidebarDisplayOptions Links = Shortcuts with { CountBadges = false };
 
     /// <summary>Artwork rows with a creator/type subtitle (PlaylistTree / EntityList / Pinned).</summary>
     public static readonly SidebarDisplayOptions Entities = new();
@@ -537,7 +550,10 @@ public static class SidebarSectionKinds
     /// <summary>The Display preset a freshly-added section of this kind is seeded with (§C3.3 AddSection).</summary>
     public static SidebarDisplayOptions DefaultDisplay(SidebarSectionKind kind) => kind switch
     {
-        SidebarSectionKind.CollectionShortcuts or SidebarSectionKind.StaticLinks => SidebarDisplayOptions.Shortcuts,
+        SidebarSectionKind.CollectionShortcuts => SidebarDisplayOptions.Shortcuts,
+        // Defect 8: StaticLinks forbids CountBadges below, so its seed must not carry it — see
+        // SidebarDisplayOptions.Links for the whole story.
+        SidebarSectionKind.StaticLinks => SidebarDisplayOptions.Links,
         // "top-N" feeds ship with their spec'd N so a freshly added section is immediately sane.
         SidebarSectionKind.NewReleases => SidebarDisplayOptions.Entities with { MaxItems = 4 },
         SidebarSectionKind.Concerts => SidebarDisplayOptions.Entities with { MaxItems = 3 },
@@ -660,6 +676,20 @@ public static class SidebarSectionKinds
 
     /// <summary>A section may only nest inside a CustomGroup, and a CustomGroup may never nest (depth 1, hard).</summary>
     public static bool IsNestable(SidebarSectionKind kind) => kind != SidebarSectionKind.CustomGroup;
+
+    /// <summary>Kinds whose CONTENT and ORDER live in a shared store outside the document, so the section spec is a VIEW
+    /// of that store rather than a container of its own rows: <c>Pinned</c> (the pin store in
+    /// <c>SidebarPreferences.Pins</c> — its Items are an override side-table, never the pin list) and
+    /// <c>PlaylistTree</c> (the backend rootlist, plus V3's local order overlay).
+    ///
+    /// <para>DEFECT 9 — this is why <c>DuplicateSection</c> refuses them. Two Pinned sections would render the same
+    /// store twice AND both commit reorders into it, so dragging in the copy would silently reshuffle the original;
+    /// two PlaylistTrees would do the same to the rootlist order. A clone of a store-backed section is not a second
+    /// list, it is a second WRITER onto one list, which no amount of fresh ids can separate. Refusing is the minimal
+    /// correct semantics: the alternative — "de-target" the copy — would need a per-section store binding the wire has
+    /// no room for.</para></summary>
+    public static bool IsStoreBacked(SidebarSectionKind kind)
+        => kind is SidebarSectionKind.Pinned or SidebarSectionKind.PlaylistTree;
 }
 
 /// <summary>Id minting. "sec_"/"itm_" + 8 lowercase hex; uniqueness within a document is enforced by the reducer

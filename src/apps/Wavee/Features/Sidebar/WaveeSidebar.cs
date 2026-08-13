@@ -78,10 +78,9 @@ sealed class WaveeSidebar : Component
             // Classic has no library-only search head (its Playlists section is a tree, not an EntityList).
             SearchHead = false,
             OnCreatePlaylist = CreatePlaylist,
-            // O3 — the customizable shortcut band, at its new render site. Set IDENTICALLY by all three modes: it is the
-            // app's navigation band (one global list on the layout document), not a Classic affordance.
-            NavBand = () => SidebarNavBand.Head(_prefs, _route, _go),
-            RailHead = () => SidebarNavBand.RailHead(_prefs, _route, _go),
+            // PHASE 1 — the shortcut band is no longer a config delegate: it is the FIRST SECTION of the document
+            // BuildDocument returns (Decision A), so the renderer needs no `NavBand`/`RailHead` seam and the rail form
+            // rides the planner's existing `ShowInRail`.
             // The rail's create-playlist affordance. A rail plan is tiles-from-sections and cannot express authored
             // chrome, so Classic's landed 40-DIP "+" tile is appended by the pane instead of planned.
             RailFooter = () => Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, SidebarRailItem.Box, 16f)),
@@ -105,7 +104,11 @@ sealed class WaveeSidebar : Component
         bool pinnedOpen = prefs?.ClassicPinnedOpen.Value ?? true;
         bool libraryOpen = prefs?.ClassicLibraryOpen.Value ?? true;
         bool playlistsOpen = prefs?.ClassicPlaylistsOpen.Value ?? true;
-        return _docCache.Get(pinnedOpen, libraryOpen, playlistsOpen);
+        // PHASE 1 — the shortcut band is ONE GLOBAL LIST on the Curated document, so Classic's locked document takes it
+        // as an argument and materialises it as its first section. A probe mount with no preference service falls back
+        // to the built-in default (Home), which is exactly what the shell renders for a never-customized band.
+        var topBar = prefs?.TopBar ?? SidebarCustomLayout.DefaultTopBar;
+        return _docCache.Get(pinnedOpen, libraryOpen, playlistsOpen, topBar);
     }
 
     /// <summary>The three section flags folded into the pane's mode epoch. Reading them with <c>.Value</c> IS the

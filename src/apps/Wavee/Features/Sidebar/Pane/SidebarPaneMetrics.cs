@@ -20,17 +20,31 @@ namespace Wavee;
 static class SidebarPaneMetrics
 {
     /// <summary>The pane's padding — Classic's landed <c>(8,8,8,12)</c>, applied ONCE around the virtualized list. Rows
-    /// therefore sit at 8, and their content at 8 + <see cref="SidebarRowMetrics.IndentFor"/>(0) = 14, exactly as the
-    /// landed Classic body did. THE single inset owner: no row, band, card or strip may add a second horizontal inset.</summary>
-    public static readonly Edges4 PanePad = new(8f, 8f, 8f, 12f);
+    /// therefore sit at 8, and their content at <see cref="ContentLane"/> = 14, exactly as the landed Classic body did.
+    /// THE single inset owner: no row, band, card or strip may add a second horizontal inset.</summary>
+    public static readonly Edges4 PanePad = new(SidebarRowGeometry.PaneEdge, 8f, SidebarRowGeometry.PaneEdge, 12f);
 
     /// <summary>Horizontal DIPs the pane padding consumes (PanePad.Left + PanePad.Right). The grid strip's cell math reads
     /// THIS rather than assuming <c>Spacing.L</c> — that assumption is what made the grid overhang the pane.</summary>
-    public const float PaneInsetH = 16f;
+    public const float PaneInsetH = SidebarRowGeometry.PaneEdge * 2f;
+
+    /// <inheritdoc cref="SidebarRowGeometry.ContentLane"/>
+    public const float ContentLane = SidebarRowGeometry.ContentLane;
+
+    /// <inheritdoc cref="SidebarRowGeometry.ContentLaneEnd"/>
+    public const float ContentLaneEnd = SidebarRowGeometry.ContentLaneEnd;
 
     /// <summary>A band that must line up with the rows around it uses the ROW's own padding. One constant pair, so
-    /// "the row inset" is a fact and not a per-call-site guess.</summary>
-    public static readonly Edges4 RowInset = new(SidebarRowMetrics.IndentFor(0), 0f, 8f, 0f);
+    /// "the row inset" is a fact and not a per-call-site guess. Valid only INSIDE the virtualized list, which already
+    /// carries <see cref="PanePad"/>; a band mounted above the list takes <see cref="BandInset"/> instead.</summary>
+    public static readonly Edges4 RowInset =
+        new(SidebarRowGeometry.RowInsetLeft, 0f, SidebarRowGeometry.RowInsetRight, 0f);
+
+    /// <summary>The horizontal inset for a FIXED CHROME BAND mounted ABOVE the virtualized list (Library V3's header /
+    /// toolbar / chip rail / rule / breadcrumb, and any future mode head). Such a band is a sibling of the padded list,
+    /// not a child of it, so <see cref="PanePad"/> never reaches it — it must land on <see cref="ContentLane"/> by
+    /// itself. Padding to a bare 8 here (which every V3 band used to do) is exactly the 6-DIP ragged left edge.</summary>
+    public static readonly Edges4 BandInset = new(ContentLane, 0f, ContentLaneEnd, 0f);
 
     /// <summary>R3.1.3 — the vertical air above a section header that is not the pane's first row. Section rhythm used to
     /// be ZERO (the planner emits contiguous rows), so five sections read as one undifferentiated column.</summary>
@@ -39,6 +53,16 @@ static class SidebarPaneMetrics
     /// <summary>R3.1.3 — the gap between a header and its first body row, matching <c>SidebarSectionHeader.Section</c>'s
     /// own internal gap so a virtualized header and a hand-built one are the same shape.</summary>
     public const float HeaderBodyGap = 2f;
+
+    /// <summary>PHASE 2 / Decision B — THE ONE EDIT-CARD HEIGHT. Every section's card in the customize canvas is exactly
+    /// this tall, whatever its kind, its density or how many rows it holds: the card band is a <c>Reorderable</c> whose
+    /// slot pitch is ONE extent (<c>SidebarPaneBand.Extent</c>) and whose displacement hints are computed from it, and
+    /// the virtualizing host's <c>VariableList</c> seeds from it too. A per-kind card height would break both, which is
+    /// the same "one height per SECTION" rule <see cref="RowHeight"/> exists to keep — stated here as its own constant
+    /// because the card is not a row of any section, it IS the section.
+    /// <para>44 = <c>SidebarRowMetrics.ClassicHeight</c>: the card sits in the pane's own rhythm rather than inventing a
+    /// third scale beside the 44-DIP rows it replaces.</para></summary>
+    public const float EditCardHeight = SidebarRowGeometry.ClassicHeight;
 
     /// <summary>R3.1.6 — the quiet empty hint's band height (was 40 with a 12f caption; a section that resolved to nothing
     /// must not occupy a full row's worth of pane).</summary>

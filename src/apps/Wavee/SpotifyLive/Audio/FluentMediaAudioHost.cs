@@ -425,6 +425,14 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     // TEMP DIAGNOSTIC (#3 resume overshoot): log raw/derived position for a few ticks after a resume, then self-disable.
     int _diagResumeTicks;
 
+    // Gapless hand-off snapshot (Tick / CommitCrossfade / OpenSession only — never the WASAPI Write path).
+    // Pre-allocated fields only; WaveeLogger's interpolated Info handler builds the string IFF Info is enabled.
+    long _gaplessXrunsAtArm;
+    long _gaplessAEndClock;
+    long _gaplessAEndWall;
+    int _gaplessArmed;            // 1 once the approaching-boundary snapshot has been taken
+    int _gaplessHardCutPending;   // 1 after Ended without a mixer commit — next OpenSession is B of a hard cut
+
     public void Stop()
     {
         _playIntent = false;
@@ -645,6 +653,14 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             _core.Volume.Value = (float)_volume;
             session.SetVolume(_volume);
             session.SetMuted(_muted);
+            if (_gaplessHardCutPending != 0)
+            {
+                long bClock = session is PcmAudioSession opened ? opened.SampleClock : 0;
+                long wall = Environment.TickCount64;
+                _log.Info($"[gapless] hardcut-b-open clock={bClock} wallGapMs={wall - _gaplessAEndWall} aEndClock={_gaplessAEndClock} xruns={SessionXruns()}");
+                _gaplessHardCutPending = 0;
+            }
+            _gaplessArmed = 0;
             if (_playIntent && autoResume) { await session.PlayAsync().ConfigureAwait(false); StartTicker(); }
         }
         catch (Exception ex)
@@ -855,6 +871,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _activeUri = "";
         _activeStartMs = 0;
         _activeDurMs = 0;
+        _gaplessArmed = 0;
         if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
         if (stream is not null) { try { stream.Dispose(); } catch { } }
         if (retiring is not null) { try { retiring.Dispose(); } catch { } }
@@ -913,6 +930,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _prepUri = start.TrackUri;
         _prepDurMs = start.DurationMs;
         _prepOverlap = req.AllowOverlap;
+        _log.Info($"[gapless] prepare-primed token={req.Token} ready={result.IsReady} leadIn={result.Gapless.LeadInFrames} trailPad={result.Gapless.TrailPadFrames} overlap={req.AllowOverlap} dur={start.DurationMs}");
     }
 
     public Task SupplyNextBodyAsync(string token, AudioStreamHandle body, CancellationToken ct = default)
@@ -929,7 +947,9 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
                     await s.AttachBodyWithNativeDecryptorAsync(BuildDecryptor(b), cdnUrls, null, ct).ConfigureAwait(false);
                     // Retain B's body handle so a device-rate reload after the crossfade commit can rebuild B independently.
                     if (_prepBytes is not null) _prepBytes.ReopenBody = b;
+                    _log.Info($"[gapless] next-body token={token} attached=1");
                 }
+                else _log.Info($"[gapless] next-body token={token} attached=0 prep={_prepToken ?? "-"}");
                 tcs.TrySetResult();
             }
             catch (Exception ex) { tcs.TrySetException(ex); }
@@ -979,6 +999,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         // DEFER (it saw _crossfadeInFlight under this same lock) or, if it already captured the sequence and is mid-await, observe
         // the bumped seq at its post-await re-check and KEEP this session — never dispose it and drop B. Adding the voice and the
         // seq bump share one lock so the reloader can never observe "B's voice added to old, but seq not yet bumped".
+        int bodySupplied = _prepBytes?.ReopenBody is not null ? 1 : 0;
         lock (_gate)
         {
             _crossfadeInFlight = true;
@@ -1012,6 +1033,10 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         }
 
         _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, _crossfadeMs));
+        long xruns = sess.XrunCount;
+        _log.Info($"[gapless] commit-crossfade clock={start} fadeFrames={fadeFrames} fadeMs={_crossfadeMs} raw={rawPos} primed=1 body={bodySupplied} xruns={xruns} xrunDelta={xruns - _gaplessXrunsAtArm}");
+        _gaplessArmed = 0;
+        _gaplessHardCutPending = 0;
     }
 
     // ── the poll tick: derive AudioHostSignals from the engine's reactive state ──────────────────────────────────────
@@ -1040,10 +1065,21 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         }
 
         // ── prepared-next overlapping crossfade: commit when the active track enters its fade window ─────────────────
+        long activePos = rawPos - _activeStartMs;
+        long armAt = _activeDurMs > 0 ? Math.Max(0, _activeDurMs - Math.Max(_crossfadeMs, 2000)) : long.MaxValue;
+        if (state == PlaybackState.Playing && !_crossfadeInFlight && _activeDurMs > 0 && activePos >= armAt && _gaplessArmed == 0)
+        {
+            _gaplessArmed = 1;
+            _gaplessXrunsAtArm = SessionXruns();
+            int primed = _prepItem is { IsReady: true } ? 1 : 0;
+            int body = _prepBytes?.ReopenBody is not null ? 1 : 0;
+            int reason = primed == 0 ? (_prepToken is null ? 4 : 2) : !_prepOverlap ? 3 : _crossfadeMs <= 0 ? 1 : 0;
+            _log.Info($"[gapless] arm remainMs={_activeDurMs - activePos} fadeMs={_crossfadeMs} overlap={_prepOverlap} primed={primed} body={body} reason={reason} clock={SessionClock()} xruns={_gaplessXrunsAtArm}");
+        }
         if (state == PlaybackState.Playing && !_crossfadeInFlight
             && _prepItem is { IsReady: true } item && _prepOverlap && _crossfadeMs > 0 && _activeDurMs > 0
             && _session is PcmAudioSession sess
-            && (rawPos - _activeStartMs) >= _activeDurMs - _crossfadeMs)
+            && activePos >= _activeDurMs - _crossfadeMs)
         {
             CommitCrossfade(sess, item, rawPos);
             pos = PositionMs;   // re-read: now B-relative (≈0 at the hand-off)
@@ -1079,6 +1115,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             case PlaybackState.Ended:
                 if (_lastState != PlaybackState.Ended)
                 {
+                    _gaplessAEndClock = SessionClock();
+                    _gaplessAEndWall = Environment.TickCount64;
+                    int primed = _prepItem is { IsReady: true } ? 1 : 0;
+                    int body = _prepBytes?.ReopenBody is not null ? 1 : 0;
+                    _gaplessHardCutPending = _crossfadeInFlight ? 0 : 1;
+                    _log.Info($"[gapless] ended clock={_gaplessAEndClock} raw={rawPos} pos={pos} fadeMs={_crossfadeMs} overlap={_prepOverlap} primed={primed} body={body} inFlight={_crossfadeInFlight} xruns={SessionXruns()} xrunDelta={SessionXruns() - _gaplessXrunsAtArm}");
                     StopTicker();
                     _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Ended, pos));
                 }
@@ -1105,6 +1147,9 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         if (ct.Contains("flac")) return WaveeDecoderKind.Flac;
         return null;
     }
+
+    long SessionClock() => _session is PcmAudioSession s ? s.SampleClock : 0;
+    long SessionXruns() => _session is PcmAudioSession s ? s.XrunCount : 0;
 
     static float DbToLinear(float db) => db == 0f ? 1f : (float)Math.Pow(10, db / 20.0);
 

@@ -1,8 +1,31 @@
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
+using FluentGpu.Input;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Controls;
+
+/// <summary>The four milestones of a reorder that a screen reader must hear (the Primer / React-Aria sortable model):
+/// the lift, every slot change while lifted, the commit, and the abort. Nothing else is announced — a drag that never
+/// leaves its home slot has no news in it.</summary>
+public enum ReorderAnnounceKind : byte
+{
+    /// <summary>The item was lifted (Space, or a pointer promotion). "Grabbed X. Position 3 of 12."</summary>
+    Grab,
+    /// <summary>The pending insertion slot moved. Coalesced — see <see cref="Announcer.SayThrottled"/>.</summary>
+    Move,
+    /// <summary>The lift committed at <see cref="ReorderAnnounce.Slot"/>.</summary>
+    Drop,
+    /// <summary>The lift ended WITHOUT a local commit — Escape, a focus loss, or a release away from the list. A
+    /// cross-list deposit also lands here: the item's new home is the DESTINATION's story, not this list's.</summary>
+    Cancel,
+}
+
+/// <summary>Everything a <see cref="Reorderable"/> knows about one announcement milestone, so the app can compose (and
+/// LOCALIZE) the sentence. <see cref="Index"/> is the lifted item's ORIGINAL index; <see cref="Slot"/> is the slot the
+/// commit would land on right now (equal to <see cref="Index"/> at <see cref="ReorderAnnounceKind.Grab"/> and
+/// <see cref="ReorderAnnounceKind.Cancel"/>); <see cref="Count"/> is the list length.</summary>
+public readonly record struct ReorderAnnounce(ReorderAnnounceKind Kind, int Index, int Slot, int Count);
 
 /// <summary>The ONE cross-list commit callback (plan E5-L3): the app removes the item from <paramref name="from"/>
 /// at <paramref name="fromIndex"/> and inserts <paramref name="payload"/> into <paramref name="to"/> at
@@ -47,6 +70,10 @@ public sealed record ReorderPayload(Reorderable Owner, int Index, object? Item);
 /// reorder; the item dims to the L1 drag opacity with the lifted shadow), Up/Down (Left/Right when
 /// <see cref="Horizontal"/>) move the insertion slot with NO dwell, Space drops (commits), Escape cancels, and
 /// focus leaving the lifted item cancels. All slot moves re-render the projection → FLIP animates them.
+///
+/// A11Y: wire <see cref="AnnounceText"/> and every one of those milestones (and the pointer path's) reaches a screen
+/// reader through the engine's live-region seam (<see cref="Announcer"/>), assertive and ~100 ms coalesced — the
+/// keyboard lift has no other feedback channel at all, since displacement and the insertion line are purely visual.
 /// </summary>
 public sealed class Reorderable
 {
@@ -100,8 +127,13 @@ public sealed class Reorderable
     public int ItemCount;
     /// <summary>Uniform resting main-axis extent per item (ignored when <see cref="ExtentOf"/> is set).</summary>
     public float ItemExtent = 48f;
-    /// <summary>Variable extents: resting main-axis extent per ORIGINAL index (sampled once at lift into pooled
-    /// storage). Cross-list insertion math still assumes the uniform <see cref="ItemExtent"/> pitch.</summary>
+    /// <summary>Variable extents: resting main-axis extent per ORIGINAL index, sampled once into pooled storage — at
+    /// lift for this list's own gesture, and on hover ENTRY for a foreign session (which has no local lift to sample
+    /// from). Set it and the WHOLE geometry family reads the sampled prefix sums instead of an assumed pitch: the
+    /// pointer→slot midpoint rule (<see cref="ReorderList.SlotAtOffset"/>), the same-list pending-slot cue and the
+    /// cross-list <see cref="InsertionLine"/> boundary (<see cref="ReorderList.BoundaryOffset"/>). Leave it null and
+    /// every one of them reduces to <see cref="ItemExtent"/> × index, byte for byte.
+    /// <para>Gate: <c>e5dragdrop.reorder.varextent</c> (cross-list) + <c>e5dragdrop.reorder.varextent.samelist</c>.</para></summary>
     public Func<int, float>? ExtentOf;
     /// <summary>The container's main-axis Gap between items.</summary>
     public float Spacing;
@@ -130,7 +162,12 @@ public sealed class Reorderable
     /// tests and drive <see cref="Advance"/> yourself (or set <see cref="DwellMs"/> = 0).</summary>
     public bool AutoDwell = true;
     /// <summary>Show the built-in 2px accent insertion line while a FOREIGN session hovers this list, and for
-    /// same-list feedback when <see cref="LiveProject"/> is off. Default true.</summary>
+    /// same-list feedback when <see cref="LiveProject"/> is off. Default true.
+    /// <para>Its geometry honours <see cref="ExtentOf"/> (cumulative extents, not index × pitch), so a mixed-height
+    /// list draws the cue exactly where the commit lands. The one thing it still assumes is that item 0's resting start
+    /// IS the origin of the <see cref="List"/> wrapper's content box — the line is a ZStack sibling of the body, so a
+    /// wrapper carrying leading content or padding ahead of the first item shifts the cue by that much. Wrap only the
+    /// items (<c>List(itemColumn)</c>), not a padded container around them.</para></summary>
     public bool ShowInsertionLine = true;
     /// <summary>Live mid-drag projection (default): <see cref="ItemAt"/> returns the PROJECTED order while lifted, so
     /// displaced siblings FLIP to make room (the rbd motion). REQUIRES key-preserving children (plain keyed children /
@@ -160,6 +197,30 @@ public sealed class Reorderable
     /// <summary>Drop caption for an accepted foreign payload at the live insertion slot ("Add to queue"), refreshed on
     /// every move. Null ⇒ no caption. Same-list reorders never caption (their feedback is the displacement).</summary>
     public Func<object?, int, string?>? ForeignCaption;
+
+    // ── a11y announcements (the Primer / React-Aria live-region model) ────────────────────────────
+    /// <summary>Compose the screen-reader sentence for one reorder milestone, or null to say nothing. Wiring it makes
+    /// the keyboard lift audible: without an announcement channel a pointer-free reorder has NO feedback at all — the
+    /// displacement and the insertion line are both purely visual, which is why the position used to be injected into
+    /// the lifted row's own children mid-lift (shifting the very content being moved).
+    ///
+    /// <para>Composition is the APP's because only the app can name the thing ("Liked Songs", "the Shortcuts section",
+    /// "track 4") and only the app owns the locale. It runs on the EDGE that triggered it — a lift, a slot change, a
+    /// commit — never per frame, so a normal <c>Loc.Format</c> here is fine; the delivery is coalesced for you
+    /// (<see cref="Announcer.SayThrottled"/>), so a held arrow key speaks once per ~100 ms rather than per repeat.</para>
+    ///
+    /// <para>Null (the default) ⇒ this list announces nothing, byte-identical to the pre-announcement control. A host
+    /// with no announce backend (headless, the slice, no assistive tech running) is silent regardless.</para></summary>
+    public Func<ReorderAnnounce, string?>? AnnounceText;
+
+    /// <summary>Reorder announcements are ASSERTIVE by default: the user is steering by them, so they must interrupt
+    /// rather than queue behind whatever the reader was already saying. Set false for a list whose reorder is
+    /// incidental.</summary>
+    public bool AnnounceAssertive = true;
+
+    /// <summary>Coalescing window for the MOVE announcements only (grab/drop/cancel are always immediate). The Primer /
+    /// React-Aria default; raise it for a list whose rows are slow to describe, or make it deterministic in a test.</summary>
+    public float AnnounceThrottleMs = Announcer.DefaultThrottleMs;
 
     /// <summary>Commit a POINTER reorder only when the gesture was actually released over THIS list (default false =
     /// the historical behavior: any completion commits at the dwell slot). A list whose items are also dragged OUT to
@@ -244,6 +305,7 @@ public sealed class Reorderable
     public bool Advance(float dtMs)
     {
         if (!Core.Advance(dtMs)) return false;
+        AnnounceMove();
         Changed();
         return true;
     }
@@ -254,7 +316,16 @@ public sealed class Reorderable
     /// <see cref="ReorderPayload"/>, resolved once at promotion), the L1 lifecycle wired into the slot math, a FLIP
     /// <c>LayoutTransition</c> (default <see cref="LayoutTransition.Slide"/>) for the displacement motion, focusable
     /// with the keyboard lift-mode keys, and the keyboard-lift visuals when lifted that way (the pointer path gets
-    /// identical visuals from L1). <paramref name="index"/> is the ORIGINAL item index (pass <c>ItemAt(slot)</c>).</summary>
+    /// identical visuals from L1). <paramref name="index"/> is the ORIGINAL item index (pass <c>ItemAt(slot)</c>).
+    ///
+    /// <para><b>The wrapper is a flex ROW</b> (<c>BoxEl.Direction</c> defaults to 0), so
+    /// <paramref name="content"/> sits on its MAIN axis and, with no <c>Grow</c>, arranges at its own MEASURED CONTENT
+    /// WIDTH — not the slot's. Content that must FILL the slot has to say so itself:
+    /// <c>Grow = 1f, Shrink = 1f, MinWidth = 0f</c> (the <c>MinWidth</c> keeps a long title eliding instead of pushing
+    /// the row past the column). Two shipped bugs came from missing it: the customizer outline's cards measured to
+    /// their own titles ("Pinned" wide, "Playlists" narrow — fixed at <c>SidebarOutlineView.cs:313-322</c>), and a
+    /// sidebar reorder-band row drew its hover/selected fill plate at the title's width. A consumer that instead pins
+    /// an explicit <c>Width</c> on the returned wrapper (the top-bar strip does) is equally fine.</para></summary>
     public Element Item(int index, Element content, string? key = null, LayoutTransition? transition = null)
     {
         bool kbLifted = _kbLifted == index;
@@ -324,6 +395,7 @@ public sealed class Reorderable
         _selfDrop = false;
         _lastDeltaWallMs = Environment.TickCount64;
         BeginCore(index);
+        Announce(ReorderAnnounceKind.Grab, index);
         InvalidateOrder();   // projection starts as identity (target == dragged) — no render needed yet
     }
 
@@ -345,16 +417,21 @@ public sealed class Reorderable
             // The item was deposited into ANOTHER Reorderable — its OnCrossCommit mutated both models; committing
             // the local move too would double-apply. Drop the hints only.
             _crossConsumed = false;
+            AnnounceEnd(ReorderAnnounceKind.Cancel);
             Core.Cancel();
         }
         else if (RequireDropOnList && !_selfDrop)
         {
             // Released away from this list (a foreign deposit target, or empty space): the downward travel that got
             // the pointer there is NOT a reorder intent. Drop the hints; the foreign target owns the outcome.
+            AnnounceEnd(ReorderAnnounceKind.Cancel);
             Core.Cancel();
         }
         else
         {
+            // Announced BEFORE Complete(): Complete resets the slot state, so the settled position has to be read while
+            // it still exists — and OnReorder's re-render must not beat the sentence that describes it.
+            AnnounceEnd(ReorderAnnounceKind.Drop);
             Core.Complete();   // fires OnReorder(from, to) iff the slot actually changed
         }
         _selfDrop = false;
@@ -365,8 +442,43 @@ public sealed class Reorderable
     {
         _crossConsumed = false;
         _selfDrop = false;
+        AnnounceEnd(ReorderAnnounceKind.Cancel);
         Core.Cancel();
         Changed();
+    }
+
+    // ── announcements ─────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>A milestone with a KNOWN slot (the lift, where slot == index).</summary>
+    private void Announce(ReorderAnnounceKind kind, int index) => Announce(kind, index, index);
+
+    private void Announce(ReorderAnnounceKind kind, int index, int slot)
+    {
+        // Ordered so the common case (no announcer wired, or no assistive client) costs one null check and never
+        // composes a string: composition is the expense, the raise is already gated inside the backend.
+        if (AnnounceText is not { } compose || !Announcer.IsAvailable) return;
+        Announcer.Say(compose(new ReorderAnnounce(kind, index, slot, Math.Max(0, ItemCount))), AnnounceAssertive);
+    }
+
+    /// <summary>The slot moved while lifted. THROTTLED (<see cref="AnnounceThrottleMs"/>): a held arrow key and a
+    /// pointer crossing rows both emit far more changes than a reader can speak, and an un-coalesced channel reads back
+    /// a position the user left several rows ago. A change inside the window is DROPPED, not queued — the terminal
+    /// Drop/Cancel announcement is what states the settled result, which is why it is a plain (unthrottled) Say.</summary>
+    private void AnnounceMove()
+    {
+        if (AnnounceText is not { } compose || !Announcer.IsAvailable || !Core.IsActive) return;
+        var a = new ReorderAnnounce(ReorderAnnounceKind.Move, Core.DraggedIndex, Core.PendingIndex,
+                                    Math.Max(0, ItemCount));
+        Announcer.SayThrottled(compose(a), AnnounceAssertive, AnnounceThrottleMs);
+    }
+
+    /// <summary>The lift ended. A Drop reports the slot the commit lands on (<c>ReorderList.Complete</c> commits the
+    /// PENDING slot, not the dwell-shown target, so that is the honest number); a Cancel reports the home slot.</summary>
+    private void AnnounceEnd(ReorderAnnounceKind kind)
+    {
+        if (!Core.IsActive) return;
+        int from = Core.DraggedIndex;
+        Announce(kind, from, kind == ReorderAnnounceKind.Drop && Core.PendingIndex >= 0 ? Core.PendingIndex : from);
     }
 
     private void BeginCore(int index)
@@ -412,7 +524,7 @@ public sealed class Reorderable
         int fwd = Horizontal ? Keys.Right : Keys.Down;
         if (e.KeyCode == back || e.KeyCode == fwd)
         {
-            if (Core.MoveTarget(e.KeyCode == back ? -1 : 1)) Changed();
+            if (Core.MoveTarget(e.KeyCode == back ? -1 : 1)) { AnnounceMove(); Changed(); }
             e.Handled = true;   // a lifted item's arrows never fall through to list nav / scrolling
         }
     }
@@ -422,12 +534,16 @@ public sealed class Reorderable
         _kbLifted = index;
         _crossConsumed = false;
         BeginCore(index);
+        // THE keyboard lift's only feedback channel: displacement and the insertion line are purely visual, so without
+        // this a pointer-free reorder is silent from lift to commit.
+        Announce(ReorderAnnounceKind.Grab, index);
         Changed();   // re-render: the item takes the lift visuals
     }
 
     private void KbDrop()
     {
         _kbLifted = -1;
+        AnnounceEnd(ReorderAnnounceKind.Drop);   // before Complete() resets the slot state
         Core.Complete();   // commits at the shown slot (pending == target in keyboard mode)
         Changed();
     }
@@ -435,6 +551,7 @@ public sealed class Reorderable
     private void KbCancel()
     {
         _kbLifted = -1;
+        AnnounceEnd(ReorderAnnounceKind.Cancel);
         Core.Cancel();
         Changed();
     }

@@ -76,6 +76,9 @@ sealed class SidebarPinDropZone : Component
             // own trailing gap — a second 4-DIP inset here would push it out of the row band.
             Margin = new Edges4(0f, 0f, 0f, Spacing.XS),
             Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S,
+            // AUDITED against SidebarPaneMetrics.ContentLane and deliberately NOT on it: this is the CARD family (a
+            // bordered, dashed plate), whose own edge is what the eye aligns on — the plate starts at PanePad like every
+            // row's fill, and its content is padded inside it, exactly as SidebarPaneSlot.Card/Prompt do.
             Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f),
             Corners = Radii.ControlAll,
             DropTarget = spec,

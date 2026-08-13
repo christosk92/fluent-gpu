@@ -95,7 +95,10 @@ sealed class LibraryV3Header : Component
         return new BoxEl
         {
             Direction = 0, Height = LibraryV3Metrics.HeaderHeight, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(8f, 0f, 8f, 0f),
+            // THE CONTENT LANE, not a bare 8. This band is a SIBLING of the padded list, so SidebarPaneMetrics.PanePad
+            // never reaches it: padding to 8 put the library glyph 6 DIP left of every row's glyph below it — the ragged
+            // left edge. BandInset is PanePad + RowInset expressed once, so the two families cannot drift again.
+            Padding = SidebarPaneMetrics.BandInset,
             Children = [.. kids],
         };
     }
@@ -165,7 +168,7 @@ sealed class LibraryV3Toolbar : Component
         return new BoxEl
         {
             Direction = 0, Height = LibraryV3Metrics.ToolbarHeight, AlignItems = FlexAlign.Center, Gap = 4f,
-            Padding = new Edges4(8f, 0f, 8f, 0f),
+            Padding = SidebarPaneMetrics.BandInset,   // the ONE content lane (see LibraryV3Header's band)
             Children = children,
         };
     }

@@ -170,12 +170,40 @@ public static class SidebarLayoutReducer
         if (!TryLocate(l, c.SectionId, out int top, out int child)) return Rej(l, SidebarRejectReason.UnknownSection);
         var src = Get(l.Sections, top, child);
 
+        // DEFECT 9 — a STORE-BACKED section cannot be duplicated. Its rows and their order live in a shared store
+        // (the pin store, the rootlist), not in the spec, so a clone is a second WRITER onto one list: two Pinned
+        // sections render the same pins and BOTH commit their reorders into the same store, so a drag in the copy
+        // silently reshuffles the original. Fresh ids cannot separate them, because the id was never what bound the
+        // section to the store — the KIND was. Refused, not repaired: see SidebarSectionKinds.IsStoreBacked.
+        // A GROUP is refused when any child is store-backed, for the same reason one level down.
+        if (SidebarSectionKinds.IsStoreBacked(src.Kind)) return Rej(l, SidebarRejectReason.KindNotDuplicable);
+        var srcKids = src.ChildList;
+        for (int i = 0; i < srcKids.Count; i++)
+            if (SidebarSectionKinds.IsStoreBacked(srcKids[i].Kind))
+                return Rej(l, SidebarRejectReason.KindNotDuplicable);
+
         if (l.SectionCount + 1 + src.ChildList.Count > MaxSections)
             return Rej(l, SidebarRejectReason.SectionCapReached);
 
         var used = CollectIds(l);
         var clone = CloneWithFreshIds(src, used);
-        if (c.TitleOverride is { } t)
+        // DEFECT 10 — AN AUTHORED TitleLocKey SURVIVES THE COPY.
+        //
+        // This used to take the caller's "{name} (copy)" literal unconditionally and CLEAR TitleLocKey, which froze a
+        // culture-following title into whatever language happened to be active at the moment of the duplicate: a copy
+        // of "Playlists" made under nl stayed "Afspeellijsten (kopie)" forever, in every language.
+        //
+        // THE DECIDING QUESTION IS RECOVERABILITY, because `RenameSection(null)` reverts to the KIND DEFAULT — not to
+        // whatever key the section carried:
+        //   * TitleLocKey != null (a template/kind-authored, culture-following name) — a literal here would be
+        //     UNRECOVERABLE: clearing the rename lands on the kind default, and the authored key is gone for good. The
+        //     copy therefore KEEPS the key and takes no literal, so it keeps following the culture. The cost is stated,
+        //     not hidden: the copy reads the same as the original until the user renames it — one click, and reversible.
+        //     Carrying BOTH would not help either; Title wins in TitleOf, so the key would be unreachable data.
+        //   * TitleLocKey == null (a user rename, or a section with no authored title at all) — nothing localized is
+        //     lost, and the literal is fully recoverable: clearing it returns to exactly what the original shows. The
+        //     caller's "{name} (copy)" lands verbatim, exactly as before.
+        if (c.TitleOverride is { } t && clone.TitleLocKey is null)
         {
             var title = Shorten(t);
             clone = clone with { Title = title, TitleLocKey = null };

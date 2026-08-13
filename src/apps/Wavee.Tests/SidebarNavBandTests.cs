@@ -5,13 +5,20 @@ using Xunit;
 namespace Wavee.Tests;
 
 /// <summary>
-/// O3 — the sidebar NAV BAND's pure half (<see cref="SidebarNavBandModel"/>): the shortcut band that used to render in
-/// the shell toolbar and now renders as the sidebar's top region in all three designs, expanded and 56-DIP rail.
+/// <see cref="SidebarNavBandModel"/> — the shortcut band's pure SHAPING rules, as a model.
 ///
-/// <para>The band's CONTENT and every mutation of it are already pinned by <c>SidebarLayoutReducerTests</c> (the
-/// AddTopBarItem/MoveTopBarItem/RemoveTopBarItem arms + the cap) and <c>SidebarLayoutJsonTests</c> (the wire). This suite
-/// covers only what the new render site DECIDES: document order, the empty-collapse, the four tile shapes, the tile →
-/// route resolution the selection mark reads, and the truncation bound.</para>
+/// <para><b>This suite is named for the model, not for a component.</b> The bespoke <c>SidebarNavBand</c> component it
+/// was originally written against is GONE: Phase 1 / Decision A materialises the band as an ordinary "Shortcuts"
+/// <c>StaticLinks</c> section at the head of every design's document (<c>SidebarShortcutsSection</c>), so the band is
+/// planned, rowed, railed and reordered by the one <c>SidebarPane</c> with no second render path. The MODEL survives
+/// because its four rules are the band's, not the widget's, and they map 1:1 onto the planner's Route / Entity / Track
+/// / Action arms: item target → tile shape, tile → the route key a selection mark reads, document order, and the
+/// truncation bound that keeps a hand-edited over-long band from outgrowing the pane.</para>
+///
+/// <para>The band's CONTENT and every mutation of it are pinned elsewhere and deliberately not restated here:
+/// <c>SidebarLayoutReducerTests</c> owns the AddTopBarItem/MoveTopBarItem/RemoveTopBarItem arms and the cap,
+/// <c>SidebarLayoutJsonTests</c> owns the wire, and <c>SidebarShortcutsSectionTests</c> owns the materialisation into a
+/// section plus the sentinel-id command routing.</para>
 /// </summary>
 public class SidebarNavBandTests
 {
@@ -67,8 +74,8 @@ public class SidebarNavBandTests
         Assert.Equal(0, tile.Index);
     }
 
-    /// <summary>A never-customized document resolves to the built-in band, so a fresh install shows the Home tile at its
-    /// new site — the "zero-pixel diff" contract, restated where the band now lives.</summary>
+    /// <summary>A never-customized document resolves to the built-in band, so a fresh install still gets exactly one
+    /// Home shortcut — now as the first row of the materialised "Shortcuts" section.</summary>
     [Fact]
     public void NeverCustomizedLayout_ResolvesToTheDefaultBand()
     {

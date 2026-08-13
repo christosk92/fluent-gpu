@@ -23,6 +23,14 @@ namespace Wavee;
 //
 // Each row is mounted under a Key that carries the section id (props freeze at mount), so selecting another section
 // REMOUNTS the rows against the new subject.
+//
+// PHASE 2 / DECISION B — RE-HOSTED, NOT FORKED. Every row here used to take `SidebarCustomizerPage`; it now takes
+// `ISidebarEditHost`, the small interface that page already satisfied (Prefs / Acts / Registry / OverlaySvc /
+// RejectEpoch / Selected / Dispatch / Select). Nothing about the rows' BODIES changed — the point is that the same
+// controls can now also be mounted by the live pane's per-section options POPOVER (P3: options live on the object,
+// not in a docked panel whose subject silently changes), driven by the shared `SidebarEditSession`. Forking this file
+// per host would have duplicated the controlled-input + rejection contract, which is exactly the "same artifact defined
+// twice" failure the sidebar architecture exists to prevent.
 
 /// <summary>An icon button that opens a <c>MenuFlyout</c> built at OPEN time (never at render time — resolving labels in
 /// a render subscribes the row to the culture epoch; the landed <c>SidebarLayoutMenu</c> note).</summary>
@@ -225,7 +233,7 @@ static class CzRow
     /// this the row never re-rendered, its mirror effect never re-ran, and the control kept showing the value the user
     /// picked while the document still held the old one. Pair it with <see cref="Epoch"/> in the mirror's dep key.</item>
     /// </list></summary>
-    public static SidebarSectionSpec? Subject(SidebarCustomizerPage page, string sectionId)
+    public static SidebarSectionSpec? Subject(ISidebarEditHost page, string sectionId)
     {
         var prefs = page.Prefs;
         _ = page.RejectEpoch.Value;
@@ -236,7 +244,7 @@ static class CzRow
 
     /// <summary>The document+rejection epoch a controlled row must fold into its mirror dep key, so the mirror re-runs on
     /// every answer the reducer gives — including "no".</summary>
-    public static int Epoch(SidebarCustomizerPage page)
+    public static int Epoch(ISidebarEditHost page)
         => (page.Prefs?.LayoutVersion.Peek() ?? 0) * 397 + page.RejectEpoch.Peek();
 
     public static Element Header(string text) => new TextEl(text)
@@ -363,12 +371,12 @@ static class CzRow
 /// <summary>A <c>ToggleSwitch</c> display-option row (<c>SetDisplayOption</c> with 0/1).</summary>
 sealed class CzToggleRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly SidebarDisplayField _field;
     readonly Signal<bool> _on = new(false);
 
-    public CzToggleRow(SidebarCustomizerPage page, string sectionId, SidebarDisplayField field)
+    public CzToggleRow(ISidebarEditHost page, string sectionId, SidebarDisplayField field)
     {
         _page = page; _sectionId = sectionId; _field = field;
     }
@@ -401,12 +409,12 @@ sealed class CzToggleRow : Component
 /// labels (round-2 defect 2). <c>SelectorBar</c> is gone from this panel entirely.</summary>
 sealed class CzSelectorRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly SidebarDisplayField _field;
     readonly Signal<int> _index = new(0);
 
-    public CzSelectorRow(SidebarCustomizerPage page, string sectionId, SidebarDisplayField field)
+    public CzSelectorRow(ISidebarEditHost page, string sectionId, SidebarDisplayField field)
     {
         _page = page; _sectionId = sectionId; _field = field;
     }
@@ -434,13 +442,13 @@ sealed class CzSelectorRow : Component
 /// <see cref="CzNumberRow"/>: two-to-four columns is a discrete pick, not a range to sweep.</summary>
 sealed class CzSliderRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly SidebarDisplayField _field;
     readonly int _min, _max;
     readonly FloatSignal _value = new(0f);
 
-    public CzSliderRow(SidebarCustomizerPage page, string sectionId, SidebarDisplayField field, int min, int max)
+    public CzSliderRow(ISidebarEditHost page, string sectionId, SidebarDisplayField field, int min, int max)
     {
         _page = page; _sectionId = sectionId; _field = field; _min = min; _max = max;
     }
@@ -481,12 +489,12 @@ sealed class CzSliderRow : Component
 /// description, because a spinner cannot show a word.</summary>
 sealed class CzNumberRow : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly SidebarDisplayField _field;
     readonly int _min, _max;
 
-    public CzNumberRow(SidebarCustomizerPage page, string sectionId, SidebarDisplayField field, int min, int max)
+    public CzNumberRow(ISidebarEditHost page, string sectionId, SidebarDisplayField field, int min, int max)
     {
         _page = page; _sectionId = sectionId; _field = field; _min = min; _max = max;
     }
@@ -514,13 +522,13 @@ sealed class CzNumberRow : Component
 /// immediately; an accepted edit changes the document and remounts this component under the new value key.</summary>
 sealed class CzNumberSpinner : Component
 {
-    readonly SidebarCustomizerPage _page;
+    readonly ISidebarEditHost _page;
     readonly string _sectionId;
     readonly SidebarDisplayField _field;
     readonly int _min, _max, _authoritative;
     readonly Signal<double> _value;
 
-    public CzNumberSpinner(SidebarCustomizerPage page, string sectionId, SidebarDisplayField field,
+    public CzNumberSpinner(ISidebarEditHost page, string sectionId, SidebarDisplayField field,
         int min, int max, int authoritative)
     {
         _page = page;

@@ -63,7 +63,13 @@ sealed class LibraryV3Chrome : Component
             Embed.Comp(() => new LibraryV3Header(_session)) with { Key = "v3-header" },
             Embed.Comp(() => new LibraryV3Toolbar(_session)) with { Key = "v3-toolbar" },
             Embed.Comp(() => new LibraryV3Chips(_session)) with { Key = "v3-chips" },
-            Divider() with { Key = "v3-chrome-rule", Margin = new Edges4(8f, 4f, 8f, 4f) },
+            // Spans the CONTENT LANE, exactly like the plan's own SidebarSectionHeader.ExplicitDivider — a rule that
+            // stopped 6 DIP short of the rows it separates is the same ragged edge in hairline form.
+            Divider() with
+            {
+                Key = "v3-chrome-rule",
+                Margin = new Edges4(SidebarPaneMetrics.ContentLane, 4f, SidebarPaneMetrics.ContentLaneEnd, 4f),
+            },
         };
 
         if (state.Drilled) bands.Add(Breadcrumb());
@@ -84,9 +90,9 @@ sealed class LibraryV3Chrome : Component
 
         return new BoxEl
         {
-            // The pane owns the horizontal inset around its list; the chrome's own bands carry Classic's 8-DIP left/right
-            // padding internally, so only the top air belongs here (the landed ExpandedBody's (0,8,0,8), minus the bottom
-            // padding the pane's own PanePad now supplies).
+            // NO horizontal padding here — each band pads itself to SidebarPaneMetrics.BandInset (the ONE content lane),
+            // because the chip rail's inset has to live INSIDE its scroller and a shared wrapper padding would clip it.
+            // Only the top air belongs here (the landed ExpandedBody's (0,8,0,8), minus the bottom padding PanePad supplies).
             Direction = 1, Shrink = 0f, Padding = new Edges4(0f, 8f, 0f, 0f),
             Children = [.. bands],
         };
@@ -100,7 +106,11 @@ sealed class LibraryV3Chrome : Component
     {
         Key = "v3-breadcrumb",
         Direction = 0, Height = LibraryV3Metrics.BreadcrumbHeight, AlignItems = FlexAlign.Center, Gap = 4f,
-        Padding = new Edges4(2f, 0f, 8f, 0f),
+        // OPTICAL lane alignment: the leading affordance is a 24-DIP box around a 12-DIP glyph, so the BOX starts 6 DIP
+        // before the lane to put the GLYPH on it (a row gets the same optics for free — its 16-DIP glyph sits in a
+        // 6-DIP inset). This is the lane expressed for a centred box, NOT a second ad-hoc inset: the old bare 2 put the
+        // back arrow at 8, one lane short of every row below it.
+        Padding = new Edges4(SidebarPaneMetrics.ContentLane - 6f, 0f, SidebarPaneMetrics.ContentLaneEnd, 0f),
         Animate = BreadcrumbFly,
         Children =
         [
@@ -168,7 +178,11 @@ sealed class LibraryV3Chrome : Component
     {
         Key = "v3-error-banner",
         Direction = 0, AlignItems = FlexAlign.Center, Gap = 8f, Shrink = 0f,
-        Padding = new Edges4(8f, 6f, 8f, 6f), Margin = new Edges4(8f, 0f, 8f, 4f),
+        // CARD family, not a band: the plate's EDGE takes the pane edge (the same x a row's fill plate starts at) and
+        // its content sits one card padding inside — identical to SidebarPaneSlot.Card / Prompt inside the list. Audited
+        // against the content lane deliberately: a card's own border is what the eye aligns on, not its text.
+        Padding = new Edges4(8f, 6f, 8f, 6f),
+        Margin = new Edges4(SidebarRowGeometry.PaneEdge, 0f, SidebarRowGeometry.PaneEdge, 4f),
         Corners = Radii.ControlAll, Fill = Tok.FillSubtleSecondary,
         Children =
         [

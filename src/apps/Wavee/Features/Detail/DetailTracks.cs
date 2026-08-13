@@ -832,9 +832,9 @@ sealed class TrackList : Component
         // The tracks stream in via the engine's skeleton boundary: while the model is Pending it shows shimmer rows the
         // engine DERIVES from the real Row(EmptyTrack) template (ONE definition — no hand-written shimmer, no drift); on
         // Ready it reveals the real virtualized list.
-        // StaggerRows follows the ItemsView's virtual viewport to the currently realized row roots. That gives albums,
-        // playlists, singles and liked songs one shared per-visible-row blur-rise while leaving cold realization and
-        // recycling untouched; newly realized overscan/scroll rows do not replay the navigation reveal.
+        // FadeOnly (not StaggerRows): ContentHost already slides the page in. A per-row blur-rise on Ready was a
+        // second entrance after that slide — first open cascaded, KeepAlive back did not. Newly realized overscan/
+        // scroll rows never replayed the navigation reveal either way.
         // The insertion destination is declared ON the list (see Insertion()) — no wrapper lane, no Configure, and no
         // app-side geometry at all: the ItemsView owns viewport, scroll offset, MEASURED extents, prefix and slot. The
         // page-level gates (editable? sorted? filtered?) are answered LIVE by CanAccept, so a refused drop is a refusal
@@ -850,7 +850,7 @@ sealed class TrackList : Component
             () => _verticalHeader && !_cfg.HasTrailing
                 ? VerticalShimmer(set, tracks, sort, labeled, tier, checkInset, contentFilterBar, rowH)
                 : RowsShimmer(set, tracks, rowH),
-            _ => RealList(), reveal: SkelReveal.StaggerRows, smoothResize: false);
+            _ => RealList(), reveal: SkelReveal.FadeOnly, smoothResize: false);
 
         // Key the list by density + filter → either REMOUNTS it (a clean slot template with the right row height /
         // filtered window). Sort is NOT in the key — each bound row re-skins itself to the new order via its

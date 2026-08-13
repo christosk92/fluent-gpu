@@ -42,7 +42,17 @@ public static class SidebarBuiltInDocuments
     /// keys its reorder bands, its collapse routing and its scroll/section identity off them, and a fresh id per rebuild
     /// would reset all three on every toggle. They are also how <see cref="ClassicSectionOf"/> maps a header click back to
     /// the right preference flag without a lookup table.</para></summary>
-    public static SidebarCustomLayout Classic(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
+    /// <param name="topBar">PHASE 1 / Decision A — the shell's shortcut band (<c>SidebarPreferences.TopBar</c>), which
+    /// is ONE GLOBAL LIST on the Curated document and therefore reaches Classic as an argument rather than from
+    /// Classic's own (locked, code-built) document. Non-empty ⇒ it is materialised as the FIRST section, ahead of
+    /// Pinned, by <see cref="SidebarShortcutsSection.Prepend"/>. Null/empty ⇒ nothing is added and Pinned stays first
+    /// (which also keeps the quick layout menu on the Pinned header, per §3.1.7). This document is never persisted, so
+    /// the sentinel-id section can never reach the wire.</param>
+    public static SidebarCustomLayout Classic(bool pinnedOpen, bool libraryOpen, bool playlistsOpen,
+        IReadOnlyList<SidebarItemSpec>? topBar = null)
+        => SidebarShortcutsSection.Prepend(ClassicSections(pinnedOpen, libraryOpen, playlistsOpen), topBar);
+
+    static SidebarCustomLayout ClassicSections(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
         => new(ClassicId,
         [
             // The FIRST group, so it keeps Classic's `rule: false` (no leading divider). Its header hosts the quick layout
@@ -91,9 +101,11 @@ public static class SidebarBuiltInDocuments
                 // EXPANDED sidebar keeps the API Console row untouched. Doc-authored default: SidebarLayoutDoc
                 // serialises display options as a DIFF against it, so a user who never touched this option simply
                 // picks up the new default, and one who did keeps their override.
-                Display: SidebarDisplayOptions.Shortcuts with
+                // `Links`, the StaticLinks preset (defect 8) — value-identical to the old
+                // `Shortcuts with { CountBadges = false }` spelled here, minus the restatement.
+                Display: SidebarDisplayOptions.Links with
                 {
-                    Density = SidebarDensity.Comfortable, CountBadges = false, ShowInRail = false,
+                    Density = SidebarDensity.Comfortable, ShowInRail = false,
                 },
                 Items: [Route(ToolsId + ":devtools", DevToolsRoute, "Code")]),
         ]);
@@ -144,19 +156,27 @@ public sealed class ClassicDocumentCache
 {
     SidebarCustomLayout? _doc;
     int _flags = -1;
+    /// <summary>The band the cached document was built from, compared by REFERENCE. Every band edit rebuilds the list
+    /// in the reducer and replaces the layout record, so a reference match proves the content matches; a value walk
+    /// would run on every pane render for no extra truth.</summary>
+    IReadOnlyList<SidebarItemSpec>? _topBar;
 
     /// <summary>Classic's collapse flags folded into one int — bit 0 pinned, bit 1 library, bit 2 playlists. This IS the
     /// mode epoch's bitmask; the two must not drift, or a toggle would re-plan without rebuilding the document.</summary>
     public static int FlagsOf(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
         => (pinnedOpen ? 1 : 0) | (libraryOpen ? 2 : 0) | (playlistsOpen ? 4 : 0);
 
-    /// <summary>The document for these flags: the SAME instance while they are unchanged, a fresh one on any flip.</summary>
-    public SidebarCustomLayout Get(bool pinnedOpen, bool libraryOpen, bool playlistsOpen)
+    /// <summary>The document for these flags AND this shortcut band: the SAME instance while both are unchanged, a
+    /// fresh one on any flip. The band is part of the key because it is part of the document now (Phase 1) — without
+    /// it a shortcut edit would bump <c>LayoutVersion</c>, re-plan, and re-plan the STALE cached document.</summary>
+    public SidebarCustomLayout Get(bool pinnedOpen, bool libraryOpen, bool playlistsOpen,
+        IReadOnlyList<SidebarItemSpec>? topBar = null)
     {
         int flags = FlagsOf(pinnedOpen, libraryOpen, playlistsOpen);
-        if (_doc is { } cached && _flags == flags) return cached;
+        if (_doc is { } cached && _flags == flags && ReferenceEquals(_topBar, topBar)) return cached;
         _flags = flags;
-        _doc = SidebarBuiltInDocuments.Classic(pinnedOpen, libraryOpen, playlistsOpen);
+        _topBar = topBar;
+        _doc = SidebarBuiltInDocuments.Classic(pinnedOpen, libraryOpen, playlistsOpen, topBar);
         return _doc;
     }
 }

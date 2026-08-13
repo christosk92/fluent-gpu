@@ -66,6 +66,7 @@ static class ControlsSuite
         BasicInputControlChecks(strings);
         W1ControlsChecks(strings);
         D2PasswordRevealFocusChecks(strings);
+        TextBoxBlurCommitChecks(strings);
         ProgressIndeterminateLifecycleChecks(strings);
         D3ExpanderChecks(strings);
         D3ExpanderWrapReflowChecks(strings);
@@ -248,6 +249,56 @@ static class ControlsSuite
         Check("gate.tooltip.stableWrap ToolTip.Wrap re-renders on a fresh target; WrapStable with the same delegate+text does not, but a text change does",
             wrapLive && stableQuiet && stableTextLive,
             $"wrapLive={wrapLive} mount={stableMount} quiet={stableQuiet}(builds={quietBuilds}) textLive={stableTextLive}(builds={liveBuilds})");
+
+        // gate.tooltip.growFill — the service wrapper is a flex ROW (BoxEl.Direction defaults to 0), so a wrapped
+        // auto-width target is MAIN-axis sized inside it: content width, not the wrapper's. A wrapper stretched by a
+        // COLUMN parent therefore held a shrink-wrapped target — which is why the sidebar's tooltip-carrying rows (a
+        // track row, a missing-entity row, an unavailable action row) painted narrower fill plates than the unwrapped
+        // rows above and below them. `grow:` is the OPT-IN cure; the DEFAULT must stay byte-identical, because the
+        // dozens of wrapped chips and icon buttons in columns app-wide are content-sized on purpose.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("tt-grow", new Size2(400, 200), 1f)); window.Show();
+            NodeHandle filled = default, plain = default, sized = default;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    // A COLUMN of fixed width: it cross-stretches each tooltip WRAPPER to 300, so the only question the
+                    // gate asks is whether the TARGET inside that wrapper follows.
+                    Build = () => new BoxEl
+                    {
+                        Direction = 1, Width = 300f, Gap = 4f,
+                        Children =
+                        [
+                            // opted in — must fill the column
+                            ToolTip.Wrap(new BoxEl
+                            {
+                                Height = 20f, Fill = Tok.AccentDefault, OnRealized = h => filled = h,
+                                Children = [new BoxEl { Width = 40f, Height = 20f }],   // intrinsically 40 wide
+                            }, "fill", grow: 1f),
+                            // default — must stay at its content width, exactly as before the parameter existed
+                            ToolTip.Wrap(new BoxEl
+                            {
+                                Height = 20f, Fill = Tok.AccentDefault, OnRealized = h => plain = h,
+                                Children = [new BoxEl { Width = 40f, Height = 20f }],
+                            }, "plain"),
+                            // opted in but the target DECLARES a Width — its own size wins, never silently overridden
+                            ToolTip.Wrap(new BoxEl
+                            {
+                                Width = 60f, Height = 20f, Fill = Tok.AccentDefault, OnRealized = h => sized = h,
+                            }, "sized", grow: 1f),
+                        ],
+                    },
+                });
+            host.RunFrame();
+            var scene = host.Scene;
+            float wFill = filled.IsNull ? -1f : scene.AbsoluteRect(filled).W;
+            float wPlain = plain.IsNull ? -1f : scene.AbsoluteRect(plain).W;
+            float wSized = sized.IsNull ? -1f : scene.AbsoluteRect(sized).W;
+            Check("gate.tooltip.growFill ToolTip.Wrap(grow:) makes the wrap layout-transparent on the MAIN axis too — the target fills the slot — while the default wrap stays content-sized byte-for-byte and a target with its own Width is never overridden",
+                Near(wFill, 300f, 0.5f) && Near(wPlain, 40f, 0.5f) && Near(wSized, 60f, 0.5f),
+                $"fill={wFill:0.#}(300) plain={wPlain:0.#}(40) sized={wSized:0.#}(60)");
+        }
     }
 
     static void NestedChecks(StringTable strings)
@@ -4927,6 +4978,81 @@ static class ControlsSuite
                 lifted && cleared && closed && noCommit,
                 $"lifted={lifted} cleared={cleared} closed={closed} deposits={probe.Deposits} dy=[{dy[2]:0.#},{dy[3]:0.#},{dy[4]:0.#}] op=[{op[2]:0.##},{op[3]:0.##},{op[4]:0.##}]");
         }
+
+        // e5dragdrop.reorder.varextent.samelist — C3's sibling case. The existing varextent gate drives the CROSS-LIST
+        // hover path (Core.Sample on entry); this drives the SAME-LIST keyboard lift with LiveProject off, which is the
+        // shape every mixed-height list in the app actually uses (the customizer outline's 52/44 cards). Both the shown
+        // cue and the committed slot must read the sampled prefix sums, or the line lands a row off from the drop.
+        {
+            var ro = new Reorderable("samelist")
+            {
+                ItemCount = 4, ItemExtent = 40f, ExtentOf = i => i == 1 ? 100f : 40f, Spacing = 0f,
+                LiveProject = false, ShowInsertionLine = true, RequestRender = static () => { },
+            };
+            var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));    // lift item 0 (starts 0,40,140,180)
+            bool lifted = ro.IsKeyboardLifted && !ro.InsertionVisible;   // home slot: nothing to show yet
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Down));     // pending 1 ⇒ the line sits AFTER the tall row
+            bool shown = ro.InsertionVisible && ro.InsertionIndex == 1;
+            float line = ro.InsertionLineOffset;                     // 140 from the extents; a uniform 40 pitch says 80
+            item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Escape));
+            Check("e5dragdrop.reorder.varextent.samelist a same-list (LiveProject-off) lift draws its insertion cue from the SAMPLED extents, so a mixed-height list marks the boundary the commit actually lands on",
+                lifted && shown && Near(line, 140f, 0.5f), $"lifted={lifted} shown={shown} line={line:0.#} expected=140");
+        }
+
+        // e5dragdrop.reorder.announce — the a11y channel (Primer / React-Aria): a keyboard lift has NO other feedback
+        // (displacement and the insertion line are purely visual), so grab/move/drop/cancel must reach the engine's
+        // live-region seam. Coalesced at ~100ms, because a held arrow key emits far more slot changes than a reader can
+        // speak — the throttle DROPS what it swallows, and the terminal drop/cancel announcement is what states the
+        // settled result, so the last thing spoken is never a position the user already left.
+        {
+            var spoken = new List<string>();
+            var assertive = new List<bool>();
+            var prior = InputHooks.Current.Default.Announce;
+            try
+            {
+                InputHooks.Current.Default.Announce = (t, a) => { spoken.Add(t); assertive.Add(a); };
+                var ro = new Reorderable("say")
+                {
+                    ItemCount = 4, ItemExtent = 40f, Spacing = 0f, LiveProject = false,
+                    RequestRender = static () => { },
+                    AnnounceText = a => $"{a.Kind}:{a.Index}->{a.Slot}/{a.Count}",
+                    // Deterministic: a wall-clock window would make the coalescing assertion depend on how fast this
+                    // gate happens to run (a GC pause between two synthetic key presses must not change the outcome).
+                    AnnounceThrottleMs = 60_000f,
+                };
+                var item = (BoxEl)ro.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "i0");
+                Announcer.Reset();
+                item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));   // Grab — immediate
+                item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Down));    // Move — inside the window ⇒ coalesced away
+                item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Down));    // Move — same
+                item.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));   // Drop — states the settled result
+                bool coalesced = spoken.Count == 2
+                    && spoken[0] == "Grab:0->0/4" && spoken[1] == "Drop:0->2/4"
+                    && assertive[0] && assertive[1];
+
+                // …and a move that OPENS the window is spoken in its own right (the throttle coalesces bursts, it does
+                // not mute the channel): after a Reset the first throttled message always lands.
+                spoken.Clear();
+                Announcer.Reset();
+                bool moveSpeaks = Announcer.SayThrottled("Move:1->2/4", assertive: true)
+                    && spoken.Count == 1 && spoken[0] == "Move:1->2/4";
+
+                // An UNWIRED list is byte-identical to the pre-announcement control.
+                spoken.Clear();
+                Announcer.Reset();
+                var quiet = new Reorderable("quiet") { ItemCount = 4, ItemExtent = 40f, RequestRender = static () => { } };
+                var qi = (BoxEl)quiet.Item(0, new BoxEl { Width = 200, Height = 40 }, key: "q0");
+                qi.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));
+                qi.OnKeyDown?.Invoke(new KeyEventArgs(Keys.Space));
+                bool silentByDefault = spoken.Count == 0;
+
+                Check("e5dragdrop.reorder.announce Reorderable announces grab/move/drop assertively through the engine live-region seam, coalesces a burst of moves down to the terminal message, and stays byte-identical (silent) with no AnnounceText wired",
+                    coalesced && moveSpeaks && silentByDefault,
+                    $"coalesced={coalesced} moveSpeaks={moveSpeaks} silent={silentByDefault}");
+            }
+            finally { InputHooks.Current.Default.Announce = prior; Announcer.Reset(); }
+        }
     }
 
     static void SortableMathChecks()
@@ -6561,6 +6687,121 @@ static class ControlsSuite
         Check("cp2.c — blur→refocus shows no eye (OnGotFocus arm-clear); typing populated stays hidden; empty→retype re-arms",
             blurUnmounts && noEyeOnRefocus && typingPopulatedHidden && rearmed,
             $"blur={blurUnmounts} refocus={noEyeOnRefocus} typing={typingPopulatedHidden} rearmed={rearmed}");
+    }
+
+    // cp-blur — TextBox.CommitOnLostFocus. WinUI's TextBox has no blur seam at all, so a rename field built on Enter
+    // alone silently DROPS a typed value the moment focus moves — the user's edit is gone with no error and nothing to
+    // undo. The opt-in must land exactly one commit per real edit: an Escape that reverts-then-blurs is a cancel and
+    // must not publish the reverted value as a choice, and an Enter that already committed must not be re-published by
+    // the blur that follows it.
+    static void TextBoxBlurCommitChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("tb-blur", new Size2(460, 260), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+
+        var optIn = new FluentGpu.Signals.Signal<string>("");
+        var optOut = new FluentGpu.Signals.Signal<string>("");
+        var commits = new List<string>();
+        var optOutCommits = new List<string>();
+        int cancels = 0;
+        NodeHandle other = default;
+
+        var root = new W0fStaticProbe
+        {
+            Build = () => new BoxEl
+            {
+                Direction = 1, Gap = 12, Padding = Edges4.All(12),
+                Children =
+                [
+                    TextBox.Create(optIn, null, new TextBox.TextBoxOptions
+                    {
+                        Width = 200f, CommitOnLostFocus = true,
+                        OnCommit = v => commits.Add(v), OnCancel = () => cancels++,
+                    }),
+                    // The control group: identical field WITHOUT the opt-in must stay byte-identical (Enter only).
+                    TextBox.Create(optOut, null, new TextBox.TextBoxOptions
+                    {
+                        Width = 200f, OnCommit = v => optOutCommits.Add(v),
+                    }),
+                    new BoxEl { Width = 120, Height = 32, OnClick = () => { }, OnRealized = h => other = h },
+                ],
+            },
+        };
+        using var host = new AppHost(app, window, device, fonts, strings, root);
+        host.RunFrame();
+        var scene = host.Scene;
+        var fields = Roles(scene, AutomationRole.Text);
+
+        void TypeFocused(string text)
+        {
+            foreach (char ch in text) window.QueueInput(new InputEvent(InputKind.Char, default, 0, ch));
+            host.RunFrame();
+            host.RunFrame();
+        }
+        void Type(NodeHandle field, string text)
+        {
+            ClickNode(host, window, field);
+            host.RunFrame();
+            TypeFocused(text);
+        }
+        void Blur() { ClickNode(host, window, other); host.RunFrame(); }
+        void Key(int code) { window.QueueInput(new InputEvent(InputKind.Key, default, 0, code)); host.RunFrame(); host.RunFrame(); }
+
+        bool wired = fields.Count == 2 && !other.IsNull;
+        if (!wired)
+        {
+            Check("cp-blur TextBox.CommitOnLostFocus probe wired", false, $"fields={fields.Count} other={!other.IsNull}");
+            return;
+        }
+
+        // 1 — type, then click away: the edit is COMMITTED (this is the whole feature).
+        Type(fields[0], "ab");
+        Blur();
+        bool committedOnBlur = commits.Count == 1 && commits[0] == optIn.Peek();
+
+        // 2 — refocus and blur with NO edit: nothing new. The baseline is what the last commit published, not the
+        //     mere fact that the field was focused.
+        ClickNode(host, window, fields[0]); host.RunFrame();
+        Blur();
+        bool untouchedBlurSilent = commits.Count == 1;
+
+        // 3 — Enter commits and KEEPS focus (WinUI); the blur that eventually follows must NOT re-publish it.
+        Type(fields[0], "c");
+        Key(Keys.Enter);
+        int afterEnter = commits.Count;
+        Blur();
+        bool noDoubleCommitAfterEnter = afterEnter == 2 && commits.Count == 2 && commits[1] == optIn.Peek();
+
+        // 4 — Escape reverts to the FOCUS-TIME snapshot and blurs. Staged (focus → type → Enter → type again → Escape)
+        //     so the revert target genuinely DIFFERS from what was last published: without the cancel guard the blur
+        //     would then publish the reverted text as if the user had chosen it, turning a cancel into an edit.
+        Type(fields[0], "z");
+        Key(Keys.Enter);                 // publishes the "z" edit and keeps focus
+        string published = commits.Count == 3 ? commits[2] : "";
+        TypeFocused("y");                // still focused — a further edit the user is about to abandon
+        Key(Keys.Escape);                // revert to the focus-time text (≠ published), OnCancel, blur
+        Blur();                          // …and the click that follows must not commit it either
+        bool cancelDoesNotCommit = cancels == 1 && commits.Count == 3
+                                   && published.Length > 0 && optIn.Peek() != published;
+
+        // 5 — …and the cancel flag does not LATCH: the next real edit still commits on blur.
+        Type(fields[0], "q");
+        Blur();
+        bool cancelDoesNotLatch = commits.Count == 4 && commits[3] == optIn.Peek();
+
+        // 6 — the opt-out field is untouched: blur drops the edit exactly as before (Enter is still its only commit).
+        Type(fields[1], "x");
+        Blur();
+        bool optOutUnchanged = optOutCommits.Count == 0;
+
+        Check("cp-blur TextBox.CommitOnLostFocus commits a typed edit on blur, stays silent for an untouched blur, never double-commits after Enter, never commits Escape's revert (and does not latch), and leaves an opt-out field byte-identical",
+            committedOnBlur && untouchedBlurSilent && noDoubleCommitAfterEnter && cancelDoesNotCommit
+            && cancelDoesNotLatch && optOutUnchanged,
+            $"blur={committedOnBlur} untouched={untouchedBlurSilent} enter={noDoubleCommitAfterEnter} " +
+            $"cancel={cancelDoesNotCommit}(n={cancels}) latch={cancelDoesNotLatch} optOut={optOutUnchanged}(n={optOutCommits.Count}) " +
+            $"commits=[{string.Join(",", commits)}]");
     }
 
     static void ControlKitIdiomChecks(StringTable strings)

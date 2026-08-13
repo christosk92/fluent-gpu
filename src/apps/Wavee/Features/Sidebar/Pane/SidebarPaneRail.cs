@@ -64,16 +64,11 @@ static class SidebarPaneRail
             kids.Add(SidebarLayoutMenu.Button(prefs, owner.Navigate, box: SidebarRailItem.Box));
         }
 
-        // O3 — the shortcut band's rail form, PREPENDED (the mirror of the RailFooter append above): the app's navigation
-        // band sits above the document's own tiles, exactly as it does in the expanded pane. Inserted AFTER the loop
-        // rather than before it on purpose — the "pending + nothing resolved ⇒ shimmer" fallback tests `kids.Count == 0`,
-        // and a head tile pushed in first would make an unresolved rail look resolved. A null head (an emptied band)
-        // costs neither tiles nor a rule.
-        if (owner.Config.RailHead?.Invoke() is { } head)
-        {
-            kids.Insert(0, SidebarRailItem.Divider());
-            kids.Insert(0, head);
-        }
+        // PHASE 1 — the shortcut band's rail form used to be PREPENDED here from `Config.RailHead`, a second hand-written
+        // tile path beside the loop above. It is gone: the band is now the document's first section
+        // (`SidebarShortcutsSection`), so `SidebarRowPlanner.BuildRail` emits its tiles from `ShowInRail` in document
+        // order like every other section's, and the divider under them comes from the plan's own divider collapse rules.
+        // One owner for rail CONTENT, which is what locked decision 7 always said.
 
         return new BoxEl
         {

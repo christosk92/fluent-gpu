@@ -37,6 +37,12 @@ public enum SidebarRowKind : byte
     CreateAction  = 10,  // the "+" affordance a PlaylistTree section owns
     EntityCard    = 11,  // the EntityEmbed hero card: taller row, cover-left, play affordance
     PromptRow     = 12,  // an actionable degraded state (e.g. Concerts' "Set your location" row)
+    // PHASE 2 / Decision B — EDIT MODE ONLY. One uniform-height header card standing in for a whole section while the
+    // pane is the customize canvas: grip · kind glyph · title · count · eye · "…". APPENDED, never inserted: the kind
+    // is the ItemsView's ContentType (one recycle pool per kind) and the tests pin the row SEQUENCE, so renumbering
+    // would silently re-pool every existing row. `ItemCount` carries the card's honest count (-1 = none — see
+    // SidebarEditPlan.CardCount); `EntryIndex` stays -1, like every other chrome row.
+    SectionCard   = 13,
 }
 
 /// <summary>POD. No strings are allocated during planning: labels resolve at render time from the referenced
@@ -233,6 +239,54 @@ public static class SidebarRowPlanner
         return new SidebarRowPlan(st.Rows, st.Entries, input.Revision);
     }
 
+    /// <summary>PHASE 2 / Decision B — THE EDIT PROJECTION of the same document.
+    ///
+    /// <para><b>Why a second entry point and not a flag inside <see cref="Build"/>.</b> Iron rule 3 says the document is
+    /// never rendered section-by-section: one flat <c>SidebarRow[]</c> through one <c>ItemsView.CreateBound</c>. Edit
+    /// mode must obey that too — a pane-level "substitute a hand-built card column for the list" would have re-created
+    /// the nested-scroller shape the unification deleted, and would have cost the cards virtualization, the pane's
+    /// reorder-band machinery and the section rhythm. So edit mode is a PLAN: every top-level section becomes ONE
+    /// <see cref="SidebarRowKind.SectionCard"/> row, and the one expanded section (or every section, under
+    /// <c>ShowContents</c>) has its ordinary body planned right underneath by the very same per-kind planners the live
+    /// pane uses — which is what makes the canvas the real artifact rather than a preview of it (P1).</para>
+    ///
+    /// <para>It is a SEPARATE method rather than a branch so the normal path stays byte-identical, and so the pure
+    /// planner keeps exactly one reason to know an edit session exists.</para>
+    ///
+    /// <para>Three deliberate differences from <see cref="Build"/>:</para>
+    /// <list type="bullet">
+    /// <item>a HIDDEN section still gets its card (P2 — it is dimmed with an eye-off badge, never removed from view)
+    /// but never a body: its rows are not in the live sidebar, and drawing them would be the editor lying;</item>
+    /// <item>no <c>SectionHeader</c> row is emitted — the card IS the header, and two of them would be one artifact
+    /// drawn twice;</item>
+    /// <item>an unknown (future) section kind plans no card, exactly as it renders no rows. It stays in the document
+    /// and round-trips untouched; <c>SidebarEditPlan.ToMoveSection</c> bridges the resulting gap in the band.</item>
+    /// </list>
+    /// <para>One further, DELIBERATE divergence from the live pane: a revealed body ignores the section's persisted
+    /// <c>Collapsed</c> bit. Expanding a card is the EDITOR's reveal — you cannot reorder or relabel items you cannot
+    /// see — while the document's own collapse state stays exactly what it was and remains editable from the section's
+    /// options ("Collapse section"). Honouring it here would make a collapsed section the one thing in the canvas that
+    /// cannot be edited.</para></summary>
+    public static SidebarRowPlan BuildEdit(SidebarCustomLayout layout, in SidebarProjectionInput input,
+        in SidebarEditState edit, SidebarPlanBuffers? buffers = null)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        var st = Begin(buffers);
+
+        var sections = layout.Sections;
+        for (int i = 0; i < sections.Count; i++)
+        {
+            var s = sections[i];
+            if (!SidebarSectionKinds.IsKnown(s.Kind)) continue;
+            // The card is a chrome row like any other: Key == section.Id, EntryIndex == -1, no string allocated.
+            Add(ref st, new SidebarRow(SidebarRowKind.SectionCard, s.Id, 0, -1,
+                                       SidebarEditPlan.CardCount(s), s.Id));
+            if (SidebarEditPlan.ShowsBody(in edit, s)) PlanBody(s, 0, in input, ref st);
+        }
+
+        return new SidebarRowPlan(st.Rows, st.Entries, input.Revision);
+    }
+
     // ── expanded plan ────────────────────────────────────────────────────────────────────────────────────────────────
 
     static void PlanSection(SidebarSectionSpec s, byte depth, in SidebarProjectionInput input, ref PlanState st)
@@ -260,6 +314,14 @@ public static class SidebarRowPlanner
 
         if (s.Collapsed) return;
 
+        PlanBody(s, depth, in input, ref st);
+    }
+
+    /// <summary>A section's BODY rows — everything after its header. Split out of <see cref="PlanSection"/> so the edit
+    /// projection (<see cref="BuildEdit"/>) can plan a real body under a card without also planning a second header;
+    /// <see cref="PlanSection"/> is unchanged in behaviour (header, collapse gate, then this).</summary>
+    static void PlanBody(SidebarSectionSpec s, byte depth, in SidebarProjectionInput input, ref PlanState st)
+    {
         switch (s.Kind)
         {
             case SidebarSectionKind.Pinned: PlanPinned(s, depth, in input, ref st); break;

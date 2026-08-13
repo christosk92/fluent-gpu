@@ -745,6 +745,21 @@ Providers are **materialized lazily** per node first reached by a navigate/hit-t
 - **`get_BoundingRectangle`** uses the shared ancestor-transform-chain helper (§5.3 `LocalRectToClient`) + client→screen — **not** a bare client offset.
 - **Auto-name derivation:** the `AccessibilityScanner` heuristics (LabeledBy → content text → AutomationId fallback) are extracted into a **shared helper** consumed by BOTH the DEBUG `AccessibilityScanner` lint and the runtime `get_Name`. The same helper resolves `get_FullDescription` (§11.5) so name and full-description never disagree.
 - **Live regions:** the **reconciler** captures the pre-write `StringId` for `A11yLiveRegion` nodes (`1<<26`) and compares post-write; on change it raises `RaiseLiveRegionChanged`. `UseAnnounce` raises the **UIA Notification event** (`UiaRaiseNotificationEvent` / `IRawElementProviderSimple3`) added to `IA11yBackend`; it fires in **phase 12** for any seq ≤ last-presented (so screen-reader announcements track what was actually shown).
+- **As-built — the ANNOUNCE seam (SHIPPED, ahead of the `NodeProvider` tree above).** The full UIA tree is still future
+  work, but the live region is not: the host publishes a `(text, assertive)` delegate on `InputHooks.Announce`, which the
+  Windows backend points at `UiaRaiseNotificationEvent` on the window's root provider (`Win32Uia.Announce`, itself gated
+  on `UiaClientsAreListening` per §11.2). A headless/probe host leaves the delegate null, so every announcement is a
+  no-op by construction. `FluentGpu.Input.Announcer` is the engine-side front door over it and owns exactly ONE policy —
+  **coalescing**: `Say` speaks immediately and reopens the window; `SayThrottled` speaks the first change in a ~100 ms
+  window (the Primer / React-Aria value) and DROPS the rest, so a held arrow key or a pointer crossing rows cannot read
+  back a position the user has already left. The throttle is deliberately **leading-edge with no trailing timer** —
+  there is no clock here to deliver one, and giving it one means putting this on the frame loop. What makes dropping
+  correct is a caller obligation: every throttled run must END with a plain `Say` stating the SETTLED result, which is
+  both more useful than the last intermediate message and immune to the window. Text is composed by the CALLER, on the
+  edge that triggered it (never per frame, never inside phases 6–13), because only the app can name the thing and owns
+  the locale. First consumer: `Controls.Reorderable.AnnounceText` (grab / each move / drop / cancel, assertive — the
+  keyboard lift's ONLY feedback channel, since displacement and the insertion line are purely visual; gate
+  `e5dragdrop.reorder.announce`). This is the substrate the `UseAnnounce` hook above will sit on; the hook is not built.
 - **`AutomationRole` (SHIPPED — control-type announcement for a `BoxEl`):** because a FluentGpu control is a `BoxEl`, not a nominal type, it announces its kind via a new `AutomationRole` enum (defined in **Foundation**) surfaced through `BoxEl.Role` → the **`InteractionInfo.Role`** column (a `byte`; storage shape owned by `scene-memory.md`, semantics here). Control factories set it: Button/IconButton → `Button`, ToggleButton → `ToggleButton`, Slider → `Slider`, ScrollBar → `ScrollBar`, NavigationView items → `NavigationItem`. It is the bridge the future UIA `NodeProvider` (mapping `AutomationRole` → UIA `ControlType`), the devtools inspector, and UI tests read to recover a control's type from the flat SoA tree. (Phase 0; the lookless control kit's richer `A11yInfo.ControlType`/`Patterns` story, §11.4 above, supersedes it once that kit lands.)
 
 ### 11.5 Collection relations + heading/landmark nav (L6 folded into core)

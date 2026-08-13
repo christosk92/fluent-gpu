@@ -257,7 +257,9 @@ sealed class LibraryV3Chips : Component
         => ScrollView(new BoxEl
         {
             Direction = 0, Gap = 6f, AlignItems = FlexAlign.Center, MinWidth = 0f,
-            Padding = new Edges4(8f, 0f, 8f, 0f),
+            // The ONE content lane (see LibraryV3Header's band). It sits INSIDE the horizontal scroller on purpose: the
+            // chips must scroll out from under the lane with AutoEdgeFade, not be clipped at a padded viewport.
+            Padding = SidebarPaneMetrics.BandInset,
             // The rail box owns the arrow-key handler; a focused chip's key event bubbles here.
             OnKeyDown = onKey,
             Children = [.. chips],

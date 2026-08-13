@@ -32,8 +32,10 @@ public class ArtistHeroLayoutTests
         Assert.True(wide.CopyMaxWidth > medium.CopyMaxWidth);
     }
 
+    // Stacked tiers no longer paint an overlay veil at all: the photograph is a top band and the identity column sits
+    // below it on the page surface, so Vertical here means "stacked layout", not "vertical gradient over the photo".
     [Fact]
-    public void CompactAndNarrow_UseBottomCopyWithVerticalVeils()
+    public void CompactAndNarrow_StackThePhotoAboveTheIdentityColumn()
     {
         var compact = ArtistHeroLayout.For(720f, ArtistHeroTier.Compact);
         var narrow = ArtistHeroLayout.For(420f, ArtistHeroTier.Narrow);
@@ -42,6 +44,22 @@ public class ArtistHeroLayoutTests
         Assert.Equal(ArtistHeroVeilAxis.Vertical, narrow.VeilAxis);
         Assert.True(compact.Stacked);
         Assert.True(narrow.Stacked);
+
+        // The photo band is a strict top slice — the identity column keeps a real share of the fixed hero height.
+        Assert.Equal(ArtistHeroLayout.CompactPhotoHeight, ArtistHeroLayout.PhotoHeightFor(compact));
+        Assert.Equal(ArtistHeroLayout.NarrowPhotoHeight, ArtistHeroLayout.PhotoHeightFor(narrow));
+        Assert.True(ArtistHeroLayout.CompactPhotoHeight < compact.MinHeight);
+        Assert.True(ArtistHeroLayout.NarrowPhotoHeight < narrow.MinHeight);
+    }
+
+    [Fact]
+    public void WideAndMedium_PhotoOwnsTheWholeHero()
+    {
+        var wide = ArtistHeroLayout.For(1440f, ArtistHeroTier.Wide);
+        var medium = ArtistHeroLayout.For(900f, ArtistHeroTier.Medium);
+
+        Assert.Equal(wide.MinHeight, ArtistHeroLayout.PhotoHeightFor(wide));
+        Assert.Equal(medium.MinHeight, ArtistHeroLayout.PhotoHeightFor(medium));
     }
 
     [Fact]

@@ -26,10 +26,11 @@ sealed partial class ArtistPage : Component
     bool TopBandWide(float w)
         => _topBandWide = _topBandWide ? w >= TopBandWideW - TopBandHysteresis : w >= TopBandWideW;
 
-    // Top tracks retain the native two-column PagedShelf. The supporting rail now carries artist-authored and
-    // time-sensitive objects only: Artist Pick and upcoming. Latest release moved out to its own wide banner
-    // section, pinned directly above Albums (see ArtistPage.cs Body) — a "just dropped" record earns full-band
-    // prominence, not a narrow rail card competing with Artist Pick for the same column.
+    // Top tracks retain the native two-column PagedShelf. The supporting rail carries ONE featured object: an
+    // Artist pick (with the upcoming record riding it as a merged S3 footer row when both exist), or — when there
+    // is no pick — a standalone Zune date-led upcoming card. Never both sections at once: stacking pick + upcoming
+    // in the rail out-ran Top tracks and left a dead band beside it. Latest release stays its own wide banner
+    // above Albums (see ArtistPage.cs Body).
     Element TopBand(IReadOnlyList<Track> popular, string uri, PlaybackBridge? bridge, Services svc,
                     PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName,
                     ArtistPreRelease? upcoming,
@@ -40,7 +41,7 @@ sealed partial class ArtistPage : Component
             string popTitle = Loc.Get(Strings.Artist.TopTracks);
             Element tracks = Embed.Comp(() => new ArtistPopular(popular, uri, bridge, svc, popTitle, accent))
                 with { SkeletonProxy = () => ArtistPopular.SkeletonShape(popular, popTitle) };
-            Element featured = FeaturedColumn(pinned, artistImage, artistBackground, artistName, upcoming, go, play, accent);
+            Element featured = FeaturedColumn(pinned, artistImage, artistBackground, artistName, upcoming, go, play, accent, wide);
             bool hasFeatured = pinned is not null || upcoming is { IsUpcoming: true };
 
             if (!hasFeatured)
@@ -66,34 +67,39 @@ sealed partial class ArtistPage : Component
             };
         }, fallback: 900f);
 
+    // The pick owns this column outright. A standalone Upcoming card renders here only when there is NO pick —
+    // when both exist, the announcement moves to its own full-width band above Latest release (ArtistPage.cs Body),
+    // because two stacked cards made the rail out-run Top tracks and left a dead band beside them. `wide` is folded
+    // into the child's Key: a tier crossing remounts (props freeze at mount).
     Element FeaturedColumn(PinnedItem? pinned, Image? artistImage, Image? artistBackground, string artistName,
                            ArtistPreRelease? upcoming, Action<string, string?> go,
-                           Action<string> play, Func<ColorF> accent)
+                           Action<string> play, Func<ColorF> accent, bool wide)
     {
-        var groups = new List<Element>(2);
         if (pinned is { } pick)
         {
             string target = RichText.RouteForUri(pick.TargetUri) ?? ("album:" + pick.TargetUri);
-            groups.Add(Section(Loc.Get(Strings.Artist.ArtistPick),
+            return Section(Loc.Get(Strings.Artist.ArtistPick),
                 MediaCard.ArtistPick(pick, artistName, artistImage, artistBackground,
                     onClick: () => go(target, pick.Title),
                     onPlay: () => play(pick.TargetUri),
+                    accent: accent,
+                    horizontal: !wide,
                     // A pinned item can point at any entity, so the kind comes from the uri — the same discrimination
                     // `target` above used, so the drag payload can never disagree with the click's destination.
                     drag: CardDrag(WaveeDragKindMap.OfUri(pick.TargetUri), pick.TargetUri, pick.Title, pick.Cover)))
-                with { Key = "featured:pick" });
+                with { Key = "featured:pick:" + (wide ? "rail" : "band") };
         }
         if (upcoming is { IsUpcoming: true } next)
-            groups.Add(Section(Loc.Get(Strings.Artist.Upcoming), UpcomingMasthead(next, go, accent))
-                with { Key = "featured:upcoming" });
-
-        return new BoxEl { Direction = 1, Gap = Spacing.XL, Children = groups.ToArray() };
+            return Section(Loc.Get(Strings.Artist.Upcoming), UpcomingCard(next, artistName, wide, go, accent))
+                with { Key = "featured:upcoming:" + (wide ? "rail" : "band") };
+        return new BoxEl();
     }
 
-    // The artist's announced-but-unreleased record in the supporting rail. Built on ReleaseMasthead's
-    // geometry grammar verbatim (96px cover, 10px/700 eyebrow, 15px/700 name, 12px meta, the same paddings, corners,
-    // card fill and hover) so the two read as one stack rather than two designs sharing a column.
-    static Element UpcomingMasthead(ArtistPreRelease p, Action<string, string?> go, Func<ColorF> accent)
+    // The Zune date-led upcoming card: the date is the headline, not a chip. Two arms on one tone plate —
+    // P1 column when it sits in the wide featured rail (no pick), P2 horizontal band everywhere full-width:
+    // the stacked featured slot, and the page-level band above Latest release that hosts it when the pick
+    // owns the rail (ArtistPage.cs Body).
+    static Element UpcomingCard(ArtistPreRelease p, string artistName, bool wide, Action<string, string?> go, Func<ColorF> accent)
     {
         // Either scheme can land here: preReleaseV2 hands back an ALBUM uri on every capture so far, but a
         // spotify:prerelease: one is equally valid (the two ids DIFFER — neither can be synthesised from the other).
@@ -103,73 +109,137 @@ sealed partial class ArtistPage : Component
         // Sentence case throughout, including the release TYPE: the sibling tokens it used to match ("ALBUM" out of
         // KindLabel) are LOCALIZED strings, and upper-casing those is the exact defect the eyebrow role gave up.
         // Absent type → the bare word, never a dangling separator.
-        string eyebrow = p.Type is { Length: > 0 } type
+        string eyebrowText = p.Type is { Length: > 0 } type
             ? Loc.Get(Strings.Artist.Upcoming) + " · " + type
             : Loc.Get(Strings.Artist.Upcoming);
+        ColorF tint = accent();
+
+        TextEl eyebrow = WaveeType.Eyebrow(eyebrowText) with { Color = tint, MaxLines = 1 };
+        TextEl title = WaveeType.PickQuote(p.Name) with
+        {
+            Wrap = TextWrap.Wrap, MaxLines = 2, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+        };
+        var metaKids = new List<Element>(2)
+        {
+            Ui.Caption(artistName) with
+            {
+                Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+            },
+        };
         // Announced-but-undated is a real state on the wire — then the card announces without promising a day.
-        string meta = p.ReleaseAt is { } dated ? Strings.Detail.ReleasesOn(DetailFormat.ShortDate(dated)) : "";
+        // The "releases …" caption joins the meta only on the HORIZONTAL arm, where the big date sits away from the
+        // copy at the row's far end; in the P1 column the date IS the headline two lines up, and repeating it in
+        // caption ink directly underneath said the same fact twice.
+        TextEl? bigDate = null;
+        if (p.ReleaseAt is { } dated)
+        {
+            if (!wide)
+                metaKids.Add(Ui.Caption(Strings.Detail.ReleasesOn(DetailFormat.ShortDate(dated))) with
+                {
+                    MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+                });
+            bigDate = WaveeType.SurfaceDisplay(DetailFormat.ShortDate(dated)) with { MaxLines = 1 };
+        }
+        Element meta = new BoxEl { Direction = 1, MinWidth = 0f, Children = metaKids.ToArray() };
+
+        // NO Play button, and there must never be one: a prerelease uri must never reach PlayAsync — there is
+        // nothing to stream yet, and the sibling masthead's Play slot is taken here by the only action the record
+        // can honour before it drops.
+        //
+        // PROPS FREEZE AT MOUNT, so the embed is keyed on the uri: this column is rebuilt whenever extras arrive,
+        // and an unkeyed PreSaveButton would keep resolving (and pre-saving) whichever uri happened to be current
+        // at mount.
+        Element actions = new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S,
+            Children =
+            [
+                Embed.Comp(() => new PreSaveButton { Uri = p.Uri, Name = p.Name, Accent = accent })
+                    with { Key = "presave:" + p.Uri },
+                Button.Create(Loc.Get(Strings.Artist.View), () => go(route, p.Name),
+                    ButtonAppearance.Outline, ControlSize.Small),
+            ],
+        }.Skeletonized(false);
+
+        // The LIVE clock (UseInterval, auto-paused while the page is parked or the window minimized). Only inside
+        // two weeks: further out, the big date alone speaks — a month of "327 hrs" is noise. Keyed on uri + instant
+        // because ReleaseAt freezes at mount.
+        Element? countdown = p.ReleaseAt is { } due
+            && due > DateTimeOffset.UtcNow
+            && due - DateTimeOffset.UtcNow <= TimeSpan.FromDays(14)
+            ? Embed.Comp(() => new PreReleaseCountdown { ReleaseAt = due, Accent = accent, Bare = true })
+                with { Key = "artist-upcoming:" + p.Uri + ":" + due.UtcTicks.ToString(CultureInfo.InvariantCulture) }
+            : null;
+
+        Element content;
+        if (wide)
+        {
+            var col = new List<Element>(6) { eyebrow };
+            if (bigDate is { } d) col.Add(d);
+            col.Add(title);
+            col.Add(meta);
+            if (countdown is { } clock) col.Add(clock);
+            col.Add(actions);
+            content = new BoxEl
+            {
+                Direction = 1, Padding = Edges4.All(Spacing.L), Gap = Spacing.S,
+                Children = col.ToArray(),
+            };
+        }
+        else
+        {
+            // Exactly one elastic lane (the copy column) — cover, date and actions never give.
+            var row = new List<Element>(4)
+            {
+                new BoxEl
+                {
+                    Width = 88f, Height = 88f, Shrink = 0f, ClipToBounds = true,
+                    Corners = CornerRadius4.All(Radii.Control),
+                    Children =
+                    [
+                        Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 88f, 88f, Radii.Control, decodePx: 192),
+                    ],
+                },
+                new BoxEl
+                {
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XS,
+                    Children = [eyebrow, title with { MaxLines = 1 }, meta],
+                },
+            };
+            if (bigDate is { } d) row.Add(d with { Shrink = 0f });
+            var actionCol = new List<Element>(2) { actions };
+            if (countdown is { } clock) actionCol.Add(clock);
+            row.Add(new BoxEl
+            {
+                Direction = 1, Gap = Spacing.S, AlignItems = FlexAlign.End, Shrink = 0f,
+                Children = actionCol.ToArray(),
+            });
+            content = new BoxEl
+            {
+                Direction = 0, Gap = Spacing.XL, AlignItems = FlexAlign.Center,
+                Padding = new Edges4(Spacing.XL, Spacing.L, Spacing.XL, Spacing.L),
+                MinWidth = 0f,
+                Children = row.ToArray(),
+            };
+        }
 
         return new BoxEl
         {
-            Direction = 0, Gap = Spacing.M, AlignItems = FlexAlign.Center,
-            Padding = Edges4.All(Spacing.M), Corners = CornerRadius4.All(Radii.Card),
-            // A FULL card, on the bare page surface: this is a discrete promoted object (one announced record) — exactly
-            // what a Fluent card is FOR — and the announcement is this page's one piece of news, so it earns the chrome.
-            // The stroke is safe because nothing encloses it any more; there is no second hairline to double up with.
+            ZStack = true, ClipToBounds = true,
+            Corners = CornerRadius4.All(Radii.Card),
             Fill = Tok.FillCardDefault, BorderWidth = 1f, BorderColor = Tok.StrokeCardDefault,
             Children =
             [
                 new BoxEl
                 {
-                    Width = 96f, Height = 96f, Shrink = 0f, ClipToBounds = true,
-                    Corners = CornerRadius4.All(Radii.Control),
-                    Children =
-                    [
-                        Surfaces.Artwork(p.Cover, p.Uri.GetHashCode() & 0x7fffffff, 96f, 96f, Radii.Control, decodePx: 192),
-                    ],
+                    HitTestVisible = false,
+                    // 0.16 is the Tok.AccentSubtle alpha.
+                    Gradient = GradientDown(
+                        new GradientStop(0f, tint with { A = 0.16f }),
+                        new GradientStop(0.55f, tint with { A = 0.05f }),
+                        new GradientStop(0.85f, tint with { A = 0f })),
                 },
-                new BoxEl
-                {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = 4f,
-                    Children =
-                    [
-                        // The eyebrow alias (12/16/600 + the one tracking). Title is BodyStrong (14/20/600), the app's
-                        // card-title rung.
-                        WaveeType.Eyebrow(eyebrow) with { Color = Tok.TextTertiary, MaxLines = 1 },
-                        Ui.BodyStrong(p.Name) with
-                        {
-                            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
-                        },
-                        meta.Length > 0
-                            ? Ui.Caption(meta) with { MaxLines = 1, Trim = TextTrim.CharacterEllipsis }
-                            : new BoxEl(),
-                        new BoxEl
-                        {
-                            Direction = 0, Gap = Spacing.S, Margin = new Edges4(0f, Spacing.S, 0f, 0f),
-                            Children =
-                            [
-                                // NO Play button, and there must never be one: a prerelease uri must never reach
-                                // PlayAsync — there is nothing to stream yet, and the sibling masthead's Play slot is
-                                // taken here by the only action the record can honour before it drops.
-                                //
-                                // PROPS FREEZE AT MOUNT, so the embed is keyed on the uri: this column is rebuilt
-                                // whenever extras arrive, and an unkeyed PreSaveButton would keep resolving (and
-                                // pre-saving) whichever uri happened to be current at mount.
-                                Embed.Comp(() => new PreSaveButton { Uri = p.Uri, Name = p.Name, Accent = accent })
-                                    with { Key = "presave:" + p.Uri },
-                                Button.Create(Loc.Get(Strings.Artist.View), () => go(route, p.Name),
-                                    ButtonAppearance.Outline, ControlSize.Small),
-                            ],
-                        }.Skeletonized(false),
-                        // The LIVE clock (UseInterval, auto-paused while the page is parked or the window minimized).
-                        // This is the one countdown on the artist page that keeps running: unlike the hero card it does
-                        // not collapse away on scroll. Keyed on uri + instant because ReleaseAt freezes at mount.
-                        p.ReleaseAt is { } due
-                            ? Embed.Comp(() => new PreReleaseCountdown { ReleaseAt = due, Accent = accent })
-                                with { Key = "artist-upcoming:" + p.Uri + ":" + due.UtcTicks.ToString(CultureInfo.InvariantCulture) }
-                            : new BoxEl(),
-                    ],
-                },
+                content,
             ],
         };
     }

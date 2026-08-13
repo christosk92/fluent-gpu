@@ -293,6 +293,8 @@ public sealed class PcmAudioSession : IMediaSession
     public float ReferenceLufsValue => _refLufs;
     /// <summary>The mixer-domain frame currently consumed (the sample clock the scheduler ticks on).</summary>
     public long SampleClock => _mixer.ConsumeSeq;
+    /// <summary>RT-feed ring underruns (silence written) since this session opened. 0 on the single-thread pull path.</summary>
+    public long XrunCount => _feed?.XrunCount ?? 0;
 
     /// <summary>Publish an audio graph (spec §7.4 atomic swap). Control-thread only.</summary>
     public void Configure(AudioGraphSpec spec) => _graph.Publish(spec);

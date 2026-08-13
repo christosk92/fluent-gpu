@@ -131,6 +131,7 @@ sealed partial class ArtistPage : Component
         var scroll = ScrollView(Skel.Region(artist,
             content: a => Body(a, fansList, svc, go, bridge, compactInteractive, pageScroll),
             onFailed: () => ErrorState.Build(artist.Error),
+            reveal: SkelReveal.FadeOnly,
             group: routeKey)
             with
             {
@@ -215,14 +216,16 @@ sealed partial class ArtistPage : Component
             pivot.Add(new ContextPivotItem(key, pivotLabel));
             sections.Add(ContextBand.Anchor(_anchors, key, body with { Key = "sec:" + key }));
         }
-        // NO pre-release band here. Four surfaces already carry the announcement, each in a place the visitor is
-        // already looking: the hero eyebrow pill (narrow windows), the hero pinned card's date line (wide), the compact
-        // bar once the hero scrolls away, and the Upcoming masthead at the head of the Releases column — where anyone
-        // asking "what's new from this artist" looks first. A band of its own would be a FIFTH copy of one fact, and it
-        // would push Top tracks, the thing most visitors came for, down by ~90px on every artist with something coming.
         if (popular.Count > 0)
             Sec("popular", Loc.Get(Strings.Artist.TopTracks),
                 TopBand(popular, uri, bridge, svc, a.Pinned, a.Image, a.HeaderImage, a.Name, extras?.PreRelease, go, PlayContext, accent));
+        // The upcoming announcement has exactly ONE home. When there is no pick it is the featured column beside
+        // Top tracks (FeaturedColumn). When the pick owns that column, it moves HERE — a quiet full-width band above
+        // Latest release (the same slot grammar), never a second card stacked under the pick: that stack made the
+        // rail out-run Top tracks and left a dead band beside them.
+        if (a.Pinned is not null && popular.Count > 0 && extras?.PreRelease is { IsUpcoming: true } upNext)
+            Sec("upcoming", null,
+                Section(Loc.Get(Strings.Artist.Upcoming), UpcomingCard(upNext, a.Name, wide: false, go, accent)));
         // The "just dropped" banner earns full-band prominence directly above Albums — not a narrow rail card
         // sharing a column with Artist Pick/Upcoming (see ArtistPage.TopTracks.LatestReleaseBanner).
         if (a.LatestRelease is { Name.Length: > 0, Uri.Length: > 0 } latestRelease)

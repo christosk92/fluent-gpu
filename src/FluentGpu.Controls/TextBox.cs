@@ -39,6 +39,11 @@ public static class TextBox
         public Action<int, int>? OnSelectionChanged { get; init; }
         public Action<string>? OnCommit { get; init; }
         public Action? OnCancel { get; init; }
+        /// <summary>OPT-IN: also fire <see cref="OnCommit"/> when focus leaves the field with an uncommitted edit — the
+        /// inline-rename contract. Off by default, so an existing TextBox is byte-identical. An Escape that reverts and
+        /// blurs does NOT commit, and an Enter that already committed is not re-published on the following blur; see
+        /// <see cref="EditableText.CommitOnLostFocus"/> for the two double-commit cases and how they are settled.</summary>
+        public bool CommitOnLostFocus { get; init; }
         public Field<string>? Field { get; init; }
     }
 
@@ -64,6 +69,7 @@ public static class TextBox
         var onSelectionChanged = o.OnSelectionChanged;
         var onCommit = o.OnCommit;
         var onCancel = o.OnCancel;
+        bool commitOnLostFocus = o.CommitOnLostFocus;
         var field = o.Field;
         float w = Math.Max(o.Width, MinWidth);
         float h = Math.Max(o.Height, 32f);       // TextControlThemeMinHeight = 32 (generic.xaml:96)
@@ -82,6 +88,7 @@ public static class TextBox
             OnSelectionChanged = onSelectionChanged,
             OnCommit = onCommit,
             OnCancel = onCancel,
+            CommitOnLostFocus = commitOnLostFocus,
             // form-validation.md: the editor owns the invalid-border + touched-on-blur; TextBox owns the message row.
             Field = field?.Binding,
         });

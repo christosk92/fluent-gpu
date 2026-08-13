@@ -84,38 +84,29 @@ sealed partial class ArtistPage : Component
             };
         }
 
+        float photoH = ArtistHeroLayout.PhotoHeightFor(metrics);
         ColorF Placeholder() => Surfaces.ArtworkPlaceholder;
         Element art = background?.Url is { Length: > 0 } source
             ? Embed.Comp(() => new HeroArt(source, _heroWidth, background.BlurHash, Placeholder))
                 with { Key = "heroart:" + source }
-            : new BoxEl { Width = width, Height = height, Fill = Placeholder() };
+            : new BoxEl { Width = width, Height = photoH, Fill = Placeholder() };
         Element media = new BoxEl
         {
-            Width = width, Height = height, ZStack = true, ClipToBounds = true,
+            Width = width, Height = photoH, ZStack = true, ClipToBounds = true,
             TransformOriginX = 0.5f, TransformOriginY = 0f,
-            EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, ArtistHeroLayout.PhotoFadeBandFor(height)),
+            EdgeFade = new EdgeFadeSpec(EdgeMask.Bottom, ArtistHeroLayout.PhotoFadeBandFor(photoH)),
             ScrollBinds =
             [
                 new() { StretchFromTop = true },
                 new()
                 {
                     From = ScrollChannel.Offset, To = BindSink.TransY,
-                    Range = ScrollRange.Px(0f, height),
-                    OutStart = 0f, OutEnd = height * ArtistHeroLayout.PhotoParallaxFraction,
+                    Range = ScrollRange.Px(0f, photoH),
+                    OutStart = 0f, OutEnd = photoH * ArtistHeroLayout.PhotoParallaxFraction,
                     Ease = Easing.Linear,
                 },
             ],
             Children = [art],
-        };
-
-        Element copy = new BoxEl
-        {
-            Width = width, Height = height,
-            Direction = 1,
-            Justify = metrics.Stacked ? FlexJustify.End : FlexJustify.Center,
-            AlignItems = FlexAlign.Start,
-            Padding = new Edges4(metrics.Gutter, Spacing.XXL, metrics.Gutter, Spacing.XXL),
-            Children = [Identity()],
         };
 
         void MeasureHero(RectF bounds)
@@ -124,27 +115,68 @@ sealed partial class ArtistPage : Component
                 _heroWidth.Value = bounds.W;
         }
 
-        Element expandedPresentation = new BoxEl
+        // Collapse binds are shared by both arms: the whole expanded presentation slides up and fades as the band
+        // takes over.
+        ScrollBindDsl[] collapseBinds =
+        [
+            new() { From = ScrollChannel.Offset, To = BindSink.TransY,
+                Range = ScrollRange.Px(0f, collapseDistance),
+                OutStart = 0f, OutEnd = -collapseDistance, Ease = Easing.Linear },
+            new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
+                Range = ScrollRange.Px(ArtistHeroLayout.ExpandedFadeStart(collapseDistance), collapseDistance),
+                OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
+        ];
+
+        Element expandedPresentation;
+        if (metrics.Stacked)
         {
-            Width = width, Height = height, ZStack = true,
-            HitTestVisible = !compactCanHit,
-            ScrollBinds =
-            [
-                new() { From = ScrollChannel.Offset, To = BindSink.TransY,
-                    Range = ScrollRange.Px(0f, collapseDistance),
-                    OutStart = 0f, OutEnd = -collapseDistance, Ease = Easing.Linear },
-                new() { From = ScrollChannel.Offset, To = BindSink.Opacity,
-                    Range = ScrollRange.Px(ArtistHeroLayout.ExpandedFadeStart(collapseDistance), collapseDistance),
-                    OutStart = 1f, OutEnd = 0f, Ease = Easing.Linear },
-            ],
-            Children =
-            [
-                media,
-                CoverPaletteLeaves.ArtistHeroVeil(
-                    PaletteImageUrl(a), metrics.VeilAxis, width, height, key: "artist-veil:" + uri),
-                copy,
-            ],
-        };
+            // Compact/Narrow: the photograph is a FIELD on top and the identity column sits BELOW it on the page
+            // surface — no overlay veil (there is no copy on the picture to protect), no bottom-justified pile at the
+            // photo's seam. The photo's own EdgeFade melts it into the page tone the type sits on.
+            expandedPresentation = new BoxEl
+            {
+                Width = width, Height = height, Direction = 1,
+                HitTestVisible = !compactCanHit,
+                ScrollBinds = collapseBinds,
+                Children =
+                [
+                    media,
+                    new BoxEl
+                    {
+                        Grow = 1f, MinHeight = 0f, Direction = 1,
+                        Justify = FlexJustify.Center, AlignItems = FlexAlign.Start,
+                        Padding = new Edges4(metrics.Gutter, Spacing.M, metrics.Gutter, Spacing.XL),
+                        Children = [Identity()],
+                    },
+                ],
+            };
+        }
+        else
+        {
+            Element copy = new BoxEl
+            {
+                Width = width, Height = height,
+                Direction = 1,
+                Justify = FlexJustify.Center,
+                AlignItems = FlexAlign.Start,
+                Padding = new Edges4(metrics.Gutter, Spacing.XXL, metrics.Gutter, Spacing.XXL),
+                Children = [Identity()],
+            };
+
+            expandedPresentation = new BoxEl
+            {
+                Width = width, Height = height, ZStack = true,
+                HitTestVisible = !compactCanHit,
+                ScrollBinds = collapseBinds,
+                Children =
+                [
+                    media,
+                    CoverPaletteLeaves.ArtistHeroVeil(
+                        PaletteImageUrl(a), metrics.VeilAxis, width, height, key: "artist-veil:" + uri),
+                    copy,
+                ],
+            };
+        }
         // Invisible at scroll offset 0 in the real page (its ScrollBind ramps Opacity 0→1 only past the collapse
         // threshold) — but SkeletonDeriver strips ScrollBinds from container nodes (they'd otherwise become dead
         // parallax/pin math on a static tree), so without this the derived shimmer falls back to the default Opacity=1
@@ -279,7 +311,9 @@ sealed class HeroArt : Component
         var tier = UseRef(ArtistHeroTier.Wide);
         var metrics = ArtistHeroLayout.For(width, tier.Value);
         tier.Value = metrics.Tier;
-        float height = metrics.MinHeight;
+        // The photo BAND, not the hero: on stacked tiers the photograph is the top slice and the identity column
+        // owns the rest — sized through the same helper the banner's media box uses, so the two cannot disagree.
+        float height = ArtistHeroLayout.PhotoHeightFor(metrics);
 
         var decode = UseRef((0, 0));
         if (decode.Value.Item1 <= 0 && width > 1f)

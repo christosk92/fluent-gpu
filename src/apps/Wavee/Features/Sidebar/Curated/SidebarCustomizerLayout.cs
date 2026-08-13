@@ -6,113 +6,22 @@ using Wavee.Core.Sidebar;
 
 namespace Wavee;
 
-// The full-page customizer's PURE model (plan §C4 + the visual-remediation amendment): the progressive four-tier
-// tier ladder, the searchable section palette, the outline flattening + drag translation, and the opaque-config editing
-// helpers the schema-generated property controls write through.
+// The companion page's PURE model (Phase 3): the searchable section palette (now including the DESTINATIONS group),
+// the display-option projection the generated property controls bind, and the opaque-config editing helpers they write
+// through.
 //
 // ENGINE-FREE BY CONSTRUCTION (System + System.Text.Json + Wavee.Core + the engine-free Data/ contract types only), for
 // the same reason as Features/Sidebar/Data/*: src/apps/Wavee.Tests source-includes THIS file, so SidebarCustomizerLayout
-// Tests drive the REAL tier hysteresis, the REAL palette filter, the REAL drag translation and the REAL config rewriter
-// rather than copies of them. Nothing here may reference Signal<T>, Element, Icons, Loc or Tok — glyph NAMES travel as
-// strings (SidebarCustomizerPalette maps them app-side) and every label is a loc KEY resolved at the UI edge.
-
-/// <summary>The customizer's region tier:
-/// <see cref="Canvas"/> = Palette + Outline + Inspector + persistent Preview ·
-/// <see cref="Full"/> = Palette + Outline + Inspector · <see cref="Compact"/> = Outline + Inspector (palette/templates
-/// move to command overflow) · <see cref="Narrow"/> = Outline only (the inspector becomes a bottom sheet).
-/// Ordered WIDEST-FIRST so "a smaller number is a wider layout" makes the hysteresis rule readable.</summary>
-public enum SidebarCustomizerTier : byte { Canvas = 0, Full = 1, Compact = 2, Narrow = 3 }
-
-/// <summary>Region geometry + the tier ladder. Pure and unit-tested: a responsive rule that lives in a render is a rule
-/// nobody can pin (the <c>ShellResponsiveLayout</c> / <c>DetailLayoutBreakpoints</c> precedent).</summary>
-public static class SidebarCustomizerLayout
-{
-    /// <summary>The fixed palette column (REVISION 2: 232 DIP).</summary>
-    public const float PaletteWidth = 232f;
-
-    /// <summary>The fixed inspector column (REVISION 2: 320 DIP).</summary>
-    public const float InspectorWidth = 320f;
-
-    /// <summary>The persistent live-preview column at the Canvas tier.</summary>
-    public const float PreviewWidth = 360f;
-
-    /// <summary>The elastic outline column never measures below this — past it the tier drops instead of squeezing.</summary>
-    public const float OutlineMinWidth = 320f;
-
-    /// <summary>≥ this ⇒ <see cref="SidebarCustomizerTier.Canvas"/> (all four regions).
-    /// <para>LOWERED 1480 → 1320. These thresholds measure the PAGE CONTENT width, not the window: the docked sidebar eats
-    /// ~280 DIP before this page is ever measured, so a ~1330-wide window arrived here as ~1050 and landed in Compact —
-    /// which is why the reporter never saw the eyebrow, the saved-locally dot, the inline Reset or the preview column.
-    /// 1320 content ⇒ roughly a 1600-wide window with the sidebar expanded.</para></summary>
-    public const float CanvasEnterW = 1320f;
-
-    /// <summary>≥ this ⇒ <see cref="SidebarCustomizerTier.Full"/> (palette + outline + inspector).
-    /// <para>LOWERED 1180 → 1000 for the same reason, and it still fits by construction: Palette 232 + Inspector 320 +
-    /// <see cref="OutlineMinWidth"/> 320 + two 12-DIP region gaps + 32 DIP of page padding = 928, so 1000 leaves the
-    /// elastic outline 72 DIP of slack above its own minimum before the tier has to drop.</para></summary>
-    public const float FullEnterW = 1000f;
-
-    /// <summary>≥ this ⇒ <see cref="SidebarCustomizerTier.Compact"/> (outline + inspector).</summary>
-    public const float CompactEnterW = 820f;
-
-    /// <summary>Widen immediately, shrink only this far past the threshold — the shell's 24-DIP idiom, so a pane resize
-    /// that lands exactly on a breakpoint cannot oscillate.</summary>
-    public const float HysteresisDip = 24f;
-
-    /// <summary>The inspector's height when it is a bottom sheet (<see cref="SidebarCustomizerTier.Narrow"/>): a share of
-    /// the page height, clamped so it neither hides the outline nor collapses into a strip.</summary>
-    public static float SheetHeight(float pageHeight)
-    {
-        if (pageHeight <= 0f) return 320f;
-        float h = pageHeight * 0.55f;
-        return h < 240f ? Math.Min(240f, pageHeight) : h > 520f ? 520f : h;
-    }
-
-    /// <summary>The tier a width maps to with no memory (the first measure).</summary>
-    public static SidebarCustomizerTier NominalTier(float width)
-        => width >= CanvasEnterW ? SidebarCustomizerTier.Canvas
-         : width >= FullEnterW ? SidebarCustomizerTier.Full
-         : width >= CompactEnterW ? SidebarCustomizerTier.Compact
-         : SidebarCustomizerTier.Narrow;
-
-    /// <summary>The tier for <paramref name="width"/> given the tier currently shown (<paramref name="wasTier"/>, −1 =
-    /// not measured yet). Widening applies immediately; NARROWING requires <see cref="HysteresisDip"/> past the
-    /// threshold, so dragging the window across a breakpoint cannot flicker two layouts.</summary>
-    public static SidebarCustomizerTier Tier(float width, int wasTier)
-    {
-        var now = NominalTier(width);
-        if (wasTier < 0 || wasTier > (int)SidebarCustomizerTier.Narrow) return now;
-        var was = (SidebarCustomizerTier)wasTier;
-        if (now == was) return now;
-        if ((int)now < (int)was) return now;                       // widening — immediate
-        return NominalTier(width + HysteresisDip) == was ? was : now;   // narrowing — only past the dip
-    }
-
-    /// <summary>Whether the palette is an inline column (Canvas/Full) or command overflow (Compact/Narrow).</summary>
-    public static bool PaletteInline(SidebarCustomizerTier tier) => tier <= SidebarCustomizerTier.Full;
-
-    /// <summary>Whether the inspector is an inline column (Canvas/Full/Compact) or a bottom sheet (Narrow).</summary>
-    public static bool InspectorInline(SidebarCustomizerTier tier) => tier != SidebarCustomizerTier.Narrow;
-
-    /// <summary>Only the Canvas tier has enough room for a persistent fourth preview region.</summary>
-    public static bool PreviewInline(SidebarCustomizerTier tier) => tier == SidebarCustomizerTier.Canvas;
-
-    /// <summary>Supporting header chrome is visible: it leaves before any command is put under pressure. Since R3.2 this
-    /// gates the header's SECOND LINE (the active-template eyebrow, which replaced the literal subtitle), the
-    /// saved-locally indicator and the inline Reset button — the same "chrome first" rule, one more level. The NAME is
-    /// kept because it is the tested public surface of this pure table.</summary>
-    public static bool SubtitleVisible(SidebarCustomizerTier tier) => tier <= SidebarCustomizerTier.Full;
-
-    /// <summary>Width protected for the title lane before fitting commands. The title may still ellipsize.</summary>
-    public static float TitleReserve(SidebarCustomizerTier tier) => tier switch
-    {
-        SidebarCustomizerTier.Canvas or SidebarCustomizerTier.Full => 240f,
-        SidebarCustomizerTier.Compact => 120f,
-        _ => 0f,
-    };
-}
-
-// ── command pressure ────────────────────────────────────────────────────────────────────────────────────────────────
+// Tests drive the REAL palette filter, the REAL destination table and the REAL config rewriter rather than copies of
+// them. Nothing here may reference Signal<T>, Element, Icons, Loc or Tok — glyph NAMES travel as strings
+// (SidebarCustomizerPalette maps them app-side) and every label is a loc KEY resolved at the UI edge.
+//
+// PHASE 3 DELETIONS, recorded so nobody re-adds them: the four-tier region ladder (`SidebarCustomizerTier` +
+// `SidebarCustomizerLayout`), the command-fit table (`SidebarCustomizerCommandLayout` and friends) and the outline
+// flattening + drag translation (`SidebarOutlineRow`/`SidebarOutlineRows`/`SidebarOutlineDrag`) all died WITH the
+// surfaces they described. The page is now ONE scrolling column at every width, so there is no tier to resolve and no
+// command to demote; the outline is gone because the docked pane IS the canvas (Decision B), and the one section-drag
+// translation that survives is `SidebarEditPlan.ToMoveSection`, which works in the PANE's band slots.
 
 /// <summary>The query controls a section kind owns. Kept beside the other pure customizer tables so the property panel
 /// cannot grow a second, untested kind switch.</summary>
@@ -134,98 +43,20 @@ public static class SidebarNumberEdit
         => Math.Clamp((int)Math.Round(value), min, max);
 }
 
-[Flags]
-public enum SidebarCustomizerInlineCommand : byte
-{
-    None = 0,
-    Add = 1,
-    Undo = 2,
-    Redo = 4,
-}
+// ── the palette (grouped + searchable; Phase 3 adds Destinations) ─────────────────────────────────────────────────────
 
-/// <summary>Measured/final extents for the compact native CommandBar buttons and the external accent Done action.
-/// Defaults match the controls' public compact metrics; tests can inject long-localization measurements.</summary>
-public readonly record struct SidebarCustomizerCommandWidths(
-    float Add,
-    float Undo,
-    float Redo,
-    float More,
-    float Done,
-    float Gap)
-{
-    public static SidebarCustomizerCommandWidths Default => new(48f, 48f, 48f, 48f, 76f, 8f);
-}
-
-public readonly record struct SidebarCustomizerCommandFit(
-    SidebarCustomizerInlineCommand Inline,
-    float NativeBarWidth,
-    float TotalWidth)
-{
-    public bool Has(SidebarCustomizerInlineCommand command) => (Inline & command) != 0;
-    internal int Richness =>
-        (Has(SidebarCustomizerInlineCommand.Undo) ? 4 : 0)
-        + (Has(SidebarCustomizerInlineCommand.Redo) ? 2 : 0)
-        + (Has(SidebarCustomizerInlineCommand.Add) ? 1 : 0);
-}
-
-/// <summary>Pure priority fit for the customizer header. Done and More are mandatory; optional commands demote to
-/// overflow immediately while narrowing and promote only with a 16-DIP reserve.</summary>
-public static class SidebarCustomizerCommandLayout
-{
-    public const float PromotionHysteresis = 16f;
-
-    public static SidebarCustomizerCommandFit Resolve(
-        float available,
-        in SidebarCustomizerCommandWidths widths,
-        SidebarCustomizerTier tier,
-        SidebarCustomizerCommandFit? previous = null)
-    {
-        available = MathF.Max(0f, available);
-        var candidate = ResolveCore(available, in widths, tier);
-        if (previous is not { } old || candidate.Richness <= old.Richness) return candidate;
-        return ResolveCore(MathF.Max(0f, available - PromotionHysteresis), in widths, tier);
-    }
-
-    static SidebarCustomizerCommandFit ResolveCore(
-        float available,
-        in SidebarCustomizerCommandWidths widths,
-        SidebarCustomizerTier tier)
-    {
-        float native = MathF.Max(0f, widths.More);
-        float total = native + MathF.Max(0f, widths.Gap) + MathF.Max(0f, widths.Done);
-        var inline = SidebarCustomizerInlineCommand.None;
-
-        // UNDO/REDO ARE ALLOWED AT EVERY TIER (round-3 defect 4). This used to read `tier != Narrow`, which BANNED them
-        // outright instead of letting the WIDTH decide — so a narrow window collapsed to "… Done" with no history
-        // affordance at all, even though the two 48-DIP buttons fit with hundreds of DIP to spare. They are the
-        // highest-frequency commands in an editor; the budget below is the only thing that should ever demote them.
-        bool allowAdd = tier <= SidebarCustomizerTier.Full;
-
-        void Add(SidebarCustomizerInlineCommand command, float width)
-        {
-            float next = total + MathF.Max(0f, width);
-            if (next > available) return;
-            total = next;
-            native += MathF.Max(0f, width);
-            inline |= command;
-        }
-
-        // History is more important than creation under pressure; Add remains one click away in overflow.
-        Add(SidebarCustomizerInlineCommand.Undo, widths.Undo);
-        Add(SidebarCustomizerInlineCommand.Redo, widths.Redo);
-        if (allowAdd) Add(SidebarCustomizerInlineCommand.Add, widths.Add);
-
-        return new SidebarCustomizerCommandFit(inline, native, total);
-    }
-}
-
-// ── the palette (REVISION 2's 17 entries, grouped + searchable) ────────────────────────────────────────────────────────
-
-/// <summary>The palette's groups, in render order (REVISION 2: Navigation / Library / Playback / Dynamic feeds / Layout /
-/// Actions / Extensions).</summary>
+/// <summary>The palette's groups. <see cref="Destinations"/> is APPENDED (7) rather than inserted at 0 even though it
+/// renders FIRST: the numeric order is only this enum's storage, and <see cref="SidebarPalette.Groups"/> is the single
+/// authority on render order — renumbering the six that shipped would silently rewrite every existing entry's group.</summary>
 public enum SidebarPaletteGroup : byte
 {
     Navigation = 0, Library = 1, Playback = 2, DynamicFeeds = 3, Layout = 4, Actions = 5, Extensions = 6,
+
+    /// <summary>Phase 3 — real app pages, so typing "home" answers with <b>Home</b> instead of "Links — shortcuts to
+    /// pages like Home or Search". Entries are generated from <c>SidebarPinId.PinnableRoutes</c> plus the three
+    /// destinations that are reachable but not pinnable; their labels come from <c>ShellNav.Dest</c> at the UI edge, so
+    /// they follow the UI culture and can never disagree with the tab strip or the breadcrumb.</summary>
+    Destinations = 7,
 }
 
 /// <summary>What the palette ADDS when clicked. Kept as data (not a switch in a render) so the palette, its search
@@ -244,11 +75,25 @@ public enum SidebarPaletteAdd : byte
     AnyContribution = 4,
     /// <summary>A pre-seeded StaticLinks section containing the localized Liked Songs route.</summary>
     LikedSongsShortcut = 5,
+
+    /// <summary>Phase 3 — an app PAGE. One <c>AddSection(StaticLinks, Item: the route)</c>, so the click is one
+    /// undoable step that produces a working row, never the empty Links section defect 7 named. When a StaticLinks
+    /// section is already the session's subject the same click APPENDS to it instead (see
+    /// <see cref="SidebarPalette.AppendsToSelection"/>).</summary>
+    Destination = 6,
+
+    /// <summary>Phase 3 / defect 7 — a BARE Links section. Identical to <see cref="Section"/> except that the surface
+    /// opens the destination picker immediately, so the section is never left with zero items.</summary>
+    LinksWithPicker = 7,
 }
 
 /// <summary>One palette row. <paramref name="IconName"/> is a GLYPH NAME (this file is engine-free — the app-side
 /// palette view maps it); the two loc keys come from <c>SidebarSectionKinds</c> wherever a kind owns them, so a section's
-/// name is never spelled twice.</summary>
+/// name is never spelled twice.
+/// <para><paramref name="RouteKey"/> is set only on <see cref="SidebarPaletteGroup.Destinations"/> rows. Those carry NO
+/// name loc key on purpose: a destination's label is <c>ShellNav.Dest(routeKey).Title</c>, which is the ONE owner of
+/// "what this page is called" for the tab strip, the breadcrumb, the pinned rows and now the palette — minting a second
+/// spelling here is exactly the drift the single-owner rule exists to catch.</para></summary>
 public sealed record SidebarPaletteEntry(
     string Id,
     SidebarPaletteGroup Group,
@@ -257,16 +102,17 @@ public sealed record SidebarPaletteEntry(
     string NameLocKey,
     string DescriptionLocKey,
     string IconName,
-    string? ContributionId = null);
+    string? ContributionId = null,
+    string? RouteKey = null);
 
 /// <summary>The palette table + its pure search filter.</summary>
 public static class SidebarPalette
 {
-    /// <summary>REVISION 2's palette, in group order. Seventeen ENTRIES in the spec's wording — eighteen rows here,
-    /// because "Queue/Now Playing" names two distinct first-party contributions (<c>wavee.queue</c> and
+    /// <summary>The SECTION half of the palette, in group order. Seventeen ENTRIES in the spec's wording — eighteen rows
+    /// here, because "Queue/Now Playing" names two distinct first-party contributions (<c>wavee.queue</c> and
     /// <c>wavee.nowPlaying</c>) with their own loc keys, and offering them as one row would make the second
     /// unreachable.</summary>
-    public static readonly SidebarPaletteEntry[] All =
+    public static readonly SidebarPaletteEntry[] Sections =
     [
         // Navigation
         new("pinned", SidebarPaletteGroup.Navigation, SidebarSectionKind.Pinned, SidebarPaletteAdd.Section,
@@ -275,8 +121,11 @@ public static class SidebarPalette
             SidebarPaletteAdd.Section, "sidebar.section.shortcuts", "sidebar.section.shortcutsSub", "Heart"),
         new("likedSongs", SidebarPaletteGroup.Navigation, SidebarSectionKind.StaticLinks,
             SidebarPaletteAdd.LikedSongsShortcut, "nav.likedSongs", "sidebar.customizer.likedSongsSub", "Heart"),
-        new("staticLinks", SidebarPaletteGroup.Navigation, SidebarSectionKind.StaticLinks, SidebarPaletteAdd.Section,
-            "sidebar.section.staticLinks", "sidebar.section.staticLinksSub", "Link"),
+        // DEFECT 7 — a bare "Links" section used to add a zero-item section that plans as one generic grey hint, and
+        // adding it twice gave two identical dead rows. It now opens the destination picker on the way in, so the
+        // section it creates always has something in it.
+        new("staticLinks", SidebarPaletteGroup.Navigation, SidebarSectionKind.StaticLinks,
+            SidebarPaletteAdd.LinksWithPicker, "sidebar.section.staticLinks", "sidebar.section.staticLinksSub", "Link"),
 
         // Library
         new("playlistTree", SidebarPaletteGroup.Library, SidebarSectionKind.PlaylistTree, SidebarPaletteAdd.Section,
@@ -324,16 +173,116 @@ public static class SidebarPalette
             SidebarPaletteAdd.AnyContribution, "sidebar.section.extension", "sidebar.section.extensionSub", "Code"),
     ];
 
-    /// <summary>Group order == the enum order; the palette renders headers in exactly this sequence.</summary>
+    /// <summary>The real destinations that are NOT in <c>SidebarPinId.PinnableRoutes</c>: settings and the API console
+    /// are refused by <c>SidebarPinId.FromRoute</c> as tooling/editor surfaces and the concerts hub simply never
+    /// declared itself pinnable — which is a PIN policy, and not a reason to hide a real page from a shortcut list.
+    ///
+    /// <para>DECLARED ABOVE <see cref="Destinations"/> ON PURPOSE: C# runs static field initializers in TEXTUAL order,
+    /// so declaring this below the field that reads it would leave it null inside <c>BuildDestinations</c> and ship an
+    /// empty Destinations group — a defect a reader would blame on the palette rather than on line order.</para></summary>
+    static readonly string[] ExtraDestinationRoutes = ["settings", "api-console", ConcertsRoute];
+
+    /// <summary>Spelled as a literal for the same reason <c>ShellNav</c> spells it that way: this file is source-included
+    /// by <c>Wavee.Tests</c>, which cannot see <c>Wavee.Features.Concerts.ConcertRoutes</c>.</summary>
+    const string ConcertsRoute = "concerts";
+
+    /// <summary>The DESTINATIONS the palette offers, in the order they are listed here.
+    ///
+    /// <para>The set is <c>SidebarPinId.PinnableRoutes</c> ∪ <see cref="ExtraDestinationRoutes"/>, exactly as the plan
+    /// specifies. The union is spelled with the pinnable list as the SOURCE rather than re-typed, so a route that
+    /// becomes pinnable later shows up here for free.</para>
+    ///
+    /// <para>Every entry is <c>StaticLinks</c> + <see cref="SidebarPaletteAdd.Destination"/>: ONE
+    /// <c>AddSection(StaticLinks, Item: route)</c>, one undo step. There is no <c>IconOverride</c> on the seeded item on
+    /// purpose — a route row resolves its glyph through <c>ShellNav.Dest</c> at the row site
+    /// (<c>SidebarPaneSlot</c>), and freezing a whitelisted icon name here would both duplicate that owner and risk an
+    /// <c>InvalidIcon</c> rejection for any glyph outside <c>SidebarIconNames.Allowed</c>.</para></summary>
+    public static readonly SidebarPaletteEntry[] Destinations = BuildDestinations();
+
+    static SidebarPaletteEntry[] BuildDestinations()
+    {
+        var routes = SidebarPinId.PinnableRoutes;
+        var extra = ExtraDestinationRoutes;
+        var into = new SidebarPaletteEntry[routes.Length + extra.Length];
+        for (int i = 0; i < routes.Length; i++) into[i] = Destination(routes[i]);
+        for (int i = 0; i < extra.Length; i++) into[routes.Length + i] = Destination(extra[i]);
+        return into;
+    }
+
+    /// <summary>One destination row. The name key is EMPTY — the label is resolved from the route at the UI edge (see
+    /// <see cref="SidebarPaletteEntry.RouteKey"/>); the description is one shared string for the whole group, because
+    /// twelve near-identical sentences is a translation cost with no reader benefit.</summary>
+    static SidebarPaletteEntry Destination(string routeKey) => new(
+        "dest:" + routeKey, SidebarPaletteGroup.Destinations, SidebarSectionKind.StaticLinks,
+        SidebarPaletteAdd.Destination, "", DestinationSubLocKey, "Link", ContributionId: null, RouteKey: routeKey);
+
+    /// <summary>The one description every destination row shares.</summary>
+    public const string DestinationSubLocKey = "sidebar.customizer.destinationSub";
+
+    /// <summary>The WHOLE palette: destinations first, then the section kinds. One array, so
+    /// <see cref="Filter"/>, the grouping loop and the tests all read one table.</summary>
+    public static readonly SidebarPaletteEntry[] All = Concat(Destinations, Sections);
+
+    static SidebarPaletteEntry[] Concat(SidebarPaletteEntry[] a, SidebarPaletteEntry[] b)
+    {
+        var into = new SidebarPaletteEntry[a.Length + b.Length];
+        Array.Copy(a, into, a.Length);
+        Array.Copy(b, 0, into, a.Length, b.Length);
+        return into;
+    }
+
+    /// <summary>Render order. DESTINATIONS FIRST: the whole point of the group is that a user who types (or scrolls
+    /// looking for) "home" meets the page before they meet the abstraction that could hold it. The remaining six keep
+    /// the order they shipped in.</summary>
     public static readonly SidebarPaletteGroup[] Groups =
     [
+        SidebarPaletteGroup.Destinations,
         SidebarPaletteGroup.Navigation, SidebarPaletteGroup.Library, SidebarPaletteGroup.Playback,
         SidebarPaletteGroup.DynamicFeeds, SidebarPaletteGroup.Layout, SidebarPaletteGroup.Actions,
         SidebarPaletteGroup.Extensions,
     ];
 
+    /// <summary>DEFECT 5 — the palette entry that NAMES a contribution id, or null.
+    ///
+    /// <para>The "pick a contribution" list used to print the raw source id twice — as the title and as the subtitle —
+    /// under a comment saying no manifest name exists until M3/M4. That is true of a THIRD-PARTY contribution and false
+    /// of every one Wavee ships: the palette's own Playback/Dynamic-feeds rows already carry localized names for
+    /// <c>wavee.queue</c>, <c>wavee.nowPlaying</c> and <c>wavee.artist.topTracks</c>. Looking the id up here means the
+    /// pick list says "Queue" where it can and falls back to the id exactly once where it cannot.</para></summary>
+    public static SidebarPaletteEntry? EntryForContribution(string? contributionId)
+    {
+        if (contributionId is not { Length: > 0 }) return null;
+        for (int i = 0; i < Sections.Length; i++)
+        {
+            var e = Sections[i];
+            if (e.ContributionId is { Length: > 0 } id
+                && string.Equals(id, contributionId, StringComparison.Ordinal)) return e;
+        }
+        return null;
+    }
+
+    /// <summary>Can this entry be DRAGGED onto the canvas, or is it click-only?
+    ///
+    /// <para>A drag has to resolve to ONE <c>AddSection</c> at the drop position, composed at promotion time. Three
+    /// kinds of entry cannot: the two that open a modal first (an action shortcut, a bare Links section — the picker
+    /// IS the gesture, and a dialog opening mid-drag would be absurd), the one that switches the palette into
+    /// contribution-pick mode, and "Recently played", which is deliberately TWO commands (<c>AddSection</c> plus the
+    /// recents-source flip) — dropping it would land a section whose source silently disagreed with its own name. Those
+    /// rows stay click-only rather than shipping a drag that lies about its outcome.</para></summary>
+    public static bool CanDrag(SidebarPaletteAdd add) => add is SidebarPaletteAdd.Section
+        or SidebarPaletteAdd.Contribution or SidebarPaletteAdd.LikedSongsShortcut or SidebarPaletteAdd.Destination;
+
+    /// <summary>Does clicking this entry APPEND to the currently-selected section instead of creating a sibling? Only a
+    /// destination does, and only into a <c>StaticLinks</c> section: every other palette row creates a section by
+    /// definition, and appending a route into (say) a PlaylistTree would be a <c>KindDoesNotAcceptItems</c> rejection
+    /// dressed up as a feature. Pure so the rule is testable rather than a condition inside a click handler.</summary>
+    public static bool AppendsToSelection(SidebarPaletteEntry? entry, SidebarSectionSpec? selected)
+        => entry is { Add: SidebarPaletteAdd.Destination, RouteKey.Length: > 0 }
+           && selected is { Kind: SidebarSectionKind.StaticLinks };
+
     public static string GroupLocKey(SidebarPaletteGroup group) => group switch
     {
+        SidebarPaletteGroup.Destinations => "sidebar.palette.destinations",
         SidebarPaletteGroup.Navigation => "sidebar.palette.navigation",
         SidebarPaletteGroup.Library => "sidebar.palette.library",
         SidebarPaletteGroup.Playback => "sidebar.palette.playback",
@@ -482,106 +431,6 @@ public static class SidebarDisplayValues
             ],
         _ => Array.Empty<string>(),
     };
-}
-
-// ── the outline (flattened document + the drag translation) ───────────────────────────────────────────────────────────
-
-/// <summary>One outline row: a top-level section (<see cref="Depth"/> 0) or a <c>CustomGroup</c> child (depth 1). Flat,
-/// because the outline IS a flat reorderable list and <c>Reorderable</c> works in slot indices.</summary>
-public readonly record struct SidebarOutlineRow(
-    string SectionId,
-    string? ParentId,
-    SidebarSectionKind Kind,
-    int Depth,
-    int IndexInParent,
-    bool Hidden,
-    bool IsGroup,
-    int ChildCount)
-{
-    /// <summary>52 DIP top level / 44 DIP child (R3.2 item 2 — a top-level row is a CARD carrying a 24-DIP kind chip, a
-    /// title and a kind subtitle; a depth-1 child is one line) — also the <c>Reorderable.ExtentOf</c> answer.</summary>
-    public float Height => Depth == 0 ? 52f : 44f;
-}
-
-/// <summary>Document → outline rows. Pure, so the flattening (and therefore every index the drag translation works in)
-/// is unit-tested.</summary>
-public static class SidebarOutlineRows
-{
-    /// <summary>Rebuild <paramref name="into"/> (caller-owned — the outline reuses one list per mount).</summary>
-    public static int Build(SidebarCustomLayout? layout, List<SidebarOutlineRow> into)
-    {
-        ArgumentNullException.ThrowIfNull(into);
-        into.Clear();
-        if (layout is null) return 0;
-
-        var sections = layout.Sections;
-        for (int i = 0; i < sections.Count; i++)
-        {
-            var s = sections[i];
-            bool group = s.Kind == SidebarSectionKind.CustomGroup;
-            var kids = s.ChildList;
-            into.Add(new SidebarOutlineRow(s.Id, null, s.Kind, 0, i, s.Hidden, group, kids.Count));
-            for (int j = 0; j < kids.Count; j++)
-            {
-                var k = kids[j];
-                into.Add(new SidebarOutlineRow(k.Id, s.Id, k.Kind, 1, j, k.Hidden,
-                    k.Kind == SidebarSectionKind.CustomGroup, k.ChildList.Count));
-            }
-        }
-        return into.Count;
-    }
-
-    /// <summary>Index of a section id in the flat rows (−1 when absent).</summary>
-    public static int IndexOf(IReadOnlyList<SidebarOutlineRow> rows, string? sectionId)
-    {
-        if (string.IsNullOrEmpty(sectionId)) return -1;
-        for (int i = 0; i < rows.Count; i++)
-            if (string.Equals(rows[i].SectionId, sectionId, StringComparison.Ordinal)) return i;
-        return -1;
-    }
-}
-
-/// <summary>Flat outline indices → a <c>MoveSection</c> command (§C4.5's <c>OutlineDrag.ToMove</c>).
-///
-/// <para>The drop lands in the PARENT OF THE ROW NOW AT <c>to</c>, at that row's own index — so dragging a section onto
-/// a group's child takes that child's slot inside the group, and dragging onto a top-level row stays top level.
-/// <c>NewIndex</c> is interpreted AFTER the removal (the <c>Reorderable.OnReorder</c> / reducer contract), which is
-/// exactly what "take the target's slot" means for both directions.</para>
-///
-/// <para>An ILLEGAL move (a group into a group, a section into its own child) is NOT filtered here: the command is built
-/// and the REDUCER rejects it with <c>NestingTooDeep</c>, which is what drives the customizer's inline reject strip. One
-/// authority for legality, never two.</para></summary>
-public static class SidebarOutlineDrag
-{
-    public static MoveSection? ToMove(IReadOnlyList<SidebarOutlineRow> rows, int from, int to)
-    {
-        ArgumentNullException.ThrowIfNull(rows);
-        if (rows.Count == 0) return null;
-        if ((uint)from >= (uint)rows.Count) return null;
-        if (from == to) return null;
-
-        var moving = rows[from];
-
-        // Past the end ⇒ append after the last row's parent chain (a drop below every row).
-        if (to >= rows.Count)
-        {
-            var last = rows[rows.Count - 1];
-            return new MoveSection(moving.SectionId, last.ParentId,
-                last.ParentId is null || string.Equals(last.ParentId, moving.ParentId, StringComparison.Ordinal)
-                    ? last.IndexInParent + 1
-                    : last.IndexInParent + 1);
-        }
-        if (to < 0) return new MoveSection(moving.SectionId, null, 0);
-
-        var target = rows[to];
-        // Dropping ONTO a collapsed/expanded group's own header row from outside it: land INSIDE the group at child 0
-        // (§C4.5). A group can never nest, so a moving group keeps the group's own slot instead.
-        if (target.IsGroup && moving.Kind != SidebarSectionKind.CustomGroup && target.Depth == 0
-            && !string.Equals(target.SectionId, moving.ParentId, StringComparison.Ordinal))
-            return new MoveSection(moving.SectionId, target.SectionId, 0);
-
-        return new MoveSection(moving.SectionId, target.ParentId, target.IndexInParent);
-    }
 }
 
 // ── opaque extension config: the writer behind the schema-generated property controls ─────────────────────────────────

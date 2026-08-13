@@ -166,6 +166,24 @@ sealed class SidebarPane : Component
 
     /// <summary>The contiguous plan-row runs those sections own, rebuilt with every plan (see <see cref="SidebarPaneBand"/>).</summary>
     readonly List<SidebarPaneBand> _bands = new();
+
+    // ── PHASE 2 / Decision B — the customize canvas ───────────────────────────────────────────────────────────────────
+    /// <summary>The section-card drag band: ONE run of <c>SectionCard</c> rows at ONE uniform pitch
+    /// (<c>SidebarPaneMetrics.EditCardHeight</c>). Empty <c>Count</c> = not armed, which is the normal sidebar and also
+    /// edit mode with a section expanded (see <c>SidebarEditPlan.SectionsReorderable</c>). It is deliberately NOT in
+    /// <see cref="_bands"/>: those are keyed by section id and resolve through <see cref="ReorderFor"/> to a per-section
+    /// ITEM reorderable of a different drag kind, and one lookup answering two questions is how the wrong slot gets
+    /// moved.</summary>
+    SidebarPaneBand _sectionBand;
+    Reorderable? _sectionReorder;
+
+    /// <summary>The drag kind of the section-card band. Its OWN kind, never <c>WaveeDragKinds.Resource</c>: a document
+    /// SECTION is not a pinnable entity, and letting a pin band or a playlist row accept one (or vice versa) would be a
+    /// drop that silently does nothing.
+    /// <para>PHASE 3 — the literal moved to <see cref="SidebarEditPlan.SectionDragKind"/> so the companion page's
+    /// palette chips can carry the SAME kind without the string being typed twice (a drag kind spelled twice is a drop
+    /// that silently accepts nothing). This alias stays because every use site in this file reads it.</para></summary>
+    const string SectionDragKind = SidebarEditPlan.SectionDragKind;
     /// <summary>Pinned sections currently showing folder descendants. Their top-level pins are no longer contiguous in
     /// plan space, so the flat reorder controller is disabled until the folder collapses rather than treating a child as
     /// an independent pin or moving the wrong store slot.</summary>
@@ -206,11 +224,17 @@ sealed class SidebarPane : Component
     /// the mode puts those rows in its own chrome instead (<c>Config.ShowLayoutMenu == false</c>).</summary>
     internal string? MenuHostSectionId;
 
+    /// <summary>PHASE 2 — the edit session THE PUBLISHED PLAN WAS BUILT FROM, published as a plain field beside
+    /// <see cref="Plan"/> for the same reason (a bound slot is a frozen child that reads these at ITS render time, and a
+    /// signal write from Render would be a backwards write). Keeping it in lockstep with the plan is load-bearing: a
+    /// card slot must never draw an "expanded" chevron for a plan that has no body rows under it.</summary>
+    internal SidebarEditState? Edit;
+
     Func<int, (float dx, float dy)>? _displacement;
     bool _countSeeded;
 
     sealed record PlanStage(SidebarCustomLayout Document, SidebarRowPlan Pane, SidebarRowPlan Rail,
-                            string EffectiveSearch, bool UsesA, int Epoch);
+                            string EffectiveSearch, bool UsesA, int Epoch, SidebarEditState? Edit);
 
     // ── selection travel (R3.0.2 follow-up) ──────────────────────────────────────────────────────────────────────────
     // Centralized NavigationView transaction. Realized item-owned pills register their exact retained nodes here; the
@@ -261,7 +285,13 @@ sealed class SidebarPane : Component
         bool compact = !_inDrawer && _compact.Value && !_dragPeek.Value;
         string search = _search.Value;                  // subscribe → the pinned head re-plans as you type
 
-        var stage = UseMemo(() => BuildStage(sourceDoc, search), PlanDep(search));
+        // PHASE 2 / Decision B — the live edit session, or null. Invoked UNCONDITIONALLY and outside every hook, on both
+        // arms: edit mode must not change this component's hook sequence (the branch is on the VALUE, never around the
+        // hooks). A mode with no `Edit` delegate — Classic, Library V3 — simply gets null here, and every path below
+        // reduces to the landed behaviour byte for byte.
+        var edit = Config.Edit?.Invoke();
+
+        var stage = UseMemo(() => BuildStage(sourceDoc, search, edit), PlanDep(search, in edit));
         if (!_planPublished) PublishStage(stage, notify: false);
         int planVersion = _planVersion.Value;
         int disclosureUiVersion = _disclosureVersion.Value;
@@ -323,14 +353,11 @@ sealed class SidebarPane : Component
         //     the rail on the old palette;
         //   • the culture epoch — same argument for the tile labels (`Loc.Get` inside the tooltip/`ShellNav.Dest`).
         //     Reading it here is also the subscription that re-renders this pane on a culture switch.
-        //   • O3 — the shortcut band's LIST: `Config.RailHead` is invoked inside this memo, and the band is
-        //     `SidebarCustomLayout.EffectiveTopBar`, a PLAIN property on the document. Its edits bump `LayoutVersion`
-        //     (which is not otherwise in this key — the plan version only moves when the ROW plan republishes), and its
-        //     COUNT is what decides whether the rail carries head tiles and their separating rule at all. Without both,
-        //     a rail that is currently presented would keep drawing the band the user just edited.
-        // Unconditional (the hooks-order rule) even in the drawer, which has no rail at all.
-        int bandVersion = Prefs?.LayoutVersion.Value ?? 0;
-        int bandCount = Prefs?.TopBar.Count ?? SidebarCustomLayout.DefaultTopBar.Count;
+        //
+        // PHASE 1 removed a fourth dep, `(LayoutVersion, TopBar.Count)`. It existed because `Config.RailHead` drew the
+        // shortcut band from a PLAIN property outside the rail plan. The band is now the document's first SECTION, so a
+        // shortcut edit bumps `LayoutVersion`, which is in `PlanDep`, which re-plans, which moves `planVersion` — the
+        // dep that was already here. Re-adding a band dep would be the same artifact keyed twice.
         Element compactRail = UseMemo(
             () => _inDrawer
                 ? (Element)new BoxEl { Height = 0f, Shrink = 0f }
@@ -339,14 +366,12 @@ sealed class SidebarPane : Component
                     Grow = 1f, AutoEdgeFade = true, SuppressScrollBar = true,
                 },
             DepKey.Combine(
-                DepKey.Combine(
-                    DepKey.From(planVersion, Tok.Epoch, Localization.CultureEpoch.Value,
-                                // …and the binder's PRESENCE, which the "no driver yet ⇒ shimmer the whole rail" fallback
-                                // reads directly. A binder arriving after the first frame need not move any of the versions
-                                // above (they all start at 0), and the rail must not stay on skeletons if it does.
-                                (_inDrawer ? 1 : 0) | (Prefs?.Binder is null ? 0 : 2)),
-                    SelectedRoutePeek),
-                DepKey.From(bandVersion, bandCount)));
+                DepKey.From(planVersion, Tok.Epoch, Localization.CultureEpoch.Value,
+                            // …and the binder's PRESENCE, which the "no driver yet ⇒ shimmer the whole rail" fallback
+                            // reads directly. A binder arriving after the first frame need not move any of the versions
+                            // above (they all start at 0), and the rail must not stay on skeletons if it does.
+                            (_inDrawer ? 1 : 0) | (Prefs?.Binder is null ? 0 : 2)),
+                SelectedRoutePeek));
 
         var children = new List<Element>(3) { expanded };
         if (!_inDrawer)
@@ -413,17 +438,19 @@ sealed class SidebarPane : Component
 
     Element[] ExpandedChildren(int rows)
     {
-        // 0 — O3: the customizable shortcut band, the pane's TOPMOST chrome. Invoked here (not snapshotted) so the
-        //     LayoutVersion it reads subscribes this pane, and above Config.Head because it is the app's navigation
-        //     band rather than mode chrome. A null return is an emptied band and costs no layout at all.
-        //     The band ends in its OWN closing rule and ZERO bottom padding (SidebarNavBand.BandRule): the 8 DIP under
-        //     that rule is PanePad.Top below, contributed once by PaddedList. Nothing here may add a second gap.
-        Element? navBand = Config.NavBand?.Invoke();
+        // PHASE 1 — the shortcut band is no longer chrome at position 0. It is the FIRST SECTION of `Doc`
+        // (`SidebarShortcutsSection`), so it lives inside the virtualized plan list below: it scrolls with the document,
+        // it takes the pane's ONE inset instead of carrying a duplicate of it, and it joins the pane's route-keyed
+        // selection transaction instead of drawing a static mark that had to opt out of it.
         // 1 — the mode's own fixed chrome (V3's header band / toolbar / chips), then the optional library-only search head.
         //     The head is rendered ONLY when the document actually contains an EntityList section (a library-only search
         //     over a pane with no library list would filter nothing).
         Element? modeHead = Config.Head?.Invoke();
-        Element? searchHead = Config.SearchHead && HasEntityList(Doc)
+        // PHASE 2: no search head while the pane is the canvas. The head filters EntityList/PlaylistTree BODIES, and in
+        // edit mode at most one section's body is on screen — a search box that visibly filters nothing is exactly the
+        // affordance-that-does-nothing this rework exists to remove. Not a Design branch: it reads the session, which
+        // arrives through the config delegate like everything else mode-specific.
+        Element? searchHead = Config.SearchHead && Edit is null && HasEntityList(Doc)
             ? Embed.Comp(() => new SidebarPaneSearchHead(_search, ExpandedWidth)) with { Key = "head" }
             : null;
 
@@ -438,10 +465,9 @@ sealed class SidebarPane : Component
             ? EmptyPane()
             : PaddedList();
 
-        int n = 1 + (navBand is null ? 0 : 1) + (modeHead is null ? 0 : 1) + (searchHead is null ? 0 : 1);
+        int n = 1 + (modeHead is null ? 0 : 1) + (searchHead is null ? 0 : 1);
         var kids = new Element[n];
         int k = 0;
-        if (navBand is { } nb) kids[k++] = nb;
         if (modeHead is { } mh) kids[k++] = mh;
         if (searchHead is { } sh) kids[k++] = sh;
         kids[k] = body;
@@ -557,7 +583,7 @@ sealed class SidebarPane : Component
     /// <summary>Everything outside the document the plan depends on, folded into one 16-byte key: the document version, the
     /// projection revision, the pin/folder versions, the search text and the MODE epoch. Reading them here is ALSO the
     /// subscription that re-renders this pane (and therefore re-plans) when any of them moves.</summary>
-    DepKey PlanDep(string search)
+    DepKey PlanDep(string search, in SidebarEditState? edit)
     {
         var prefs = Prefs;
         int layoutVer = prefs?.LayoutVersion.Value ?? 0;
@@ -567,19 +593,28 @@ sealed class SidebarPane : Component
         // NOT a signal (the binder is a plain service); it moves in lockstep with Entries.Version, which IS one.
         int revision = prefs?.Binder?.Revision ?? 0;
         int mode = Config.ModeEpoch?.Invoke() ?? 0;
+        // PHASE 2: entering/leaving edit mode, expanding another card and flipping "Show section contents" all change
+        // which rows exist, so the session folds into the plan key exactly like the MODE epoch beside it. The fold is
+        // never 0 for a live session, so "no session" cannot collide with one (SidebarEditPlan.Fold).
         return DepKey.Combine(DepKey.From(layoutVer, entriesVer, pinsVer, folderVer),
-                              DepKey.Combine(DepKey.From(revision, mode), search));
+                              DepKey.Combine(DepKey.From(revision, mode, SidebarEditPlan.Fold(in edit), 0), search));
     }
 
-    PlanStage BuildStage(SidebarCustomLayout document, string search)
+    PlanStage BuildStage(SidebarCustomLayout document, string search, SidebarEditState? edit)
     {
         var input = Input(search);
         bool useA = !_planPublished || !_presentedUsesA;
         var paneBuffers = useA ? _paneBuffersA : _paneBuffersB;
         var railBuffers = useA ? _railBuffersA : _railBuffersB;
-        var pane = SidebarRowPlanner.Build(document, input, paneBuffers);
+        // The EDIT PROJECTION of the same document, through the same buffers, into the same one flat row list (iron
+        // rule 3). Not a second renderer and not a substituted column: one `SidebarRow[]`, one `ItemsView.CreateBound`.
+        var pane = edit is { } session
+            ? SidebarRowPlanner.BuildEdit(document, input, in session, paneBuffers)
+            : SidebarRowPlanner.Build(document, input, paneBuffers);
+        // The 56-DIP rail is NEVER the canvas: it has no room for a card and nothing about it is editable, so it keeps
+        // planning the real document. A user who collapses the pane mid-edit sees their actual rail, which is honest.
         var rail = SidebarRowPlanner.BuildRail(document, input, railBuffers);
-        return new PlanStage(document, pane, rail, SidebarSearch.Normalize(input.Search), useA, ++_nextPlanEpoch);
+        return new PlanStage(document, pane, rail, SidebarSearch.Normalize(input.Search), useA, ++_nextPlanEpoch, edit);
     }
 
     void TryPublishStage(PlanStage stage)
@@ -602,10 +637,15 @@ sealed class SidebarPane : Component
         var oldEntries = Plan.Entries;
         // A new document or a new effective query changes what a row draws without necessarily changing the row record
         // (section titles, empty-state copy and inline controls all hang off them), so those edges bump wholesale.
+        // PHASE 2: the session is in the same class of edge — a card's chevron, its dimming and its affordance set all
+        // hang off it without necessarily changing the row RECORD (entering edit mode changes every row's kind, but
+        // expanding a card leaves the surviving cards' records identical while their expanded-state changes).
         bool wholesale = !_planPublished
                          || !ReferenceEquals(stage.Document, Doc)
-                         || !string.Equals(stage.EffectiveSearch, _effectiveSearch, StringComparison.Ordinal);
+                         || !string.Equals(stage.EffectiveSearch, _effectiveSearch, StringComparison.Ordinal)
+                         || !Nullable.Equals(stage.Edit, Edit);
 
+        Edit = stage.Edit;
         Doc = stage.Document;
         Plan = stage.Pane;
         _railPlan = stage.Rail;
@@ -672,12 +712,16 @@ sealed class SidebarPane : Component
         _bands.Clear();
         _pinnedSubtrees.Clear();
         _pinnedDepths.Clear();
+        RebuildSectionBand(plan);
         var rows = plan.Rows;
         for (int i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
             if (SectionOf(row.SectionId)?.Kind != SidebarSectionKind.Pinned) continue;
-            if (row.Kind == SidebarRowKind.SectionHeader)
+            // In the canvas the CARD stands in for the header, so it is what registers the section's base depth — without
+            // this a Pinned section expanded over an open folder would not disable its own item band and a descendant
+            // row would be treated as an independent pin (the `_pinnedSubtrees` guard).
+            if (row.Kind is SidebarRowKind.SectionHeader or SidebarRowKind.SectionCard)
             {
                 _pinnedDepths[row.SectionId] = row.Depth;
                 continue;
@@ -715,6 +759,67 @@ sealed class SidebarPane : Component
         }
         if (bandId is not null) _bands.Add(new SidebarPaneBand(bandId, bandStart, rows.Count - bandStart, bandExtent));
     }
+
+    /// <summary>PHASE 2 — resolve the section-card drag band, or leave it empty (= disarmed).
+    ///
+    /// <para>STRUCTURAL DRAG IS ARMED ONLY IN EDIT MODE (the Discord lesson: an always-armed structural drag is chronic
+    /// accidental reorders). Outside the canvas this returns immediately and nothing about pin/item reorder changes.</para>
+    ///
+    /// <para>Inside it, the band is armed only while every card is a card — <c>SidebarEditPlan.SectionsReorderable</c>
+    /// owns that rule and its reasoning. The band additionally SKIPS the pinned Shortcuts head: the sentinel is not in
+    /// <c>Sections</c>, so it can neither move nor be moved past, and covering it would let a drop above it map onto
+    /// index 0 — which is BELOW it — i.e. the cue and the outcome disagreeing. Excluding it makes the band's slots line
+    /// up 1:1 with the cards the reducer can actually address.</para>
+    ///
+    /// <para>Verified contiguous rather than assumed: any card whose body is showing terminates the run, so a stale
+    /// state can only ever shrink the band, never mis-address it.</para></summary>
+    void RebuildSectionBand(SidebarRowPlan plan)
+    {
+        _sectionBand = default;
+        if (Edit is not { } edit || !SidebarEditPlan.SectionsReorderable(in edit)) return;
+
+        var rows = plan.Rows;
+        int start = -1, count = 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (rows[i].Kind != SidebarRowKind.SectionCard) { if (start >= 0) break; continue; }
+            if (SidebarEditPlan.IsPinnedCard(rows[i].SectionId)) { if (start >= 0) break; continue; }
+            if (start < 0) start = i;
+            count++;
+        }
+        if (start < 0 || count < 2) return;   // a single card has nothing to reorder against
+        _sectionBand = new SidebarPaneBand(SectionDragKind, start, count, SidebarPaneMetrics.EditCardHeight);
+    }
+
+    /// <summary>The section-card band for a plan row, when this row is one of its cards.</summary>
+    internal bool TryEditSectionBand(int planIndex, out SidebarPaneBand band)
+    {
+        band = _sectionBand;
+        return band.Contains(planIndex);
+    }
+
+    /// <summary>The section-card <c>Reorderable</c> — created once and kept for the component's life (it holds gesture
+    /// state and must never be rebuilt mid-drag).</summary>
+    internal Reorderable SectionReorder => _sectionReorder ??= new Reorderable(SectionDragKind)
+    {
+        // Same two reasons as the pane's item bands: a live projection would swap content under the lifted node over a
+        // POSITIONALLY recycling virtualized list, and the built-in insertion line's geometry is measured from the
+        // `List(...)` wrapper's origin — which the pane never mounts, because each band is a RUN inside the one
+        // virtualized plan list. Displacement (the ItemsView channel) is the cue.
+        LiveProject = false,
+        ShowInsertionLine = false,
+        // DELIBERATELY NOT `RequireDropOnList`: that flag needs the `List(...)` wrapper to observe the release, and the
+        // pane mounts no wrapper — setting it here would make `_selfDrop` permanently false and CANCEL every reorder.
+        // Nothing else accepts this private kind, so a release away from the pane already commits nothing meaningful.
+        //
+        // DragStyle stays NULL — i.e. the engine's ghost lift, where the card itself is the moving visual. The app's
+        // chip resolver answers only `WaveeDragKinds.Resource` (`WaveeResourceDrag.Chip`), so a Stationary lift here
+        // would dim the card in place and draw NOTHING that moves: one gesture, zero visuals (the dnd skill's
+        // "two visuals for one gesture" pitfall, in its other direction — "a Stationary source in an app with no
+        // preview layer mounted has no moving visual at all"). The customizer outline's own section list makes the same
+        // call for the same reason.
+        AnnounceAssertive = true,
+    };
 
     static bool IsReorderableRow(in SidebarRow row) => row.Kind
         is SidebarRowKind.EntityRow or SidebarRowKind.IconRow or SidebarRowKind.Placeholder
@@ -1282,6 +1387,7 @@ sealed class SidebarPane : Component
 
     void ConfigureReorder()
     {
+        ConfigureSectionReorder();
         for (int i = 0; i < _bands.Count; i++)
         {
             var band = _bands[i];
@@ -1306,10 +1412,71 @@ sealed class SidebarPane : Component
         Context.RequestRerender();
     }
 
+    /// <summary>PHASE 2 — wire the section-card band. Called from <see cref="ConfigureReorder"/> on every publish, like
+    /// the item bands: the Reorderable's state is set as PLAIN FIELDS each render (its documented shape), so a
+    /// disarmed band simply reports zero items and lifts nothing.</summary>
+    void ConfigureSectionReorder()
+    {
+        if (_sectionReorder is null && _sectionBand.Count == 0) return;   // never armed — allocate nothing
+        var ro = SectionReorder;
+        ro.Scene = Context.Scene;
+        ro.RequestRender = BumpDisplacement;
+        ro.ItemCount = _sectionBand.Count;
+        ro.ItemExtent = SidebarPaneMetrics.EditCardHeight;   // ONE height for every card — the uniform pitch the slot math wants
+        ro.Spacing = 0f;                                     // plan rows are contiguous inside the virtualized list
+        ro.ItemOf = null;                                    // the band never leaves its own list (no cross-list payload)
+        ro.OnReorder = CommitSectionMove;
+        // The a11y channel for a POINTER-FREE reorder (Phase 4's `Reorderable.AnnounceText`). Without it the keyboard
+        // lift — Space to pick up, arrows to place, Space to drop, Escape to cancel, all already built into the control
+        // and deliberately not disabled — has NO feedback at all: the displacement is purely visual. Composition is the
+        // app's because only the app can name the section and owns the locale; delivery is coalesced for us, so a held
+        // arrow key speaks once per ~100 ms rather than per repeat.
+        ro.AnnounceText = SectionAnnounce;
+    }
+
+    /// <summary>One reorder milestone as a sentence. Runs on the EDGE that triggered it (a lift, a slot change, a
+    /// commit) — never per frame — so resolving a localized string here is fine.</summary>
+    string? SectionAnnounce(ReorderAnnounce a)
+    {
+        string name = SectionTitleAtCardSlot(a.Index);
+        if (name.Length == 0) return null;
+        string where = Loc.Format(SidebarPaneLoc.ReorderPosition, ("index", a.Slot + 1), ("count", a.Count));
+        return a.Kind switch
+        {
+            ReorderAnnounceKind.Grab => Loc.Format(SidebarPaneLoc.ReorderGrabbed, ("name", name), ("position", where)),
+            ReorderAnnounceKind.Move => Loc.Format(SidebarPaneLoc.ReorderMoved, ("name", name), ("position", where)),
+            ReorderAnnounceKind.Drop => Loc.Format(SidebarPaneLoc.ReorderDropped, ("name", name), ("position", where)),
+            _ => Loc.Format(SidebarPaneLoc.ReorderCancelled, ("name", name)),
+        };
+    }
+
+    string SectionTitleAtCardSlot(int slot)
+    {
+        string id = SidebarEditPlan.SectionIdAt(Plan.Rows, _sectionBand.Start, _sectionBand.Count, slot);
+        var section = id.Length == 0 ? null : SectionOf(id);
+        return section is null ? "" : SidebarPaneText.TitleOf(section);
+    }
+
+    /// <summary>Commit a section-card drag as the undoable <c>MoveSection</c>. The band-slot → document-index
+    /// translation is the pure, unit-tested <c>SidebarEditPlan.ToMoveSection</c> — it is computed against the PERSISTED
+    /// document (<c>Prefs.Layout</c>), never against <see cref="Doc"/>, which carries the materialised Shortcuts section
+    /// at index 0 and would therefore make every index one too high.</summary>
+    void CommitSectionMove(int from, int to)
+    {
+        if (Config.ReadOnly || Prefs is not { } prefs) return;
+        var command = SidebarEditPlan.ToMoveSection(prefs.Layout, Plan.Rows,
+            _sectionBand.Start, _sectionBand.Count, from, to);
+        if (command is not null) prefs.Dispatch(command);
+    }
+
     /// <summary>The ItemsView's displacement channel, in PLAN-row space: a lifted section's siblings part to make room
     /// while every other row stays put. Stable delegate — <c>ListOptions</c> freezes at mount.</summary>
     (float dx, float dy) Displacement(int planIndex)
     {
+        // PHASE 2 — the section-card band first: it is not in `_bands` (see the field note), and while it is lifted no
+        // item band can be, because expanding a section disarms it.
+        if (_sectionBand.Contains(planIndex) && _sectionReorder is { IsLifted: true } sro)
+            return (0f, sro.OffsetFor(planIndex - _sectionBand.Start));
         if (!TryBandOf(planIndex, out var band)) return (0f, 0f);
         var ro = ReorderFor(band.SectionId);
         if (!ro.IsLifted) return (0f, 0f);
@@ -1629,6 +1796,90 @@ sealed class SidebarPane : Component
         if (Config.SetSectionCollapsed is not { } apply) return;
         StartDisclosure("section:" + sectionId, sectionId, folder: false, open: !collapsed,
             () => apply(sectionId, collapsed));
+    }
+
+    // ── PHASE 2 / Decision B — the canvas's own commands ─────────────────────────────────────────────────────────────
+
+    /// <summary>The shared edit session, or null. Reached through <c>SidebarPreferences</c> — the app-root service both
+    /// the canvas and the companion page hold — which IS the shared-state seam: the pane never touches the customizer
+    /// page and the page never touches the renderer (iron rule 6).</summary>
+    internal SidebarEditSession? EditSession => Prefs?.Edit;
+
+    /// <summary>The host the per-section options popover hands to the customizer's generated control set. The session
+    /// itself implements it, so the popover and the companion page drive one document through one mutation path.</summary>
+    internal ISidebarEditHost? EditHost => Prefs?.Edit;
+
+    /// <summary>Expand this card's section (or collapse it when it is already the expanded one). SESSION state, not
+    /// document state: it is deliberately NOT <c>SetSectionCollapsed</c>, because a user opening a card to look inside
+    /// it must not silently rewrite — and fill the undo ring with — the collapse state their real sidebar uses.
+    /// <para>It therefore does not run the disclosure choreography either: <c>StartDisclosure</c> resolves its animated
+    /// range from a <c>SectionHeader</c> row, which the canvas does not plan (the card replaces it). The re-plan rides
+    /// the ordinary <c>PlanDep</c> fold.</para></summary>
+    internal void ToggleEditExpanded(string sectionId) => EditSession?.ToggleExpanded(sectionId);
+
+    /// <summary>Is this card's section currently showing its rows? Reads the session THE PUBLISHED PLAN WAS BUILT FROM,
+    /// never the live signal, so the chevron can never claim "open" over a plan with no body under it.</summary>
+    internal bool EditShowsBody(SidebarSectionSpec section)
+        => Edit is { } edit && SidebarEditPlan.ShowsBody(in edit, section);
+
+    /// <summary>The eye: hide or show a section. Undoable, autosaved, and instantly visible in the canvas — a hidden
+    /// section keeps its card, dimmed, with an eye-off badge (P2: nothing vanishes into an invisible elsewhere).</summary>
+    internal void SetSectionHidden(string sectionId, bool hidden)
+    {
+        if (Config.ReadOnly || SidebarEditPlan.IsPinnedCard(sectionId)) return;
+        Prefs?.Dispatch(new SetSectionHidden(sectionId, hidden));
+    }
+
+    /// <summary>Explicit Move up / Move down for a card's "…" menu — P6: drag is one of several ways, never the only
+    /// one. It works whatever the drag band's state is (it addresses the document, not a band slot), which is what makes
+    /// a section reorderable even while another card is expanded and the band is disarmed.</summary>
+    internal void MoveSectionBy(string sectionId, int delta)
+    {
+        if (Config.ReadOnly || delta == 0 || Prefs is not { } prefs) return;
+        if (SidebarEditPlan.IsPinnedCard(sectionId)) return;   // the sentinel is not in `Sections`
+        var at = prefs.Layout.Locate(sectionId);
+        if (at.Index < 0) return;
+        int siblings = at.Parent is null ? prefs.Layout.Sections.Count : at.Parent.ChildList.Count;
+        int next = at.Index + delta;
+        if (next < 0 || next >= siblings) return;
+        prefs.Dispatch(new MoveSection(sectionId, at.Parent?.Id, next));
+    }
+
+    /// <summary>Remove a section from the card's "…" menu. Explicit and undoable — the only path that deletes
+    /// (iron rule 9).</summary>
+    internal void RemoveEditSection(string sectionId)
+    {
+        if (Config.ReadOnly || SidebarEditPlan.IsPinnedCard(sectionId)) return;
+        if (Prefs?.Dispatch(new RemoveSection(sectionId)) != SidebarRejectReason.None) return;
+        if (EditSession is { } session
+            && string.Equals(session.Expanded.Peek(), sectionId, StringComparison.Ordinal))
+            session.Expanded.Value = null;
+    }
+
+    /// <summary>PHASE 3 — is there room for one more section? Read by the section card's palette DROP TARGET, whose
+    /// <c>CanAccept</c> runs once per opt-in target per frame while a drag is live (the dnd skill's per-frame-alloc
+    /// rule), so it is a count comparison and nothing else.</summary>
+    internal bool CanAcceptPaletteDrop
+        => !Config.ReadOnly && Prefs is { } prefs
+           && prefs.Layout.SectionCount < SidebarLayoutReducer.MaxSections;
+
+    /// <summary>PHASE 3 — commit a palette chip dropped ON a section card as the undoable <c>AddSection</c>. The band
+    /// slot → document index translation is the pure, unit-tested <c>SidebarEditPlan.ToAddSection</c>, computed against
+    /// the PERSISTED document (<c>Prefs.Layout</c>) and never against <see cref="Doc"/>, which carries the materialised
+    /// Shortcuts section at index 0 and would make every index one too high.</summary>
+    internal void AddSectionFromPalette(string beforeSectionId, SidebarSectionDropPayload payload)
+    {
+        if (Config.ReadOnly || Prefs is not { } prefs) return;
+        var command = SidebarEditPlan.ToAddSection(prefs.Layout, beforeSectionId, payload);
+        if (command is not null) prefs.Dispatch(command);
+    }
+
+    /// <summary>Duplicate a section from the card's "…" menu. <paramref name="copyTitle"/> is the localized "{name} copy"
+    /// the caller formats — Wavee.Core has no <c>Loc</c>, so the clone's literal title is supplied here.</summary>
+    internal void DuplicateEditSection(string sectionId, string copyTitle)
+    {
+        if (Config.ReadOnly || SidebarEditPlan.IsPinnedCard(sectionId)) return;
+        Prefs?.Dispatch(new DuplicateSection(sectionId, copyTitle));
     }
 
     /// <summary>Activate a folder through the mode seam while keeping inline disclosure structurally animated. Narrow

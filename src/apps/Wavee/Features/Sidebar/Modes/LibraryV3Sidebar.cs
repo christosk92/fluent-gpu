@@ -55,8 +55,12 @@ sealed class LibraryV3Sidebar : Component
     LibraryV3Session? _session;
 
     // The document cache: `Document` is invoked on EVERY pane render, and a rebuilt-per-render document would allocate a
-    // handful of records per frame the pane paints. Keyed on the state it was built from (a record struct — value equality).
+    // handful of records per frame the pane paints. Keyed on the state it was built from (a record struct — value equality)
+    // AND on the shortcut band, which is part of the document since Phase 1: a band edit bumps LayoutVersion and re-plans,
+    // and without the band in the key the re-plan would run against the STALE cached document. Compared by reference —
+    // every band edit rebuilds the list in the reducer, so a reference match proves the content matches.
     LibraryV3DocState _docState;
+    IReadOnlyList<SidebarItemSpec>? _docTopBar;
     SidebarCustomLayout? _docLayout;
 
     // The view (order) cache. The pane shapes its input TWICE per plan (the expanded plan and the rail plan), so without
@@ -121,8 +125,10 @@ sealed class LibraryV3Sidebar : Component
             Document = BuildDocument,
             Input = ShapeInput,
             ModeEpoch = ReadModeEpoch,
-            // V3 renders NO section headers (§3.2.7 — the document's sections are all title-less), so there is nothing to
-            // collapse and no per-section collapse state to own.
+            // V3's OWN sections are all title-less (§3.2.7), so they plan no header row and there is nothing to collapse.
+            // Phase 1's Shortcuts section is titled and therefore does plan one — deliberately, it is the app's
+            // navigation and needs a name — but it stays non-collapsible here for the same reason as everywhere else:
+            // the band is materialised from `TopBar` and has no persisted Collapsed bit to write.
             SetSectionCollapsed = null,
             // The document is ephemeral and the CHROME owns every piece of its state: no inline section controls, no
             // document commands (a Dispatch here would edit the CURATED document), no customize CTA.
@@ -131,11 +137,9 @@ sealed class LibraryV3Sidebar : Component
             // binder folds in — the pane's pinned search head would be a second, competing query.
             SearchHead = false,
             Head = ChromeHead,
-            // O3 — the customizable shortcut band, at its new render site. Set IDENTICALLY by all three modes: it is the
-            // app's navigation band, so it sits ABOVE V3's own chrome (header band / toolbar / chips) rather than
-            // inside it — V3 owns its library surface, not the app's navigation.
-            NavBand = () => SidebarNavBand.Head(_prefs, _route, _go),
-            RailHead = () => SidebarNavBand.RailHead(_prefs, _route, _go),
+            // PHASE 1 — the shortcut band is no longer a config delegate at all: it is the FIRST SECTION of the document
+            // BuildDocument returns (Decision A). The renderer therefore needs no `NavBand`/`RailHead` seam, the 56-DIP
+            // rail form rides the planner's existing `ShowInRail`, and V3 finally has a navigation section of its own.
             // §3.2.3 keeps the design switch in V3's own overflow menu (it embeds SidebarLayoutMenu.Rows as a sub-menu), so
             // the pane must not hang a second layout button off a header. The RAIL keeps its copy: a collapsed pane has no
             // overflow menu to reach.
@@ -160,9 +164,14 @@ sealed class LibraryV3Sidebar : Component
     {
         if (_session is not { } session) return SidebarCustomLayout.Empty;
         var state = session.ReadState();
-        if (_docLayout is { } cached && _docState.Equals(state)) return cached;
+        // The shortcut band lives on the CURATED document (one global list), so V3 reads it from the preference service
+        // rather than from its own synthesized layout. The read is unconditional and comes first: the pane already
+        // subscribes LayoutVersion through PlanDep, and short-circuiting behind the cache would only hide a stale band.
+        var topBar = _prefs?.TopBar;
+        if (_docLayout is { } cached && _docState.Equals(state) && ReferenceEquals(_docTopBar, topBar)) return cached;
         _docState = state;
-        _docLayout = LibraryV3Document.Build(in state);
+        _docTopBar = topBar;
+        _docLayout = LibraryV3Document.Build(in state, topBar);
         return _docLayout;
     }
 

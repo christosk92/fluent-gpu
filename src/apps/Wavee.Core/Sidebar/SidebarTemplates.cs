@@ -96,8 +96,9 @@ public static class SidebarTemplates
         // Subtitles = the song-count caption.
         Section(SidebarSectionKind.PlaylistTree, "sidebar.playlists", SidebarDisplayOptions.Entities),
         Divider(),
-        // Mirrors today's flat DevToolsRow — deliberately header-less.
-        Section(SidebarSectionKind.StaticLinks, null, SidebarDisplayOptions.Shortcuts,
+        // Mirrors today's flat DevToolsRow — deliberately header-less. `Links`, not `Shortcuts`: a StaticLinks section
+        // forbids CountBadges (defect 8), so seeding it from the CollectionShortcuts preset carried a dead flag.
+        Section(SidebarSectionKind.StaticLinks, null, SidebarDisplayOptions.Links,
         [
             Route("api-console", "Code"),
         ]),
@@ -114,7 +115,8 @@ public static class SidebarTemplates
             SidebarDisplayOptions.Entities with { Subtitles = true, InlineControls = true },
             query: SidebarEntityQuery.Default),
         Divider(),
-        Section(SidebarSectionKind.StaticLinks, null, SidebarDisplayOptions.Shortcuts,
+        // `Links`, not `Shortcuts` — see the ClassicInspired arm above (defect 8).
+        Section(SidebarSectionKind.StaticLinks, null, SidebarDisplayOptions.Links,
         [
             Route("home", "Home"),
             Route("search", "Search"),

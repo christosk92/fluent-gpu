@@ -54,9 +54,9 @@ sealed class ContentHost : Component
     }
 
     // Every destination page gets its own slot inside the active tab, so ALL forward/back navigation uses the same
-    // page-slide language. The prior detail/artist family keys made album→album and artist→artist mutate in place while
-    // cross-family hops slid a new page in — two visibly different navigation systems for adjacent links. Search remains
-    // one live workspace because its query changes in place as the omnibar is edited.
+    // page-slide language (Fluent Frame SlideNavigationTransitionInfo / Zune panorama: the page moves, the content
+    // does not then cascade). Search remains one live workspace because its query changes in place as the omnibar
+    // is edited.
     static string SlotKey(PageSlot s)
     {
         if (s.Route.Name == "search") return s.TabId + "\u001Fsearch";

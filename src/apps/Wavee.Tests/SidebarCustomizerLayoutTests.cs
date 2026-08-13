@@ -5,159 +5,20 @@ using Xunit;
 
 namespace Wavee.Tests;
 
-// The full-page customizer's PURE model (Wave 4a): the progressive three-region tier ladder, the searchable palette table
-// + filter, the outline flattening and its flat-index → MoveSection translation, the display-option projection, and the
-// opaque extension-config rewriter. All of it lives in Features/Sidebar/Curated/SidebarCustomizerLayout.cs, which is
-// engine-free ON PURPOSE and source-included here, so these tests drive PRODUCTION code rather than a copy of it.
+// The companion page's PURE model (Phase 3): the searchable palette table + filter — now including the DESTINATIONS
+// group — the display-option projection the generated property controls bind, and the opaque extension-config rewriter.
+// All of it lives in Features/Sidebar/Curated/SidebarCustomizerLayout.cs, which is engine-free ON PURPOSE and
+// source-included here, so these tests drive PRODUCTION code rather than a copy of it.
 //
-// Where legality is the REDUCER's business (a group inside a group), the test asserts exactly that: the translation
-// produces the command and SidebarLayoutReducer rejects it. Two authorities for one rule is the drift this avoids.
+// PHASE 3 REMOVALS, recorded so nobody re-adds the tests either: the four-tier region ladder
+// (`SidebarCustomizerTier`/`SidebarCustomizerLayout`), the header's command-fit table
+// (`SidebarCustomizerCommandLayout`) and the outline flattening + its flat-index → MoveSection translation
+// (`SidebarOutlineRow`/`SidebarOutlineRows`/`SidebarOutlineDrag`) all died WITH the surfaces they described — the page
+// is ONE scrolling column at every width and the docked pane IS the canvas. The one section-drag translation that
+// survives is `SidebarEditPlan.ToMoveSection`, which works in the PANE's band slots and is covered by
+// SidebarEditPlanTests.
 public class SidebarCustomizerLayoutTests
 {
-    // ── the tier ladder ───────────────────────────────────────────────────────────────────────────────────────────────
-    //
-    // Bands (R3.2 round 2 LOWERED the top two): >=1320 four regions · 1000-1319 three · 820-999 two · <820 outline only.
-    // The width these take is the PAGE CONTENT width, and the docked sidebar spends ~280 DIP before this page measures —
-    // at the old 1480/1180 a normal ~1330 window fell into Compact and the reporter never saw Canvas or the rich header.
-
-    [Fact]
-    public void NominalTier_MapsTheFourBands()
-    {
-        Assert.Equal(SidebarCustomizerTier.Canvas, SidebarCustomizerLayout.NominalTier(1320f));
-        Assert.Equal(SidebarCustomizerTier.Canvas, SidebarCustomizerLayout.NominalTier(2400f));
-        Assert.Equal(SidebarCustomizerTier.Full, SidebarCustomizerLayout.NominalTier(1000f));
-        Assert.Equal(SidebarCustomizerTier.Full, SidebarCustomizerLayout.NominalTier(1319f));
-        Assert.Equal(SidebarCustomizerTier.Compact, SidebarCustomizerLayout.NominalTier(999f));
-        Assert.Equal(SidebarCustomizerTier.Compact, SidebarCustomizerLayout.NominalTier(820f));
-        Assert.Equal(SidebarCustomizerTier.Narrow, SidebarCustomizerLayout.NominalTier(819f));
-        Assert.Equal(SidebarCustomizerTier.Narrow, SidebarCustomizerLayout.NominalTier(0f));
-    }
-
-    /// <summary>The Full band must never be narrower than the three fixed regions it promises to show, or the tier would
-    /// squeeze the elastic outline below <c>OutlineMinWidth</c> instead of dropping a region.</summary>
-    [Fact]
-    public void FullBand_FitsItsThreeRegions()
-    {
-        const float PagePadding = 32f;    // Spacing.L a side
-        const float RegionGaps = 24f;     // two 12-DIP gaps between three regions
-        float needed = SidebarCustomizerLayout.PaletteWidth
-                     + SidebarCustomizerLayout.InspectorWidth
-                     + SidebarCustomizerLayout.OutlineMinWidth
-                     + RegionGaps + PagePadding;
-        Assert.True(SidebarCustomizerLayout.FullEnterW >= needed,
-            $"FullEnterW {SidebarCustomizerLayout.FullEnterW} < {needed} needed");
-
-        float canvasNeeded = needed + SidebarCustomizerLayout.PreviewWidth + 12f;
-        Assert.True(SidebarCustomizerLayout.CanvasEnterW >= canvasNeeded,
-            $"CanvasEnterW {SidebarCustomizerLayout.CanvasEnterW} < {canvasNeeded} needed");
-    }
-
-    [Fact]
-    public void Tier_UnmeasuredTakesTheNominalBand()
-    {
-        Assert.Equal(SidebarCustomizerTier.Canvas, SidebarCustomizerLayout.Tier(1600f, -1));
-        Assert.Equal(SidebarCustomizerTier.Full, SidebarCustomizerLayout.Tier(1100f, -1));
-        Assert.Equal(SidebarCustomizerTier.Compact, SidebarCustomizerLayout.Tier(900f, -1));
-        Assert.Equal(SidebarCustomizerTier.Narrow, SidebarCustomizerLayout.Tier(700f, -1));
-    }
-
-    [Fact]
-    public void Tier_WidensImmediately()
-    {
-        Assert.Equal(SidebarCustomizerTier.Canvas,
-            SidebarCustomizerLayout.Tier(1320f, (int)SidebarCustomizerTier.Narrow));
-        Assert.Equal(SidebarCustomizerTier.Full,
-            SidebarCustomizerLayout.Tier(1000f, (int)SidebarCustomizerTier.Narrow));
-        Assert.Equal(SidebarCustomizerTier.Compact,
-            SidebarCustomizerLayout.Tier(820f, (int)SidebarCustomizerTier.Narrow));
-    }
-
-    [Fact]
-    public void Tier_NarrowsOnlyPastTheHysteresisDip()
-    {
-        Assert.Equal(SidebarCustomizerTier.Canvas,
-            SidebarCustomizerLayout.Tier(1310f, (int)SidebarCustomizerTier.Canvas));
-        Assert.Equal(SidebarCustomizerTier.Full,
-            SidebarCustomizerLayout.Tier(1290f, (int)SidebarCustomizerTier.Canvas));
-
-        // 990 is below the 1000 threshold but inside the 24-DIP dip: the layout must NOT drop a region yet.
-        Assert.Equal(SidebarCustomizerTier.Full,
-            SidebarCustomizerLayout.Tier(990f, (int)SidebarCustomizerTier.Full));
-        Assert.Equal(SidebarCustomizerTier.Compact,
-            SidebarCustomizerLayout.Tier(970f, (int)SidebarCustomizerTier.Full));
-
-        Assert.Equal(SidebarCustomizerTier.Compact,
-            SidebarCustomizerLayout.Tier(810f, (int)SidebarCustomizerTier.Compact));
-        Assert.Equal(SidebarCustomizerTier.Narrow,
-            SidebarCustomizerLayout.Tier(790f, (int)SidebarCustomizerTier.Compact));
-    }
-
-    [Fact]
-    public void Tier_SkipsTwoBandsAtOnceWhenTheDropIsBigEnough()
-        => Assert.Equal(SidebarCustomizerTier.Narrow,
-            SidebarCustomizerLayout.Tier(600f, (int)SidebarCustomizerTier.Full));
-
-    [Fact]
-    public void SheetHeight_IsClampedBothWays()
-    {
-        Assert.Equal(320f, SidebarCustomizerLayout.SheetHeight(0f));       // unmeasured page
-        Assert.Equal(520f, SidebarCustomizerLayout.SheetHeight(1000f));    // 55% would be 550
-        Assert.Equal(240f, SidebarCustomizerLayout.SheetHeight(400f));     // 55% would be 220
-        Assert.Equal(100f, SidebarCustomizerLayout.SheetHeight(100f));     // never taller than the page itself
-    }
-
-    [Fact]
-    public void RegionVisibility_FollowsTheTier()
-    {
-        Assert.True(SidebarCustomizerLayout.PaletteInline(SidebarCustomizerTier.Canvas));
-        Assert.True(SidebarCustomizerLayout.PaletteInline(SidebarCustomizerTier.Full));
-        Assert.False(SidebarCustomizerLayout.PaletteInline(SidebarCustomizerTier.Compact));
-        Assert.False(SidebarCustomizerLayout.PaletteInline(SidebarCustomizerTier.Narrow));
-
-        Assert.True(SidebarCustomizerLayout.InspectorInline(SidebarCustomizerTier.Canvas));
-        Assert.True(SidebarCustomizerLayout.InspectorInline(SidebarCustomizerTier.Full));
-        Assert.True(SidebarCustomizerLayout.InspectorInline(SidebarCustomizerTier.Compact));
-        Assert.False(SidebarCustomizerLayout.InspectorInline(SidebarCustomizerTier.Narrow));
-
-        Assert.True(SidebarCustomizerLayout.PreviewInline(SidebarCustomizerTier.Canvas));
-        Assert.False(SidebarCustomizerLayout.PreviewInline(SidebarCustomizerTier.Full));
-        Assert.False(SidebarCustomizerLayout.PreviewInline(SidebarCustomizerTier.Compact));
-        Assert.False(SidebarCustomizerLayout.PreviewInline(SidebarCustomizerTier.Narrow));
-    }
-
-    // ── the header's command-pressure fit ─────────────────────────────────────────────────────────────────────────────
-
-    /// <summary>Undo/Redo stay inline at EVERY tier while the width allows it (round-3 defect 4). They used to be banned
-    /// outright below Compact, so a narrow window collapsed to "… Done" with no history affordance even though the two
-    /// buttons fit with room to spare. Width — never tier — is what may demote them.</summary>
-    [Fact]
-    public void CommandFit_KeepsHistoryInlineAtEveryTierWhenItFits()
-    {
-        var w = SidebarCustomizerCommandWidths.Default;
-        foreach (SidebarCustomizerTier tier in Enum.GetValues<SidebarCustomizerTier>())
-        {
-            var fit = SidebarCustomizerCommandLayout.Resolve(600f, in w, tier);
-            Assert.True(fit.Has(SidebarCustomizerInlineCommand.Undo), $"{tier}: Undo demoted at 600 DIP");
-            Assert.True(fit.Has(SidebarCustomizerInlineCommand.Redo), $"{tier}: Redo demoted at 600 DIP");
-        }
-    }
-
-    /// <summary>...and under REAL pressure they are the LAST inline commands standing: history outranks creation.</summary>
-    [Fact]
-    public void CommandFit_DemotesAddBeforeHistory()
-    {
-        var w = SidebarCustomizerCommandWidths.Default;
-        // More(48) + Gap(8) + Done(76) = 132 mandatory; +Undo +Redo = 228; +Add would need 276.
-        var fit = SidebarCustomizerCommandLayout.Resolve(240f, in w, SidebarCustomizerTier.Full);
-        Assert.True(fit.Has(SidebarCustomizerInlineCommand.Undo));
-        Assert.True(fit.Has(SidebarCustomizerInlineCommand.Redo));
-        Assert.False(fit.Has(SidebarCustomizerInlineCommand.Add));
-
-        // Squeezed to the mandatory pair only: everything optional is in overflow, nothing is dropped outright.
-        var none = SidebarCustomizerCommandLayout.Resolve(140f, in w, SidebarCustomizerTier.Full);
-        Assert.Equal(SidebarCustomizerInlineCommand.None, none.Inline);
-    }
-
     // ── the palette table ─────────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
@@ -176,15 +37,31 @@ public class SidebarCustomizerLayoutTests
         }
     }
 
+    /// <summary>Every row must be NAMEABLE — but by exactly one owner, and a destination's owner is not this table.
+    ///
+    /// <para>A SECTION row spells its own <c>NameLocKey</c>. A DESTINATION row deliberately leaves it EMPTY and carries
+    /// a <c>RouteKey</c> instead, because "what this page is called" already has a single owner in
+    /// <c>ShellNav.Dest(route).Title</c> — the same string the tab strip, the breadcrumb and a pinned row use. Minting a
+    /// twelfth-and-thirteenth spelling here is exactly the drift the single-owner rule exists to catch. So the rule is
+    /// EITHER a non-empty name key OR a non-empty route key, never neither.</para></summary>
     [Fact]
     public void Palette_EveryEntryAddsAKnownKindAndNamesItsLocKeys()
     {
         foreach (var entry in SidebarPalette.All)
         {
             Assert.True(SidebarSectionKinds.IsKnown(entry.Kind));
-            Assert.False(string.IsNullOrEmpty(entry.NameLocKey));
             Assert.False(string.IsNullOrEmpty(entry.DescriptionLocKey));
             Assert.False(string.IsNullOrEmpty(entry.IconName));
+
+            bool named = !string.IsNullOrEmpty(entry.NameLocKey);
+            bool routed = !string.IsNullOrEmpty(entry.RouteKey);
+            Assert.True(named || routed, entry.Id + " can be labelled by neither a loc key nor a route");
+
+            // …and never BOTH: two owners for one label is the drift, whichever one the renderer happens to pick.
+            Assert.False(named && routed, entry.Id + " names its label twice");
+
+            // The split is exactly the group split — a route key is a Destinations-only member.
+            Assert.Equal(entry.Group == SidebarPaletteGroup.Destinations, routed);
         }
     }
 
@@ -269,173 +146,120 @@ public class SidebarCustomizerLayoutTests
         Assert.True(SidebarPalette.Matches(SidebarPalette.NormalizeQuery("  Pin  "), "Pinned", null));
     }
 
-    // ── the outline ───────────────────────────────────────────────────────────────────────────────────────────────────
+    // ── the Destinations group (Phase 3) ──────────────────────────────────────────────────────────────────────────────
+    //
+    // The fix for "search home, get Links": typing "home" used to return one row — *Links — Shortcuts to pages like Home
+    // or Search* — whose click added an EMPTY StaticLinks section. Destinations answer the question with the page.
 
     static SidebarSectionSpec Section(string id, SidebarSectionKind kind,
         IReadOnlyList<SidebarSectionSpec>? children = null, bool hidden = false)
         => new(id, kind, Title: null, TitleLocKey: null, Hidden: hidden, Collapsed: false, Display: null,
                Items: null, Query: null, Children: children, Extension: null);
 
-    /// <summary>pinned · group[child] · divider — the shape every outline rule needs (a top-level row, a group, a nested
-    /// row and a trailing row).</summary>
-    static SidebarCustomLayout Doc()
-    {
-        var child = Section("sec_c1", SidebarSectionKind.StaticLinks);
-        var group = Section("sec_g", SidebarSectionKind.CustomGroup, new[] { child });
-        return new SidebarCustomLayout(SidebarTemplates.Blank,
-        [
-            Section("sec_p", SidebarSectionKind.Pinned),
-            group,
-            Section("sec_d", SidebarSectionKind.Divider),
-        ]);
-    }
-
-    static List<SidebarOutlineRow> Rows(SidebarCustomLayout doc)
-    {
-        var rows = new List<SidebarOutlineRow>();
-        SidebarOutlineRows.Build(doc, rows);
-        return rows;
-    }
-
+    /// <summary>The entry SET is derived, never re-typed: <c>SidebarPinId.PinnableRoutes</c> (the pin scheme's own list,
+    /// so a route that becomes pinnable later shows up here for free) ∪ the three real pages the PIN policy refuses —
+    /// settings and the API console are tooling surfaces and the concerts hub simply never declared itself pinnable,
+    /// which is not a reason to hide a real page from a shortcut list.</summary>
     [Fact]
-    public void OutlineRows_FlattenTopLevelAndGroupChildrenInOrder()
+    public void Destinations_AreThePinnableRoutesPlusTheThreeUnpinnablePages()
     {
-        var rows = Rows(Doc());
+        var routes = new List<string>();
+        foreach (var e in SidebarPalette.Destinations) routes.Add(e.RouteKey!);
 
-        Assert.Equal(4, rows.Count);
-        Assert.Equal("sec_p", rows[0].SectionId);
-        Assert.Equal("sec_g", rows[1].SectionId);
-        Assert.Equal("sec_c1", rows[2].SectionId);
-        Assert.Equal("sec_d", rows[3].SectionId);
+        Assert.Equal(SidebarPinId.PinnableRoutes.Length + 3, routes.Count);
 
-        Assert.Null(rows[0].ParentId);
-        Assert.Equal("sec_g", rows[2].ParentId);
-        Assert.Equal(0, rows[0].Depth);
-        Assert.Equal(1, rows[2].Depth);
-        Assert.Equal(0, rows[2].IndexInParent);
-        Assert.Equal(2, rows[3].IndexInParent);      // top-level index, not the flat one
+        // The pinnable routes come FIRST and in their own order — the union is spelled with that list as the source.
+        for (int i = 0; i < SidebarPinId.PinnableRoutes.Length; i++)
+            Assert.Equal(SidebarPinId.PinnableRoutes[i], routes[i]);
 
-        Assert.True(rows[1].IsGroup);
-        Assert.Equal(1, rows[1].ChildCount);
-        Assert.False(rows[0].IsGroup);
+        Assert.Equal(new[] { "settings", "api-console", "concerts" },
+                     routes.GetRange(SidebarPinId.PinnableRoutes.Length, 3).ToArray());
 
-        // R3.2 item 2: an outline row is a CARD (24-DIP kind chip + title + kind subtitle), so top-level grew 44 -> 52 and
-        // the one-line depth-1 child 36 -> 44. These two numbers are also Reorderable's drop pitch.
-        Assert.Equal(52f, rows[0].Height);
-        Assert.Equal(44f, rows[2].Height);
+        // The three extras are exactly the ones the pin scheme turns away — otherwise this list would duplicate one.
+        foreach (var extra in new[] { "settings", "api-console", "concerts" })
+            Assert.Null(SidebarPinId.FromRoute(extra));
+
+        // "home" is in there, which is the whole point of the group.
+        Assert.Contains("home", routes);
     }
 
+    /// <summary>Every destination is ONE undoable <c>AddSection(StaticLinks, Item: route)</c> — a pre-seeded section, so
+    /// the click produces a WORKING row rather than defect 7's empty grey hint. Its id is namespaced <c>dest:</c> so it
+    /// can never collide with a section entry's id.</summary>
     [Fact]
-    public void OutlineRows_BuildIsIdempotentAndClearsTheCallerList()
+    public void Destinations_AreOneSeededStaticLinksAddEach()
     {
-        var rows = new List<SidebarOutlineRow> { default, default };
-        Assert.Equal(4, SidebarOutlineRows.Build(Doc(), rows));
-        Assert.Equal(4, rows.Count);
-        Assert.Equal(0, SidebarOutlineRows.Build(null, rows));
-        Assert.Empty(rows);
+        foreach (var e in SidebarPalette.Destinations)
+        {
+            Assert.Equal(SidebarPaletteGroup.Destinations, e.Group);
+            Assert.Equal(SidebarSectionKind.StaticLinks, e.Kind);
+            Assert.Equal(SidebarPaletteAdd.Destination, e.Add);
+            Assert.Equal(SidebarPalette.DestinationSubLocKey, e.DescriptionLocKey);
+            Assert.Null(e.ContributionId);
+            Assert.StartsWith("dest:", e.Id, StringComparison.Ordinal);
+            Assert.Equal("dest:" + e.RouteKey, e.Id);
+        }
+
+        // They render FIRST: a user hunting for "home" must meet the page before the abstraction that could hold it.
+        Assert.Equal(SidebarPaletteGroup.Destinations, SidebarPalette.Groups[0]);
+        for (int i = 0; i < SidebarPalette.Destinations.Length; i++)
+            Assert.Same(SidebarPalette.Destinations[i], SidebarPalette.All[i]);
     }
 
+    /// <summary>A destination clicked while a <c>StaticLinks</c> section is the subject APPENDS to it instead of minting
+    /// a sibling — twelve destinations would otherwise be twelve one-row sections. Only a destination does this, and
+    /// only into StaticLinks: appending a route into a PlaylistTree would be a <c>KindDoesNotAcceptItems</c> rejection
+    /// dressed up as a feature.</summary>
     [Fact]
-    public void OutlineRows_IndexOfFindsBySectionId()
+    public void Destinations_AppendIntoAStaticLinksSubjectAndNothingElse()
     {
-        var rows = Rows(Doc());
-        Assert.Equal(2, SidebarOutlineRows.IndexOf(rows, "sec_c1"));
-        Assert.Equal(-1, SidebarOutlineRows.IndexOf(rows, "nope"));
-        Assert.Equal(-1, SidebarOutlineRows.IndexOf(rows, null));
+        var dest = SidebarPalette.Destinations[0];
+        var links = Section("sec_l", SidebarSectionKind.StaticLinks);
+
+        Assert.True(SidebarPalette.AppendsToSelection(dest, links));
+        Assert.False(SidebarPalette.AppendsToSelection(dest, Section("sec_t", SidebarSectionKind.PlaylistTree)));
+        Assert.False(SidebarPalette.AppendsToSelection(dest, Section("sec_g", SidebarSectionKind.CustomGroup)));
+        Assert.False(SidebarPalette.AppendsToSelection(dest, null));            // nothing selected ⇒ a new section
+        Assert.False(SidebarPalette.AppendsToSelection(null, links));
+
+        // No other palette row appends, whatever is selected — including the two other StaticLinks-kinded rows.
+        foreach (var e in SidebarPalette.Sections)
+            Assert.False(SidebarPalette.AppendsToSelection(e, links), e.Id + " appends into the selection");
     }
 
-    // ── the drag translation ──────────────────────────────────────────────────────────────────────────────────────────
-
+    /// <summary>CanDrag is about whether ONE <c>AddSection</c> can be composed at drag promotion. Three shapes cannot:
+    /// the two that open a modal first (an action shortcut, a bare Links section — the picker IS the gesture, and a
+    /// dialog opening mid-drag would be absurd), the one that switches the palette into contribution-pick mode, and
+    /// "Recently played", which is deliberately TWO commands. Those stay CLICK-ONLY rather than shipping a drag that
+    /// lies about its outcome.</summary>
     [Fact]
-    public void Drag_NoOpAndOutOfRangeProduceNothing()
+    public void CanDrag_RefusesExactlyTheRowsThatCannotResolveToOneAddSection()
     {
-        var rows = Rows(Doc());
-        Assert.Null(SidebarOutlineDrag.ToMove(rows, 1, 1));
-        Assert.Null(SidebarOutlineDrag.ToMove(rows, 9, 0));
-        Assert.Null(SidebarOutlineDrag.ToMove(new List<SidebarOutlineRow>(), 0, 1));
+        Assert.True(SidebarPalette.CanDrag(SidebarPaletteAdd.Destination));
+        Assert.True(SidebarPalette.CanDrag(SidebarPaletteAdd.Section));
+        Assert.True(SidebarPalette.CanDrag(SidebarPaletteAdd.Contribution));
+        Assert.True(SidebarPalette.CanDrag(SidebarPaletteAdd.LikedSongsShortcut));
+
+        Assert.False(SidebarPalette.CanDrag(SidebarPaletteAdd.ActionShortcut));
+        Assert.False(SidebarPalette.CanDrag(SidebarPaletteAdd.LinksWithPicker));
+        Assert.False(SidebarPalette.CanDrag(SidebarPaletteAdd.AnyContribution));
+        Assert.False(SidebarPalette.CanDrag(SidebarPaletteAdd.RecentlyPlayed));
+
+        // Every destination is draggable — the group the canvas drop path was built for.
+        foreach (var e in SidebarPalette.Destinations) Assert.True(SidebarPalette.CanDrag(e.Add));
     }
 
+    /// <summary>DEFECT 7 — the bare "Links" row no longer adds a zero-item section. It opens the destination picker on
+    /// the way in, which is a different <c>Add</c> verb, which is also why it is click-only above.</summary>
     [Fact]
-    public void Drag_TopLevelRowTakesTheTargetsTopLevelSlot()
+    public void TheBareLinksRow_OpensTheDestinationPicker()
     {
-        var rows = Rows(Doc());
-        var move = SidebarOutlineDrag.ToMove(rows, 3, 0);      // the divider onto the pinned row
+        SidebarPaletteEntry? links = null;
+        foreach (var e in SidebarPalette.All) if (e.Id == "staticLinks") links = e;
 
-        Assert.NotNull(move);
-        Assert.Equal("sec_d", move!.SectionId);
-        Assert.Null(move.NewParentId);
-        Assert.Equal(0, move.NewIndex);
-
-        var result = SidebarLayoutReducer.Apply(Doc(), move);
-        Assert.True(result.Changed);
-        Assert.Equal("sec_d", result.Layout.Sections[0].Id);
-    }
-
-    [Fact]
-    public void Drag_OntoAGroupHeaderLandsInsideTheGroup()
-    {
-        var rows = Rows(Doc());
-        var move = SidebarOutlineDrag.ToMove(rows, 0, 1);      // pinned onto the group's own row
-
-        Assert.NotNull(move);
-        Assert.Equal("sec_p", move!.SectionId);
-        Assert.Equal("sec_g", move.NewParentId);
-        Assert.Equal(0, move.NewIndex);
-
-        var result = SidebarLayoutReducer.Apply(Doc(), move);
-        Assert.True(result.Changed);
-        var group = result.Layout.Find("sec_g");
-        Assert.NotNull(group);
-        Assert.Equal("sec_p", group!.ChildList[0].Id);
-        Assert.Equal(2, result.Layout.Sections.Count);          // it left the top level
-    }
-
-    [Fact]
-    public void Drag_OntoAGroupChildTakesThatChildsSlot()
-    {
-        var rows = Rows(Doc());
-        var move = SidebarOutlineDrag.ToMove(rows, 3, 2);      // the divider onto the group's child
-
-        Assert.NotNull(move);
-        Assert.Equal("sec_g", move!.NewParentId);
-        Assert.Equal(0, move.NewIndex);
-
-        var result = SidebarLayoutReducer.Apply(Doc(), move);
-        Assert.True(result.Changed);
-        Assert.Equal("sec_d", result.Layout.Find("sec_g")!.ChildList[0].Id);
-    }
-
-    [Fact]
-    public void Drag_PastTheEndAppendsAfterTheLastRow()
-    {
-        var rows = Rows(Doc());
-        var move = SidebarOutlineDrag.ToMove(rows, 0, rows.Count);
-
-        Assert.NotNull(move);
-        Assert.Equal("sec_p", move!.SectionId);
-        Assert.Null(move.NewParentId);
-        Assert.Equal(3, move.NewIndex);
-
-        var result = SidebarLayoutReducer.Apply(Doc(), move);
-        Assert.True(result.Changed);
-        Assert.Equal("sec_p", result.Layout.Sections[^1].Id);
-    }
-
-    [Fact]
-    public void Drag_AGroupIntoAGroupIsBuiltAndRejectedByTheReducer()
-    {
-        // LEGALITY IS THE REDUCER'S: the translation does not filter, so the customizer shows ONE rejection message from
-        // ONE authority instead of two subtly different rules.
-        var rows = Rows(Doc());
-        var move = SidebarOutlineDrag.ToMove(rows, 1, 2);      // the group onto its own child
-
-        Assert.NotNull(move);
-        Assert.Equal("sec_g", move!.SectionId);
-        Assert.Equal("sec_g", move.NewParentId);
-
-        var result = SidebarLayoutReducer.Apply(Doc(), move);
-        Assert.False(result.Changed);
-        Assert.Equal(SidebarRejectReason.NestingTooDeep, result.Reason);
+        Assert.NotNull(links);
+        Assert.Equal(SidebarPaletteAdd.LinksWithPicker, links!.Add);
+        Assert.Equal(SidebarSectionKind.StaticLinks, links.Kind);
     }
 
     // ── display options: the panel's projection is the reducer's inverse ──────────────────────────────────────────────

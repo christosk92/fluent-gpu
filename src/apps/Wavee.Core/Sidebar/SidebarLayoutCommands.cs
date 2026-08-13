@@ -212,4 +212,7 @@ public enum SidebarRejectReason : byte
     // LAYOUT V2.
     ConfigTooLarge,        // an extension config (or action arguments) over SidebarExtensionRef.MaxConfigBytes
     ExtensionRefMissing,   // an Extension section without an addressable SidebarExtensionRef
+    // PHASE 1 / defect 9. APPENDED, never inserted — the enum is persisted-adjacent (the customizer maps it to inline
+    // messages and the tests pin the values).
+    KindNotDuplicable,     // DuplicateSection on a store-backed kind (SidebarSectionKinds.IsStoreBacked)
 }
