@@ -13,6 +13,7 @@ public enum AnnotatedScrollBarScrollKind : byte
     Drag = 1,
     IncrementButton = 2,
     DecrementButton = 3,
+    Wheel = 4,
 }
 
 /// <summary>An annotation at an absolute content offset.</summary>
@@ -28,14 +29,20 @@ public sealed record AnnotatedScrollBarOptions
     public Func<AnnotatedScrollBarLabel, Element>? DetailTemplate { get; init; }
     /// <summary>Cancelable request filter. Return false to suppress the controller request.</summary>
     public Func<float, AnnotatedScrollBarScrollKind, bool>? Scrolling { get; init; }
+    /// <summary>Explicit control height. A finite value &gt; 0 pins the bar (tests, gallery samples). NaN or ≤0 means
+    /// stretch: the root has no explicit Height, fills the parent slot with <c>AlignSelf=Stretch</c> and
+    /// <c>Grow=1</c>, and <c>UseMeasuredBounds</c> feeds tick/thumb math only — never written back as Height (that
+    /// freeze is why a 280 fallback never grew with the page).</summary>
     public float Height { get; init; } = 280f;
     public TemplateParts? Parts { get; init; }
 }
 
 /// <summary>
-/// The single geometry oracle for an annotated rail. Every rail position is normalized over the scrollable offset
-/// range; labels/ticks beyond the last legal viewport offset clamp to the trailing edge. Element top positions then use
-/// their own available travel, so a pointer, ghost, thumb, tick, and label all describe the same offset.
+/// The single geometry oracle for an annotated rail. Every rail position — thumb, ghost, tick, label, pointer decode —
+/// shares ONE domain: the legal scroll range <c>[MinimumOffset, MaximumOffset]</c>. Offset = MaximumOffset is the
+/// BOTTOM of the track (the last reachable date), not a leftover viewport fraction below it. A label or tick whose
+/// content offset sits past Maximum (inside the final viewport) clamps onto that same end pixel. Pointer decode
+/// returns a scroll offset; the bottom of the rail is the last reachable date.
 /// </summary>
 public readonly struct RailMetrics
 {
@@ -55,24 +62,31 @@ public readonly struct RailMetrics
     public float RailHeight { get; }
     public float ThumbHeight { get; }
     public float ScrollRange => MaximumOffset - MinimumOffset;
-    public float ContentSpan => ScrollRange + ViewportLength;
     public float ThumbTravel => MathF.Max(0f, RailHeight - ThumbHeight);
     public bool IsScrollable => ScrollRange > 0f && RailHeight > 0f;
 
     public float ClampScrollOffset(float offset)
         => Math.Clamp(Finite(offset, MinimumOffset), MinimumOffset, MaximumOffset);
 
-    /// <summary>Maps a content/scroll offset onto the full rail, clamped to the legal scroll range.</summary>
+    /// <summary>The one canonical rail-Y a click/drag/hover decodes against and every marker anchors to (A6): the
+    /// CENTER of the thumb-equivalent marker at this offset — Position01×<see cref="ThumbTravel"/> plus half the
+    /// thumb's own thickness. <see cref="ScrollOffsetToThumbTop"/>/<see cref="ContentOffsetToTickTop"/> return this
+    /// same TOP-anchored scale (their box's own height centers it); this is the shared reference so a pointer
+    /// landing on the visual thumb/tick/ghost decodes back to the exact offset that drew it. Previously the
+    /// pointer-decode path used a THIRD, independent RailHeight-based scale that disagreed with the thumb/tick scale
+    /// by the thumb/rail height delta (~2.3% drift at ThumbHeight=3/RailHeight=130).</summary>
     public float ContentOffsetToRailY(float offset)
     {
-        return Position01(offset) * RailHeight;
+        return Position01(offset) * ThumbTravel + ThumbHeight * 0.5f;
     }
 
-    /// <summary>Inverse of <see cref="ContentOffsetToRailY"/> over the legal scroll range.</summary>
+    /// <summary>Inverse of <see cref="ContentOffsetToRailY"/> over the legal scroll range — the single pointer-decode
+    /// path shared by click, drag, and hover-detail (A6). The bottom of the rail is MaximumOffset (the last reachable
+    /// date). Scroll requests still run the result through <see cref="ClampScrollOffset"/>.</summary>
     public float RailYToContentOffset(float railY)
     {
-        if (RailHeight <= 0f || ScrollRange <= 0f) return MinimumOffset;
-        float p = Math.Clamp(Finite(railY, 0f) / RailHeight, 0f, 1f);
+        if (RailHeight <= 0f || ThumbTravel <= 0f || ScrollRange <= 0f) return MinimumOffset;
+        float p = Math.Clamp((Finite(railY, 0f) - ThumbHeight * 0.5f) / ThumbTravel, 0f, 1f);
         return MinimumOffset + p * ScrollRange;
     }
 
@@ -84,15 +98,24 @@ public readonly struct RailMetrics
     public float ContentOffsetToTickTop(float offset)
         => Position01(offset) * ThumbTravel;
 
+    /// <summary>Labels share the thumb/tick canonical scale (A6) instead of their own independent
+    /// RailHeight-minus-labelHeight denominator, then clamp into the label's own legal band so a tall label never
+    /// overshoots the rail's bottom edge.</summary>
     public float ContentOffsetToLabelTop(float offset, float labelHeight)
     {
         labelHeight = Math.Clamp(Finite(labelHeight, 0f), 0f, RailHeight);
-        return Position01(offset) * MathF.Max(0f, RailHeight - labelHeight);
+        float top = Position01(offset) * ThumbTravel;
+        return Math.Clamp(top, 0f, MathF.Max(0f, RailHeight - labelHeight));
     }
 
+    /// <summary>Offset → fraction of the legal scroll range. A label/tick past <see cref="MaximumOffset"/> (content
+    /// inside the final viewport that cannot be scrolled to the top) clamps to Maximum — the last date sits at the
+    /// rail end instead of leaving an unreachable band under it.</summary>
     private float Position01(float offset)
-        => ScrollRange <= 0f ? 0f
-            : (ClampScrollOffset(offset) - MinimumOffset) / ScrollRange;
+    {
+        if (ScrollRange <= 0f) return 0f;
+        return (ClampScrollOffset(offset) - MinimumOffset) / ScrollRange;
+    }
 
     private static float Finite(float value, float fallback) => float.IsFinite(value) ? value : fallback;
 }
@@ -178,6 +201,13 @@ public static class AnnotatedScrollBar
     internal const float TooltipMinHeight = 40f;
     internal const float ContentLayoutDebounceMs = 50f;
     internal const float SizeLayoutDebounceMs = 500f;
+    // A4: the default label template's -5 top margin (WinUI's LabelTemplate Margin) trims 5 DIP off the rendered
+    // glyph; the topmost label must sit at least this far from the labels grid's ClipToBounds=true top edge or its
+    // ascenders render into the clip.
+    internal const float LabelTopBleed = 5f;
+    // A11: tick density cap — quantize tick tops to buckets this wide (ThumbHeight+1) and emit at most one tick per
+    // bucket, so hundreds of eagerly-built per-day tick Elements collapse to what the rail can actually resolve.
+    internal const float MinTickGap = ThumbHeight + 1f;
 
     public static Element Create(AnnotatedScrollBarController controller, AnnotatedScrollBarOptions? options = null)
     {
@@ -223,7 +253,12 @@ public static class AnnotatedScrollBar
 
 internal sealed class AnnotatedScrollBarCore : Component
 {
-    private sealed record LabelLayoutSnapshot(object Source, float RailHeight, float[] Tops, float[] Heights, bool[] Visible);
+    /// <summary>Measured label content heights only. Tops and collision visibility are cheap pure math over the LIVE
+    /// <see cref="RailMetrics"/> and are recomputed synchronously each render — during sustained extent correction
+    /// (a long fling realizing rows) the old debounced tops froze at a stale mapping while the ticks and thumb kept
+    /// moving. Heights are the one part that needs realized nodes, so only they stay behind the measure debounce.
+    /// <see cref="Source"/>/<see cref="RailHeight"/> gate staleness by identity, not by count.</summary>
+    private sealed record LabelLayoutSnapshot(object Source, float RailHeight, float[] Heights);
 
     public override Element Render()
     {
@@ -232,8 +267,8 @@ internal sealed class AnnotatedScrollBarCore : Component
         var options = props.Options;
         var bounds = UseMeasuredBounds();
         float measuredHeight = bounds.Value.H;
-        float height = float.IsFinite(options.Height) && options.Height > 0f
-            ? options.Height
+        bool pinHeight = float.IsFinite(options.Height) && options.Height > 0f;
+        float height = pinHeight ? options.Height
             : measuredHeight > 0f ? measuredHeight : 280f;
         float railHeight = MathF.Max(0f, height - 2f * AnnotatedScrollBar.ButtonCell);
         // Range/viewport changes are layout events and re-render the rail. Offset is deliberately read only by the
@@ -243,6 +278,10 @@ internal sealed class AnnotatedScrollBarCore : Component
         float viewportLength = controller.ViewportLength.Value;
         var metrics = new RailMetrics(minimumOffset, maximumOffset, viewportLength,
             railHeight, AnnotatedScrollBar.ThumbHeight);
+        // Bind thunks keep the first Func they were mounted with — a captured `railHeight` local would freeze the
+        // thumb on the frame-one fallback while a stretched track kept growing. The signal is the live denominator.
+        var liveRailHeight = UseFloatSignal(railHeight);
+        liveRailHeight.SetIfChanged(railHeight);
 
         var hoverY = UseFloatSignal(float.NaN);
         var dragging = UseRef(false);
@@ -254,39 +293,38 @@ internal sealed class AnnotatedScrollBarCore : Component
             DepKey.Combine(DepKey.FromRef(options.Labels), DepKey.From(options.Labels.Count)));
         var labelLayout = UseSignal<LabelLayoutSnapshot?>(null);
 
-        void LayoutLabels()
+        void MeasureLabels()
         {
             int count = options.Labels.Count;
-            var tops = new float[count];
             var heights = new float[count];
-            var measured = new RailLabelContainer[count];
             var scene = Context.Scene;
             for (int i = 0; i < count; i++)
-            {
-                float labelHeight = MeasureLabelContent(scene, i < labelNodes.Length ? labelNodes[i] : NodeHandle.Null,
+                heights[i] = MeasureLabelContent(scene, i < labelNodes.Length ? labelNodes[i] : NodeHandle.Null,
                     railHeight);
-                float top = metrics.ContentOffsetToLabelTop(options.Labels[i].ScrollOffset, labelHeight);
-                tops[i] = top;
-                heights[i] = labelHeight;
-                measured[i] = new RailLabelContainer(i, top, labelHeight);
-            }
-            // Labels live in the rail, which is already inset from the control by ButtonCell on each end — that is the
-            // legal range. Passing the rail span (not the full control height) keeps first/last clear of the arrows.
-            var visible = RailLabelCollision.Collapse(measured, 0f, railHeight);
-            labelLayout.Value = new LabelLayoutSnapshot(options.Labels, railHeight, tops, heights, visible);
+            var prior = labelLayout.Peek();
+            if (prior is not null && ReferenceEquals(prior.Source, options.Labels)
+                && prior.RailHeight == railHeight && prior.Heights.AsSpan().SequenceEqual(heights)) return;
+            labelLayout.Value = new LabelLayoutSnapshot(options.Labels, railHeight, heights);
         }
 
-        var labelDeps = DepKey.Combine(
-            DepKey.Combine(DepKey.FromRef(options.Labels, options.LabelTemplate), DepKey.From(options.Labels.Count)),
-            DepKey.From(metrics.MinimumOffset, metrics.MaximumOffset, metrics.ViewportLength, 0f));
-        UseTimeout(LayoutLabels, AnnotatedScrollBar.ContentLayoutDebounceMs, labelDeps);
-        UseTimeout(LayoutLabels, AnnotatedScrollBar.SizeLayoutDebounceMs, DepKey.From(railHeight));
+        // The measure debounce deps deliberately EXCLUDE Min/Max/Viewport: a trailing debounce restarts on every dep
+        // change, and extent corrections land every frame during a long fling — keying the timer on the metrics
+        // starved it and froze the labels at a stale mapping. Tops/collision no longer need the timer at all (pure
+        // math in BuildLabels); only node measurement waits for realized labels.
+        var labelDeps = DepKey.Combine(DepKey.FromRef(options.Labels, options.LabelTemplate),
+            DepKey.From(options.Labels.Count));
+        UseTimeout(MeasureLabels, AnnotatedScrollBar.ContentLayoutDebounceMs, labelDeps);
+        UseTimeout(MeasureLabels, AnnotatedScrollBar.SizeLayoutDebounceMs, DepKey.From(railHeight));
 
         var currentLayout = labelLayout.Value;
-        // Keep the last collision snapshot while a replacement Labels array is debounced. Never fall back to
-        // all-visible — Wavee rebuilds the array every render, and that flash is the regression.
-        bool hasLayout = currentLayout is not null
-            && currentLayout.Tops.Length == options.Labels.Count;
+        // Keep the last measured heights while a replacement Labels array is debounced. Heights are the only
+        // measured part left (tops/visibility are recomputed from the live metrics every render), and a height is a
+        // position-independent content measurement — so count + rail height is a safe reuse gate for a same-count
+        // replacement (Wavee rebuilds the array on every measured-extent bump). Unmeasured labels fall back to
+        // LabelSize; the collision pass always runs, so there is no all-visible flash either way.
+        bool hasHeights = currentLayout is not null
+            && currentLayout.RailHeight == railHeight
+            && currentLayout.Heights.Length == options.Labels.Count;
 
         Element DefaultLabel(AnnotatedScrollBarLabel label) => new TextEl(label.Text ?? string.Empty)
         {
@@ -295,32 +333,63 @@ internal sealed class AnnotatedScrollBarCore : Component
             Margin = new Edges4(0f, -5f, 0f, -2f), // LabelTemplate margin 0,-5,0,-2.
         };
 
-        var labels = UseMemo(() => BuildLabels(options, metrics, labelNodes, currentLayout, hasLayout, DefaultLabel),
+        var labels = UseMemo(() => BuildLabels(options, metrics, labelNodes,
+                hasHeights ? currentLayout!.Heights : null, DefaultLabel),
             DepKey.Combine(
                 DepKey.Combine(DepKey.FromRef(options.Labels, options.LabelTemplate), DepKey.From(options.Labels.Count)),
-                DepKey.Combine(DepKey.FromRef(currentLayout), DepKey.From(railHeight))));
+                DepKey.Combine(DepKey.FromRef(currentLayout),
+                    DepKey.From(metrics.MinimumOffset, metrics.MaximumOffset, metrics.ViewportLength, railHeight))));
         var ticks = UseMemo(() => BuildTicks(options.TickOffsets, metrics),
             DepKey.Combine(DepKey.Combine(DepKey.FromRef(options.TickOffsets), DepKey.From(options.TickOffsets.Count)),
                 DepKey.From(metrics.MinimumOffset, metrics.MaximumOffset, metrics.ViewportLength, railHeight)));
 
-        void ResolveDetail(float y)
+        // Event handlers and the re-resolve effect decode with the LIVE controller geometry, never the render-frame
+        // `metrics` closure: extent corrections land every frame during a fling/realization, and a click decoded with
+        // the previous frame's max lands rows away from where the (live-metric) thumb then draws. `metrics` stays the
+        // element-construction snapshot only (labels/ticks memo keys re-render on geometry change anyway).
+        void ResolveDetailAt(float y)
         {
-            hoverY.Value = y;
             var resolve = options.DetailLabelAtOffset;
-            var next = resolve?.Invoke(metrics.RailYToContentOffset(y));
+            var next = resolve?.Invoke(LiveMetrics(controller, liveRailHeight.Value).RailYToContentOffset(y));
             detail.SetIfChanged(next);
         }
 
+        void ResolveDetail(float y)
+        {
+            hoverY.Value = y;
+            ResolveDetailAt(y);
+        }
+
+        // W-bug-1: the flyout is a pointer preview, but the mapping UNDER the stationary pointer moves during
+        // momentum and extent correction — and the dispatcher never re-fires OnHoverMove for an unchanged hovered
+        // node. Auto-tracked effect: any controller-geometry change re-resolves the date at the current hover Y, so
+        // the tip stays glued to the live mapping. SetIfChanged bounds the write; the body is allocation-free while
+        // the tip is hidden (NaN early-out).
+        UseEffect(() =>
+        {
+            float y = hoverY.Value;
+            _ = controller.Offset.Value;
+            _ = controller.MaximumOffset.Value;
+            _ = controller.ViewportLength.Value;
+            _ = liveRailHeight.Value;
+            if (float.IsNaN(y)) return;
+            ResolveDetailAt(y);
+        });
+
         void RequestAtRailY(float y, AnnotatedScrollBarScrollKind kind)
         {
-            float target = metrics.ClampScrollOffset(metrics.RailYToContentOffset(y));
+            var live = LiveMetrics(controller, liveRailHeight.Value);
+            float target = live.ClampScrollOffset(live.RailYToContentOffset(y));
+            // 112: annotated-rail pointer decode. f0=railY, i1=kind, i2=(int)target, f1=railHeight.
+            if (ScrollTrace.CompiledIn && ScrollTrace.Enabled)
+                ScrollTrace.Note(112, y, (int)kind, (int)target, live.RailHeight);
             if (options.Scrolling is null || options.Scrolling(target, kind))
                 controller.ScrollTo(target);
         }
 
         void Request(float target, AnnotatedScrollBarScrollKind kind, bool animate = false)
         {
-            target = metrics.ClampScrollOffset(target);
+            target = LiveMetrics(controller, liveRailHeight.Value).ClampScrollOffset(target);
             if (options.Scrolling is null || options.Scrolling(target, kind))
                 controller.ScrollTo(target, animate);
         }
@@ -351,13 +420,38 @@ internal sealed class AnnotatedScrollBarCore : Component
         }
         void Exit()
         {
-            if (dragging.Value)
-            {
-                exitedWhileDragging.Value = true;
-                return;
-            }
+            // Engine contract (InputDispatcher.CancelWorkingContact): a captured OnDrag node learns its gesture died
+            // through OnPointerExit — capture loss has NO release edge, so keeping `dragging` latched here left the
+            // ghost/tip pinned forever after an alt-tab or window-blur mid-drag. Reset unconditionally: a drag that
+            // merely strayed off the rail self-heals, because its very next OnDrag sample re-arms `dragging` and
+            // re-resolves the detail.
+            dragging.Value = false;
+            exitedWhileDragging.Value = false;
             hoverY.Value = float.NaN;
             detail.SetIfChanged(null);
+        }
+
+        void Wheel(WheelEventArgs e)
+        {
+            // An annotated rail is commonly a SIBLING of its viewport, not a descendant. Native wheel routing therefore
+            // cannot discover the viewport from a hit on this control; without this bridge the rail visibly advertises
+            // more range while wheel input over it is silently dropped. Preserve the engine's raw signed DIP delta and
+            // route through the same controller seam used by sticky overlays and other external scroll chrome.
+            if (!float.IsFinite(e.Delta) || e.Delta == 0f) return;   // leave horizontal-only input available to ancestors
+            float target = LiveMetrics(controller, railHeight)
+                .ClampScrollOffset(controller.Offset.Peek() + e.Delta);
+            if (options.Scrolling is null || options.Scrolling(target, AnnotatedScrollBarScrollKind.Wheel))
+            {
+                // The ghost/tip deliberately survive the wheel: the pointer has not moved, and the re-resolve effect
+                // keeps the tip's date glued to the live mapping as the content scrolls under it. Clearing them here
+                // made the flyout vanish mid-gesture and — hover never re-fires on an unchanged node — never return.
+                // Animated: the viewport's own wheel path is a WheelAnimating chase with accumulation, and a hard
+                // snap here both felt alien next to it and ARRESTED any in-flight fling. (Residual: the rail forwards
+                // the raw DIP delta — the notch → max(48, 10%·viewport) scaling lives in the dispatcher's viewport
+                // path, which element wheel routing has no seam to reach yet.)
+                controller.ScrollBy(e.Delta, animate: true);
+            }
+            e.Handled = true;
         }
 
         void OnKey(KeyEventArgs e)
@@ -390,18 +484,23 @@ internal sealed class AnnotatedScrollBarCore : Component
             e.Handled = true;
         }
 
-        Func<Affine2D> ghostTransform = () => Affine2D.Translation(0f,
-            LiveMetrics(controller, railHeight).ScrollOffsetToThumbTop(
-                LiveMetrics(controller, railHeight).RailYToContentOffset(hoverY.Value)));
+        // Round-trip through the live scroll-range oracle so the ghost sits on the pointer even after an extent
+        // correction (hover Y → offset → thumb top; both legs share Position01).
+        Func<Affine2D> ghostTransform = () =>
+        {
+            var live = LiveMetrics(controller, liveRailHeight.Value);
+            return Affine2D.Translation(0f, live.ScrollOffsetToThumbTop(live.RailYToContentOffset(hoverY.Value)));
+        };
         Func<float> ghostOpacity = () => float.IsNaN(hoverY.Value) ? 0f : 1f;
         Func<Affine2D> thumbTransform = () => Affine2D.Translation(0f,
-            LiveMetrics(controller, railHeight).ScrollOffsetToThumbTop(controller.Offset.Value));
+            LiveMetrics(controller, liveRailHeight.Value).ScrollOffsetToThumbTop(controller.Offset.Value));
         Func<Affine2D> tipTransform = () =>
         {
+            float rh = liveRailHeight.Value;
             float h = tipHeight.Value;
-            if (h <= 0f || h > railHeight * 0.5f) h = AnnotatedScrollBar.TooltipMinHeight;
+            if (h <= 0f || h > rh * 0.5f) h = AnnotatedScrollBar.TooltipMinHeight;
             float y = float.IsNaN(hoverY.Value) ? 0f : hoverY.Value - h * 0.5f;
-            return Affine2D.Translation(0f, Math.Clamp(y, 0f, MathF.Max(0f, railHeight - h)));
+            return Affine2D.Translation(0f, Math.Clamp(y, 0f, MathF.Max(0f, rh - h)));
         };
         Func<float> tipOpacity = () =>
             float.IsNaN(hoverY.Value) || detail.Value is null ? 0f : 1f;
@@ -444,6 +543,7 @@ internal sealed class AnnotatedScrollBarCore : Component
         {
             Key = AnnotatedScrollBar.PartRail,
             Direction = 0,
+            Height = railHeight,
             Justify = FlexJustify.End,
             HitTestVisible = false,
             Children = [new BoxEl { Width = 1f, Height = railHeight }],
@@ -548,12 +648,15 @@ internal sealed class AnnotatedScrollBarCore : Component
         };
         // Auto width + End alignment: the flag takes its desired width and hangs off the leading edge of the
         // 44px rail (ArrangeZStack desiredW). The rail itself stays Width=44 so hover cannot reflow the list.
+        // MeasureUnboundedWidth (A3): report the tooltip's real text width instead of the ~20 DIP the rail's own
+        // Width=44 would otherwise squeeze it to, which is what forced CharacterEllipsis down to "M…".
         var tip = new BoxEl
         {
             Key = AnnotatedScrollBar.PartTip,
             Height = AnnotatedScrollBar.TooltipMinHeight,
             Direction = 0,
             JustifySelf = FlexAlign.End,
+            MeasureUnboundedWidth = true,
             HitTestVisible = false,
             Transform = tipTransform,
             Opacity = Prop.Of(tipOpacity),
@@ -567,6 +670,7 @@ internal sealed class AnnotatedScrollBarCore : Component
                 Key = AnnotatedScrollBar.PartTip,
                 Height = AnnotatedScrollBar.TooltipMinHeight,
                 JustifySelf = FlexAlign.End,
+                MeasureUnboundedWidth = true,
                 Transform = tipTransform,
                 Opacity = Prop.Of(tipOpacity),
             };
@@ -610,7 +714,10 @@ internal sealed class AnnotatedScrollBarCore : Component
         {
             Direction = 1,
             Width = AnnotatedScrollBar.LabelsMinWidth,
-            Height = height,
+            Height = pinHeight ? height : float.NaN,
+            AlignSelf = FlexAlign.Stretch,
+            Grow = pinHeight ? 0f : 1f,
+            Basis = pinHeight ? float.NaN : 0f,
             MinWidth = AnnotatedScrollBar.LabelsMinWidth,
             MinHeight = 0f,
             Shrink = 1f,
@@ -621,6 +728,7 @@ internal sealed class AnnotatedScrollBarCore : Component
             TabStop = interactive,
             IsEnabled = interactive,
             OnKeyDown = OnKey,
+            OnPointerWheel = interactive ? Wheel : null,
             Children =
             [
                 ScrollButton(up: true, interactive
@@ -636,8 +744,13 @@ internal sealed class AnnotatedScrollBarCore : Component
         };
     }
 
+    /// <summary>Live geometry at the moment of the call. Deliberately `.Value` (tracked) reads, not `.Peek()`:
+    /// evaluated inside a tracked scope (the thumb/ghost transform binding Effects, the detail re-resolve effect)
+    /// they subscribe it — an extent correction alone must re-place the thumb even when the offset never moved
+    /// (`.Peek()` there kept the stale denominator until the next offset write). In plain event handlers there is no
+    /// tracking scope and a `.Value` read is just the live value.</summary>
     private static RailMetrics LiveMetrics(AnnotatedScrollBarController controller, float railHeight)
-        => new(controller.MinimumOffset.Peek(), controller.MaximumOffset.Peek(), controller.ViewportLength.Peek(),
+        => new(controller.MinimumOffset.Value, controller.MaximumOffset.Value, controller.ViewportLength.Value,
             railHeight, AnnotatedScrollBar.ThumbHeight);
 
     /// <summary>Content height of a label, never a ZStack-stretched wrapper (those report <paramref name="railHeight"/>).</summary>
@@ -652,65 +765,92 @@ internal sealed class AnnotatedScrollBarCore : Component
         return h;
     }
 
+    /// <summary>Tops and collision visibility are pure math over the CURRENT metrics — computed here, every memo
+    /// refresh, so the labels ride the same live mapping as the ticks and thumb. <paramref name="heights"/> is the
+    /// debounced measured snapshot (null/short = LabelSize fallback); the collision pass always runs, so a fresh
+    /// label set never flashes all-visible.</summary>
     private static Element[] BuildLabels(AnnotatedScrollBarOptions options, RailMetrics metrics,
-                                         NodeHandle[] nodes, LabelLayoutSnapshot? layout, bool hasLayout,
+                                         NodeHandle[] nodes, float[]? heights,
                                          Func<AnnotatedScrollBarLabel, Element> defaultTemplate)
     {
-        var result = new Element[options.Labels.Count];
+        int count = options.Labels.Count;
+        var result = new Element[count];
         var template = options.LabelTemplate ?? defaultTemplate;
-        bool[]? seedVisible = null;
-        for (int i = 0; i < result.Length; i++)
+        // A4: only the DEFAULT template's -5 top margin bleeds ascenders past y=0 under ClipToBounds=true; a
+        // caller-supplied LabelTemplate owns its own margins and must not be shifted on our behalf.
+        bool usingDefaultTemplate = options.LabelTemplate is null;
+        var measured = new RailLabelContainer[count];
+        for (int i = 0; i < count; i++)
+        {
+            float height = heights is not null && i < heights.Length ? heights[i] : AnnotatedScrollBar.LabelSize;
+            float top = metrics.ContentOffsetToLabelTop(options.Labels[i].ScrollOffset, height);
+            if (i == 0 && usingDefaultTemplate) top = MathF.Max(top, AnnotatedScrollBar.LabelTopBleed);
+            measured[i] = new RailLabelContainer(i, top, height);
+        }
+        // Labels live in the rail, which is already inset from the control by ButtonCell on each end — that is the
+        // legal range. Passing the rail span (not the full control height) keeps first/last clear of the arrows.
+        var visible = RailLabelCollision.Collapse(measured, 0f, metrics.RailHeight);
+        for (int i = 0; i < count; i++)
         {
             int index = i;
-            var label = options.Labels[i];
-            float height = hasLayout ? layout!.Heights[i] : AnnotatedScrollBar.LabelSize;
-            float top = hasLayout ? layout!.Tops[i]
-                : metrics.ContentOffsetToLabelTop(label.ScrollOffset, height);
-            bool visible;
-            if (hasLayout) visible = layout!.Visible[i];
-            else
-            {
-                // First paint (and a count-changing replacement before debounce): collapse with LabelSize so we
-                // never flash every label visible. A same-count replacement keeps the previous snapshot instead.
-                if (seedVisible is null)
-                {
-                    seedVisible = new bool[result.Length];
-                    var seed = new RailLabelContainer[result.Length];
-                    for (int s = 0; s < result.Length; s++)
-                    {
-                        float sh = AnnotatedScrollBar.LabelSize;
-                        seed[s] = new RailLabelContainer(s,
-                            metrics.ContentOffsetToLabelTop(options.Labels[s].ScrollOffset, sh), sh);
-                    }
-                    seedVisible = RailLabelCollision.Collapse(seed, 0f, metrics.RailHeight);
-                }
-                visible = seedVisible[i];
-            }
             result[i] = new BoxEl
             {
                 Key = "asb-label:" + i,
                 Width = AnnotatedScrollBar.LabelsMinWidth,
-                Height = height,
-                OffsetY = top,
+                Height = measured[i].Height,
+                OffsetY = measured[i].Top,
                 Direction = 0,
                 Justify = FlexJustify.End,
                 HitTestVisible = false,
-                Opacity = visible ? 1f : 0f,
+                Opacity = visible[i] ? 1f : 0f,
                 OnRealized = h => nodes[index] = h,
-                Children = [template(label)],
+                Children = [template(options.Labels[i])],
             };
         }
         return result;
     }
 
+    /// <summary>A11 density cap: hundreds of eagerly-built per-day tick Elements is wasted work once several land
+    /// within the same few DIP of rail. Quantizes tick tops into <see cref="AnnotatedScrollBar.MinTickGap"/>-wide
+    /// buckets and keeps at most one winner per bucket, always preserving the two endpoints (offsets[0]/[^1]) even
+    /// if a middle tick already claimed their bucket — the visible ends of the range must never disappear. Keyed by
+    /// BUCKET index (not source index) so the emitted tree stays stable as the offsets identity changes underneath.</summary>
     private static Element[] BuildTicks(IReadOnlyList<float> offsets, RailMetrics metrics)
     {
-        var result = new Element[offsets.Count];
-        for (int i = 0; i < result.Length; i++)
+        int count = offsets.Count;
+        if (count == 0) return [];
+        int bucketCount = metrics.RailHeight > 0f
+            ? Math.Max(1, (int)MathF.Ceiling(metrics.RailHeight / AnnotatedScrollBar.MinTickGap))
+            : 1;
+        var winner = new int[bucketCount];   // source index of the bucket's chosen tick; -1 = empty
+        Array.Fill(winner, -1);
+
+        int BucketOf(float offset)
         {
-            result[i] = new BoxEl
+            int b = (int)(metrics.ContentOffsetToTickTop(offset) / AnnotatedScrollBar.MinTickGap);
+            return Math.Clamp(b, 0, bucketCount - 1);
+        }
+
+        for (int i = 0; i < count; i++)
+        {
+            int bucket = BucketOf(offsets[i]);
+            if (winner[bucket] < 0) winner[bucket] = i;
+        }
+        // Endpoints have priority over whatever density-collapse already claimed their bucket.
+        winner[BucketOf(offsets[0])] = 0;
+        winner[BucketOf(offsets[count - 1])] = count - 1;
+
+        int kept = 0;
+        for (int b = 0; b < bucketCount; b++) if (winner[b] >= 0) kept++;
+        var result = new Element[kept];
+        int w = 0;
+        for (int b = 0; b < bucketCount; b++)
+        {
+            int i = winner[b];
+            if (i < 0) continue;
+            result[w++] = new BoxEl
             {
-                Key = "asb-tick:" + i,
+                Key = "asb-tick:" + b,
                 Width = AnnotatedScrollBar.ThumbWidth,
                 Height = AnnotatedScrollBar.ThumbHeight,
                 OffsetY = metrics.ContentOffsetToTickTop(offsets[i]),

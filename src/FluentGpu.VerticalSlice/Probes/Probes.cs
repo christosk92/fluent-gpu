@@ -602,6 +602,30 @@ sealed partial class PropsGenProbe : Component
     }
 }
 
+// A recycled virtual-slot analogue for MediaCard's hover/play overlay.  The retained click handler must be the
+// generated stable forwarder: props delivery swaps the callback without requiring the overlay to re-render.
+[Props]
+sealed partial class RecycledPlaybackOverlayProbe : Component
+{
+    [Prop] public partial Action? OnPlay { get; }
+
+    public int Renders;
+    public NodeHandle PlayFab;
+
+    public override Element Render()
+    {
+        Renders++;
+        return new BoxEl
+        {
+            Width = 32f,
+            Height = 32f,
+            Role = AutomationRole.Button,
+            OnClick = OnPlay,
+            OnRealized = h => PlayFab = h,
+        };
+    }
+}
+
 // ── G4a call-site-keyed hook substrate probes ────────────────────────────────────────────────────────────────────
 // A CONDITIONAL hook (Middle) between two unconditional neighbours. With the positional cursor this desynced the
 // neighbours' cells; with the keyed substrate each hook keeps its own call-site cell regardless of the conditional.

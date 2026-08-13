@@ -12,9 +12,10 @@ namespace Wavee;
 // engine ramp carries the pair (12/16 · 14/20 · 14/20-600 · 18/24 · 20/28-600 · 28/36-600 · 40/52-600 · 68/92-600), so
 // repointing a call site at an alias brings the line height with it.
 //
-// WEIGHT POLICY: 400 and 600 only. The three DISPLAY-FACE identity aliases (ArtistDisplay / ArtistTitle /
-// ArtistCompactTitle) keep their documented 700 — that is the ONE sanctioned editorial divergence, and it is sanctioned
-// because those three are the app's masthead voice, not UI labels.
+// WEIGHT POLICY: 400 and 600 only, with two documented divergences. The three DISPLAY-FACE identity aliases
+// (ArtistDisplay / ArtistTitle / ArtistCompactTitle) keep their documented 700 — the masthead voice, not UI labels.
+// PivotLabel keeps SemiLight 350 — the same WinUI SemiLight the engine's own Pivot control (FluentGpu.Controls/Pivot.cs)
+// already uses for its header row; a pivot is a control cut, not a body-text weight, so it is not bound by the policy.
 public static class WaveeType
 {
     /// <summary>Track / album / playlist titles in lists. → Ui.BodyStrong (14 / 20 / 600).</summary>
@@ -176,4 +177,18 @@ public static class WaveeType
 
     /// <summary>Now-playing track title. → Ui.Subtitle (20 / 28 / 600).</summary>
     public static TextEl NowPlayingTitle(string s) => Ui.Subtitle(s);
+
+    /// <summary>A ZUNE-style pivot tab header (All / Music / Podcasts / Artists) — the Display face at SemiLight, one
+    /// rung under <see cref="RailHeader(string)"/>. 19 / 25 / <b>350</b> — the second sanctioned weight divergence (see
+    /// the class header): the same SemiLight the engine's own <c>Pivot</c> control uses for its header row, carried
+    /// into the app's display face so the tab strip reads as editorial typography rather than as a WinUI chrome
+    /// control.</summary>
+    public static TextEl PivotLabel(string s) => Ui.BodyLarge(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
+        Size = 19f,
+        LineHeight = 25f,
+        Weight = 350,
+        CharSpacing = -6f,
+    };
 }

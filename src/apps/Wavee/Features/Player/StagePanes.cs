@@ -438,7 +438,7 @@ sealed class StageQueuePane : Component
                     Children =
                     [
                         Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, RowArt, RowArt, Radii.Control, decodePx: 96),
-                        Embed.Comp(() => new NowPlayingOverlay(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, RowArt, centered: true))
+                        NowPlayingOverlay.Create(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, RowArt, centered: true)
                             .Skeletonized(false),
                     ],
                 },

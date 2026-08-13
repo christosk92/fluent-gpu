@@ -997,7 +997,39 @@ static class HooksSuite
         }
 
         // gate.props.gen.batch-coalesce — ApplyProps writing TWO changed fields (wrapped in Runtime.Batch at the reuse
-        // seam) re-renders the core EXACTLY ONCE, both values landed (no torn intermediate, no double render).
+        // gate.props.recycled-playback-callback — models one virtual MediaCard slot whose hover/play overlay is
+        // gate.props.recycled-playback-callback models one virtual MediaCard slot whose hover/play overlay is rebound.
+        // The retained play-FAB click must call B even though a delegate-only prop update
+        // intentionally does not re-render the overlay.
+        {
+            var scene = new SceneStore();
+            var recon = new TreeReconciler(scene, strings);
+            var overlay = new RecycledPlaybackOverlayProbe();
+            int playsA = 0, playsB = 0;
+            Element Tree(Action onPlay) => new BoxEl
+            {
+                Width = 64f,
+                Height = 64f,
+                Children = [Embed.Comp(new RecycledPlaybackOverlayProbe.PropsData(onPlay), () => overlay)],
+            };
+            var a = Tree(() => playsA++);
+            recon.ReconcileRoot(a, null);
+            recon.Runtime.Flush();
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var b = Tree(() => playsB++);
+            recon.ReconcileRoot(b, a);
+            recon.Runtime.Flush();
+            new FlexLayout(scene, new HeadlessFontSystem(strings)).Run(scene.Root);
+            var input = new InputDispatcher(scene);
+            var p = new Point2(16f, 16f);
+            input.Dispatch([new InputEvent(InputKind.PointerDown, p, 0, 0, Pointer: PointerKind.Mouse)]);
+            input.Dispatch([new InputEvent(InputKind.PointerUp, p, 0, 0, Pointer: PointerKind.Mouse)]);
+            bool rebound = overlay.Renders == 1 && playsA == 0 && playsB == 1;
+            Check("gate.props.recycled-playback-callback reused MediaCard play overlay invokes the newly bound item callback",
+                rebound, $"renders={overlay.Renders} playsA={playsA} playsB={playsB}");
+        }
+
+        // gate.props.gen.batch-coalesce applies two changed fields in one reuse-batch; the core re-renders exactly once.
         {
             var scene = new SceneStore();
             var recon = new TreeReconciler(scene, strings);

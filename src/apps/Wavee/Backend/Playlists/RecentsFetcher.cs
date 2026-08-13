@@ -57,6 +57,11 @@ public sealed class RecentsFetcher : IRecentsSource
     /// against <paramref name="lastRows"/> and null is returned when it did not move — callers never rebuild ~1.7k rows
     /// for a no-op. An absent/short prior revision can't be diffed, so it converges via a full <see cref="FetchAsync"/>
     /// (always makes progress).
+    /// <para>Contents-hash guard (rejected): We considered hashing the raw <c>contents</c> bytes before parsing,
+    /// invalidating rows only when the digest changed. This was rejected because: (a) the server reserialises metadata
+    /// attributes non-deterministically within the hashed region, defeating byte-level equivalence checks; (b) hashing
+    /// ~9.4k items costs the same computational order as mapping them into the fresh row vector. The post-map
+    /// <c>SameItems</c> structural comparison is sufficient, simpler, and more direct.</para>
     /// <para>INVARIANT: this never returns rows derived from a body that carried no <c>contents</c>. Mapping such a body
     /// yields ZERO items, and handing that back as a "snapshot" is what replaced 1,708 resident rows with 0.</para></summary>
     public async Task<RecentsSnapshot?> FetchDiffAsync(byte[]? lastRevision, IReadOnlyList<RecentsRow> lastRows, CancellationToken ct = default)

@@ -568,6 +568,12 @@ public sealed class GroupedListVirtualLayout : IMeasuredVirtualLayout
     private readonly int[] _headers;   // sorted flat indices of group headers
     private ExtentTable? _table;
 
+    /// <summary>W1.2c: bumped by <see cref="SetMeasured"/> only when the corrected extent is an actual DELTA
+    /// (compare-before-set) — a consumer can gate a re-render of derived layout (sticky-pin math, rail geometry) on
+    /// this instead of guessing from unrelated render churn. Mirrors <c>ExtentTable.SetExtent</c>'s own internal
+    /// delta gate rather than widening that shared type's signature with a bool return.</summary>
+    public int MeasuredVersion { get; private set; }
+
     public GroupedListVirtualLayout(int[] headerIndices, float headerExtent, float itemEstimate)
     {
         _headers = headerIndices ?? [];
@@ -625,7 +631,12 @@ public sealed class GroupedListVirtualLayout : IMeasuredVirtualLayout
         return new RectF(0f, pos, cross, ext);
     }
 
-    public void SetMeasured(int index, float mainExtent, float crossSize) => _table?.SetExtent(index, mainExtent);
+    public void SetMeasured(int index, float mainExtent, float crossSize)
+    {
+        if (_table is null || (uint)index >= (uint)_table.Count) return;
+        if (_table.ExtentAt(index) != mainExtent) MeasuredVersion++;
+        _table.SetExtent(index, mainExtent);
+    }
     public float OffsetOf(int index, float crossSize) => _table?.OffsetOf(index) ?? 0f;
     public int IndexAt(float offset, float crossSize) => _table?.IndexAt(offset) ?? 0;
 }

@@ -430,7 +430,7 @@ internal static class TrackRow
                                          decodePx: (int)MathF.Max(64f, art * 2f)),
                         st.IsBuffering
                             ? new BoxEl { Width = art, Height = art, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center, Fill = WaveeOnMedia.CoverScrim, Children = [Spinner()] }
-                            : Embed.Comp(() => new NowPlayingOverlay(t.Uri, onPlay, fab, cover: true, art, centered: true)).Skeletonized(false),
+                            : NowPlayingOverlay.Create(t.Uri, onPlay, fab, cover: true, art, centered: true).Skeletonized(false),
                     ],
                 },
                 new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS, Justify = FlexJustify.Center, Children = textKids.ToArray() },
@@ -851,13 +851,17 @@ internal static class TrackRow
     // PressScale-pushes on press for a real button feel.
     /// <param name="hoverPaused">Row/card hover signal that also drives this cell's HoverOpacity fade — pause the EQ
     /// while invisible. Must come from the interactive ancestor (not the bars' own hit target).</param>
+    /// <param name="ctx">The page's ambient accent (<see cref="WaveeAccentCtx"/>), read by the CALLER — this is a plain
+    /// static helper, not a Component, so it cannot call UseContext itself. Null (what a caller on any page other than
+    /// Recents has to pass) is a pure no-op: the equalizer keeps its ordinary <c>Tok.AccentTextPrimary</c>.</param>
     internal static Element NumberCell(int index, bool isNow, bool isPlaying, bool isBuffering, bool isTop,
-                                       Action? onPlay = null, IReadSignal<bool>? hoverPaused = null)
+                                       Action? onPlay = null, IReadSignal<bool>? hoverPaused = null,
+                                       IReadSignal<PageAccent>? ctx = null)
     {
         ColorF accent = Tok.AccentTextPrimary;
         Element rest =
             isBuffering ? Spinner()
-            : isNow     ? WaveeEqualizer.Of(isPlaying, static () => Tok.AccentTextPrimary, paused: hoverPaused)
+            : isNow     ? WaveeEqualizer.Of(isPlaying, () => ctx is {} a ? a.Value.Ink : Tok.AccentTextPrimary, paused: hoverPaused)
             : isTop     ? Icon(Icons.FavoriteStarFill, 11f, accent)
             :             Caption((index + 1).ToString()) with { Color = Tok.TextTertiary };
         Element transport = isBuffering

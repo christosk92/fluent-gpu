@@ -76,6 +76,12 @@ signals it reads — no deps list; pass a `DepKey` only to over-scope); `UseRequ
 → `Resource<T>{ Loadable, IsFetching, IsStale, Refresh(), Mutate(…) }` (SWR); `UseDebouncedValue`/`UseThrottledValue`/
 `UseTimeout`/`UseInterval` (host-timer-queue backed); `UseMeasuredBounds`/`UseMeasuredWidth(quantum)`; `sig.SetIfChanged(v)`.
 
+**Text/image link idiom:** `Role`/`Focusable`/`Cursor`/`OnClick`/`HitTestVisible`/`Draggable`/`DropTarget`/etc. live
+**only on `BoxEl`** — `TextEl`/`ImageEl`/other leaf elements don't have them (a common `CS0117`). Put those on the
+wrapping `BoxEl`; give the leaf child just `Color`/`HoverColor`. Cursor and hover-color resolution walk **up** the
+ancestor chain to the nearest explicit `Cursor`, so an unannotated `TextEl` inside a `Cursor=Hand` Box already works —
+see `docs/guide/pitfalls.md` and e.g. `ContextBand.Link`/`StageChrome.PivotLink`.
+
 **Controls (one `X.Create` idiom; controlled-input contract — pass a signal + `onChange`, or none to auto-materialize):**
 `Button.Accent(label, onClick)` / `Button.Create(label, onClick, ButtonAppearance.Subtle, ControlSize.Small)`;
 `Slider.Create(vol, onChange)`; `ToggleSwitch.Create(isOn, onChange)`; `CheckBox.Create(label, isChecked, onChange)`;

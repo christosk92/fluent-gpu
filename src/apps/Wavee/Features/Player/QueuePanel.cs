@@ -318,7 +318,7 @@ sealed class QueuePanel : Component
                     Children =
                     [
                         Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, 44f, 44f, Radii.Control, decodePx: 96),
-                        Embed.Comp(() => new NowPlayingOverlay(t.Uri, () => { }, 28f, cover: true, 44f, centered: true))
+                        NowPlayingOverlay.Create(t.Uri, () => { }, 28f, cover: true, 44f, centered: true)
                             .Skeletonized(false),
                     ],
                 },
@@ -496,7 +496,7 @@ sealed class QueuePanel : Component
                     [
                         Surfaces.Artwork(t.Image, t.Id.GetHashCode() & 0x7fffffff, QueueArt, QueueArt, Radii.Control, decodePx: 72),
                         // Fluent now-playing cue (EQ / play-pause) — same overlay as RecRow / Next-up ArtCards.
-                        Embed.Comp(() => new NowPlayingOverlay(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, QueueArt, centered: true))
+                        NowPlayingOverlay.Create(t.Uri, () => PlayQueueEntry(b, entry), 26f, cover: true, QueueArt, centered: true)
                             .Skeletonized(false),
                     ],
                 },

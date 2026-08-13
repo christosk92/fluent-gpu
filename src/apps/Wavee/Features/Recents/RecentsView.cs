@@ -6,7 +6,11 @@ using Wavee.Core;
 
 namespace Wavee;
 
-/// <summary>The two recycle-pool kinds in the grouped Recents projection.</summary>
+/// <summary>The recycle-pool kinds in the grouped Recents projection — CONTENT ONLY, deliberately no synthetic
+/// trailing dock-reserve item. The shell's content region is CLIPPED above the docked player bar (WaveeShell: "its
+/// bottom edge IS the player bar's top — content can never paint into the reserved dock slot"), so an in-scroller
+/// reserve spacer could never scroll under the transport; it only parked a permanent dead band at the end of the
+/// scroll and made the rail advertise range past the last real row (W-bug-2's second regression).</summary>
 enum RecentsFlatItemKind : byte { DateHeader, Row }
 
 /// <summary>One entry in the list passed to the grouped virtual layout. A header has no source row
@@ -56,7 +60,16 @@ sealed record RecentsCalendarMonth(
     DateOnly? BusiestDay,
     int BusiestDayPlays,
     bool IsCurrentMonth,
-    RecentsCalendarDay[] Days);
+    RecentsCalendarDay[] Days)
+{
+    /// <summary>How many WEEK ROWS this month actually occupies in the culture-rotated 7-column grid: the leading
+    /// blanks plus the days, rounded up to whole weeks. 4 (a 28-day February that starts on the culture's first
+    /// weekday) through 6 (a 31-day month whose 1st lands late in the week) — never the fixed 6 the card used to
+    /// draw, whose 6th row was empty for most months and read as a clipped card.
+    /// <para>A COMPUTED property, not a stored field: it is a pure function of two values the record already carries,
+    /// so it cannot drift from them and <see cref="RecentsView.DayDensity"/> owes it no extra bookkeeping.</para></summary>
+    public int WeekCount => (FirstDayOffset + Days.Length + 6) / 7;
+}
 
 /// <summary>The calendar overview derived solely from the resident, filtered Recents rows.</summary>
 sealed record RecentsCalendar(RecentsCalendarMonth[] Months, int MaximumDayPlays);
@@ -78,6 +91,15 @@ static class RecentsView
     public const int BatchCap = 64;
 
     // ── content-type chips ────────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>Stored <see cref="RecentsRow.ContentType"/> suffix for music — the mapper strips the
+    /// <c>content_type_</c> prefix, so the pivot must never look for the raw wire key.</summary>
+    public const string PivotMusic = "music";
+    /// <summary>Stored <see cref="RecentsRow.ContentType"/> suffix for podcasts (wire key
+    /// <c>content_type_podcasts</c>).</summary>
+    public const string PivotPodcasts = "podcasts";
+    /// <summary>The one pivot with no wire <c>content_type_*</c> counterpart — decided from the hydration uri.</summary>
+    public const string PivotArtists = "kind:artist";
+
     /// <summary>The distinct <c>content_type_*</c> tokens present in the list, in FIRST-SEEN (wire) order.
     ///
     /// Derived from the rows, never from a fixed table: the wire carries the concept as a key suffix
@@ -101,14 +123,33 @@ static class RecentsView
     }
 
     /// <summary>The chip predicate. A null selection is "All" and matches every row (including one the server gave no
-    /// content type at all); a selected token matches only rows carrying it.</summary>
+    /// content type at all); a selected token matches only rows carrying it.
+    ///
+    /// <c>"kind:artist"</c> is the one pivot with no wire <c>content_type_*</c> counterpart — the server never marks a
+    /// row "this is an artist", so it is decided from the same uri the row would be hydrated from, the same way a
+    /// header with no uri of its own resolves its kind from its first child (<see cref="HydrationUri"/>). Every other
+    /// token is still matched against <c>ContentType</c> unchanged.</summary>
     public static bool Matches(RecentsRow row, string? token)
-        => token is null || string.Equals(row.ContentType, token, StringComparison.OrdinalIgnoreCase);
+        => token is null
+            || (string.Equals(token, PivotArtists, StringComparison.OrdinalIgnoreCase)
+                ? RecentsList.EntityKindOf(HydrationUri(row) ?? row.Uri) == RecentsEntityKind.Artist
+                : string.Equals(row.ContentType, token, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Whether the fixed pivot strip should enable <paramref name="token"/> for this snapshot.
+    /// The same predicate as <see cref="Matches"/> so availability and the filter can never disagree about
+    /// stored suffixes (<c>music</c>/<c>podcasts</c>) vs raw wire keys (<c>content_type_music</c>).</summary>
+    public static bool PivotAvailable(IReadOnlyList<RecentsRow> rows, string token)
+    {
+        for (int i = 0; i < rows.Count; i++)
+            if (Matches(rows[i], token)) return true;
+        return false;
+    }
 
     /// <summary>The display map: display index → index into <paramref name="rows"/>, in wire order.
     ///
-    /// Filtering is CLIENT-SIDE and nothing else: no request in the whole captured session carries a filter parameter,
-    /// so a chip change must never reach the network — it re-cuts the loaded snapshot and that is all.</summary>
+    /// Filtering is CLIENT-SIDE: the official client does hit <c>/recents/page/diff</c> on a chip click, but those
+    /// bodies are the same items with only the list-level <c>filters</c> attribute permuted — a no-op for the row
+    /// vector. A chip change must never reach the network; it re-cuts the loaded snapshot and that is all.</summary>
     public static int[] Filter(IReadOnlyList<RecentsRow> rows, string? token)
     {
         if (token is null)
@@ -178,9 +219,39 @@ static class RecentsView
             flatMonths.Add(monthIndex);
         }
 
+        // No trailing dock-reserve spacer (see the RecentsFlatItemKind doc): the shell clips the content region above
+        // the docked player bar, so the projection is content only and the last flat item is the last real row.
         return new RecentsSections(
             items.ToArray(), headers.ToArray(), labels.ToArray(), dates.ToArray(),
             flatRows.ToArray(), flatDays.ToArray(), flatMonths.ToArray(), rowToFlat, rowToDay);
+    }
+
+    /// <summary>Midnight rollover: rebuild ONLY <see cref="RecentsSections.HeaderLabels"/> from the already-settled
+    /// <see cref="RecentsSections.HeaderDates"/> — every index/date/row mapping in <paramref name="sections"/> is
+    /// untouched, so a caller can swap the label array in place without re-cutting the grouped shape (and without
+    /// disturbing a restored scroll offset or a realized measured-extent table keyed on that shape).</summary>
+    public static RecentsSections Relabel(RecentsSections sections, DateTimeOffset now, CultureInfo culture,
+                                          Func<string, string>? localize = null)
+    {
+        var dates = sections.HeaderDates;
+        var labels = new string[dates.Length];
+        for (int i = 0; i < dates.Length; i++)
+            labels[i] = dates[i] == DateOnly.MinValue
+                ? ""
+                : DayBucketLabel(dates[i].ToDateTime(TimeOnly.MinValue), now, culture, localize);
+        return sections with { HeaderLabels = labels };
+    }
+
+    /// <summary>How many ROWS a day bucket holds — the count a date header states beside its label. The bucket runs
+    /// from its own header to the next one (or to the end of the list), minus the header itself. Pure and
+    /// engine-free so the rule is testable: an off-by-one here is a wrong number under a real day word.</summary>
+    public static int CountForDay(RecentsSections sections, int dayIndex)
+    {
+        var headers = sections.HeaderIndices;
+        if ((uint)dayIndex >= (uint)headers.Length) return 0;
+        int start = headers[dayIndex];
+        int end = dayIndex + 1 < headers.Length ? headers[dayIndex + 1] : sections.Items.Length;
+        return Math.Max(0, end - start - 1);
     }
 
     /// <summary>Per-day bucket label: Today, Yesterday, the culture's weekday for days 2..6, then its abbreviated
@@ -202,6 +273,22 @@ static class RecentsView
     public static string DayBucketLabel(long atMs, DateTimeOffset now, CultureInfo culture,
                                         Func<string, string>? localize = null)
         => atMs <= 0 ? "" : DayBucketLabel(DateTimeOffset.FromUnixTimeMilliseconds(atMs), now, culture, localize);
+
+    /// <summary>The 8 fabricated skeleton rows shown before the first fetch resolves. Stamped minutes apart off
+    /// <paramref name="now"/> — the CALLER's own clock, never <see cref="DateTimeOffset.UtcNow"/> taken here: a UTC
+    /// instant read back through the local offset a grouping pass uses can sit on the wrong side of local midnight
+    /// (23:30 local at UTC−8 is still "today" in UTC−8 but reads as tomorrow in UTC), splitting one skeleton "Today"
+    /// bucket into two. Taking the clock as a parameter means every caller groups the same instant it stamped.</summary>
+    public static RecentsRow[] PendingSeedRows(DateTimeOffset now)
+    {
+        var rows = new RecentsRow[8];
+        for (int i = 0; i < rows.Length; i++)
+            rows[i] = new RecentsRow(
+                RecentsRowKind.Group, "pending:" + i, "", null, null, null, null, 1,
+                now.AddMinutes(-i).ToUnixTimeMilliseconds(), RecentsEntityKind.Unknown,
+                RecentsReason.Played);
+        return rows;
+    }
 
     // ── hydration targets ─────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>The ONE uri a row is hydrated from, or null when it names nothing fetchable.
@@ -359,6 +446,20 @@ static class RecentsView
         return new RecentsCalendar(months.ToArray(), maximum);
     }
 
+    /// <summary>The tallest month in the calendar, in week rows — what the overview's <c>GridFit</c> row-height
+    /// estimate has to be seeded from. A grid layout sizes its rows from ONE estimate, so an estimate taken from a
+    /// 4-week month clips every 6-week card until it measures (and the realized/estimated mix makes the extent walk);
+    /// taking the maximum makes the first paint an over-estimate at worst, which corrects downward invisibly.
+    /// <para>Floors at 1 so an EMPTY calendar (no months at all — the pre-snapshot state) still yields a positive
+    /// row height rather than a zero-height grid the layout would divide by.</para></summary>
+    public static int MaxWeeks(RecentsCalendar calendar)
+    {
+        int weeks = 1;
+        var months = calendar.Months;
+        for (int i = 0; i < months.Length; i++) weeks = Math.Max(weeks, months[i].WeekCount);
+        return weeks;
+    }
+
     static int PlayContribution(RecentsRow row)
         => row.Reason != RecentsReason.Played ? 0
             : row.Kind == RecentsRowKind.Group ? Math.Max(1, row.ChildCount) : 1;
@@ -443,37 +544,100 @@ static class RecentsView
         return index;
     }
 
-    /// <summary>The hero's thin metadata line: how many rows, and the window they span. Empty when there is nothing to
+    /// <summary>The hero's thin metadata line: how many rows, the window they span, and — when the wire's grouping
+    /// collapsed more plays than there are rows — how many plays that grouping hides. Empty when there is nothing to
     /// state yet, so the line simply does not render rather than claiming "0".
+    ///
+    /// <para>The window's endpoints are formatted through <see cref="DayBucketLabel(DateTimeOffset,DateTimeOffset,CultureInfo,Func{string,string}?)"/>
+    /// (day words), never <see cref="PlayedAt(DateTimeOffset,DateTimeOffset,CultureInfo)"/> — a TODAY endpoint must
+    /// read "today", not the clock time PlayedAt renders it as. <paramref name="localize"/> is the same optional seam
+    /// DayBucketLabel already takes, threaded through so a caller/test can supply Today/Yesterday without a live
+    /// <c>Loc</c> table.</para>
     ///
     /// <para><paramref name="countPhrase"/> is the seam for the one AUTHORED word on this line ("1,708 items"). It is a
     /// delegate rather than a string constant for the same reason <c>CollectRange</c> takes <c>pending</c>: this file
     /// owns no localized copy and must stay engine-free, so the page supplies <c>Strings.Recents.ItemCount</c> and the
     /// tests supply nothing at all. Omitted ⇒ the bare culture-formatted number, which is what the wire alone can
-    /// vouch for.</para></summary>
+    /// vouch for. <paramref name="groupedPhrase"/> is the matching seam for the third segment ("grouped from 9,446
+    /// plays"): a group row's authoritative <c>ChildCount</c> (at least one) summed over every row is the total number
+    /// of plays the wire recorded, and that segment appears only when grouping actually hid some — a list of all
+    /// singles has <c>totalPlays == rows.Count</c> and states nothing new.</para></summary>
     public static string Summary(IReadOnlyList<RecentsRow> rows, DateTimeOffset now, CultureInfo culture,
-                                 Func<int, string>? countPhrase = null)
+                                 Func<int, string>? countPhrase = null, Func<int, string>? groupedPhrase = null,
+                                 Func<string, string>? localize = null)
     {
         if (rows.Count == 0) return "";
         long oldest = long.MaxValue, newest = long.MinValue;
+        int totalPlays = 0;
         for (int i = 0; i < rows.Count; i++)
         {
-            long t = rows[i].PlayedAtMs;
-            if (t <= 0) continue;
-            if (t < oldest) oldest = t;
-            if (t > newest) newest = t;
+            RecentsRow row = rows[i];
+            long t = row.PlayedAtMs;
+            if (t > 0)
+            {
+                if (t < oldest) oldest = t;
+                if (t > newest) newest = t;
+            }
+            totalPlays += Math.Max(1, row.ChildCount);
         }
-        string count = countPhrase is null ? rows.Count.ToString("N0", culture) : countPhrase(rows.Count);
-        if (newest == long.MinValue) return count;
-        string from = PlayedAt(oldest, now, culture), to = PlayedAt(newest, now, culture);
-        if (from.Length == 0 || to.Length == 0) return count;
-        return string.Equals(from, to, StringComparison.Ordinal)
-            ? count + " · " + to
-            : count + " · " + from + " – " + to;
+        string result = countPhrase is null ? rows.Count.ToString("N0", culture) : countPhrase(rows.Count);
+        if (newest != long.MinValue)
+        {
+            string from = DayBucketLabel(oldest, now, culture, localize), to = DayBucketLabel(newest, now, culture, localize);
+            if (from.Length > 0 && to.Length > 0)
+                result += string.Equals(from, to, StringComparison.Ordinal)
+                    ? " · " + to
+                    : " · " + from + " – " + to;
+        }
+        if (groupedPhrase is not null && totalPlays > rows.Count)
+            result += " · " + groupedPhrase(totalPlays);
+        return result;
     }
 
     /// <summary>A chip's label. The wire token IS the label when the app has no key for it — a data-derived name is
     /// honest where an invented one is not, and it keeps a content type the server adds tomorrow renderable today.</summary>
     public static string ChipLabel(string token, CultureInfo culture)
         => token.Length == 0 ? token : char.ToUpper(token[0], culture) + token[1..];
+
+    // ── owner display names ───────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>A playlist owner subtitle that never shows a raw base62 id. A resolved profile name always wins; absent
+    /// that, the store's own owner name is shown ONLY when it is more than the id the wire already gave the row — a
+    /// store that has not resolved a display name yet parrots the bare id back as "the name", and showing that is the
+    /// exact "AI-ness" this exists to remove. <paramref name="rawOwnerId"/> may itself be a bare id or a full
+    /// <c>spotify:user:…</c> uri; the comparison goes through <see cref="UserProfileIds.BareId"/> so either spelling
+    /// matches. Null (never "") means: render nothing, not an empty line.</summary>
+    public static string? OwnerSubtitle(string? storeOwnerName, string? rawOwnerId, string? resolvedName)
+    {
+        if (resolvedName is { Length: > 0 }) return resolvedName;
+        if (storeOwnerName is not { Length: > 0 }) return null;
+        if (rawOwnerId is not { Length: > 0 }) return storeOwnerName;
+        return string.Equals(UserProfileIds.BareId(storeOwnerName), UserProfileIds.BareId(rawOwnerId), StringComparison.Ordinal)
+            ? null
+            : storeOwnerName;
+    }
+
+    // ── viewport-derived accent ───────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>The row the dynamic accent grades its color from: the first ROW-kind flat item at or after
+    /// <paramref name="stickyFlat"/> that still falls inside the SAME day bucket. Bounded to an 8-item forward walk —
+    /// a resolution leaf built on this only ever needs a plausible representative of "the day currently pinned", not an
+    /// exhaustive search, and an unbounded walk would turn one scroll frame into an O(bucket) scan. Returns -1 when
+    /// <paramref name="stickyFlat"/> is out of range, names a bucket with no day (a "" empty-timestamp header), or the
+    /// bucket ends (or the walk bound is hit) before a Row is found.</summary>
+    public static int AccentSourceRow(RecentsSections sections, RecentsRow[] rows, int stickyFlat)
+    {
+        var items = sections.Items;
+        if ((uint)stickyFlat >= (uint)items.Length) return -1;
+        int day = items[stickyFlat].DayIndex;
+        if (day < 0) return -1;
+        int limit = Math.Min(items.Length, stickyFlat + 8);
+        for (int i = stickyFlat; i < limit; i++)
+        {
+            RecentsFlatItem item = items[i];
+            if (item.DayIndex != day) break;
+            if (item.Kind != RecentsFlatItemKind.Row) continue;
+            if ((uint)item.OriginalRowIndex >= (uint)rows.Length) continue;
+            return item.OriginalRowIndex;
+        }
+        return -1;
+    }
 }

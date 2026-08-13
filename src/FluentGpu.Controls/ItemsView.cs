@@ -19,6 +19,7 @@ public sealed class ItemsViewController
     internal Func<int>? GetCurrent;
     internal TryGetItemIndexDelegate? TryGetItemIndexImpl;
     internal Action<float>? ScrollByImpl;
+    internal CorrectMeasuredExtentDelegate? CorrectMeasuredExtentImpl;
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
@@ -43,6 +44,7 @@ public sealed class ItemsViewController
 
     internal delegate bool TryGetItemIndexDelegate(float horizontalViewportRatio, float verticalViewportRatio,
                                                    out int index);
+    internal delegate bool CorrectMeasuredExtentDelegate(IMeasuredVirtualLayout layout, int index, float mainExtent);
 
     /// <summary>The REALIZED virtualized viewport node (<c>Null</c> before mount and for a non-virtual host). The seam a
     /// composing control needs to write per-viewport <c>ScrollState</c> knobs that a frozen-at-mount options record cannot
@@ -51,8 +53,8 @@ public sealed class ItemsViewController
     public NodeHandle Viewport => GetViewportImpl?.Invoke() ?? NodeHandle.Null;
 
     /// <summary>The live scroll offset along the view's scroll axis (DIP; 0 before the viewport realizes / for a
-    /// non-virtual host). The scroll-anchoring read: pair with <see cref="ScrollBy"/> to keep the visible content
-    /// stationary across a data insert/remove above the viewport.</summary>
+    /// non-virtual host). For a measured-layout correction, use <see cref="CorrectMeasuredExtent"/> so active scroll
+    /// intents are rebased together with the visible anchor.</summary>
     public float ScrollOffset => GetOffsetImpl?.Invoke() ?? 0f;
 
     /// <summary>The live selection model — Select/Deselect/IsSelected/SelectAll/DeselectAll/InvertSelection
@@ -85,6 +87,16 @@ public sealed class ItemsViewController
     /// The drag-reorder EDGE AUTO-SCROLL seam: a composing list (ListView) calls this while the pointer drags near
     /// the viewport edge (the plan's E5-L3 edge auto-scroll in virtualized lists). No-op for non-virtual hosts.</summary>
     public void ScrollBy(float delta) => ScrollByImpl?.Invoke(delta);
+
+    /// <summary>Correct a cached measured extent, preserving the current visible anchor and every active scroll intent.
+    /// This is the unrealized-row counterpart to the layout engine's normal measure feedback: use it when transient UI
+    /// (for example, an expanded drawer) disappears while its virtual slot is off-screen and cannot remeasure itself.
+    /// Returns false when this controller is not mounted on <paramref name="layout"/> or the request is invalid.</summary>
+    public bool CorrectMeasuredExtent(IMeasuredVirtualLayout layout, int index, float mainExtent)
+    {
+        ArgumentNullException.ThrowIfNull(layout);
+        return CorrectMeasuredExtentImpl?.Invoke(layout, index, mainExtent) ?? false;
+    }
 
     /// <summary>Animate currently-realized rows at the supplied logical indices out, then invoke
     /// <paramref name="commit"/> exactly once to mutate the backing collection. Indices are sorted, de-duplicated and
@@ -1035,14 +1047,23 @@ public sealed class ItemsView : Component
             float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
             float content = horizontal ? sc.ContentW : sc.ContentH;
             float offsetNow = horizontal ? sc.OffsetX : sc.OffsetY;
-            float target = Math.Clamp(offsetNow + delta, 0f, MathF.Max(0f, content - viewport));
+            // Zoom-scaled max — the dispatcher's clamp contract (identical on the ZoomFactor==1 path).
+            float zr = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+            float maxOffset = MathF.Max(0f, content * zr - viewport);
+            float target = Math.Clamp(offsetNow + delta, 0f, maxOffset);
             if (target == offsetNow) return;
             if (horizontal) { sc.OffsetX = target; sc.TargetX = target; }
             else { sc.OffsetY = target; sc.TargetY = target; }
             var contentNode = sc.ContentNode;
             if (!contentNode.IsNull && sceneRef.IsLive(contentNode))
             {
-                sceneRef.Paint(contentNode).LocalTransform = Affine2D.Translation(horizontal ? -target : 0f, horizontal ? 0f : -target);
+                // Device-pixel-snapped, zoom-aware, band-composed — the shared writer (a raw Translation here painted
+                // an unsnapped/unzoomed transform until the next ArrangeViewport healed it).
+                ref NodePaint paint = ref sceneRef.Paint(contentNode);
+                float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, target, maxOffset);
+                if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
+                OverscrollPhysics.WriteContentTransform(ref paint, in sceneRef.Bounds(contentNode), horizontal, target,
+                    band, sc.ZoomFactor, sceneRef.DeviceScale);
                 sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
             }
             sceneRef.Mark(vp, NodeFlags.VirtualRangeDirty);
@@ -1058,6 +1079,76 @@ public sealed class ItemsView : Component
             (Context.RequestFrame ?? Context.RequestRerender)();
         }
 
+        // An off-screen variable row cannot feed its collapsed size through ArrangeVirtualMeasured. Apply that one
+        // explicit correction atomically with the SAME anchor-intent rebase as FlexLayout.RecordAnchorShift, so a live
+        // wheel/programmatic/touch phase continues in the corrected coordinate space instead of undoing the pin.
+        bool CorrectMeasuredExtent(IMeasuredVirtualLayout expectedLayout, int index, float mainExtent)
+        {
+            if (sceneRef is null || !float.IsFinite(mainExtent) || mainExtent < 0f) return false;
+            var vp = viewportNode.Value;
+            if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.HasScroll(vp)) return false;
+            ref ScrollState sc = ref sceneRef.ScrollRef(vp);
+            if (!ReferenceEquals(sc.Layout, expectedLayout) || (uint)index >= (uint)sc.ItemCount) return false;
+
+            bool horizontal = sc.Orientation == 1;
+            float viewport = horizontal ? sc.ViewportW : sc.ViewportH;
+            // The INNER cross the arrange paths use (the content's published cross extent, viewport-fallback) — see
+            // ApplyScrollPosition's viewport-check comment: a viewport-vs-inner mismatch makes a width-keyed measured
+            // layout reseed its extent table on every alternation between this seam and arrange (the felt jitter).
+            float cross = horizontal ? (sc.ContentH > 0f ? sc.ContentH : sc.ViewportH)
+                                     : (sc.ContentW > 0f ? sc.ContentW : sc.ViewportW);
+            if (!(viewport > 0f) || !(cross > 0f)) return false;
+            if (expectedLayout is IViewportVirtualLayout viewportLayout)
+                viewportLayout.SetViewport(viewport, cross);
+            _ = expectedLayout.ContentExtent(sc.ItemCount, cross); // initialize stateful measured layouts before SetMeasured
+
+            float oldOffset = horizontal ? sc.OffsetX : sc.OffsetY;
+            int anchorIndex = Math.Clamp(expectedLayout.IndexAt(oldOffset, cross), 0, sc.ItemCount - 1);
+            float anchorWithin = oldOffset - expectedLayout.OffsetOf(anchorIndex, cross);
+            float oldMain = horizontal ? expectedLayout.ItemRect(index, cross).W : expectedLayout.ItemRect(index, cross).H;
+            if (oldMain == mainExtent) return true;
+
+            expectedLayout.SetMeasured(index, mainExtent, cross);
+            float mainContent = expectedLayout.ContentExtent(sc.ItemCount, cross);
+            // Zoom-scaled max, the dispatcher's clamp contract (identical on the ZoomFactor==1 path).
+            float zc = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+            float maxOffset = MathF.Max(0f, mainContent * zc - viewport);
+            float pinned = Math.Clamp(expectedLayout.OffsetOf(anchorIndex, cross) + anchorWithin, 0f, maxOffset);
+            float delta = pinned - oldOffset;
+
+            if (horizontal) { sc.OffsetX = pinned; sc.ContentW = mainContent; }
+            else            { sc.OffsetY = pinned; sc.ContentH = mainContent; }
+            sc.AnchorIndex = anchorIndex;
+            sc.RebaseAnchorIntents(delta, horizontal);
+            // This seam can run after phase 6, so clamp chase destinations against the corrected extent immediately;
+            // otherwise phase 7 gets one tick against an out-of-range target before ArrangeViewport can reclamp it.
+            if (horizontal)
+            {
+                sc.TargetX = Math.Clamp(sc.TargetX, 0f, maxOffset);
+                if (!float.IsNaN(sc.PendingTargetX)) sc.PendingTargetX = Math.Clamp(sc.PendingTargetX, 0f, maxOffset);
+            }
+            else
+            {
+                sc.TargetY = Math.Clamp(sc.TargetY, 0f, maxOffset);
+                if (!float.IsNaN(sc.PendingTargetY)) sc.PendingTargetY = Math.Clamp(sc.PendingTargetY, 0f, maxOffset);
+            }
+
+            float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, pinned, maxOffset);
+            if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
+
+            var contentNode = sc.ContentNode;
+            if (!contentNode.IsNull && sceneRef.IsLive(contentNode))
+            {
+                ref NodePaint paint = ref sceneRef.Paint(contentNode);
+                OverscrollPhysics.WriteContentTransform(ref paint, in sceneRef.Bounds(contentNode), horizontal, pinned,
+                    band, sc.ZoomFactor, sceneRef.DeviceScale);
+                sceneRef.Mark(contentNode, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            }
+            sceneRef.Mark(vp, NodeFlags.LayoutDirty | NodeFlags.VirtualRangeDirty | NodeFlags.PaintDirty);
+            (Context.RequestFrame ?? Context.RequestRerender)();
+            return true;
+        }
+
         void ControllerScrollTo(ScrollToRequest request)
         {
             if (horizontal || sceneRef is null) return;
@@ -1071,7 +1162,13 @@ public sealed class ItemsView : Component
             if (horizontal || sceneRef is null) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return;
-            ScrollIntoView.ScrollTo(Context, vp, sc.OffsetY + request.Delta, request.Animate);
+            // Accumulate on the live chase target when one is armed — the dispatcher's own wheel idiom
+            // (SetPendingWheelTarget bases the next notch on PendingTarget, not the animating offset). Re-basing a
+            // second notch on the mid-chase offset silently ate most of its travel.
+            float from = request.Animate && sc.Phase == ScrollIntegrator.WheelAnimating && !float.IsNaN(sc.PendingTargetY)
+                ? sc.PendingTargetY
+                : sc.OffsetY;
+            ScrollIntoView.ScrollTo(Context, vp, from + request.Delta, request.Animate);
         }
 
         void MoveCurrent(int next, bool ctrl, bool shift, float alignmentRatio = float.NaN)
@@ -1313,6 +1410,7 @@ public sealed class ItemsView : Component
             ctl.GetCurrent = current.Peek;
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
+            ctl.CorrectMeasuredExtentImpl = CorrectMeasuredExtent;
             ctl.GetViewportImpl = () => viewportNode.Value;
             ctl.GetOffsetImpl = () =>
             {
@@ -1357,6 +1455,7 @@ public sealed class ItemsView : Component
                 ctl.TryGetItemIndexImpl = null;
                 ctl.GetCurrent = null;
                 ctl.ScrollByImpl = null;
+                ctl.CorrectMeasuredExtentImpl = null;
                 ctl.GetViewportImpl = null;
                 ctl.GetOffsetImpl = null;
                 ctl.BeginRemovalImpl = null;

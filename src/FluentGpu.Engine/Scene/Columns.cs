@@ -59,6 +59,11 @@ public struct LayoutInput
     public FlexJustify Justify;   // container: main-axis distribution
     public FlexAlign AlignItems;  // container: default child cross alignment
     public bool Wrap;             // container: wrap children to multiple lines when the main axis is constrained
+    // ZStack overlay child only (A3/layout.md MeasureZStack): ignore the stack's own constrained childAvail and
+    // measure at PositiveInfinity instead, reporting the child's natural content width — e.g. a rail tooltip that
+    // must report its real text width even though the rail itself stays pinned to a fixed, narrower ZStack. Packed
+    // alongside Wrap in the existing LayoutInput column (no new SoA column).
+    public bool MeasureUnboundedWidth;
 
     public TextStyle TextStyle;   // for VisualKind.Text leaves
 
@@ -224,6 +229,9 @@ public struct ScrollState
                                           // panDelta) on the scroll axis. Per-NODE (not the singleton resampler) so CONCURRENT
                                           // multi-touch pans on sibling scrollers are independent; the phase-7 integrator splits
                                           // it into a clamped offset + rubber-band once (TouchpadTracking, PhaseTouchPan). NaN = none.
+    public float TouchPanAnchorOffset;    // direct-touch's per-node coordinate origin. Every WM_POINTER move derives
+                                          // PendingRawOffset from this + finger travel, so an anchor re-pin must shift both.
+                                          // NaN outside a claimed direct-touch pan.
     public float PendingAnchorShift;      // accumulated virtualization anchor re-pin delta (DIP) since the last integrator tick.
                                           // The layout re-pin (ArrangeVirtualVariable/Measured) shifts the offset to keep the
                                           // topmost item fixed across extent corrections; it records the shift HERE so the phase-7
@@ -417,7 +425,37 @@ public struct ScrollState
     /// offset + rubber-band exactly like the resampler path (scroll-feel-rework-v2 §4.1/§4.4).</summary>
     public const byte PhaseTouchPan = 16;
 
-    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, ItemClipTopInset = float.NaN, DisclosureFirst = -1, DisclosureT = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
+    /// <summary>Move every live scroll intent into the coordinate space produced by a virtualization anchor
+    /// correction. The caller owns the matching <see cref="OffsetX"/>/<see cref="OffsetY"/> write; this method rebases
+    /// the phase-7 integrator's destinations and contact anchor so an active wheel, programmatic chase, or touch pan
+    /// cannot fight that layout-owned offset change on its next tick.</summary>
+    public void RebaseAnchorIntents(float delta, bool horizontal)
+    {
+        if (!float.IsFinite(delta) || delta == 0f) return;
+        PendingAnchorShift += delta;
+        if (horizontal)
+        {
+            TargetX += delta;
+            if (!float.IsNaN(PendingTargetX)) PendingTargetX += delta;
+        }
+        else
+        {
+            TargetY += delta;
+            if (!float.IsNaN(PendingTargetY)) PendingTargetY += delta;
+        }
+        if (!float.IsNaN(PendingRawOffset)) PendingRawOffset += delta;
+        if ((PhaseFlags & PhaseTouchPan) != 0 && !float.IsNaN(TouchPanAnchorOffset))
+            TouchPanAnchorOffset += delta;
+        // A retargeted fling's landing value and its seed anchor are absolute offsets too — an un-rebased snap
+        // target made an in-flight snap fling land on a PRE-correction coordinate. And the direction-hysteresis
+        // reference must shift with the pin, or an anchor correction larger than the hysteresis spuriously flips
+        // ScrolledFwdBit without any user motion.
+        if (!float.IsNaN(FlingSnapTarget)) FlingSnapTarget += delta;
+        if (float.IsFinite(FlingFromOffset)) FlingFromOffset += delta;
+        if (DirLatched) OffsetPrev += delta;
+    }
+
+    public static ScrollState Default => new() { ExtentTableRef = -1, ZoomFactor = 1f, MinZoom = 0.1f, MaxZoom = 10f, FlingSnapTarget = float.NaN, PendingTargetX = float.NaN, PendingTargetY = float.NaN, PendingRawOffset = float.NaN, TouchPanAnchorOffset = float.NaN, ItemClipTopInset = float.NaN, DisclosureFirst = -1, DisclosureT = float.NaN, PrevArrangedFirst = 0, PrevArrangedLast = -1 };
 
     /// <summary>True when this viewport has any snap points configured (a fling lands on one).</summary>
     public readonly bool HasSnap => SnapInterval > 0f || (SnapPoints is { Length: > 0 });

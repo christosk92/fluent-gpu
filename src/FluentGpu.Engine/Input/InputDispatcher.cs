@@ -1327,6 +1327,7 @@ public sealed class InputDispatcher
             OnScrollTrackEnd?.Invoke(_panTarget);   // §2.1: clear any resampler latch on capture loss (no stale replay)
             ref ScrollState psc = ref _scene.ScrollRef(_panTarget);
             psc.PendingRawOffset = float.NaN;       // stop the per-node touch-pan intent
+            psc.TouchPanAnchorOffset = float.NaN;
             psc.PhaseFlags &= unchecked((byte)~ScrollState.PhaseTouchPan);
             if (psc.OverscrollPx != 0f)
             {
@@ -1858,6 +1859,7 @@ public sealed class InputDispatcher
         sc.PendingTargetX = float.NaN; sc.PendingTargetY = float.NaN;
         sc.Overscrolling = false; sc.OverscrollVel = 0f;
         sc.PendingRawOffset = s.PanAnchorOffset;
+        sc.TouchPanAnchorOffset = s.PanAnchorOffset;
         sc.PhaseFlags = ScrollState.PhaseTouchPan;
         sc.Phase = ScrollIntegrator.TouchpadTracking;
         OnScrollArmed?.Invoke(viewport);
@@ -2034,6 +2036,7 @@ public sealed class InputDispatcher
         // direct-touch gesture, runs the anchor away). A live SnapBack band (handed off by the down's CancelFling) simply
         // springs to 0 as the finger re-drags from the clamped offset — matching the pre-rework direct-touch behavior.
         sc.PendingRawOffset = _panAnchorOffset;     // panDelta = 0 at claim; the claiming move's sample sets it below
+        sc.TouchPanAnchorOffset = _panAnchorOffset;
         sc.PhaseFlags = ScrollState.PhaseTouchPan;
         sc.Phase = ScrollIntegrator.TouchpadTracking;
         OnScrollArmed?.Invoke(_panTarget);
@@ -2047,7 +2050,8 @@ public sealed class InputDispatcher
         if (_panTarget.IsNull || !_scene.IsLive(_panTarget) || !_scene.HasScroll(_panTarget)) return;
         float panDelta = _panAxisX ? (e.PositionPx.X - _panAnchorPx.X) : (e.PositionPx.Y - _panAnchorPx.Y);
         ref ScrollState sc = ref _scene.ScrollRef(_panTarget);
-        sc.PendingRawOffset = _panAnchorOffset - panDelta;
+        float anchor = float.IsNaN(sc.TouchPanAnchorOffset) ? _panAnchorOffset : sc.TouchPanAnchorOffset;
+        sc.PendingRawOffset = anchor - panDelta;
         OnScrollArmed?.Invoke(_panTarget);
     }
 
@@ -2694,6 +2698,7 @@ public sealed class InputDispatcher
                 ref ScrollState psc = ref _scene.ScrollRef(_panTarget);
                 OnScrollTrackEnd?.Invoke(_panTarget);     // §2.1: clear any resampler latch (no-op for a per-node touch pan)
                 psc.PendingRawOffset = float.NaN;         // stop the per-node touch-pan intent (the tick must not re-apply it)
+                psc.TouchPanAnchorOffset = float.NaN;
                 psc.PhaseFlags &= unchecked((byte)~ScrollState.PhaseTouchPan);
                 if (psc.OverscrollPx != 0f)
                 {

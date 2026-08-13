@@ -99,7 +99,11 @@ public static class ScrollIntoView
         float contentExtent = horizontal ? sc.ContentW : sc.ContentH;
         float offset = horizontal ? sc.OffsetX : sc.OffsetY;
 
-        target = Math.Clamp(target, 0f, MathF.Max(0f, contentExtent - viewportExtent));
+        // Zoom-scaled max, the dispatcher's SetScrollOffset clamp contract — the unscaled `content − viewport` this
+        // used to be silently disagreed with every wheel/fling clamp on a zoomed viewport.
+        float z = sc.ZoomFactor > 0f ? sc.ZoomFactor : 1f;
+        float maxOffset = MathF.Max(0f, contentExtent * z - viewportExtent);
+        target = Math.Clamp(target, 0f, maxOffset);
         if (MathF.Abs(target - offset) < 0.5f) return false;
 
         if (animate)
@@ -129,9 +133,11 @@ public static class ScrollIntoView
             return true;
         }
 
-        // Snap: the dispatcher's SetScrollOffset idiom — write Offset==Target, ARREST any in-flight chase or fling, and
-        // apply the -offset content transform NOW so the node is on screen this frame (an edit-enter must land before
-        // the user types). Leaving a chase armed here would let it drag the offset straight back off the target.
+        // Snap: the dispatcher's SetScrollOffset idiom — write Offset==Target, ARREST any in-flight chase, fling, OR
+        // recorded touch-pan intent, and apply the content transform NOW so the node is on screen this frame (an
+        // edit-enter must land before the user types). Leaving a chase armed here would let it drag the offset
+        // straight back off the target — and a stale PendingRawOffset did exactly that through the integrator's
+        // TouchpadTracking branch one tick later (the rail tap that lands, then snaps back on first touch).
         if (horizontal) { sc.OffsetX = target; sc.TargetX = target; sc.PendingTargetX = float.NaN; }
         else { sc.OffsetY = target; sc.TargetY = target; sc.PendingTargetY = float.NaN; }
         sc.Phase = ScrollIntegrator.Idle;
@@ -140,13 +146,26 @@ public static class ScrollIntoView
         sc.ProgrammaticHalflifeMs = 0f;
         sc.FlingRetargeted = false;
         sc.FlingSnapTarget = float.NaN;
+        sc.PendingRawOffset = float.NaN;
+        sc.RestorePending = false;   // an explicit programmatic scroll cancels a pending restore, like every other writer
+        sc.IdleMs = 0f;
+        // Offset==Target defeats the integrator's |Target−Offset| motion test — pulse the conscious-bar reveal the
+        // way every synchronous dispatcher move does.
+        sc.ScrollMoved = true;
 
         var content = sc.ContentNode;
         if (!content.IsNull && scene.IsLive(content))
         {
-            scene.Paint(content).LocalTransform =
-                Affine2D.Translation(horizontal ? -target : 0f, horizontal ? 0f : -target);
+            // Device-pixel-snapped, zoom-aware, band-composed — the same writer every other offset path uses. The
+            // old raw Translation painted an unsnapped/unzoomed/band-less transform until the next ArrangeViewport
+            // healed it: a sub-pixel seam against device-snapped pinned chrome on HiDPI displays.
+            ref NodePaint cp = ref scene.Paint(content);
+            float band = OverscrollPhysics.GuardBandSign(sc.OverscrollPx, target, maxOffset);
+            if (sc.Overscrolling && band != sc.OverscrollPx) sc.OverscrollPx = band;
+            OverscrollPhysics.WriteContentTransform(ref cp, in scene.Bounds(content), horizontal, target, band,
+                sc.ZoomFactor, scene.DeviceScale);
             scene.Mark(content, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
+            ScrollBindEval.ApplyContinuous(scene, viewport, ref sc);   // continuous binds must not lag the snap a frame
         }
         scene.Mark(viewport, NodeFlags.PaintDirty | NodeFlags.VirtualRangeDirty);
         ctx.RequestRerender();

@@ -91,14 +91,21 @@
     "savedCount": "{count, plural, other {#곡 추가}}",
     "overview": "개요",
     "playCount": "{count, plural, other {#회 재생}}",
-    "mostly": "주로 {title}",
+    "mostly": "최다 재생: {title}",
     "nothingPlayed": "재생 기록 없음",
-    "busiest": "가장 많이 재생한 날: {date} · {count, plural, other {#회}}",
     "soFar": "현재까지",
     "jumpToDay": "{date}(으)로 이동",
+    "groupedFrom": "{count, plural, other {재생 #회를 그룹화함}}",
     "chip": {
       "music": "음악",
       "podcasts": "팟캐스트"
+    },
+    "pivot": {
+      "artists": "아티스트"
+    },
+    "legend": {
+      "quieter": "적음",
+      "busier": "많음"
     }
   },
 

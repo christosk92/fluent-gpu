@@ -876,10 +876,7 @@ public sealed class FlexLayout
     private static void RecordAnchorShift(ref ScrollState scw, float delta, bool horizontal, int nodeIdx, int anchorIndex, float offset)
     {
         if (delta == 0f) return;
-        scw.PendingAnchorShift += delta;
-        if (horizontal) { scw.TargetX += delta; if (!float.IsNaN(scw.PendingTargetX)) scw.PendingTargetX += delta; }
-        else            { scw.TargetY += delta; if (!float.IsNaN(scw.PendingTargetY)) scw.PendingTargetY += delta; }
-        if (!float.IsNaN(scw.PendingRawOffset)) scw.PendingRawOffset += delta;
+        scw.RebaseAnchorIntents(delta, horizontal);
         if (ScrollTrace.CompiledIn && ScrollTrace.Enabled) ScrollTrace.Note(100, delta, nodeIdx, anchorIndex, offset);
     }
 
@@ -1025,7 +1022,10 @@ public sealed class FlexLayout
         float maxW = 0f, maxH = 0f;
         for (var c = _scene.FirstChild(node); !c.IsNull; c = _scene.NextSibling(c))
         {
-            var cs = Measure(c, childAvail);
+            // A3: a MeasureUnboundedWidth child (e.g. a rail tooltip) opts out of the stack's own constrained
+            // width and reports its natural content width instead of being squeezed to childAvail.
+            bool unbounded = _scene.Layout(c).MeasureUnboundedWidth;
+            var cs = Measure(c, unbounded ? float.PositiveInfinity : childAvail);
             maxW = MathF.Max(maxW, cs.Width); maxH = MathF.Max(maxH, cs.Height);
         }
         float w = float.IsNaN(li.Width) ? maxW + li.Padding.Horizontal : li.Width;
@@ -1055,10 +1055,12 @@ public sealed class FlexLayout
             // held across a call that can touch the store.
             float mL, mT, mR, mB, declW, declH;
             FlexAlign align, justify;
+            bool unboundedW;
             {
                 ref LayoutInput cli = ref _scene.Layout(c);
                 mL = cli.Margin.Left; mT = cli.Margin.Top; mR = cli.Margin.Right; mB = cli.Margin.Bottom;
                 declW = cli.Width; declH = cli.Height;
+                unboundedW = cli.MeasureUnboundedWidth;
                 // A ZStack has no main axis, so BOTH axes are alignment (the WinUI overlay-Grid model):
                 //   vertical   = AlignSelf, falling back to the stack's AlignItems
                 //   horizontal = JustifySelf, falling back to the stack's Justify (a distribution mapped to its
@@ -1079,9 +1081,18 @@ public sealed class FlexLayout
             // layer: the child fills the slot, so there is no free space left to align it within (this is why a
             // content-sized badge could never be parked in a corner). Start/Stretch keep filling, which is both the
             // legacy behaviour and what a full-bleed backdrop/scrim layer wants.
-            bool desiredW = float.IsNaN(declW) && (justify == FlexAlign.Center || justify == FlexAlign.End);
+            unboundedW &= float.IsNaN(declW);   // an explicit Width always wins, flag or not
+            bool desiredW = !unboundedW && float.IsNaN(declW) && (justify == FlexAlign.Center || justify == FlexAlign.End);
             bool desiredH = float.IsNaN(declH) && (align == FlexAlign.Center || align == FlexAlign.End);
-            if (desiredW || desiredH)
+            if (unboundedW)
+            {
+                // A3: measure at the child's own natural width regardless of the stack's slot — Min-against-slotW
+                // below would just clamp it straight back down to the very constraint it opted out of.
+                var desired = Measure(c, float.PositiveInfinity);
+                cw = desired.Width;
+                if (desiredH) ch = MathF.Min(ch, desired.Height);
+            }
+            else if (desiredW || desiredH)
             {
                 var desired = Measure(c, slotW);
                 if (desiredW) cw = MathF.Min(cw, desired.Width);
@@ -1089,7 +1100,18 @@ public sealed class FlexLayout
             }
 
             float freeV = MathF.Max(0f, innerH - ch - mT - mB);
-            float freeH = MathF.Max(0f, innerW - cw - mL - mR);
+            // Width overflow may go NEGATIVE — but ONLY for the two layers that asked to escape the slot, because a
+            // negative freeH is what walks a child off the stack's LEADING edge:
+            //   • justify == End — "End" means flush against the trailing edge, and that promise is what an oversized
+            //     layer is authored for (a 200-wide tip right-anchored on a 44-wide rail hangs off the left).
+            //   • unboundedW (A3) — the child explicitly opted out of the stack's width; re-clamping here would put
+            //     back exactly the constraint the flag removed in the measure branch above.
+            // Center stays CLAMPED at 0 (legacy): centering an overflow would shift EVERY oversized centered layer
+            // half its overflow past the stack's origin, app-wide, where it has always pinned at x=0 — and a centered
+            // layer carries no anchoring promise that overflowing could keep. The vertical axis never overflows
+            // (freeV above stays clamped) — there is no height-side opt-out flag to honour.
+            float freeH = innerW - cw - mL - mR;
+            if (!(unboundedW || justify == FlexAlign.End)) freeH = MathF.Max(0f, freeH);
             float oy = align == FlexAlign.Center ? freeV * 0.5f : align == FlexAlign.End ? freeV : 0f;
             float ox = justify == FlexAlign.Center ? freeH * 0.5f : justify == FlexAlign.End ? freeH : 0f;
             Arrange(c, padL + mL + ox, padT + mT + oy, cw, ch);   // overlay at the aligned origin (recorder paints in order)

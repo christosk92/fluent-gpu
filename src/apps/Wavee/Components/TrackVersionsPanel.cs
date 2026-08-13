@@ -288,7 +288,7 @@ sealed class TrackVersionsPanel : Component
                 Children =
                 [
                     art,
-                    Embed.Comp(() => new NowPlayingOverlay(v.Uri, onPlay, fab, cover: true, MathF.Min(w, h), centered: true))
+                    NowPlayingOverlay.Create(v.Uri, onPlay, fab, cover: true, MathF.Min(w, h), centered: true)
                         .Skeletonized(false),
                 ],
             };

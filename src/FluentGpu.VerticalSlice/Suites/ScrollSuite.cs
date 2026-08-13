@@ -39,6 +39,56 @@ using static FluentGpu.VerticalSlice.Harness.Asserts;
         });
     }
 
+    sealed class UnboundedZStackChild : Component
+    {
+        public override Element Render() => new BoxEl
+        {
+            Height = 20f,
+            JustifySelf = FlexAlign.End,
+            MeasureUnboundedWidth = true,
+            Children = [new BoxEl { Width = 200f, Height = 20f }],
+        };
+    }
+
+    // gate.scroll.explicit-measured-correction-* probe: row 2 is corrected to a drawer-sized cached extent only after
+    // it has scrolled out of the realized window. CorrectMeasuredExtent must then be able to collapse that UNREALIZED
+    // band without remounting/re-rendering this component, while retaining row+within-row as the canonical anchor.
+    sealed class ExplicitMeasuredCorrectionProbe : Component
+    {
+        public const int N = 100;
+        public const int CorrectedIndex = 2;
+        public const float RowH = 64f;
+        public const float ExpandedH = 264f;
+        public const float ExtentDelta = ExpandedH - RowH;
+
+        public readonly ItemsViewController Controller = new();
+        public readonly MeasuredStackVirtualLayout Layout = new(RowH);
+        public int RenderCount;
+
+        public override Element Render()
+        {
+            RenderCount++;
+            return new BoxEl
+            {
+                Width = 300f,
+                Height = 300f,
+                Children =
+                [
+                    ItemsView.CreateBound(N,
+                        static _ => new BoxEl { Height = RowH, Fill = ColorF.FromRgba(30, 30, 30) },
+                        RepeatLayout.Measured(Layout),
+                        new ListOptions
+                        {
+                            Controller = Controller,
+                            SelectionMode = ItemsSelectionMode.None,
+                            Overscan = 0,
+                            Grow = 1f,
+                        }),
+                ],
+            };
+        }
+    }
+
 static class ScrollSuite
 {
     public static void Run(StringTable strings)
@@ -153,18 +203,136 @@ static class ScrollSuite
 
         var metrics = new RailMetrics(10f, 810f, 200f, 248f, 3f);
         float[] samples = [10f, 50f, 410f, 510f, 810f];
-        bool metricsRoundTrip = true;
+        bool metricsRoundTrip = true, thumbClickAgrees = true;
         foreach (float sample in samples)
+        {
             metricsRoundTrip &= Near(metrics.RailYToContentOffset(metrics.ContentOffsetToRailY(sample)), sample, 0.01f);
-        Check("gate.scroll.annotated-metrics RailMetrics round-trips the scrollable domain while labels/ticks/requests clamp and the max-offset thumb reaches the end",
-            metricsRoundTrip && Near(metrics.ClampScrollOffset(1010f), 810f)
-            && Near(metrics.ScrollOffsetToThumbTop(810f), metrics.ThumbTravel),
-            $"roundTrip={metricsRoundTrip} clamp={metrics.ClampScrollOffset(1010f):0.#} maxThumb={metrics.ScrollOffsetToThumbTop(810f):0.#}/{metrics.ThumbTravel:0.#}");
+            // A6: a pointer landing exactly on the rendered thumb's CENTER must decode back to the offset that drew
+            // it. Before the fix, thumb/tick top used the ThumbTravel scale while pointer-decode used a raw
+            // RailHeight scale — a click on the thumb missed by the thumb/rail height delta (~2.3% at these dims).
+            float thumbCenter = metrics.ScrollOffsetToThumbTop(sample) + metrics.ThumbHeight * 0.5f;
+            thumbClickAgrees &= Near(metrics.RailYToContentOffset(thumbCenter), sample, 0.01f);
+        }
+        // Scroll-range domain: thumb / ticks / labels / pointer decode all share [Min, Max]. MaximumOffset is the
+        // BOTTOM of the track (the last reachable date). A label/tick past Max clamps onto that same end pixel —
+        // there is no leftover viewport band under the last date.
+        float maxThumbTop = metrics.ScrollOffsetToThumbTop(810f);
+        bool lastDateAtEnd = Near(maxThumbTop, metrics.ThumbTravel)
+            && Near(metrics.ContentOffsetToTickTop(810f), metrics.ThumbTravel)
+            && Near(metrics.ContentOffsetToTickTop(1010f), metrics.ThumbTravel)
+            && Near(metrics.RailYToContentOffset(metrics.RailHeight), 810f);
+        Check("gate.scroll.annotated-metrics RailMetrics round-trips the scrollable domain, a click on the rendered thumb decodes to the exact offset, while labels/ticks/requests clamp and the max-offset thumb reaches the end",
+            metricsRoundTrip && thumbClickAgrees && Near(metrics.ClampScrollOffset(1010f), 810f)
+            && lastDateAtEnd,
+            $"roundTrip={metricsRoundTrip} thumbClick={thumbClickAgrees} clamp={metrics.ClampScrollOffset(1010f):0.#} maxThumb={maxThumbTop:0.#}/{metrics.ThumbTravel:0.#} lastAtEnd={lastDateAtEnd}");
 
         bool ticksPlaced = Near(metrics.ContentOffsetToTickTop(510f),
-            metrics.ContentOffsetToRailY(510f) / metrics.RailHeight * metrics.ThumbTravel);
+            metrics.ContentOffsetToRailY(510f) - metrics.ThumbHeight * 0.5f);
         Check("gate.scroll.annotated-ticks tick placement shares the RailMetrics content mapping used by labels, detail, and clicks",
             ticksPlaced, $"rail={metrics.ContentOffsetToRailY(510f):0.#} tick={metrics.ContentOffsetToTickTop(510f):0.#}");
+
+        // A11 — tick density cap: 1000 offsets spread across the full scroll range must collapse to ≤ ceil(railHeight/4)
+        // rendered ticks, with the two endpoints always surviving the collapse.
+        {
+            using var appTicks = new HeadlessPlatformApp();
+            var windowTicks = new HeadlessWindow(new WindowDesc("asb-tick-density", new Size2(200, 340), 1f));
+            windowTicks.Show();
+            var tickController = new AnnotatedScrollBarController();
+            tickController.SetValues(0f, 1000f, 0f, 200f);
+            tickController.SetIsScrollable(true);
+            const int DenseTickCount = 1000;
+            var denseTicks = new float[DenseTickCount];
+            for (int i = 0; i < DenseTickCount; i++) denseTicks[i] = i;
+            var tickRoot = new W0fStaticProbe
+            {
+                Build = () => AnnotatedScrollBar.Create(tickController, new AnnotatedScrollBarOptions
+                {
+                    Height = 280f,
+                    TickOffsets = denseTicks,
+                }),
+            };
+            using var tickHost = new AppHost(appTicks, windowTicks, new HeadlessGpuDevice(),
+                new HeadlessFontSystem(strings), strings, tickRoot);
+            tickHost.RunFrame();
+
+            var tickAsb = FindRole(tickHost.Scene, tickHost.Scene.Root, AutomationRole.ScrollBar);
+            var tickRail = Child(tickHost.Scene, tickAsb, 1);
+            var ticksGrid = Child(tickHost.Scene, tickRail, 1);   // labels, ticks, tooltip rail, ghost, tip, thumb
+            int tickChildren = tickHost.Scene.ChildCount(ticksGrid);
+            const float DenseRailHeight = 280f - 2f * AnnotatedScrollBar.ButtonCell;   // 248
+            int maxTicks = (int)MathF.Ceiling(DenseRailHeight / AnnotatedScrollBar.MinTickGap);
+            var denseMetrics = new RailMetrics(0f, 1000f, 200f, DenseRailHeight, AnnotatedScrollBar.ThumbHeight);
+            var firstTickNode = Child(tickHost.Scene, ticksGrid, 0);
+            var lastTickNode = Child(tickHost.Scene, ticksGrid, Math.Max(0, tickChildren - 1));
+            float firstY = tickHost.Scene.AbsoluteRect(firstTickNode).Y - tickHost.Scene.AbsoluteRect(tickRail).Y;
+            float lastY = tickHost.Scene.AbsoluteRect(lastTickNode).Y - tickHost.Scene.AbsoluteRect(tickRail).Y;
+            bool endpointsKept = Near(firstY, denseMetrics.ContentOffsetToTickTop(denseTicks[0]), 0.5f)
+                && Near(lastY, denseMetrics.ContentOffsetToTickTop(denseTicks[^1]), 0.5f);
+            Check("gate.scroll.annotated-tick-density 1000 tick offsets collapse to at most ceil(railHeight/MinTickGap) rendered ticks with both endpoints kept",
+                tickChildren > 0 && tickChildren <= maxTicks && endpointsKept,
+                $"ticks={tickChildren}/{maxTicks} first={firstY:0.#} last={lastY:0.#}");
+        }
+
+        // A3 — MeasureUnboundedWidth: a ZStack child opts out of the stack's own constrained width and reports its
+        // NATURAL content width, while the ZStack itself stays pinned to its explicit Width (a fixed-width rail is
+        // never reflowed by a hanging tooltip/flyout layer); JustifySelf=End right-anchors the oversized layer.
+        {
+            using var appZ = new HeadlessPlatformApp();
+            var windowZ = new HeadlessWindow(new WindowDesc("zstack-unbounded", new Size2(300, 200), 1f));
+            windowZ.Show();
+            var zRoot = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    ZStack = true,
+                    Width = 44f,
+                    Height = 60f,
+                    Children =
+                    [
+                        Embed.Comp(static () => new UnboundedZStackChild()),
+                    ],
+                },
+            };
+            using var zHost = new AppHost(appZ, windowZ, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, zRoot);
+            zHost.RunFrame();
+
+            var stackR = zHost.Scene.AbsoluteRect(zHost.Scene.Root);
+            var flagR = zHost.Scene.AbsoluteRect(Child(zHost.Scene, zHost.Scene.Root, 0));
+            Check("gate.layout.zstack-unbounded-width a component-wrapped MeasureUnboundedWidth child preserves transparent-boundary participation, measures its natural width while its ZStack stays fixed, and remains right-anchored",
+                Near(stackR.W, 44f) && Near(flagR.W, 200f) && Near(flagR.Right, stackR.Right, 0.5f),
+                $"stackW={stackR.W:0.#} flagW={flagR.W:0.#} flagRight={flagR.Right:0.#} stackRight={stackR.Right:0.#}");
+        }
+
+        // A3 (companion) — the overflow allowance is NOT global: only an End-anchored (or MeasureUnboundedWidth) layer
+        // may hang off the ZStack's LEADING edge. An oversized Center-justified child keeps its legacy x=0 pin.
+        {
+            using var appC = new HeadlessPlatformApp();
+            var windowC = new HeadlessWindow(new WindowDesc("zstack-overflow-anchor", new Size2(300, 200), 1f));
+            windowC.Show();
+            var cRoot = new W0fStaticProbe
+            {
+                Build = () => new BoxEl
+                {
+                    ZStack = true,
+                    Width = 44f,
+                    Height = 60f,
+                    Children =
+                    [
+                        new BoxEl { Width = 200f, Height = 20f, JustifySelf = FlexAlign.Center },
+                        new BoxEl { Width = 200f, Height = 20f, JustifySelf = FlexAlign.End },
+                    ],
+                },
+            };
+            using var cHost = new AppHost(appC, windowC, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, cRoot);
+            cHost.RunFrame();
+
+            var stackC = cHost.Scene.AbsoluteRect(cHost.Scene.Root);
+            var centeredC = cHost.Scene.AbsoluteRect(Child(cHost.Scene, cHost.Scene.Root, 0));
+            var endedC = cHost.Scene.AbsoluteRect(Child(cHost.Scene, cHost.Scene.Root, 1));
+            Check("gate.layout.zstack-center-overflow-pins-leading an oversized NON-unbounded Center-justified ZStack child stays pinned at the stack's leading edge (no negative shift), while an End-justified one still overflows leading to stay right-anchored",
+                Near(centeredC.X, stackC.X, 0.5f) && Near(endedC.Right, stackC.Right, 0.5f) && endedC.X < stackC.X - 100f,
+                $"centerX={centeredC.X:0.#} stackX={stackC.X:0.#} endX={endedC.X:0.#} endRight={endedC.Right:0.#} stackRight={stackC.Right:0.#}");
+        }
 
         var collapsed = RailLabelCollision.Collapse(
         [
@@ -3039,6 +3207,209 @@ static class ScrollSuite
                 worst == 0, $"worstHotAlloc={worst}B across the scripted cycle");
         }
 
+        // Seed the explicit-correction repro identically for each phase arm: scroll far enough that row 2 is no longer
+        // realized, then cache a 264-DIP "drawer" extent there. The visible row+within-row anchor must move +200 DIP,
+        // while the probe component itself remains run-once. Arm one idle integrator tick to drain the setup re-pin so
+        // each arm starts with a clean PendingAnchorShift and measures only its collapse correction.
+        static bool PrimeExplicitCorrection(AppHost host, ExplicitMeasuredCorrectionProbe probe,
+                                              out NodeHandle viewport, out ScrollState state)
+        {
+            host.RunFrame(); host.RunFrame();
+            viewport = probe.Controller.Viewport;
+            if (viewport.IsNull) { state = default; return false; }
+
+            probe.Controller.ScrollBy(20f * ExplicitMeasuredCorrectionProbe.RowH + 7f);
+            host.RunFrame(); host.RunFrame();
+            if (!host.Scene.TryGetScroll(viewport, out var beforeGrow)) { state = default; return false; }
+            int anchor = probe.Layout.IndexAt(beforeGrow.OffsetY, beforeGrow.ViewportW);
+            float within = beforeGrow.OffsetY - probe.Layout.OffsetOf(anchor, beforeGrow.ViewportW);
+            int renders = probe.RenderCount;
+
+            bool grew = probe.Controller.CorrectMeasuredExtent(probe.Layout,
+                ExplicitMeasuredCorrectionProbe.CorrectedIndex, ExplicitMeasuredCorrectionProbe.ExpandedH);
+            host.ScrollIntegratorForTest.Arm(viewport);
+            host.RunFrame(); host.RunFrame();
+            if (!host.Scene.TryGetScroll(viewport, out state)) return false;
+
+            int grownAnchor = probe.Layout.IndexAt(state.OffsetY, state.ViewportW);
+            float grownWithin = state.OffsetY - probe.Layout.OffsetOf(grownAnchor, state.ViewportW);
+            return grew
+                && beforeGrow.FirstRealized > ExplicitMeasuredCorrectionProbe.CorrectedIndex
+                && grownAnchor == anchor && Near(grownWithin, within, 0.01f)
+                && Near(state.ContentH, ExplicitMeasuredCorrectionProbe.N * ExplicitMeasuredCorrectionProbe.RowH
+                    + ExplicitMeasuredCorrectionProbe.ExtentDelta, 0.01f)
+                && Near(state.PendingAnchorShift, 0f, 0.01f)
+                && probe.RenderCount == renders;
+        }
+
+        // Explicit correction during a PROGRAMMATIC chase. The destination was resolved in the expanded coordinate
+        // space, so collapsing an off-screen row above both the viewport and destination must translate the live offset,
+        // Target, and PendingTarget together by -200. The chase must then settle on the same logical item in the new
+        // coordinate space, with no component re-render caused by the correction.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("explicit-correction-programmatic", new Size2(360, 460), 1f));
+            window.Show();
+            var probe = new ExplicitMeasuredCorrectionProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            bool primed = PrimeExplicitCorrection(host, probe, out var vp, out _);
+
+            const int Destination = 60;
+            probe.Controller.StartBringItemIntoView(Destination, alignmentRatio: 0f, animate: true);
+            host.Scene.TryGetScroll(vp, out var before);
+            float cross = before.ViewportW;
+            int anchor = probe.Layout.IndexAt(before.OffsetY, cross);
+            float within = before.OffsetY - probe.Layout.OffsetOf(anchor, cross);
+            int renders = probe.RenderCount;
+
+            bool corrected = probe.Controller.CorrectMeasuredExtent(probe.Layout,
+                ExplicitMeasuredCorrectionProbe.CorrectedIndex, ExplicitMeasuredCorrectionProbe.RowH);
+            host.Scene.TryGetScroll(vp, out var after);
+            int afterAnchor = probe.Layout.IndexAt(after.OffsetY, cross);
+            float afterWithin = after.OffsetY - probe.Layout.OffsetOf(afterAnchor, cross);
+            float d = -ExplicitMeasuredCorrectionProbe.ExtentDelta;
+            bool active = before.Phase == ScrollIntegrator.WheelAnimating
+                && (before.PhaseFlags & ScrollState.PhaseProgrammatic) != 0
+                && !float.IsNaN(before.PendingTargetY);
+            bool immediate = corrected && afterAnchor == anchor && Near(afterWithin, within, 0.01f)
+                && Near(after.OffsetY, before.OffsetY + d, 0.01f)
+                && Near(after.TargetY, before.TargetY + d, 0.01f)
+                && Near(after.PendingTargetY, before.PendingTargetY + d, 0.01f)
+                && Near(after.PendingAnchorShift, d, 0.01f)
+                && Near(after.ContentH, ExplicitMeasuredCorrectionProbe.N * ExplicitMeasuredCorrectionProbe.RowH, 0.01f)
+                && probe.RenderCount == renders;
+
+            bool settled = false;
+            for (int i = 0; i < 600; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.Phase == ScrollIntegrator.Idle) { settled = true; break; }
+            }
+            host.Scene.TryGetScroll(vp, out var fin);
+            float expected = probe.Layout.OffsetOf(Destination, fin.ViewportW);
+            bool landed = settled && Near(fin.OffsetY, expected, 0.6f) && probe.RenderCount == renders;
+            Check("gate.scroll.explicit-measured-correction-programmatic collapsing an UNREALIZED measured row above the viewport during a programmatic chase preserves row+within-row, rebases Offset/Target/PendingTarget/PendingAnchorShift by the exact extent delta, publishes ContentH immediately, and settles on the same logical destination without a component re-render",
+                primed && active && immediate && landed,
+                $"primed={primed} active={active} immediate={immediate} landed={landed} anchor={anchor}->{afterAnchor} within={within:0.##}->{afterWithin:0.##} off={before.OffsetY:0.##}->{after.OffsetY:0.##} pending={before.PendingTargetY:0.##}->{after.PendingTargetY:0.##} content={after.ContentH:0.##} renders={renders}->{probe.RenderCount}");
+        }
+
+        // Same correction during a real smooth WHEEL chase (the non-programmatic arm of WheelAnimating). A later tick
+        // must consume the rebased target rather than chasing the pre-collapse coordinate and dragging the view forward.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("explicit-correction-wheel", new Size2(360, 460), 1f));
+            window.Show();
+            var probe = new ExplicitMeasuredCorrectionProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            host.Input.SmoothScroll = true;
+            bool primed = PrimeExplicitCorrection(host, probe, out var vp, out _);
+
+            window.QueueInput(new InputEvent(InputKind.Wheel, new Point2(150f, 150f), 0, 0,
+                WheelNotch: 2f, Pointer: PointerKind.Mouse, TimestampMs: 1000));
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var before);
+            float cross = before.ViewportW;
+            int anchor = probe.Layout.IndexAt(before.OffsetY, cross);
+            float within = before.OffsetY - probe.Layout.OffsetOf(anchor, cross);
+            int renders = probe.RenderCount;
+
+            bool corrected = probe.Controller.CorrectMeasuredExtent(probe.Layout,
+                ExplicitMeasuredCorrectionProbe.CorrectedIndex, ExplicitMeasuredCorrectionProbe.RowH);
+            host.Scene.TryGetScroll(vp, out var after);
+            int afterAnchor = probe.Layout.IndexAt(after.OffsetY, cross);
+            float afterWithin = after.OffsetY - probe.Layout.OffsetOf(afterAnchor, cross);
+            float d = -ExplicitMeasuredCorrectionProbe.ExtentDelta;
+            float expectedLanding = before.PendingTargetY + d;
+            bool active = before.Phase == ScrollIntegrator.WheelAnimating
+                && (before.PhaseFlags & ScrollState.PhaseWheel) != 0
+                && !float.IsNaN(before.PendingTargetY);
+            bool immediate = corrected && afterAnchor == anchor && Near(afterWithin, within, 0.01f)
+                && Near(after.OffsetY, before.OffsetY + d, 0.01f)
+                && Near(after.TargetY, before.TargetY + d, 0.01f)
+                && Near(after.PendingTargetY, expectedLanding, 0.01f)
+                && Near(after.PendingAnchorShift, d, 0.01f)
+                && Near(after.ContentH, ExplicitMeasuredCorrectionProbe.N * ExplicitMeasuredCorrectionProbe.RowH, 0.01f)
+                && probe.RenderCount == renders;
+
+            bool settled = false;
+            for (int i = 0; i < 300; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                if (s.Phase == ScrollIntegrator.Idle) { settled = true; break; }
+            }
+            host.Scene.TryGetScroll(vp, out var fin);
+            bool landed = settled && Near(fin.OffsetY, expectedLanding, 0.6f) && probe.RenderCount == renders;
+            Check("gate.scroll.explicit-measured-correction-wheel collapsing an UNREALIZED measured row above the viewport during a wheel chase preserves row+within-row, rebases Offset/Target/PendingTarget/PendingAnchorShift by the exact extent delta, publishes ContentH immediately, and the live wheel chase lands in corrected coordinates without a component re-render",
+                primed && active && immediate && landed,
+                $"primed={primed} active={active} immediate={immediate} landed={landed} anchor={anchor}->{afterAnchor} within={within:0.##}->{afterWithin:0.##} off={before.OffsetY:0.##}->{after.OffsetY:0.##} pending={before.PendingTargetY:0.##}->{after.PendingTargetY:0.##} final={fin.OffsetY:0.##}/{expectedLanding:0.##} renders={renders}->{probe.RenderCount}");
+        }
+
+        // Direct WM_POINTER continuation is the subtle producer-side case: PendingRawOffset can be shifted correctly at
+        // collapse time yet the NEXT move can overwrite it from the dispatcher's original press anchor. The per-node
+        // TouchPanAnchorOffset must therefore move with the correction too; another 16-DIP upward move advances exactly
+        // 16 DIP from the corrected offset, never jumping 200 DIP back into the old coordinate space.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("explicit-correction-direct-touch", new Size2(360, 460), 1f));
+            window.Show();
+            var probe = new ExplicitMeasuredCorrectionProbe();
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), fonts, strings, probe);
+            bool primed = PrimeExplicitCorrection(host, probe, out var vp, out _);
+
+            RectF vr = host.Scene.AbsoluteRect(vp);
+            float x = vr.X + vr.W * 0.5f;
+            float y0 = vr.Y + MathF.Min(220f, vr.H - 20f);
+            uint t = s_touchClockMs;
+            const uint PointerId = 91;
+            var ev = new InputEvent[1];
+            ev[0] = Touch(InputKind.PointerDown, new Point2(x, y0), t, PointerId);
+            host.Input.Dispatch(ev); host.RunFrame();
+            t += 16;
+            ev[0] = Touch(InputKind.PointerMove, new Point2(x, y0 - 20f), t, PointerId);
+            host.Input.Dispatch(ev); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var before);
+            float cross = before.ViewportW;
+            int anchor = probe.Layout.IndexAt(before.OffsetY, cross);
+            float within = before.OffsetY - probe.Layout.OffsetOf(anchor, cross);
+            int renders = probe.RenderCount;
+
+            bool corrected = probe.Controller.CorrectMeasuredExtent(probe.Layout,
+                ExplicitMeasuredCorrectionProbe.CorrectedIndex, ExplicitMeasuredCorrectionProbe.RowH);
+            host.Scene.TryGetScroll(vp, out var after);
+            int afterAnchor = probe.Layout.IndexAt(after.OffsetY, cross);
+            float afterWithin = after.OffsetY - probe.Layout.OffsetOf(afterAnchor, cross);
+            float d = -ExplicitMeasuredCorrectionProbe.ExtentDelta;
+            bool active = before.Phase == ScrollIntegrator.TouchpadTracking
+                && (before.PhaseFlags & ScrollState.PhaseTouchPan) != 0
+                && !float.IsNaN(before.PendingRawOffset) && !float.IsNaN(before.TouchPanAnchorOffset);
+            bool immediate = corrected && afterAnchor == anchor && Near(afterWithin, within, 0.01f)
+                && Near(after.OffsetY, before.OffsetY + d, 0.01f)
+                && Near(after.TargetY, before.TargetY + d, 0.01f)
+                && Near(after.PendingRawOffset, before.PendingRawOffset + d, 0.01f)
+                && Near(after.TouchPanAnchorOffset, before.TouchPanAnchorOffset + d, 0.01f)
+                && Near(after.PendingAnchorShift, d, 0.01f)
+                && Near(after.ContentH, ExplicitMeasuredCorrectionProbe.N * ExplicitMeasuredCorrectionProbe.RowH, 0.01f)
+                && probe.RenderCount == renders;
+
+            t += 16;
+            ev[0] = Touch(InputKind.PointerMove, new Point2(x, y0 - 36f), t, PointerId);
+            host.Input.Dispatch(ev); host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var continued);
+            bool continuedOneToOne = Near(continued.OffsetY, after.OffsetY + 16f, 0.75f)
+                && continued.Phase == ScrollIntegrator.TouchpadTracking
+                && (continued.PhaseFlags & ScrollState.PhaseTouchPan) != 0
+                && probe.RenderCount == renders;
+            ev[0] = Touch(InputKind.PointerUp, new Point2(x, y0 - 36f), t + 16, PointerId);
+            host.Input.Dispatch(ev);
+            s_touchClockMs = t + 1000;
+
+            Check("gate.scroll.explicit-measured-correction-direct-touch collapsing an UNREALIZED measured row above a live direct-touch pan preserves row+within-row, rebases Offset/Target/PendingRaw/TouchPanAnchor/PendingAnchorShift and ContentH, and the next pointer move continues 1:1 in corrected coordinates without a component re-render",
+                primed && active && immediate && continuedOneToOne,
+                $"primed={primed} active={active} immediate={immediate} continued={continuedOneToOne} anchor={anchor}->{afterAnchor} within={within:0.##}->{afterWithin:0.##} off={before.OffsetY:0.##}->{after.OffsetY:0.##}->{continued.OffsetY:0.##} raw={before.PendingRawOffset:0.##}->{after.PendingRawOffset:0.##} touchAnchor={before.TouchPanAnchorOffset:0.##}->{after.TouchPanAnchorOffset:0.##} renders={renders}->{probe.RenderCount}");
+        }
+
         // gate.scroll.anchor-repin-under-gesture (Fix 1: the homepage touchpad-jitter repro): jump DEEP into a MEASURED
         // virtual list (the sticky-gate raw-ScrollRef pattern, so the rows above the jump target stay UNREALIZED at their
         // 40px estimate), then drag UPWARD — rows entering from above realize at 64px, and every correction to a row
@@ -3553,6 +3924,27 @@ static class ScrollSuite
             bool none = gl2.StickyHeaderIndexAt(0f) == -1 && gl2.StickyHeaderIndexAt(4 * 48f + 1f) == 4;
             Check("e11virt.4 GroupedList: header extents seeded, sticky index per offset band (−1 above first), correction moves the pivot",
                 seeded && sticky && correctedG && none, $"total={total:0}→{gl.ContentExtent(n, cross):0} hdr6@{gl.OffsetOf(6, cross):0}");
+
+            // W1.2c — MeasuredVersion: bumped only on a real delta (compare-before-set), and a "drawer" case — a
+            // mid-group row growing into a much taller band (an expander) — shifts the FOLLOWING header's offset by
+            // exactly that delta while StickyHeaderIndexAt/IndexAt/OffsetOf all stay correct over the enlarged band.
+            int versionAfterFirstSet = gl.MeasuredVersion;
+            gl.SetMeasured(3, 80f, cross);                       // same value again: compare-before-set must NOT bump
+            bool noBumpOnRepeat = gl.MeasuredVersion == versionAfterFirstSet;
+            float hdr13Before = gl.OffsetOf(13, cross);          // 624
+            int sticky700Before = gl.StickyHeaderIndexAt(700f);  // still inside group 3's (un-enlarged) band
+            gl.SetMeasured(8, 400f, cross);                      // drawer opens mid-group-2 (row 8: 48 → 400, +352)
+            bool versionBumped = gl.MeasuredVersion == versionAfterFirstSet + 1;
+            float hdr13After = gl.OffsetOf(13, cross);
+            bool headerShifted = Near(hdr13After - hdr13Before, 352f);
+            int sticky700After = gl.StickyHeaderIndexAt(700f);   // the enlarged group-2 band now covers it
+            bool stickyCorrect = sticky700Before == 13 && sticky700After == 6;
+            int atRow = gl.IndexAt(700f, cross);
+            bool roundTrip = gl.OffsetOf(atRow, cross) <= 700f
+                && (atRow + 1 >= n || gl.OffsetOf(atRow + 1, cross) > 700f);
+            Check("e11virt.4b GroupedList drawer: MeasuredVersion bumps only on a real delta, the following header's offset shifts by exactly that delta, and StickyHeaderIndexAt/IndexAt/OffsetOf stay correct across the enlarged band (W1.2c)",
+                noBumpOnRepeat && versionBumped && headerShifted && stickyCorrect && roundTrip,
+                $"version={versionAfterFirstSet}→{gl.MeasuredVersion} hdr13 {hdr13Before:0}→{hdr13After:0} sticky700 {sticky700Before}→{sticky700After} atRow={atRow}");
         }
 
         // e11virt.pagedshelf-measured — the REAL realize-all PagedShelf branch. Its ScrollEl must remain the root
@@ -6262,6 +6654,236 @@ static class ScrollSuite
             Check("gate.scroll.annotated-label-snapshot-stable a replacement Labels array keeps the previous collision layout until debounce; never all-visible",
                 !flashed && visibleCount < n && visibleCount > 0,
                 $"flashed={flashed} visibleCount={visibleCount}/{n}");
+        }
+
+        // ── External AnnotatedScrollBar wheel routing: the rail is a SIBLING, so it must bridge raw wheel DIP to the
+        // viewport controller instead of relying on scroll-ancestor discovery (there is none on this hit path). ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-wheel-external-rail", new Size2(320, 280), 1f));
+            window.Show();
+            var controller = new AnnotatedScrollBarController();
+            var wheelKind = (AnnotatedScrollBarScrollKind)255;
+            float wheelTarget = float.NaN;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(),
+                new HeadlessFontSystem(strings), strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Direction = 0, Width = 320f, Height = 240f,
+                        Children =
+                        [
+                            new BoxEl
+                            {
+                                Direction = 1, Grow = 1f, Shrink = 1f, Basis = 0f, MinWidth = 0f,
+                                Children =
+                                [
+                                    ItemsView.Create(80,
+                                        i => new BoxEl { Height = 40f, Children = [new TextEl($"row {i}") { Size = 13f }] },
+                                        RepeatLayout.Stack(40f),
+                                        new ListOptions
+                                        {
+                                            SelectionMode = ItemsSelectionMode.None,
+                                            Selector = SelectorVisual.None,
+                                            Grow = 1f,
+                                            Scroll = new ScrollOptions
+                                            {
+                                                SuppressScrollBar = true,
+                                                VerticalScrollController = controller,
+                                            },
+                                        }),
+                                ],
+                            },
+                            AnnotatedScrollBar.Create(controller, new AnnotatedScrollBarOptions
+                            {
+                                Height = 240f,
+                                Scrolling = (target, kind) =>
+                                {
+                                    wheelTarget = target;
+                                    wheelKind = kind;
+                                    return true;
+                                },
+                            }),
+                        ],
+                    },
+                });
+            host.RunFrame();
+            host.RunFrame();
+            var vp = FindScrollable(host.Scene, host.Scene.Root);
+            var bar = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var barR = host.Scene.AbsoluteRect(bar);
+            var onRail = new Point2(barR.X + barR.W * 0.5f, barR.Y + barR.H * 0.5f);
+            window.QueueInput(new InputEvent(InputKind.PointerMove, onRail, 0, 0));
+            host.RunFrame();
+            var rail = Child(host.Scene, bar, 1);
+            var ghost = Child(host.Scene, rail, 3);
+            bool ghostShown = host.Scene.Paint(ghost).Opacity > 0.5f;
+            window.QueueInput(new InputEvent(InputKind.Wheel, onRail, 0, 0, ScrollDelta: 48f, TimestampMs: 16));
+            host.RunFrame();
+            host.RunFrame();
+            host.Scene.TryGetScroll(vp, out var midSc);
+            // Animated chase, not a snap: two frames in, the offset is en route — moving but short of the target.
+            bool glides = midSc.OffsetY > 0.5f && midSc.OffsetY < 47.5f;
+            float settled = float.NaN;
+            for (int i = 0; i < 120; i++)
+            {
+                host.RunFrame();
+                host.Scene.TryGetScroll(vp, out var s);
+                settled = s.OffsetY;
+                if (MathF.Abs(settled - 48f) < 0.5f) break;
+            }
+            bool ghostHeld = host.Scene.Paint(ghost).Opacity > 0.5f;
+            Check("gate.scroll.annotated-wheel-external-rail wheel input over a sibling AnnotatedScrollBar runs the cancelable Wheel request, rides the WheelAnimating chase to the accumulated DIP target, and keeps the stationary pointer's ghost preview",
+                glides && Near(settled, 48f, 0.5f)
+                && wheelKind == AnnotatedScrollBarScrollKind.Wheel && Near(wheelTarget, 48f, 0.5f)
+                && ghostShown && ghostHeld,
+                $"bar={barR} mid={midSc.OffsetY:0.#} settled={settled:0.#} request={wheelKind}/{wheelTarget:0.#} ghost={ghostShown}->{ghostHeld}");
+        }
+
+        // ── W-bug-1: the detail flyout must re-resolve when the scroll geometry changes UNDER a stationary pointer.
+        // Momentum/extent correction moves the offset↔rail mapping while the dispatcher never re-fires hover for an
+        // unchanged node — so the control's own geometry-tracking effect is the only thing keeping the date truthful. ──
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-asb-tip-live", new Size2(360, 340), 1f));
+            window.Show();
+            var controller = new AnnotatedScrollBarController();
+            controller.SetValues(0f, 800f, 0f, 200f);   // scroll range 800
+            controller.SetIsScrollable(true);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                        Width = 360f, Height = 340f,
+                        Children =
+                        [
+                            new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Width = 200f, Height = 280f },
+                            AnnotatedScrollBar.Create(controller, new AnnotatedScrollBarOptions
+                            {
+                                Height = 280f,
+                                DetailLabelAtOffset = offset => new AnnotatedScrollBarLabel(0f,
+                                    offset < 900f ? "Early" : "Late"),
+                            }),
+                        ],
+                    },
+                });
+            host.RunFrame();
+            var asb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var rail = Child(host.Scene, asb, 1);
+            var railR = host.Scene.AbsoluteRect(rail);
+            // Hover at 60% of the rail: decode ≈ 0.6 × range 800 ≈ 480 ⇒ "Early".
+            window.QueueInput(new InputEvent(InputKind.PointerMove,
+                new Point2(railR.X + 22f, railR.Y + railR.H * 0.6f), 0, 0));
+            host.RunFrame();
+            host.RunFrame();
+            bool early = !FindTextNode(host.Scene, strings, asb, "Early").IsNull;
+            // Extent correction with the pointer STATIONARY: range 800 → 2400, the same rail Y now names ≈ 1440 ⇒ "Late".
+            controller.SetValues(0f, 2400f, 0f, 200f);
+            host.RunFrame();
+            host.RunFrame();
+            bool late = !FindTextNode(host.Scene, strings, asb, "Late").IsNull;
+            Check("gate.scroll.annotated-tip-tracks-live-geometry an extent correction under a STATIONARY hover re-resolves the detail flyout without a pointer move",
+                early && late, $"early={early} late={late}");
+        }
+
+        // Last reachable date at the rail END: offset == Max places the thumb at ThumbTravel; hovering the bottom
+        // of the track resolves that last header (not a leftover viewport band with a different date).
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-asb-last-end", new Size2(360, 340), 1f));
+            window.Show();
+            var controller = new AnnotatedScrollBarController();
+            controller.SetValues(0f, 800f, 800f, 200f);
+            controller.SetIsScrollable(true);
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings,
+                new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Direction = 0, AlignItems = FlexAlign.Start, Padding = Edges4.All(20f),
+                        Width = 360f, Height = 340f,
+                        Children =
+                        [
+                            new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, Width = 200f, Height = 280f },
+                            AnnotatedScrollBar.Create(controller, new AnnotatedScrollBarOptions
+                            {
+                                Height = 280f,
+                                Labels =
+                                [
+                                    new AnnotatedScrollBarLabel(0f, "Aug"),
+                                    new AnnotatedScrollBarLabel(800f, "May 15"),
+                                ],
+                                TickOffsets = [0f, 800f],
+                                DetailLabelAtOffset = offset => new AnnotatedScrollBarLabel(0f,
+                                    offset < 400f ? "Aug flag" : "May 15 flag"),
+                            }),
+                        ],
+                    },
+                });
+            host.RunFrame();
+            var asb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var rail = Child(host.Scene, asb, 1);
+            var railR = host.Scene.AbsoluteRect(rail);
+            var thumb = Child(host.Scene, host.Scene.LastChild(rail), 0);
+            var thumbR = host.Scene.AbsoluteRect(thumb);
+            var expect = new RailMetrics(0f, 800f, 200f, 248f, 3f);
+            bool thumbAtEnd = Near(thumbR.Y, railR.Y + expect.ScrollOffsetToThumbTop(800f), 1f)
+                && Near(expect.ScrollOffsetToThumbTop(800f), expect.ThumbTravel);
+            window.QueueInput(new InputEvent(InputKind.PointerMove,
+                new Point2(railR.X + 22f, railR.Y + railR.H - 1f), 0, 0));
+            host.RunFrame();
+            host.RunFrame();
+            bool lastDate = !FindTextNode(host.Scene, strings, asb, "May 15 flag").IsNull;
+            Check("gate.scroll.annotated-last-header-at-end last-header offset equal to MaximumOffset puts the thumb at the rail bottom, and a pointer at the track end resolves that last date",
+                thumbAtEnd && lastDate, $"thumbY={thumbR.Y - railR.Y:0.#}/{expect.ThumbTravel:0.#} lastDate={lastDate}");
+        }
+
+        // NaN Height fills the parent row's cross size. Recents wraps the bar in a stretch COLUMN so the
+        // ComponentEl's mirrored Grow=1 fills height instead of stealing HStack width from the list.
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("cp4-asb-stretch", new Size2(400, 500), 1f));
+            window.Show();
+            var controller = new AnnotatedScrollBarController();
+            controller.SetValues(0f, 800f, 0f, 200f);
+            controller.SetIsScrollable(true);
+            const float SlotH = 420f;
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(),
+                new HeadlessFontSystem(strings), strings, new W0fStaticProbe
+                {
+                    Build = () => new BoxEl
+                    {
+                        Direction = 0, Width = 300f, Height = SlotH, AlignItems = FlexAlign.Stretch,
+                        Children =
+                        [
+                            new BoxEl { Grow = 1f, Basis = 0f, MinWidth = 0f, MinHeight = 0f },
+                            new BoxEl
+                            {
+                                Direction = 1, AlignSelf = FlexAlign.Stretch, MinHeight = 0f,
+                                Children =
+                                [
+                                    AnnotatedScrollBar.Create(controller, new AnnotatedScrollBarOptions
+                                    {
+                                        Height = float.NaN,
+                                        Labels =
+                                        [
+                                            new AnnotatedScrollBarLabel(0f, "Aug"),
+                                            new AnnotatedScrollBarLabel(800f, "May"),
+                                        ],
+                                    }),
+                                ],
+                            },
+                        ],
+                    },
+                });
+            host.RunFrame();
+            host.RunFrame();
+            var asb = FindRole(host.Scene, host.Scene.Root, AutomationRole.ScrollBar);
+            var asbR = host.Scene.AbsoluteRect(asb);
+            Check("gate.scroll.annotated-stretch NaN Height fills a stretch column beside a Grow=1 list",
+                Near(asbR.H, SlotH, 1f), $"h={asbR.H:0.#} slot={SlotH}");
         }
 
         // ── Wheel-through sticky overlay: HitTestPassThrough band still scrolls via OnPointerWheel → ScrollBy ──

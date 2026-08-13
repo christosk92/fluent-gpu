@@ -36,8 +36,9 @@ namespace Wavee;
 // resolving its uri against the store, and a store change re-skins the realized window. A page-local metadata cache
 // would have been thrown away on navigate-away and shared with nobody.
 //
-// Filtering is CLIENT-SIDE, always: no request in the captured session carries a filter parameter, so a chip change
-// re-cuts the loaded snapshot and never touches the network.
+// Filtering is CLIENT-SIDE, always: the official client hits /recents/page/diff on a chip click, but those bodies
+// are the same items with only the list-level filters attribute permuted. A chip change re-cuts the loaded snapshot
+// and never touches the network.
 //
 // The page takes NO constructor dependency (app-page rule) — everything resolves through UseContext in Render.
 sealed class RecentsPage : Component
@@ -64,10 +65,17 @@ sealed class RecentsPage : Component
     /// <summary>The desktop client's attribution tag for recents hydration traffic (`client-feature-id`). Threaded
     /// through SyncAllAsync → IMetadataSource.FetchAsync → the transport, so it survives the chokepoint.</summary>
     const string FeatureId = "mdata_esperanto";
+    /// <summary>W2.9: the implicit brush-transition budget every dynamic-accent consumer on this page shares — a
+    /// section crossing glides rather than snaps. <c>Motion.ReducedMotion</c> is a VALUE at the call site (the
+    /// house idiom — see <see cref="WaveeMotion.MastheadStaggerMs"/>'s remarks), never a hook branch.</summary>
+    static float AccentTransitionMs => Motion.ReducedMotion ? 0f : WaveeMotion.Standard;
+    /// <summary>How long after a now-playing identity change to revision-sync. Same 2 s trailing window as
+    /// <see cref="PlayLogStore.SaveDebounceMs"/> so a skip burst becomes one <c>/page/diff</c>, and so we don't beat
+    /// the server's recents write (capture: Spotify's full snapshot landed ~10 s after play).</summary>
+    const float DiffAfterPlayMs = PlayLogStore.SaveDebounceMs;
 
     /// <summary>The recycled-slot fallback: a bound slot transiently outside the range renders nothing.</summary>
     static readonly RecentsFlatItem EmptyFlat = new(RecentsFlatItemKind.Row, -1, -1, -1);
-    static readonly RecentsSnapshot PendingSeed = CreatePendingSeed();
 
     // ── reactive surface (three signals; everything else is a plain field the slots read at render time) ──────────────
     /// <summary>Bumped when hydration lands in the STORE (or a snapshot is adopted). The bound projection carries it, so
@@ -79,22 +87,80 @@ sealed class RecentsPage : Component
     readonly Signal<string?> _chip = new(null);
     /// <summary>Exactly one disclosure is open. The wire item id is the identity; entity URIs repeat.</summary>
     readonly Signal<string> _expandedRow = new("");
+    /// <summary>The open disclosure's index in <see cref="Shape.Rows"/>. Kept beside the wire id because the measured
+    /// virtual layout is indexed by the FLAT projection: when an open row is recycled offscreen, no live node remains
+    /// to report its collapsed height, so the transition itself must normalize that cached extent.</summary>
+    int _expandedOriginalRow = -1;
     readonly Signal<int> _stickyHeader = new(-1);
     readonly Signal<float> _stickyPush = new(0f);
+    /// <summary>W1.4c: the layout's own measured-extent version (<see cref="GroupedListVirtualLayout.MeasuredVersion"/>)
+    /// published by <see cref="UpdateSticky"/>. Folded into the <see cref="RecentsRail"/> label/tick memo keys (replacing
+    /// the old dead "layoutReady" bit — a Shape always carries a live Layout now, so readiness is no longer in question)
+    /// and into <see cref="ProjectSticky"/>'s packed key, so a drawer-driven extent correction invalidates both the
+    /// rail's cached offsets and the sticky gate on the same scroll-geometry callback.
+    /// <para>The layout bumps that version only on a REAL delta (compare-before-set inside <c>SetMeasured</c>), so this
+    /// is exact invalidation — it replaced a 128-DIP <c>ContentH</c> bucket that could miss a correction which happened
+    /// to leave the total extent inside the same bucket, and the rail's cached <c>OffsetOf</c> values with it.</para></summary>
+    readonly Signal<int> _railMeasuredVersion = new(0);
+    /// <summary>W2.9: the sticky bucket's DAY, quantized so the dynamic accent moves once per section crossing —
+    /// never per row, per extent correction, or per scroll frame. -1 = no sticky header yet (the page fallback).
+    /// Written only by the coalesced <see cref="ResolveAccentDay"/> post, mirroring <see cref="Pump"/>'s own
+    /// arm-then-post idiom so a scroll burst reporting several day changes before the post drains still commits
+    /// only the LATEST one.</summary>
+    readonly Signal<int> _accentDay = new(-1);
+    /// <summary>W2.9: the page's own viewport-following accent, published by <see cref="RecentsAccentBinder"/> — the
+    /// leaf that owns the cover-grading <c>Watch</c> subscription (the <c>Design/CoverPaletteLeaves.cs</c> idiom: a
+    /// page <c>Render</c> must never subscribe to a grading arrival itself). Provided to the subtree via
+    /// <see cref="WaveeAccentCtx"/>; consumers read it as a PROP (a bound <c>Fill</c>/<c>Color</c>), never
+    /// re-rendering when the accent shifts.</summary>
+    readonly Signal<PageAccent> _accent = new(FallbackAccent());
     readonly Signal<bool> _isZoomedOut = new(false);
     readonly Signal<DateOnly> _calendarDay = new(DateOnly.FromDateTime(DateTime.Now));
     readonly object _washOwner = new();
 
-    // ── the snapshot, owned as plain arrays (never a signal: a 1,708-element list is not a value to diff) ─────────────
-    // The rows stay POINTERS for their whole life. Nothing here is ever rewritten with hydrated text — that lives in the
-    // store, which is shared, persisted and updated by every other surface too.
-    RecentsRow[] _rows;                                      // wire order
-    RecentsRow[] _display;                                   // the chip's cut of _rows (== _rows when nothing is selected)
-    bool[] _morphable;                                       // first occurrence of each uri → may claim the shared-element tag
-    RecentsSections _sections;
-    RecentsCalendar _calendar;
-    string[] _chipTokens = Array.Empty<string>();
-    string[] _chipLabels = Array.Empty<string>();
+    // ── the snapshot, owned as ONE atomic reference (never a signal: a 1,708-element list is not a value to diff) ─────
+    // W1.1: every field that must agree with every OTHER field to describe one coherent list — the wire rows, the
+    // chip's display cut, the morph-eligibility flags, the grouped sections, the calendar, and the STATEFUL grouped
+    // layout that measures them — lives on one Shape instance instead of six loose fields. The old shape had a real
+    // bug class (A1/A2/A10): _sections and _vc/_groupedLayout could be swapped non-atomically across two statements,
+    // so a reader landing between them saw one generation of sections against another of everything else. A single
+    // REFERENCE SWAP is atomic here by construction — UI-thread only, every read and every write happens
+    // synchronously on that one thread, never interleaved with a concurrent reader — so publishing a new Shape can
+    // never be observed half-updated. EVERY engine-invoked member captures `var s = _shape;` ONCE at its own entry
+    // and resolves fields only through that local (never re-reading `_shape` mid-method), so one logical operation
+    // always sees one generation even though `_shape` itself may already point somewhere else by the time the NEXT
+    // engine callback runs.
+    sealed class Shape
+    {
+        public readonly RecentsRow[] Rows;                 // wire order
+        public readonly RecentsRow[] Display;              // the chip's cut of Rows (== Rows when nothing is selected)
+        public readonly bool[] Morphable;                  // first occurrence of each uri → may claim the shared-element tag
+        public readonly RecentsSections Sections;
+        public readonly RecentsCalendar Calendar;
+        // STATEFUL — W1.2b reuses this SAME instance across a Recut only when the row snapshot and complete flat
+        // projection are unchanged, preserving ordinary measured corrections without transferring them to other rows.
+        // Ephemeral drawer height is normalized before every recut and page deactivation.
+        public readonly GroupedListVirtualLayout Layout;
+        public readonly TimeSpan BuiltOffset;              // the local UTC offset the sections were grouped under (W1.6)
+
+        public Shape(RecentsRow[] rows, RecentsRow[] display, bool[] morphable, RecentsSections sections,
+                     RecentsCalendar calendar, GroupedListVirtualLayout layout, TimeSpan builtOffset)
+        {
+            Rows = rows; Display = display; Morphable = morphable; Sections = sections;
+            Calendar = calendar; Layout = layout; BuiltOffset = builtOffset;
+        }
+    }
+
+    Shape _shape;
+    /// <summary>The same seeded shape handed to <c>UseResource</c>, retained so the loading branch can run the real
+    /// date-header/row builders against placeholder data and let <c>SkeletonDeriver</c> map that output.</summary>
+    readonly Shape _pendingShape;
+    /// <summary>W1.5: the per-mount fabricated skeleton, built once in the constructor from the SAME local clock
+    /// (<see cref="DateTimeOffset.Now"/> taken there, not <see cref="DateTimeOffset.UtcNow"/>) that grouped the
+    /// initial <see cref="Shape"/> — see <see cref="RecentsView.PendingSeedRows"/> for why a frozen UTC instant would
+    /// split one skeleton "Today" bucket into two near a local midnight. Also handed to <c>UseResource</c> as the
+    /// pending value so the loadable and the initial shape agree before the first fetch resolves.</summary>
+    readonly RecentsSnapshot _pendingSeed;
     string? _revision;
     bool _hasSnapshot;
 
@@ -105,7 +171,6 @@ sealed class RecentsPage : Component
     readonly ItemsViewController _calendarController = new();
     readonly AnnotatedScrollBarController _scrollController = new();
     readonly SemanticZoomController _zoomController = new();
-    GroupedListVirtualLayout? _groupedLayout;
     /// <summary>Integration seam for SemanticZoom: inline and overlay day headers share this callback.</summary>
     internal Action<DateOnly>? DateHeaderInvoked { get; set; }
 
@@ -114,9 +179,21 @@ sealed class RecentsPage : Component
     // SyncAllAsync twice while one call is still in flight; freshness, dedup and skipping belong to MetadataService.
     readonly HashSet<string> _inflight = new(StringComparer.Ordinal);
     readonly List<string> _batch = new(RecentsView.BatchCap);
+    /// <summary>W2.8: reused across pumps like <see cref="_batch"/> — the realized window's unresolved playlist owner
+    /// ids, handed to <see cref="Services.UserProfiles"/> each pump. A different subsystem from the metadata
+    /// chokepoint <see cref="_batch"/> feeds, so it gets its own scratch list rather than sharing one.</summary>
+    readonly List<string> _ownerBatch = new(16);
     int _rangeFirst, _rangeEnd;
     bool _pumpArmed;
     bool _storeDirty;
+    /// <summary>W2.9: the LATEST day <see cref="UpdateSticky"/> has seen this turn — mirrors <see cref="_rangeFirst"/>/
+    /// <see cref="_rangeEnd"/>'s role for <see cref="Pump"/>: recorded immediately (never captured by the arm site),
+    /// read fresh by the posted <see cref="ResolveAccentDay"/>.</summary>
+    int _pendingAccentDay = -1;
+    bool _accentArmed;
+    /// <summary>Pre-created once (constructor) — never a per-frame closure — so <c>_post(_resolveAccentDay)</c> costs
+    /// no per-call delegate allocation on the scroll-hot <see cref="UpdateSticky"/> path.</summary>
+    readonly Action _resolveAccentDay;
 
     // Services + callbacks, refreshed at the top of every render so a bound slot never holds a mount-time instance.
     Services? _svc;
@@ -137,18 +214,6 @@ sealed class RecentsPage : Component
     /// <summary>What a row displays, resolved from the STORE at render time. Never stored on the row.</summary>
     readonly record struct RowFacts(string? Title, string? Subtitle, Image? Cover);
 
-    static RecentsSnapshot CreatePendingSeed()
-    {
-        var now = DateTimeOffset.UtcNow;
-        var rows = new RecentsRow[8];
-        for (int i = 0; i < rows.Length; i++)
-            rows[i] = new RecentsRow(
-                RecentsRowKind.Group, "pending:" + i, "", null, null, null, null, 1,
-                now.AddMinutes(-i).ToUnixTimeMilliseconds(), RecentsEntityKind.Unknown,
-                RecentsReason.Played);
-        return new RecentsSnapshot(null, rows);
-    }
-
     static RecentsRow[] CopyRows(IReadOnlyList<RecentsRow> incoming)
     {
         var rows = new RecentsRow[incoming.Count];
@@ -158,15 +223,21 @@ sealed class RecentsPage : Component
 
     public RecentsPage()
     {
-        _rows = CopyRows(PendingSeed.Rows);
-        _display = _rows;
-        var displayToRow = RecentsView.Filter(_rows, null);
-        _morphable = RecentsView.FirstOccurrence(_rows);
         var now = DateTimeOffset.Now;
-        _sections = RecentsView.BuildSections(_rows, displayToRow, now, CultureInfo.CurrentCulture);
-        _calendar = RecentsView.DayDensity(_rows, displayToRow, now, CultureInfo.CurrentCulture);
-        _vc = VirtualCollection<RecentsFlatItem>.FromSnapshot(_sections.Items);
+        _pendingSeed = new RecentsSnapshot(null, RecentsView.PendingSeedRows(now));
+        var rows = CopyRows(_pendingSeed.Rows);
+        var morphable = RecentsView.FirstOccurrence(rows);
+        var displayToRow = RecentsView.Filter(rows, null);
+        var culture = CultureInfo.CurrentCulture;
+        var sections = RecentsView.BuildSections(rows, displayToRow, now, culture);
+        var calendar = RecentsView.DayDensity(rows, displayToRow, now, culture);
+        var layout = new GroupedListVirtualLayout(sections.HeaderIndices, DateHeaderHeight, RowHeight);
+        layout.ContentExtent(sections.Items.Length, 0f);   // prime the extent table before publish (W1.1 ordering)
+        _pendingShape = new Shape(rows, rows, morphable, sections, calendar, layout, now.Offset);
+        _shape = _pendingShape;
+        _vc = VirtualCollection<RecentsFlatItem>.FromSnapshot(sections.Items);
         DateHeaderInvoked = OpenOverview;
+        _resolveAccentDay = ResolveAccentDay;
     }
 
     public override Element Render()
@@ -187,7 +258,22 @@ sealed class RecentsPage : Component
         if (svc is null) return new BoxEl { Grow = 1f };
 
         // ── the cold read. One page-scoped CTS also cancels every hydration batch on unmount. ─────────────────────────
-        var recents = UseResource(ct => FetchResourceAsync(svc.Recents, ct), PendingSeed);
+        var recents = UseResource(ct => FetchResourceAsync(svc.Recents, ct), _pendingSeed);
+
+        // ── W1.6 midnight rollover. Keyed on the current LOCAL day number so the timer re-arms once per day instead of
+        //    drifting; the callback re-reads the clock itself, so the exact ms computed here only has to land sometime
+        //    after the boundary, never exactly on it (the "+1s" settle below).
+        DateOnly today = DateOnly.FromDateTime(_now.ToOffset(_now.Offset).DateTime);
+        DateTimeOffset nextMidnight = new(today.AddDays(1).ToDateTime(TimeOnly.MinValue), _now.Offset);
+        float msUntilRollover = (float)Math.Max(1000d, (nextMidnight - _now).TotalMilliseconds + 1000d);
+        UseTimeout(RolloverMidnight, msUntilRollover, DepKey.From(today.DayNumber));
+
+        // In-page freshness: a track identity change while this page is live re-arms a trailing /page/diff.
+        // UseActivation still diffs on nav-back; this is the path the capture showed Wavee missing (zero recents
+        // GETs while playing). Keyed on the uri so a skip burst collapses to one fetch after the last change.
+        string playUri = svc.Playback.CurrentTrack.Value?.Uri ?? "";
+        UseTimeout(() => { if (_hasSnapshot) recents.Refresh(); }, DiffAfterPlayMs,
+            DepKey.From(playUri.GetHashCode(), playUri.Length));
 
         UseEffect(() =>
         {
@@ -211,9 +297,19 @@ sealed class RecentsPage : Component
             return (Action?)(() => sub.Dispose());
         }, DepKey.FromRef(store));
 
+        // W2.8: an owner profile resolving is exactly as much a "the row is now readable" event as a store write —
+        // same coalesced-dirty idiom, so a burst of Prefetch results costs one epoch bump, not one per id.
+        var userProfiles = svc.UserProfiles;
+        UseEffect(() =>
+        {
+            var sub = userProfiles.Changed.Subscribe(Observers.From<string>(_ => MarkStoreDirty()));
+            return (Action?)(() => sub.Dispose());
+        }, DepKey.FromRef(userProfiles));
+
         int epoch = _epoch.Value;          // subscribe: hydration re-renders the chrome (summary + wash) too
         int shapeEpoch = _shapeEpoch.Value;
         string? token = _chip.Value;
+        int accentDay = _accentDay.Value;  // W2.9: subscribe — a section crossing re-derives WashCard's source row
 
         // ── the shell MATERIAL (Mica wash). Recents publishes ONE leg — the most recent hydrated cover — through the
         //    same HomeWashSource resolution Home uses, so the colour is the page's own content and never invented.
@@ -246,29 +342,44 @@ sealed class RecentsPage : Component
         UseActivation(
             onActivated: () =>
             {
+                // KeepAlive un-parks this subtree before it raises activation. Clear the retained disclosure here—while
+                // row render effects are live—so the first return frame cannot replay the old drawer out of the parked
+                // scene. Deactivation below only normalizes the measured table; writing the signal after parking would
+                // defer row reconciliation behind the page replay budget.
+                CollapseExpanded(_shape);
                 SetWash(wash);
-                // Revision sync on REACTIVATION, never on a cadence: a null diff answer means "unchanged", and the
-                // correct response to that is to do nothing at all.
+                // Revision sync on REACTIVATION (and, separately, after a now-playing identity change — see the
+                // DiffAfterPlayMs timeout in Render). A null diff answer means "unchanged": do nothing at all.
                 if (_hasSnapshot) recents.Refresh();
             },
-            onDeactivated: ClearWash);
+            onDeactivated: () =>
+            {
+                ClearWash();
+                // KeepAlive has begun parking by the time this callback runs. Erase the cached geometry now, but leave
+                // the disclosure signal for onActivated to clear after the subtree is live again (see above).
+                ResetExpandedExtent(_shape, _expandedOriginalRow);
+                _expandedOriginalRow = -1;
+            });
         // …and on UNMOUNT too: onDeactivated fires only on PARK, so a nav that evicts this page without parking it
         // would otherwise leave a wash owned by a gone page. Owner-gated, so it can never clobber the next page's.
         UseEffect(() => (Action?)ClearWash, DepKey.Empty);
 
         // ── chrome ────────────────────────────────────────────────────────────────────────────────────────────────────
         Element hero = Hero();
-        Element? chips = _chipLabels.Length == 0
-            ? null
-            : ContentFilterChips.Build(
-                new ContentFilterChipSet(_chipLabels, _chipLabels.Length),
-                LabelOf(token),
-                SelectChip,
-                Loc.Get(Strings.Detail.Filter.All),
-                "recents.chips");
+        // W2.3: the Zune pivot strip replaces ContentFilterChips here — a FIXED All/Music/Podcasts/Artists set (never
+        // the wire-derived variable chip bar), so it renders on frame one instead of popping in once a content-type
+        // token resolves. Keyed on shapeEpoch (not token) so a pivot switch re-renders the same live component instead
+        // of remounting it — only a genuine snapshot/filter rebuild tears it down.
+        Element pivots = Embed.Comp(() => new PivotTabs(this)) with { Key = "recents-pivots:" + shapeEpoch };
 
+        // The EXPLICIT-shimmerSource overload, which the docs reserve for exactly this case: content is a STATEFUL
+        // component (the semantic-zoom surface, its virtual list, its controllers) that must not mount during load —
+        // so the deriver would hit an unrendered ComponentEl with no SkeletonProxy and fall back to ONE 160×10 bar.
+        // PendingContentSource invokes the real date-header/row builders against the same placeholder Shape supplied
+        // to UseResource; the engine derives their shimmer, so row design still has one source of truth.
         Element body = Skel.Region(
             recents.Loadable,
+            shimmerSource: PendingContentSource,
             content: _ => Embed.Comp(() => new RecentsSemanticSurface(this, token, shapeEpoch)) with
             { Key = "recents-semantic:" + (token ?? "all") + ":" + shapeEpoch },
             reveal: SkelReveal.None,
@@ -276,13 +387,20 @@ sealed class RecentsPage : Component
             onEmpty: () => EmptyState.Build(Loc.Get(Strings.Sidebar.Section.EmptyRecents)),
             onFailed: () => ErrorState.Build(recents.Loadable.Error, onRetry: () => recents.Refresh()));
 
-        var kids = new List<Element>(3) { hero };
-        if (chips is not null)
-            kids.Add(new BoxEl { Padding = new Edges4(PageInset, 0f, PageInset, 0f), Children = [chips] });
+        var kids = new List<Element>(4)
+        {
+            hero,
+            new BoxEl { Padding = new Edges4(PageInset, 0f, PageInset, Spacing.S), Children = [pivots] },
+        };
         kids.Add(new BoxEl
         {
             Grow = 1f, Shrink = 1f, Direction = 1, MinWidth = 0f, MinHeight = 0f,
-            Padding = new Edges4(PageInset, 0f, PageInset, PlayerDock.Reserve + Spacing.L),
+            // NO dock reserve anywhere on this page: the shell already clips the content region above the docked
+            // player bar (WaveeShell — "its bottom edge IS the player bar's top"), so a reserve — as wrapper padding
+            // OR as a trailing in-scroller spacer — could never scroll content clear of anything; it only parked a
+            // dead band at the end of the scroll while the rail advertised that unreachable range (W-bug-2's second
+            // regression). Spacing.L is tail breathing so the last row is not glued to the bar's seam.
+            Padding = new Edges4(PageInset, 0f, PageInset, Spacing.L),
             // The FLIP: a chip switch changes the list's identity (below), and this wrapper glides the swap instead of
             // cutting to a differently-sized list. Motion.ReducedMotion is a VALUE, so this is a null vs a transition,
             // never a divergent hook path.
@@ -292,9 +410,14 @@ sealed class RecentsPage : Component
                 Exit: new EnterExit(Opacity: 0f, Active: true)),
             Children = [body],
         });
+        // W2.9: always-mounted, zero-size — the ONE leaf that owns the accent's cover-grading Watch subscription
+        // (see RecentsAccentBinder's own remarks). It publishes into _accent; nothing in this Render subscribes to
+        // the grading Watch itself.
+        kids.Add(Embed.Comp(new RecentsAccentBinder.Props(this), () => new RecentsAccentBinder()) with
+        { Key = "recents-accent" });
 
-        _ = epoch;   // read above; the explicit subscription this chrome depends on
-        return new BoxEl
+        _ = epoch; _ = accentDay;   // read above; the explicit subscriptions this chrome depends on
+        Element page = new BoxEl
         {
             Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f,
             Focusable = true,
@@ -306,6 +429,38 @@ sealed class RecentsPage : Component
             },
             Children = kids.ToArray(),
         };
+        // W2.9: the ambient, content-derived accent this page publishes — MediaCard's now-playing equalizer and
+        // TrackRow's number cell (and any future shared component) read it with UseContext(WaveeAccentCtx.Slot)
+        // instead of knowing they are embedded in Recents. Modeled on how the shell provides ShellMaterial.Slot.
+        return Ctx.Provide(WaveeAccentCtx.Slot, (IReadSignal<PageAccent>?)_accent, page);
+    }
+
+    // ── the loading source ────────────────────────────────────────────────────────────────────────────────────────────
+    /// <summary>Render the real list rows against <see cref="_pendingShape"/>. The result is only an input to
+    /// <c>SkeletonDeriver</c>; callbacks are stripped and semantic leaves become shimmer bars. Materializing the eight
+    /// seed rows is bounded and intentional—the stateful bound virtual list itself must not mount while pending.</summary>
+    Element PendingContentSource()
+    {
+        var shape = _pendingShape;
+        var items = shape.Sections.Items;
+        var children = new List<Element>(items.Length);
+        for (int i = 0; i < items.Length; i++)
+        {
+            var flat = items[i];
+            if (flat.Kind == RecentsFlatItemKind.DateHeader)
+            {
+                children.Add(DayHeader(shape, flat.DayIndex, overlay: false));
+                continue;
+            }
+            int rowIndex = flat.OriginalRowIndex;
+            if ((uint)rowIndex >= (uint)shape.Rows.Length) continue;
+            children.Add(RowContent(shape.Rows[rowIndex], new RowFacts("", "", null), rowIndex, expanded: false));
+        }
+        return new BoxEl
+        {
+            Grow = 1f, Shrink = 1f, Direction = 1, MinWidth = 0f, MinHeight = 0f, ClipToBounds = true,
+            Children = children.ToArray(),
+        };
     }
 
     // ── masthead ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -316,8 +471,31 @@ sealed class RecentsPage : Component
         // The count is the page's ONE authored word on this line; the window either side of it stays culture-table
         // formatting (RecentsView owns no copy and is engine-free — see its Summary doc for the seam).
         string summary = _hasSnapshot
-            ? RecentsView.Summary(_rows, _now, _culture, static n => Strings.Recents.ItemCount(n))
+            ? RecentsView.Summary(_shape.Rows, _now, _culture,
+                static n => Strings.Recents.ItemCount(n),
+                static n => Strings.Recents.GroupedFrom(n))
             : "";
+        // W2.1: the control kit's BreadcrumbBar — the HOUSE IDIOM for a drill-in trail (HomeSectionPage, LibraryPage
+        // and DiscographyPage all state their path with this exact call). The hand-rolled caption row it replaces
+        // looked the same and behaved worse: one hand-wired Box was the only tab stop, so "Home" and "Recents" were
+        // not crumbs to a screen reader and Left/Right did nothing. The control gives every crumb a tab stop, arrow-key
+        // crumb-to-crumb focus, the WinUI hover/press foreground ramps and the chevron glyph — free, and identical
+        // across the four surfaces that use it. Default styling on purpose: a per-page restyle is how four trails end
+        // up looking like four different controls.
+        // A ComponentEl cannot carry Enter/Transition itself, so the hero stagger lives on this wrapper — same shape
+        // the title/summary lines below use.
+        Element breadcrumb = new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center,
+            Enter = new EnterExit(Dy: 10f, Opacity: 0f, Active: true),
+            Transition = MotionTok.StandardEnter,
+            Children =
+            [
+                BreadcrumbBar.Create(
+                    [Loc.Get(Strings.Nav.Home), Loc.Get(Strings.Nav.Recents)],
+                    i => { if (i == 0) _go("home", null); }),
+            ],
+        };
         var title = WaveeType.SurfaceDisplay(Loc.Get(Strings.Home.Recents)) with
         {
             MaxLines = 1, Wrap = TextWrap.NoWrap, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
@@ -327,8 +505,9 @@ sealed class RecentsPage : Component
         };
         var overview = Button.Create(Loc.Get(Strings.Recents.Overview), OpenOverviewFromMasthead,
             ButtonAppearance.Subtle, ControlSize.Small, glyph: Icons.Calendar) with { Shrink = 0f };
-        var lines = new List<Element>(2)
+        var lines = new List<Element>(3)
         {
+            breadcrumb,
             new BoxEl
             {
                 Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.M, MinWidth = 0f,
@@ -354,6 +533,92 @@ sealed class RecentsPage : Component
         };
     }
 
+    /// <summary>W2.3: the Zune pivot strip that replaces the wire-derived <c>ContentFilterChips</c> bar for this
+    /// surface — a FIXED four tabs (All / Music / Podcasts / Artists) in <see cref="WaveeType.PivotLabel"/>, always
+    /// shown (never popping in once a content-type token resolves); a tab with no matching row is shown disabled
+    /// rather than hidden, the same "evidenced or dimmed, never removed" rule <c>ContentFilterChips</c> already uses.
+    /// Reads <see cref="_chip"/>/<see cref="_shape"/> straight off the page (no props to freeze — this is a page-local
+    /// component the same way <see cref="RecentsRail"/> is), so a pivot switch re-renders it live; only a genuine
+    /// shape rebuild remounts it (the embed Key at the call site carries <c>shapeEpoch</c>, not the token).</summary>
+    sealed class PivotTabs : Component
+    {
+        const float UnderlineHeight = 2f;
+        /// <summary>~260ms per the prototype's pivot-underline entrance (target-design doc, "Pivot tabs").</summary>
+        const float UnderlineEnterMs = 260f;
+
+        readonly RecentsPage _page;
+        public PivotTabs(RecentsPage page) => _page = page;
+
+        public override Element Render()
+        {
+            string? selected = _page._chip.Value;
+            var rows = _page._shape.Rows;
+            bool hasMusic = RecentsView.PivotAvailable(rows, RecentsView.PivotMusic);
+            bool hasPodcasts = RecentsView.PivotAvailable(rows, RecentsView.PivotPodcasts);
+            bool hasArtist = RecentsView.PivotAvailable(rows, RecentsView.PivotArtists);
+            return new BoxEl
+            {
+                Direction = 0, Gap = Spacing.XL, AlignItems = FlexAlign.Center, Shrink = 0f,
+                Children =
+                [
+                    Tab(null, Loc.Get(Strings.Detail.Filter.All), available: true, selected is null),
+                    Tab(RecentsView.PivotMusic, Loc.Get(Strings.Recents.Chip.Music), hasMusic,
+                        string.Equals(selected, RecentsView.PivotMusic, StringComparison.OrdinalIgnoreCase)),
+                    Tab(RecentsView.PivotPodcasts, Loc.Get(Strings.Recents.Chip.Podcasts), hasPodcasts,
+                        string.Equals(selected, RecentsView.PivotPodcasts, StringComparison.OrdinalIgnoreCase)),
+                    Tab(RecentsView.PivotArtists, Loc.Get(Strings.Recents.Pivot.Artists), hasArtist,
+                        string.Equals(selected, RecentsView.PivotArtists, StringComparison.OrdinalIgnoreCase)),
+                ],
+            };
+        }
+
+        Element Tab(string? token, string label, bool available, bool isSelected)
+        {
+            Element text = WaveeType.PivotLabel(label) with
+            {
+                Color = !available ? Tok.TextDisabled : isSelected ? Tok.TextPrimary : Tok.TextSecondary,
+                MaxLines = 1,
+            };
+            // The underline only MOUNTS on the selected tab — swapping which tab carries it is what makes the
+            // scaleX 0→1 in EnterExit fire as a genuine mount (Presence enter), not a property tween on a
+            // continuously-present bar. The non-selected placeholder reserves the same 2px baseline so every tab
+            // sits at the same height regardless of selection.
+            // W2.9: bound to the page's viewport-following accent (Fill — the raw graded plate, matching what this
+            // bar replaced: Tok.AccentDefault) rather than read once — a Prop, so a section crossing mid-hover glides
+            // the bar's colour without this tab re-rendering.
+            Element underline = isSelected
+                ? new BoxEl
+                {
+                    Key = "underline",
+                    Height = UnderlineHeight, Corners = Radii.FullAll,
+                    Fill = Prop.Of(() => _page._accent.Value.Fill),
+                    BrushTransitionMs = RecentsPage.AccentTransitionMs,
+                    TransformOriginX = 0f,
+                    Enter = new EnterExit(Sx: 0f, Active: true),
+                    Transition = MotionTokenDef.Eased(UnderlineEnterMs, Easing.SmoothOut),
+                }
+                : new BoxEl { Height = UnderlineHeight, Fill = ColorF.Transparent };
+            return new BoxEl
+            {
+                Direction = 1, Gap = Spacing.XS, Shrink = 0f,
+                Role = AutomationRole.Button, Focusable = available, Cursor = available ? CursorId.Hand : CursorId.Arrow,
+                IsEnabled = available, FocusVisualMargin = new Edges4(2f, 2f, 2f, 2f),
+                OnClick = available ? () => _page.SelectPivot(token) : null,
+                Children = [text, underline],
+            };
+        }
+    }
+
+    /// <summary>W2.3's selection — the four fixed pivot tokens, chosen directly (never the old label→token lookup
+    /// <c>ContentFilterChips</c> needed). CLIENT-SIDE like every other chip switch: re-cuts the loaded snapshot,
+    /// never reaches the network.</summary>
+    void SelectPivot(string? token)
+    {
+        if (string.Equals(token, _chip.Peek(), StringComparison.Ordinal)) return;
+        _chip.Value = token;
+        Recut(token);
+    }
+
     // ── the list ──────────────────────────────────────────────────────────────────────────────────────────────────────
     void OpenOverviewFromMasthead()
     {
@@ -369,16 +634,18 @@ sealed class RecentsPage : Component
 
     int HeaderFlatFor(DateOnly date)
     {
-        for (int i = 0; i < _sections.HeaderDates.Length; i++)
-            if (_sections.HeaderDates[i] == date) return _sections.HeaderIndices[i];
+        var s = _shape;
+        for (int i = 0; i < s.Sections.HeaderDates.Length; i++)
+            if (s.Sections.HeaderDates[i] == date) return s.Sections.HeaderIndices[i];
         return -1;
     }
 
     int MonthFor(DateOnly date)
     {
-        for (int i = 0; i < _calendar.Months.Length; i++)
+        var s = _shape;
+        for (int i = 0; i < s.Calendar.Months.Length; i++)
         {
-            var month = _calendar.Months[i];
+            var month = s.Calendar.Months[i];
             if (month.Year == date.Year && month.Month == date.Month) return i;
         }
         return -1;
@@ -386,22 +653,24 @@ sealed class RecentsPage : Component
 
     int MapInToOut(int flatIndex)
     {
-        if ((uint)flatIndex >= (uint)_sections.Items.Length) return -1;
-        int day = _sections.Items[flatIndex].DayIndex;
-        return (uint)day < (uint)_sections.HeaderDates.Length ? MonthFor(_sections.HeaderDates[day]) : -1;
+        var s = _shape;
+        if ((uint)flatIndex >= (uint)s.Sections.Items.Length) return -1;
+        int day = s.Sections.Items[flatIndex].DayIndex;
+        return (uint)day < (uint)s.Sections.HeaderDates.Length ? MonthFor(s.Sections.HeaderDates[day]) : -1;
     }
 
     int MapOutToIn(int monthIndex)
     {
+        var s = _shape;
         DateOnly selected = _calendarDay.Peek();
         int exact = HeaderFlatFor(selected);
         if (exact >= 0 && MonthFor(selected) == monthIndex) return exact;
-        if ((uint)monthIndex >= (uint)_calendar.Months.Length) return -1;
-        var month = _calendar.Months[monthIndex];
-        for (int i = 0; i < _sections.HeaderDates.Length; i++)
+        if ((uint)monthIndex >= (uint)s.Calendar.Months.Length) return -1;
+        var month = s.Calendar.Months[monthIndex];
+        for (int i = 0; i < s.Sections.HeaderDates.Length; i++)
         {
-            var date = _sections.HeaderDates[i];
-            if (date.Year == month.Year && date.Month == month.Month) return _sections.HeaderIndices[i];
+            var date = s.Sections.HeaderDates[i];
+            if (date.Year == month.Year && date.Month == month.Month) return s.Sections.HeaderIndices[i];
         }
         return -1;
     }
@@ -426,6 +695,7 @@ sealed class RecentsPage : Component
             Element zoomedIn = new BoxEl
             {
                 Direction = 0, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.M,
+                AlignItems = FlexAlign.Stretch,
                 Children =
                 [
                     new BoxEl
@@ -433,7 +703,14 @@ sealed class RecentsPage : Component
                         Direction = 1, Grow = 1f, Shrink = 1f, Basis = 0f, MinWidth = 0f, MinHeight = 0f,
                         Children = [detail],
                     },
-                    rail,
+                    // BoxEl is the HStack flex item. RecentsRail is a ComponentEl — Grow/AlignSelf on its root are
+                    // mirrored onto the HStack child, so Grow=1 there would steal WIDTH from the list. This column
+                    // takes the row's stretched HEIGHT; RecentsRail Grow=1 fills that column instead.
+                    new BoxEl
+                    {
+                        Direction = 1, AlignSelf = FlexAlign.Stretch, MinHeight = 0f,
+                        Children = [rail],
+                    },
                 ],
             };
             Element zoomedOut = Embed.Comp(() => new CalendarOverviewSurface(_page, _shapeEpoch)) with
@@ -453,9 +730,11 @@ sealed class RecentsPage : Component
     }
 
     /// <summary>Owns the annotated rail so extent-signal churn cannot rebuild label arrays. GroupedListVirtualLayout
-    /// ignores cross size (<c>OffsetOf</c>/<c>IndexAt</c> take 0); labels are memoized on <see cref="_shapeEpoch"/>.</summary>
+    /// ignores cross size (<c>OffsetOf</c>/<c>IndexAt</c> take 0); labels are memoized on <see cref="_shapeEpoch"/> and
+    /// the W1.4c measured-extent version (a new grouping OR a measured-extent correction is what can move offsets).</summary>
     sealed class RecentsRail : Component
     {
+        static int s_geomKey;
         readonly RecentsPage _page;
         readonly int _shapeEpoch;
         readonly Func<AnnotatedScrollBarLabel[]> _labels;
@@ -473,47 +752,90 @@ sealed class RecentsPage : Component
 
         public override Element Render()
         {
-            var bounds = UseMeasuredBounds().Value;
-            float viewport = _page._scrollController.ViewportLength.Value;
-            float railHeight = bounds.H > 0f ? bounds.H : viewport > 0f ? viewport : WaveeSize.RailAlbum;
-            // Shape is the identity; the 0/1 bit lets the first post-layout render populate labels if this
-            // rail mounted before RecentsListSurface assigned _groupedLayout. Not a per-scroll key.
-            int layoutReady = _page._groupedLayout is null ? 0 : 1;
-            var labels = UseMemo(_labels, DepKey.From(_shapeEpoch, layoutReady));
-            var ticks = UseMemo(_ticks, DepKey.From(_shapeEpoch, layoutReady));
+            // The HStack item is a stretch column around this component (RecentsSemanticSurface). Grow=1 fills THAT
+            // column's height. Do not put Grow=1/AlignSelf=Stretch on this root for the HStack itself: ComponentEl
+            // mirrors those onto the HStack child, and Grow=1 there steals WIDTH from the list. Once the slot has
+            // a real height, pass it as ASB Height so today is the top of the rail and the last date is the bottom.
+            float slotH = UseMeasuredBounds().Value.H;
+            // W1.4c: a Shape always carries a live Layout now (W1.1), so the old "has the layout landed yet" bit is
+            // dead. What actually invalidates the rail's cached label/tick offsets is the extent table CORRECTING
+            // (drawer expand/collapse, realized-row measurement) — the layout's own MeasuredVersion, published by
+            // UpdateSticky. Exact (delta-gated by the layout itself), not a 128-DIP heuristic on ContentH.
+            int measuredVersion = _page._railMeasuredVersion.Value;
+            var labels = UseMemo(_labels, DepKey.From(_shapeEpoch, measuredVersion));
+            var ticks = UseMemo(_ticks, DepKey.From(_shapeEpoch, measuredVersion));
+            LogGeometry(slotH, labels, ticks);
             return new BoxEl
             {
-                AlignSelf = FlexAlign.Stretch, MinHeight = 0f,
+                Direction = 1, Grow = 1f, Basis = 0f, MinHeight = 0f,
                 Children =
                 [
                     AnnotatedScrollBar.Create(_page._scrollController, new AnnotatedScrollBarOptions
                     {
                         Labels = labels,
                         TickOffsets = ticks,
-                        Height = railHeight,
+                        // Parent-determined slot (this Grow=1 box fills the HStack stretch column). Passing it
+                        // pins the bar so thumb/ticks/labels share that height — NaN stretch grew the dotted
+                        // track while thumb math stayed on a shorter railHeight, leaving a dead band under Max.
+                        Height = slotH > 0f ? slotH : float.NaN,
                         DetailLabelAtOffset = _detail,
                     }),
                 ],
             };
         }
+
+        void LogGeometry(float slotH, AnnotatedScrollBarLabel[] labels, float[] ticks)
+        {
+            var c = _page._scrollController;
+            float min = c.MinimumOffset.Peek();
+            float max = c.MaximumOffset.Peek();
+            float off = c.Offset.Peek();
+            float vp = c.ViewportLength.Peek();
+            float lastOff = labels.Length > 0 ? labels[^1].ScrollOffset : float.NaN;
+            int key = HashCode.Combine((int)slotH, (int)max, (int)vp, (int)lastOff, labels.Length);
+            if (key == s_geomKey) return;
+            s_geomKey = key;
+            float range = MathF.Max(0f, max - min);
+            float thumb01 = range > 0f ? (Math.Clamp(off, min, max) - min) / range : 0f;
+            float last01 = range > 0f && float.IsFinite(lastOff)
+                ? (Math.Clamp(lastOff, min, max) - min) / range : 0f;
+            WaveeLog.Instance.Event(WaveeLogLevel.Info, "ui", "recents.rail",
+                "Annotated rail geometry",
+                fields:
+                [
+                    WaveeLogField.Of("slotH", slotH),
+                    WaveeLogField.Of("viewport", vp),
+                    WaveeLogField.Of("min", min),
+                    WaveeLogField.Of("max", max),
+                    WaveeLogField.Of("offset", off),
+                    WaveeLogField.Of("thumb01", thumb01),
+                    WaveeLogField.Of("lastLabel", labels.Length > 0 ? labels[^1].Text : ""),
+                    WaveeLogField.Of("lastOff", lastOff),
+                    WaveeLogField.Of("last01", last01),
+                    WaveeLogField.Of("lastMinusMax", lastOff - max),
+                    WaveeLogField.Of("labels", labels.Length),
+                    WaveeLogField.Of("ticks", ticks.Length),
+                ]);
+        }
     }
 
     AnnotatedScrollBarLabel[] RailLabels()
     {
-        var layout = _groupedLayout;
-        if (layout is null) return [];
+        var s = _shape;
+        var layout = s.Layout;
+        var sections = s.Sections;
         var labels = new List<AnnotatedScrollBarLabel>();
         int priorMonth = -1, priorYear = -1;
-        for (int i = 0; i < _sections.HeaderIndices.Length; i++)
+        for (int i = 0; i < sections.HeaderIndices.Length; i++)
         {
-            DateOnly date = _sections.HeaderDates[i];
+            DateOnly date = sections.HeaderDates[i];
             if (date == DateOnly.MinValue || date.Month == priorMonth && date.Year == priorYear) continue;
             // The rail is LabelsMinWidth (44). Full month names ellipsis to "Augu.." and make the
             // labels unreadable; abbreviated months fit, and the pointer flag carries the day.
             string text = priorYear != date.Year
                 ? date.ToString("MMM yy", _culture)
                 : date.ToString("MMM", _culture);
-            labels.Add(new AnnotatedScrollBarLabel(layout.OffsetOf(_sections.HeaderIndices[i], 0f), text));
+            labels.Add(new AnnotatedScrollBarLabel(layout.OffsetOf(sections.HeaderIndices[i], 0f), text));
             priorMonth = date.Month; priorYear = date.Year;
         }
         return labels.ToArray();
@@ -521,23 +843,52 @@ sealed class RecentsPage : Component
 
     float[] RailTicks()
     {
-        var layout = _groupedLayout;
-        if (layout is null) return [];
-        var ticks = new float[_sections.HeaderIndices.Length];
-        for (int i = 0; i < ticks.Length; i++) ticks[i] = layout.OffsetOf(_sections.HeaderIndices[i], 0f);
+        var s = _shape;
+        var layout = s.Layout;
+        var sections = s.Sections;
+        var ticks = new float[sections.HeaderIndices.Length];
+        for (int i = 0; i < ticks.Length; i++) ticks[i] = layout.OffsetOf(sections.HeaderIndices[i], 0f);
         return ticks;
     }
 
     AnnotatedScrollBarLabel? RailDetail(float offset)
     {
-        var layout = _groupedLayout;
-        if (layout is null || _sections.Items.Length == 0) return null;
-        int flat = Math.Clamp(layout.IndexAt(offset, 0f), 0, _sections.Items.Length - 1);
-        int day = _sections.Items[flat].DayIndex;
-        if ((uint)day >= (uint)_sections.HeaderLabels.Length) return null;
-        return new AnnotatedScrollBarLabel(layout.OffsetOf(_sections.HeaderIndices[day], 0f),
-            _sections.HeaderLabels[day]);
+        var s = _shape;
+        var layout = s.Layout;
+        var sections = s.Sections;
+        if (sections.Items.Length == 0) return null;
+        int lastContent = sections.Items.Length - 1;
+        int flat = Math.Clamp(layout.IndexAt(offset, 0f), 0, lastContent);
+        int day = sections.Items[flat].DayIndex;
+        if ((uint)day >= (uint)sections.HeaderLabels.Length) return null;
+        return new AnnotatedScrollBarLabel(layout.OffsetOf(sections.HeaderIndices[day], 0f),
+            sections.HeaderLabels[day]);
     }
+
+    // ── calendar geometry (ONE source of truth; the app's own precedent is ConcertDateFlyout's picker grid) ───────────
+    /// <summary>A day cell, verbatim the ConcertDateFlyout picker's rung (38 × 32 with a 4-DIP gutter). FIXED, never
+    /// <c>Grow = 1</c>: a stretchy cell turns the heatmap into a row of ragged accent bars whose width says nothing,
+    /// and two months in different grid columns then disagree on what "one day" looks like.</summary>
+    const float CalCellW = 38f, CalCellH = 32f;
+    /// <summary>The weekday-initial band above the grid — the picker's 38 × 20 header cell.</summary>
+    const float CalHeaderH = 20f;
+    /// <summary>Both gutters (between columns and between week rows), the picker's 4.</summary>
+    const float CalGap = Spacing.XS;
+    /// <summary>A month card's exact content width: 7 cells + 6 gutters = 290. It is the card's <c>Width</c> AND the
+    /// grid's min cell width, so a column break can never cut a month in half.</summary>
+    const float CalGridW = 7f * CalCellW + 6f * CalGap;
+    /// <summary>The card's title line: <c>WaveeType.ModuleHeader</c> is Ui.Subtitle's 20/28 ramp, so the header row
+    /// measures exactly one 28-DIP line box (its trailing meta caption is shorter and centers inside it).</summary>
+    const float CalTitleH = 28f;
+    /// <summary>The DETERMINISTIC height of a <see cref="CalendarMonthCard"/> with <paramref name="weeks"/> week rows —
+    /// the ModuleHeader line (Ui.Subtitle's 28 line box) + the card gap + the weekday band + one gutter + the week rows
+    /// and their gutters. 4/5/6 weeks ⇒ 200/236/272.
+    /// <para>It exists because <c>RepeatLayout.GridFit</c> takes a row-height ESTIMATE, and the old guess
+    /// (<c>RailAlbum + Thumb64 + PageWide</c>) was ~120 DIP short of a real 6-week card — which is what visibly cut the
+    /// bottom week row off every card in the overview. Derived from the same consts the card lays out with, so the two
+    /// cannot drift.</para></summary>
+    static float MonthCardHeight(int weeks)
+        => CalTitleH + Spacing.S + CalHeaderH + CalGap + weeks * (CalCellH + CalGap) - CalGap;
 
     sealed class CalendarOverviewSurface : Component
     {
@@ -549,13 +900,15 @@ sealed class RecentsPage : Component
         {
             _ = _page._epoch.Value;
             DateOnly selected = _page._calendarDay.Value;
-            var calendar = _page._calendar;
+            var calendar = _page._shape.Calendar;
             Element months = ItemsView.Create(
                 calendar.Months.Length,
                 i => Embed.Comp(() => new CalendarMonthCard(_page, i)) with
                 { Key = "recents-month:" + calendar.Months[i].Year + ":" + calendar.Months[i].Month },
-                RepeatLayout.GridFit(WaveeSize.RailAlbum, Spacing.PageWide,
-                    WaveeSize.RailAlbum + WaveeSize.Thumb64 + Spacing.PageWide),
+                // The card's OWN width as the min cell width, and the TALLEST month's exact height as the row estimate:
+                // a grid sizes every row from one estimate, so seeding it from a 4-week month clips the 6-week cards
+                // until they measure. Over-estimating corrects downward invisibly; under-estimating is the visible bug.
+                RepeatLayout.GridFit(CalGridW, Spacing.PageWide, MonthCardHeight(RecentsView.MaxWeeks(calendar))),
                 new ListOptions
                 {
                     SelectionMode = ItemsSelectionMode.None,
@@ -573,19 +926,35 @@ sealed class RecentsPage : Component
             return new BoxEl
             {
                 Direction = 1, Grow = 1f, Shrink = 1f, MinWidth = 0f, MinHeight = 0f, Gap = Spacing.L,
+                // No dock reserve here either: the shell clips the content region above the docked player bar
+                // (WaveeShell), so the calendar grid already ends at the bar's top edge like every other surface.
+                Padding = default,
                 OnPointerExit = _page.ResetCalendarDay,
                 Children =
                 [
+                    // ONE band, not a three-line stack: the day + its readout are one reading (a label over its own
+                    // sentence), and the legend is a KEY to the grid below — it belongs beside them, not under them.
+                    // Two 16-DIP caption lines and the swatch row on one line costs the grid ~40 DIP less chrome.
                     new BoxEl
                     {
-                        Direction = 1, Shrink = 0f, Gap = Spacing.XXS,
+                        Direction = 0, Shrink = 0f, MinWidth = 0f, AlignItems = FlexAlign.Center, Gap = Spacing.M,
                         Padding = new Edges4(Spacing.S, Spacing.S, Spacing.S, 0f),
                         Children =
                         [
-                            Caption(selected.ToString("dddd d MMMM", _page._culture)) with
-                            { Weight = 600, Color = Tok.TextPrimary },
-                            Caption(_page.CalendarReadout(selected)) with
-                            { Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                            new BoxEl
+                            {
+                                // Grow + MinWidth 0: the readout is the only line here that can be long (it carries a
+                                // "top: <title>" clause), so it — never the legend — is what gives width back.
+                                Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Gap = Spacing.XXS,
+                                Children =
+                                [
+                                    Caption(selected.ToString("dddd d MMMM", _page._culture)) with
+                                    { Weight = 600, Color = Tok.TextPrimary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                                    Caption(_page.CalendarReadout(selected)) with
+                                    { Color = Tok.TextSecondary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
+                                ],
+                            },
+                            Legend(_page),
                         ],
                     },
                     months,
@@ -602,8 +971,11 @@ sealed class RecentsPage : Component
 
         public override Element Render()
         {
-            var month = _page._calendar.Months[_monthIndex];
+            var month = _page._shape.Calendar.Months[_monthIndex];
             DateOnly today = DateOnly.FromDateTime(_page._now.ToOffset(_page._now.Offset).DateTime);
+            // The weekday band: 7 cells at the EXACT cell width, so an initial sits over its own column. Rotated by the
+            // culture's own FirstDayOfWeek (a nl-NL grid starts on Monday) — the same rotation DayDensity computes
+            // FirstDayOffset with, so the band and the offset can never disagree about which column is column 0.
             var weekNames = new Element[7];
             var firstDay = _page._culture.DateTimeFormat.FirstDayOfWeek;
             for (int i = 0; i < weekNames.Length; i++)
@@ -611,20 +983,22 @@ sealed class RecentsPage : Component
                 int day = ((int)firstDay + i) % 7;
                 weekNames[i] = new BoxEl
                 {
-                    Grow = 1f, Basis = 0f, MinWidth = 0f, Height = Spacing.XXL,
+                    Width = CalCellW, Height = CalHeaderH, Shrink = 0f,
                     AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
                     Children = [Caption(_page._culture.DateTimeFormat.AbbreviatedDayNames[day]) with
-                    { Color = Tok.TextTertiary, MaxLines = 1 }],
+                    { Color = Tok.TextSecondary, MaxLines = 1 }],
                 };
             }
 
-            var rows = new List<Element>(7)
+            var rows = new List<Element>(1 + month.WeekCount)
             {
-                new BoxEl { Direction = 0, Children = weekNames },
+                new BoxEl { Direction = 0, Gap = CalGap, Children = weekNames },
             };
             DateOnly first = new(month.Year, month.Month, 1);
             DateOnly gridFirst = first.AddDays(-month.FirstDayOffset);
-            for (int week = 0; week < 6; week++)
+            // month.WeekCount, never a fixed 6: a February that starts on the culture's first weekday occupies FOUR
+            // rows, and drawing six left a dead band under the card that read as clipping.
+            for (int week = 0; week < month.WeekCount; week++)
             {
                 var cells = new Element[7];
                 for (int column = 0; column < 7; column++)
@@ -632,29 +1006,47 @@ sealed class RecentsPage : Component
                     DateOnly date = gridFirst.AddDays(week * 7 + column);
                     cells[column] = _page.CalendarCell(date, month, today, _monthIndex);
                 }
-                rows.Add(new BoxEl { Direction = 0, Children = cells });
+                rows.Add(new BoxEl { Direction = 0, Gap = CalGap, Children = cells });
             }
 
             string monthTitle = first.ToString("MMMM", _page._culture);
-            string total = Strings.Recents.PlayCount(month.TotalPlays);
-            string busiest = month.BusiestDay is { } busy
-                ? Strings.Recents.Busiest(busy.ToString("d MMMM", _page._culture), month.BusiestDayPlays)
+            // ONE line, title + subdued fact — the three-line stat block (play count + "Busiest: …") is gone: the grid
+            // IS the busiest-day statement, said in colour, and repeating it in prose under every card was the clutter.
+            string meta = month.TotalPlays > 0
+                ? Strings.Recents.PlayCount(month.TotalPlays)
+                    + (month.IsCurrentMonth ? " · " + Loc.Get(Strings.Recents.SoFar) : "")
                 : Loc.Get(Strings.Recents.NothingPlayed);
-            if (month.IsCurrentMonth) total += " · " + Loc.Get(Strings.Recents.SoFar);
             return new BoxEl
             {
-                Direction = 1, MinWidth = WaveeSize.RailAlbum, Gap = Spacing.S,
+                Direction = 1, Width = CalGridW, Gap = Spacing.S,
                 OnPointerExit = _page.ResetCalendarDay,
                 Children =
                 [
-                    WaveeType.ModuleHeader(monthTitle) with
+                    // Deliberately NOT WaveeType.ModuleHeader(title, meta) — that alias is a SpanTextEl, whose Color is
+                    // a plain ColorF with no BrushTransitionMs, so it cannot carry the W2.9 accent BIND below. Two nodes
+                    // on one row instead, centered rather than bottom-aligned (the engine has no FlexAlign.Baseline —
+                    // see WaveeType.ModuleHeader(string,string)'s remarks on why bottom-aligning reads as a mistake).
+                    new BoxEl
                     {
-                        Color = month.IsCurrentMonth ? WaveeAccent.Decor : Tok.TextPrimary,
-                        MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                        Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.S, MinWidth = 0f,
+                        Children =
+                        [
+                            WaveeType.ModuleHeader(monthTitle) with
+                            {
+                                // W2.9: Prop-bound so a section crossing while the overview happens to be open glides
+                                // this ink rather than requiring CalendarMonthCard itself to re-render.
+                                Color = month.IsCurrentMonth ? Prop.Of(() => _page._accent.Value.Ink) : Tok.TextPrimary,
+                                BrushTransitionMs = RecentsPage.AccentTransitionMs,
+                                MaxLines = 1, Trim = TextTrim.CharacterEllipsis, Shrink = 0f,
+                            },
+                            Caption(meta) with
+                            {
+                                Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                                Grow = 1f, Basis = 0f, MinWidth = 0f,
+                            },
+                        ],
                     },
-                    Caption(total) with { Color = Tok.TextTertiary, MaxLines = 1 },
-                    Caption(busiest) with { Color = Tok.TextTertiary, MaxLines = 1, Trim = TextTrim.CharacterEllipsis },
-                    new BoxEl { Direction = 1, Gap = Spacing.XS, Children = rows.ToArray() },
+                    new BoxEl { Direction = 1, Gap = CalGap, Children = rows.ToArray() },
                 ],
             };
         }
@@ -662,21 +1054,30 @@ sealed class RecentsPage : Component
 
     RecentsCalendarDay? CalendarDay(DateOnly date)
     {
+        var s = _shape;
         int monthIndex = MonthFor(date);
-        if ((uint)monthIndex >= (uint)_calendar.Months.Length) return null;
-        var month = _calendar.Months[monthIndex];
+        if ((uint)monthIndex >= (uint)s.Calendar.Months.Length) return null;
+        var month = s.Calendar.Months[monthIndex];
         int day = date.Day - 1;
         return (uint)day < (uint)month.Days.Length ? month.Days[day] : null;
     }
 
     string CalendarReadout(DateOnly date)
     {
+        var s = _shape;
         var day = CalendarDay(date);
         int plays = day?.PlayCount ?? 0;
-        string readout = Strings.Recents.PlayCount(plays);
-        if (day?.TopItem is { } top && (uint)top.OriginalRowIndex < (uint)_rows.Length
-            && FactsFor(_rows[top.OriginalRowIndex]).Title is { Length: > 0 } title)
+        // A quiet day says so in words. "0 plays" is a plural template doing arithmetic at the reader — the app
+        // already owns the sentence for exactly this state, and the month card's meta line uses the same one.
+        string readout = plays > 0 ? Strings.Recents.PlayCount(plays) : Loc.Get(Strings.Recents.NothingPlayed);
+        if (day?.TopItem is { } top && (uint)top.OriginalRowIndex < (uint)s.Rows.Length
+            && FactsFor(s.Rows[top.OriginalRowIndex]).Title is { Length: > 0 } title)
             readout += " · " + Strings.Recents.Mostly(title);
+        // W2.7: the ONE place this readout is built — the calendar cell tooltip and the sticky live readout both call
+        // through here, so a jumpable day (the flat list actually has a header for it) states the affordance in both
+        // without a second call site to keep in sync. Not jumpable ⇒ no dead "click here" promise.
+        if (HeaderFlatFor(date) >= 0)
+            readout += " · " + Strings.Recents.JumpToDay(date.ToString("d MMM", _culture));
         return readout;
     }
 
@@ -686,48 +1087,82 @@ sealed class RecentsPage : Component
     void ResetCalendarDay()
         => _calendarDay.Value = DateOnly.FromDateTime(_now.ToOffset(_now.Offset).DateTime);
 
-    static ColorF DensityFill(int level)
+    /// <summary>W2.9: an INSTANCE method now — the ramp's hue is this page's dynamic accent (<see cref="_accent"/>'s
+    /// Ink, substituting for the old fixed <see cref="WaveeAccent.Decor"/>), the alpha formula unchanged. Prop-bound
+    /// so the whole heatmap glides colour on a section crossing without any cell re-rendering.</summary>
+    Prop<ColorF> DensityFill(int level)
     {
         if (level <= 0) return ColorF.Transparent;
-        ColorF accent = WaveeAccent.Decor;
         float t = Math.Clamp(level, 1, 5) / 5f;
-        float alpha = Tok.AccentSubtle.A + (accent.A - Tok.AccentSubtle.A) * t;
-        return accent with { A = alpha };
+        return Prop.Of(() =>
+        {
+            ColorF accent = _accent.Value.Ink;
+            float alpha = Tok.AccentSubtle.A + (accent.A - Tok.AccentSubtle.A) * t;
+            return accent with { A = alpha };
+        });
+    }
+
+    /// <summary>W2.5: the "Quieter → Busier" key for the heatmap's 5-level ramp — five swatches at the exact
+    /// <see cref="DensityFill"/> levels the calendar cells themselves paint, so the legend can never drift from what
+    /// it explains.</summary>
+    static Element Legend(RecentsPage page)
+    {
+        var swatches = new Element[5];
+        for (int level = 1; level <= 5; level++)
+            swatches[level - 1] = new BoxEl
+            {
+                Width = 12f, Height = 12f, Shrink = 0f, Corners = Radii.ControlAll, Fill = page.DensityFill(level),
+                BrushTransitionMs = AccentTransitionMs,
+            };
+        var kids = new List<Element>(7)
+        {
+            Caption(Loc.Get(Strings.Recents.Legend.Quieter)) with { Color = Tok.TextTertiary, MaxLines = 1, Shrink = 0f },
+        };
+        kids.AddRange(swatches);
+        kids.Add(Caption(Loc.Get(Strings.Recents.Legend.Busier)) with { Color = Tok.TextTertiary, MaxLines = 1, Shrink = 0f });
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Center, Gap = Spacing.XS, Shrink = 0f,
+            Children = kids.ToArray(),
+        };
     }
 
     Element CalendarCell(DateOnly date, RecentsCalendarMonth month, DateOnly today, int monthIndex)
     {
-        bool inMonth = date.Year == month.Year && date.Month == month.Month;
-        var day = inMonth ? CalendarDay(date) : null;
-        bool isToday = inMonth && date == today;
-        bool hasRows = inMonth && HeaderFlatFor(date) >= 0;
+        // A lead/trail day belongs to the NEIGHBOURING month's card, which states it there with its own heat. Drawing
+        // it here as a dimmed numeral put the same day on screen twice with two different densities, and gave it a
+        // tooltip that read the other card's data. So: a blank spacer that only holds the column open.
+        if (date.Year != month.Year || date.Month != month.Month)
+            return new BoxEl { Width = CalCellW, Height = CalCellH, Shrink = 0f };
+
+        var day = CalendarDay(date);
+        bool isToday = date == today;
+        bool hasRows = HeaderFlatFor(date) >= 0;
+        // ONE today cue: the numeral goes Semibold in the page's dynamic accent ink. The 700 weight (outside the app's
+        // 400/600 type policy), the accent dot, the accent border ring and the accent glow shadow are all deleted —
+        // four simultaneous cues for one day, three of which spent the accent on GEOMETRY the accent-role rules
+        // reserve for Decor (a wash, an ink), and the ring in particular competed with the density fill it sat on.
         var numeral = Body(date.Day.ToString(_culture)) with
         {
-            Weight = (ushort)(isToday ? 700 : 400),
-            Color = !inMonth ? Tok.TextDisabled : isToday ? WaveeAccent.Decor : Tok.TextPrimary,
+            Weight = (ushort)(isToday ? 600 : 400),
+            Color = isToday ? Prop.Of(() => _accent.Value.Ink) : Tok.TextPrimary,
+            BrushTransitionMs = AccentTransitionMs,
             MaxLines = 1,
         };
-        var children = new List<Element>(2) { numeral };
-        if (isToday)
-            children.Add(new BoxEl
-            {
-                Width = Spacing.XS, Height = Spacing.XS, Corners = Radii.FullAll,
-                Fill = WaveeAccent.Decor, AlignSelf = FlexAlign.End,
-            });
         var cell = new BoxEl
         {
-            Grow = 1f, Basis = 0f, MinWidth = 0f, Height = WaveeSize.Thumb40,
-            Direction = 1, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Width = CalCellW, Height = CalCellH, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = Radii.ControlAll,
-            Fill = inMonth ? DensityFill(day?.DensityLevel ?? 0) : Tok.FillSubtleTransparent,
-            BorderWidth = isToday ? Spacing.XXS : 0f,
-            BorderColor = isToday ? WaveeAccent.Decor : ColorF.Transparent,
-            Shadow = isToday ? new ShadowSpec(Spacing.M, 0f, 0f, Tok.AccentSubtle) : null,
+            // W2.9: the heat itself — a Prop-bound Decor wash, so the whole heatmap glides colour on a section
+            // crossing without one cell re-rendering.
+            Fill = DensityFill(day?.DensityLevel ?? 0),
+            BrushTransitionMs = AccentTransitionMs,
             Role = hasRows ? AutomationRole.Button : AutomationRole.None,
             Focusable = hasRows,
             TabStop = hasRows,
             Cursor = hasRows ? CursorId.Hand : CursorId.Arrow,
-            OnHoverMove = inMonth ? _ => _calendarDay.SetIfChanged(date) : null,
+            OnHoverMove = _ => _calendarDay.SetIfChanged(date),
             OnClick = hasRows ? () =>
             {
                 _calendarDay.Value = date;
@@ -737,16 +1172,11 @@ sealed class RecentsPage : Component
             {
                 if (focused) _calendarDay.SetIfChanged(date); else ResetCalendarDay();
             } : null,
-            Children = children.ToArray(),
+            Children = [numeral],
         };
-        if (!inMonth) return cell;
-        // ToolTip.Wrap is layout-transparent on AlignSelf but does not carry Grow; the flex track owns the
-        // 7-column contract so the wrap cannot collapse the cell into a content-sized accent bar.
-        return new BoxEl
-        {
-            Grow = 1f, Basis = 0f, MinWidth = 0f, Height = WaveeSize.Thumb40, Direction = 1,
-            Children = [ToolTip.Wrap(cell, CalendarTooltip(date))],
-        };
+        // Straight through: the cell carries its own fixed 38×32 now, so ToolTip.Wrap has no flex contract left to
+        // drop and the extra Grow-carrying box the stretchy cell needed is dead weight.
+        return ToolTip.Wrap(cell, CalendarTooltip(date));
     }
 
     sealed class RecentsListSurface : Component
@@ -762,10 +1192,9 @@ sealed class RecentsPage : Component
 
         public override Element Render()
         {
-            var layout = UseMemo(
-                () => new GroupedListVirtualLayout(_page._sections.HeaderIndices, DateHeaderHeight, RowHeight),
-                DepKey.From(_shapeEpoch));
-            _page._groupedLayout = layout;
+            // W1.1: the layout lives ON the Shape now (built/reused in Recut) — no per-mount UseMemo needed, and no
+            // separate assignment to keep it in sync with RecentsRail: both read the SAME _page._shape.Layout.
+            var layout = _page._shape.Layout;
             var view = UseComputed(() => new RowsView(_page._epoch.Value, _page._vc.Version.Value, _page._vc));
             var items = UseMemo(() => BoundItems.Project(
                 view,
@@ -798,13 +1227,19 @@ sealed class RecentsPage : Component
                     VerticalScrollController = _page._scrollController,
                     SuppressScrollBar = true,
                     OnScrollGeometryChanged = (_page.ProjectSticky, _page.UpdateSticky),
+                    // The app's canonical pinned-chrome offset model (DetailTracks' vertical arm): the recyclable rows
+                    // are band-clipped at exactly the inset the sticky overlay occupies, feathered by the same 24-DIP
+                    // StickyFadeBand, so a row scrolls UNDER the band instead of showing through a translucent plate.
+                    // Static values suffice here — unlike DetailTracks there is no collapsing hero, so the pinned band
+                    // is always exactly one DateHeaderHeight tall.
+                    ItemClipTopInset = DateHeaderHeight,
+                    ItemClipTopFadeBand = Wavee.Features.Detail.DetailVerticalLayout.StickyFadeBand,
                 },
                 // The engine's own cold-realize stagger: bounded to the REALIZED window by construction, which is the
                 // only kind of entrance a 1,708-row list may have.
                 Entrance = new EntranceOptions { StaggerColdRealize = true },
                 // The point of the page: the realized window moved → hydrate what it still misses.
                 OnVisibleRange = _page.OnVisibleRange,
-                KeyOf = _page.FlatKey,
             }) with { Key = "recents-list:" + (_token ?? "all") + ":" + _shapeEpoch };
 
             Element overlay = Embed.Comp(() => new StickyDayHeader(_page)) with
@@ -818,52 +1253,61 @@ sealed class RecentsPage : Component
         }
     }
 
+    /// <summary>The recycle-pool id per row KIND — a group card's slot must never rebind into another kind's shape.</summary>
     int ContentTypeOf(int index)
     {
-        var sections = _sections;
+        var s = _shape;
+        var sections = s.Sections;
         if ((uint)index >= (uint)sections.Items.Length) return 0;
         var flat = sections.Items[index];
         if (flat.Kind == RecentsFlatItemKind.DateHeader) return 0;
         int rowIndex = flat.OriginalRowIndex;
-        return (uint)rowIndex < (uint)_rows.Length ? 1 + (int)_rows[rowIndex].Kind : 1;
+        return (uint)rowIndex < (uint)s.Rows.Length ? 1 + (int)s.Rows[rowIndex].Kind : 1;
     }
 
     // ── rows ──────────────────────────────────────────────────────────────────────────────────────────────────────────
     /// <summary>A recents row is a card ONE realized slot renders. Its own component so the slot re-renders on its own
     /// item subscription (an index rebind, or a hydration epoch) without the page re-rendering.</summary>
-    string FlatKey(int index)
-    {
-        var sections = _sections;
-        if ((uint)index >= (uint)sections.Items.Length) return "recents:missing:" + index;
-        var item = sections.Items[index];
-        if (item.Kind == RecentsFlatItemKind.DateHeader) return "recents:day:" + (uint)item.DayIndex;
-        int rowIndex = item.OriginalRowIndex;
-        return (uint)rowIndex < (uint)_rows.Length ? "recents:item:" + _rows[rowIndex].ItemId : "recents:missing:" + index;
-    }
-
     void InvokeFlat(RecentsFlatItem item)
     {
         if (item.Kind != RecentsFlatItemKind.Row) return;
+        var s = _shape;
         int rowIndex = item.OriginalRowIndex;
-        if ((uint)rowIndex >= (uint)_rows.Length) return;
-        var row = _rows[rowIndex];
-        if (CanExpand(row)) ToggleExpanded(row);
+        if ((uint)rowIndex >= (uint)s.Rows.Length) return;
+        var row = s.Rows[rowIndex];
+        if (CanExpand(row)) ToggleExpanded(row, rowIndex);
         else Open(row);
     }
 
     string TextFor(RecentsFlatItem item)
     {
+        var s = _shape;
         if (item.Kind == RecentsFlatItemKind.DateHeader)
-            return (uint)item.DayIndex < (uint)_sections.HeaderLabels.Length ? _sections.HeaderLabels[item.DayIndex] : "";
+            return (uint)item.DayIndex < (uint)s.Sections.HeaderLabels.Length ? s.Sections.HeaderLabels[item.DayIndex] : "";
+        if (item.Kind != RecentsFlatItemKind.Row) return "";
         int rowIndex = item.OriginalRowIndex;
-        return (uint)rowIndex < (uint)_rows.Length ? FactsFor(_rows[rowIndex]).Title ?? "" : "";
+        return (uint)rowIndex < (uint)s.Rows.Length ? FactsFor(s.Rows[rowIndex]).Title ?? "" : "";
     }
 
+    /// <summary>The scroll-geometry change key for <see cref="UpdateSticky"/>'s cheap gate — the action only fires
+    /// when this projected value actually changes. W1.4c widens it to also carry the layout's measured-extent version,
+    /// so a drawer-driven extent correction bumps this key on the SAME scroll-geometry callback that already fires on
+    /// every meaningful scroll frame (observers run pre-publish every frame), instead of needing a second observer.
+    /// <para>Bit layout (documented for review — nothing downstream ever decodes this value, only compares it for
+    /// equality): bits 63..24 (40 bits) = sticky header's flat index + 1 (0 encodes "no sticky header"); bits 23..8
+    /// (16 bits) = the low 16 bits of <see cref="GroupedListVirtualLayout.MeasuredVersion"/> (a monotone counter — the
+    /// truncation only matters if 65,536 corrections land between two frames, and equality is all this key needs);
+    /// bits 7..0 (8 bits) = the quantized push (<see cref="Spacing.XXS"/> units), offset by 128 so it packs as an
+    /// unsigned byte — push is always ≤ 0 and bounded in magnitude by <see cref="DateHeaderHeight"/>.</para></summary>
     long ProjectSticky(ScrollGeometry geometry)
     {
         StickyMetrics(geometry, out int header, out float push);
-        int quantized = (int)MathF.Round(push / Spacing.XXS);
-        return ((long)(header + 1) << 32) | (uint)quantized;
+        int measured = _shape.Layout.MeasuredVersion & 0xFFFF;
+        int quantizedPush = (int)MathF.Round(push / Spacing.XXS);
+        long headerPart = (long)(header + 1) << 24;
+        long measuredPart = (long)(uint)measured << 8;
+        long pushPart = (uint)(byte)Math.Clamp(quantizedPush + 128, 0, 255);
+        return headerPart | measuredPart | pushPart;
     }
 
     void UpdateSticky(ScrollGeometry geometry)
@@ -872,7 +1316,33 @@ sealed class RecentsPage : Component
         float quantized = MathF.Round(push / Spacing.XXS) * Spacing.XXS;
         if (_stickyHeader.Peek() != header) _stickyHeader.Value = header;
         if (!_stickyPush.Peek().Equals(quantized)) _stickyPush.Value = quantized;
+        _railMeasuredVersion.SetIfChanged(_shape.Layout.MeasuredVersion);
+
+        // W2.9: the dynamic accent (and the wash WashCard now shares a source row with) is quantized to the DAY the
+        // sticky header belongs to — never the more volatile flat header index itself, so a drawer-driven extent
+        // correction that shifts `header` within the SAME day cannot reshuffle it. One coalesced post per turn, the
+        // same arm-then-post idiom Pump uses below: the LATEST day is recorded into a plain field immediately, and
+        // the posted continuation re-reads that field fresh (never a value captured at arm time) — so several day
+        // changes reported before the post drains still resolve to exactly one commit: the final one.
+        var sections = _shape.Sections;
+        int day = (uint)header < (uint)sections.Items.Length ? sections.Items[header].DayIndex : -1;
+        _pendingAccentDay = day;
+        if (_accentDay.Peek() != day && !_accentArmed)
+        {
+            _accentArmed = true;
+            _post(_resolveAccentDay);
+        }
         ProbeStickyAlignment(geometry, header);
+    }
+
+    /// <summary>The coalesced continuation <see cref="UpdateSticky"/> arms — reads <see cref="_pendingAccentDay"/>
+    /// FRESH (never the day captured when it armed) and commits it via <c>SetIfChanged</c>, so a scroll burst that
+    /// crossed several days before this drained still moves the accent exactly once, to the day it actually settled
+    /// on.</summary>
+    void ResolveAccentDay()
+    {
+        _accentArmed = false;
+        _accentDay.SetIfChanged(_pendingAccentDay);
     }
 
     /// <summary>Issue 2 DEBUG probe: Today-over-July is not a grouping bug if the same PlayedAtMs feeds both
@@ -881,10 +1351,11 @@ sealed class RecentsPage : Component
     [Conditional("DEBUG")]
     void ProbeStickyAlignment(ScrollGeometry geometry, int stickyFlat)
     {
-        var layout = _groupedLayout;
-        var sections = _sections;
-        var rows = _rows;
-        if (layout is null || sections.Items.Length == 0) return;
+        var s = _shape;
+        var layout = s.Layout;
+        var sections = s.Sections;
+        var rows = s.Rows;
+        if (sections.Items.Length == 0) return;
         TimeSpan offset = _now.Offset;
         ProbeFlatDate(sections, rows, stickyFlat, offset, "sticky");
         int at = layout.IndexAt(geometry.OffsetY, 0f);
@@ -924,9 +1395,10 @@ sealed class RecentsPage : Component
 
     void StickyMetrics(ScrollGeometry geometry, out int header, out float push)
     {
-        var layout = _groupedLayout;
-        var sections = _sections;
-        if (layout is null || sections.HeaderIndices.Length == 0)
+        var s = _shape;
+        var layout = s.Layout;
+        var sections = s.Sections;
+        if (sections.HeaderIndices.Length == 0)
         {
             header = -1; push = 0f; return;
         }
@@ -947,36 +1419,44 @@ sealed class RecentsPage : Component
 
     void InvokeDay(int dayIndex)
     {
-        if ((uint)dayIndex < (uint)_sections.HeaderDates.Length)
-            DateHeaderInvoked?.Invoke(_sections.HeaderDates[dayIndex]);
+        var s = _shape;
+        if ((uint)dayIndex < (uint)s.Sections.HeaderDates.Length)
+            DateHeaderInvoked?.Invoke(s.Sections.HeaderDates[dayIndex]);
     }
 
-    int CountForDay(int dayIndex)
-    {
-        var headers = _sections.HeaderIndices;
-        if ((uint)dayIndex >= (uint)headers.Length) return 0;
-        int start = headers[dayIndex];
-        int end = dayIndex + 1 < headers.Length ? headers[dayIndex + 1] : _sections.Items.Length;
-        return Math.Max(0, end - start - 1);
-    }
+    Element DayHeader(int dayIndex, bool overlay) => DayHeader(_shape, dayIndex, overlay);
 
-    Element DayHeader(int dayIndex, bool overlay)
+    Element DayHeader(Shape s, int dayIndex, bool overlay)
     {
-        string label = (uint)dayIndex < (uint)_sections.HeaderLabels.Length ? _sections.HeaderLabels[dayIndex] : "";
-        int n = CountForDay(dayIndex);
+        string label = (uint)dayIndex < (uint)s.Sections.HeaderLabels.Length ? s.Sections.HeaderLabels[dayIndex] : "";
+        // The per-day count is a PURE rule (it has to exclude the trailing dock spacer from the last day) and lives in
+        // RecentsView beside the projection that emits that spacer, read here off the SAME shape snapshot.
+        int n = RecentsView.CountForDay(s.Sections, dayIndex);
         return new BoxEl
         {
             Direction = 0, Height = DateHeaderHeight, Grow = overlay ? 1f : 0f, MinWidth = 0f,
             AlignItems = FlexAlign.Center, Gap = Spacing.M,
             Padding = new Edges4(Spacing.S, 0f, Spacing.S, 0f),
             Fill = overlay ? Tok.FillLayerDefault : ColorF.Transparent,
-            Role = AutomationRole.Button, Focusable = true,
+            // The PINNED copy is a duplicate of an inline header that is still in the tree — one day, two tab stops and
+            // two announcements. The inline arm keeps the semantics; the overlay keeps only the click affordance (it is
+            // the same target under the pointer), so a11y sees exactly one zoom-out control per day.
+            Role = overlay ? AutomationRole.None : AutomationRole.Button,
+            Focusable = !overlay, Cursor = CursorId.Hand,
             OnClick = () => InvokeDay(dayIndex),
             Children =
             [
+                // W2.6/W2.9: the header IS the semantic zoom-out affordance — the hover-accent ink says so without a
+                // second re-render for the HOVER transition itself (TextEl's own hover ramp is compositor-only). The
+                // COLOUR it eases to is now this page's dynamic accent rather than the fixed WaveeAccent.Decor;
+                // HoverColor is a plain (non-bindable) ColorF, so — unlike Fill/BorderColor above — this DOES read
+                // (and subscribe to) _accent directly: the realized date-header slot re-renders on a section
+                // crossing, same as it already does for _stickyHeader/_epoch, so the cost is bounded to the small
+                // realized window rather than the whole list.
                 WaveeType.ModuleHeader(label) with
                 {
                     Shrink = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
+                    HoverColor = _accent.Value.Ink, BrushTransitionMs = WaveeMotion.Faster,
                 },
                 new BoxEl
                 {
@@ -998,9 +1478,13 @@ sealed class RecentsPage : Component
 
         public override Element Render()
         {
+            // W1.6: a midnight relabel bumps _epoch (not _shapeEpoch — the grouping itself didn't change), so the
+            // pinned overlay must subscribe here too or it would keep showing yesterday's day word after rollover.
+            _ = _page._epoch.Value;
             int flatIndex = _page._stickyHeader.Value;
-            int day = (uint)flatIndex < (uint)_page._sections.Items.Length
-                ? _page._sections.Items[flatIndex].DayIndex : -1;
+            var sections = _page._shape.Sections;
+            int day = (uint)flatIndex < (uint)sections.Items.Length
+                ? sections.Items[flatIndex].DayIndex : -1;
             return new BoxEl
             {
                 Direction = 0, Grow = 1f, MinWidth = 0f,
@@ -1018,7 +1502,9 @@ sealed class RecentsPage : Component
         {
             // WheelEventArgs.Delta is the same signed DIP the viewport path consumes (InputDispatcher.ScrollBy
             // does offset + delta; ItemsView.ControllerScrollBy does OffsetY + request.Delta). Do not negate.
-            _page._scrollController.ScrollBy(e.Delta);
+            // Animated: rides the engine's WheelAnimating chase (with target accumulation) like wheel over the list
+            // body — a hard snap here felt alien beside it and arrested any in-flight fling.
+            _page._scrollController.ScrollBy(e.Delta, animate: true);
             e.Handled = true;
         }
     }
@@ -1036,51 +1522,48 @@ sealed class RecentsPage : Component
             _ = _scope.Index.Value;
             if (flat.Kind == RecentsFlatItemKind.DateHeader) return _page.DayHeader(flat.DayIndex, overlay: false);
             int rowIndex = flat.OriginalRowIndex;
-            if ((uint)rowIndex >= (uint)_page._rows.Length) return new BoxEl { Height = RowHeight };
-            var row = _page._rows[rowIndex];
-            return Embed.Comp(() => new HydratedRecentsRow(_page, row, rowIndex)) with
-            { Key = "recents-row:" + row.ItemId };
+            var s = _page._shape;
+            if ((uint)rowIndex >= (uint)s.Rows.Length) return new BoxEl { Height = RowHeight };
+            var row = s.Rows[rowIndex];
+            // RE-PUSHED PROPS, not ctor args, and NO Key. A recycled slot rebinds by writing one index signal — the
+            // instance is deliberately REUSED, so a factory closure would freeze the row it first mounted with and the
+            // slot would render that row forever (the "Tue/Wed under a Yesterday header" bug). And a Key here is inert:
+            // a component's single root child is paired by ElementTypeId alone (Reconciler.ReconcileSingleChild), which
+            // is exactly what the ReuseGuard.KeyIgnoredInSingleChildSlot tripwire documents. Props are the mechanism the
+            // component-props contract reserves for "same instance, changed data".
+            return Embed.Comp(new HydratedRecentsRow.Props(_page, row, rowIndex), () => new HydratedRecentsRow());
         }
     }
 
     sealed class HydratedRecentsRow : Component
     {
-        readonly RecentsPage _page;
-        readonly RecentsRow _initialRow;
-        readonly int _initialRowIndex;
-
-        public HydratedRecentsRow(RecentsPage page, RecentsRow initialRow, int initialRowIndex)
-        {
-            _page = page; _initialRow = initialRow; _initialRowIndex = initialRowIndex;
-        }
+        /// <summary>The live row this slot currently stands for. An immutable record so an unchanged re-push is
+        /// equality-coalesced (no child re-render) while a REBIND — always a changed <see cref="RowIndex"/> — pushes
+        /// through immediately.</summary>
+        internal sealed record Props(RecentsPage Page, RecentsRow Row, int RowIndex);
 
         public override Element Render()
         {
+            var p = UseProps<Props>();
+            var page = p.Page;
+            RecentsRow row = p.Row;
             var facts = UseLoadable<RowFacts>();
-            int epoch = _page._epoch.Value;
-            RecentsRow row = LiveRow();
-            bool expanded = string.Equals(_page._expandedRow.Value, row.ItemId, StringComparison.Ordinal);
+            int epoch = page._epoch.Value;
+            bool expanded = string.Equals(page._expandedRow.Value, row.ItemId, StringComparison.Ordinal);
+            // Keyed on (epoch, RowIndex): a hydration landing re-resolves the same row, and a RECYCLE (a new index into
+            // the same reused instance) re-resolves the new one — including SetPending, so a recycled slot never shows
+            // the previous row's facts while the new one is still a pointer. A same-index item change can only come
+            // from a snapshot replace, which remounts the whole list via its "recents-list:…:" + _shapeEpoch key.
             UseEffect(() =>
             {
-                var resolved = _page.FactsFor(LiveRow());
+                var resolved = page.FactsFor(row);
                 if (resolved.Title is { Length: > 0 }) facts.SetReady(resolved);
                 else facts.SetPending(default);
-            }, DepKey.From(epoch));
+            }, DepKey.From(epoch, p.RowIndex));
             return Skel.Region(facts,
-                content: resolved => _page.RowContent(LiveRow(), resolved, _initialRowIndex, expanded),
+                content: resolved => page.RowContent(row, resolved, p.RowIndex, expanded),
                 reveal: SkelReveal.FadeOnly,
                 smoothResize: false);
-        }
-
-        RecentsRow LiveRow()
-        {
-            if ((uint)_initialRowIndex < (uint)_page._rows.Length)
-            {
-                RecentsRow live = _page._rows[_initialRowIndex];
-                if (string.Equals(live.ItemId, _initialRow.ItemId, StringComparison.Ordinal))
-                    return live;
-            }
-            return _initialRow;
         }
     }
 
@@ -1101,7 +1584,7 @@ sealed class RecentsPage : Component
         return kind switch
         {
             RecentsEntityKind.Playlist => store.GetPlaylist(uri) is { } p
-                ? new RowFacts(NullIfEmpty(p.Name), NullIfEmpty(p.OwnerName), p.Cover) : default,
+                ? new RowFacts(NullIfEmpty(p.Name), OwnerSubtitleFor(p), p.Cover) : default,
             RecentsEntityKind.Album => store.GetAlbum(uri) is { } a
                 ? new RowFacts(NullIfEmpty(a.Name), ArtistNames(a.Artists), a.Cover) : default,
             RecentsEntityKind.Artist => store.GetArtist(uri) is { } ar
@@ -1114,6 +1597,18 @@ sealed class RecentsPage : Component
                 ? new RowFacts(NullIfEmpty(t.Title), ArtistNames(t.Artists), t.Image) : default,
             _ => default,
         };
+    }
+
+    /// <summary>W2.8 (C1): never a raw base62 owner id. Resolves the SAME way <see cref="StoreLibrarySource.OverlayOwner"/>
+    /// already does for the Library surface — <c>Owner.Id</c> first, the store's own <c>OwnerName</c> as the raw-id
+    /// fallback — then hands the store's own name, the raw id, and whatever <see cref="Services.UserProfiles"/> has
+    /// already resolved to <see cref="RecentsView.OwnerSubtitle"/>, which owns the actual decision (resolved name wins;
+    /// the store name shows only when it is more than the id parroted back; otherwise null, never the bare id).</summary>
+    string? OwnerSubtitleFor(Playlist p)
+    {
+        string? rawOwnerId = p.Owner?.Id is { Length: > 0 } id ? id : NullIfEmpty(p.OwnerName);
+        string? resolvedName = rawOwnerId is { Length: > 0 } raw ? _svc?.UserProfiles.Get(raw)?.Name : null;
+        return RecentsView.OwnerSubtitle(NullIfEmpty(p.OwnerName), rawOwnerId, resolvedName);
     }
 
     static readonly LayoutTransition DrawerReveal = new(
@@ -1161,7 +1656,7 @@ sealed class RecentsPage : Component
 
         bool canExpand = CanExpand(row);
         Element chevron = canExpand
-            ? TrackRow.ExpandChevron(expanded, () => ToggleExpanded(row)) with { Transition = MotionTok.DisclosureChevron }
+            ? TrackRow.ExpandChevron(expanded, () => ToggleExpanded(row, displayIndex)) with { Transition = MotionTok.DisclosureChevron }
             : new BoxEl { Width = Spacing.XXL, Height = Spacing.XXL, Shrink = 0f };
         var trailingKids = new List<Element>(2);
         if (when.Length > 0)
@@ -1176,7 +1671,7 @@ sealed class RecentsPage : Component
         Element card = MediaCard.Row(
             facts.Cover, facts.Title!, savedLine is null ? sub : "", artUri,
             circular: kind == RecentsEntityKind.Artist,
-            onClick: canExpand ? () => ToggleExpanded(row) : () => Open(row),
+            onClick: canExpand ? () => ToggleExpanded(row, displayIndex) : () => Open(row),
             onPlay: () => Play(uri),
             typeChip: KindLabel(kind),
             metaContent: savedLine,
@@ -1193,6 +1688,10 @@ sealed class RecentsPage : Component
             // ConnectedAnimation captures nowhere else, so no snapshot is ever taken. See the long note at
             // DetailShell.cs's `MorphKey = null` for the full finding. This stays the source half of the pair, minted
             // through the ONE shared convention (MorphKeys.For) so the two sides cannot drift while it is dormant.
+            //
+            // 2026-08-12 decision: keep it dormant here too — the Zune×Fluent pass explicitly dropped connected
+            // animation rather than wiring a forward capture for it. Follow-up recorded separately: "re-enable
+            // connected flies app-wide" (RecentsPage + DetailShell + host publication).
             morphKey: Morphable(displayIndex) ? MorphKeys.For(DetailKindOf(kind), uri) : null);
         // Prototype rows are flat (transparent rest, hover wash). Card lift physics belong to plated home/search cards.
         Element primary = new BoxEl { Key = "row", Direction = 1, Children = [card] };
@@ -1228,11 +1727,48 @@ sealed class RecentsPage : Component
         return false;
     }
 
-    void ToggleExpanded(RecentsRow row)
+    void ToggleExpanded(RecentsRow row, int originalRowIndex)
     {
-        bool closing = string.Equals(_expandedRow.Peek(), row.ItemId, StringComparison.Ordinal);
-        _expandedRow.Value = closing ? "" : row.ItemId;
-        if (!closing) HydrateChildren(row, RecentsView.BatchCap);
+        // Event callbacks can outlive the shape generation that authored them for one reconcile turn. Resolve the
+        // index against the current atomic Shape and reject a stale identity instead of opening a different row that
+        // happened to inherit that index after a snapshot replacement.
+        var shape = _shape;
+        if ((uint)originalRowIndex >= (uint)shape.Rows.Length) return;
+        var liveRow = shape.Rows[originalRowIndex];
+        if (!string.Equals(liveRow.ItemId, row.ItemId, StringComparison.Ordinal)) return;
+        var rowToFlat = shape.Sections.RowToFlat;
+        if ((uint)originalRowIndex >= (uint)rowToFlat.Length || rowToFlat[originalRowIndex] < 0) return;
+
+        bool closing = string.Equals(_expandedRow.Peek(), liveRow.ItemId, StringComparison.Ordinal);
+        // Normalize the OLD entry before the one signal write. A realized old row will confirm 64 DIP during its exit;
+        // an unrealized/recycled one cannot, so this is the only place that can remove its stale drawer extent.
+        ResetExpandedExtent(shape, _expandedOriginalRow);
+        _expandedOriginalRow = closing ? -1 : originalRowIndex;
+        _expandedRow.Value = closing ? "" : liveRow.ItemId;
+        if (!closing) HydrateChildren(liveRow, RecentsView.BatchCap);
+    }
+
+    void CollapseExpanded(Shape shape)
+    {
+        ResetExpandedExtent(shape, _expandedOriginalRow);
+        _expandedOriginalRow = -1;
+        if (_expandedRow.Peek().Length > 0) _expandedRow.Value = "";
+    }
+
+    void ResetExpandedExtent(Shape shape, int originalRowIndex)
+    {
+        var rowToFlat = shape.Sections.RowToFlat;
+        if ((uint)originalRowIndex >= (uint)rowToFlat.Length) return;
+        int flat = rowToFlat[originalRowIndex];
+        if ((uint)flat >= (uint)shape.Sections.Items.Length
+            || shape.Sections.Items[flat].Kind != RecentsFlatItemKind.Row) return;
+        // BuildShape primes every table before an interaction can open, but ContentExtent keeps this helper safe for a
+        // future caller that owns a freshly-created Shape too. An off-screen drawer has no realized node to enter
+        // ArrangeVirtualMeasured's normal correction path, so use the controller's atomic measured-extent seam: it
+        // preserves the visible anchor AND rebases any live wheel/touch/programmatic intent into the new coordinates.
+        shape.Layout.ContentExtent(shape.Sections.Items.Length, 0f);
+        if (!_listController.CorrectMeasuredExtent(shape.Layout, flat, RowHeight))
+            shape.Layout.SetMeasured(flat, RowHeight, 0f); // not mounted on this shape: no live viewport needs anchoring
     }
 
     Element Drawer(RecentsRow row)
@@ -1257,7 +1793,12 @@ sealed class RecentsPage : Component
             });
         }
         // Spine: a 1px divider descending from the parent art, children hanging off it (TrackVersionsPanel
-        // connector idiom; proto `.kid-wrap{margin-left:30px;padding-left:26px;border-left}`).
+        // connector idiom; proto `.kid-wrap{margin-left:30px;padding-left:26px;border-left}`). W2.9: a SECTION SPINE
+        // is the one structural-looking element the app's own accent budget explicitly allows to carry accent (see
+        // WaveeAccent's AccentDecor role, "section spines"; the plan's adopted recommendation is literally "spine
+        // may take accent") — unlike the chevron beside it (stays Tok.TextSecondary) or DayHeader's plain divider
+        // rule above it (stays Tok.StrokeDividerDefault, genuine chrome). Prop-bound so it glides with everything
+        // else on a section crossing.
         return new BoxEl
         {
             Key = "drawer:" + row.ItemId,
@@ -1268,7 +1809,8 @@ sealed class RecentsPage : Component
             [
                 new BoxEl
                 {
-                    Width = 1f, Shrink = 0f, Fill = Tok.StrokeDividerDefault, HitTestVisible = false,
+                    Width = 1f, Shrink = 0f, Fill = Prop.Of(() => _accent.Value.Ink),
+                    BrushTransitionMs = AccentTransitionMs, HitTestVisible = false,
                 },
                 new BoxEl
                 {
@@ -1409,7 +1951,7 @@ sealed class RecentsPage : Component
 
     bool Morphable(int rowIndex)
     {
-        var flags = _morphable;
+        var flags = _shape.Morphable;
         return (uint)rowIndex < (uint)flags.Length && flags[rowIndex];
     }
 
@@ -1483,39 +2025,6 @@ sealed class RecentsPage : Component
         _ => HomeCardKind.Playlist,
     };
 
-    // ── chips ─────────────────────────────────────────────────────────────────────────────────────────────────────────
-    string? LabelOf(string? token)
-    {
-        if (token is null) return null;
-        for (int i = 0; i < _chipTokens.Length; i++)
-            if (string.Equals(_chipTokens[i], token, StringComparison.OrdinalIgnoreCase)) return _chipLabels[i];
-        return null;
-    }
-
-    void SelectChip(string? label)
-    {
-        string? token = null;
-        if (label is not null)
-            for (int i = 0; i < _chipLabels.Length; i++)
-                if (string.Equals(_chipLabels[i], label, StringComparison.Ordinal)) { token = _chipTokens[i]; break; }
-        if (string.Equals(token, _chip.Peek(), StringComparison.Ordinal)) return;
-        _chip.Value = token;
-        Recut(token);      // CLIENT-SIDE: re-cut the loaded snapshot. No request carries a filter parameter.
-    }
-
-    /// <summary>The chip's visible label. A real key for each content type the CAPTURE proves this list carries
-    /// (`content_type_music`, `content_type_podcasts` — 1,703 and 5 headers respectively); the wire token itself for
-    /// anything else, because a data-derived name is honest where an invented one is not and a content type the server
-    /// adds tomorrow stays renderable today. No key is minted for a token that has never been observed.</summary>
-    string LabelFor(string token)
-    {
-        if (string.Equals(token, "music", StringComparison.OrdinalIgnoreCase))
-            return Loc.Get(Strings.Recents.Chip.Music);
-        if (string.Equals(token, "podcasts", StringComparison.OrdinalIgnoreCase))
-            return Loc.Get(Strings.Recents.Chip.Podcasts);
-        return RecentsView.ChipLabel(token, _culture);
-    }
-
     // ── snapshot lifecycle ────────────────────────────────────────────────────────────────────────────────────────────
     async Task<RecentsSnapshot> FetchResourceAsync(IRecentsSource source, CancellationToken ct)
     {
@@ -1531,7 +2040,7 @@ sealed class RecentsPage : Component
         {
             try { revision = Convert.FromHexString(hex); } catch (FormatException) { revision = null; }
         }
-        var rows = _rows;
+        var rows = _shape.Rows;
         var fresh = await source.FetchDiffAsync(revision, rows, ct).ConfigureAwait(false);
         ct.ThrowIfCancellationRequested();
         if (fresh is null) return new RecentsSnapshot(_revision, rows);
@@ -1545,29 +2054,35 @@ sealed class RecentsPage : Component
     void Adopt(RecentsSnapshot snapshot)
     {
         var rows = CopyRows(snapshot.Rows);
-        _rows = rows;
-        _morphable = RecentsView.FirstOccurrence(rows);
+        var morphable = RecentsView.FirstOccurrence(rows);
         _revision = snapshot.Revision;
         _hasSnapshot = true;
 
-        var tokens = RecentsView.ContentTypes(rows);
-        _chipTokens = new string[tokens.Count];
-        _chipLabels = new string[tokens.Count];
-        for (int i = 0; i < tokens.Count; i++) { _chipTokens[i] = tokens[i]; _chipLabels[i] = LabelFor(tokens[i]); }
-        // A chip that no longer exists in the new snapshot cannot stay selected.
-        string? token = _chip.Peek();
-        if (token is not null && LabelOf(token) is null) { token = null; _chip.Value = null; }
-
+        // W2.3: the pivot set is now FIXED (All/Music/Podcasts/Artists), so unlike the old wire-derived chip bar there
+        // is no "this token no longer exists" case to guard — every selectable token is always one of the four, and
+        // PivotTabs itself disables whichever ones this snapshot has zero rows for.
         _inflight.Clear();
-        Recut(token);
+        BuildShape(rows, morphable, _chip.Peek());
         _epoch.Value++;
     }
 
     /// <summary>Re-cut the display array for a chip token. The row array is untouched — filtering is a VIEW, so a chip
-    /// switch can never lose hydration or reach the network.</summary>
+    /// switch (or a DST-driven full recut off <see cref="RolloverMidnight"/>) can never lose hydration or reach the
+    /// network.</summary>
     void Recut(string? token)
     {
-        var rows = _rows;
+        var s = _shape;
+        BuildShape(s.Rows, s.Morphable, token);
+    }
+
+    /// <summary>W1.1's single build-and-publish chokepoint — <see cref="Adopt"/> (rows changed) and <see cref="Recut"/>
+    /// (rows unchanged, only the cut/grouping changed) both fund through here so there is exactly ONE place that
+    /// constructs a <see cref="Shape"/>. Ordering matters and is deliberate: build the map/display/sections/calendar →
+    /// reuse-or-build the layout → PRIME its extent table → construct the Shape → publish <see cref="_shape"/> →
+    /// replace the virtual collection's snapshot → reset the per-shape interaction state → bump
+    /// <see cref="_shapeEpoch"/> LAST, once every reader-visible piece of state already agrees.</summary>
+    void BuildShape(RecentsRow[] rows, bool[] morphable, string? token)
+    {
         var map = RecentsView.Filter(rows, token);
         RecentsRow[] display;
         if (token is null)
@@ -1579,15 +2094,72 @@ sealed class RecentsPage : Component
             display = new RecentsRow[map.Length];
             for (int i = 0; i < map.Length; i++) display[i] = rows[map[i]];
         }
-        _display = display;
-        _sections = RecentsView.BuildSections(rows, map, _now, _culture);
-        _calendar = RecentsView.DayDensity(rows, map, _now, _culture);
-        _calendarDay.Value = DateOnly.FromDateTime(_now.LocalDateTime);
-        _vc.ReplaceSnapshot(_sections.Items);
+        var sections = RecentsView.BuildSections(rows, map, _now, _culture);
+        var calendar = RecentsView.DayDensity(rows, map, _now, _culture);
+
+        // W1.2b: reuse the previous Shape's Layout instance — and therefore its measured extent table — only when this
+        // is the SAME row snapshot and the entire flat projection is unchanged. Count+header positions are not enough:
+        // a fresh snapshot can place different row identities at those indices, which would transfer drawer/row
+        // measurements to unrelated content.
+        // KNOWN COHERENCE SEAM (documented, not fixed here): when this gate misses (hydration Adopt, pivot re-cut),
+        // the new layout starts as a pure-estimate table while the restored ABSOLUTE offset was measured against the
+        // old, corrected one — every measured correction is lost and the offset briefly means a different place in
+        // content until the realized window re-corrects. Carrying measured extents across snapshots (re-keying by
+        // row identity) is its own task; the exact per-kind estimates (row 64 == real 64, header 48, spacer 88) keep
+        // the practical drift small for Recents.
+        // _shape always holds a real instance by this point (the constructor seeds it before anything can call
+        // BuildShape), so the reuse check compares against a real previous generation, never a null placeholder.
+        var previous = _shape;
+        // The outgoing projection may hold a drawer height at an unrealized index. Normalize it before deciding whether
+        // the table is safe to reuse; the disclosure itself is reset after the new shape is atomically published.
+        ResetExpandedExtent(previous, _expandedOriginalRow);
+        _expandedOriginalRow = -1;
+        GroupedListVirtualLayout layout =
+            ReferenceEquals(rows, previous.Rows)
+            && sections.Items.AsSpan().SequenceEqual(previous.Sections.Items)
+                ? previous.Layout
+                : new GroupedListVirtualLayout(sections.HeaderIndices, DateHeaderHeight, RowHeight);
+        layout.ContentExtent(sections.Items.Length, 0f);   // prime (no-op when the table already matches this count)
+
+        // PUBLISH ORDER (verified, and the reason the untracked `_shape` field is safe to read beside the tracked `_vc`
+        // snapshot): `_shape` lands FIRST and `_shapeEpoch` LAST, on the UI thread, with nothing between them that can
+        // yield. So any reader woken by `_vc.Version` or `_shapeEpoch` already sees the matching Shape, and a reader
+        // that samples `_shape` alone can at worst be one generation AHEAD — never behind, and never half-updated
+        // (a single reference swap; see the Shape doc comment).
+        _shape = new Shape(rows, display, morphable, sections, calendar, layout, _now.Offset);
+        _vc.ReplaceSnapshot(sections.Items);
         _expandedRow.Value = "";
-        _stickyHeader.Value = -1;
-        _stickyPush.Value = 0f;
+        // Re-resolve the sticky overlay from the live offset — never leave it at -1. ItemClipTopInset clips the
+        // in-list first header, so a blank overlay is a missing "Today" until the user scrolls. A pivot Recut
+        // mid-list keeps the day under the current offset, not a hardcoded Today.
+        float offset = _scrollController.Offset.Peek();
+        float viewport = _scrollController.ViewportLength.Peek();
+        UpdateSticky(new ScrollGeometry(0f, offset, viewport, viewport, 0f, 0f, 0f, 0f, 0));
+        _calendarDay.Value = DateOnly.FromDateTime(_now.LocalDateTime);
         _shapeEpoch.Value++;
+    }
+
+    /// <summary>W1.6 midnight rollover, armed by <see cref="Render"/> via <c>UseTimeout</c> keyed on the local day
+    /// number. A day-word bucket ("Today"/"Yesterday"/a weekday name) is a pure function of TODAY, so every one of
+    /// them goes stale the instant local midnight passes even though the underlying grouping — which rows belong to
+    /// which calendar day — never moved. The common case therefore only needs to relabel in place (an <see cref="_epoch"/>
+    /// bump, not <see cref="_shapeEpoch"/> — nothing keyed on the shape needs to remount). A full <see cref="Recut"/>
+    /// is reserved for the one case relabeling cannot fix: the local UTC offset itself moved (a DST edge, a timezone
+    /// change) since the shape was built, which can shift which calendar day a timestamp near midnight belongs to.</summary>
+    void RolloverMidnight()
+    {
+        var now = DateTimeOffset.Now;
+        _now = now;
+        var shape = _shape;
+        if (shape.BuiltOffset != now.Offset)
+        {
+            Recut(_chip.Peek());
+            return;
+        }
+        var relabeled = RecentsView.Relabel(shape.Sections, now, _culture);
+        _shape = new Shape(shape.Rows, shape.Display, shape.Morphable, relabeled, shape.Calendar, shape.Layout,
+            shape.BuiltOffset);
+        _epoch.Value++;
     }
 
     // ── viewport hydration ────────────────────────────────────────────────────────────────────────────────────────────
@@ -1607,21 +2179,50 @@ sealed class RecentsPage : Component
     {
         _pumpArmed = false;
         if (_storeDirty) { _storeDirty = false; _epoch.Value++; }
+        var s = _shape;
+        // W2.8: owner resolution is a DIFFERENT subsystem from the metadata chokepoint below (Services.UserProfiles,
+        // not Services.Metadata), so it runs on every pump regardless of whether there is anything left to hydrate
+        // through _metadata.
+        CollectUnresolvedOwners(s.Sections.FlatToRow, s.Rows, _rangeFirst, _rangeEnd);
         if (_metadata is not { } metadata || _cts is not { } cts) return;
         _batch.Clear();
-        RecentsView.CollectRange(_rows, _sections.FlatToRow, _rangeFirst, _rangeEnd, Pending, _batch);
-        int hi = Math.Min(_rangeEnd, _sections.FlatToRow.Length);
+        RecentsView.CollectRange(s.Rows, s.Sections.FlatToRow, _rangeFirst, _rangeEnd, Pending, _batch);
+        int hi = Math.Min(_rangeEnd, s.Sections.FlatToRow.Length);
         for (int i = Math.Max(0, _rangeFirst); i < hi && _batch.Count < RecentsView.BatchCap; i++)
         {
-            int rowIndex = _sections.FlatToRow[i];
-            if ((uint)rowIndex >= (uint)_rows.Length || _rows[rowIndex].Reason != RecentsReason.Saved) continue;
-            RecentsView.CollectChildUris(_rows[rowIndex], Pending, _batch,
+            int rowIndex = s.Sections.FlatToRow[i];
+            if ((uint)rowIndex >= (uint)s.Rows.Length || s.Rows[rowIndex].Reason != RecentsReason.Saved) continue;
+            RecentsView.CollectChildUris(s.Rows[rowIndex], Pending, _batch,
                 Math.Min(2, RecentsView.BatchCap - _batch.Count));
         }
         if (_batch.Count == 0) return;
         var uris = _batch.ToArray();
         for (int i = 0; i < uris.Length; i++) _inflight.Add(uris[i]);
         _ = HydrateAsync(metadata, uris, cts.Token);
+    }
+
+    /// <summary>W2.8: the realized window's playlist rows whose owner <see cref="Services.UserProfiles"/> has not
+    /// resolved yet. Mirrors <see cref="StoreLibrarySource.OverlayOwner"/>'s raw-id derivation (<c>Owner.Id</c> first,
+    /// the store's own <c>OwnerName</c> as the fallback) so the id handed to <c>Prefetch</c> is the exact one
+    /// <see cref="OwnerSubtitleFor"/> will later look up with. Reuses <see cref="_ownerBatch"/> across pumps —
+    /// bounded to the realized range, never the whole snapshot.</summary>
+    void CollectUnresolvedOwners(int[] flatToRow, RecentsRow[] rows, int first, int end)
+    {
+        if (_svc is not { } svc || _store is not { } store) return;
+        _ownerBatch.Clear();
+        int hi = Math.Min(end, flatToRow.Length);
+        for (int i = Math.Max(0, first); i < hi; i++)
+        {
+            int rowIndex = flatToRow[i];
+            if ((uint)rowIndex >= (uint)rows.Length) continue;
+            if (RecentsView.HydrationUri(rows[rowIndex]) is not { Length: > 0 } uri
+                || RecentsList.EntityKindOf(uri) != RecentsEntityKind.Playlist) continue;
+            if (store.GetPlaylist(uri) is not { } p) continue;
+            string? raw = p.Owner?.Id is { Length: > 0 } id ? id : NullIfEmpty(p.OwnerName);
+            if (raw is null || svc.UserProfiles.Get(raw) is not null) continue;
+            _ownerBatch.Add(raw);
+        }
+        if (_ownerBatch.Count > 0) svc.UserProfiles.Prefetch(_ownerBatch);
     }
 
     void HydrateChildren(RecentsRow row, int cap)
@@ -1680,7 +2281,7 @@ sealed class RecentsPage : Component
     {
         _post(() =>
         {
-            if (_rows.Length == 0) return;   // nothing realized to re-skin — a parked/empty page ignores the churn
+            if (_shape.Rows.Length == 0) return;   // nothing realized to re-skin — a parked/empty page ignores the churn
             _storeDirty = true;
             if (_pumpArmed) return;
             _pumpArmed = true;
@@ -1688,11 +2289,31 @@ sealed class RecentsPage : Component
         });
     }
 
-    /// <summary>The wash's source card: the most recent row that has actually resolved a cover. Null until one has —
-    /// a wash invented before any artwork landed would be a colour the page does not own.</summary>
+    /// <summary>W2.9 fallback accent: identical to what every consumer painted before this page had a dynamic one
+    /// (<see cref="WaveeAccent.Decor"/> ⇒ <c>Tok.AccentTextPrimary</c> for Ink, <c>Tok.AccentDefault</c> for Fill), so
+    /// a page with no graded artwork yet — or with washes disabled — never regresses.</summary>
+    static PageAccent FallbackAccent() => new(Tok.AccentTextPrimary, Tok.AccentDefault, "");
+
+    /// <summary>W2.9: the wash's source card — now the SAME row selector the dynamic accent grades from
+    /// (<see cref="RecentsView.AccentSourceRow"/>), so the Mica wash and the accent always agree on which row they
+    /// are painting and shift together on a section crossing. Falls back to the original "first resolved cover in
+    /// the top of the list" scan when no sticky header has resolved yet (e.g. before the first scroll) or that row's
+    /// cover has not hydrated — a wash invented before any artwork landed would be a colour the page does not own.</summary>
     HomeCard? WashCard()
     {
-        var rows = _display;
+        var s = _shape;
+        int sourceRow = RecentsView.AccentSourceRow(s.Sections, s.Rows, _stickyHeader.Peek());
+        if ((uint)sourceRow < (uint)s.Rows.Length)
+        {
+            var sourceFacts = FactsFor(s.Rows[sourceRow]);
+            if (sourceFacts.Cover?.Url is { Length: > 0 })
+            {
+                string sourceUri = RecentsView.HydrationUri(s.Rows[sourceRow]) ?? s.Rows[sourceRow].Uri;
+                return new HomeCard(sourceUri, sourceFacts.Title ?? "", sourceFacts.Subtitle, sourceFacts.Cover,
+                    CardKindOf(RecentsList.EntityKindOf(sourceUri)));
+            }
+        }
+        var rows = s.Display;
         int scan = Math.Min(rows.Length, 32);   // the wash is the TOP of the list, not a full-array search per render
         for (int i = 0; i < scan; i++)
         {
@@ -1703,5 +2324,43 @@ sealed class RecentsPage : Component
                 CardKindOf(RecentsList.EntityKindOf(uri)));
         }
         return null;
+    }
+
+    /// <summary>W2.9 resolution leaf, modeled on <see cref="CoverPaletteLeaves"/>'s <c>CoverPageTonePlane</c>/
+    /// <c>CoverShellTintBinder</c>: the ONE node that owns the cover-grading <c>Watch</c> subscription, so a grading
+    /// landing mid-scroll re-renders THIS zero-size node and nothing else — never the page, never a row. Reads the
+    /// day-quantized <see cref="_accentDay"/> (the coalesced trigger <see cref="UpdateSticky"/>/<see cref="ResolveAccentDay"/>
+    /// maintain) to know WHEN to re-derive; re-derives the source row itself via the SAME
+    /// <see cref="RecentsView.AccentSourceRow"/> selector <see cref="WashCard"/> uses (keyed off the live
+    /// <see cref="_stickyHeader"/>, not a value captured at the day change), so the two can never disagree about
+    /// which row they are grading from. Publishes into the page-owned <see cref="_accent"/> signal; every consumer
+    /// reads THAT as a Prop, never this leaf's own Watch.</summary>
+    sealed class RecentsAccentBinder : Component
+    {
+        internal sealed record Props(RecentsPage Page);
+
+        public override Element Render()
+        {
+            var page = UseProps<Props>().Page;
+            _ = AppearancePrefs.Epoch.Value;   // the Settings toggle applies LIVE — same gate as the wash (Render, ~:266)
+            bool disabled = page._svc?.Settings.Get(WaveeSettings.DisableColorWashes) ?? false;
+            _ = page._accentDay.Value;         // subscribe: re-derive once per section crossing, never per row
+            _ = page._epoch.Value;             // a hydration landing may be what makes FactsFor resolve a cover at all
+
+            PageAccent resolved = FallbackAccent();
+            if (!disabled)
+            {
+                var s = page._shape;
+                int row = RecentsView.AccentSourceRow(s.Sections, s.Rows, page._stickyHeader.Peek());
+                if ((uint)row < (uint)s.Rows.Length && page.FactsFor(s.Rows[row]).Cover?.Url is { Length: > 0 } url)
+                {
+                    _ = SpotifyLive.CoverColorPlane.Current.Watch(url).Value;   // the leaf owns THIS subscription
+                    if (Surfaces.ChromeSchemeFor(url) is { } scheme)
+                        resolved = new PageAccent(WaveePalette.ChromeAccent(scheme), WaveePalette.Accent(scheme), url);
+                }
+            }
+            page._accent.SetIfChanged(resolved);
+            return new BoxEl { Width = 0f, Height = 0f, HitTestVisible = false };
+        }
     }
 }

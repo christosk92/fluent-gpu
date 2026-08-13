@@ -1011,6 +1011,7 @@ public sealed class TreeReconciler
         a.FlexGrow = c.FlexGrow; a.FlexShrink = c.FlexShrink; a.FlexBasis = c.FlexBasis; a.AlignSelf = c.AlignSelf; a.JustifySelf = c.JustifySelf;
         a.Width = c.Width; a.Height = c.Height;
         a.MinW = c.MinW; a.MinH = c.MinH; a.MaxW = c.MaxW; a.MaxH = c.MaxH;
+        a.MeasureUnboundedWidth = c.MeasureUnboundedWidth;
     }
 
     private void ReplaceComponent(NodeHandle node, ComponentEl ce)
@@ -3904,6 +3905,7 @@ public sealed class TreeReconciler
                 li.Justify = b.Justify;
                 li.AlignItems = b.AlignItems;
                 li.Wrap = b.Wrap;
+                li.MeasureUnboundedWidth = b.MeasureUnboundedWidth;
                 li.AspectRatio = b.AspectRatio;   // CSS aspect-ratio: FlexLayout.Measure derives the missing extent (Ui.AspectRatio)
                 if (b.ZStack) _scene.Mark(node, NodeFlags.ZStack); else _scene.Unmark(node, NodeFlags.ZStack);
                 if (b.ClipToBounds) _scene.Mark(node, NodeFlags.ClipsToBounds); else _scene.Unmark(node, NodeFlags.ClipsToBounds);
@@ -4544,6 +4546,7 @@ public sealed class TreeReconciler
            && a.AlignSelf == b.AlignSelf && a.JustifySelf == b.JustifySelf
            && a.Justify == b.Justify && a.AlignItems == b.AlignItems
            && a.Wrap == b.Wrap
+           && a.MeasureUnboundedWidth == b.MeasureUnboundedWidth
            && a.TextStyle == b.TextStyle;
 
     private static bool SameGridSpec(in GridSpec a, in GridSpec b)

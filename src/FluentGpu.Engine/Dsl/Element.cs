@@ -413,6 +413,11 @@ public sealed record BoxEl : Element
     public FlexJustify Justify { get; init; } = FlexJustify.Start;
     public FlexAlign AlignItems { get; init; } = FlexAlign.Stretch;
     public bool Wrap { get; init; }
+    /// <summary>ZStack-only measure opt-out (A3): this child ignores the stack's own constrained width and measures
+    /// at PositiveInfinity instead, reporting its NATURAL content width — for a layer that must overflow its ZStack
+    /// parent's bounds (a rail tooltip whose stack pins a fixed narrow width) rather than being squeezed to it.
+    /// Ignored outside a ZStack; the parent's own size is unaffected by it (an explicit parent Width still wins).</summary>
+    public bool MeasureUnboundedWidth { get; init; }
     /// <summary>CSS <c>aspect-ratio</c> (width÷height): derive the missing extent for a fluid box. NaN (default) = off.
     /// When exactly one of Width/Height is set the other is derived; when both are fluid, the box takes the offered
     /// width and derives its height. Both explicit ⇒ aspect ignored. Routed through the shared <c>LayoutInput.AspectRatio</c>
