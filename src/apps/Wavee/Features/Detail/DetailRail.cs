@@ -116,7 +116,7 @@ static class DetailRail
                         // uri whenever the link is absent (offline, unresolved, or already released). Key = the target:
                         // SaveButton's uri freezes at mount.
                         (m.PreReleaseUri ?? m.ContextUri) is { Length: > 0 } saveUri
-                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title)) with { Key = "save:" + saveUri }
+                            ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title) { Accent = () => h.Accent }) with { Key = "save:" + saveUri }
                             : Fab(Icons.Heart, () => { }),
                         PlaylistInlineEdit.ShareButton(modelSource),
                         PlaylistInlineEdit.OwnerMenu(modelSource, h),
@@ -135,7 +135,7 @@ static class DetailRail
         if (descMaxLines > 0 && (editable || m.Description is { Length: > 0 }))
             kids.Add(editable
                 ? PlaylistInlineEdit.Description(modelSource, cover, descMaxLines, h)
-                : RichText.Of(m.Description!, 12f, Tok.TextSecondary, Tok.AccentTextPrimary, cover, descMaxLines,
+                : RichText.Of(m.Description!, 12f, Tok.TextSecondary, h.Accent, cover, descMaxLines,
                     u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); }));
 
         var rail = new BoxEl
@@ -308,7 +308,7 @@ static class DetailRail
             // Same heart-target swap as the two-column rail above (see the comment there): a full pre-release is saved
             // against its prerelease entity, and the key is the target because SaveButton's uri freezes at mount.
             (m.PreReleaseUri ?? m.ContextUri) is { Length: > 0 } saveUri
-                ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title)) with { Key = "save:" + saveUri }
+                ? Embed.Comp(() => new SaveButton(saveUri, 16f, FabSize, m.Title) { Accent = () => h.Accent }) with { Key = "save:" + saveUri }
                 : Fab(Icons.Heart, () => { }),
             Fab(Icons.Share, () => { if (m.ShareUrl is { Length: > 0 } url) InputHooks.Current.Default.OpenUri?.Invoke(url); }),
         ],

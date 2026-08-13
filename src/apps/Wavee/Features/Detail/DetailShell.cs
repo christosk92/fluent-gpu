@@ -228,7 +228,12 @@ sealed class DetailShell : Component
         // (WaveePalette.PageTone), which is a different axis from this accent — chroma for chrome, a clamped tone for
         // the page.
         var chrome = coverChrome ?? liveChrome;
-        ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp) : Tok.AccentDefault;
+        // Plane first (the same chrome every album/playlist uses once the cover is graded). Payload second: the Home
+        // daylist card already has extractedColors.colorDark, and a daylist cover often never grades — without this
+        // the hero Play/countdown/heart stay Tok.AccentDefault blue beside an orange Home card.
+        ColorF accent = chrome is { } cp ? WaveePalette.ChromeAccent(cp)
+            : m.Accent != 0 ? WaveePalette.ChromeFromPayload(m.Accent)
+            : Tok.AccentDefault;
 
         // Page-scoped shell material tint: a cover-keyed binder leaf (UseEffect publication + UseActivation set/clear +
         // a mount-once unmount clear — the "wash sticks" fix), not a page-scope Watch, so a graded batch repaints one

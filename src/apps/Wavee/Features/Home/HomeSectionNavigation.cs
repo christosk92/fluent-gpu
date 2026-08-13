@@ -95,7 +95,8 @@ static class HomeCardNav
                     new PlaylistSummary(card.Uri, card.Title, card.Meta?.OwnerName ?? "", 0, card.Image,
                         card.MosaicTiles,
                         DaylistExpiresAtMs: card.Meta?.ExpiresAtMs ?? 0,
-                        DaylistCreatedAtMs: card.Meta?.CreatedAtMs ?? 0));
+                        DaylistCreatedAtMs: card.Meta?.CreatedAtMs ?? 0,
+                        Accent: card.Meta?.Accent ?? 0));
                 return;
         }
     }

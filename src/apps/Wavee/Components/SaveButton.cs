@@ -24,12 +24,18 @@ sealed class SaveButton : Component
     readonly float _box;
     readonly string? _name;   // display-only: names the item in the notification-center activity entry
     public SaveButton(string uri, float glyph = 16f, float box = 40f, string? name = null) { _uri = uri; _glyph = glyph; _box = box; _name = name; }
+    /// <summary>Filled-heart ink. A thunk because the detail hero derives its accent from art / a Home payload that
+    /// can land after mount (PreSaveButton's contract). Null → the page's <see cref="WaveeAccentCtx"/>, else the
+    /// semantic accent token.</summary>
+    public Func<ColorF>? Accent { get; init; }
 
     public override Element Render()
     {
         var lib = UseContext(LibraryBridge.Slot);
+        var ctx = UseContext(WaveeAccentCtx.Slot);
         if (lib is null) return new BoxEl();                 // no Mutations source → no affordance (capability gate)
         bool saved = lib.IsSaved(_uri);                      // subscribe → re-skin on any saved-set change
+        ColorF ink = Accent?.Invoke() ?? (ctx is { } a ? a.Value.Ink : Tok.AccentTextPrimary);
         return new BoxEl
         {
             Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
@@ -37,7 +43,7 @@ sealed class SaveButton : Component
             HoverScale = WaveeMotion.ScaleEmphatic.Hover, PressScale = WaveeMotion.ScaleEmphatic.Press,
             Role = AutomationRole.Button,
             OnClick = () => lib.ToggleSaved(_uri, _name),
-            Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, _glyph, saved ? Tok.AccentTextPrimary : Tok.TextSecondary)],
+            Children = [Icon(saved ? Icons.HeartFill : Icons.Heart, _glyph, saved ? ink : Tok.TextSecondary)],
         }.Interactive(Interaction.Subtle);
     }
 }

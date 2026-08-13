@@ -64,6 +64,31 @@ public static class WaveePalette
         => Hairline(seed, Tok.Theme,
             ColorContrast.Flatten(Tok.FillCardSecondary, WaveeColors.FloatingPane), HairlineHoverContrast);
 
+    /// <summary>WCAG AA text contrast. <see cref="Hairline"/> is the quieter 3.25:1 rule; this is the same hue
+    /// solve at the text threshold. Chrome fills (<see cref="Lift"/>, <see cref="ChromeAccent"/>) are plates — painting
+    /// them as ink on a wash mixed from the same hue is what made the Home daylist countdown unreadable.</summary>
+    public const float TextContrast = 4.5f;
+
+    /// <summary>Accent as TEXT on a card-like surface. Same hue as <see cref="Hairline"/>, solved to
+    /// <see cref="TextContrast"/>.</summary>
+    public static ColorF TextInk(ColorF seed)
+        => TextInk(seed, Tok.Theme, ColorContrast.Flatten(Tok.FillCardDefault, WaveeColors.FloatingPane));
+
+    /// <summary>Pure overload used by contrast tests for both themes without mutating global theme state.
+    /// Some hues cannot hit AA at the hairline saturation cap (a mid-blue on a dark card tops out ~4.4:1);
+    /// those fall back to <see cref="ColorContrast.PickContrast"/> so the digits stay readable.</summary>
+    public static ColorF TextInk(ColorF seed, ThemeKind theme, ColorF cardBackground)
+    {
+        var ink = Hairline(seed, theme, cardBackground, TextContrast);
+        return ColorContrast.MeetsAaText(ink, cardBackground) ? ink : ColorContrast.PickContrast(cardBackground);
+    }
+
+    /// <summary>Chrome fill from a Pathfinder <c>extractedColors.colorDark</c> payload (opaque ARGB). Same
+    /// <see cref="Lift"/> the Home hero Play button uses, so a daylist card and its detail page agree before
+    /// <c>CoverColorPlane</c> grades the art. 0 (no payload) is the semantic accent, not a fabricated hue.</summary>
+    public static ColorF ChromeFromPayload(uint argb)
+        => argb == 0 ? Tok.AccentDefault : Lift(ToColor(argb));
+
     /// <summary>Pure overload used by contrast tests for both themes without mutating global theme state.</summary>
     public static ColorF Hairline(ColorF seed, ThemeKind theme, ColorF cardBackground, float targetContrast = HairlineContrast)
     {

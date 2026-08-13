@@ -77,4 +77,13 @@ public class DaylistWindowTests
         Assert.Equal(0L, bare.DaylistExpiresAtMs);
         Assert.Equal(0L, bare.DaylistCreatedAtMs);
     }
+
+    [Fact]
+    public void PlaylistSummary_CarriesTheHomePayloadAccent_AndDefaultsToZero()
+    {
+        var p = new Wavee.Core.PlaylistSummary("spotify:playlist:id", "daylist", "Spotify", 50, null,
+            DaylistExpiresAtMs: ExpiresMs, DaylistCreatedAtMs: CreatedMs, Accent: 0xFFE6B42Au);
+        Assert.Equal(0xFFE6B42Au, p.Accent);
+        Assert.Equal(0u, new Wavee.Core.PlaylistSummary("spotify:playlist:id", "x", "o", 0, null).Accent);
+    }
 }

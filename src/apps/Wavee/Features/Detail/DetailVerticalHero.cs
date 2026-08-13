@@ -171,7 +171,7 @@ static class DetailVerticalHero
         // swap the target rather than adding a second heart, and key on the target because SaveButton's uri freezes at
         // mount. Falls back to the album uri whenever the link is absent (offline, unresolved, or already released).
         if ((m.PreReleaseUri ?? m.ContextUri) is { Length: > 0 } saveUri && cfg.Heart != HeartMode.None)
-            actions.Add(Embed.Comp(() => new SaveButton(saveUri, 16f, SatelliteSize, m.Title))
+            actions.Add(Embed.Comp(() => new SaveButton(saveUri, 16f, SatelliteSize, m.Title) { Accent = () => h.Accent })
                 with { Key = $"vhero-save:{saveUri}" });
         actions.Add(PlaylistInlineEdit.ShareButton(full, SatelliteSize));
         actions.Add(Embed.Comp(() => new DetailHeroMoreButton(full, cfg, h, SatelliteSize))
@@ -188,7 +188,7 @@ static class DetailVerticalHero
         if (editable)
             description = PlaylistInlineEdit.Description(full, contentW, descLines, h);
         else if (m.Description is { Length: > 0 })
-            description = RichText.Expandable(m.Description, 13f, Tok.TextSecondary, Tok.AccentTextPrimary,
+            description = RichText.Expandable(m.Description, 13f, Tok.TextSecondary, h.Accent,
                 contentW, descLines, m.ContextUri ?? m.Title,
                 u => { if (RichText.RouteForUri(u) is { } k) h.Go(k, null); });
         Add("hero-description", description);
@@ -376,7 +376,7 @@ static class DetailVerticalHero
         {
             if (i > 0) spans[at++] = new TextSpan(", ");
             var artist = m.Artists[i];
-            spans[at++] = new TextSpan(artist.Name, Weight: 600, Color: Tok.AccentTextPrimary,
+            spans[at++] = new TextSpan(artist.Name, Weight: 600, Color: h.Accent,
                 OnClick: () => h.Go("artist:" + artist.Uri, artist.Name));
         }
         return new SpanTextEl(spans)

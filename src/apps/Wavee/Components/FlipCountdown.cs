@@ -27,8 +27,9 @@ sealed class FlipCountdown : Component
 {
     /// <summary>Unix ms when the current daylist window rolls over. ≤ 0 → renders nothing.</summary>
     public required long ExpiresAtMs { get; init; }
-    /// <summary>Digit ink — the hero/page accent. A thunk (PreReleaseCountdown's pattern): detail pages derive their
-    /// accent from art that lands AFTER mount, and reading it inside Render subscribes so the digits re-tint.</summary>
+    /// <summary>Chrome accent the digits take their HUE from. A thunk (PreReleaseCountdown's pattern): detail pages
+    /// derive their accent from art that lands AFTER mount, and reading it inside Render subscribes so the digits
+    /// re-tint. The fill is contrast-graded to <see cref="WaveePalette.TextInk"/> — never painted raw on a wash.</summary>
     public required Func<ColorF> Accent { get; init; }
     /// <summary>Rail preset: Body-scale digits for the narrow detail rail. Default = hero scale.</summary>
     public bool Compact;
@@ -62,9 +63,11 @@ sealed class FlipCountdown : Component
 
         if (ExpiresAtMs <= 0) return new BoxEl();       // the hooks above always ran — stable order
 
-        // Zune-thin numerals on the page's accent while the window is live; the whole strip dims to tertiary ink once
-        // it closes ("regenerating" — the feed swap re-keys a fresh window in).
-        ColorF ink = expired ? Tok.TextTertiary : Accent();
+        // Zune-thin numerals in the page accent's TEXT grade while the window is live. Callers pass the chrome fill
+        // (Home's extracted wash / the detail hero Play); painting that fill as ink on a wash mixed from the same hue
+        // is unreadable — TextInk solves AA against the card surface and keeps the hue. The strip dims to tertiary
+        // once the window closes ("regenerating" — the feed swap re-keys a fresh window in).
+        ColorF ink = expired ? Tok.TextTertiary : WaveePalette.TextInk(Accent());
         float cellH = Compact ? CompactRowHeight : HeroRowHeight;
         float cellW = Compact ? 10f : 13f;              // fixed cells in lieu of tabular figures — see the class doc
         float colonW = Compact ? 6f : 8f;

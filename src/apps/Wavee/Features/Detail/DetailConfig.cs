@@ -82,6 +82,10 @@ public sealed record DetailModel(
     /// ("album:"+uri / "pl:"+uri) so the cover flies to/from the like-tagged Home card. Null = no Hero.</summary>
     public string? MorphKey { get; init; }
 
+    /// <summary>Home-card <c>extractedColors.colorDark</c> as opaque ARGB (0 = none). Rides the nav preview so the
+    /// detail hero Play / countdown / heart agree with the Home daylist card before CoverColorPlane grades the art.</summary>
+    public uint Accent { get; init; }
+
     // ── Upcoming release (album path) ────────────────────────────────────────────────────────────────────────────────
     // Init-only, deliberately NOT positional: every `with` expression and DetailModel.Empty above would have to be
     // rewritten for a new positional parameter, and these three are set by exactly one mapper (MapAlbum).

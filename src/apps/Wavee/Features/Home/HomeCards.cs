@@ -284,6 +284,8 @@ static class HomeCards
         Element pulse = c.Meta is { ExpiresAtMs: > 0 } m
             ? Embed.Comp(() => new FlipCountdown
               {
+                  // Chrome fill — FlipCountdown contrast-grades it to TextInk so the digits stay the daylist hue
+                  // without disappearing into the peach/yellow wash (the Play capsule keeps this fill as a plate).
                   ExpiresAtMs = m.ExpiresAtMs, Accent = () => accent, BottomMargin = Spacing.M,
               }) with { Key = c.Uri + ":" + m.ExpiresAtMs }
             : new BoxEl();

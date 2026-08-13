@@ -66,6 +66,8 @@ sealed class DetailPage : Component
             // (The loader closure is re-pointed each render, so a route swap merges against ITS route's preview.)
             if (loaded.ExpiresAtMs == 0 && preview is { ExpiresAtMs: > 0 })
                 loaded = loaded with { ExpiresAtMs = preview.ExpiresAtMs, CreatedAtMs = preview.CreatedAtMs };
+            if (loaded.Accent == 0 && preview is { Accent: not 0u })
+                loaded = loaded with { Accent = preview.Accent };
             return loaded;
         }, preview ?? PendingSeed(kind), route.Name).Loadable;
 

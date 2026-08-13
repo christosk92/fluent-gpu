@@ -437,4 +437,37 @@ public class CoverAccentDerivationTests
             Assert.True(line.ToHsv().S <= 0.5001f);
         }
     }
+
+    [Theory]
+    [InlineData(230, 180, 42)]   // peach/gold — the daylist wash that made Lift-as-ink unreadable
+    [InlineData(217, 63, 49)]
+    [InlineData(58, 92, 180)]
+    public void TextInk_MeetsAaOnTheCard_UnlikeTheLiftedFill(byte r, byte g, byte b)
+    {
+        var seed = ColorF.FromRgba(r, g, b);
+        var lifted = WaveePalette.Lift(seed);
+        foreach (var palette in Tok.Presets)
+        foreach (var theme in new[] { ThemeKind.Dark, ThemeKind.Light })
+        {
+            var tokens = theme == ThemeKind.Dark ? palette.Dark : palette.Light;
+            var shell = theme == ThemeKind.Dark ? palette.DarkShell : palette.LightShell;
+            var mica = theme == ThemeKind.Dark ? MicaRef.DarkDefault : MicaRef.LightDefault;
+            var pane = ColorContrast.Flatten(shell.FileArea, ColorContrast.Flatten(shell.Toolbar, mica));
+            var card = ColorContrast.Flatten(tokens.FillCardDefault, pane);
+            var ink = WaveePalette.TextInk(seed, theme, card);
+
+            Assert.True(ColorContrast.MeetsAaText(ink, card),
+                $"TextInk must be AA on the card (theme={theme}, ratio={ColorContrast.Ratio(ink, card):0.00})");
+            Assert.False(ColorContrast.MeetsAaText(lifted, card) && ink.Equals(lifted),
+                "TextInk must not be the raw Lift fill when that fill fails AA (the Home countdown bug)");
+        }
+    }
+
+    [Fact]
+    public void ChromeFromPayload_LiftsTheHomeCardAccent_AndTreatsZeroAsTheSemanticDefault()
+    {
+        uint peach = 0xFFE6B42Au;   // the daylist colorDark shape: a warm extracted tone
+        Assert.Equal(WaveePalette.Lift(WaveePalette.ToColor(peach)), WaveePalette.ChromeFromPayload(peach));
+        Assert.Equal(Tok.AccentDefault, WaveePalette.ChromeFromPayload(0));
+    }
 }

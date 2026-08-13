@@ -35,8 +35,11 @@ static class DetailPreview
         Artists: Array.Empty<ArtistRef>(), Description: null, MetaLine: Strings.Detail.SongCount(p.TrackCount),
         Tracks: Array.Empty<Track>(), AboutArtist: null,
         // The daylist window the Home card already knew — the countdown paints with the header instead of waiting
-        // for the full load, and survives a playlist4 response that omits the format attributes.
-        ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs);
+        // for the full load, and survives a playlist4 response that omits the format attributes. The payload accent
+        // rides along for the same reason: CoverColorPlane often has no grading for a daylist cover, and without
+        // this the detail Play/heart fall back to the semantic blue.
+        ExpiresAtMs: p.DaylistExpiresAtMs, CreatedAtMs: p.DaylistCreatedAtMs)
+        { Accent = p.Accent };
 
     static string AlbumBadge(AlbumKind k) => k switch
     {
