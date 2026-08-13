@@ -20,6 +20,7 @@ public sealed class ItemsViewController
     internal TryGetItemIndexDelegate? TryGetItemIndexImpl;
     internal Action<float>? ScrollByImpl;
     internal CorrectMeasuredExtentDelegate? CorrectMeasuredExtentImpl;
+    internal Func<int, bool>? IsItemRealizedImpl;
     internal Func<float>? GetOffsetImpl;
     internal Func<NodeHandle>? GetViewportImpl;
     internal Action<IReadOnlyList<int>, Action>? BeginRemovalImpl;
@@ -97,6 +98,11 @@ public sealed class ItemsViewController
         ArgumentNullException.ThrowIfNull(layout);
         return CorrectMeasuredExtentImpl?.Invoke(layout, index, mainExtent) ?? false;
     }
+
+    /// <summary>True when <paramref name="index"/> currently has a realized slot in this view's window.
+    /// Off-screen (or unmounted) indices return false — an expanded drawer at such an index has no live node to
+    /// remeasure, so the owner must correct the cached extent itself.</summary>
+    public bool IsItemRealized(int index) => IsItemRealizedImpl?.Invoke(index) ?? false;
 
     /// <summary>Animate currently-realized rows at the supplied logical indices out, then invoke
     /// <paramref name="commit"/> exactly once to mutate the backing collection. Indices are sorted, de-duplicated and
@@ -1411,6 +1417,16 @@ public sealed class ItemsView : Component
             ctl.Selection = model;
             ctl.ScrollByImpl = ScrollByDelta;
             ctl.CorrectMeasuredExtentImpl = CorrectMeasuredExtent;
+            ctl.IsItemRealizedImpl = index =>
+            {
+                if (sceneRef is null) return false;
+                var vp = viewportNode.Value;
+                if (vp.IsNull || !sceneRef.IsLive(vp) || !sceneRef.TryGetScroll(vp, out var sc)) return false;
+                if ((uint)index >= (uint)sc.ItemCount) return false;
+                int prefix = Math.Clamp(sc.PersistentPrefixCount, 0, sc.ItemCount);
+                if (index < prefix) return true;
+                return index >= sc.FirstRealized && index < sc.LastRealized;
+            };
             ctl.GetViewportImpl = () => viewportNode.Value;
             ctl.GetOffsetImpl = () =>
             {
@@ -1456,6 +1472,7 @@ public sealed class ItemsView : Component
                 ctl.GetCurrent = null;
                 ctl.ScrollByImpl = null;
                 ctl.CorrectMeasuredExtentImpl = null;
+                ctl.IsItemRealizedImpl = null;
                 ctl.GetViewportImpl = null;
                 ctl.GetOffsetImpl = null;
                 ctl.BeginRemovalImpl = null;

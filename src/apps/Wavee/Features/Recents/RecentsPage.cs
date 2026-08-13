@@ -1550,6 +1550,10 @@ sealed class RecentsPage : Component
             var facts = UseLoadable<RowFacts>();
             int epoch = page._epoch.Value;
             bool expanded = string.Equals(page._expandedRow.Value, row.ItemId, StringComparison.Ordinal);
+            var bridge = UseContext(PlaybackBridge.Slot);
+            var lib = UseContext(LibraryBridge.Slot);
+            var acts = UseContext(ActionServices.Slot);
+            var overlay = UseContext(Overlay.Service);
             // Keyed on (epoch, RowIndex): a hydration landing re-resolves the same row, and a RECYCLE (a new index into
             // the same reused instance) re-resolves the new one — including SetPending, so a recycled slot never shows
             // the previous row's facts while the new one is still a pointer. A same-index item change can only come
@@ -1561,7 +1565,7 @@ sealed class RecentsPage : Component
                 else facts.SetPending(default);
             }, DepKey.From(epoch, p.RowIndex));
             return Skel.Region(facts,
-                content: resolved => page.RowContent(row, resolved, p.RowIndex, expanded),
+                content: resolved => page.RowContent(row, resolved, p.RowIndex, expanded, bridge, lib, acts, overlay),
                 reveal: SkelReveal.FadeOnly,
                 smoothResize: false);
         }
@@ -1620,7 +1624,9 @@ sealed class RecentsPage : Component
         Size: SizeMode.Reflow,
         Anchor: SizeAnchor.Leading);
 
-    Element RowContent(RecentsRow row, RowFacts facts, int displayIndex, bool expanded)
+    Element RowContent(RecentsRow row, RowFacts facts, int displayIndex, bool expanded,
+                       PlaybackBridge? bridge = null, LibraryBridge? lib = null,
+                       ActionServices? acts = null, IOverlayService? overlay = null)
     {
         if (row.ItemId.Length == 0) return new BoxEl { Height = RowHeight };
         // Unhydrated: the REAL row geometry with neutral placeholder tiles. Never empty space, and never an invented
@@ -1652,15 +1658,21 @@ sealed class RecentsPage : Component
         Element? savedLine = row.Reason == RecentsReason.Saved ? SavedMeta(sub.Length > 0 ? sub : phrase) : null;
 
         if (row.Kind == RecentsRowKind.Single)
-            return new BoxEl { Direction = 1, MinWidth = 0f, Children = [TrackRowContent(row, facts, displayIndex, uri) with { Key = "row" }] };
+            return new BoxEl
+            {
+                Direction = 1, MinWidth = 0f,
+                Children = [TrackRowContent(row, facts, displayIndex, uri, bridge, lib, acts, overlay) with { Key = "row" }],
+            };
 
         bool canExpand = CanExpand(row);
+        var menu = CardMenu(artUri, facts.Title ?? "", facts.Cover, sub.Length > 0 ? sub : owner, kind == RecentsEntityKind.Artist, acts, overlay);
         Element chevron = canExpand
             ? TrackRow.ExpandChevron(expanded, () => ToggleExpanded(row, displayIndex)) with { Transition = MotionTok.DisclosureChevron }
             : new BoxEl { Width = Spacing.XXL, Height = Spacing.XXL, Shrink = 0f };
-        var trailingKids = new List<Element>(2);
+        var trailingKids = new List<Element>(3);
         if (when.Length > 0)
             trailingKids.Add(Caption(when) with { Color = Tok.TextTertiary, Shrink = 0f, MaxLines = 1 });
+        if (menu is not null) trailingKids.Add(TrackRow.MoreButton(true));
         trailingKids.Add(chevron);
         Element trailing = new BoxEl
         {
@@ -1677,6 +1689,8 @@ sealed class RecentsPage : Component
             metaContent: savedLine,
             trailing: trailing,
             plated: false,
+            menu: menu,
+            drag: CardDrag(kind, artUri, facts.Title ?? "", facts.Cover, acts),
             leadingArtwork: row.Reason == RecentsReason.Saved ? context => SavedArtwork(row, context) : null,
             // Shared-element source. Tagged for the FIRST occurrence of this uri only — uris repeat down a recents list
             // (~1,388 repeats on a real account) and two live nodes under one MorphId is a duplicate-key bug: the
@@ -1740,9 +1754,12 @@ sealed class RecentsPage : Component
         if ((uint)originalRowIndex >= (uint)rowToFlat.Length || rowToFlat[originalRowIndex] < 0) return;
 
         bool closing = string.Equals(_expandedRow.Peek(), liveRow.ItemId, StringComparison.Ordinal);
-        // Normalize the OLD entry before the one signal write. A realized old row will confirm 64 DIP during its exit;
-        // an unrealized/recycled one cannot, so this is the only place that can remove its stale drawer extent.
-        ResetExpandedExtent(shape, _expandedOriginalRow);
+        // An off-screen drawer has no realized node to remeasure, so snap its cached extent to the collapsed row
+        // before the signal write. A REALIZED old row must NOT snap: ArrangeVirtualMeasured follows the SizeMode.Reflow
+        // exit (the DetailTracks ExpandableRowSlot contract) so the slot eases expanded → 64 instead of leaving a
+        // content-less gap at the old height.
+        if (!IsFlatRealized(shape, _expandedOriginalRow))
+            ResetExpandedExtent(shape, _expandedOriginalRow);
         _expandedOriginalRow = closing ? -1 : originalRowIndex;
         _expandedRow.Value = closing ? "" : liveRow.ItemId;
         if (!closing) HydrateChildren(liveRow, RecentsView.BatchCap);
@@ -1769,6 +1786,14 @@ sealed class RecentsPage : Component
         shape.Layout.ContentExtent(shape.Sections.Items.Length, 0f);
         if (!_listController.CorrectMeasuredExtent(shape.Layout, flat, RowHeight))
             shape.Layout.SetMeasured(flat, RowHeight, 0f); // not mounted on this shape: no live viewport needs anchoring
+    }
+
+    bool IsFlatRealized(Shape shape, int originalRowIndex)
+    {
+        var rowToFlat = shape.Sections.RowToFlat;
+        if ((uint)originalRowIndex >= (uint)rowToFlat.Length) return false;
+        int flat = rowToFlat[originalRowIndex];
+        return flat >= 0 && _listController.IsItemRealized(flat);
     }
 
     Element Drawer(RecentsRow row)
@@ -1802,7 +1827,8 @@ sealed class RecentsPage : Component
         return new BoxEl
         {
             Key = "drawer:" + row.ItemId,
-            Direction = 0, MinWidth = 0f, ClipToBounds = true,
+            Direction = 0, MinWidth = 0f, Shrink = 0f, ClipToBounds = true,
+            AlignItems = FlexAlign.Stretch,
             Margin = new Edges4(Spacing.XXL + Spacing.S, Spacing.XXS, 0f, Spacing.S),
             Animate = DrawerReveal,
             Children =
@@ -1814,7 +1840,7 @@ sealed class RecentsPage : Component
                 },
                 new BoxEl
                 {
-                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f,
+                    Direction = 1, Grow = 1f, Basis = 0f, MinWidth = 0f, Shrink = 0f,
                     Padding = new Edges4(Spacing.L + Spacing.S, 0f, Spacing.S, 0f),
                     Stagger = WaveeMotion.StaggerMs,
                     Children = rendered.ToArray(),
@@ -1837,62 +1863,30 @@ sealed class RecentsPage : Component
         {
             var facts = UseLoadable<RowFacts>();
             int epoch = _page._epoch.Value;
+            var bridge = UseContext(PlaybackBridge.Slot);
+            var lib = UseContext(LibraryBridge.Slot);
+            var acts = UseContext(ActionServices.Slot);
+            var overlay = UseContext(Overlay.Service);
             UseEffect(() =>
             {
                 var resolved = _page.FactsFor(_initialUri);
                 if (resolved.Title is { Length: > 0 }) facts.SetReady(resolved);
                 else facts.SetPending(default);
             }, DepKey.From(epoch));
-            return Skel.Region(facts, resolved => _page.ChildRowContent(_initialUri, resolved, _index),
+            return Skel.Region(facts, resolved => _page.ChildRowContent(_initialUri, resolved, _index, bridge, lib, acts, overlay),
                 reveal: SkelReveal.FadeOnly, smoothResize: false);
         }
     }
 
-    Element ChildRowContent(string uri, RowFacts facts, int index)
-    {
-        long duration = _store?.GetTrack(uri)?.DurationMs
-            ?? _store?.GetEpisode(uri)?.DurationMs ?? 0;
-        string time = duration > 0 ? DetailFormat.TrackTime(duration) : "";
-        string subtitle = facts.Subtitle ?? "";
-        var titleKids = new List<Element>(2)
-        {
-            WaveeType.TrackTitle(facts.Title ?? "") with
-            {
-                Grow = 1f, Basis = 0f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-            },
-        };
-        if (subtitle.Length > 0)
-            titleKids.Add(Caption("· " + subtitle) with
-            {
-                Color = Tok.TextTertiary, Shrink = 1f, MinWidth = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
-            });
-        return new BoxEl
-        {
-            Direction = 0, Height = ChildRowHeight, MinWidth = 0f,
-            AlignItems = FlexAlign.Center, Gap = Spacing.M,
-            Padding = new Edges4(Spacing.XS, 0f, Spacing.S, 0f),
-            Corners = Radii.ControlAll,
-            HoverFill = Tok.FillSubtleSecondary,
-            Children =
-            [
-                new BoxEl
-                {
-                    Width = Spacing.XL, Shrink = 0f, AlignItems = FlexAlign.Center, Justify = FlexJustify.End,
-                    Children =
-                    [
-                        Caption((index + 1).ToString(_culture)) with { Color = Tok.TextTertiary, MaxLines = 1 },
-                    ],
-                },
-                new BoxEl
-                {
-                    Direction = 0, Grow = 1f, Basis = 0f, MinWidth = 0f,
-                    AlignItems = FlexAlign.Center, Gap = Spacing.XS,
-                    Children = titleKids.ToArray(),
-                },
-                Caption(time) with { Color = Tok.TextTertiary, Shrink = 0f },
-            ],
-        };
-    }
+    static readonly ColumnSet ChildCols = new(Album: false, By: false, Date: false, Video: false, Plays: false,
+        Heart: true, Thumb: true, Actions: true);
+    static readonly TrackSize[] ChildTracks =
+        [TrackSize.Px(30f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
+
+    Element ChildRowContent(string uri, RowFacts facts, int index,
+                            PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? overlay)
+        => BindTrackRow(ResolveTrack(uri, facts), index, ChildCols, ChildTracks, ChildRowHeight, showTrackArtist: true,
+            bridge, lib, acts, overlay);
 
     Element SavedArtwork(RecentsRow row, Element context)
     {
@@ -1930,24 +1924,83 @@ sealed class RecentsPage : Component
         };
     }
 
-    Element TrackRowContent(RecentsRow row, RowFacts facts, int displayIndex, string uri)
+    Element TrackRowContent(RecentsRow row, RowFacts facts, int displayIndex, string uri,
+                            PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? overlay)
     {
         _ = row;    // the single arm has no group facts to state — its identity is entirely the track's
-        var track = _store?.GetTrack(uri)
-                    ?? new Track(HomeCardNav.Id(uri), uri, facts.Title ?? "", Array.Empty<ArtistRef>(),
-                                 new AlbumRef("", "", ""), 0L, false, facts.Cover);
-        var columns = new ColumnSet(Album: false, By: false, Date: false, Video: false, Plays: false,
-            Heart: false, Thumb: true, Actions: false);
-        Element title = WaveeType.TrackTitle(facts.Title ?? "") with
-        { MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f };
-        return TrackRow.Grid(track, displayIndex, default, columns, SingleRowTracks, RowHeight, title,
-            showTrackArtist: false, _go, onPlay: () => Play(uri));
+        return BindTrackRow(ResolveTrack(uri, facts), displayIndex, SingleRowCols, SingleRowTracks, RowHeight,
+            showTrackArtist: false, bridge, lib, acts, overlay);
     }
 
-    /// <summary>The single arm's column widths: # · thumb · title* · the duration lane. Static because the shape never
+    /// <summary>The single arm's column widths: # · ♥ · thumb · title* · duration · "…". Static because the shape never
     /// varies — this surface has no width tiers.</summary>
+    static readonly ColumnSet SingleRowCols = new(Album: false, By: false, Date: false, Video: false, Plays: false,
+        Heart: true, Thumb: true, Actions: true);
     static readonly TrackSize[] SingleRowTracks =
-        [TrackSize.Px(36f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f)];
+        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
+
+    Track ResolveTrack(string uri, RowFacts facts)
+    {
+        if (_store?.GetTrack(uri) is { } track) return track;
+        var episode = _store?.GetEpisode(uri);
+        return new Track(HomeCardNav.Id(uri), uri, facts.Title ?? episode?.Title ?? "", Array.Empty<ArtistRef>(),
+            new AlbumRef("", "", facts.Subtitle ?? episode?.ShowName ?? ""),
+            episode?.DurationMs ?? 0L, false, facts.Cover ?? episode?.Image);
+    }
+
+    BoxEl BindTrackRow(Track track, int displayIndex, ColumnSet cols, TrackSize[] sizes, float rowH, bool showTrackArtist,
+                         PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? overlay)
+    {
+        var st = TrackRow.StateOf(bridge, lib, track);
+        Element title = WaveeType.TrackTitle(track.Title) with
+        {
+            Color = st.IsNow ? Tok.AccentTextPrimary : Tok.TextPrimary,
+            MaxLines = 1, Trim = TextTrim.CharacterEllipsis, MinWidth = 0f,
+        };
+        Element grid = TrackRow.Grid(track, displayIndex, st, cols, sizes, rowH, title, showTrackArtist, _go,
+            onPlay: () => TrackRow.Invoke(bridge, track, () => Play(track.Uri)),
+            onLike: track.Uri.Length > 0 ? () => lib?.ToggleSaved(track.Uri, track.Title) : null,
+            actionsCell: TrackRow.MoreButton(true));
+        BoxEl row = new BoxEl
+        {
+            Direction = 1, MinWidth = 0f,
+            Role = AutomationRole.Button, Cursor = CursorId.Hand,
+            OnClick = () => TrackRow.Invoke(bridge, track, () => Play(track.Uri)),
+            HoverFill = Tok.FillSubtleSecondary,
+            Corners = Radii.ControlAll,
+            Draggable = track.Uri.Length > 0
+                ? Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(track))
+                : null,
+            Children = [grid],
+        };
+        return acts is { } a && overlay is { } ov
+            ? row.WithContextMenu(ov, () => TrackContextMenu.BuildSingle(a, track))
+            : row;
+    }
+
+    static MenuAttach? CardMenu(string uri, string name, Image? image, string? subtitle, bool circular,
+                                ActionServices? acts, IOverlayService? overlay)
+        => acts is null || overlay is null || uri.Length == 0
+            ? null
+            : Menus.CardAttach(acts, overlay, uri, name, image, subtitle, circular);
+
+    static DragSource? CardDrag(RecentsEntityKind kind, string uri, string name, Image? cover, ActionServices? acts)
+    {
+        if (uri.Length == 0) return null;
+        WaveeResourceKind resource = kind switch
+        {
+            RecentsEntityKind.Album => WaveeResourceKind.Album,
+            RecentsEntityKind.Artist => WaveeResourceKind.Artist,
+            RecentsEntityKind.Show => WaveeResourceKind.Show,
+            RecentsEntityKind.Episode => WaveeResourceKind.Episode,
+            RecentsEntityKind.Track => WaveeResourceKind.Track,
+            RecentsEntityKind.Collection or RecentsEntityKind.Playlist => WaveeResourceKind.Playlist,
+            _ => WaveeResourceKind.Route,
+        };
+        if (resource == WaveeResourceKind.Route) return null;
+        return Drag.Source(WaveeDragKinds.Resource,
+            () => WaveeResourceDragPayload.ForEntity(resource, uri, name, cover, acts));
+    }
 
     bool Morphable(int rowIndex)
     {
