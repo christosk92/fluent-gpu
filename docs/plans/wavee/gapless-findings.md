@@ -1,6 +1,6 @@
 # Gapless playback — diagnosis
 
-Wave-0 Agent B. Code-anchored findings for the four known gapless killers. PlayPlay decrypt is treated as an opaque body-supplier; those trees were not read.
+Status: **FIXED** — see “As fixed” at the end. Wave-0 Agent B. Code-anchored findings for the four known gapless killers. PlayPlay decrypt is treated as an opaque body-supplier; those trees were not read.
 
 **Default user path is the broken 0 ms path.** `WaveeSettings.CrossfadeEnabled` defaults to `false` (`src/apps/Wavee/Platform/AppSettings.cs:152`). `SetCrossfade` then stores `_crossfadeEnabled = enabled && _crossfadeMs > 0` (`FluentMediaAudioHost.cs:481–482`). A listener who never opens Playback settings never reaches `CommitCrossfade`.
 
@@ -338,3 +338,26 @@ UserQueue / autoplay already preview correctly. Close the holes:
 - **Not feasible** headlessly: real `IAudioClient` Start/Stop gap, shared-mode padding, Spotify granule vs `GaplessInfo.None`. That is the `[gapless] wallGapMs` / `xrunDelta` listening pass above.
 
 A Wavee-level probe that feeds synthetic PCM through `FluentMediaAudioHost` would need a test seam to inject `IAudioDecoder` / skip CDN. Prefer the engine probe + host Tick unit test with a fake `PcmAudioSession` if one is extracted; do not stand up WASAPI in CI.
+
+---
+
+## As fixed
+
+Date: 2026-08-14. All four killers addressed; the agent-facing contract now lives in `.claude/skills/wavee/audio-handoff.md`.
+
+| Killer | Verdict then | As fixed | Covering test |
+|---|---|---|---|
+| **1. Prepare-next scheduling** | UNCERTAIN — trigger was identity-change-keyed only; a seek never re-armed | Rules extracted to the pure `PreparedNextPolicy`: `EndingSoonMarginMs = overlapMs + 8 s` (clamped to duration on short tracks), a remaining-ms re-arm on top of the retained start-of-track warm, and a seek that lands inside the window re-prepares. The signature dedupe makes redundant re-arms free. | the 15 `PreparedNextPolicyTests` |
+| **2. Format change (44.1 k → 48 k)** | VERIFIED-OK as a format matter; the real gap was the per-track device reopen | No format work needed. The reopen is gone: a natural advance is a **mixer edit** on the live session, and `RebuildSink`/`SoftReloadAsync` are reserved for a real endpoint change. | `[gapless] hardcut-b-open` absence in the listening pass |
+| **3. Decode pre-roll / trim** | BROKEN — `Gapless => GaplessInfo.None`; `TrimmingSource` unwired | `ResolveGapless` fills `GaplessInfo` (FLAC STREAMINFO; MP3 via the new `Mp3GaplessProbe` Xing/LAME parse with the 529-sample decoder-delay convention), and `TrimmingSource` wraps the decoder in **both** `PcmAudioPlayer.OpenAsync` and `PrepareAsync`. | `GaplessJoinTests.TheJoinTrimsTheIncomingCodecPriming_SoTheSeamCarriesRealAudio` |
+| **4. The 0 ms path** | BROKEN — the commit predicate required `_crossfadeMs > 0`, so the default path drained → `Ended` → full session reopen | Two-phase butt-join: `CommitGaplessJoin` adds B's prepared voice to the live mixer at A's natural-end frame with `GainEnvelope.Constant`; `AnnounceGaplessJoin` then emits `Started` with `EffectiveFadeMs = 0` so the session advances **without** reloading. Not-ready degrades by *holding* `Ended` (bounded) and promoting when the slot lands — never a reload mid-fill. | `GaplessJoinTests.ConstantVoiceAtTheNaturalEndFrame_IsSampleContinuous`, `…_PreparedTransition` 0 ms case |
+
+The trap that motivated killer 4's design is pinned by two tests: `Fade_WithZeroFrames_IsTheConstantEnvelope` (a zero-length fade *is* unity gain) and `TwoConstantVoicesOverlapping_SumTheirEnergy_WhichIsWhyZeroMsMustNotCrossfade`. Anyone who "simplifies" gapless into `CommitCrossfade(0)` has to delete both.
+
+### Instrumentation kept
+
+The Wave-0 `[gapless]` events stayed and gained the join/degrade states (`commit-join`, `join-live`, `join-abandoned`, `promote-at-end`, `ended-hold`, `rearm`). `arm reason` is now **0** = will commit, **2** = not primed, **3** = overlap refused, **4** = no token — the old **1** (zero-ms/disabled) is gone because 0 ms now commits. Reading guide in the skill doc.
+
+### Not done — final acceptance is a listening pass
+
+Everything above is verified headlessly (mixer continuity, trim, decision table). What CI structurally cannot check is the thing the user hears: the real `IAudioClient` boundary, shared-mode padding, and whether Spotify's Vorbis bodies actually carry usable granule/gapless data (the probe currently returns `None` for Vorbis, so those tracks rely on the join alone, without trim). **Acceptance: play a continuous album end-to-end** and confirm `arm reason=0` → `commit-join` → `join-live` with no `hardcut-b-open` and `xrunDelta=0`. A Vorbis lead-in default was deliberately *not* guessed — if the listening pass reveals priming clicks on Spotify tracks, that is the next change, with a measured value rather than a folklore constant.

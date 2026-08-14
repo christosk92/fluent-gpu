@@ -84,6 +84,28 @@ public class PreparedTransitionTests
         Assert.Equal(new[] { "spotify:episode:a", "spotify:episode:b" }, host.Loaded.ToArray());
     }
 
+    [Fact]
+    public async Task AZeroMsHandoff_AdvancesTheSession_WithoutReloadingTheActiveTrack()
+    {
+        // W2 killer 4: with crossfade off (the DEFAULT), the boundary is a butt-join, not a fade — the host announces the
+        // join with EffectiveFadeMs = 0 and the session must advance off the PREPARED audio. A reload here is the audible
+        // gap: it means the WASAPI session was torn down and reopened between two tracks.
+        var host = new PreparedHost();
+        var projection = new NowPlayingProjection("dev");
+        using var controller = new PlaybackController(host, new StubTrackResolver(), projection,
+            new FakeContextResolver("spotify:track:a", "spotify:track:b"), "dev");
+
+        await controller.PlayAsync("spotify:playlist:test");
+        await WaitUntilAsync(() => host.Prepared.Count >= 1);
+        var prepared = host.Prepared.First();
+
+        host.EmitTransition(new AudioTransitionSignal(AudioTransitionKind.Started, prepared.Token,
+            prepared.Start.TrackUri, 0, EffectiveFadeMs: 0));
+        await WaitUntilAsync(() => projection.CurrentTrack?.Uri == "spotify:track:b");
+
+        Assert.Equal(new[] { "spotify:track:a" }, host.Loaded.ToArray());   // no second load == no session reopen
+    }
+
     static async Task WaitUntilAsync(Func<bool> predicate)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
