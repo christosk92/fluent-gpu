@@ -114,3 +114,25 @@ is a no-op.
   not a marshaled object, or NativeAOT ExeServer registration silently no-ops.
 - `Show` returning S_OK does not paint a banner. Read `ToastNotifier.Setting`. Toasts in an elevated
   process genuinely do not work.
+
+## Single instance + protocol: the gate must outlive the window, and the payload arrives twice
+
+`SingleInstanceGate.TryAcquire(name, windowClass, payload)` is a **named-mutex + `WM_COPYDATA`** pair, not a lock you can
+let go of:
+
+- **Keep the gate alive for the whole process.** Disposing it after the check releases the name, and the next launch
+  becomes a second "primary" — two windows, two audio sessions. Dispose in the `finally` around the run, not after the
+  `if`.
+- **The secondary must exit without initializing anything.** It has already handed its payload over; if it goes on to
+  register protocols or touch app data it races the primary over the same files.
+- **The forwarded message needs a receiver window that already exists.** `TryAcquire` finds the primary by window
+  class, so the class name passed here must match the one the PAL actually creates (`"FluentGpuWindow"`), and the
+  primary must have pumped at least one message. A payload sent before the window exists is dropped, not queued.
+- **A cold launch delivers the payload through `ActivationArgs`, a warm one through the redirect event.** Both paths
+  must post into the SAME intake (`DeepLinkChannel`), or a link works only when the app was already running (or only
+  when it was not). Test both.
+- `ProtocolRegistrar` writes **HKCU** and no-ops when packaged (the manifest owns the association) — so a packaged
+  build silently ignores a scheme the unpackaged build registers. Do not "fix" that by calling it anyway; add the
+  manifest entry.
+- Registering a scheme you did not invent (`spotify:`) is a **user decision**, not a feature: gate it on an explicit
+  opt-in setting, and unregister on the way back down so the toggle is symmetric.

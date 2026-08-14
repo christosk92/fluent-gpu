@@ -132,6 +132,9 @@ sealed class WaveeApp : Component
 
             bridge.Activate(post);
             PowerBridge.Attach(bridge, post, _services);
+            // Scheduled pre-save release drops: attached after the library bridge exists (it reconciles off the saved-set
+            // signal, which fires once on subscribe and therefore doubles as the launch reconcile).
+            ReleaseNotifier.Attach(_services.Settings, libBridge, _services.PreRelease);
             libBridge.Activate(post);
             friendsBridge.Activate(post);
             notifications.Activate(post);

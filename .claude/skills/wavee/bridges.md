@@ -37,3 +37,19 @@ Jump List category rows read `PlayLogStore` (via `PlaybackBridge.PlayLog`). Opti
 Glyphs: `src/apps/Wavee/assets/taskbar/{prev,play,pause,next}.ico` (already globbed by the csproj `assets\**\*` Content include). Missing files skip the glyph; tooltips still work.
 
 Toast CLSID (packaged manifest must match): `C8E4A91B-3D52-4F07-9B6A-1E7C4D8F2A30` (`WaveeNativeBoot.ToastActivatorClsid`).
+
+## Not a playback bridge: `ReleaseNotifier` (scheduled pre-save drops)
+
+`App/ReleaseNotifier.cs` is the fourth OS surface but hangs off the **library**, not `PlaybackBridge` — its trigger is a pre-save, not a track change. Attached from `WaveeApp` beside `PowerBridge.Attach`.
+
+| Aspect | Rule |
+|---|---|
+| Delivery | `ToastNotifier.Schedule` — the **OS** holds the timer, so the toast fires with Wavee closed. No background task, service or tray resident is involved (and none is needed for this). |
+| Opt-in | `WaveeSettings.NotifyReleaseDrops`, default **off**. Turning it off calls `UnscheduleAll()` — a switch that only gated future writes would still let yesterday's entries fire. |
+| Trigger | `LibraryBridge.SetSaved` → `ReleaseNotifier.OnSavedChanged(uri, saved)`. That is the one chokepoint every heart / menu item / drop target already goes through; non-`spotify:prerelease:` uris no-op. |
+| Reconcile | Every launch (`Attach` → `RequestReconcile`) rebuilds from the live saved-set + a fresh `IPreReleaseService` resolve. **Never trust what was scheduled last run**: dates slip, albums drop, users un-pre-save. Tags are stable (`drop:<prerelease-uri>`) so a reconcile REPLACES its own earlier entry instead of stacking duplicates. |
+| Staleness | Gate on `PreReleaseLink.IsUpcoming`, never on the link merely existing — the kind-138 payload has a 30-day offline TTL, so a cached link outlives its own release. |
+| Play target | `link.AlbumUri`, not the prerelease uri: the two ids are unrelated and only the album resolves once the record is out. |
+| Cover | `ToastImageCache.Default.Localize(url)` — the unpackaged AUMID hero path rejects `http(s)`. A failed localize drops the hero, never the toast. |
+
+**Still missing (T1.6 second half):** the `TimeTrigger` background task that would *discover* things while closed (a rotated daylist, a followed-artist release that did not exist at schedule time). That needs a packaged (MSIX) identity — `BackgroundTaskBuilder` and `windows.backgroundTasks` are unavailable unpackaged — plus a full-trust COM server and manifest entries in the `ops/` AppxManifest sources. Scheduled drops deliberately do **not** depend on it.

@@ -141,6 +141,11 @@ static class WaveeSettings
     // Cap applied WHEN the connection is metered (NetworkCostKind.Fixed / Variable). Same 0..2 ladder as PlaybackQuality.
     // Default 1 = High160 so a metered laptop does not silently stay on Very High.
     public static readonly SettingKey<int> MeteredQualityCap = new("playback.quality.meteredCap", 1);
+    // ── OS notifications (toasts) ─────────────────────────────────────────────────────────────────────────────────────
+    // Opt-in, per the calm contract: notifications are something the user turns ON, never something that arrives because
+    // we shipped a feature. ReleaseDrops schedules an "out now" toast for a PRE-SAVED album at its release timestamp —
+    // delivered by the OS, so it lands even with Wavee closed. Off by default.
+    public static readonly SettingKey<bool> NotifyReleaseDrops = new("notify.releaseDrops", false);
     // Handle spotify: links with Wavee. OFF by default and deliberately so (the calm contract): silently taking the scheme
     // from an installed Spotify would break the user's muscle memory without being asked. Toggling it registers /
     // unregisters the HKCU scheme association at once, so the change is visible immediately rather than at next launch.

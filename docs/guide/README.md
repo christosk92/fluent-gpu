@@ -162,6 +162,13 @@ Run it (host wiring): see **[getting-started.md](./getting-started.md)**.
     the neutral-fallback floor (zero-config = neutral English unchanged), the JSON-source-of-truth + generated
     `Strings` keys + `Loc.Bind`/`Loc.Get`, how an app ships translations, the pseudo-locale QA pass, the CultureInfo-
     derived vs shipped-string split, and the `FGRP008` no-hardcoded-string analyzer.
+13. **[windows-integration.md](./windows-integration.md)** — becoming a Windows **citizen**: the
+    one-activation-intake rule, and the hub over every OS surface (protocol + single instance, taskbar
+    progress/overlay/thumb buttons, jump list, SMTC, toasts incl. live-update and OS-scheduled delivery with the app
+    closed, power keep-awake/suspend, metered-network policy, mouse Back/Forward). Carries the
+    WindowsApi-vs-PAL-vs-app ownership split, the threading table (which callback arrives on which thread), and what
+    packaged identity is actually required for. Companions: **[shortcuts.md](./shortcuts.md)** (the user-facing key
+    map) and **[startup-bench.md](./startup-bench.md)** (the `--startup-bench` probe + what the About receipts read).
 
 ---
 

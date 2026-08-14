@@ -137,6 +137,9 @@ public sealed class LibraryBridge : IUndoTarget
         if (saved) next.Add(uri); else next.Remove(uri);
         PublishSaved(next);                      // optimistic, URI-selective subscribers update this frame
         AnnounceSaved(saved, name);
+        // A pre-save is the trigger for its scheduled "out now" toast, and this is the one chokepoint every heart / menu /
+        // drop target goes through. No-op for ordinary uris and when release drops are off.
+        ReleaseNotifier.OnSavedChanged(uri, saved);
         // Record BEFORE the async reconcile so the entry exists to flip Failed if the write faults immediately.
         long id = _activity.IsSuppressed ? -1 : _activity.Record(saved ? ActivityKind.Save : ActivityKind.Unsave, uri, name);
         var task = _mut.SetSavedAsync(uri, saved);   // reconcile (re-emits the confirmed set via the bridge subscription)

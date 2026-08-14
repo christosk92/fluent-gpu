@@ -552,6 +552,11 @@
       "customize": "Customize sidebar",
       "customizeSub": "Add, reorder and configure the sections in Custom"
     },
+    "notifications": {
+      "title": "Notifications",
+      "releaseDrops": "Tell me when a pre-saved album is out",
+      "releaseDropsSub": "Windows delivers it at release time, even if Wavee is closed. Nothing else is notified."
+    },
     "links": {
       "title": "Links",
       "spotify": "Open spotify: links in Wavee",

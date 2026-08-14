@@ -13,6 +13,9 @@ Source: `src/apps/Wavee/App/DeepLink.cs`. Boot wiring: `src/apps/Wavee/Program.c
 | `wavee://open?route=<name>&arg=<value>` | `DeepLinkKind.Open` | `Route`, optional `Arg` |
 | `wavee://play?ctx=<spotify-context-uri>` | `DeepLinkKind.Play` | `Context` |
 | `wavee://resume` | `DeepLinkKind.Resume` | (none) |
+| `wavee://pause` | `DeepLinkKind.Pause` | (none) |
+| `spotify:` album / playlist / artist / show | `DeepLinkKind.Open` | translated to the shell's route names (`album` / `pl` / `artist` / `show`) |
+| `spotify:track:<id>` | `DeepLinkKind.Play` | `Context` = the track uri |
 
 Unknown verbs, missing required args (`open` without `route`, `play` without `ctx`), and garbage are **ignored** — the
 parser never throws. Percent-encoding is decoded. A raw command line that *contains* a `wavee://` token is accepted.
@@ -29,8 +32,10 @@ Probes / `--screenshot` / `--frames` skip this entire block.
 
 1. **Gate** — `new SingleInstanceGate(); TryAcquire("Wavee", "FluentGpuWindow", payload)`. Secondary forwards via
    `WM_COPYDATA` and exits 0. Keep the gate alive for process lifetime.
-2. **Register** — `ProtocolRegistrar.RegisterProtocol("wavee", exe, "Wavee", iconPath: null)` (no `.ico` in assets).
-   try/catch: registration failure must never block launch. HKCU; no-ops when packaged.
+2. **Register** — `ProtocolRegistrar.RegisterProtocol("wavee", exe, "Wavee", iconPath: WaveeAppIcon.Path())`.
+   try/catch: registration failure must never block launch. HKCU; no-ops when packaged. The OPT-IN `spotify:` handler
+   follows immediately via `DeepLink.SyncSpotifySchemeRegistration(settings.Get(WaveeSettings.HandleSpotifyLinks))`,
+   which registers *or unregisters* so turning the setting off actually hands the scheme back.
 3. **Classify** — `ActivationArgs.FromCurrentProcess("wavee")`. `Protocol` / `File` / `ToastActivated` →
    `DeepLinkChannel.Post(argument)`.
 4. **Subscribe** — `FluentApp.ActivationRedirected += raw => { DeepLinkChannel.Post(raw); DeepLink.WakeWindow(); }`

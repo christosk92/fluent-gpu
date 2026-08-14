@@ -77,6 +77,17 @@ sealed partial class SettingsPage
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
+        // Turning drops OFF must actually cancel the toasts the OS is already holding, not just stop scheduling new ones —
+        // a scheduled toast outlives the process, so a switch that only gated future writes would still fire old ones.
+        Element ReleaseDropsToggle() => ToggleSwitch.Create(
+            new Signal<bool>(settings?.Get(WaveeSettings.NotifyReleaseDrops) ?? false), onChange: _ =>
+            {
+                if (settings is null) return;
+                settings.Set(WaveeSettings.NotifyReleaseDrops, !settings.Get(WaveeSettings.NotifyReleaseDrops));
+                ReleaseNotifier.RequestReconcile();
+                Bump();
+            }, style: SettingsCard.CompactToggleStyle());
+
         // The scheme association is applied AT THE TOGGLE, not at next launch: a user who turns this on expects the very
         // next spotify: link to open here, and one who turns it off expects the scheme handed straight back.
         Element SpotifyLinksToggle() => ToggleSwitch.Create(
@@ -167,6 +178,9 @@ sealed partial class SettingsPage
             // would be a conditional hook (it would vanish from the page's hook order the moment another tab renders).
             SettingsSectionHeader(Loc.Get(Strings.Settings.Sidebar.Title), Icons.SplitView),
             Embed.Comp(() => new SidebarSettingsCard()),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Notifications.Title), Icons.Bell),
+            SettingsRow(Loc.Get(Strings.Settings.Notifications.ReleaseDrops),
+                Loc.Get(Strings.Settings.Notifications.ReleaseDropsSub), ReleaseDropsToggle(), Icons.Bell),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Links.Title), Icons.Link),
             SettingsRow(Loc.Get(Strings.Settings.Links.Spotify), Loc.Get(Strings.Settings.Links.SpotifySub),
                 SpotifyLinksToggle(), Icons.Link),
