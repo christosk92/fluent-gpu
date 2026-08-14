@@ -2004,6 +2004,14 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         long fromMs = _currentHost.PositionMs;
         _currentHost.Seek(targetMs);
         Emit(BuildEvent(EvKind.Seeked, _snap.Current?.Track, fromMs, seekToMs: targetMs));
+        // W2 (remaining-ms-keyed prepare): a seek that LANDS inside the ending-soon window re-arms prepared-next NOW —
+        // the signature dedupe makes this free when the slot is already prepared for the unchanged (current, next) pair —
+        // and gives a last-page continuation fetch its head start instead of waiting for track-end.
+        if (PreparedNextPolicy.SeekRequiresRearm(_snap.Current?.Track.DurationMs ?? 0, targetMs, 0))
+        {
+            SchedulePreparedNext("seek-ending-soon");
+            MaybeStartContinuationFetch();
+        }
     }
 
     static string ParseContextKind(string? contextUri)
@@ -2526,16 +2534,15 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         // there is nothing to prepare — fall through with next = null so any PRIOR prepared token is CANCELLED rather than
         // left dangling on a host that has been stopped (a swap back to audio re-schedules from LoadAndPlayCurrent). This is
         // a no-op on the unchanged audio path (_currentKind stays Audio when ShouldPlayAsVideo is unwired).
-        var next = _currentKind == PlayableKind.Video || current is null ? null : _session.PreviewNext();
-        // Never prepare an audio hand-off INTO a video track — that boundary is a hard cut (AllowCrossfade is false).
-        if (next is not null && KindFor(next.Track) == PlayableKind.Video) next = null;
-        // Same boundary, source-agnostic: a media source without the prepared-next capability gets the hard cut too.
-        if (next is not null && !MayPrepare(next.Track)) next = null;
-        bool allowOverlap = current is not null && next is not null && _snap.Repeat != RepeatMode.Track
-            && IsMusic(current.Track) && IsMusic(next.Track)
-            && MediaSwitchLogic.AllowCrossfade(_currentKind, KindFor(next.Track));   // overlap only Audio→Audio (never across a video boundary)
-        string? signature = next is null ? null
-            : $"{current!.ItemId.Value:x}:{next.ItemId.Value:x}:{(allowOverlap ? 1 : 0)}";
+        // The decision rules (video boundaries, the prepare gate, overlap eligibility, the dedupe signature) live in the
+        // PURE PreparedNextPolicy (W2) — this method only reads the live values and acts on the returned decision.
+        var preview = _currentKind == PlayableKind.Video || current is null ? null : _session.PreviewNext();
+        var decision = PreparedNextPolicy.Decide(_currentKind, current, preview,
+            preview is null ? PlayableKind.Audio : KindFor(preview.Track),
+            preview is not null && MayPrepare(preview.Track), _snap.Repeat);
+        var next = decision.Prepare ? preview : null;
+        bool allowOverlap = decision.AllowOverlap;
+        string? signature = decision.Signature;
 
         CancellationTokenSource? priorCts;
         string? priorToken;
@@ -2638,14 +2645,6 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             _preparedItemId = QueueItemId.None;
         }
         cts?.Dispose();
-    }
-
-    static bool IsMusic(Track track)
-    {
-        if (track.Uri.StartsWith("spotify:episode:", StringComparison.OrdinalIgnoreCase)
-            || track.Uri.Contains(":episode:", StringComparison.OrdinalIgnoreCase)
-            || track.Uri.Contains(":podcast:", StringComparison.OrdinalIgnoreCase)) return false;
-        return track.Source?.Contains("podcast", StringComparison.OrdinalIgnoreCase) != true;
     }
 
     void OnAudioTransition(AudioTransitionSignal signal)

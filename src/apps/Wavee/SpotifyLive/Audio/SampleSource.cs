@@ -63,11 +63,17 @@ internal sealed class FlacSampleSource : ISampleSource
         var si = _reader.Streaminfo;
         SampleRate = si.SampleRate;
         Channels = si.ChannelsCount;
+        TotalFrames = si.TotalSampleCount > 0 ? si.TotalSampleCount : -1;
         _scale = 1f / (1 << (si.BitsPerSample > 1 ? si.BitsPerSample - 1 : 15));   // 16-bit→1/32768, 24-bit→1/8388608
     }
 
     public int SampleRate { get; }
     public int Channels { get; }
+
+    /// <summary>STREAMINFO's total inter-channel sample (frame) count, or −1 when the header carried none. Read from the
+    /// mandatory first metadata block — no seek, so it is safe on the head-only fast-start path. Feeds the decode edge's
+    /// <c>GaplessInfo.ExactFrames</c> so a butt-join stops exactly at the encoded length (W2 gapless fix §3).</summary>
+    public long TotalFrames { get; }
 
     public int ReadSamples(float[] buffer, int offset, int count)
     {

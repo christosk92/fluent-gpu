@@ -172,6 +172,22 @@ public sealed class TrimmingSource : IAudioSource
     /// <inheritdoc/>
     public ReplayGainInfo Loudness { get; }
 
+    /// <summary>Seek to a POST-trim (mixer-domain) frame: the inner source is moved to <c>frame + LeadInFrames</c> and the
+    /// emit cursor re-anchored, so a trimmed voice stays seekable through the session/feed seek dispatch (spec §8.3 — the
+    /// trim decorator must be invisible to transport). The lead-in is absorbed into the seek target, never re-skipped.</summary>
+    public void SeekFrame(long frame)
+    {
+        if (frame < 0) frame = 0;
+        if (_emitLimit != long.MaxValue && frame > _emitLimit) frame = _emitLimit;
+        switch (_inner)
+        {
+            case DecoderAudioSource das: das.SeekFrame(frame + _leadIn); break;
+            case MemoryAudioSource mas: mas.SeekFrame(frame + _leadIn); break;
+        }
+        _emitted = frame;
+        _leadSkipped = true;   // the seek target already accounts for the lead-in — never skip it a second time
+    }
+
     /// <inheritdoc/>
     public int Read(Span<float> dst, int channels)
     {

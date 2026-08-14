@@ -219,9 +219,11 @@ public sealed class AudioFeedThread : IDisposable
         long frame = Interlocked.Exchange(ref _pendingSeekFrame, -1);
         if (frame < 0) return;
         var rings = Volatile.Read(ref _published);
-        long primary = _session.PrimaryVoiceIdValue;
+        // Seek the ACTIVE voice's ring — after a committed crossfade/gapless hand-off that is the promoted incoming voice
+        // (SetActiveVoice re-pointed it), not the retired primary; a fresh SetVoice resets it to the primary id.
+        long active = _session.ActiveVoiceIdValue;
         for (int i = 0; i < rings.Length; i++)
-            if (rings[i].VoiceId == primary) { rings[i].Ring.WorkerApplySeek(frame); break; }
+            if (rings[i].VoiceId == active) { rings[i].Ring.WorkerApplySeek(frame); break; }
     }
 
     /// <summary>Drain the RT→worker retire queue: for each retired voice id, dispose its ring and republish the ring table
