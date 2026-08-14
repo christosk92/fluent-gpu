@@ -828,6 +828,24 @@ loop at the wrong rate on any display that is not 120 Hz. It now carries a per-i
 `1000 / CurrentRefreshHz()` at DirectManipulation enable and on `WM_DISPLAYCHANGE` / `WM_DPICHANGED`, clamped
 to [3, 17] ms; an unknown rate leaves the default in force.
 
+**A fallback is not a pace — the skip-submit floor returns the CEILING, not `DeriveAsyncPaceMs` (LANDED).**
+The floor's contract (§11.1.2, "Who asks") is that the *compositor tick* paces an elided frame and the
+wall-clock value is a pure fallback for when the clock is unavailable. A fallback must therefore be **longer**
+than one refresh. Returning `DeriveAsyncPaceMs` — deliberately *just under* a refresh — made the wall clock
+**race the tick and always win**, so production paced off a 7 ms timer instead of the 8.33 ms vblank and drifted
+off the panel's phase entirely. Measured on a 120 Hz panel: **219 fps of record-only frames**, present intervals
+smeared **8–50 ms with no vsync quantisation**, ~157 frames/s hash-elided
+(`ops/diag/sessions/live-20260814-152702-freescroll`). The branch now returns `PhaseGateCeilingMs()` — two
+refresh periods, the same backstop shape the gate already uses — so the tick fires first and anchors production
+to the vblank, and a clockless backend paces byte-identical frames at 2R, which costs nothing because those
+frames produce no pixels by construction.
+
+The branch is also no longer `!_asyncActive`-gated. It was scoped to the sync path while its own rationale
+("an elided submit skips Present — the loop's only pacer") applies verbatim to async, where the elision is far
+more common; it now sits **below** the armed-gate branch so an armed gate keeps the present-ack as its phase
+reference, per "Who asks" above. `pace-skip` is consequently a live token on the shipping default — `ops/diag/AGENT.md`
+carries the corresponding correction.
+
 #### 11.1.4 The armed-gate slip re-phase (LANDED)
 
 The gate's phase reference is the present-ack, and the ceiling is its only other wake source. On a 120 Hz

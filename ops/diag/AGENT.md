@@ -82,8 +82,11 @@ with a cadence number, stop.
   position, panel response and backlight are all invisible. Say `inputToVblankOfPresent`, never "photon".
 - **A `0` is not "no cost".** Check `reasonNotMeasured` first. Layout counts are 0 without `FG_LAYOUT_DIAG`, GPU
   splits are 0 without `FG_GPU_TIMING`. Reading an unmeasured 0 as "cheap" de-ranks real causes to the bottom.
-- **The absence of a `pace-skip` wait token proves nothing.** That token is only assigned when the render thread
-  is synchronous; on the shipping async default it is *always* absent. Use the `skipD=` delta instead.
+- **`pace-skip` now fires on the async default too.** It used to be assigned only when the render thread was
+  synchronous, so its absence proved nothing and `skipD=` was the only evidence. Since the skip-submit pacing floor
+  was extended to async, `pace-skip` means what it says: **the previous frame elided its submit**, and the wait is
+  paced by the compositor tick with a 2×refresh wall-clock fallback. A long `pace-skip` run is now the readable form
+  of "the scene is not changing"; cross-check it against `skipD=` rather than instead of it.
 - **An empty `[render-census]` is not a refutation.** It is suppressed unless flush ≥ 12 ms or components ≥ 25,
   so a shell-wide-but-cheap re-render every frame prints nothing at all.
 - **A 60 ambient cap under a 120 Hz panel BEATS** against the vsync-locked present — a software cap below the

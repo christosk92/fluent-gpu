@@ -1641,24 +1641,6 @@ public sealed class AppHost : IDisposable
             _lastWaitKind = HostWaitKind.Ambient;
             return AmbientFrameWaitMs();
         }
-        // Skip-submit pacing floor: an elided submit skips Present — the sync path's ONLY pacer — so a scroll-armed-
-        // but-unchanged stretch (a held/stuck band, a spring tail, the 2s scrollbar idle-hide dwell) would otherwise
-        // free-run the loop at CPU speed re-recording a byte-identical scene (measured on-device: ~785 fps, a full
-        // core, for the whole armed window). Pace those frames at DeriveAsyncPaceMs — the same value the async path
-        // returns, deliberately: BOTH branches are display-rate KINDS, so both are exempt from the NextDeltaMs Resync
-        // guard and the animation clock stays monotonic across a switch between them (a wait that read as a throttle
-        // gap here would zero-dt every animating frame — the frozen one-shot-anim bug class). Input still ends the wait
-        // immediately (WaitForWork is MsgWait-based), so nothing gains latency; the first frame that actually changes
-        // pixels submits, and the next wait returns to 0 (present-throttled).
-        // The display clock IS this branch's pacer, not a supplement: an elided submit produces no present, so there is
-        // no ack to wake on and the wall-clock value below is a pure fallback for when the compositor clock is
-        // unavailable. Waking on the tick puts even these frames on the panel's phase.
-        if (!_asyncActive && _lastFrameSkippedSubmit)
-        {
-            _lastWaitKind = HostWaitKind.PaceSkipSubmit;
-            _lastWaitWantsDisplayClock = true;
-            return AsyncDisplayPaceMs();
-        }
         // Parked on the display-phase gate: sleep until the render thread's present-ack wake, with the stall ceiling as
         // the backstop. Returning the pace cap here instead would wake the loop mid-flight only to gate again — busywork
         // that also re-samples the DirectManipulation pump deadline and drags production off the display's phase, which
@@ -1677,6 +1659,34 @@ public sealed class AppHost : IDisposable
         {
             _lastWaitKind = HostWaitKind.PaceAsync;
             _lastWaitWantsDisplayClock = _slipDetector.RephaseWanted;
+            return PhaseGateCeilingMs();
+        }
+        // Skip-submit pacing floor: an elided submit skips Present — so a scroll-armed-but-unchanged stretch (a held
+        // band, a spring tail, the 2s scrollbar idle-hide dwell, a mounted FrameClock poller over a static scene) would
+        // otherwise free-run the loop re-recording a byte-identical scene (measured on-device: ~785 fps, a full core,
+        // for the whole armed window). BOTH branches this can fall between are display-rate KINDS, so both are exempt
+        // from the NextDeltaMs Resync guard and the animation clock stays monotonic across a switch between them (a wait
+        // that read as a throttle gap here would zero-dt every animating frame — the frozen one-shot-anim bug class).
+        // Input still ends the wait immediately (WaitForWork is MsgWait-based), so nothing gains latency; the first
+        // frame that actually changes pixels submits.
+        //
+        // The display clock IS this branch's pacer, not a supplement, and the returned value is a pure FALLBACK for when
+        // the compositor clock is unavailable (headless, a remote session where the probe fails). It must therefore be
+        // LONGER than a refresh period, not shorter. Returning the pace cap here — DeriveAsyncPaceMs, i.e. refresh-1ms —
+        // made the wall clock RACE the tick and always win, so the loop woke on a 7ms timer instead of the 8.33ms vblank
+        // and production drifted off the panel's phase entirely: measured 219 fps of record-only frames against a 120 Hz
+        // panel, with present intervals smeared 8–50 ms and no vsync quantisation at all
+        // (ops/diag/sessions/live-20260814-152702-freescroll). The gate's own stall ceiling (2x refresh, clamped) is the
+        // right shape: with a tick the tick fires first and paces us onto the vblank; without one, byte-identical frames
+        // pace at 2R, which costs nothing because they produce no pixels by construction.
+        //
+        // Ordering: this sits BELOW the armed-gate branch deliberately. While the gate is armed a publish IS owed a
+        // present, the ack is the better phase reference, and asking for a per-tick wake there would re-enter the loop
+        // only to gate again — the busywork Pal.cs's WakeOnDisplayClock contract calls out by name.
+        if (_lastFrameSkippedSubmit)
+        {
+            _lastWaitKind = HostWaitKind.PaceSkipSubmit;
+            _lastWaitWantsDisplayClock = true;
             return PhaseGateCeilingMs();
         }
         // Unarmed async: nothing is owed a present, so there is no ack to sleep on and the wall-clock cap is the only
