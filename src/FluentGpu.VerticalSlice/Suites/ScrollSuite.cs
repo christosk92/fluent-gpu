@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Linq;
@@ -3046,24 +3046,31 @@ static class ScrollSuite
                 $"lines1={lines1:0.0} lines3={lines3:0.0} lines6={lines6:0.0} page={pageTarget:0.0}(exp {pageExpected:0}) carry={carryOk}");
         }
 
-        // gate.scroll.subpixel-stability (§8.10): a slow sub-pixel pan produces monotonic WHOLE-device-px translate steps
-        // (tx = round((offset+band)·scale)/scale) while the logical offset stays continuous float — and a ScrollBind sticky
-        // pin sharing the same origin computes the SAME rounded translation (no 1px seam). scale = 2 ⇒ steps of 0.5 DIP.
+        // gate.scroll.subpixel-stability (§8.10, REWRITTEN): a slow sub-pixel pan tracks the logical offset EXACTLY and
+        // advances in even sub-pixel steps — and a real ScrollBind sticky pin rides the same continuous grid, so its
+        // on-screen position never jumps a device pixel against the content beneath it.
+        //
+        // This gate previously asserted the OPPOSITE (tx = round((off+band)·s)/s, "step is 0 or one device px"). That
+        // snap is gone: it quantized all scrolling to the device grid, which at DPI scale 1.0 is a full 1 DIP, and
+        // measured over 5,483 real offset writes it made 26% of slow-scroll frames display a literal ZERO step while
+        // adding ~60% more velocity jitter at p90 than the motion actually had. The `stepEven` check below is the
+        // direct inverse of that defect: a zero step inside a moving sweep now FAILS.
         {
             const float scale = 2f;
+            const float inc = 0.1f;
             NodePaint cp = default; var bounds = new RectF(0, 0, 300, 3200);
-            float prevTx = float.NaN; bool monotonic = true, wholePx = true, stepOk = true;
+            float prevTx = float.NaN; bool monotonic = true, tracksExact = true, stepEven = true;
             for (int i = 0; i <= 40; i++)
             {
-                float off = i * 0.1f;   // 0..4 DIP in 0.1 steps (sub-device-pixel at scale 2)
+                float off = i * inc;    // 0..4 DIP in 0.1 steps (sub-device-pixel at scale 2)
                 OverscrollPhysics.WriteContentTransform(ref cp, in bounds, horizontal: false, offset: off, band: 0f, zoomFactor: 1f, scale: scale);
                 float tx = -cp.LocalTransform.Dy;                       // translation Y = −tx
-                if (MathF.Abs(tx * scale - MathF.Round(tx * scale)) > 1e-4f) wholePx = false;   // integral device px
+                if (MathF.Abs(tx - off) > 1e-4f) tracksExact = false;   // sub-pixel: the transform IS the logical offset
                 if (!float.IsNaN(prevTx))
                 {
                     float step = tx - prevTx;
                     if (step + 1e-4f < 0f) monotonic = false;
-                    if (!(step < 1e-4f || Near(step, 1f / scale, 1e-3f))) stepOk = false;        // step is 0 or one device px
+                    if (!Near(step, inc, 1e-3f)) stepEven = false;      // every frame moves the SAME distance — no hold-hold-jump
                 }
                 prevTx = tx;
             }
@@ -3073,7 +3080,7 @@ static class ScrollSuite
             // a sub-pixel step against the content beneath it. (The prior sub-check called WriteContentTransform TWICE with
             // identical args and asserted equality — tautological; it never exercised ApplyPin, so a real pin/content seam
             // — ApplyPin wrote an UNROUNDED Affine2D.Translation(0, shift) while content was device-px rounded — shipped unverified.)
-            bool pinDeviceAligned = true, pinWholePx = true, pinnedEver = false; string pinLog = "";
+            bool pinContinuous = true, pinnedEver = false; string pinLog = ""; float prevAbsY = float.NaN;
             {
                 using var papp = new HeadlessPlatformApp();
                 var pwin = new HeadlessWindow(new WindowDesc("subpixel-pin", new Size2(320, 240), 2f)); pwin.Show();
@@ -3120,16 +3127,19 @@ static class ScrollSuite
                     pwin.QueueInput(new InputEvent(InputKind.PointerMove, new Point2(8f, 8f), 0, 0));
                     phost.RunFrame();
                     if ((ps.Flags(headerN) & NodeFlags.StickyPinned) != 0) pinnedEver = true;
-                    float shiftDy = ps.Paint(headerN).LocalTransform.Dy;                         // the applied pin shift
-                    if (MathF.Abs(shiftDy * ds - MathF.Round(shiftDy * ds)) > 1e-3f) pinWholePx = false;
                     float absY = ps.AbsoluteRect(headerN).Y;                                     // on-screen (content + pin composed)
-                    if (MathF.Abs(absY * ds - MathF.Round(absY * ds)) > 1e-3f) { pinDeviceAligned = false; if (pinLog.Length == 0) pinLog = $"seam@y={y:0.0} absY={absY:0.###}"; }
+                    // The seam test, now that both sides are continuous: a pinned header must never move further in one
+                    // sub-pixel step than the step itself. Under the old shared device-px snap this jumped 1/ds (0.5 DIP)
+                    // at every grid crossing — visible as the header crawling against the rows sliding under it.
+                    if (!float.IsNaN(prevAbsY) && MathF.Abs(absY - prevAbsY) > 0.1f + 1e-3f)
+                    { pinContinuous = false; if (pinLog.Length == 0) pinLog = $"seam@y={y:0.0} d={MathF.Abs(absY - prevAbsY):0.###}"; }
+                    prevAbsY = absY;
                 }
-                if (headerN.IsNull) { pinDeviceAligned = false; pinLog = "header not realized"; }
+                if (headerN.IsNull) { pinContinuous = false; pinLog = "header not realized"; }
             }
-            Check("gate.scroll.subpixel-stability a slow sub-pixel pan advances in monotonic whole-device-px steps (tx=round((off+band)·s)/s) while logical offset stays float, and a REAL pinned ScrollBind shares the content's device grid — its shift AND on-screen position snap to whole device px (no 1px seam)",
-                monotonic && wholePx && stepOk && pinnedEver && pinWholePx && pinDeviceAligned,
-                $"monotonic={monotonic} wholePx={wholePx} stepOk={stepOk} pinnedEver={pinnedEver} pinWholePx={pinWholePx} pinDeviceAligned={pinDeviceAligned} {pinLog}");
+            Check("gate.scroll.subpixel-stability a slow sub-pixel pan tracks the logical offset EXACTLY in even monotonic sub-pixel steps (no device-grid quantization, so no zero-step frames), and a REAL pinned ScrollBind rides the same continuous grid — its on-screen position never jumps a device pixel against the content beneath it",
+                monotonic && tracksExact && stepEven && pinnedEver && pinContinuous,
+                $"monotonic={monotonic} tracksExact={tracksExact} stepEven={stepEven} pinnedEver={pinnedEver} pinContinuous={pinContinuous} {pinLog}");
         }
 
         // gate.scroll.transition-matrix (§8.11, structural guard for R1): drive the feel-critical legal transitions and

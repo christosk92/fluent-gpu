@@ -173,18 +173,26 @@ public static class OverscrollPhysics
     /// InteractionTracker-style path is <b>translation-only</b> elastic overscroll (no scale — scale-about-edge is
     /// DM touch-only and pivots in viewport scroll-space, not content bounds, which read as "wrong relative point"
     /// when scrolling). Pinch zoom still uses origin conjugation when <paramref name="zoomFactor"/> ≠ 1.
-    /// <para>The scroll-axis translation is snapped to a whole DEVICE pixel (scroll-feel-rework-v2 §4.6/§8):
-    /// <c>tx = round((offset+band)·scale)/scale</c> with <paramref name="scale"/> the effective DPI scale — a slow
-    /// sub-pixel pan advances in whole-device-px steps (a ScrollBind sticky pin sharing the origin never seams), while
-    /// the LOGICAL offset/band remain continuous float (the caller's state is untouched). Headless scale = 1.</para></summary>
+    /// <para>The scroll-axis translation is SUB-PIXEL — it is no longer snapped to a whole device pixel. The snap
+    /// (<c>tx = round((offset+band)·scale)/scale</c>, scroll-feel-rework-v2 §4.6/§8) quantized all scrolling to the
+    /// device grid, which at DPI scale 1.0 is a full 1 DIP: measured over 5,483 offset writes, 20% of frames advanced
+    /// ≤3 DIP and within that band <b>26% displayed a literal ZERO step</b> — hold, hold, jump — at a flawless 120 Hz,
+    /// and frame-to-frame velocity jitter at p90 rose from 0.593 (logical) to 0.947 (displayed), i.e. the snap ADDED
+    /// ~60% more perceived roughness than the motion actually had. Fast flings were never affected (at 12.7 DIP/frame
+    /// the snap costs ~4%); this was purely the slow, deliberate, reading-speed scroll.</para>
+    /// <para>What the snap was buying, and how that is paid for now: a ScrollBind sticky pin sharing this origin must
+    /// not seam a sub-pixel step against the content beneath it, so <c>ScrollBindEval</c> dropped its matching snap in
+    /// the same change — both sides are continuous float and agree exactly. Crisp TEXT under sub-pixel translation is
+    /// the glyph renderer's job, handled by the sub-pixel phase atlas (<c>GlyphRenderer.SubPixelPhases</c>) rather than
+    /// by quantizing the whole scene's motion. Headless scale = 1.</para></summary>
     public static void WriteContentTransform(
         ref NodePaint cp, in RectF contentBounds,
         bool horizontal, float offset, float band,
         float zoomFactor, float scale)
     {
         float z = (!float.IsFinite(zoomFactor) || zoomFactor <= 0f) ? 1f : zoomFactor;
-        float s = (!float.IsFinite(scale) || scale <= 0f) ? 1f : scale;
-        float t = MathF.Round((offset + band) * s) / s;   // device-pixel snap; logical offset/band stay float
+        _ = scale;   // kept in the signature (every caller passes the live DeviceScale); no longer a snap denominator
+        float t = offset + band;   // sub-pixel: no device-grid snap (see the remarks above)
         float offX = horizontal ? t : 0f;
         float offY = horizontal ? 0f : t;
 

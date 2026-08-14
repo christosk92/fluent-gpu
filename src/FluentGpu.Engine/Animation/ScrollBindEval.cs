@@ -196,12 +196,12 @@ public static class ScrollBindEval
                 shift = Math.Clamp(sc.OffsetY + b.Inset - yN, 0f, limit);
             }
         }
-        // Device-pixel snap (scroll-feel-rework-v2 §4.6/§8, gate.scroll.subpixel-stability): the pinned shift rounds to a
-        // whole device pixel on the SAME grid the content transform uses (OverscrollPhysics.WriteContentTransform:
-        // round((offset+band)·s)/s), so a sticky header sharing the scroller's origin never seams a sub-pixel step against
-        // the content beneath it during a slow pan. The clamp above stays in logical float; only the applied shift snaps.
-        float s = scene.DeviceScale;
-        if (float.IsFinite(s) && s > 0f) shift = MathF.Round(shift * s) / s;
+        // NO device-pixel snap. This shift and the content transform must live on the SAME grid or a sticky header
+        // seams a sub-pixel step against the content beneath it during a slow pan — that shared-grid requirement is why
+        // the snap existed here (scroll-feel-rework-v2 §4.6/§8) and it is exactly why it had to be removed here too when
+        // OverscrollPhysics.WriteContentTransform went sub-pixel. Both sides are now continuous float, so they agree
+        // EXACTLY rather than agreeing only at the quantum. Crisp text under sub-pixel motion is handled where it
+        // belongs, in the glyph renderer's sub-pixel phase atlas.
         ref NodePaint p = ref scene.Paint(n);
         bool pinned = shift > 0f;
         if (MathF.Abs(p.LocalTransform.Dy - shift) > 0.01f)
@@ -242,8 +242,8 @@ public static class ScrollBindEval
         if (!inContent) return;
         if (PerfEnabled) StickyClipEvals++;
         float top = sc.OffsetY + b.Inset - yN;                     // node-local y of the viewport-anchored line
-        float s = scene.DeviceScale;
-        if (float.IsFinite(s) && s > 0f) top = MathF.Round(top * s) / s;
+        // Sub-pixel, on the same continuous grid as the content transform and the pinned shift above: a clip edge that
+        // snapped while the content it cuts did not would crawl a pixel against the moving rows under it.
         float nodeH = scene.Bounds(n).H;
         // Fully above the sticky line: freeze ClipRect.Y at nodeH so further offset advances do not re-Mark every
         // pixel (overscan rows under translucent chrome were the playlist sticky hitch — O(window) PaintDirty/frame).

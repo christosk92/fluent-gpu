@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -57,7 +57,11 @@ internal readonly record struct GlyphKey(int Fam, int Size, int Scale, int Weigh
 /// <summary>One baked glyph quad in LOCAL (DIP) space — color/transform/opacity are applied per-frame at replay, NOT baked
 /// here, so the same shaped run is reusable across scroll/theme/fade. The atlas UVs are stable (the shelf packer never
 /// repacks), so a cached quad stays valid for the life of the run.</summary>
-internal struct ShapedGlyph { public float DstX, DstY, DstW, DstH, U0, V0, U1, V1; }
+/// <summary>One cached local-space glyph quad. <see cref="V0"/>/<see cref="V1"/> address sub-pixel phase 0; a replay at
+/// phase <c>p</c> adds <c>p * VStride</c> to both, which is why the phase stack is packed CONTIGUOUSLY (one atlas slot,
+/// <c>SubPixelPhases</c> variants stacked vertically). That keeps the shaped-run cache phase-AGNOSTIC — the alternative,
+/// keying runs by phase, would multiply the cache by the phase count and re-shape on every sub-pixel crossing.</summary>
+internal struct ShapedGlyph { public float DstX, DstY, DstW, DstH, U0, V0, U1, V1, VStride; }
 
 /// <summary>A fully shaped text run cached by content (see <see cref="RunKey"/>): the local-space quads + an LRU stamp.
 /// Allocated only on a cache miss (content change); replayed allocation-free on every steady-state frame.
@@ -136,7 +140,23 @@ internal sealed unsafe class GlyphRenderer : IDisposable
     // (~1,500 distinct glyphs at two sizes) plus the app's text fits one generation. Overflow is still HANDLED
     // (generational reset below) — before that, a full atlas silently cached entries at X=Y=0, so every later
     // glyph sampled the atlas origin and corrupted all text for the rest of the session.
-    private const int ATLAS = 2048;
+    private const int ATLAS = 4096;
+
+    /// <summary>Vertical sub-pixel positions each glyph is rasterized at. Text can then be placed on a 1/N device-row
+    /// grid and stay CRISP, instead of choosing between a whole-pixel snap (which quantizes all scrolling to the device
+    /// grid — at DPI scale 1.0 that is a full 1 DIP, and 26% of slow-scroll frames displayed a literal zero step) and
+    /// drawing unsnapped (which samples an integer-baseline bitmap at a fractional device Y through a LINEAR sampler and
+    /// smears every glyph across two rows — the literal "motion blur while scrolling, sharp when it stops").
+    ///
+    /// <para>4 phases ⇒ worst-case placement error 1/8 device pixel, below the visual threshold, and the same count
+    /// Skia has long used for sub-pixel text positioning. The cost is per-glyph atlas AREA, not per-glyph count: each
+    /// entry is <c>SubPixelPhases</c>× taller, which is why <see cref="ATLAS"/> went 2048 → 4096 in the same change
+    /// (4× the area exactly absorbs it; R8, so 16 MB). Raising this without raising the atlas trades crispness for
+    /// eviction thrash.</para></summary>
+    internal const int SubPixelPhases = 4;
+
+    /// <summary>Baseline Y offset in DEVICE pixels for phase <paramref name="p"/> (positive = down).</summary>
+    private static float PhaseOffset(int p) => p / (float)SubPixelPhases;
 
     private IDWriteFactory* _dw;
     private const string DefaultFamily = "Segoe UI";
@@ -451,34 +471,98 @@ float4 PSMain(VSOutG i) : SV_Target
         run.isSideways = BOOL.FALSE;
         run.bidiLevel = 0;
 
-        IDWriteGlyphRunAnalysis* analysis;
         // NATURAL_SYMMETRIC (not NATURAL): symmetric AA in BOTH axes. Plain NATURAL anti-aliases only horizontally, which
         // samples out fine horizontal stroke features — the documented blur on CJK faces (e.g. MS Mincho) and large text.
         // SYMMETRIC is the modern default (UWP/WinUI/WPF) and Microsoft's recommendation above ~16 ppem. (dwrite.h docs.)
-        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
-            DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, 0f, &analysis), "CreateGlyphRunAnalysis");
-
         // NATURAL (antialiased) rendering mode → must query the CLEARTYPE_3x1 texture (ALIASED_1x1 returns empty bounds here).
-        RECT bounds;
-        Check(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds), "GetAlphaTextureBounds");
-        int w = bounds.right - bounds.left, h = bounds.bottom - bounds.top;
+        // H is the PER-PHASE height; the packed slot is SubPixelPhases× that.
+        bool hasInk = TryRasterizePhaseStack(&run, out RECT bounds, out int w, out int h, out byte[] stack);
+        if (!hasInk) { bounds = default; w = 0; h = 0; }
 
         e = new GlyphEntry { Advance = advance, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
-        Diag.Set("text.glyph", "last", $"ch='{ch}' gi={gi} {w}x{h} adv={advance:0.0}");
+        Diag.Set("text.glyph", "last", $"ch='{ch}' gi={gi} {w}x{h}x{SubPixelPhases} adv={advance:0.0}");
         if (w > 0 && h > 0)
         {
-            byte[] rgb = new byte[w * h * 3];   // 3 subpixel coverage bytes per pixel
-            fixed (byte* pr = rgb)
-                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)rgb.Length), "CreateAlphaTexture");
-            byte[] gray = new byte[w * h];      // average to grayscale coverage for the R8 atlas
-            for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
-            PackOrReset(ref e, gray, w, h);
+            PackOrReset(ref e, stack, w, h * SubPixelPhases);
             _atlasDirty = true;
         }
         Diag.Count("text.glyph", "rasterized");
-        analysis->Release();
         _cache[key] = e;
         return e;
+    }
+
+    /// <summary>Rasterize <see cref="SubPixelPhases"/> vertically-offset variants of one glyph run and stack them into a
+    /// single R8 image of <c>w × (h · SubPixelPhases)</c>, phase p occupying rows <c>[p·h, (p+1)·h)</c>.
+    ///
+    /// <para>All phases share ONE box — the union of their individual alpha-texture bounds — so every variant is aligned
+    /// to the same origin and differs only by the sub-pixel shift. That is what lets the replay select a phase with a
+    /// single V offset instead of per-phase bearings. The union is taken rather than "phase 0 plus a row" because a
+    /// sub-pixel shift can move the reported bounds on either edge, and <c>CreateAlphaTexture</c> is asked for each
+    /// phase's OWN rect (passing a wider rect than the analysis reported is not contractually safe) and blitted into
+    /// place.</para>
+    ///
+    /// <para>Returns false for a glyph with no coverage at any phase (space, control) — the caller caches a zero-size
+    /// entry as before. Cache-miss path only: 2N analyses per glyph, never per frame.</para></summary>
+    private bool TryRasterizePhaseStack(DWRITE_GLYPH_RUN* run, out RECT box, out int w, out int h, out byte[] stack)
+    {
+        box = default; w = 0; h = 0; stack = [];
+        RECT union = default;
+        bool any = false;
+        for (int p = 0; p < SubPixelPhases; p++)
+        {
+            IDWriteGlyphRunAnalysis* a;
+            Check(_dw->CreateGlyphRunAnalysis(run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+                DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, PhaseOffset(p), &a), "CreateGlyphRunAnalysis");
+            RECT b;
+            int hr = (int)a->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &b);
+            a->Release();
+            Check(hr, "GetAlphaTextureBounds");
+            if (b.right <= b.left || b.bottom <= b.top) continue;
+            if (!any) { union = b; any = true; }
+            else
+            {
+                if (b.left < union.left) union.left = b.left;
+                if (b.top < union.top) union.top = b.top;
+                if (b.right > union.right) union.right = b.right;
+                if (b.bottom > union.bottom) union.bottom = b.bottom;
+            }
+        }
+        if (!any) return false;
+
+        box = union;
+        w = union.right - union.left;
+        h = union.bottom - union.top;
+        stack = new byte[w * h * SubPixelPhases];
+
+        for (int p = 0; p < SubPixelPhases; p++)
+        {
+            IDWriteGlyphRunAnalysis* a;
+            Check(_dw->CreateGlyphRunAnalysis(run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
+                DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, PhaseOffset(p), &a), "CreateGlyphRunAnalysis");
+            RECT b;
+            int hrB = (int)a->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &b);
+            if (hrB < 0) { a->Release(); Check(hrB, "GetAlphaTextureBounds"); }
+            int bw = b.right - b.left, bh = b.bottom - b.top;
+            if (bw <= 0 || bh <= 0) { a->Release(); continue; }
+            byte[] rgb = ArrayPool<byte>.Shared.Rent(bw * bh * 3);
+            int hrT;
+            fixed (byte* pr = rgb)
+                hrT = (int)a->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &b, pr, (uint)(bw * bh * 3));
+            a->Release();
+            if (hrT >= 0)
+            {
+                int dstBase = p * w * h + (b.top - union.top) * w + (b.left - union.left);
+                for (int row = 0; row < bh; row++)
+                {
+                    int src = row * bw * 3, dst = dstBase + row * w;
+                    for (int x = 0; x < bw; x++)
+                        stack[dst + x] = (byte)((rgb[src + 3 * x] + rgb[src + 3 * x + 1] + rgb[src + 3 * x + 2]) / 3);
+                }
+            }
+            ArrayPool<byte>.Shared.Return(rgb);
+            Check(hrT, "CreateAlphaTexture");
+        }
+        return true;
     }
 
     /// <summary>Shelf-pack one rasterized glyph. False = atlas full — the caller must NOT cache the entry as-is
@@ -594,7 +678,8 @@ float4 PSMain(VSOutG i) : SV_Target
             if (VerifyCache) VerifyAgainstReshape(in hit, text, family, size, weight, originX, topY, maxWidth, wrap, trim, maxLines, charSpacing, lineHeight, lineStacking, lineBounds, dpiScale, spanRunId);
 #endif
             var quads = hit.Glyphs.AsSpan(0, hit.Count);
-            Replay(quads, hit.Colors, forceColor, color, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), outList);
+            float snap = SnapDy(quads, world, dpiScale, out int ph);
+            Replay(quads, hit.Colors, forceColor, color, world, opacity, snap, ph, outList);
             return;
         }
 
@@ -622,7 +707,8 @@ float4 PSMain(VSOutG i) : SV_Target
         _runCache[key] = new ShapedRun { Glyphs = arr, Colors = colors, Count = n, LastUsedFrame = _frame };
         _runsShaped++;
         var baked = arr.AsSpan(0, n);
-        Replay(baked, colors, forceColor, color, world, opacity, inMotion ? 0f : SnapDy(baked, world, dpiScale), outList);
+        float bsnap = SnapDy(baked, world, dpiScale, out int bph);
+        Replay(baked, colors, forceColor, color, world, opacity, bsnap, bph, outList);
     }
 
     private float[] _gradDy = Array.Empty<float>();
@@ -702,17 +788,17 @@ float4 PSMain(VSOutG i) : SV_Target
             bool sung = split >= 1f;
             ColorF settled = sung ? before : after;
             if (settled.A * opacity <= SettledAlphaEpsilon) return;   // invisible (e.g. the glow layer's unsung pass)
-            float settledSnap = inMotion ? 0f : SnapDy(quads, world, dpiScale);
+            float settledSnap = SnapDy(quads, world, dpiScale, out int settledPhase);
             if (sung)
             {
-                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, plainList);
+                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, settledPhase, plainList);
             }
             else
             {
                 if (_gradDy.Length < count) _gradDy = new float[count];
                 var dy = _gradDy.AsSpan(0, count);
                 dy.Fill(lift);   // a == 0 everywhere ⇒ lift*(1-a) == lift; Span.Fill is intrinsic, no allocation
-                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, plainList, dy);
+                Replay(quads, null, forceColor: true, settled, world, opacity, settledSnap, settledPhase, plainList, dy);
             }
             return;
         }
@@ -777,7 +863,8 @@ float4 PSMain(VSOutG i) : SV_Target
             float a = Math.Clamp((splitShader - gtc) / fade + 0.5f, 0f, 1f);
             _gradDy[i] = lift * (1f - a);   // unsung sunk by `lift`, rising to the baseline (0) as it is swept (settles to 0 at split==1)
         }
-        ReplayGradient(quads, world, opacity, inMotion ? 0f : SnapDy(quads, world, dpiScale), before, after, splitShader, fade, total,
+        float gsnap = SnapDy(quads, world, dpiScale, out int gph);
+        ReplayGradient(quads, world, opacity, gsnap, gph, before, after, splitShader, fade, total,
             _gradRo0.AsSpan(0, count), _gradRo1.AsSpan(0, count), _gradDy.AsSpan(0, count), outList);
     }
 
@@ -813,23 +900,35 @@ float4 PSMain(VSOutG i) : SV_Target
             (int)MathF.Round(charSpacing * 10f), lineHQ, lineStacking | (lineBounds << 8), spanRunId);
     }
 
-    /// <summary>Per-run vertical device-grid correction (local DIP), applied at replay. Glyph bitmaps are rasterized
-    /// for an INTEGER device baseline (CreateGlyphRunAnalysis at baselineOrigin 0,0) and every bearing/height is an
-    /// integer device row, so all of a run's quads share the first quad's fractional device-Y phase. Drawn at a
-    /// fractional device Y, the LINEAR/CLAMP atlas sampler attenuates the bottom coverage row by (1−frac) — the
-    /// intermittent "label shaved 1-2px at the bottom" defect (layout never snaps: a centered row yields fractional
-    /// DIP Y, and the DPI scale is fractional at 125/150/175%). Snapping happens HERE, not at bake, so cached quads
-    /// stay phase-agnostic and one run cached at one position replays correctly at any other. One scalar for the
-    /// whole run: multi-line leading stays uniform (lines snap as a group from the first baseline). Y only — X keeps
-    /// DirectWrite's sub-pixel advances. Skewed/rotated/flipped worlds (M12 ≠ 0 or M22 ≤ 0) draw unsnapped — there
-    /// is no meaningful pixel grid for them. MOTION-GATED at the call sites: a run whose world was written this frame
-    /// (DrawGlyphRunCmd.InMotion — scroll/fling/drag/FLIP) draws unsnapped so it rides sub-pixel with its plate instead
-    /// of hopping a device row at every half-pixel crossing; the host's settle frame re-snaps it crisp at rest.</summary>
-    private static float SnapDy(ReadOnlySpan<ShapedGlyph> glyphs, in Affine2D world, float dpiScale)
+    /// <summary>Per-run vertical placement, applied at replay: snap the run's baseline to the nearest <b>1/N device
+    /// row</b> and report which of the <see cref="SubPixelPhases"/> baked variants realises that fraction. Returns the
+    /// correction in local DIP; <paramref name="phase"/> selects the atlas rows.
+    ///
+    /// <para>Glyph bitmaps are rasterized for an integer device baseline PLUS a known sub-pixel offset, and every
+    /// bearing/height is an integer device row, so all of a run's quads share the first quad's fractional device-Y
+    /// phase. The correction moves the baseline onto the integer row <c>i</c>; the bitmap itself carries the remaining
+    /// <c>phase/N</c>. Worst-case residual is 1/(2N) device pixels.</para>
+    ///
+    /// <para>This replaces a whole-pixel snap that was <b>motion-gated off</b> for the entire duration of every scroll,
+    /// fling and drag — which meant a fractional device Y sampled through the LINEAR/CLAMP atlas sampler, attenuating
+    /// the bottom coverage row by (1−frac) and smearing every glyph across two rows for as long as the gesture lasted,
+    /// then popping sharp on the settle frame. There is no longer anything to gate: the phase stack is crisp at any
+    /// fraction, so text stays sharp in motion AND the scene is free to move sub-pixel.</para>
+    ///
+    /// <para>Snapping happens HERE, not at bake, so cached quads stay phase-agnostic and one run cached at one position
+    /// replays correctly at any other. One scalar for the whole run: multi-line leading stays uniform (lines snap as a
+    /// group from the first baseline). Y only — X keeps DirectWrite's sub-pixel advances. Skewed/rotated/flipped worlds
+    /// (M12 ≠ 0 or M22 ≤ 0) draw unsnapped at phase 0 — there is no meaningful pixel grid for them.</para></summary>
+    private static float SnapDy(ReadOnlySpan<ShapedGlyph> glyphs, in Affine2D world, float dpiScale, out int phase)
     {
+        phase = 0;
         if (glyphs.Length == 0 || world.M12 != 0f || world.M22 <= 0f) return 0f;
         float devY = (world.M22 * glyphs[0].DstY + world.Dy) * dpiScale;
-        return (MathF.Round(devY) - devY) / (world.M22 * dpiScale);
+        float m = MathF.Round(devY * SubPixelPhases);          // nearest 1/N device row, in 1/N units
+        float rowF = MathF.Floor(m / SubPixelPhases);          // the integer device row the quad is positioned on
+        phase = (int)(m - rowF * SubPixelPhases);              // floor remainder ⇒ always 0..N-1, incl. negative devY
+        if (phase < 0) phase = 0; else if (phase >= SubPixelPhases) phase = SubPixelPhases - 1;
+        return (rowF - devY) / (world.M22 * dpiScale);
     }
 
     /// <summary>Emit cached local-space quads into <paramref name="outList"/>, applying the per-frame color/transform/opacity
@@ -841,17 +940,18 @@ float4 PSMain(VSOutG i) : SV_Target
     /// <paramref name="perGlyphDy"/> (optional, parallel to <paramref name="glyphs"/>): an extra per-glyph local-DIP Y
     /// offset added on top of <paramref name="snapDy"/> — how <see cref="LayoutRunGradient"/>'s settled-split fast path
     /// reproduces the wipe's uniform unsung `Lift` through this lean single-color path.</summary>
-    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
+    private static void Replay(ReadOnlySpan<ShapedGlyph> glyphs, ColorF[]? colors, bool forceColor, ColorF color, Affine2D world, float opacity, float snapDy, int phase, List<GlyphInstance> outList, ReadOnlySpan<float> perGlyphDy = default)
     {
         for (int i = 0; i < glyphs.Length; i++)
         {
             ref readonly var s = ref glyphs[i];
             ColorF c = colors is not null && !forceColor && colors[i].A > 0f ? colors[i] : color;
             float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
+            float v = phase * s.VStride;   // select the baked sub-pixel variant (contiguous phase stack)
             outList.Add(new GlyphInstance
             {
                 DstX = dx, DstY = dy, DstW = dw, DstH = dh,
-                U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
+                U0 = s.U0, V0 = s.V0 + v, U1 = s.U1, V1 = s.V1 + v,
                 R = c.R, G = c.G, B = c.B, A = c.A,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy, Opacity = opacity,
             });
@@ -862,7 +962,7 @@ float4 PSMain(VSOutG i) : SV_Target
     /// and record its run-local-x extent [gt0,gt1] plus before/after/split/fade — the PS does the per-PIXEL colour mix, so
     /// the wipe boundary cuts THROUGH glyphs (half sung / half unsung), not glyph-by-glyph. The quad's SIZE is never
     /// touched: glyphs do not magnify at the front (the refuted char pop — see LayoutRunGradient).</summary>
-    private static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float snapDy,
+    private static void ReplayGradient(ReadOnlySpan<ShapedGlyph> glyphs, Affine2D world, float opacity, float snapDy, int phase,
         ColorF before, ColorF after, float split, float fade, float total,
         ReadOnlySpan<float> ro0, ReadOnlySpan<float> ro1,
         ReadOnlySpan<float> perGlyphDy, List<GradGlyphInstance> outList)
@@ -872,10 +972,11 @@ float4 PSMain(VSOutG i) : SV_Target
         {
             ref readonly var s = ref glyphs[i];
             float dx = s.DstX, dy = s.DstY + snapDy + (i < perGlyphDy.Length ? perGlyphDy[i] : 0f), dw = s.DstW, dh = s.DstH;
+            float v = phase * s.VStride;   // select the baked sub-pixel variant (contiguous phase stack)
             outList.Add(new GradGlyphInstance
             {
                 DstX = dx, DstY = dy, DstW = dw, DstH = dh,
-                U0 = s.U0, V0 = s.V0, U1 = s.U1, V1 = s.V1,
+                U0 = s.U0, V0 = s.V0 + v, U1 = s.U1, V1 = s.V1 + v,
                 M11 = world.M11, M12 = world.M12, M21 = world.M21, M22 = world.M22, Dx = world.Dx, Dy = world.Dy,
                 BR = before.R, BG = before.G, BB = before.B, BA = before.A,
                 AR = after.R, AG = after.G, AB = after.B, AA = after.A,
@@ -921,6 +1022,7 @@ float4 PSMain(VSOutG i) : SV_Target
                         DstX = originX + lg.X + ge.BearingX * inv, DstY = topY + lg.Y + ge.BearingY * inv,
                         DstW = ge.W * inv, DstH = ge.H * inv,
                         U0 = ge.X / (float)ATLAS, V0 = ge.Y / (float)ATLAS, U1 = (ge.X + ge.W) / (float)ATLAS, V1 = (ge.Y + ge.H) / (float)ATLAS,
+                        VStride = ge.H / (float)ATLAS,
                     });
                     colorsOut?.Add(lg.Span >= 0 && lg.Span < spans.Length ? spans[lg.Span].Color : default);
                 }
@@ -949,30 +1051,16 @@ float4 PSMain(VSOutG i) : SV_Target
         run.glyphIndices = &gi; run.glyphAdvances = &zeroAdvance; run.glyphOffsets = null;
         run.isSideways = BOOL.FALSE; run.bidiLevel = 0;
 
-        IDWriteGlyphRunAnalysis* analysis;
-        // NATURAL_SYMMETRIC (not NATURAL): symmetric AA in BOTH axes. Plain NATURAL anti-aliases only horizontally, which
-        // samples out fine horizontal stroke features — the documented blur on CJK faces (e.g. MS Mincho) and large text.
-        // SYMMETRIC is the modern default (UWP/WinUI/WPF) and Microsoft's recommendation above ~16 ppem. (dwrite.h docs.)
-        Check(_dw->CreateGlyphRunAnalysis(&run, 1.0f, null, DWRITE_RENDERING_MODE.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
-            DWRITE_MEASURING_MODE.DWRITE_MEASURING_MODE_NATURAL, 0f, 0f, &analysis), "CreateGlyphRunAnalysis");
-        RECT bounds;
-        Check(analysis->GetAlphaTextureBounds(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds), "GetAlphaTextureBounds");
-        int w = bounds.right - bounds.left, h = bounds.bottom - bounds.top;
+        // NATURAL_SYMMETRIC + the SubPixelPhases vertical phase stack — see TryRasterizePhaseStack. H is PER PHASE.
+        bool hasInk = TryRasterizePhaseStack(&run, out RECT bounds, out int w, out int h, out byte[] stack);
+        if (!hasInk) { bounds = default; w = 0; h = 0; }
         e = new GlyphEntry { Advance = 0f, BearingX = bounds.left, BearingY = bounds.top, W = w, H = h };
         if (w > 0 && h > 0)
         {
-            byte[] rgb = ArrayPool<byte>.Shared.Rent(w * h * 3);
-            fixed (byte* pr = rgb)
-                Check(analysis->CreateAlphaTexture(DWRITE_TEXTURE_TYPE.DWRITE_TEXTURE_CLEARTYPE_3x1, &bounds, pr, (uint)(w * h * 3)), "CreateAlphaTexture");
-            byte[] gray = ArrayPool<byte>.Shared.Rent(w * h);
-            for (int i = 0; i < w * h; i++) gray[i] = (byte)((rgb[3 * i] + rgb[3 * i + 1] + rgb[3 * i + 2]) / 3);
-            PackOrReset(ref e, gray, w, h);
-            ArrayPool<byte>.Shared.Return(gray);
-            ArrayPool<byte>.Shared.Return(rgb);
+            PackOrReset(ref e, stack, w, h * SubPixelPhases);
             _atlasDirty = true;
         }
         Diag.Count("text.glyph", "rasterized");
-        analysis->Release();
         _cache[key] = e;
         return e;
     }
@@ -985,6 +1073,7 @@ float4 PSMain(VSOutG i) : SV_Target
             {
                 DstX = pen + g.BearingX * inv, DstY = baseline + g.BearingY * inv, DstW = g.W * inv, DstH = g.H * inv,
                 U0 = g.X / (float)ATLAS, V0 = g.Y / (float)ATLAS, U1 = (g.X + g.W) / (float)ATLAS, V1 = (g.Y + g.H) / (float)ATLAS,
+                VStride = g.H / (float)ATLAS,
             });
         return pen + g.Advance;
     }

@@ -3120,12 +3120,19 @@ public sealed class AppHost : IDisposable
                     _scrollAnim.HasActive || _dispatcher.GestureActive);
             // scroll-feel-rework-v2 §4.1: the TouchpadTracking resampler targets frameT − ScrollTuning.ResampleLatencyMs
             // (12ms as shipped, NOT the 5ms of the original design — four comments drifted on that and are now fixed).
-            // NOTE the sampled instant is thereby BEHIND frame start, not ahead to the frame's expected PRESENT time; the
-            // signed gap is emitted as clockSampleSkewMs on the latency row so it is measured rather than assumed.
-            // Feed the frame's QPC clock
-            // (matches the dispatcher's per-packet QpcTicks). Headless leaves it 0 → the resampler uses the latest deposited
-            // sample (no synthesis), preserving gate determinism.
-            if (!_isHeadless) _scrollAnim.FrameQpcSec = Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
+            // Feed the frame's QPC clock (matches the dispatcher's per-packet QpcTicks). Headless leaves it 0 → the
+            // resampler uses the latest deposited sample (no synthesis), preserving gate determinism.
+            //
+            // VBLANK-QUANTIZED, not a raw clock read. The resampled position is a smooth least-squares function of time
+            // (ScrollIntegrator.ResampleContact), so the evenness of the MOTION is exactly the evenness of the instant we
+            // evaluate it at. A bare Stopwatch.GetTimestamp() here is taken mid-phase-7 — after _anim.Tick, incremental
+            // layout and reflow — so its spacing carries all of their variance (measured sd 1.4–2.4 ms, p05 6.77 / p95
+            // 9.85 ms) while the photons it feeds land on a rigid refresh lattice (95% of attested PresentRefreshCount
+            // deltas advance exactly one slot). Evaluating a smooth curve at a jittery argument and displaying it on an
+            // even grid IS the judder: same applied offsets divided by the actual frame interval measure 24.3% velocity
+            // roughness, divided by the real refresh grid 37.0% — a 1.53x amplification affecting every frame at every
+            // speed (ops/diag/sessions/live-20260814-152702-freescroll).
+            if (!_isHeadless) _scrollAnim.FrameQpcSec = QuantizedFrameSec(Stopwatch.GetTimestamp());
             _scrollAnim.Tick(dtMs);                            // 7 smooth scroll + fling + overscroll spring + scrollbar fade (the engine-owned integrator)
             long scrollHoldNow = Stopwatch.GetTimestamp();
             if (_scrollAnim.AnyUserScrollActiveThisFrame)
@@ -4027,6 +4034,44 @@ public sealed class AppHost : IDisposable
         long p = _device.LastPresentStats.RefreshPeriodQpc;
         return p > 0 ? p : Stopwatch.Frequency / 60;
     }
+
+    /// <summary>The frame's motion-sampling instant, SNAPPED to the display's refresh lattice: the phase anchor is the
+    /// last present stamp (a real vblank the OS attested), the step is the measured refresh period, and the result is
+    /// the lattice point nearest <paramref name="nowQpc"/>.
+    ///
+    /// <para>Why snap at all. Everything downstream of this value is smooth by construction — the resampler evaluates a
+    /// least-squares line, the spring is analytical — so the only place per-frame motion roughness can enter is the
+    /// ARGUMENT. Snapping makes consecutive frames differ by exactly one refresh period, which is what the display will
+    /// actually do with them.</para>
+    ///
+    /// <para>NEAREST, not next. Rounding to the nearest lattice point is a zero-mean correction, so it removes variance
+    /// without shifting the resampler's effective latency — the 12 ms <c>ResampleLatencyMs</c> lag keeps its meaning and
+    /// the no-extrapolation clamp (note 101) does not start firing more often, which projecting FORWARD to the expected
+    /// present would have caused (the target would routinely land past the newest contact sample and clamp).</para>
+    ///
+    /// <para>Falls back to the raw clock whenever the lattice cannot be trusted: no present stamped yet (first frames,
+    /// headless), a non-positive period, or an anchor so old that accumulated period error would have drifted the phase
+    /// — better an honest jittery instant than a confidently wrong one. MONOTONIC by construction: the returned value
+    /// never goes backwards, because a backwards step would hand the integrator a negative dt and freeze the motion.</para></summary>
+    private double QuantizedFrameSec(long nowQpc)
+    {
+        long refresh = RefreshPeriodQpcOrDefault();
+        long anchor = Volatile.Read(ref _lastPresentQpc);
+        double freq = Stopwatch.Frequency;
+        if (anchor <= 0 || refresh <= 0) { _lastQuantizedFrameQpc = nowQpc; return nowQpc / freq; }
+        long delta = nowQpc - anchor;
+        // A stale anchor cannot carry phase: at 120 Hz a 0.1% period error is a whole refresh of drift after ~1.4 s.
+        if (delta < 0 || delta > refresh * 128) { _lastQuantizedFrameQpc = nowQpc; return nowQpc / freq; }
+        long k = (delta + refresh / 2) / refresh;         // nearest lattice point (delta >= 0 here, so no floor/trunc split)
+        long snapped = anchor + k * refresh;
+        // Never rewind: a snap that lands before the previous frame's instant would produce a negative dt downstream.
+        if (snapped < _lastQuantizedFrameQpc) snapped = _lastQuantizedFrameQpc;
+        _lastQuantizedFrameQpc = snapped;
+        return snapped / freq;
+    }
+
+    /// <summary>Previous <see cref="QuantizedFrameSec"/> result (QPC ticks) — the monotonicity floor.</summary>
+    private long _lastQuantizedFrameQpc;
 
     private void EmitLatencyRow(float dtMs)
     {

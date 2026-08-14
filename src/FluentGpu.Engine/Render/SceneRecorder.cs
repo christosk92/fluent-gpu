@@ -1549,7 +1549,9 @@ public static class SceneRecorder
                 int spanRunId = li.TextStyle.SpanRunId;
                 if (!p.Text.IsEmpty)
                 {
-                    if (inMotion) stats.UnsnappedGlyphSpans++;
+                    // No longer counted on motion: with the glyph renderer's sub-pixel phase atlas a moving run is drawn
+                    // CRISP at its 1/N device row rather than unsnapped, so there is nothing for the host's settle frame
+                    // to re-snap. The counter stays (it is a public record stat) and now reports the truth: zero.
                     if (scene.TryGetGlyphWipe(node, out var wipe))   // glyph wipe (lyrics karaoke): per-glyph color + lift from the split
                         dl.DrawGlyphRunGradient(local, p.Text, li.TextStyle.FontFamily, effSize, li.TextStyle.Weight,
                             (int)li.TextStyle.Wrap, (int)li.TextStyle.Trim, li.TextStyle.MaxLines,

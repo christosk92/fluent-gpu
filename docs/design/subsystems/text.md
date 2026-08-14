@@ -603,8 +603,17 @@ Cache `(faceId, scriptTag, cp-block) → substituteFaceId`. **Run boundaries ali
 
 - **Horizontal subpixel:** `SubpxX` bucket N=4; pen X snapped to 1/4 px, the residual baked into the raster
   transform (4.5). Preserves inter-glyph spacing fidelity at ≤4× glyph storage.
-- **Vertical:** `SubpxY`=1 for horizontal Latin/Cyrillic/Greek (baseline grid-snapped per line); vertical/
-  sideways CJK may use N=4.
+- **Vertical:** `SubpxY` bucket **N=4** (`GlyphRenderer.SubPixelPhases`), for ALL scripts — the per-line baseline
+  is placed on a 1/4-device-row grid and the residual sub-pixel offset is baked into the raster (`baselineOriginY
+  = p/N` at `CreateGlyphRunAnalysis`). Was `SubpxY`=1 (whole-row baseline snap) for horizontal Latin/Cyrillic/Greek.
+  **Why it changed:** a whole-row vertical snap forces a choice between quantizing all SCROLLING to the device grid
+  (at DPI scale 1.0 that is a full 1 DIP — measured 26% of slow-scroll frames displaying a literal zero step) and
+  drawing text unsnapped while it moves, which samples an integer-baseline bitmap at a fractional device Y through
+  the LINEAR/CLAMP atlas sampler and smears every glyph across two rows for the whole gesture. Four vertical phases
+  dissolve the choice: worst-case placement error is 1/8 device px, text stays crisp *in motion*, and the scene is
+  free to translate sub-pixel. Cost is glyph atlas **area**, not entry count — the phase stack is packed contiguously
+  in one slot so the shaped-run cache stays phase-agnostic and a replay selects a phase with one V offset; the atlas
+  went 2048² → 4096² (R8, 16 MB) to absorb it exactly.
 - **Hinting/grid-fit:** `NATURAL_SYMMETRIC` + `GRID_FIT_DEFAULT` (smooth, position-accurate, animation- and
   transform-friendly — favors GPU composability over maximal small-size sharpness); GDI-classic only behind an
   explicit "crisp small UI text" opt-in (forces integer positioning + grid-fit + disables subpixel X).
