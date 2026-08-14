@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
@@ -14,7 +14,7 @@ namespace Wavee;
 // ── Settings shell — tab strip + shared layout helpers; tab bodies live in partials + DiagnosticsPanel ─────────────
 sealed partial class SettingsPage : Component
 {
-    const int TabGeneral = 0, TabPlayback = 1, TabStorage = 2, TabDiagnostics = 3, TabAbout = 4;
+    const int TabGeneral = 0, TabPlayback = 1, TabNotifications = 2, TabStorage = 3, TabDiagnostics = 4, TabAbout = 5;
     const float SettingsContentMaxWidth = 1000f;
     const float SettingsCardSpacing = 4f;
     static readonly Edges4 SettingsSectionHeaderMargin = new(0f, Spacing.XXXL, 0f, Spacing.S);
@@ -38,6 +38,7 @@ sealed partial class SettingsPage : Component
     [
         Loc.Get(Strings.Settings.Tabs.General),
         Loc.Get(Strings.Settings.Tabs.Playback),
+        Loc.Get(Strings.Settings.Notify.Title),
         Loc.Get(Strings.Settings.Tabs.Storage),
         Loc.Get(Strings.Settings.Tabs.Diagnostics),
         Loc.Get(Strings.Settings.Tabs.About),
@@ -114,6 +115,7 @@ sealed partial class SettingsPage : Component
         Element body = tab switch
         {
             TabPlayback => PlaybackTab(svc),
+            TabNotifications => NotificationsTab(svc),
             TabStorage => StorageTab(svc, post),
             TabDiagnostics => new BoxEl
             {

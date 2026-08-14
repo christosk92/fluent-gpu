@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using FluentGpu;          // FluentApp (OS theme facade + SystemColorsChanged relay)
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;   // Diag.CompiledIn (debug-build gate for the FPS HUD)
@@ -135,6 +135,7 @@ sealed class WaveeApp : Component
             // Scheduled pre-save release drops: attached after the library bridge exists (it reconciles off the saved-set
             // signal, which fires once on subscribe and therefore doubles as the launch reconcile).
             ReleaseNotifier.Attach(_services.Settings, libBridge, _services.PreRelease);
+            DaylistNotifier.Attach(_services.Settings);
             libBridge.Activate(post);
             friendsBridge.Activate(post);
             notifications.Activate(post);

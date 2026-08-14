@@ -31,6 +31,9 @@ Read [wiring-discipline.md](wiring-discipline.md) before any seam/composition-ro
 - [audio-handoff.md](audio-handoff.md) — gapless & crossfade: one `IAudioClient` per queue, the 0 ms butt-join vs the
   overlap path, prepared-next timing, codec pre-roll trim, and how to read the `[gapless]` log. Read before touching
   `SpotifyLive/Audio/**` or prepared-next scheduling.
+- [notifications.md](notifications.md) — the two channels (bell / Windows), the Off→In-app→Windows ladder, the 8 topic
+  dials, quiet hours, the live-escalation watermark and the scheduled-toast reconcile rules. Read before adding a
+  notification of any kind.
 - [palette-shortcuts.md](palette-shortcuts.md) — the Ctrl+K command palette registry, the shortcut table, `Announcer`.
 - [bridges.md](bridges.md) — the OS-mirror bridges hanging off `PlaybackBridge` (SMTC, taskbar, jump list).
 - [deep-linking.md](deep-linking.md) — the `wavee://` verb map and the one activation entry every surface routes through.

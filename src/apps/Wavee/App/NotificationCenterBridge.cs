@@ -162,9 +162,40 @@ public sealed class NotificationCenterBridge
             update, _social.Snapshot, ganderSeen, _whatsNew.Snapshot, whatsNewSeen, _log.Snapshot,
             _settings.Get(WaveeSettings.NotificationsReadIds));
 
+        // The per-topic dials (Settings → Notifications) decide what the centre may surface at all. Filtered HERE rather
+        // than inside NotificationMerge so the merge stays a pure feed fold, and the unread badge is recounted over the
+        // visible set — a silenced topic must not keep the bell lit for rows the user cannot see.
+        (items, unread) = ApplyTopicVisibility(items, unread);
+
         Items.Value = items;
         UnreadCount.Value = unread;
+        // One escalation point for every LIVE topic: whatever just arrived, is unread, and is dialled to Windows becomes a
+        // banner here (watermarked, so a rebuild or relaunch never re-toasts the feed).
+        ToastEscalator.Consider(_settings, items);
         SocialState.Value = _social.State;
         WhatsNewState.Value = _whatsNew.State;
+    }
+
+    /// <summary>Drop the rows whose TOPIC is dialled Off and recount unread. Returns the input untouched in the common
+    /// case (nothing silenced), so the default configuration allocates nothing extra.</summary>
+    (IReadOnlyList<WaveeNotification> Items, int Unread) ApplyTopicVisibility(
+        IReadOnlyList<WaveeNotification> items, int unread)
+    {
+        bool anySilenced = false;
+        for (int i = 0; i < items.Count; i++)
+            if (NotificationPrefs.Level(_settings, NotificationPrefs.TopicOf(items[i])) == NotifyLevel.Off)
+            { anySilenced = true; break; }
+        if (!anySilenced) return (items, unread);
+
+        var kept = new List<WaveeNotification>(items.Count);
+        int keptUnread = 0;
+        for (int i = 0; i < items.Count; i++)
+        {
+            var n = items[i];
+            if (NotificationPrefs.Level(_settings, NotificationPrefs.TopicOf(n)) == NotifyLevel.Off) continue;
+            kept.Add(n);
+            if (n.IsUnread) keptUnread++;
+        }
+        return (kept, keptUnread);
     }
 }

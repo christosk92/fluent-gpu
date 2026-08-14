@@ -1,5 +1,7 @@
-using System;
+﻿using System;
 using FluentGpu.WindowsApi.Storage;
+
+using Wavee.Core;
 
 namespace Wavee;
 
@@ -141,11 +143,34 @@ static class WaveeSettings
     // Cap applied WHEN the connection is metered (NetworkCostKind.Fixed / Variable). Same 0..2 ladder as PlaybackQuality.
     // Default 1 = High160 so a metered laptop does not silently stay on Very High.
     public static readonly SettingKey<int> MeteredQualityCap = new("playback.quality.meteredCap", 1);
-    // ── OS notifications (toasts) ─────────────────────────────────────────────────────────────────────────────────────
-    // Opt-in, per the calm contract: notifications are something the user turns ON, never something that arrives because
-    // we shipped a feature. ReleaseDrops schedules an "out now" toast for a PRE-SAVED album at its release timestamp —
-    // delivered by the OS, so it lands even with Wavee closed. Off by default.
-    public static readonly SettingKey<bool> NotifyReleaseDrops = new("notify.releaseDrops", false);
+    // ── Notifications ─────────────────────────────────────────────────────────────────────────────────────────────────
+    // Two global gates + one LADDER per topic (Off / In-app / In-app + Windows — see Wavee.Core NotifyLevel).
+    //
+    // NotifyWindows is the single opt-in, per the calm contract: with it off the app behaves EXACTLY as it did before the
+    // Notifications page existed (the in-app centre shows what it always showed, and Windows is never touched). Every
+    // per-topic default is therefore a SHAPE for when the user opts in, not noise they have to go and switch off.
+    public static readonly SettingKey<bool> NotifyWindows = new("notify.windows", false);
+    // Play the Windows notification sound. Off => the toast is delivered <audio silent='true'/> — it still appears in the
+    // Action Center, it just does not make a noise. Default on: a silent banner is a surprising default for a toast.
+    public static readonly SettingKey<bool> NotifySound = new("notify.sound", true);
+    // Quiet hours: no Windows banner inside [from, to) local hours (may wrap midnight). A LIVE toast inside the window is
+    // suppressed (the centre still records it); a SCHEDULED one is shifted to the end of the window rather than dropped.
+    public static readonly SettingKey<bool> NotifyQuietEnabled = new("notify.quiet.enabled", false);
+    public static readonly SettingKey<int> NotifyQuietFromHour = new("notify.quiet.from", 22);
+    public static readonly SettingKey<int> NotifyQuietToHour = new("notify.quiet.to", 8);
+    // Per-topic levels. Keyed by the NotifyTopic name so the wire form stays readable and reordering the enum cannot
+    // silently repoint a user's choice at a different topic. Defaults come from NotificationPolicy.DefaultFor.
+    public static readonly SettingKey<int> NotifyNewAlbums = new("notify.topic.newAlbums", (int)NotifyLevel.InApp);
+    public static readonly SettingKey<int> NotifyNewEpisodes = new("notify.topic.newEpisodes", (int)NotifyLevel.InApp);
+    public static readonly SettingKey<int> NotifyReleaseDrops = new("notify.topic.releaseDrops", (int)NotifyLevel.Windows);
+    public static readonly SettingKey<int> NotifyConcerts = new("notify.topic.concerts", (int)NotifyLevel.InApp);
+    public static readonly SettingKey<int> NotifyFollowers = new("notify.topic.followers", (int)NotifyLevel.InApp);
+    public static readonly SettingKey<int> NotifyDaylist = new("notify.topic.daylistRefresh", (int)NotifyLevel.InApp);
+    public static readonly SettingKey<int> NotifyAppUpdates = new("notify.topic.appUpdates", (int)NotifyLevel.InApp);
+    public static readonly SettingKey<int> NotifyLibraryActivity = new("notify.topic.libraryActivity", (int)NotifyLevel.InApp);
+    // Watermark for LIVE toast escalation: the newest notification timestamp already raised as a banner. Without it a
+    // rebuild (or a relaunch) would re-toast the whole feed — the loudest possible bug in a notification system.
+    public static readonly SettingKey<long> NotifyLastToastedMs = new("notify.lastToastedMs", 0L);
     // Handle spotify: links with Wavee. OFF by default and deliberately so (the calm contract): silently taking the scheme
     // from an installed Spotify would break the user's muscle memory without being asked. Toggling it registers /
     // unregisters the HKCU scheme association at once, so the change is visible immediately rather than at next launch.

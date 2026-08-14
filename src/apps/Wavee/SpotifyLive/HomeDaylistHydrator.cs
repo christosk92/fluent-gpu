@@ -358,9 +358,19 @@ internal sealed class HomeDaylistHydrator
         return copy;
     }
 
+    /// <summary>Reports "this daylist window ends at &lt;unix ms&gt;" as the feed hydrates: <c>(contextUri, expiresAtMs,
+    /// title)</c>. Assigned by the composition root (Wavee wires it to the scheduled-toast notifier); null in tests and
+    /// before wiring, which makes the report a no-op. Deliberately a hook, not a direct call — the hydrator resolves feed
+    /// data and must stay ignorant of whether anything notifies.</summary>
+    internal static Action<string, long, string?>? WindowObserved;
+
     static HomeCard OverlayCard(HomeCard card, HomePlaylistHeader header)
     {
         var meta = card.Meta!;
+        // A hydrated daylist card carries the end of its own window — a KNOWN future moment. Reported through the hook
+        // rather than calling a notifier directly: this type is source-included by Wavee.Tests, so it must not reach into
+        // the app's toast layer, and the hydrator has no business knowing that anyone notifies.
+        if (meta.ExpiresAtMs > 0) WindowObserved?.Invoke(card.Uri, meta.ExpiresAtMs, header.Title);
         return card with
         {
             Title = header.Title,

@@ -78,9 +78,15 @@ static class ReleaseNotifier
             TryUnschedule(TagFor(uri));
             return;
         }
-        if (!settings.Get(WaveeSettings.NotifyReleaseDrops)) return;
+        if (!Allowed(settings)) return;
         _ = ScheduleOneAsync(svc, uri);
     }
+
+    /// <summary>Drops are allowed when the Windows channel is on AND the ReleaseDrops topic is dialled to Windows —
+    /// the same gate the live escalator uses, read through the one accessor so the two can never disagree.</summary>
+    static bool Allowed(IAppSettings settings) =>
+        NotificationPrefs.Policy(settings).WindowsEnabled
+        && NotificationPrefs.Level(settings, NotifyTopic.ReleaseDrops) == NotifyLevel.Windows;
 
     static async Task ScheduleOneAsync(IPreReleaseService svc, string uri)
     {
@@ -102,7 +108,7 @@ static class ReleaseNotifier
         if (settings is null || library is null) return;
         if (!ToastNotifier.IsSupported) return;
 
-        if (!settings.Get(WaveeSettings.NotifyReleaseDrops)) { UnscheduleAll(); return; }
+        if (!Allowed(settings)) { UnscheduleAll(); return; }
         _ = ReconcileAsync(library.Saved.Peek());
     }
 
@@ -182,7 +188,15 @@ static class ReleaseNotifier
                 catch (Exception) { /* no hero is fine; the text toast still announces the drop */ }
             }
 
-            if (ToastNotifier.Default.Schedule(toast, due, tag, Group))
+            // Quiet hours SHIFT a scheduled drop rather than dropping it: the album is still out, the user just hears
+            // about it at a civilised hour instead of 03:00.
+            IAppSettings? settings;
+            lock (Gate) settings = _settings;
+            DateTimeOffset deliver = settings is null
+                ? due
+                : NotificationPrefs.Policy(settings).Quiet.NextAudible(due.ToLocalTime());
+
+            if (ToastNotifier.Default.Schedule(toast, deliver, tag, Group))
                 lock (Gate) Scheduled.Add(preReleaseUri);
         }
         catch (Exception)
