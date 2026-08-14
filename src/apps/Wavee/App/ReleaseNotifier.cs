@@ -158,7 +158,10 @@ static class ReleaseNotifier
         }
     }
 
-    static void TrySchedule(string preReleaseUri, PreReleaseLink link, DateTimeOffset due)
+    /// <summary>Build and hand the drop toast to the OS. Returns the instant the OS was actually asked to deliver at —
+    /// which is NOT necessarily <paramref name="due"/>, because quiet hours shift it — or null when nothing was scheduled.
+    /// Callers enforce the minimum lead time; this method deliberately does not, so a diagnostic can drive it directly.</summary>
+    static DateTimeOffset? TrySchedule(string preReleaseUri, PreReleaseLink link, DateTimeOffset due)
     {
         string tag = TagFor(preReleaseUri);
         try
@@ -196,13 +199,29 @@ static class ReleaseNotifier
                 ? due
                 : NotificationPrefs.Policy(settings).Quiet.NextAudible(due.ToLocalTime());
 
-            if (ToastNotifier.Default.Schedule(toast, deliver, tag, Group))
-                lock (Gate) Scheduled.Add(preReleaseUri);
+            if (!ToastNotifier.Default.Schedule(toast, deliver, tag, Group)) return null;
+            lock (Gate) Scheduled.Add(preReleaseUri);
+            return deliver;
         }
         catch (Exception)
         {
             // Scheduling is best-effort: the next launch reconciles again.
+            return null;
         }
+    }
+
+    /// <summary>Diagnostic seam for Settings ▸ Notifications ▸ Send event: schedule <paramref name="link"/> through the
+    /// REAL path at <paramref name="due"/>, returning the instant the OS was asked for (quiet hours may have moved it).
+    /// The caller owns the lead time — Windows accepts a near-immediate schedule and then silently never paints it, so
+    /// <paramref name="due"/> must be comfortably in the future. Refuses when the dial would not deliver, so a simulate
+    /// can never schedule something the user has switched off.</summary>
+    internal static DateTimeOffset? SimulateSchedule(PreReleaseLink link, DateTimeOffset due)
+    {
+        IAppSettings? settings;
+        lock (Gate) settings = _settings;
+        if (settings is null || !Allowed(settings) || !ToastNotifier.IsSupported) return null;
+        string uri = link.PreReleaseUri is { Length: > 0 } u ? u : "spotify:prerelease:simulated";
+        return TrySchedule(uri, link, due);
     }
 
     static void TryUnschedule(string tag)

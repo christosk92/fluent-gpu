@@ -153,13 +153,15 @@ public sealed class NotificationCenterBridge
         long ganderSeen = _settings.Get(WaveeSettings.NotificationsGanderLastSeenMs);
         long whatsNewSeen = _settings.Get(WaveeSettings.NotificationsWhatsNewLastSeenMs);
 
-        // App update pinned at the top (state-driven, unread until acknowledged).
+        // App update pinned at the top (state-driven, unread until acknowledged). A SIMULATED update stands in when the
+        // real service reports None — there is no other way to exercise that topic (the service is a get-only Null impl).
         AppUpdateNotification? update = _update.Current != AppUpdateState.None
             ? new AppUpdateNotification(long.MaxValue, IsUnread: true, _update.Current, _update.Version, _update.ReleaseNotesUrl, _update.Error)
-            : null;
+            : _injectedUpdate;
 
         var (items, unread) = NotificationMerge.Build(
-            update, _social.Snapshot, ganderSeen, _whatsNew.Snapshot, whatsNewSeen, _log.Snapshot,
+            update, Merged(_social.Snapshot, _injectedSocial), ganderSeen,
+            Merged(_whatsNew.Snapshot, _injectedNew), whatsNewSeen, _log.Snapshot,
             _settings.Get(WaveeSettings.NotificationsReadIds));
 
         // The per-topic dials (Settings → Notifications) decide what the centre may surface at all. Filtered HERE rather
@@ -171,9 +173,73 @@ public sealed class NotificationCenterBridge
         UnreadCount.Value = unread;
         // One escalation point for every LIVE topic: whatever just arrived, is unread, and is dialled to Windows becomes a
         // banner here (watermarked, so a rebuild or relaunch never re-toasts the feed).
-        ToastEscalator.Consider(_settings, items);
+        _lastEscalated = ToastEscalator.Consider(_settings, items);
         SocialState.Value = _social.State;
         WhatsNewState.Value = _whatsNew.State;
+    }
+
+    // ── simulated events (Settings → Notifications ▸ Send event) ─────────────────────────────────────────────────────
+    // Injected rows are merged into the SAME NotificationMerge.Build inputs the feeds fill, so a simulated event is
+    // indistinguishable from a real one downstream: identical unread gating, identical topic filtering, identical
+    // escalation. That is the entire point — a test affordance that took a shortcut past this method would prove nothing
+    // about the pipeline it claims to exercise. Injected at the BRIDGE rather than at a feed service because the live
+    // services replace their snapshot wholesale on every fetch (an injected item would vanish on the next panel open)
+    // and because a SetInner decorator is discarded by the next login or logout.
+
+    /// <summary>Cap: a simulated row behaves exactly like a real one, including persisting for the session, so repeated
+    /// presses must not grow without bound. Oldest is dropped first.</summary>
+    const int MaxInjected = 10;
+
+    readonly List<SocialNotification> _injectedSocial = new();
+    readonly List<NewReleaseNotification> _injectedNew = new();
+    AppUpdateNotification? _injectedUpdate;
+    int _lastEscalated;
+
+    /// <summary>Banners raised by the most recent <see cref="Rebuild"/>. Lets the simulate affordance report what
+    /// actually happened rather than re-deriving what it believes should have happened.</summary>
+    public int LastEscalatedCount => _lastEscalated;
+
+    /// <summary>Push a synthetic notification through the real pipeline and return how many Windows banners it raised
+    /// (0 when the topic is dialled below Windows, quiet hours are active, or the row simply never banners).</summary>
+    public int Simulate(WaveeNotification notification)
+    {
+        switch (notification)
+        {
+            case SocialNotification s: Add(_injectedSocial, s); break;
+            case NewReleaseNotification r: Add(_injectedNew, r); break;
+            case AppUpdateNotification u: _injectedUpdate = u; break;
+            default: return 0;      // ActivityNotification arrives via ActivityLog.Record, its own real path
+        }
+        _lastEscalated = 0;
+        Rebuild();
+        return _lastEscalated;
+    }
+
+    /// <summary>Forget every simulated row (they are session-scoped by nature — nothing persists them).</summary>
+    public void ClearSimulated()
+    {
+        if (_injectedSocial.Count == 0 && _injectedNew.Count == 0 && _injectedUpdate is null) return;
+        _injectedSocial.Clear();
+        _injectedNew.Clear();
+        _injectedUpdate = null;
+        Rebuild();
+    }
+
+    static void Add<T>(List<T> list, T item)
+    {
+        if (list.Count >= MaxInjected) list.RemoveAt(0);
+        list.Add(item);
+    }
+
+    /// <summary>The live snapshot plus any injected rows. Returns the snapshot itself when nothing is injected, so the
+    /// default path allocates nothing extra.</summary>
+    static IReadOnlyList<T> Merged<T>(IReadOnlyList<T> snapshot, List<T> injected)
+    {
+        if (injected.Count == 0) return snapshot;
+        var all = new List<T>(snapshot.Count + injected.Count);
+        all.AddRange(snapshot);
+        all.AddRange(injected);
+        return all;
     }
 
     /// <summary>Drop the rows whose TOPIC is dialled Off and recount unread. Returns the input untouched in the common

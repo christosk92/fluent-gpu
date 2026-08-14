@@ -67,3 +67,39 @@ A scheduled toast outlives the process, so both notifiers reconcile rather than 
 5. Live topic? `ToastEscalator.Present` needs a banner shape. Scheduled? It needs its own notifier with a reconcile.
 
 **Do not add a dial you have not wired.** An unreachable switch is worse than no switch: it teaches the user something false about the product, and nothing in CI will ever catch it.
+
+## Simulating an event (Settings ▸ Notifications ▸ Send event)
+
+Every topic row expands to reveal **Send a test event**, which pushes a synthetic event down **the same code path a real one takes**. The feeds are remote and slow, so without this the dials are unfalsifiable — a correctly-silenced topic and a broken one look identical.
+
+`App/NotificationSimulator.cs` orchestrates; `Wavee.Core/Notifications/SimulatedNotifications.cs` holds the builders (engine-free, therefore tested).
+
+### Three shapes, matching the three real ones
+
+| Topics | How it travels |
+|---|---|
+| NewAlbums, NewEpisodes, Concerts, Followers, AppUpdates | injected at `NotificationCenterBridge.Simulate` → the real `Rebuild()` runs untouched: same merge, same topic filter, same escalator |
+| ReleaseDrops, DaylistRefresh | `ReleaseNotifier.SimulateSchedule` / `DaylistNotifier.SimulateSchedule` → the real OS timer, ~3 min out |
+| LibraryActivity | `ActivityLog.Record` — its genuine trigger is the user's own action |
+
+**Nothing calls `ToastNotifier.Show` directly.** A shortcut past the pipeline would prove only that Windows can paint a banner, which is not the question. (The old global "Send a test notification" button did exactly that and was removed when this landed.)
+
+### Why the injection is at the bridge
+
+Not at a feed service: the live ones are `internal sealed` and replace their snapshot wholesale on every fetch, so an injected row is wiped by the next `EnsureFresh` — which the panel calls on every open. Not a `SetInner` decorator either: `LiveSessionHost` and the logout path both call `SetInner` unconditionally, so it would be silently discarded on the next login, and it would leak into the sidebar's New-Releases source. The bridge already owns every stage, so injecting there is the only place that is both durable and faithful.
+
+### Four invariants that fail silently
+
+1. **Beat both watermarks.** `NotificationMerge.Build` gates unread on `Timestamp > lastSeenMs` — *strictly* — and both feed watermarks are stamped to "now" whenever the panel is opened or Mark-all-read is pressed. `SimulatedNotifications.NextTimestamp` handles the same-millisecond case; a plain `UtcNow` can tie and arrive already-read.
+2. **Unique id per press.** The merge does not dedup, the panel keys rows on `"ntf:" + Id`, and the toast tag is `"live:" + Id` — a reused id makes Windows *replace* the previous banner, so the second press looks like it did nothing. (`AppUpdateNotification` fixes its own id to `"update"`, so that one legitimately replaces.)
+3. **Topic is derived, not declared.** A concert needs `ConcertWireType` or a concert action target or `SpotifyUpdates.IsConcert` is false and it lands on **Followers**. Never classify by title — the real feed's titles are server-localized prose.
+4. **Prime the toast watermark.** The escalator raises nothing while `NotifyLastToastedMs` is 0, so enabling notifications never replays history. A simulated event is *now*, not history, so the simulator sets the watermark to `now − 1` first — otherwise the very first press lands in the bell with no banner and reads as broken.
+
+### Two safety rules
+
+- **Never schedule for a topic that is dialled down.** Both scheduled notifiers *revoke* on a disallowed policy, so a naive simulate would destroy a genuinely pending real toast. `SendScheduled` checks the dial before going near them.
+- **A simulated activity entry must not be undoable.** The undo for a real save calls `SetSaved(uri, false)`. The simulator records `ActivityKind.PlaylistCreate` (excluded from `ActivityEntry.IsUndoable`) against an unresolvable `wavee:simulated:` target, so no Undo is offered and there is no inverse to get wrong.
+
+### The report is the feature
+
+The confirmation names the stage that consumed the event — dropped by the dial, recorded in the bell only, bannered, held by quiet hours until HH:mm, or scheduled for HH:mm. It reports the **computed** delivery instant, never the requested one, because `QuietHours.NextAudible` can move a scheduled drop hours out. Banner counts come from `ToastEscalator.Consider`'s return value, so the message states what *happened* rather than what the caller predicted.

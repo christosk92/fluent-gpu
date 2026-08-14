@@ -84,6 +84,25 @@ static class DaylistNotifier
         }
     }
 
+    /// <summary>Diagnostic seam for Settings ▸ Notifications ▸ Send event: pretend the current daylist window ends at
+    /// <paramref name="due"/> and schedule through the REAL <see cref="Note"/> path. Returns the delivery instant the OS
+    /// was asked for, or null when the dial would not deliver — deliberately checked HERE so a simulate never reaches
+    /// <see cref="Note"/>'s disallowed branch, which REVOKES a genuinely pending real rollover toast.</summary>
+    internal static DateTimeOffset? SimulateSchedule(DateTimeOffset due, string? contextUri, string? title)
+    {
+        IAppSettings? settings;
+        lock (Gate) settings = _settings;
+        if (settings is null || !ToastNotifier.IsSupported) return null;
+        var policy = NotificationPrefs.Policy(settings);
+        var level = NotificationPrefs.Level(settings, NotifyTopic.DaylistRefresh);
+        if (policy.ScheduleAt(level, due) is not { } deliver) return null;
+
+        long ms = due.ToUnixTimeMilliseconds();
+        lock (Gate) { if (_scheduledFor == ms) ms++; }   // an identical window is a no-op in Note; nudge so a repeat press works
+        Note(contextUri, ms, title);
+        lock (Gate) return _scheduledFor == ms ? deliver : null;
+    }
+
     /// <summary>Re-check the held entry against the current dials. Called when a notification setting changes. Can only
     /// ever REVOKE here: re-scheduling needs a window end, which arrives with the next feed resolve — so turning the dial
     /// back up quietly re-arms itself rather than guessing at a stale expiry.</summary>

@@ -50,19 +50,14 @@ sealed partial class SettingsPage
             children.Add(InfoBar.Create(InfoBarSeverity.Informational,
                 title: "", message: Loc.Get(Strings.Settings.Notify.WindowsOffHint), isClosable: false));
         foreach (var topic in NotificationPrefs.AllTopics)
-            children.Add(TopicRow(settings, topic));
-
-        children.Add(SettingsSectionHeader(Loc.Get(Strings.Settings.Notify.TryTitle), Icons.Play));
-        children.Add(SettingsRow(Loc.Get(Strings.Settings.Notify.Test), Loc.Get(Strings.Settings.Notify.TestSub),
-            Button.Standard(Loc.Get(Strings.Settings.Notify.TestButton), () => SendTest(policy)), Icons.Bell,
-            isEnabled: policy.WindowsEnabled));
+            children.Add(TopicRow(svc, settings, topic));
 
         return SettingsTabStack(children.ToArray());
     }
 
     // ── the per-topic dial ───────────────────────────────────────────────────────────────────────────────────────────
 
-    Element TopicRow(IAppSettings? settings, NotifyTopic topic)
+    Element TopicRow(Services? svc, IAppSettings? settings, NotifyTopic topic)
     {
         var level = NotificationPrefs.Level(settings, topic);
         // A topic that cannot reach Windows renders TWO segments, not three-with-one-dead: an unreachable switch teaches
@@ -81,8 +76,57 @@ sealed partial class SettingsPage
             Bump();
         });
 
-        return SettingsRow(Label(topic), Sub(topic), dial, Glyph(topic));
+        // An expander, not a wider row: SettingsCard has ONE content slot and starts reflowing at 476 DIP, so a button
+        // beside three segments would stack the dial under its own label for every user, to serve a button most never
+        // press. The chevron keeps the dial exactly where it is and reveals the test affordance on demand — the shape
+        // SettingsPage.Playback already uses (control in the header, detail rows in Items).
+        return SettingsExpander.Create(new SettingsExpander.Options
+        {
+            Header = Label(topic),
+            Description = Sub(topic),
+            HeaderIcon = Glyph(topic),
+            Content = dial,
+            Items = [SendRow(svc, topic)],
+        });
     }
+
+    /// <summary>The revealed "Send event" row. Enabled at every level except when there is no app to simulate against —
+    /// including Off, because "nothing happens, as configured" is the one outcome a user currently cannot verify.</summary>
+    Element SendRow(Services? svc, NotifyTopic topic)
+    {
+        string sub = NotificationPolicy.IsScheduled(topic)
+            ? Loc.Get(Strings.Settings.Notify.SendScheduledSub)
+            : Loc.Get(Strings.Settings.Notify.SendSub);
+        return SettingsItem(Loc.Get(Strings.Settings.Notify.Send), sub,
+            Button.Standard(Loc.Get(Strings.Settings.Notify.SendButton), () => RunSimulation(svc, topic)),
+            isEnabled: svc is not null);
+    }
+
+    /// <summary>Run the simulation and report what the PIPELINE decided — which stage consumed the event, and when a
+    /// scheduled one will actually arrive. That report is the feature; the banner is just one of its outcomes.</summary>
+    void RunSimulation(Services? svc, NotifyTopic topic)
+    {
+        var result = NotificationSimulator.Send(svc, topic);
+        var (message, severity) = Describe(result);
+        Toast.Show(message, new ToastOptions { Severity = severity, DurationMs = 6000f });
+        Bump();   // a new bell row / a changed scheduled count is visible on this page
+    }
+
+    static (string Message, InfoBarSeverity Severity) Describe(SimResult r) => r.Outcome switch
+    {
+        SimOutcome.Dropped => (Loc.Get(Strings.Settings.Notify.OutcomeDropped), InfoBarSeverity.Informational),
+        SimOutcome.RecordedInApp => (Loc.Get(Strings.Settings.Notify.OutcomeInApp), InfoBarSeverity.Success),
+        SimOutcome.Banner => (Loc.Get(Strings.Settings.Notify.OutcomeBanner), InfoBarSeverity.Success),
+        SimOutcome.NeverBanners => (Loc.Get(Strings.Settings.Notify.OutcomeNeverBanners), InfoBarSeverity.Success),
+        SimOutcome.BannerQuietDeferred => (
+            Strings.Settings.Notify.OutcomeQuiet(Clock(r.At)), InfoBarSeverity.Informational),
+        SimOutcome.Scheduled => (
+            Strings.Settings.Notify.OutcomeScheduled(Clock(r.At)), InfoBarSeverity.Success),
+        _ => (Loc.Get(Strings.Settings.Notify.OutcomeUnavailable), InfoBarSeverity.Warning),
+    };
+
+    static string Clock(DateTimeOffset? at)
+        => at?.ToLocalTime().ToString("HH:mm", System.Globalization.CultureInfo.CurrentCulture) ?? "--:--";
 
     static string Label(NotifyTopic topic) => Loc.Get(topic switch
     {
@@ -208,25 +252,6 @@ sealed partial class SettingsPage
                 () => LoginView.OpenUrl("ms-settings:notifications"));
 
         return InfoBar.Create(InfoBarSeverity.Warning, t.Title, t.Body, isClosable: false, actionButton: action);
-    }
-
-    static void SendTest(in NotificationPolicy policy)
-    {
-        bool ok;
-        try
-        {
-            var toast = ToastBuilder.Create()
-                .Title(Loc.Get(Strings.Settings.Notify.Test))
-                .Body(Loc.Get(Strings.Settings.Notify.TestSub))
-                .Launch("wavee://open?route=settings")
-                .Tag("notify-test");
-            if (!policy.Sound) toast.Silent();
-            ok = ToastNotifier.Default.Show(toast);
-        }
-        catch (Exception) { ok = false; }
-
-        Toast.Show(Loc.Get(ok ? Strings.Settings.Notify.TestSent : Strings.Settings.Notify.TestFailed),
-            new ToastOptions { Severity = ok ? InfoBarSeverity.Success : InfoBarSeverity.Warning });
     }
 
     /// <summary>Re-derive the OS-held scheduled set after any change that could alter it (the master gate, the drops dial,

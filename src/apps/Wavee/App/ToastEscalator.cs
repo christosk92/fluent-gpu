@@ -31,11 +31,13 @@ static class ToastEscalator
     const string Group = "wavee.live";
 
     /// <summary>Consider <paramref name="items"/> (the freshly rebuilt centre, newest first) for escalation. Cheap and
-    /// synchronous on the UI thread: it walks the list once and only touches the OS for rows that pass every gate.</summary>
-    public static void Consider(IAppSettings? settings, IReadOnlyList<WaveeNotification> items)
+    /// synchronous on the UI thread: it walks the list once and only touches the OS for rows that pass every gate.
+    /// <para>Returns the number of banners actually raised, so the "Send event" diagnostic can report what HAPPENED
+    /// instead of re-deriving what it thinks should have happened.</para></summary>
+    public static int Consider(IAppSettings? settings, IReadOnlyList<WaveeNotification> items)
     {
-        if (settings is null || items.Count == 0) return;
-        if (!ToastNotifier.IsSupported) return;
+        if (settings is null || items.Count == 0) return 0;
+        if (!ToastNotifier.IsSupported) return 0;
 
         var policy = NotificationPrefs.Policy(settings);
         long watermark = settings.Get(WaveeSettings.NotifyLastToastedMs);
@@ -49,11 +51,12 @@ static class ToastEscalator
             if (ts > newest) newest = ts;
         }
 
+        int raised = 0;
         bool firstRun = watermark <= 0;
         if (!firstRun && policy.WindowsEnabled)
         {
             var now = DateTimeOffset.Now;
-            int raised = 0, suppressed = 0;
+            int suppressed = 0;
             for (int i = items.Count - 1; i >= 0; i--)      // oldest → newest, so a truncated burst keeps the FRESHEST
             {
                 var n = items[i];
@@ -68,6 +71,7 @@ static class ToastEscalator
         }
 
         if (newest > watermark) settings.Set(WaveeSettings.NotifyLastToastedMs, newest);
+        return raised;
     }
 
     /// <summary>The row's own timestamp, with the app-update sentinel folded to "now" — it sorts by
