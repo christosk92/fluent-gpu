@@ -735,14 +735,41 @@ public static class SceneRecorder
         }
     }
 
-    // Walk is recursive with a ~21 KB frame (Wavee.exe.80200.dmp: SP delta 0x54F0). A depth NUMBER cap blanks real
-    // pages (detail tracklists sit deeper than the hero). The dump was a CYCLE — the same node on the current path —
-    // which we abort. Acyclic trees of any depth keep painting (until the native stack would overflow ~70, which no
-    // real Wavee page reaches). NOTE: `depth` still carries a z-band in the high bits for painter order; that is
-    // unrelated to this guard.
+    // Walk is recursive with a ~21 KB frame (measured again in Wavee.exe.74360.dmp: SP delta 0x5620 = 21.5 KB). Two
+    // distinct failures are guarded here, and they need different guards:
+    //
+    //  * A CYCLE — the same node on the current path — is a reconciler bug. PushWalkPath aborts that subtree.
+    //  * DEPTH. The previous note claimed "no real Wavee page reaches ~70" and so left depth unguarded. The dumps
+    //    disprove it: Wavee.exe.74360.dmp overflowed the stack at exactly 68 levels, from Record → Walk with no cycle.
+    //    At 21.5 KB a frame, a 1.5 MB stack holds ~68 levels, and an ordinary page (shell → content → scroll → column →
+    //    section → card → grid → row → text, plus any expander/virtualizer) genuinely gets there.
+    //
+    // A depth NUMBER cap is still the wrong instrument — it blanks real pages, which is why it was removed. Probe the
+    // ACTUAL remaining stack instead: TryEnsureSufficientExecutionStack is depth-independent, so a page only degrades
+    // when it is truly about to run out, and it degrades by clipping the deepest subtree rather than killing the
+    // process. A StackOverflowException cannot be caught, so there is no recovering after the fact — the check has to
+    // happen before the call.
+    //
+    // The 21.5 KB frame is itself the underlying inefficiency (WalkCore is one ~1000-line method, so the JIT unions the
+    // locals of every branch and inlined callee into a single frame). Shrinking it multiplies the depth budget and is
+    // worth doing, but it is a measured optimization, not this guard.
+    //
+    // NOTE: `depth` still carries a z-band in the high bits for painter order; that is unrelated to these guards.
     [ThreadStatic] static uint[]? t_walkPath;
     [ThreadStatic] static int t_walkPathLen;
     private static int s_cycleAbortLogged;
+    private static int s_depthAbortLogged;
+
+    /// <summary>True while there is stack headroom for another <see cref="WalkCore"/> frame. On the false edge the
+    /// caller must stop descending: the deepest subtree goes unpainted, which is visible but survivable — a stack
+    /// overflow is neither catchable nor survivable.</summary>
+    private static bool HasWalkStackHeadroom()
+    {
+        if (System.Runtime.CompilerServices.RuntimeHelpers.TryEnsureSufficientExecutionStack()) return true;
+        if (Interlocked.Exchange(ref s_depthAbortLogged, 1) == 0)
+            Trace.WriteLine($"SceneRecorder.Walk out of stack at path depth {t_walkPathLen} — deepest subtree not painted.");
+        return false;
+    }
 
     /// <summary>Sort depth for the drop-spotlight scrim band. The high 16 bits of a record depth are the Z-BAND (0 = the
     /// main pass + orphan fallback, 1 = the drag ghost, (1&lt;&lt;16)|1 = connected-animation overlays, (1&lt;&lt;16)|2 =
@@ -845,6 +872,7 @@ public static class SceneRecorder
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
         if ((scene.Flags(node) & NodeFlags.Visible) == 0) return default;
         if (!PushWalkPath(node)) return default;
+        if (!HasWalkStackHeadroom()) { PopWalkPath(); return default; }
         try
         {
             return WalkCore(scene, dl, images, node, parentWorld, parentOpacity, depth, clip, in focus, in textEdit,

@@ -86,6 +86,12 @@ public sealed class NotificationCenterBridge
     public void MarkAllRead()
     {
         _log.MarkAllRead();
+        // Simulated rows go too. A real app-update row is state-driven and outlives a read (it is dismissed by
+        // Acknowledge, not by reading it) — but a SIMULATED one has no state behind it, so without this it would sit in
+        // the centre for the rest of the process with no way for the user to clear it.
+        _injectedSocial.Clear();
+        _injectedNew.Clear();
+        _injectedUpdate = null;
         AdvanceRemoteLastSeen();
         Rebuild();
     }

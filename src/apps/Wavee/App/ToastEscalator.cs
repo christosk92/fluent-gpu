@@ -64,6 +64,10 @@ static class ToastEscalator
                 if (ts <= watermark || !n.IsUnread) continue;
                 var topic = NotificationPrefs.TopicOf(n);
                 if (!policy.RaisesToastNow(NotificationPrefs.Level(settings, topic), now)) continue;
+                // An app update is STATE, not an event: the row persists for as long as the update is available and is
+                // never read-gated, so a timestamp test alone would re-raise it on every rebuild. Escalate it only when
+                // the state or version actually changed.
+                if (n is AppUpdateNotification u && !UpdateChanged(u)) continue;
                 if (raised >= MaxPerRebuild) { suppressed++; continue; }
                 if (TryRaise(n, topic, policy)) raised++;
             }
@@ -74,10 +78,27 @@ static class ToastEscalator
         return raised;
     }
 
-    /// <summary>The row's own timestamp, with the app-update sentinel folded to "now" — it sorts by
-    /// <c>long.MaxValue</c> to pin itself to the top of the centre, which is a display concern, not a time.</summary>
+    /// <summary>The row's own timestamp, with the <c>long.MaxValue</c> SENTINEL folded to "now" — an update pins that
+    /// value to sort to the top of the centre, which is a display concern, not a time.
+    /// <para>Keyed on the sentinel, NOT on the type: folding every app-update row to a live "now" made it beat the
+    /// watermark on every single rebuild, so it re-toasted forever (a simulated update carries a real timestamp and was
+    /// re-raised by every unrelated rebuild — a banner storm).</para></summary>
     static long TimestampOf(WaveeNotification n) =>
-        n is AppUpdateNotification ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : n.Timestamp;
+        n.Timestamp == long.MaxValue ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() : n.Timestamp;
+
+    /// <summary>The (state, version) of the app update last raised as a banner. Process-lifetime, because that is the
+    /// lifetime of the condition it describes.</summary>
+    static string s_lastUpdateRaised = "";
+
+    /// <summary>True when this update row differs from the one already banner-ed — the transition test that makes an
+    /// app update fire once per change rather than once per rebuild.</summary>
+    static bool UpdateChanged(AppUpdateNotification u)
+    {
+        string id = u.State.ToString() + ":" + (u.Version ?? "");
+        if (string.Equals(id, s_lastUpdateRaised, StringComparison.Ordinal)) return false;
+        s_lastUpdateRaised = id;
+        return true;
+    }
 
     static bool TryRaise(WaveeNotification n, NotifyTopic topic, in NotificationPolicy policy)
     {

@@ -85,15 +85,22 @@ internal readonly unsafe struct IStringMap
     internal uint Release()
         => ((delegate* unmanaged<IStringMap*, uint>)_lpVtbl[2])(Self(in this));
 
-    /// <summary><c>HRESULT Insert(HSTRING key, HSTRING value, boolean* replaced)</c> — vtable slot 11.</summary>
+    /// <summary><c>HRESULT Insert(HSTRING key, HSTRING value, boolean* replaced)</c> — vtable slot <b>10</b>.
+    /// <para><c>IMap&lt;K,V&gt;</c> derives straight from <c>IInspectable</c>: Lookup (6), get_Size (7), HasKey (8),
+    /// GetView (9), Insert (10), Remove (11), Clear (12). It does NOT inherit <c>IIterable</c> — that is a sibling
+    /// interface reached by QueryInterface, and counting a slot for it here put this call on <c>Remove(K)</c>, which
+    /// silently deleted the key instead of setting it (a live progress update that did nothing, and returned S_OK).</para></summary>
     internal int Insert(HSTRING key, HSTRING value, byte* replaced)
-        => ((delegate* unmanaged<IStringMap*, HSTRING, HSTRING, byte*, int>)_lpVtbl[11])(Self(in this), key, value, replaced);
+        => ((delegate* unmanaged<IStringMap*, HSTRING, HSTRING, byte*, int>)_lpVtbl[10])(Self(in this), key, value, replaced);
 }
 
 /// <summary>
 /// Call-OUT vtable over WinRT <c>IVectorView&lt;ScheduledToastNotification&gt;</c> returned by
-/// <c>IToastNotifier.GetScheduledToastNotifications</c>. Layout is IInspectable (0-5) + IIterable.First (6) +
-/// IVectorView: GetAt (7), get_Size (8). Hand-rolled for the same generic-binding reason as <see cref="IStringMap"/>.
+/// <c>IToastNotifier.GetScheduledToastNotifications</c>. Layout is IInspectable (0-5) then IVectorView's own methods:
+/// GetAt (6), get_Size (7), IndexOf (8), GetMany (9). <b>There is no <c>IIterable.First</c> slot here</b> —
+/// <c>IVectorView&lt;T&gt;</c> derives from <c>IInspectable</c>, and <c>IIterable&lt;T&gt;</c> is a sibling interface
+/// obtained by QueryInterface, so reserving a slot for it shifts every method by one. Hand-rolled for the same
+/// generic-binding reason as <see cref="IStringMap"/>.
 /// </summary>
 [SupportedOSPlatform("windows8.0")]
 internal readonly unsafe struct IScheduledToastView
@@ -110,15 +117,18 @@ internal readonly unsafe struct IScheduledToastView
     internal uint Release()
         => ((delegate* unmanaged<IScheduledToastView*, uint>)_lpVtbl[2])(Self(in this));
 
-    /// <summary><c>HRESULT GetAt(uint index, IScheduledToastNotification** item)</c> — vtable slot 7. The returned
+    /// <summary><c>HRESULT GetAt(uint index, IScheduledToastNotification** item)</c> — vtable slot <b>6</b>. The returned
     /// pointer is AddRef'd; the caller Releases it.</summary>
     internal int GetAt(uint index, IScheduledToastNotification** item)
-        => ((delegate* unmanaged<IScheduledToastView*, uint, IScheduledToastNotification**, int>)_lpVtbl[7])(
+        => ((delegate* unmanaged<IScheduledToastView*, uint, IScheduledToastNotification**, int>)_lpVtbl[6])(
             Self(in this), index, item);
 
-    /// <summary><c>HRESULT get_Size(uint* size)</c> — vtable slot 8.</summary>
+    /// <summary><c>HRESULT get_Size(uint* size)</c> — vtable slot <b>7</b>.
+    /// <para>Slot 8 is <c>IndexOf(T value, uint* index, boolean* found)</c>. Calling it as <c>get_Size</c> wrote through
+    /// a caller-supplied pointer it never received and killed the process with an uncatchable
+    /// <c>ExecutionEngineException</c> — the crash that found this bug.</para></summary>
     internal int get_Size(uint* size)
-        => ((delegate* unmanaged<IScheduledToastView*, uint*, int>)_lpVtbl[8])(Self(in this), size);
+        => ((delegate* unmanaged<IScheduledToastView*, uint*, int>)_lpVtbl[7])(Self(in this), size);
 }
 
 /// <summary>

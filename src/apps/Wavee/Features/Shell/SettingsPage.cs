@@ -18,7 +18,8 @@ sealed partial class SettingsPage : Component
     const float SettingsContentMaxWidth = 1000f;
     const float SettingsCardSpacing = 4f;
     static readonly Edges4 SettingsSectionHeaderMargin = new(0f, Spacing.XXXL, 0f, Spacing.S);
-    static readonly string[] s_tabKeys = ["general", "playback", "storage", "diagnostics", "about"];
+    // Must stay 1:1 with Tab* / TabLabels() — missing Notifications made About (index 5) IndexOutOfRange.
+    static readonly string[] s_tabKeys = ["general", "playback", "notifications", "storage", "diagnostics", "about"];
 
     readonly Signal<int> _tab = new(0);
     readonly Signal<int> _uiEpoch = new(0);
