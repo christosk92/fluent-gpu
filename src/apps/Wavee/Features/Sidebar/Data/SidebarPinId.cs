@@ -36,13 +36,44 @@ public static class SidebarPinId
     public const string ShowPrefix = "show:";
     public const string FolderPrefix = "folder:";
 
-    /// <summary>The pre-seeded app routes shown by pickers. Dynamic route families (browse, concerts, extension pages,
-    /// future registered routes) are also pinnable when reached; they are not enumerated here because their instances
-    /// only exist at runtime.</summary>
+    /// <summary>The pre-seeded app routes shown by pickers. Dynamic route families (see
+    /// <see cref="PinnableRoutePrefixes"/>) are also pinnable when reached; their instances only exist at runtime, so
+    /// they are recognised by prefix rather than enumerated here.</summary>
     /// <remarks>"recents" is the full recently-played page. It is offered by the CUSTOMIZER only and is deliberately NOT
     /// in <c>SidebarCustomLayout.DefaultTopBar</c> — a destination a user may add, not one the shell mandates.</remarks>
     public static readonly string[] PinnableRoutes =
         ["home", "search", "albums", "artists", "liked", "podcasts", "local", "history", "recents"];
+
+    /// <summary>Real, durable pages that <see cref="FromRoute"/> accepts but that the curated picker deliberately does
+    /// NOT seed — the concerts hub is reachable from an artist page, and offering it in the pin picker alongside Home
+    /// and Search would advertise a discovery surface most users never open. Pinnable when REACHED, not suggested.</summary>
+    public static readonly string[] AlsoPinnableRoutes = ["concerts"];
+
+    /// <summary>The dynamic route FAMILIES a pin may address. Every entry is a durable destination: the entity kinds
+    /// (whose ids double as pin ids), plus the app's own generated pages — a pre-release album, a Home section drill-in,
+    /// a browse category, a discography facet, an artist's concert schedule.
+    ///
+    /// <para>Spelled as LITERALS for the same reason <c>ShellNav</c> spells its route keys that way: this file is
+    /// source-included by <c>Wavee.Tests</c>, which cannot see the engine-bound files that own the constants
+    /// (<c>HomeSectionRoutes.Prefix</c>, <c>BrowseRoutes.Prefix</c>, <c>DiscographyRoute</c>,
+    /// <c>ConcertRoutes.ArtistSchedulePrefix</c>). Adding a route family means adding it here too — that is the whole
+    /// point of a closed list: an UNRECOGNISED key is refused, so a third-party entity scheme or a typo can never
+    /// become a pin that renders as the "Your Library" fallback.</para></summary>
+    public static readonly string[] PinnableRoutePrefixes =
+    [
+        PlaylistPrefix, AlbumPrefix, ArtistPrefix, ShowPrefix, FolderPrefix,
+        "prerelease:", "home-section:", "browse:", "disco:", "artist-concerts:",
+    ];
+
+    /// <summary>Real pages that are never pins. The first three are tooling/editor surfaces (a pinned "Settings" row is
+    /// chrome, not a destination); <c>playback-diagnostics</c> is a report reached from a dialog.</summary>
+    static readonly string[] UnpinnableRoutes =
+        ["settings", "api-console", "sidebar-customize", "home-customize", "playback-diagnostics"];
+
+    /// <summary>One dated event. Its page is real and navigable, but a concert happens and is then over, so a pin would
+    /// decay into a dead row — the durable destinations are the hub ("concerts") and an artist's schedule
+    /// ("artist-concerts:"), both of which <see cref="FromRoute"/> accepts.</summary>
+    const string EventRoutePrefix = "concert:";
 
     /// <summary>Liked Songs is a ROUTE pin, not a playlist pin — matching <c>ActionRules.RouteFor</c>'s existing special
     /// case, so a pin made from the detail page and a pin made from a sidebar row are the SAME pin.</summary>
@@ -85,16 +116,38 @@ public static class SidebarPinId
         _ => null,                                                                      // tracks, episodes, everything else
     };
 
-    /// <summary>Route key → pin id. Every real application route is stable enough to pin; only internal tooling/editor
-    /// surfaces are refused. Entity routes retain their existing prefixed identities, so pins made from page chrome,
-    /// tabs, cards and sidebar rows converge on one record.</summary>
+    /// <summary>Route key → pin id, and the app's one route RECOGNISER. Every durable application destination is stable
+    /// enough to pin — the curated <see cref="PinnableRoutes"/> picker set, <see cref="AlsoPinnableRoutes"/>, and the
+    /// dynamic <see cref="PinnableRoutePrefixes"/> families (entity routes keep their existing prefixed identities, so
+    /// pins made from page chrome, tabs, cards and sidebar rows converge on one record). Refused: tooling/editor
+    /// surfaces, one dated event, and anything UNRECOGNISED.
+    ///
+    /// <para>That last clause is load-bearing and was once missing: callers use this as a recogniser, not just as a
+    /// policy filter. <c>WaveeActionTargets.Resolve</c> asks "is this stored key a route?" before falling through to its
+    /// bare-uri arm, and <c>SidebarPaneSlot</c>/<c>SidebarDestination</c> gate on it. A version that returned every
+    /// non-empty string made those questions unanswerable — a third-party entity uri came back as a route pin with an
+    /// empty entity uri, and any typo became a pin that painted as the "Your Library" fallback.</para></summary>
     public static string? FromRoute(string? routeKey)
     {
         if (string.IsNullOrWhiteSpace(routeKey)) return null;
-        if (string.Equals(routeKey, "settings", StringComparison.Ordinal)
-            || string.Equals(routeKey, "api-console", StringComparison.Ordinal)
-            || string.Equals(routeKey, "sidebar-customize", StringComparison.Ordinal)) return null;
-        return routeKey;
+
+        for (int i = 0; i < UnpinnableRoutes.Length; i++)
+            if (string.Equals(UnpinnableRoutes[i], routeKey, StringComparison.Ordinal)) return null;
+
+        // Checked BEFORE the prefix families: "concert:" would otherwise be claimed by nothing, but an explicit refusal
+        // documents the event/hub split at the point a reader looks for it.
+        if (routeKey.StartsWith(EventRoutePrefix, StringComparison.Ordinal)) return null;
+
+        for (int i = 0; i < PinnableRoutePrefixes.Length; i++)
+            if (routeKey.StartsWith(PinnableRoutePrefixes[i], StringComparison.Ordinal)) return routeKey;
+
+        for (int i = 0; i < PinnableRoutes.Length; i++)
+            if (string.Equals(PinnableRoutes[i], routeKey, StringComparison.Ordinal)) return routeKey;
+
+        for (int i = 0; i < AlsoPinnableRoutes.Length; i++)
+            if (string.Equals(AlsoPinnableRoutes[i], routeKey, StringComparison.Ordinal)) return routeKey;
+
+        return null;
     }
 
     public static bool IsPinnableRoute(string? routeKey) => FromRoute(routeKey) is not null;

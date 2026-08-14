@@ -174,8 +174,9 @@ public static class SidebarPalette
     ];
 
     /// <summary>The real destinations that are NOT in <c>SidebarPinId.PinnableRoutes</c>: settings and the API console
-    /// are refused by <c>SidebarPinId.FromRoute</c> as tooling/editor surfaces and the concerts hub simply never
-    /// declared itself pinnable — which is a PIN policy, and not a reason to hide a real page from a shortcut list.
+    /// are refused by <c>SidebarPinId.FromRoute</c> as tooling/editor surfaces, and the concerts hub is pinnable
+    /// (<c>SidebarPinId.AlsoPinnableRoutes</c>) but deliberately absent from the curated PIN picker. Neither is a reason
+    /// to hide a real page from a shortcut list — a shortcut and a pin are different offers.
     ///
     /// <para>DECLARED ABOVE <see cref="Destinations"/> ON PURPOSE: C# runs static field initializers in TEXTUAL order,
     /// so declaring this below the field that reads it would leave it null inside <c>BuildDestinations</c> and ship an

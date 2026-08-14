@@ -571,8 +571,15 @@ public class ColdStoreSchemaV5Tests
                 Assert.Equal(3, cold.LoadAllExtensions().Count());
             }
 
-            using (var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, Locale))   // the sweep runs at open
+            // The sweep is a TTL tier driven by the RECURRING GC pass, NOT by open (see SweepExpiredExtensionsNow) — an
+            // open-time sweep put an unbounded delete on the startup path. Drive it the way the GC pass does; what this
+            // case is about is the CUTOFF, and that is unchanged either way.
+            using (var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, Locale))
             {
+                var (sweptRows, sweptBytes) = cold.SweepExpiredExtensionsNow();
+                Assert.Equal(1, sweptRows);                                   // only the >+7d row
+                Assert.True(sweptBytes > 0, "the sweep must report the payload bytes it freed");
+
                 var kept = cold.LoadAllExtensions().Select(x => x.EntityUri).ToHashSet(StringComparer.Ordinal);
                 Assert.Equal(2, kept.Count);
                 Assert.DoesNotContain("spotify:album:stale", kept);          // > +7d past expiry

@@ -403,8 +403,14 @@ public class DetailVerticalLayoutTests
         Assert.Contains("Surfaces.AccentRule", hero);
         Assert.Contains("DetailRail.EyebrowRun", hero);
         Assert.Contains("WaveeCta.Play(", hero);
-        Assert.Contains("WaveeEntrance.Row(", hero);
         Assert.Contains("WaveeCta.IconButtonSize", hero);
+
+        // And NO second entrance cascade. ContentHost already slides the whole page in (the Fluent/Zune page language),
+        // so a WaveeEntrance stagger over the identity column on top of it is what made first-open read as dizzy and made
+        // Back feel like a different animation. The hero used to carry `WaveeEntrance.Row(` and this case used to REQUIRE
+        // it; the requirement inverted when the page slide became the one entrance. Matched on the CALL form — the file
+        // still names the recipe in the comment that explains its absence, and that comment is the point.
+        Assert.DoesNotContain("WaveeEntrance.Row(", hero);
         // …and the band it carries paints NOTHING (the offset model): no fill anywhere in the hero file, so the
         // page's own art-derived ground is what shows through the stuck band.
         Assert.DoesNotContain("ContextBandOver", hero);

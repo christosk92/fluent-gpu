@@ -64,12 +64,32 @@ public static class ImageSource
 
     public static bool IsUsable(Image? image) => Quality(image) == ImageSourceQuality.Usable;
 
+    /// <summary>Pick the better of two artwork references for the SAME entity from two different sources.
+    /// <see cref="Quality"/> (is there a resolvable URL at all?) decides first; a tie is then broken by known pixel
+    /// area, and only then by <paramref name="primary"/>.
+    ///
+    /// <para>The area tie-break is what keeps a thin writer honest. A cluster/library echo upserts a track carrying a
+    /// small 64px cover while the row already holds the resolved 640px one; both URLs are perfectly
+    /// <see cref="ImageSourceQuality.Usable"/>, so resolvability alone would hand the win to whichever side happened to
+    /// be <paramref name="primary"/> and let the thin write downgrade the art. Dimensions are optional, so this only
+    /// engages when BOTH sides state them — an unknown size never outranks a known one, and equal (or unstated) sizes
+    /// keep the historical prefer-primary behaviour.</para></summary>
     public static Image? ChooseBetter(Image? primary, Image? fallback)
     {
         if (primary is null) return fallback;
         if (fallback is null) return primary;
-        return Quality(primary) >= Quality(fallback) ? primary : fallback;
+        var qp = Quality(primary);
+        var qf = Quality(fallback);
+        if (qp != qf) return qp > qf ? primary : fallback;
+        long ap = Area(primary), af = Area(fallback);
+        if (ap != af && ap > 0 && af > 0) return ap > af ? primary : fallback;
+        return primary;
     }
+
+    /// <summary>The stated pixel area, or 0 when either dimension is unknown or non-positive ("I don't know" — never a
+    /// claim of smallness, which is why <see cref="ChooseBetter"/> requires both sides to be positive).</summary>
+    static long Area(Image image) =>
+        image.Width is int w && w > 0 && image.Height is int h && h > 0 ? (long)w * h : 0L;
 
     /// <summary>True when both images resolve to the same cover identity (normalized URL, or matching mosaic tiles
     /// when neither has a URL). Null/empty pairs are not "the same source".</summary>

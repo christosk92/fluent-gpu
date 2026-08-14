@@ -189,7 +189,9 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
             } while (!result.EndOfMessage);
 
             System.Threading.Volatile.Write(ref _lastRecvTick, Environment.TickCount64);   // any frame = the link is alive
-            var f = DealerFrameParser.Parse(frame.GetBuffer().AsSpan(0, (int)frame.Length));
+            var utf8 = frame.GetBuffer().AsSpan(0, (int)frame.Length);
+            var f = DealerFrameParser.Parse(utf8);
+            DealerArchive.Instance.RecordInbound(utf8, f);
             switch (f.Type)
             {
                 case DealerFrameType.Ping:
@@ -229,6 +231,7 @@ public sealed class LiveDealerTransport : ITransport, IDisposable
                         return;
                     }
                     await SendTextAsync("{\"type\":\"ping\"}").ConfigureAwait(false);
+                    DealerArchive.Instance.RecordKeepalive(DealerFrameType.Ping);
                 }
             }
             catch { /* loop ends on disconnect/cancel */ }

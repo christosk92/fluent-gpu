@@ -149,10 +149,15 @@ if ($gitDirty) { Warn "Working tree is DIRTY. The bundle records this; a dirty c
 $publishArgs = @()
 if (-not $SkipPublish) {
   Step "Publishing Wavee ($Arch$(if ($Diag) { ', FLUENTGPU_DIAG' }))"
-  $pub = @('-Arch', $Arch)
-  if ($Diag) { $pub += '-Diag' }
-  $publishArgs = $pub
-  & (Join-Path $root 'ops\build\publish-wavee-aot.ps1') @pub
+  # Named arguments, not an array splat: `& script @('-Arch', $Arch)` binds the
+  # literal "-Arch" to the ValidateSet parameter and fails. bench-wavee.ps1 uses this form.
+  $publishArgs = @('-Arch', $Arch)
+  if ($Diag) { $publishArgs += '-Diag' }
+  if ($Diag) {
+    & (Join-Path $root 'ops\build\publish-wavee-aot.ps1') -Arch $Arch -Diag
+  } else {
+    & (Join-Path $root 'ops\build\publish-wavee-aot.ps1') -Arch $Arch
+  }
   if ($LASTEXITCODE -ne 0) { throw "publish failed ($LASTEXITCODE)" }
 }
 if (-not $ExePath) {

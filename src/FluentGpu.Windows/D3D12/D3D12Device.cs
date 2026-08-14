@@ -103,7 +103,9 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     // Open PushLayer kinds in stream order (acrylic pops are no-ops; opacity + self-blur pops composite their leased
     // RT), and the leased (slot, alpha, σ) per open OPACITY/BLUR group — both reused across frames (0 steady alloc). A
     // blur group is an opacity group with Sigma > 0: its RT is separable-Gaussian-blurred before the flat composite.
-    private const int NoopLayerKind = -1;
+    // (There is no longer a "drew the subtree inline" sentinel. It existed for the blur-hold miss arms, which now blur
+    // this frame instead — a hold may serve an older snapshot but never a DIFFERENT image. PopLayer's kind dispatch is
+    // still tolerant of an unknown kind, so the invariant it rested on is intact.)
     // A PURE edge fade (σ == 0, group alpha 1) that took the STRIP path: no group RT is leased at all, so it is NOT on
     // _opacityGroups (everything that peeks at the innermost open group — acrylic backdrop binding, nested composites —
     // must keep seeing the real enclosing target). It is tracked on its own stack and marked on _layerKinds with this
@@ -2570,8 +2572,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                             // ADOPT THE ACRYLIC CONTRACT (AcrylicScrollHold: a hold extends an EXISTING snapshot): serve
                             // the node's most recent pin, positioned at this frame's origin and drawn at its own size, at
                             // THIS frame's GroupAlpha. One content generation of staleness is imperceptible under a blur
-                            // and under motion — where the old fallback (NoopLayerKind: draw the subtree INLINE, and the
-                            // recorder has already folded the row's opacity into GroupAlpha and reset the subtree to 1)
+                            // and under motion — where the old fallback (draw the subtree INLINE, and the recorder has
+                            // already folded the row's opacity into GroupAlpha and reset the subtree to 1)
                             // published the whole subtree CRISP and at FULL brightness. That is the lyrics panel's
                             // "everything goes white" flash: a line advance shifts the σ/emphasis ladder across the whole
                             // visible window at once, so every row misses in the same frame.
@@ -2587,22 +2589,37 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
                                 pos = afterPop;         // the subtree is represented by the pin — skip it and its PopLayer
                                 continue;
                             }
-                            // NEVER pinned (and too big to blur locally): there is nothing to hold, so the subtree draws
-                            // inline. This is the ONLY surviving crisp fallback.
-                            _layerKinds.Add(NoopLayerKind);
+                            // NEVER pinned (and too big to blur locally): there is nothing to HOLD, so honour
+                            // AcrylicScrollHold's first clause — `if (!hasRetained) return true` — and BLUR IT NOW by
+                            // falling through to the ordinary lease below. A hold is a licence to serve an older
+                            // snapshot; it was never a licence to publish a DIFFERENT image. The old arm here drew the
+                            // subtree inline after the recorder had already folded the row's
+                            // opacity into GroupAlpha and reset the subtree to 1 — so a row with nothing to hold
+                            // published CRISP and at FULL brightness, which is a wrong frame, not a cheaper one.
+                            // Bounded by construction: this is a first-sight σ (nothing pinned for this LayerId at any
+                            // σ), so it is a mount-time event, not a per-frame one.
+                            _blurCacheMiss++;
                             _blurHoldFallback++;
-                            continue;
                         }
                     }
                     else if (holdIfCached && L.BlurSigma > 0f)
                     {
-                        // Uncacheable (TryCompute bailed on a nested layer / unknown op) under a hold policy. HoldOrSkipOnMiss
-                        // must still SKIP the subtree (drop it, exactly like the cacheable hold-miss path above) rather than
-                        // flash it crisp; without a hash we don't have afterPop, so walk the subtree to its matching PopLayer.
-                        if (skipOnHoldMiss && TrySkipLayerSubtree(drawList, pos, out int skipTo)) pos = skipTo;
-                        else _layerKinds.Add(NoopLayerKind);   // HoldIfCached (or an unwalkable subtree): crisp inline fallback
+                        // Uncacheable (TryCompute bailed on a nested layer / unknown op) under a hold policy.
+                        // HoldOrSkipOnMiss still SKIPS the subtree (drop the decorative blur entirely); without a hash we
+                        // have no afterPop, so walk the subtree to its matching PopLayer.
+                        if (skipOnHoldMiss && TrySkipLayerSubtree(drawList, pos, out int skipTo))
+                        {
+                            pos = skipTo;
+                            _blurHoldFallback++;
+                            continue;
+                        }
+                        // HoldIfCached, or an unwalkable subtree: same rule as above — nothing cacheable to hold ⇒ blur
+                        // now, never crisp. This arm is the one the lyrics panel lands on: a row NEAR the focus carries a
+                        // held-note halo σ INSIDE its depth-of-field σ, and a nested PushLayer is exactly what
+                        // BlurPinKey.TryCompute refuses, so those rows are permanently pin-ineligible. Under the frame-
+                        // global scroll hold (AppHost's SelfBlurHold — ANY user scroll, plus a ~0.12 s tail) every one of
+                        // them used to flash crisp+full-alpha at each line advance while the main page was scrolling.
                         _blurHoldFallback++;
-                        continue;
                     }
                     // PURE edge fade (no blur, group alpha 1): skip the full-canvas group RT entirely. Snapshot only the
                     // fade STRIPS of the current target (D), let the subtree draw STRAIGHT onto it, then on PopLayer

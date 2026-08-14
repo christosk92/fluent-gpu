@@ -66,11 +66,13 @@ static class Program
             minLevel: minSetting >= 0 ? (WaveeLogLevel)minSetting : defaultLevel,
             fileMinLevel: fileSetting >= 0 ? (WaveeLogLevel)fileSetting : defaultFileLevel,
             dailyRolling: true);
+        DealerArchive.Instance.Configure(Path.Combine(logDir, "dealer"));
         Diag.Sink = WaveeLog.DiagSink;                 // fold engine diagnostics (FG_DIAG) into the app log stream
         WaveeLog.Instance.Info("app", "startup", "Wavee starting",
             WaveeLogField.Of("pid", Environment.ProcessId),
             WaveeLogField.Of("args", args.Length),
             WaveeLogField.Of("log", logPath),
+            WaveeLogField.Of("dealerArchive", Path.Combine(logDir, "dealer")),
             WaveeLogField.Of("framework", System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription),
             WaveeLogField.Of("os", System.Runtime.InteropServices.RuntimeInformation.OSDescription));
 
@@ -79,12 +81,17 @@ static class Program
         {
             WaveeLog.Instance.Critical("crash", $"Unhandled exception (terminating={e.IsTerminating})", e.ExceptionObject as Exception);
             WaveeLog.Instance.Flush();
+            DealerArchive.Instance.Flush();
         };
         TaskScheduler.UnobservedTaskException += (_, e) =>
         {
             WaveeLog.Instance.Error("crash", "Unobserved task exception", e.Exception);
             WaveeLog.Instance.Flush();
             e.SetObserved();
+        };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) =>
+        {
+            try { DealerArchive.Instance.Flush(); } catch { }
         };
 
         if (Array.IndexOf(args, "--perf-bench") >= 0)

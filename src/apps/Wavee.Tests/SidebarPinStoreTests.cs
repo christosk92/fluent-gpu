@@ -253,8 +253,23 @@ public class SidebarPinStoreTests
         Assert.False(SidebarPinId.IsPinnableRoute("settings"));
         Assert.Null(SidebarPinId.FromRoute("api-console"));
         Assert.Null(SidebarPinId.FromRoute("sidebar-customize"));
+        Assert.Null(SidebarPinId.FromRoute("home-customize"));
+        Assert.Null(SidebarPinId.FromRoute("playback-diagnostics"));
         Assert.Null(SidebarPinId.FromRoute(""));
         Assert.Null(SidebarPinId.FromRoute(null));
+
+        // …and so is anything the route vocabulary does not RECOGNISE. FromRoute is the app's route recogniser, not just
+        // a policy filter: WaveeActionTargets.Resolve asks it "is this stored key a route?" before falling through to its
+        // bare-uri arm, and SidebarPaneSlot / SidebarDestination gate on it. A version that returned every non-empty
+        // string made a third-party entity uri resolve to a route pin with an EMPTY entity uri, and turned any typo into
+        // a pin that painted as the "Your Library" fallback.
+        Assert.Null(SidebarPinId.FromRoute("acme:widget:7"));
+        Assert.Null(SidebarPinId.FromRoute("not-a-route"));
+        Assert.Null(SidebarPinId.FromRoute("spotify:album:5"));   // an entity URI is FromUri's job, never a route
+
+        // One dated event is not a durable destination — the hub and the artist schedule above are. See
+        // SidebarDataSourceTests.Events_carry_title_venue_and_the_event_instant_and_are_not_pinnable.
+        Assert.Null(SidebarPinId.FromRoute("concert:spotify:concert:9"));
     }
 
     // The full recently-played page is CUSTOMIZABLE, not mandatory: it seeds the picker (so it can be added), and it

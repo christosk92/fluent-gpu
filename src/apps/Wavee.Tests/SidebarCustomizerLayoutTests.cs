@@ -157,9 +157,10 @@ public class SidebarCustomizerLayoutTests
                Items: null, Query: null, Children: children, Extension: null);
 
     /// <summary>The entry SET is derived, never re-typed: <c>SidebarPinId.PinnableRoutes</c> (the pin scheme's own list,
-    /// so a route that becomes pinnable later shows up here for free) ∪ the three real pages the PIN policy refuses —
-    /// settings and the API console are tooling surfaces and the concerts hub simply never declared itself pinnable,
-    /// which is not a reason to hide a real page from a shortcut list.</summary>
+    /// so a route that becomes pinnable later shows up here for free) ∪ the three real pages that list omits — settings
+    /// and the API console because the PIN policy refuses them as tooling surfaces, the concerts hub because the curated
+    /// picker does not advertise it (it is pinnable when reached). Neither omission is a reason to hide a real page from
+    /// a shortcut list: a shortcut and a pin are different offers.</summary>
     [Fact]
     public void Destinations_AreThePinnableRoutesPlusTheThreeUnpinnablePages()
     {
@@ -175,9 +176,16 @@ public class SidebarCustomizerLayoutTests
         Assert.Equal(new[] { "settings", "api-console", "concerts" },
                      routes.GetRange(SidebarPinId.PinnableRoutes.Length, 3).ToArray());
 
-        // The three extras are exactly the ones the pin scheme turns away — otherwise this list would duplicate one.
+        // The extras are exactly the pages PinnableRoutes omits — otherwise this list would duplicate one row.
         foreach (var extra in new[] { "settings", "api-console", "concerts" })
-            Assert.Null(SidebarPinId.FromRoute(extra));
+            Assert.DoesNotContain(extra, SidebarPinId.PinnableRoutes);
+
+        // …and they are omitted for two DIFFERENT reasons, which is why the set cannot be derived from one predicate:
+        // the tooling surfaces are refused by the pin scheme outright, the concerts hub is pinnable but uncurated.
+        Assert.Null(SidebarPinId.FromRoute("settings"));
+        Assert.Null(SidebarPinId.FromRoute("api-console"));
+        Assert.Equal("concerts", SidebarPinId.FromRoute("concerts"));
+        Assert.Contains("concerts", SidebarPinId.AlsoPinnableRoutes);
 
         // "home" is in there, which is the whole point of the group.
         Assert.Contains("home", routes);

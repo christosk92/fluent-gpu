@@ -274,10 +274,14 @@ public class ExtensionEtagCacheTests
             cold.Flush();
 
             int calls = 0;
+            int conditionalCalls = 0;
             var http = new FakeExchange((req, _) =>
             {
                 calls++;
                 var body = Xm.BatchedEntityRequest.Parser.ParseFrom(HttpCompression.Gunzip(req.Body!));
+                foreach (var entity in body.EntityRequest)
+                    foreach (var query in entity.Query)
+                        if (query.HasEtag && query.Etag.Length > 0) conditionalCalls++;
                 // HydrateFromCold strips ETag on Missing → no conditional; if a 304 somehow arrives with Missing
                 // prior, Fold/FetchBatch must not adopt it. Force a 304 body to exercise the guard.
                 return new HttpResp(200, new Dictionary<string, string>(),
@@ -288,9 +292,23 @@ public class ExtensionEtagCacheTests
             cache.MarkStale(uri, Xm.ExtensionKind.TrackV4);
 
             var values = await cache.GetAsync([(uri, Xm.ExtensionKind.TrackV4)], TestContext.Current.CancellationToken);
-            // 304-on-Missing is dropped from FetchBatch result → key stays out of the values dict (unsealed).
-            Assert.False(values.ContainsKey((uri, Xm.ExtensionKind.TrackV4)));
             Assert.Equal(1, calls);
+            // The legacy ETag never leaves the process: HydrateFromCold strips it on a Missing row, so the server is
+            // given no way to answer 304 at all. This is the FIRST of the two guards and the cheaper one.
+            Assert.Equal(0, conditionalCalls);
+
+            // The second guard: a 304 that arrives anyway is dropped from FetchBatch's result, so nothing is Seeded and
+            // nothing is re-Persisted. The key is still reported to the caller — the offline/SWR arm hands back the
+            // already-known stale row rather than a hole — but it is the PRE-EXISTING Missing, carrying no payload…
+            Assert.True(values.TryGetValue((uri, Xm.ExtensionKind.TrackV4), out var value));
+            Assert.True(value.Missing);
+            Assert.Null(value.Payload);
+
+            // …and, crucially, still UNSEALED: the refused 304 bought no fresh TTL, so the very next read goes back to
+            // the wire for a full body instead of being served a resealed negative. That is what "RequiresFullBody"
+            // means, and asserting it here is what a `values` key-absence check only ever implied.
+            await cache.GetAsync([(uri, Xm.ExtensionKind.TrackV4)], TestContext.Current.CancellationToken);
+            Assert.Equal(2, calls);
         }
         finally { DeleteDb(path); }
     }

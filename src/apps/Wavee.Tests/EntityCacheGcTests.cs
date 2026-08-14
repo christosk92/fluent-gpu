@@ -352,6 +352,12 @@ public class EntityCacheGcTests
 
     // ── (f) the v5 → v6 migration ────────────────────────────────────────────────────────────────────────────────────
 
+    /// <summary>The version the runner must land on: <c>CurrentSchemaVersion</c>, not the literal "6". Opening a v5 file
+    /// runs the WHOLE ordered chain in one pass (v5→v6→v7→…), so hard-coding this step's own number made the test fail
+    /// the moment a later migration was added — which says nothing about the v6 step this case is actually about.</summary>
+    static string ExpectedSchemaVersion =>
+        SqliteColdStore.CurrentSchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     [Fact]
     public void MigrateV6_AddsAndBackfillsAdoptedAt_AndIsIdempotent()
     {
@@ -364,13 +370,13 @@ public class EntityCacheGcTests
             long stamped;
             using (var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, Locale)) { }
             Assert.True(HasColumn(path, "playlists", "adopted_at"));
-            Assert.Equal("6", Scalar(path, "SELECT value FROM meta WHERE key='schema_version';") as string);
+            Assert.Equal(ExpectedSchemaVersion, Scalar(path, "SELECT value FROM meta WHERE key='schema_version';") as string);
             stamped = Count(path, "SELECT adopted_at FROM playlists WHERE uri='spotify:playlist:legacy';");
             Assert.True(stamped > 0, "the backfill must date existing playlists to now, not leave them instantly stale");
 
             // Reopen: no second ALTER, no re-stamp.
             using (var cold = new SqliteColdStore(path, SqliteColdStore.DefaultAccount, Locale)) { }
-            Assert.Equal("6", Scalar(path, "SELECT value FROM meta WHERE key='schema_version';") as string);
+            Assert.Equal(ExpectedSchemaVersion, Scalar(path, "SELECT value FROM meta WHERE key='schema_version';") as string);
             Assert.Equal(stamped, Count(path, "SELECT adopted_at FROM playlists WHERE uri='spotify:playlist:legacy';"));
         }
         finally { TryDelete(path); }

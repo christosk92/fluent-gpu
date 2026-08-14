@@ -14,15 +14,20 @@ public class StoreEntityMergeTests
     const string EpUri = "spotify:episode:e1";
     const string TrUri = "spotify:track:t1";
 
+    // coverUrl is a URL rather than an Image so that `coverUrl: null` genuinely means COVER-LESS. Taking an `Image?` and
+    // defaulting it with `?? new Image(…)` made the ClearPicture case unexpressible — passing null silently produced the
+    // default cover, so the test asserted a clear it had never actually asked for.
+    const string DefaultCoverUrl = "https://i.scdn.co/image/abc";
+
     static Playlist Pl(
         string name = "My List",
         string? description = "hello",
-        Image? cover = null,
+        string? coverUrl = DefaultCoverUrl,
         bool isPublic = true,
         string? basePermRev = null,
         PlaylistCapabilities? caps = null) =>
         new("p1", PlUri, name, description, "owner",
-            cover ?? new Image("https://i.scdn.co/image/abc"),
+            coverUrl is null ? null : new Image(coverUrl),
             TrackCount: 3,
             Capabilities: caps ?? new PlaylistCapabilities(true, true, true, false, true),
             IsPublic: isPublic,
@@ -41,8 +46,8 @@ public class StoreEntityMergeTests
     public void ClearPicture_NullCoverSticks()
     {
         var store = new InMemoryStore();
-        store.UpsertPlaylist(Pl(cover: new Image("https://i.scdn.co/image/keep")));
-        store.UpsertPlaylist(Pl(cover: null));   // ClearPicture
+        store.UpsertPlaylist(Pl(coverUrl: "https://i.scdn.co/image/keep"));
+        store.UpsertPlaylist(Pl(coverUrl: null));   // ClearPicture
         Assert.Null(store.GetPlaylist(PlUri)!.Cover);
     }
 

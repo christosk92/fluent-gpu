@@ -2059,6 +2059,17 @@ sealed class LyricsView : Component
                 // stays and only its amplitude comes down — here and at HeldGlowPeakScale.
                 float baseSigma = _large ? 4.5f : 3f;
                 float glowA = GlowAlphaOf(voiceLine);
+                // KNOWN COST, not a correctness bug (and deliberately not "fixed" here): while this row carries a
+                // depth-of-field σ, a halo σ makes a blur layer NESTED inside a blur layer, and a nested PushLayer is
+                // exactly what BlurPinKey.TryCompute refuses — so dofContent is pin-INELIGIBLE for the voice row through
+                // the whole ~140 ms lead window and the ~240 ms out-fade after it, i.e. at every line handoff. It
+                // re-Gaussians instead of pin-hitting. The LINE-SYNCED branch of LyricLineView.Render dodges this by
+                // putting σ on the focal row only; the two ways out here both cost a VISUAL: zero the halo σ (the bloom
+                // becomes a crisp duplicate under the main text at full GlowOpacity) or zero the row's DoF σ (~380 ms of
+                // two in-focus rows per handoff, weakening the ladder). Neither is obviously right, so the cost stands.
+                // What this used to ALSO cost — the panel flashing crisp+full-alpha at a handoff during any page scroll —
+                // is gone: a blur-hold miss now blurs the frame instead of publishing the subtree inline
+                // (D3D12Device's hold arms).
                 float sigma = baseSigma * glowA;
                 ref var gp = ref scene.Paint(glowNode);
                 if (MathF.Abs(gp.BlurSigma - sigma) > 0.01f) { gp.BlurSigma = sigma; glowDirty = true; }
