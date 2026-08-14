@@ -1,6 +1,6 @@
 # Playback restore — edge-case findings
 
-Status: **DIAGNOSIS ONLY** (no product code changed). Date: 2026-08-14.
+Status: **FIXED** — see “As fixed” at the end. Diagnosis + fix design: 2026-08-14; implemented the same day.
 Grounding: `PlaybackController`, `PlaybackSession`, `NowPlayingProjection`, `ClusterMapper`, `TransferState` / `ProtoTransferStateDecoder`, `PlaybackBridge`.
 Prior locked intent: `docs/plans/wavee/queue-rework-proposal.md` §8 (F9) — full session restore from cluster, **shown paused**, resumable instantly. Local persistence was explicitly deferred (§13.3).
 
@@ -203,3 +203,32 @@ Reuse `FakeContextResolver`, `ProtoTransferStateDecoder`, `QueueRecoveryTests` f
 2. **History is defined as local-only and then never rebuilt.** `ReplaceFromCluster` / `SetTransferredContext` / viewer `MapQueue` all discard `prev_tracks`. Combined with `CanSkipPrev=true` on `Started`, Previous after restore is an enabled no-op (`<3s`) or a restart (`>3s`).
 
 3. **Active-without-session cluster fold hides the queue.** When the announce echo still names us `active_device_id`, `OnCluster` takes the track but refuses cluster queue and options (`weActive` branches at 409 and 429). Launch can show now-playing with an empty queue until the user hits Play — at which point ghost autoplays and still has no History.
+
+---
+
+## As fixed
+
+Date: 2026-08-14. The fix design above is implemented; this section is the closing matrix. Product code: `PlaybackController` (launch `SessionRecovery`, `TryRestoreFromSnapshotAsync`, `HealQueueFromContextAsync`, the unified ghost path), `PlaybackSession` (`prev_tracks` → History, `is_queued`/autoplay acceptance, `missCursor`), `NowPlayingProjection` (derived `CanSkipPrev`, the `weActive && !hasLocalContext` fall-through), `ContextResolve.ResolveRestoreIndex` (the shared ladder), `PlaybackBridge.MaybeWritePlaybackSnapshot` + `SessionSnapshotStore.UpdatePlayback` (the writer), `Program.cs` (process-exit flush). Agent-facing contract: `.claude/skills/wavee/session-restore.md`.
+
+| Dimension | As fixed | Covering test |
+|---|---|---|
+| Current track + position | One pipeline: every restore path ends in `LoadAndPlayCurrentAsync` (fast-start, continuation prefetch, prepared-next). Cold start with an empty cluster restores from `session.json`. | `SessionRecovery_ThenResume_LoadsAtTheStoredPosition_WithoutASecondSeed`, `GhostResume_EmptyCluster_RestoresTheLocalSnapshotPaused_AndNeverAutoplays` |
+| Paused | **A launch never starts music.** Recovery publishes `Paused` at the extrapolated position; the snapshot path loads `initiallyPaused: true`; the snapshot is always *written* `paused: true`. `restore_paused` now defaults to honouring the transferred paused state (only an explicit `kill` forces play). | `SessionRecovery_FirstCluster_SeedsThePausedSessionAndNeverPlays`, `InboundTransfer_DecodesInnerState_DerivesGid_AndStartsPausedAtPosition` |
+| History / Previous | `prev_tracks` rebuild History (oldest→newest, uids kept, capped). `CanSkipPrev` is **derived** (`history > 0 ∨ cursor > 0 ∨ pos > 3 s`), never a blanket `true`. Previous steps back; with nothing behind it, past 3 s restarts and under 3 s is a true no-op with the affordance disabled. | `ReplaceFromCluster_ImportsPrevTracksIntoHistory`, `LocalPrev_AfterARestoreWithHistory_StepsBackIntoThePrevTracksTail`, `LocalPrev_AfterARestoreWithNoHistory_RestartsPast3s_AndNoOpsUnderIt` |
+| UserQueue | Accepted via `provider:"queue"` **or** `metadata.is_queued:"true"` (the `ParseWireEntries` rule, now shared). Queue uris persist locally, so a custom queue survives a restart. | `ReplaceFromCluster_IsQueuedMetadataWithoutProvider_GoesToUserQueue`, `ReplaceFromCluster_FixtureA_MatchesSemantics` |
+| Upcoming / context | The background heal re-resolves the context, extends Upcoming and restores `_nextPageUrl` — long playlists page in again. On an identity miss the cluster rows stay (they *are* the live session). | `SessionRecovery_StaleActiveEcho_StillFillsTheQueueAndOptions` |
+| Autoplay tail | Accepted via provider **or** `autoplay.is_autoplay`; `_autoplayLatchedFor` stays null across a restore (a restored tail is not a new fetch), and an infinite context takes the continuation url so a station keeps paging instead of dying at the window edge. | `ReplaceFromCluster_FixtureA_MatchesSemantics` (tail + `AutoplayContextUri`) |
+| Shuffle / Repeat | The stale-active fold no longer refuses cluster options — `weActive && !hasLocalContext` falls through to the cluster's queue *and* shuffle/repeat. | `SessionRecovery_StaleActiveEcho_StillFillsTheQueueAndOptions`, `OnCluster_WeAreStaleActive_FillsQueueFromCluster` |
+| Episode position | One rule both paths: cluster/transfer position wins when `> 0`; `EpisodeResumeMicros` only at 0. | *(rule inlined in `LoadAndPlayCurrentAsync`; no dedicated test — see debt)* |
+| Unplayable / mismatch | `ContextResolve.ResolveRestoreIndex` is the one ladder: uid → uri → saved index (in range **and** playable) → context head (opt-in; for a transfer only when the sender named no current). A full miss patches the current outside the spine with `missCursor` so `Next()` is the successor, not `context[0]`. Resolve failure skips to `PreviewNext()` once, then reports. | the six `ResolveRestoreIndex_*` tests, `InboundTransfer_DecodesInnerState_DerivesGid_AndStartsPausedAtPosition` |
+| Queue UI / `QueueRevision` | A seed produces new rows and bumps the revision; a pause/seek/volume republish re-windows the same rows and coalesces (`QueueContentFold`). No more now-playing over an empty panel. | `QueueContentFold_IsStableAcrossARepublishOfTheSameEntries`, `QueueContentFold_ChangesWhenTheQueueContentChanges`, `QueueContentFold_IsOrderSensitive` |
+
+Two assertions that **pinned** the old bugs were inverted: `QueueRecoveryTests` (History is now imported) and `ConnectProjectionTests` (`prev_tracks` now surface). `ConnectPublisherTests` gained `QueueSnapshot_CapsWireTracks_AndPublishesHistoryAsPrevTracks`.
+
+### One deviation from the fix design
+
+§6 numbered the context-head rung *above* "hydrate-and-patch the current outside the spine". Implemented the other way round for transfers: an explicitly transferred current (commonly a gid with an empty uri, and frequently absent from the resolved page — a phone playing a track the page does not list) **beats** the head. `always_play_something` means "play something rather than nothing", never "prefer the head over the track the sender says is playing" — which is also what the design's own tests 14/15 describe (head only when there is *no* current). Pinned by `InboundTransfer_DecodesInnerState_DerivesGid_AndStartsPausedAtPosition`.
+
+### Test debt (not written)
+
+Of the 26 planned tests, the restore-critical ones above landed (17 tests across four files). Still unwritten, in rough value order: the episode Herodotus-vs-cluster precedence case (9), the transfer-mode matrix beyond paused/track — `restore_position` extrapolation ageing (11), `retain_session` (16), `IsPlayingQueue` head-skip (17), autoplay-tail prefetch eligibility after transfer (18), station-window exhaustion (19), `next_page_url` heal (20), unplayable-current skip (21), and the video-placement pin (25). None of them gate the fixed behaviour; they widen coverage. **Final acceptance remains a user-run pass** against the matrix above — the paused cold start, Previous after a restart, a custom queue surviving a restart, and a station continuing past the window edge.

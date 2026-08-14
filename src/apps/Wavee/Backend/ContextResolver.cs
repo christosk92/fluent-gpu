@@ -117,6 +117,25 @@ public static class ContextResolve
         return 0;
     }
 
+    /// <summary>The shared restore/identity-miss ladder (playback-restore fix §6) used by transfer, the recovery heal and
+    /// the local-snapshot restore: <b>uid → URI → saved index (in range AND a playable row — never a blind index across a
+    /// regenerated ordering, F2) → context head</b> (first playable), the head rung only when the caller opted in
+    /// (<c>always_play_something</c>, or launch recovery's "play something paused"). Returns -1 when every rung misses —
+    /// the caller then patches the saved current in OUTSIDE the spine (with a cursor hint so Next() advances to the
+    /// successor of where it sat, not context[0]).</summary>
+    public static int ResolveRestoreIndex(
+        IReadOnlyList<QueuedTrack> tracks, string? trackUri, string? trackUid, int savedIndex, bool allowContextHead)
+    {
+        int i = FindStartIndex(tracks, trackUri, trackUid);
+        if (i >= 0) return i;
+        if (savedIndex >= 0 && savedIndex < tracks.Count && tracks[savedIndex].RowKind == QueueRowKind.Playable)
+            return savedIndex;
+        if (allowContextHead)
+            for (int k = 0; k < tracks.Count; k++)
+                if (tracks[k].RowKind == QueueRowKind.Playable) return k;
+        return -1;
+    }
+
     /// <summary>True for algorithmic/endless contexts (station/radio/autoplay) — their end triggers autoplay, not Ended.</summary>
     public static bool IsInfinite(string uri) =>
         uri.Contains(":station:", StringComparison.Ordinal)

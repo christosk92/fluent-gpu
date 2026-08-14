@@ -948,4 +948,171 @@ public class ConnectControllerTests
         Assert.Contains("transfer:us", host.Calls);
         Assert.True(host.Calls.IndexOf("setoutput:dev-1") < host.Calls.IndexOf("transfer:us"));   // route FIRST, then transfer home
     }
+
+    // ── launch session restore (docs/plans/wavee/playback-restore-findings.md §§1, 2, 5, 8) ───────────────────────────
+    // Recovery is scheduled from the projection callback and runs on its own task (it takes the controller lock), so
+    // these await a condition rather than a returned Task.
+    static async Task<bool> Settle(Func<bool> until, int timeoutMs = 2000)
+    {
+        for (int waited = 0; waited < timeoutMs; waited += 10)
+        {
+            if (until()) return true;
+            await Task.Delay(10);
+        }
+        return until();
+    }
+
+    [Fact]
+    public async Task SessionRecovery_FirstCluster_SeedsThePausedSessionAndNeverPlays()
+    {
+        // The launch hole (root cause 1): a cluster naming a track with nobody active used to leave now-playing over an
+        // empty queue until the user pressed Play — and then ghost-resume AUTOPLAYED. Recovery seeds it paused instead.
+        using var c = Make(out var host, out var proj, out var outbound);
+
+        proj.OnCluster(Cluster("", Remote("spotify:track:ghost"), pos: 42_000));
+
+        Assert.True(await Settle(() => proj.CurrentTrack is not null && proj.Queue.Count > 0),
+            "recovery did not seed the session from the cluster");
+        Assert.False(proj.IsPlaying);                  // paused, never autoplayed on launch
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.Empty(outbound.Sent);                   // recovery is local-only: it must not announce on the wire
+    }
+
+    [Fact]
+    public async Task SessionRecovery_ThenResume_LoadsAtTheStoredPosition_WithoutASecondSeed()
+    {
+        using var c = Make(out var host, out var proj, out _);
+        proj.OnCluster(Cluster("", Remote("spotify:track:ghost"), pos: 42_000));
+        Assert.True(await Settle(() => proj.Queue.Count > 0));
+        host.Calls.Clear();
+
+        await c.ResumeAsync();
+
+        // The seeded-but-unloaded session goes through the ONE load pipeline (fix §4) and honours the cluster position
+        // (fix §5) — not a bare Play() over empty media.
+        Assert.True(await Settle(() => host.Calls.Any(x => x.StartsWith("load:", StringComparison.Ordinal)
+                                                        || x.StartsWith("faststart:", StringComparison.Ordinal))),
+            "resume after recovery did not load the seeded current: " + string.Join(",", host.Calls));
+        Assert.Contains("play", host.Calls);
+        Assert.Contains(host.Calls, x => x == "seek:42000" || x.StartsWith("faststart:", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task SessionRecovery_AnotherDeviceActive_StaysAViewer_AndSeedsNoLocalSession()
+    {
+        using var c = Make(out var host, out var proj, out _);
+
+        proj.OnCluster(Cluster("other-device", Remote("spotify:track:remote"), pos: 5_000, playing: true));
+        await Task.Delay(60);   // give a (wrongly) scheduled recovery time to do damage
+
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:", StringComparison.Ordinal));
+        Assert.False(c.HasLocalSession);   // the cluster owns the session; we mirror it
+    }
+
+    [Fact]
+    public async Task SessionRecovery_StaleActiveEcho_StillFillsTheQueueAndOptions()
+    {
+        // Root cause 3: when the announce echo still named US active with no local session, the fold took the track but
+        // refused the cluster queue AND shuffle/repeat — now-playing showed a track over an empty queue panel.
+        using var c = Make(out _, out var proj, out _);
+
+        proj.OnCluster(Cluster("us", Remote("spotify:track:mine"), pos: 1_000) with
+        {
+            NextTracks = [Remote("spotify:track:next1"), Remote("spotify:track:next2")],
+            Shuffle = true,
+            Repeat = RepeatMode.Context,
+        });
+
+        Assert.True(await Settle(() => proj.Queue.Count > 0), "the stale-active fold left the queue empty");
+        Assert.True(proj.IsShuffle);
+        Assert.Equal(RepeatMode.Context, proj.Repeat);
+    }
+
+    [Fact]
+    public async Task LocalPrev_AfterARestoreWithHistory_StepsBackIntoThePrevTracksTail()
+    {
+        // Root cause 2, the payoff: prev_tracks now rebuild History, so Previous after a restore actually goes back.
+        using var c = Make(out var host, out var proj, out _);
+        proj.OnCluster(Cluster("", Remote("spotify:track:current"), pos: 1_000) with
+        {
+            PrevTracks = [Remote("spotify:track:older"), Remote("spotify:track:played")],
+        });
+        Assert.True(await Settle(() => proj.Queue.Count > 0));
+        await c.ResumeAsync();
+        Assert.True(await Settle(() => host.Calls.Contains("play")));
+        host.PositionMs = 500;   // under the 3 s restart window, so this is a real step-back, not a seek(0)
+        host.Calls.Clear();
+
+        await c.PreviousAsync();
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == "spotify:track:played"),
+            "Previous did not step into the restored history; current = " + proj.CurrentTrack?.Uri);
+    }
+
+    [Fact]
+    public async Task LocalPrev_AfterARestoreWithNoHistory_RestartsPast3s_AndNoOpsUnderIt()
+    {
+        using var c = Make(out var host, out var proj, out _);
+        proj.OnCluster(Cluster("", Remote("spotify:track:only"), pos: 0));   // no prev_tracks → History stays empty
+        Assert.True(await Settle(() => proj.Queue.Count > 0));
+        await c.ResumeAsync();
+        Assert.True(await Settle(() => host.Calls.Contains("play")));
+
+        // Past 3 s → restart the current track.
+        host.PositionMs = 7_000;
+        host.Calls.Clear();
+        await c.PreviousAsync();
+        Assert.True(await Settle(() => host.Calls.Contains("seek:0")), "Previous past 3 s did not restart the track");
+
+        // Under 3 s with nothing behind it → a TRUE no-op (the old enabled-no-op bug), and the affordance says so.
+        host.PositionMs = 900;
+        host.Calls.Clear();
+        await c.PreviousAsync();
+        await Task.Delay(60);
+        Assert.DoesNotContain(host.Calls, x => x.StartsWith("load:", StringComparison.Ordinal)
+                                            || x.StartsWith("faststart:", StringComparison.Ordinal));
+        Assert.Equal("spotify:track:only", proj.CurrentTrack?.Uri);
+        Assert.False(proj.CanSkipPrev);
+    }
+
+    [Fact]
+    public async Task GhostResume_EmptyCluster_RestoresTheLocalSnapshotPaused_AndNeverAutoplays()
+    {
+        // §8 — the empty-cluster launch fallback. The snapshot restores the identity/position/options; playback stays
+        // paused (a launch must never start music) and the user queue survives the restart.
+        using var c = Make(out var host, out var proj, out _, ctx: Ctx("spotify:track:a", "spotify:track:b"));
+        c.RestoreSnapshot = () => new PlaybackSessionSnapshot(
+            ContextUri: "spotify:playlist:saved",
+            CurrentUri: "spotify:track:b",
+            CurrentUid: "",
+            CurrentIndex: 1,
+            PositionMs: 33_000,
+            Shuffle: true,
+            Repeat: RepeatMode.Context,
+            UserQueue: [new QueuedRef("spotify:track:queued", "")],
+            AutoplayActive: false);
+
+        await c.ResumeAsync();   // nothing in the cluster → the snapshot path
+
+        Assert.True(await Settle(() => proj.CurrentTrack?.Uri == "spotify:track:b"),
+            "the snapshot restore did not land on the saved current; got " + proj.CurrentTrack?.Uri);
+        Assert.False(proj.IsPlaying);
+        Assert.DoesNotContain("play", host.Calls);
+        Assert.True(proj.IsShuffle);
+        Assert.Equal(RepeatMode.Context, proj.Repeat);
+    }
+
+    [Fact]
+    public async Task GhostResume_EmptyCluster_WithNoSnapshot_StaysAQuietNoOp()
+    {
+        using var c = Make(out var host, out var proj, out var outbound);
+
+        await c.ResumeAsync();
+        await Task.Delay(60);
+
+        Assert.Empty(host.Calls);
+        Assert.Null(proj.CurrentTrack);
+        Assert.Empty(outbound.Sent);
+    }
 }

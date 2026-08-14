@@ -23,7 +23,8 @@ sealed record SessionItem(
 /// <summary>The one atomic read shape — serves the local AND viewer paths. Revision is a local monotonic bumped on every
 /// mutation; <see cref="Current"/> is THE single source of "current"; the buckets are the full resolved state (windowing
 /// is applied downstream, never here). <see cref="ClusterQueueRevision"/> is the cluster's string revision, echoed on an
-/// outbound set_queue.</summary>
+/// outbound set_queue. <see cref="ContextCursor"/> is the context index the current row resides at (-1 = current stands
+/// outside the context spine) — the derived CanSkipPrev and the session-snapshot writer read it off this atomic shape.</summary>
 public sealed record QueueSnapshot(
     long Revision,
     string? ContextUri,
@@ -33,7 +34,8 @@ public sealed record QueueSnapshot(
     ImmutableArray<QueueEntry> UserQueue,
     ImmutableArray<QueueEntry> Upcoming,  // context + autoplay rows after the cursor (providers mark them)
     bool Shuffle, RepeatMode Repeat,
-    string ClusterQueueRevision);
+    string ClusterQueueRevision,
+    int ContextCursor = -1);
 
 public sealed class PlaybackSession
 {
@@ -191,12 +193,17 @@ public sealed class PlaybackSession
         return Bump();
     }
 
-    /// <summary>Seed a transferred context while allowing its current track to live outside the resolved row set.</summary>
+    /// <summary>Seed a transferred context while allowing its current track to live outside the resolved row set.
+    /// <paramref name="missCursor"/> applies only on an identity MISS (the current is patched outside the spine): it is
+    /// the cursor to park at so <see cref="Next"/> advances to the first resolved row AFTER where the patched current sat
+    /// in the saved order — never back to context[0] (playback-restore fix §6.5). -1 (unknown position) keeps the
+    /// head-of-context advance.</summary>
     public QueueSnapshot SetTransferredContext(
         string uri,
         IReadOnlyList<QueuedTrack> tracks,
         in QueuedTrack transferredCurrent,
-        bool clearUserQueue)
+        bool clearUserQueue,
+        int missCursor = -1)
     {
         _naturalOrder.Clear();
         _context.Clear();
@@ -227,7 +234,7 @@ public sealed class PlaybackSession
         }
         else
         {
-            _cursor = -1;
+            _cursor = missCursor >= 0 && _context.Count > 0 ? Math.Min(missCursor, _context.Count - 1) : -1;
             _current = new SessionItem(MintId(), transferredCurrent.Track, transferredCurrent.Uid,
                 QueueProviderExtensions.FromWire(transferredCurrent.Provider), transferredCurrent.RowKind, uri,
                 transferredCurrent.Metadata);
@@ -508,9 +515,10 @@ public sealed class PlaybackSession
     // ── inbound / recovery ───────────────────────────────────────────────────────────────────────────────────────────
 
     /// <summary>Rebuild the whole session from a cluster (startup recovery / becoming active) — Current from player_state
-    /// (provider-aware), UserQueue from provider:"queue" rows IN WIRE ORDER, Upcoming from the context+autoplay rows
-    /// (markers kept as non-surfaced Kind rows). History is local-only (<see cref="PushHistory"/>); cluster prev_tracks
-    /// are ignored until server-driven history lands. Cursor sits before Upcoming (=-1) so the current stands alone.</summary>
+    /// (provider-aware), UserQueue from provider:"queue" OR metadata is_queued:"true" rows IN WIRE ORDER, Upcoming from
+    /// the context+autoplay rows (markers kept as non-surfaced Kind rows), and History from cluster prev_tracks
+    /// (oldest→newest, uid/provider preserved, cap <see cref="HistoryCap"/>) so Previous works after a restore
+    /// (playback-restore fix §2). Cursor sits before Upcoming (=-1) so the current stands alone.</summary>
     public QueueSnapshot ReplaceFromCluster(ClusterDelta c, Track? hydratedCurrent)
     {
         _naturalOrder.Clear();
@@ -521,17 +529,38 @@ public sealed class PlaybackSession
         _contextUri = c.ContextUri;
         _nextQueueUid = 0;
 
+        // prev_tracks are the active session's actually-played tail, oldest first — refill History from them so a
+        // restored session steps back exactly like the live one did (the old clear-without-refill is fix §2's bug).
+        if (c.PrevTracks is { Count: > 0 } prev)
+        {
+            foreach (var p in prev)
+            {
+                if (RowKindOfUri(p.Uri) != QueueRowKind.Playable) continue;   // markers never enter history
+                _history.Add(new SessionItem(MintId(), TrackFromRemote(p), p.Uid,
+                    QueueProviderExtensions.FromWire(p.Provider), QueueRowKind.Playable, c.ContextUri, p.Metadata));
+            }
+            if (_history.Count > HistoryCap) _history.RemoveRange(0, _history.Count - HistoryCap);
+        }
+
         foreach (var n in c.NextTracks)
         {
             var kind = RowKindOfUri(n.Uri);
             var provider = QueueProviderExtensions.FromWire(n.Provider);
-            if (kind == QueueRowKind.Playable && provider == QueueProvider.Queue)
+            // A user-queued row is marked by provider:"queue" OR metadata is_queued:"true" (fix §3 — some senders omit
+            // the provider; mirror the set_queue wire parse in PlaybackController.ParseWireEntries).
+            bool queued = kind == QueueRowKind.Playable
+                && (provider == QueueProvider.Queue || IsQueuedMeta(n.Metadata));
+            if (queued)
             {
                 BumpQueueCursor(n.Uid);
                 _userQueue.Add(new SessionItem(MintId(), TrackFromRemote(n), n.Uid, QueueProvider.Queue, kind, null, n.Metadata));
             }
             else
             {
+                // Autoplay classification accepts the provider OR the autoplay.is_autoplay metadata marker (fix §3 —
+                // the same acceptance ApplySetQueue already uses).
+                if (provider != QueueProvider.Autoplay && kind == QueueRowKind.Playable && IsAutoplayMeta(n.Metadata))
+                    provider = QueueProvider.Autoplay;
                 if (provider == QueueProvider.Autoplay && _autoplayContextUri is null) _autoplayContextUri = AutoplayCtxOf(n);
                 var it = new SessionItem(MintId(), TrackFromRemote(n), n.Uid, provider, kind,
                     provider == QueueProvider.Autoplay ? _autoplayContextUri : c.ContextUri, n.Metadata);
@@ -614,7 +643,7 @@ public sealed class PlaybackSession
         return new QueueSnapshot(
             _revision, _contextUri, _autoplayContextUri, current,
             history.ToImmutable(), userQueue.ToImmutable(), upcoming.ToImmutable(),
-            _shuffle, _repeat, _clusterRevision);
+            _shuffle, _repeat, _clusterRevision, _cursor);
     }
 
     // ── internals ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -846,6 +875,10 @@ public sealed class PlaybackSession
 
     static bool IsAutoplayMeta(IReadOnlyDictionary<string, string>? m) =>
         m is not null && m.TryGetValue("autoplay.is_autoplay", out var v) && v == "true";
+
+    // The wire's other user-queue marker: metadata is_queued:"true" (some senders omit provider:"queue" — fix §3).
+    static bool IsQueuedMeta(IReadOnlyDictionary<string, string>? m) =>
+        m is not null && m.TryGetValue("is_queued", out var v) && v == "true";
 
     static string? AutoplayCtxOf(in RemoteTrack n) =>
         n.Metadata is { } m && m.TryGetValue("context_uri", out var u) ? u : null;

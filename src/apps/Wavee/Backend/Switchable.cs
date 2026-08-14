@@ -76,6 +76,10 @@ public sealed class SwitchablePlayer : IPlaybackPlayer
     public void SetInner(IPlaybackPlayer inner) { lock (_gate) _inner = inner; _state.SetInner(inner.State); }
     IPlaybackPlayer Cur { get { lock (_gate) return _inner; } }
 
+    /// <summary>The current inner player — the composition-time seam PlaybackBridge uses to reach the concrete
+    /// PlaybackController (restore-snapshot wiring) after a fake→live swap without re-pointing the bridge.</summary>
+    public IPlaybackPlayer Inner => Cur;
+
     public IPlaybackState State => _state;
     public Task PlayAsync(string contextUri, int startIndex = 0, CancellationToken ct = default) => Cur.PlayAsync(contextUri, startIndex, ct);
     public Task PlayContextTrackAsync(string contextUri, PlaybackContextTrack track, int fallbackIndex = 0, CancellationToken ct = default) => Cur.PlayContextTrackAsync(contextUri, track, fallbackIndex, ct);

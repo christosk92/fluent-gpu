@@ -174,7 +174,10 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
     public RepeatMode Repeat { get { lock (_gate) return _repeat; } }
     public IReadOnlyList<QueueEntry> Queue { get { lock (_gate) return _queue; } }
     public bool CanSkipNext { get { lock (_gate) return _canSkipNext; } }
-    public bool CanSkipPrev { get { lock (_gate) return _canSkipPrev; } }
+    // Locally active (a live local session): the structural half (_canSkipPrev — history / a prior context row) plus the
+    // >3 s restart affordance, derived at read because the playhead moves without a structural publish. Viewer: the
+    // cluster restriction alone (findings fix §2).
+    public bool CanSkipPrev { get { lock (_gate) return _canSkipPrev || (_hasLocalContext && Pos() > 3000); } }
     public bool CanSeek { get { lock (_gate) return _canSeek; } }
     public IObservable<IPlaybackState> Changes => _changes;
     public IObservable<long> PositionTicks => _positionTicks;
@@ -283,12 +286,17 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                     case EvKind.Resumed:
                     case EvKind.TrackChanged:
                         _isPlaying = true; _isBuffering = false;
-                        _canSkipNext = _canSkipPrev = _canSeek = true;
+                        _canSkipNext = _canSeek = true;
+                        // CanSkipPrev is DERIVED while locally active (findings fix §2), never the blanket true that made
+                        // Previous an enabled no-op after a restore: history to step into, or a prior context row. The
+                        // >3 s restart affordance folds in at the property read (position moves without a publish).
+                        _canSkipPrev = snap.History.Length > 0 || snap.ContextCursor > 0;
                         _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                         break;
                     case EvKind.Paused:
                     case EvKind.Ended:
                     case EvKind.BecameInactive:
+                        _canSkipPrev = snap.History.Length > 0 || snap.ContextCursor > 0;   // same derivation (recovery publishes Paused)
                         _isPlaying = false; _speed = 1.0; _posMs = e.AtMs; _posAnchorWall = _now();
                         break;
                     case EvKind.Seeked:
@@ -406,7 +414,9 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
                 _isPlaying = active && c.IsPlaying && !c.IsPaused;
                 _isBuffering = c.IsBuffering;
             }
-            if (!weActive) { _shuffle = c.Shuffle; _repeat = c.Repeat; }   // active: local owns shuffle/repeat (SetLocalOptions)
+            // Active WITH a local session: local owns shuffle/repeat (SetLocalOptions). A stale "we are active" echo with
+            // NO local session (cold start — findings §9) must take the cluster's options like any viewer fold would.
+            if (!weActive || !_hasLocalContext) { _shuffle = c.Shuffle; _repeat = c.Repeat; }
             _canSkipNext = !c.DisallowSkipNext;
             _canSkipPrev = !c.DisallowSkipPrev;
             _canSeek = !c.DisallowSeeking;
@@ -426,10 +436,13 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
             long age = !_isPlaying || (isNewTrack && c.PositionAsOfMs <= 1000) ? 0 : serverSideAge + networkAge;
             _posMs = c.PositionAsOfMs + (long)Math.Round(age * _speed);
             _posAnchorWall = _now();
-            if (!weActive)
+            // Viewer: cluster queue. Active WITH a local session: keep the local queue (ApplyLocalSnapshot). The stale
+            // "we are active" fold without a local session (findings §9) falls through to MapQueue too — otherwise a cold
+            // start shows the cluster's track over an empty queue panel until the user presses Play.
+            if (!weActive || !_hasLocalContext)
             {
                 viewerQueue = MapQueue(c.NextTracks, c.PrevTracks, c.HasTrack ? c.Track : null);
-                _queue = viewerQueue;   // viewer: cluster queue. Active: keep the local queue (ApplyLocalSnapshot).
+                _queue = viewerQueue;
             }
             ctxForLog = _contextUri;
             currentForLog = _track?.Uri;
@@ -614,14 +627,25 @@ public sealed class NowPlayingProjection : IPlaybackProjection, IPlaybackState, 
         return new Track(IdFromUri(r.Uri), r.Uri, r.Title, artists, album, r.DurationMs, HasVideoMetadata(r), img);
     }
 
-    // Viewer-mode queue: the active device's next_tracks split by provider. History is local-only on the active device;
-    // viewer mode does not surface cluster prev_tracks (server-driven history is a follow-up).
+    // Viewer-mode queue: the active device's next_tracks split by provider, PRECEDED by its prev_tracks as a History tail
+    // (oldest→newest, ≤16 to mirror WindowQueue) — the viewer half of the prev_tracks restore (findings fix §2; dropping
+    // them was the same bug as ReplaceFromCluster's cleared History).
     IReadOnlyList<QueueEntry> MapQueue(IReadOnlyList<RemoteTrack> next, IReadOnlyList<RemoteTrack>? prev, RemoteTrack? current = null)
     {
-        _ = prev;
+        const int HistoryTail = 16;   // mirrors WindowQueue's display cap
         _viewerRows.Clear();
-        if (next.Count == 0 && current is null) return Array.Empty<QueueEntry>();
-        var list = new List<QueueEntry>(1 + next.Count);
+        int prevCount = prev?.Count ?? 0;
+        if (next.Count == 0 && prevCount == 0 && current is null) return Array.Empty<QueueEntry>();
+        var list = new List<QueueEntry>(Math.Min(prevCount, HistoryTail) + 1 + next.Count);
+        if (prev is not null)
+        {
+            for (int i = Math.Max(0, prevCount - HistoryTail); i < prevCount; i++)
+            {
+                if (string.IsNullOrEmpty(prev[i].Uri) || prev[i].Uri == "spotify:delimiter") continue;
+                string provider = string.IsNullOrEmpty(prev[i].Provider) ? "context" : prev[i].Provider;
+                list.Add(ViewerEntry(prev[i], QueueBucket.History, provider));
+            }
+        }
         if (current is { Uri: { Length: > 0 } uri } cur && uri != "spotify:delimiter")
         {
             string provider = string.IsNullOrEmpty(cur.Provider) ? "context" : cur.Provider;

@@ -357,6 +357,9 @@ static class Program
                     MicaAlt = !settings.Get(WaveeSettings.WindowMaterialBaseMica),
                 },
                 new HarnessOptions { Frames = frames, Screenshot = screenshot });
+            // Process-exit flush for session.json (nav + the playback restore section): the shell's unmount cleanup never
+            // runs on shutdown (AppHost.Dispose doesn't unmount the tree), so a pending debounced save would be lost.
+            SessionSnapshotStore.FlushActive();
         }
         catch (Exception ex)
         {

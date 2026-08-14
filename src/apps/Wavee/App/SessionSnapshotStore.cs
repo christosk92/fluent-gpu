@@ -51,6 +51,8 @@ public sealed class SessionPlaybackDto
     public string? RepeatMode { get; set; }
     public string[]? UserQueueUris { get; set; }
     public bool AutoplayActive { get; set; }
+    /// <summary>The autoplay source uri when a station/autoplay tail was live (additive v1 field; nulls omitted).</summary>
+    public string? AutoplayContextUri { get; set; }
     public long CapturedAtUnixMs { get; set; }
 }
 
@@ -110,6 +112,10 @@ public sealed class SessionSnapshotStore
 
     /// <summary>True after a too-new document suppressed every write (a newer build owns the file).</summary>
     public bool WritesBlocked => _writesBlocked;
+
+    /// <summary>The playback section as last loaded/written (in-memory; no disk read). The playback restore consumer
+    /// (PlaybackController via PlaybackBridge's seam) reads this on the empty-cluster launch path.</summary>
+    public SessionPlaybackDto? PlaybackSection { get { lock (_gate) return _playback; } }
 
     /// <summary>Sync load. Never throws. Missing → null. Corrupt/unreadable → null, file untouched. Too-new → null + writes blocked.</summary>
     public SessionSnapshotDto? Load()

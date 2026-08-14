@@ -158,8 +158,39 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     string _remoteInteractionId = "";
     string _remotePageInstanceId = "";
     bool _connectOriginatedPlayback;
+    // ── launch/session restore (playback-restore fix design) ───────────────────────────────────────────────────────────
+    // 0 = armed, 1 = running, 2 = seeded/done. Armed again after an attempt that found nothing to seed, so a later
+    // cluster fold (reconnect with a still-empty session) can retry; a successful seed is once-per-session.
+    int _recoveryState;
+    // The session was SEEDED (cluster recovery) but nothing was loaded on the host yet — the first Resume must go through
+    // LoadAndPlayCurrentAsync (fast-start at the stored position), not a bare host.Play() over empty media (§1).
+    bool _restorePendingLoad;
+    // Launch/ghost restore is audio-first, exactly like Connect-originated playback: video restores PLACEMENT only, never
+    // live playback (§8). Cleared by ClearRemotePlaybackIds (an explicit local media intent).
+    bool _restoreAudioFirst;
+    // One skip-to-next per restored playable whose resolve failed (§6.6) — a second failure reports instead of looping.
+    string? _unplayableSkippedUri;
 
     readonly record struct PlaybackFailureCheckpoint(string TrackUri, long PositionMs);
+
+    /// <summary>The persisted local session snapshot (session.json's playback section), consumed on the empty-cluster
+    /// launch path (§8). Wired by PlaybackBridge to SessionSnapshotStore; null (unit tests / fake backend) = no local
+    /// fallback, the empty-cluster resume stays a no-op.</summary>
+    public Func<PlaybackSessionSnapshot?>? RestoreSnapshot { get; set; }
+
+    /// <summary>Whether a local session exists (read off the immutable published snapshot — safe off-lock, F7). The
+    /// snapshot writer gates on this so viewer-mode pushes never overwrite the persisted LOCAL session.</summary>
+    public bool HasLocalSession => _snap.Current is not null;
+
+    /// <summary>Snapshot-writer hints read off the immutable published snapshot (safe off-lock, F7): the context cursor
+    /// the current row resides at (-1 = outside the spine) + the active autoplay source uri.</summary>
+    public (int ContextIndex, string? AutoplayContextUri) RestoreWriterHints
+        => (_snap.ContextCursor, _snap.AutoplayContextUri);
+
+    // Test seams (the test assembly source-includes this file): the continuation page url the heal restored, and the
+    // published atomic snapshot.
+    internal string? NextPageUrlForTest => _nextPageUrl;
+    internal QueueSnapshot SnapForTest => _snap;
 
     public PlaybackController(IAudioHost host, ITrackResolver resolver, NowPlayingProjection projection,
         IContextResolver contexts,
@@ -260,9 +291,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     // a throwing predicate (it reads app signals) degrades to AUDIO rather than breaking playback.
     PlayableKind KindFor(Track t)
     {
-        // Connect play/transfer is audio-first even when the user has a standing local video preference.
-        // Explicit local playback clears these remote session ids before resolving its media kind.
-        if (_connectOriginatedPlayback)
+        // Connect play/transfer is audio-first even when the user has a standing local video preference — and so is a
+        // launch/ghost restore (§8: video restores placement only). Explicit local playback clears both latches before
+        // resolving its media kind.
+        if (_connectOriginatedPlayback || _restoreAudioFirst)
             return MediaSwitchLogic.KindOf(false, t.Origin == TrackOrigin.Local);
         if (string.Equals(_videoAudioFallbackUri, t.Uri, StringComparison.Ordinal))
             return MediaSwitchLogic.KindOf(false, t.Origin == TrackOrigin.Local);
@@ -545,6 +577,11 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
     void OnProjectionChanged(IPlaybackState s)
     {
+        // Launch SessionRecovery (findings §1): the first cluster fold that reaches us while no local session exists
+        // seeds the session PAUSED instead of leaving now-playing over an empty queue. Fire-and-forget — the recovery
+        // takes _lock on its own task, never inside this projection callback.
+        MaybeScheduleSessionRecovery(s);
+
         // Apply a volume change (incl. one a remote controller made to the active device) to the local host when WE are
         // active. Silent host = no-op today, but correct once real audio lands; never loops (the host has no readback).
         double vol = s.Volume;
@@ -928,9 +965,10 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     {
         if (targetDeviceId == _ourDeviceId)
         {
-            if (RejectLocalPlay()) return;   // transfer-to-this-device = local playback, which is unsupported → toast + abort
+            // Transfer-to-self = local resume: the shared ResumeCurrentLockedAsync covers the reject hook, the
+            // restore-seeded pending-load fast-start, the plain resume, and the ghost/snapshot seed (§1).
             await _lock.WaitAsync(ct).ConfigureAwait(false);
-            try { if (_session.Current is not null) { _currentHost.Play(); EmitState(EvKind.Resumed); } else await GhostResumeAsync(ct).ConfigureAwait(false); }
+            try { await ResumeCurrentLockedAsync(ct).ConfigureAwait(false); }
             finally { _lock.Release(); }
             return;
         }
@@ -1133,10 +1171,24 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
 
         string currentUid = string.IsNullOrEmpty(selected.Uid) ? state.CurrentUid : selected.Uid;
         QueuedTrack current = default;
-        int currentIndex = ContextResolve.FindStartIndex(resolved.Tracks, currentUri, currentUid);
+        int missCursor = -1;
+        // The §6 restore ladder: uid → uri → saved index (in range + playable; the transfer proto has no index field, so
+        // it rides the current track's context_index metadata when the sender stamped one). The context head is the LAST
+        // resort and only when the sender named no current at all — an explicitly transferred current (often a gid with
+        // an empty uri, and frequently absent from the resolved page: a phone playing a track the page doesn't list) is
+        // patched in OUTSIDE the spine below instead. always_play_something means "play something rather than nothing",
+        // never "prefer the head over the track the sender told us is playing".
+        int savedIndex = SavedContextIndexOf(selected.Metadata);
+        int currentIndex = ContextResolve.ResolveRestoreIndex(resolved.Tracks, currentUri, currentUid, savedIndex,
+            allowContextHead: modes.RestoreTrack == "always_play_something" && string.IsNullOrEmpty(currentUri));
         if (currentIndex >= 0) current = resolved.Tracks[currentIndex];
-        else if (!string.IsNullOrEmpty(currentUri)) current = await HydrateOneAsync(currentUri, default).ConfigureAwait(false);
-        else if (resolved.Count > 0 && modes.RestoreTrack == "always_play_something") current = resolved.Tracks[0];
+        else if (!string.IsNullOrEmpty(currentUri))
+        {
+            current = await HydrateOneAsync(currentUri, default).ConfigureAwait(false);
+            // §6.5 — the patched current stands outside the spine, but Next() must land on the successor of where it SAT
+            // in the saved order (cursor = savedIndex-1 → Next() plays row[savedIndex]), never wrap to context[0].
+            if (savedIndex > 0) missCursor = savedIndex - 1;
+        }
         else
         {
             _log.Warn("transfer inner state contained no usable current track; falling back to cluster resume");
@@ -1160,7 +1212,9 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             : await _contexts.HydrateAsync(queueRefs, default).ConfigureAwait(false);
 
         long position = Math.Max(0, state.PositionMs);
-        bool paused = modes.RestorePaused == "restore" && state.Paused;
+        // restore_paused DEFAULTS to "restore" (a missing/blank option honors the transferred paused state — findings
+        // matrix "any other string → plays" was the bug); only an explicit "kill" forces play.
+        bool paused = state.Paused && !string.Equals(modes.RestorePaused, "kill", StringComparison.Ordinal);
         if (!paused && modes.RestorePosition == "extrapolate" && state.TimestampMs > 0)
         {
             long age = Math.Max(0, Now() - state.TimestampMs);
@@ -1176,7 +1230,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 ? Guid.NewGuid().ToString("N")
                 : _remoteSessionId;
             _projection.SetContextMetadata(resolved.Metadata ?? state.ContextMetadata);
-            _snap = _session.SetTransferredContext(contextUri, resolved.Tracks, current, clearUserQueue: true);
+            _snap = _session.SetTransferredContext(contextUri, resolved.Tracks, current, clearUserQueue: true, missCursor);
             if (transferredQueue.Count > 0) _snap = _session.EnqueueUser(transferredQueue);
             bool shuffleChanged = _session.Shuffle != state.Shuffle;
             _snap = _session.SetShuffle(state.Shuffle);
@@ -1242,6 +1296,17 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         parent.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? ""
             : "";
+
+    // The saved context position a transferred current track carries in its metadata (context_index / original_index) —
+    // the index rung of the §6 ladder. -1 when the sender stamped none (most transfers).
+    static int SavedContextIndexOf(IReadOnlyDictionary<string, string>? metadata)
+    {
+        if (metadata is null) return -1;
+        if ((metadata.TryGetValue("context_index", out var v) || metadata.TryGetValue("original_index", out v))
+            && int.TryParse(v, out int i) && i >= 0)
+            return i;
+        return -1;
+    }
 
     // add_to_queue: append one track to the user queue — or, if nothing is loaded, start playing it (the idle-start rule).
     async Task HandleAddToQueueAsync(ConnectCommand cmd)
@@ -1558,12 +1623,31 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
     async Task LocalResumeAsync(CancellationToken ct = default)
     {
         await _lock.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            if (_session.Current is not null) { if (RejectLocalPlay()) return; _currentHost.Play(); EmitState(EvKind.Resumed); }   // we have a local context → normal resume
-            else await GhostResumeAsync(ct).ConfigureAwait(false);   // cold/ghost → seed from the cluster snapshot
-        }
+        try { await ResumeCurrentLockedAsync(ct).ConfigureAwait(false); }
         finally { _lock.Release(); }
+    }
+
+    // The one local resume ladder (§1 + §8 read order), shared by ResumeAsync / inbound resume / transfer-to-self.
+    // Caller holds _lock.
+    async Task ResumeCurrentLockedAsync(CancellationToken ct)
+    {
+        if (_session.Current is not null)
+        {
+            if (RejectLocalPlay()) return;
+            if (_restorePendingLoad)
+            {
+                // A recovery-seeded session (§1): the viewer shows it paused but nothing is loaded on the host yet — the
+                // first Resume fast-starts through LoadAndPlayCurrentAsync at the stored position (Herodotus only at 0).
+                long pos = Math.Max(0, _projection.PositionMs);
+                MintCommand("playbtn");
+                await LoadAndPlayCurrentAsync(EvKind.Started, ct, pos > 0 ? pos : -1, skipOnUnplayable: true)
+                    .ConfigureAwait(false);
+                return;
+            }
+            _currentHost.Play(); EmitState(EvKind.Resumed);   // we have loaded local media → normal resume
+            return;
+        }
+        await GhostResumeAsync(ct).ConfigureAwait(false);   // cold/ghost → seed from the cluster (else the local snapshot)
     }
 
     async Task LocalNextAsync(CancellationToken ct = default)
@@ -1597,63 +1681,268 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
                 _snap = snap;
                 _log.Info($"queue back → {_snap.Current?.Track.Uri ?? "(none)"}");
                 await LoadAndPlayCurrentAsync(EvKind.TrackChanged, ct).ConfigureAwait(false);
+                return;
             }
+            // No history and no prior context row (a restored session, §2): into the track → restart; already at 0 → a
+            // true no-op (the derived CanSkipPrev keeps the button disabled in exactly this state).
+            if (_currentHost.PositionMs > 0) { _log.Info("queue back → restart current (no history)"); _currentHost.Seek(0); return; }
+            _log.Info("queue back ignored — no history and at position 0");
         }
         finally { _lock.Release(); }
     }
 
     // Ghost resume: the play button while nothing is loaded locally → seed context/track/position + the next-up queue
-    // from the cluster snapshot, then play locally (we take over). Caller holds _lock.
+    // from the cluster snapshot, then play locally through the ONE LoadAndPlayCurrentAsync pipeline (fix §4 — fast-start,
+    // continuation prefetch, prepared-next; the old audio-only duplicate that always Play()ed and inverted the episode
+    // rule is gone). Empty cluster → the persisted local session is the fallback, restored PAUSED (§8). Caller holds _lock.
     async Task GhostResumeAsync(CancellationToken ct)
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers cold resume / self-transfer / bare inbound transfer)
         var track = _projection.CurrentTrack;
-        if (track is null) { _log.Info("ghost resume: nothing in the cluster to resume"); return; }
-        var ctxUri = _projection.ContextUri ?? track.Uri;
-        SeedSessionFromCluster(track, ctxUri);
-        // Ghost resume seeds an AUDIO session from the cluster (the resolver yields an AudioStreamHandle), so make audio the
-        // current media host before loading — a prior video session, if any, is stopped and its subscription moved off.
-        SwitchHost(_audioHost);
-        _currentKind = PlayableKind.Audio;
-        AudioStreamHandle handle;
-        try { handle = await _resolver.ResolveAsync(track, ct).ConfigureAwait(false); }
-        catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
-        _audioHost.Load(handle);   // audio-specific loading (only reached when the current kind is audio/local)
-        long pos = _projection.PositionMs;
-        if (track.Uri.StartsWith("spotify:episode:", StringComparison.Ordinal) && EpisodeResumeMicros is { } resumeFn)
+        if (track is null)
         {
-            try
-            {
-                long micros = await resumeFn(track.Uri, ct).ConfigureAwait(false);
-                if (micros > 0) pos = micros / 1000;
-            }
-            catch (Exception ex) { _log.Info("episode resume lookup failed: " + ex.Message); }
+            if (!await TryRestoreFromSnapshotAsync(ct).ConfigureAwait(false))
+                _log.Info("ghost resume: nothing in the cluster to resume");
+            return;
         }
-        if (pos > 0) _currentHost.Seek(pos);
-        _currentHost.Play();
+        var ctxUri = _projection.ContextUri ?? track.Uri;
+        long generation = SeedSessionFromCluster(track, ctxUri);
+        _restorePendingLoad = false;   // this path loads immediately
         MintCommand("playbtn");
-        _currentIds = MintPlaybackIds(track);
-        Emit(BuildEvent(EvKind.Started, track, pos));   // the atomic publish carries the session snapshot seeded above
+        // Cluster position wins when > 0; EpisodeResumeMicros runs only when it is 0 (fix §5 — the resume seek inside
+        // LoadAndPlayCurrentAsync already encodes exactly that rule).
+        long pos = _projection.PositionMs;
+        await LoadAndPlayCurrentAsync(EvKind.Started, ct, pos > 0 ? pos : -1, skipOnUnplayable: true).ConfigureAwait(false);
+        ScheduleQueueHeal(_session.ContextUri ?? ctxUri, generation);
     }
 
     // Full session recovery from the last cluster (§8, F9): replay the raw cluster rows through ReplaceFromCluster so the
     // user queue is filed into _userQueue IN WIRE ORDER (drain-first preserved), the context continuation + autoplay tail
     // land in Upcoming (AutoplayContextUri set), and prev_tracks restore History — NOT SetContext over _projection.Queue,
     // which relabels queue rows as context, drops drain-first + the autoplay context, and (when we're the active device)
-    // reads an empty windowed queue. Falls back to a single-track context when no cluster has been folded. Caller holds _lock.
-    void SeedSessionFromCluster(Track current, string ctxUri)
+    // reads an empty windowed queue. Falls back to a single-track context when no cluster has been folded. The cluster
+    // carries no next_page_url, so the trackers reset here and the background heal (ScheduleQueueHeal) restores paging /
+    // the station continuation from a real context resolve (§7). Caller holds _lock; returns the context generation the
+    // heal must still match to apply.
+    long SeedSessionFromCluster(Track current, string ctxUri)
     {
+        long generation = Interlocked.Increment(ref _contextGeneration);
         if (_projection.LastCluster is { HasTrack: true } c)
             _snap = _session.ReplaceFromCluster(c, current);
         else
             _snap = _session.SetContext(ctxUri, new[] { new QueuedTrack(current, "") }, 0);
-        _nextPageUrl = null;
+        _nextPageUrl = null;   // no page url on the cluster — the heal refills it (§7); without it stations died at the window edge
         _contextIsInfinite = ContextResolve.IsInfinite(_session.ContextUri ?? ctxUri);
-        _autoplayLatchedFor = null;
+        _autoplayLatchedFor = null;   // §7 — a RESTORED autoplay tail is not a new fetch; the latch arms on the next real fetch
         _continuationFetch = null;
+        _unplayableSkippedUri = null;
+        _restoreAudioFirst = true;    // §8 — a restore is audio-first; video restores placement only
         _projection.SetContextMetadata(null);
         DiagnoseQueue("controller.recover-from-cluster");
+        return generation;
+    }
+
+    // ── launch SessionRecovery (findings §1) ─────────────────────────────────────────────────────────────────────────
+    // Trigger: any projection change (a cluster fold fires one) while NO local session exists and either nobody is
+    // active or the cluster still (stale) names US active. Another device active → we stay a viewer, unchanged.
+    void MaybeScheduleSessionRecovery(IPlaybackState s)
+    {
+        if (Volatile.Read(ref _recoveryState) != 0) return;
+        var aid = s.ActiveDeviceId ?? "";
+        if (!string.IsNullOrEmpty(aid) && aid != _ourDeviceId) return;   // viewer — the cluster owns the session
+        if (_projection.LastCluster is null) return;                     // nothing folded yet (nothing to recover from)
+        if (_snap.Current is not null) return;                           // a local session already exists
+        if (Interlocked.CompareExchange(ref _recoveryState, 1, 0) != 0) return;
+        _ = RunSessionRecoveryAsync();
+    }
+
+    async Task RunSessionRecoveryAsync()
+    {
+        bool seeded = false;
+        try
+        {
+            await _lock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (_session.Current is not null) { seeded = true; return; }   // something started while we scheduled
+                var aid = _projection.ActiveDeviceId;
+                if (!string.IsNullOrEmpty(aid) && aid != _ourDeviceId) return;   // became a viewer meanwhile
+                if (_projection.LastCluster is { HasTrack: true } && _projection.CurrentTrack is { } track)
+                {
+                    bool weAreStaleActive = aid == _ourDeviceId;
+                    var ctxUri = _projection.ContextUri ?? track.Uri;
+                    long generation = SeedSessionFromCluster(track, ctxUri);
+                    _restorePendingLoad = true;   // seeded, NOT loaded — the first Resume fast-starts (§1)
+                    long pos = _projection.PositionMs;   // already extrapolated at the cluster fold
+                    // The stale "us playing" echo must not flip the just-published Paused back for the next heartbeats.
+                    if (weAreStaleActive) _projection.NoteLocalCommand();
+                    // Publish PAUSED to the viewer ONLY (ApplyLocalSnapshot, never the Publish fan-out): recovery must not
+                    // announce on the wire — the PutState fan-out happens when the user actually presses Play.
+                    _projection.ApplyLocalSnapshot(_snap, new PlaybackEvent(EvKind.Paused, track, pos));
+                    _log.Event(WaveeLogLevel.Info, "queue.recovery.seeded", "session recovered from cluster (paused)",
+                        fields:
+                        [
+                            WaveeLogField.Of("ctx", WaveeLogRedaction.HashLike(ctxUri)),
+                            WaveeLogField.Of("current", WaveeLogRedaction.HashLike(track.Uri)),
+                            WaveeLogField.Of("positionMs", pos),
+                            WaveeLogField.Of("staleActive", weAreStaleActive),
+                        ]);
+                    ScheduleQueueHeal(_session.ContextUri ?? ctxUri, generation);
+                    seeded = true;
+                }
+                else
+                {
+                    // Empty cluster at launch → the persisted local session (§8), restored PAUSED, never autoplayed.
+                    seeded = await TryRestoreFromSnapshotAsync(default).ConfigureAwait(false);
+                }
+            }
+            finally { _lock.Release(); }
+        }
+        catch (Exception ex) { _log.Info("session recovery failed: " + ex.Message); }
+        finally { Volatile.Write(ref _recoveryState, seeded ? 2 : 0); }   // nothing seeded → re-arm for a later fold
+    }
+
+    // §8 — the empty-cluster fallback: rebuild the session from the persisted snapshot and LOAD IT PAUSED (never
+    // autoplay-on-launch; audio-only). Reconciliation on consume is the §6 ladder. Caller holds _lock.
+    async Task<bool> TryRestoreFromSnapshotAsync(CancellationToken ct)
+    {
+        var snap = RestoreSnapshot?.Invoke();
+        if (snap is null || string.IsNullOrEmpty(snap.CurrentUri)) return false;
+        long generation = Interlocked.Increment(ref _contextGeneration);
+        string ctxUri = string.IsNullOrEmpty(snap.ContextUri) ? snap.CurrentUri : snap.ContextUri;
+        ResolvedContext resolved = ResolvedContext.Empty;
+        try
+        {
+            resolved = await _contexts.ResolveAsync(new ContextSpec(ctxUri, null, null,
+                snap.CurrentUri, string.IsNullOrEmpty(snap.CurrentUid) ? null : snap.CurrentUid,
+                snap.CurrentIndex >= 0 ? snap.CurrentIndex : null), ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _log.Info("snapshot restore: context resolve failed (offline?): " + ex.Message); }
+        if (generation != Volatile.Read(ref _contextGeneration)) return false;
+
+        // §6 ladder — uid → uri → saved index → context head (launch recovery opts into "play something paused").
+        int idx = ContextResolve.ResolveRestoreIndex(resolved.Tracks, snap.CurrentUri, snap.CurrentUid,
+            snap.CurrentIndex, allowContextHead: true);
+        QueuedTrack current;
+        int missCursor = -1;
+        if (idx >= 0)
+        {
+            current = resolved.Tracks[idx];
+            if (!string.IsNullOrEmpty(snap.CurrentUid) && string.IsNullOrEmpty(current.Uid))
+                current = current with { Uid = snap.CurrentUid };
+        }
+        else
+        {
+            current = await HydrateOneAsync(snap.CurrentUri, ct).ConfigureAwait(false);
+            if (!string.IsNullOrEmpty(snap.CurrentUid)) current = current with { Uid = snap.CurrentUid };
+            if (snap.CurrentIndex > 0) missCursor = snap.CurrentIndex - 1;   // §6.5 — Next() = the successor, not context[0]
+        }
+
+        _snap = _session.SetTransferredContext(ctxUri, resolved.Tracks, current, clearUserQueue: true, missCursor);
+        if (snap.UserQueue.Count > 0)
+        {
+            var queued = await _contexts.HydrateAsync(snap.UserQueue, ct).ConfigureAwait(false);
+            if (queued.Count > 0) _snap = _session.EnqueueUser(queued);
+        }
+        _snap = _session.SetShuffle(snap.Shuffle);
+        _snap = _session.SetRepeat(snap.Repeat);
+        _nextPageUrl = string.IsNullOrEmpty(resolved.NextPageUrl) ? null : resolved.NextPageUrl;
+        _contextIsInfinite = resolved.IsInfinite || ContextResolve.IsInfinite(ctxUri);
+        _autoplayLatchedFor = null;
+        _continuationFetch = null;
+        _unplayableSkippedUri = null;
+        _restoreAudioFirst = true;   // audio-only restore; video restores placement, never live playback (§8)
+        _restorePendingLoad = false; // this path loads (paused) right away
+        _projection.SetContextMetadata(resolved.Metadata);
+        MintCommand("appload");
+        _log.Event(WaveeLogLevel.Info, "queue.recovery.snapshot", "session restored from the local snapshot (paused)",
+            fields:
+            [
+                WaveeLogField.Of("ctx", WaveeLogRedaction.HashLike(ctxUri)),
+                WaveeLogField.Of("current", WaveeLogRedaction.HashLike(snap.CurrentUri)),
+                WaveeLogField.Of("positionMs", snap.PositionMs),
+                WaveeLogField.Of("resolvedTracks", resolved.Count),
+                WaveeLogField.Of("matched", idx >= 0),
+            ]);
+        await LoadAndPlayCurrentAsync(EvKind.Paused, ct, snap.PositionMs > 0 ? snap.PositionMs : -1,
+            initiallyPaused: true, skipOnUnplayable: true).ConfigureAwait(false);
+        return true;
+    }
+
+    // §1.3 / §7 — the background heal: re-resolve the seeded context, match the current by the §6 ladder (uid → uri; a
+    // heal has no saved index and never takes the head), extend Upcoming with the full resolve, and restore _nextPageUrl /
+    // the station continuation. On an identity miss the cluster rows stay (they ARE the live session) — but an infinite
+    // context still takes the continuation url so a station keeps paging instead of dying at the window edge.
+    void ScheduleQueueHeal(string? contextUri, long generation)
+    {
+        if (string.IsNullOrEmpty(contextUri)) return;
+        _ = HealQueueFromContextAsync(contextUri!, generation);
+    }
+
+    async Task HealQueueFromContextAsync(string contextUri, long generation)
+    {
+        ResolvedContext resolved;
+        try { resolved = await _contexts.ResolveAsync(ContextSpec.ForUri(contextUri), default).ConfigureAwait(false); }
+        catch (Exception ex)
+        {
+            PlaybackBucketDiagnostics.Continuation("queue.recovery.heal-error", "recovery heal resolve failed",
+                WaveeLogField.Of("ctx", contextUri),
+                WaveeLogField.Of("error", ex.GetType().Name),
+                WaveeLogField.Of("detail", ex.Message));
+            return;
+        }
+        if (resolved.Count == 0 && string.IsNullOrEmpty(resolved.NextPageUrl)) return;   // offline / empty resolver — keep cluster rows
+
+        await _lock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (generation != Volatile.Read(ref _contextGeneration)) return;   // superseded by a real play/transfer
+            if (_session.Current is not { } cur) return;
+            if (!string.Equals(_session.ContextUri, contextUri, StringComparison.Ordinal)) return;
+
+            int match = ContextResolve.FindStartIndex(resolved.Tracks, cur.Uri, _snap.Current?.Uid);
+            if (match < 0)
+            {
+                // Keep the cluster rows — they are the live session. An infinite context still takes the continuation so
+                // the station pages on (§7); a finite one keeps its window and autoplay-prefetches as usual.
+                bool infinite = resolved.IsInfinite || ContextResolve.IsInfinite(contextUri);
+                if (infinite && !string.IsNullOrEmpty(resolved.NextPageUrl)) _nextPageUrl = resolved.NextPageUrl;
+                _log.Event(WaveeLogLevel.Info, "queue.recovery.heal-miss",
+                    "restored current not found in the re-resolved context; keeping the cluster rows",
+                    fields:
+                    [
+                        WaveeLogField.Of("ctx", WaveeLogRedaction.HashLike(contextUri)),
+                        WaveeLogField.Of("current", WaveeLogRedaction.HashLike(cur.Uri)),
+                        WaveeLogField.Of("resolvedTracks", resolved.Count),
+                        WaveeLogField.Of("keptNextPage", infinite && !string.IsNullOrEmpty(resolved.NextPageUrl)),
+                    ]);
+                return;
+            }
+
+            // Keep the cluster's autoplay tail rows across the context replace (§7 — they are the live session's tail).
+            List<QueuedTrack>? autoplayRows = null;
+            foreach (var e in _snap.Upcoming)
+                if (e.Provider == QueueProvider.Autoplay)
+                    (autoplayRows ??= new List<QueuedTrack>()).Add(new QueuedTrack(e.Track, e.Uid, "autoplay", e.Metadata));
+            string? autoplayCtx = _snap.AutoplayContextUri;
+
+            _snap = _session.ReplaceContextPreservingCurrent(contextUri, resolved.Tracks);
+            if (autoplayRows is { Count: > 0 })
+                _snap = _session.AppendContextPage(autoplayRows, QueueProvider.Autoplay, autoplayCtx);
+            _nextPageUrl = string.IsNullOrEmpty(resolved.NextPageUrl) ? null : resolved.NextPageUrl;
+            _contextIsInfinite = resolved.IsInfinite || ContextResolve.IsInfinite(contextUri);
+            if (resolved.Metadata is { Count: > 0 }) _projection.SetContextMetadata(resolved.Metadata);
+            // Viewer-only refresh (no event, no wire fan-out) — a background heal is not a playback change.
+            _projection.ApplyLocalSnapshot(_snap);
+            PlaybackBucketDiagnostics.Continuation("queue.recovery.healed", "recovery heal extended the restored session",
+                WaveeLogField.Of("ctx", contextUri),
+                WaveeLogField.Of("resolvedTracks", resolved.Count),
+                WaveeLogField.Of("cursor", match),
+                WaveeLogField.Of("nextPage", _nextPageUrl ?? ""),
+                WaveeLogField.Of("autoplayKept", autoplayRows?.Count ?? 0));
+        }
+        finally { _lock.Release(); }
     }
 
     async Task MaybeSeekEpisodeResumeAsync(Track track, CancellationToken ct)
@@ -1680,6 +1969,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         _remoteInteractionId = "";
         _remotePageInstanceId = "";
         _connectOriginatedPlayback = false;
+        _restoreAudioFirst = false;   // an explicit local media intent ends the restore's audio-first rule too
         _videoRecoveryUri = null;
         _videoAudioFallbackUri = null;
         _failureCheckpoint = null;
@@ -1727,11 +2017,13 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         EvKind kind,
         CancellationToken ct,
         long resumePositionMs = -1,
-        bool initiallyPaused = false)
+        bool initiallyPaused = false,
+        bool skipOnUnplayable = false)
     {
         if (RejectLocalPlay()) return;   // local audio unsupported → toast + abort (covers play / next / prev / enqueue-idle / inbound)
         var cur = _session.Current;
         if (cur is null) { _currentHost.Stop(); return; }
+        _restorePendingLoad = false;   // any real load consumes the recovery seed's deferred-load latch
 
         // A DIFFERENT playable re-arms the video-recovery loop guard. The recovery's OWN reload keeps the same uri, so it
         // deliberately does NOT re-arm — that is what caps the fallback at one attempt per playable.
@@ -1788,7 +2080,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
             FastStartPlan plan;
             try { plan = await _fast.ResolveFastAsync(cur, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { ReportPlaybackError(ex); return; }
+            catch (Exception ex) { await HandleUnplayableCurrentAsync(ex, skipOnUnplayable, initiallyPaused, ct).ConfigureAwait(false); return; }
             var loadStartedTicks = Stopwatch.GetTimestamp();
             _audioHost.LoadFastStart(plan.Start);   // audio-specific loading (guarded: current kind is audio/local here)
             if (!initiallyPaused) _currentHost.Play();
@@ -1805,7 +2097,7 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         AudioStreamHandle handle;
         try { handle = await _resolver.ResolveAsync(cur, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
-        catch (Exception ex) { ReportPlaybackError(ex); return; }   // no silent drop — surface a typed reason
+        catch (Exception ex) { await HandleUnplayableCurrentAsync(ex, skipOnUnplayable, initiallyPaused, ct).ConfigureAwait(false); return; }   // no silent drop
         _audioHost.Load(handle);   // audio-specific loading (only reached when the current kind is audio/local)
         if (!initiallyPaused) _currentHost.Play();
         if (resumePositionMs > 0) _currentHost.Seek(resumePositionMs);
@@ -1814,6 +2106,29 @@ public sealed class PlaybackController : IPlaybackPlayer, IDisposable
         Emit(BuildEvent(kind, cur, Math.Max(0, resumePositionMs), mediaId, bitrateKbps, audioFormat, durationMs, fileId));
         SchedulePreparedNext("after-start");
         MaybeStartContinuationFetch();
+    }
+
+    // §6.6 — a restored current that fails to resolve gets ONE skip to the next playable before the error surfaces; a
+    // second failure (or nothing left to skip to) reports, so a fully dead window is one toast, never a loop. Non-restore
+    // paths (skipOnUnplayable false) keep the report-immediately behavior. The paused-ness of the original load carries
+    // over, so a paused launch restore whose current is dead never autoplays the successor. Caller holds _lock.
+    async Task HandleUnplayableCurrentAsync(Exception ex, bool skipOnUnplayable, bool initiallyPaused, CancellationToken ct)
+    {
+        var cur = _session.Current;
+        if (skipOnUnplayable && cur is not null
+            && !string.Equals(_unplayableSkippedUri, cur.Uri, StringComparison.Ordinal)
+            && _session.PreviewNext() is not null
+            && _session.Next() is { } snap)
+        {
+            _unplayableSkippedUri = cur.Uri;
+            _snap = snap;
+            _log.Info($"restore: current unplayable ({ex.GetType().Name}: {ex.Message}); skipping to next → "
+                + (snap.Current?.Track.Uri ?? "(none)"));
+            await LoadAndPlayCurrentAsync(initiallyPaused ? EvKind.Paused : EvKind.TrackChanged, ct,
+                initiallyPaused: initiallyPaused).ConfigureAwait(false);
+            return;
+        }
+        ReportPlaybackError(ex);
     }
 
     // Load + start the current VIDEO playable on the swapped-in video host. The resolved PopOutVideoSource is obtained via the

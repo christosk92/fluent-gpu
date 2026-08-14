@@ -233,7 +233,35 @@ public class ConnectProjectionTests
         var autoplay = Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:ap");
         Assert.Equal(QueueBucket.NextUp, autoplay.Bucket);
         Assert.True(autoplay.IsAutoplay);
-        Assert.DoesNotContain(p.Queue, e => e.Track.Uri == "spotify:track:h1");   // prev_tracks not surfaced
+        // prev_tracks surface as the viewer's History tail (playback-restore fix §2 — the viewer half of the same bug
+        // ReplaceFromCluster had), listed before NowPlaying like the local WindowQueue.
+        var history = Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:h1");
+        Assert.Equal(QueueBucket.History, history.Bucket);
+        Assert.Equal("u0", history.Uid);
+        Assert.True(p.Queue[0].Track.Uri == "spotify:track:h1");   // history precedes now-playing in panel order
         Assert.DoesNotContain(p.Queue, e => e.Track.Uri == "spotify:delimiter");
+    }
+
+    // Test 5 (playback-restore findings §9) — a cold start whose cluster still (stale) names US active must not hide the
+    // queue: without a local session the fold takes MapQueue + the cluster's shuffle/repeat exactly like a viewer fold.
+    [Fact]
+    public void OnCluster_WeAreStaleActive_FillsQueueFromCluster()
+    {
+        var p = new NowPlayingProjection("us", () => 0);
+        p.OnCluster(new ClusterDelta(
+            "us", true, Trk("spotify:track:now", "Now", 200000), "spotify:playlist:ctx",
+            false, true, false, 1000, 0, 0, 200000, Shuffle: true, RepeatMode.Context,
+            Array.Empty<ConnectDeviceRow>(),
+            new[]
+            {
+                new RemoteTrack("spotify:track:uq", "Queued", "", "", "", "", null, 0, Uid: "q1", Provider: "queue"),
+                new RemoteTrack("spotify:track:cx", "Ctx", "", "", "", "", null, 0, Uid: "u2", Provider: "context"),
+            }));
+
+        Assert.True(p.WeAreActive);
+        Assert.Equal(QueueBucket.UserQueue, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:uq").Bucket);
+        Assert.Equal(QueueBucket.NextUp, Assert.Single(p.Queue, e => e.Track.Uri == "spotify:track:cx").Bucket);
+        Assert.True(p.IsShuffle);                       // cluster options applied (no local session to own them)
+        Assert.Equal(RepeatMode.Context, p.Repeat);
     }
 }

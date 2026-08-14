@@ -103,6 +103,12 @@ public sealed class PlaybackBridge
     SystemMediaControlsBridge? _smtc;
     TaskbarBridge? _taskbar;
     JumpListBridge? _jumpList;
+    // ── playback session-snapshot seam (playback-restore fix §8) ────────────────────────────────────────────────────────
+    // The concrete controller behind the switchable facade (re-resolved when the fake→live swap changes the inner player):
+    // the WRITER gates + hints (HasLocalSession / RestoreWriterHints) and the READER hook (RestoreSnapshot) hang off it.
+    IPlaybackPlayer? _restoreWiredTo;
+    PlaybackController? _restoreController;
+    bool _lastPushIsPlaying;   // pause-edge detector: play→pause is a snapshot write gate
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -599,6 +605,7 @@ public sealed class PlaybackBridge
             User.Value = _session.CurrentUser;            // profile chip (name/avatar) follows the session
         })));
         WireStore();   // if a store was attached before mount, start observing it now
+        WireRestoreSeam();   // playback restore (§8): reader hook onto the live controller; re-checked on every push
         // Mirror the unified now-playing state onto the OS media surfaces (SMTC). UI-thread + the real top-level HWND
         // (FluentApp.WindowHandle); fail-soft if the platform refuses. Enabled for every backend (fake/offline included) —
         // it reflects whatever the bridge is showing, and transport buttons route back through _player like the on-screen ones.
@@ -939,6 +946,9 @@ public sealed class PlaybackBridge
 
     void PushState(IPlaybackState s)
     {
+        WireRestoreSeam();   // the inner player can swap fake→live under the switchable — cheap reference check
+        bool wasPlaying = _lastPushIsPlaying;
+        _lastPushIsPlaying = s.IsPlaying;
         var prevUri = CurrentTrack.Value?.Uri;
         CurrentTrack.Value = s.CurrentTrack;
         // Null/empty next uri is a mid-push glitch — NOT a track boundary. Clearing the has-video latch here would
@@ -1000,9 +1010,12 @@ public sealed class PlaybackBridge
         Volume.Value = (float)s.Volume;
         DurationMs.Value = s.DurationMs;
         Queue.Value = s.Queue;
-        BumpQueueRevision(s.Queue);
+        bool queueChanged = BumpQueueRevision(s.Queue);
         PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.ui.push-state",
             s.Queue, s.ContextUri, s.CurrentTrack?.Uri);
+        // Session-snapshot write gates (§8): a real track boundary, a pause edge, or a queue-content change — never a
+        // position tick (PushPosition doesn't come through here) and never a volume/heartbeat republish (no gate trips).
+        MaybeWritePlaybackSnapshot(s, trackBoundary, pauseEdge: wasPlaying && !s.IsPlaying, queueChanged);
         IsLoading.Value = s.IsLoading;
         // A surfaced local-playback error (set via NotifyPlaybackError) is owned by the bridge, not the projection (whose
         // Error is inert). Don't clobber it on every structural tick — clear it only once a track is actually playing again.
@@ -1043,21 +1056,12 @@ public sealed class PlaybackBridge
         public int GetHashCode(IReadOnlyList<QueueEntry> value) => value.Count;   // never keyed on; Equals is the contract
     }
 
-    // Fold the queue's SET identity (count + per-row id/bucket/provider) and bump the revision only on a real change.
-    void BumpQueueRevision(IReadOnlyList<QueueEntry> queue)
+    // Fold the queue's SET identity (count + per-row id/bucket/provider — QueueContentFold, unit-tested in the Backend)
+    // and bump the revision only on a real change. Returns whether the content changed (a snapshot-write gate, §8).
+    bool BumpQueueRevision(IReadOnlyList<QueueEntry> queue)
     {
-        ulong fold = 1469598103934665603UL;   // FNV-ish, order-sensitive
-        fold = (fold ^ (ulong)queue.Count) * 1099511628211UL;
-        for (int i = 0; i < queue.Count; i++)
-        {
-            var e = queue[i];
-            fold = (fold ^ e.ItemId.Value) * 1099511628211UL;
-            fold = (fold ^ (uint)e.Bucket) * 1099511628211UL;
-            fold = (fold ^ (uint)e.Provider) * 1099511628211UL;
-            if (e.ItemId.IsNone)   // degenerate/fake ids collide → mix the derived EntryId so the set still distinguishes
-                fold = (fold ^ (ulong)(uint)e.EntryId.GetHashCode(StringComparison.Ordinal)) * 1099511628211UL;
-        }
-        if (_haveQueueFold && fold == _queueContentFold) return;
+        ulong fold = QueueContentFold.Fold(queue);
+        if (_haveQueueFold && fold == _queueContentFold) return false;
         _haveQueueFold = true;
         _queueContentFold = fold;
         QueueRevision.Value = ++_queueRev;
@@ -1070,11 +1074,92 @@ public sealed class PlaybackBridge
                 if (queue[i].Track?.Uri is { Length: > 0 } u) uris.Add(u);
             if (uris.Count > 0) { try { _ = detect(uris); } catch { } }
         }
+        return true;
     }
 
     /// <summary>Set at go-live: batch music-video detection for the queue's tracks, fired when the queue's CONTENT fold
     /// changes. Fire-and-forget (it runs on the UI push path); null on the fake backend → no detection.</summary>
     public Func<IReadOnlyList<string>, Task>? DetectVideos;
+
+    // ── playback session snapshot: reader wiring + the debounced writer (playback-restore fix §8) ───────────────────────
+
+    // Wire the restore READER onto the concrete controller behind the switchable facade. Idempotent per inner instance;
+    // re-run on every push because the fake→live swap replaces the inner player without re-pointing this bridge.
+    void WireRestoreSeam()
+    {
+        var inner = (_player as SwitchablePlayer)?.Inner ?? _player;
+        if (ReferenceEquals(inner, _restoreWiredTo)) return;
+        _restoreWiredTo = inner;
+        _restoreController = inner as PlaybackController;
+        if (_restoreController is { } pc && pc.RestoreSnapshot is null)
+            pc.RestoreSnapshot = static () => MapRestoreSnapshot(SessionSnapshotStore.Active?.PlaybackSection);
+    }
+
+    // SessionPlaybackDto (the persisted session.json shape) → the proto-free Backend record the controller consumes.
+    static PlaybackSessionSnapshot? MapRestoreSnapshot(SessionPlaybackDto? dto)
+    {
+        if (dto is null || dto.TrackUri is not { Length: > 0 } uri) return null;
+        IReadOnlyList<QueuedRef> queue = Array.Empty<QueuedRef>();
+        if (dto.UserQueueUris is { Length: > 0 } uris)
+        {
+            var refs = new QueuedRef[uris.Length];
+            for (int i = 0; i < uris.Length; i++) refs[i] = new QueuedRef(uris[i], "", "queue");
+            queue = refs;
+        }
+        var repeat = dto.RepeatMode switch { "context" => RepeatMode.Context, "track" => RepeatMode.Track, _ => RepeatMode.Off };
+        return new PlaybackSessionSnapshot(dto.ContextUri ?? "", uri, dto.TrackUid ?? "", dto.TrackIndex,
+            Math.Max(0, dto.PositionMs), dto.Shuffle, repeat, queue, dto.AutoplayActive, dto.AutoplayContextUri);
+    }
+
+    // The WRITER (§8): track boundary / pause edge / queue-content change — never a position tick (the store's own 2 s
+    // debounce coalesces bursts on top). Gated on a live LOCAL session so viewer-mode pushes can't overwrite the persisted
+    // local one, and always written with paused=true semantics (a restored session never autoplays — crash-safety).
+    void MaybeWritePlaybackSnapshot(IPlaybackState s, bool trackBoundary, bool pauseEdge, bool queueChanged)
+    {
+        if (!trackBoundary && !pauseEdge && !queueChanged) return;
+        if (SessionSnapshotStore.Active is not { } store || store.WritesBlocked) return;
+        if (_restoreController is not { } pc || !pc.HasLocalSession) return;
+        if (s.CurrentTrack is not { } track || string.IsNullOrEmpty(track.Uri)) return;
+
+        var hints = pc.RestoreWriterHints;
+        string uid = "";
+        List<string>? queueUris = null;
+        bool autoplay = false;
+        var rows = s.Queue;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var e = rows[i];
+            if (e.Bucket == QueueBucket.NowPlaying) uid = e.Uid;
+            else if (e.Bucket == QueueBucket.UserQueue && e.Track.Uri is { Length: > 0 } qu)
+                (queueUris ??= new List<string>()).Add(qu);
+            if (e.IsAutoplay) autoplay = true;
+        }
+        store.UpdatePlayback(new SessionPlaybackDto
+        {
+            ContextUri = s.ContextUri,
+            ContextKind = ContextKindOf(s.ContextUri),
+            TrackUri = track.Uri,
+            TrackUid = uid,
+            TrackIndex = hints.ContextIndex,
+            PositionMs = Math.Max(0, s.PositionMs),
+            Paused = true,   // §8 — always written paused: a crash/relaunch restores silent, never mid-song audio
+            Shuffle = s.IsShuffle,
+            RepeatMode = s.Repeat switch { RepeatMode.Context => "context", RepeatMode.Track => "track", _ => "off" },
+            UserQueueUris = queueUris?.ToArray(),
+            AutoplayActive = autoplay,
+            AutoplayContextUri = hints.AutoplayContextUri,
+            CapturedAtUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
+    }
+
+    static string? ContextKindOf(string? contextUri)
+    {
+        if (string.IsNullOrEmpty(contextUri)) return null;
+        int first = contextUri.IndexOf(':');
+        if (first < 0 || first + 1 >= contextUri.Length) return null;
+        int second = contextUri.IndexOf(':', first + 1);
+        return second > first + 1 ? contextUri[(first + 1)..second] : null;
+    }
 
     /// <summary>Arm the seek latch (#2): call the instant a seek is issued from the UI so stale pre-seek position ticks are
     /// suppressed until the engine catches up. UI-thread only. The caller also optimistically writes PositionMs/Frac.</summary>

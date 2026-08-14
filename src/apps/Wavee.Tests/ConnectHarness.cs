@@ -95,6 +95,19 @@ public sealed class FakeContextResolver : IContextResolver
     /// Set by the StartRadioAsync controller tests.</summary>
     public string? RadioSeedResult;
 
+    /// <summary>The continuation url ResolveAsync reports (null = single page, the default). The restore-heal tests set it
+    /// with <see cref="NextPage"/> to prove paging/station continuation survives a recovery.</summary>
+    public string? NextPageUrlResult;
+
+    /// <summary>Whether ResolveAsync reports an infinite (station/radio) context.</summary>
+    public bool IsInfiniteResult;
+
+    /// <summary>Resolves a continuation url → a page. Null (default) yields <see cref="ContextPage.Empty"/>.</summary>
+    public Func<string, ContextPage>? NextPage;
+
+    /// <summary>Counts ResolveAsync calls (the recovery-heal tests assert the background resolve happened).</summary>
+    public int ResolveCalls;
+
     public FakeContextResolver(params string[] uris)
     {
         _tracks = new QueuedTrack[uris.Length];
@@ -103,6 +116,7 @@ public sealed class FakeContextResolver : IContextResolver
 
     public Task<ResolvedContext> ResolveAsync(ContextSpec spec, CancellationToken ct = default)
     {
+        Interlocked.Increment(ref ResolveCalls);
         IReadOnlyList<QueuedTrack> tracks = _tracks;
         if (spec.EmbeddedPages is { Count: > 0 } pages)   // a sorted/custom-ordered page sent inline wins over the fixed list
         {
@@ -112,10 +126,11 @@ public sealed class FakeContextResolver : IContextResolver
             tracks = arr;
         }
         int start = ContextResolve.ResolveStartIndex(tracks, spec);
-        return Task.FromResult(new ResolvedContext(tracks, start, null, null, false));
+        return Task.FromResult(new ResolvedContext(tracks, start, null, NextPageUrlResult, IsInfiniteResult));
     }
 
-    public Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default) => Task.FromResult(ContextPage.Empty);
+    public Task<ContextPage> LoadMoreAsync(string nextPageUrl, CancellationToken ct = default)
+        => Task.FromResult(NextPage?.Invoke(nextPageUrl) ?? ContextPage.Empty);
 
     public Task<ResolvedContext> ResolveAutoplayAsync(string contextUri, IReadOnlyList<string> recentTrackUris, CancellationToken ct = default)
         => Task.FromResult(ResolvedContext.Empty);

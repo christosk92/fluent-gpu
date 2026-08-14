@@ -95,7 +95,9 @@ public class QueueRecoveryTests
         Assert.Equal(new[] { "q3", "q1", "q4", "q5", "q2" },
             snap.UserQueue.Select(e => e.Uid).ToArray());
 
-        Assert.Empty(snap.History);   // local-only: cluster prev_tracks are not imported
+        // prev_tracks ARE imported into History (playback-restore fix §2) — oldest first, uid/provider preserved.
+        Assert.Equal(new[] { "spotify:track:7ePpQepOptZ1M9jRRydHsZ", "spotify:track:3VDPbD7IKpKDJJYb2HAOyc" },
+            snap.History.Select(e => e.Track.Uri).ToArray());
 
         var upUris = snap.Upcoming.Where(e => e.Provider == QueueProvider.Context).Select(e => e.Track.Uri).ToArray();
         Assert.Equal(new[]
@@ -111,5 +113,48 @@ public class QueueRecoveryTests
 
         Assert.DoesNotContain(snap.Upcoming, e => e.Track.Uri == "spotify:meta:page:1");
         Assert.DoesNotContain(snap.Upcoming, e => e.Track.Uri == "spotify:delimiter");
+    }
+
+    // Test 1 (playback-restore findings) — the prev_tracks → History import, pinned on its own: oldest first, uids kept,
+    // and Prev() actually steps back into the imported tail (the enabled-no-op Previous is gone).
+    [Fact]
+    public void ReplaceFromCluster_ImportsPrevTracksIntoHistory()
+    {
+        var delta = LoadFixtureA();
+        var session = new PlaybackSession();
+        var snap = session.ReplaceFromCluster(delta, Hydrate(delta.Track));
+
+        Assert.Equal(2, snap.History.Length);
+        Assert.Equal("spotify:track:7ePpQepOptZ1M9jRRydHsZ", snap.History[0].Track.Uri);   // oldest first
+        Assert.Equal("5bd5aabfe4434940c96f", snap.History[0].Uid);                          // uid preserved
+        Assert.Equal("spotify:track:3VDPbD7IKpKDJJYb2HAOyc", snap.History[1].Track.Uri);   // newest last
+        Assert.Equal("87f111e36f2f7a189eec", snap.History[1].Uid);
+
+        // Prev() steps into the newest history row (never a no-op with history present).
+        var back = session.Prev();
+        Assert.Equal("spotify:track:3VDPbD7IKpKDJJYb2HAOyc", back?.Current?.Track.Uri);
+    }
+
+    // Test 2 — a row whose sender omitted provider:"queue" but stamped metadata is_queued:"true" still files as UserQueue
+    // (fix §3, mirroring the set_queue wire parse), not as a context row.
+    [Fact]
+    public void ReplaceFromCluster_IsQueuedMetadataWithoutProvider_GoesToUserQueue()
+    {
+        var meta = new Dictionary<string, string>(StringComparer.Ordinal) { ["is_queued"] = "true" };
+        var delta = new ClusterDelta(
+            "device", true,
+            new RemoteTrack("spotify:track:now", "Now", "", "", "", "", null, 1000, "u0", "context"),
+            "spotify:playlist:ctx", false, true, false, 0, 0, 0, 1000, false, RepeatMode.Off,
+            Array.Empty<ConnectDeviceRow>(),
+            new[]
+            {
+                new RemoteTrack("spotify:track:q", "Q", "", "", "", "", null, 1000, "q9", "", meta),
+                new RemoteTrack("spotify:track:c", "C", "", "", "", "", null, 1000, "c1", "context"),
+            });
+
+        var snap = new PlaybackSession().ReplaceFromCluster(delta, null);
+
+        Assert.Equal("spotify:track:q", Assert.Single(snap.UserQueue).Track.Uri);
+        Assert.Equal("spotify:track:c", Assert.Single(snap.Upcoming).Track.Uri);
     }
 }

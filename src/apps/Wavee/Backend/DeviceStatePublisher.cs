@@ -286,7 +286,14 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
         int nextContextIndex = currentIndex + 1;
         foreach (var qe in _state.Queue)
         {
-            if (qe.Bucket is QueueBucket.NowPlaying or QueueBucket.History) continue;
+            if (qe.Bucket == QueueBucket.NowPlaying) continue;
+            if (qe.Bucket == QueueBucket.History)
+            {
+                // The session's actually-played tail is published as prev_tracks (playback-restore fix §2): it is what a
+                // later cold-start cluster hands back for History recovery, and what remote clients show as "previous".
+                prev.Add(ToSnapshotTrack(qe, ProviderOf(qe), -1));
+                continue;
+            }
             string provider = ProviderOf(qe);
             int viewIndex = IsContextProvider(provider) ? nextContextIndex++ : -1;
             next.Add(ToSnapshotTrack(qe, provider, viewIndex));
