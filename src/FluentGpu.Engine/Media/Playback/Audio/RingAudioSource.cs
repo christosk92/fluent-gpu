@@ -87,6 +87,7 @@ public sealed class RingAudioSource : IAudioSource, IDisposable
     public void WorkerApplySeek(long frame)
     {
         if (_inner is DecoderAudioSource das) das.SeekFrame(frame);
+        else if (_inner is TrimmingSource ts) ts.SeekFrame(frame);
         else if (_inner is MemoryAudioSource mas) mas.SeekFrame(frame);
         _producerDone = _inner.Exhausted;
         Interlocked.Exchange(ref _flushRequest, 1);

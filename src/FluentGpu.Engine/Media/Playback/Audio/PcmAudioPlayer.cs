@@ -43,8 +43,8 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
         if (!ok) throw new InvalidOperationException("The next audio source could not be decoded (unsupported or corrupt WAV/PCM).");
 
         var loudness = info.Loudness;
-        var voice = new DecoderAudioSource(decoder, loudness);
-        return new AudioPreparedItem(voice, decoder.Gapless, loudness, MixFrames(decoder, info.Duration, ctx.Format), info.Duration);
+        var voice = BuildTrimmedVoice(decoder, loudness, ctx.Format, info.Duration, out long totalFrames);
+        return new AudioPreparedItem(voice, decoder.Gapless, loudness, totalFrames, info.Duration);
     }
 
     private readonly Func<MixFormat, IAudioEndpoint> _endpointFactory;
@@ -83,6 +83,27 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
     private static long MixFrames(IAudioDecoder decoder, TimeSpan duration, MixFormat fmt)
         => decoder is WavAudioDecoder wav ? wav.MixFramesTotal
            : duration > TimeSpan.Zero ? (long)Math.Round(duration.TotalSeconds * fmt.SampleRate) : 0;
+
+    /// <summary>THE one gapless-trim seam (spec §8.3), shared by <see cref="OpenAsync"/> and <see cref="PrepareAsync"/> so
+    /// every codec's encoder delay / end padding is applied identically: when the decoder reported a non-trivial
+    /// <see cref="GaplessInfo"/> (mix-domain frames — the decoder converts from the source rate), the voice is wrapped in a
+    /// <see cref="TrimmingSource"/> and <paramref name="totalFrames"/> becomes the TRIMMED length (what join-arming and the
+    /// duration clamp must see). A trivial info (no trim, no exact length) keeps the bare voice — the golden-PCM paths stay
+    /// byte-identical.</summary>
+    private static IAudioSource BuildTrimmedVoice(IAudioDecoder decoder, ReplayGainInfo loudness, MixFormat fmt,
+        TimeSpan duration, out long totalFrames)
+    {
+        var voice = new DecoderAudioSource(decoder, loudness);
+        totalFrames = MixFrames(decoder, duration, fmt);
+        var g = decoder.Gapless;
+        if (g.LeadInFrames <= 0 && g.TrailPadFrames <= 0 && g.ExactFrames < 0) return voice;
+
+        var trimmed = new TrimmingSource(voice, g, fmt.Channels, totalFrames > 0 ? totalFrames : -1);
+        totalFrames = g.ExactFrames >= 0 ? g.ExactFrames
+            : totalFrames > 0 ? Math.Max(0, totalFrames - Math.Max(0, g.LeadInFrames) - Math.Max(0, g.TrailPadFrames))
+            : totalFrames;
+        return trimmed;
+    }
 
     /// <inheritdoc/>
     public MediaCapabilities Capabilities { get; } = new(SupportsVideo: false, SupportsAudioGraph: true, SupportsDrm: false)
@@ -130,8 +151,7 @@ public sealed class PcmAudioPlayer : IMediaBackend, IPreparableBackend
         }
 
         var loudness = ResolveLoudness(source, info);
-        var voice = new DecoderAudioSource(decoder, loudness);
-        long totalFrames = MixFrames(decoder, info.Duration, mix);
+        var voice = BuildTrimmedVoice(decoder, loudness, mix, info.Duration, out long totalFrames);
 
         var session = new PcmAudioSession(mix, endpoint.Sink, endpoint.Clock, _maxBlock, _driveWithOwnThread, endpoint);
         session.Configure(BuildGraphSpec(_effects, mix));
@@ -317,6 +337,7 @@ public sealed class PcmAudioSession : IMediaSession
         _voice = voice;
         _duration = duration;
         _voiceTotalFrames = totalFrames;
+        ActiveVoiceIdValue = PrimaryVoiceId;   // a fresh primary supersedes any hand-off transport pointer
         _norm = norm;
         _refLufs = referenceLufs;
         _volume = initialVolume;
@@ -358,6 +379,25 @@ public sealed class PcmAudioSession : IMediaSession
     /// <summary>The mixer voice id of the PRIMARY (currently-playing) voice — the id a crossfade retargets to fade out
     /// (via <see cref="CrossfadeMixer.TrySetVoiceEnvelope"/>). Stable for the session's playing voice.</summary>
     public long PrimaryVoiceIdValue => PrimaryVoiceId;
+
+    /// <summary>The mixer voice id transport (Seek/replay) addresses — the ACTIVE audible track. Starts as the primary
+    /// voice; a committed crossfade/gapless hand-off re-points it at the incoming voice via <see cref="SetActiveVoice"/>
+    /// so a post-hand-off seek reaches the track the user hears, not the retired outgoing voice.</summary>
+    public long ActiveVoiceIdValue { get; private set; } = PrimaryVoiceId;
+
+    /// <summary>Re-point transport at a committed hand-off's INCOMING voice (spec §8.3/§8.4 — the queue layer promotes the
+    /// prepared voice inside the LIVE session instead of reopening the device). Updates the seek target (<see cref="SeekAsync"/> /
+    /// the RT feed's seek routing address the incoming voice's ring), the duration (seek clamp + buffer health), and the
+    /// trimmed length the next join arms against. Pure bookkeeping — the mixer voice itself was already installed via
+    /// <see cref="AddCrossfadeVoice"/>; no graph/ring mutation happens here. Control thread only.</summary>
+    public void SetActiveVoice(long voiceId, IAudioSource voice, TimeSpan duration, long totalFrames)
+    {
+        if (_disposed) return;
+        ActiveVoiceIdValue = voiceId;
+        _voice = voice;
+        _duration = duration;
+        _voiceTotalFrames = totalFrames;
+    }
 
     /// <summary>Frames consumed out of the mixer (the device-clock / mixer-timeline domain). Crossfade voice
     /// <c>StartFrame</c>s are expressed in THIS domain (spec §8.2).</summary>
@@ -599,6 +639,7 @@ public sealed class PcmAudioSession : IMediaSession
         // control-thread seek mid-decode is the LinearResampler torn-Reset crash. Single-thread path: seek inline.
         if (_feed is not null) _feed.RequestSeek(frame);
         else if (_voice is DecoderAudioSource das) das.SeekFrame(frame);
+        else if (_voice is TrimmingSource ts) ts.SeekFrame(frame);
         else if (_voice is MemoryAudioSource mas) mas.SeekFrame(frame);
 
         // Anchor the position domain to the device clock's current count (spec §7.6): device keeps counting; origin re-maps.
@@ -845,6 +886,7 @@ public sealed class PcmAudioSession : IMediaSession
         // RT path: worker-routed (sole inner-decoder toucher — spec §7.9/§12); single-thread path: inline.
         if (_feed is not null) _feed.RequestSeek(0);
         else if (_voice is DecoderAudioSource das) das.SeekFrame(0);
+        else if (_voice is TrimmingSource ts) ts.SeekFrame(0);
         else if (_voice is MemoryAudioSource mas) mas.SeekFrame(0);
         _clock.TryGetPlayed(out long playedNow, out _);
         _position.Rebase(playedNow, 0);

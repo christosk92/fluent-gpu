@@ -125,7 +125,11 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
     private int _holdFrames;                                 // unconsumed conformed frames retained for the next Process
     private bool _eof;
 
-    public GaplessInfo Gapless => GaplessInfo.None;
+    // Parsed per-file gapless trim (W2 fix §3), in MIX-domain frames — resolved in TryOpen, consumed by
+    // PcmAudioPlayer's TrimmingSource wrap. None until a file proves otherwise.
+    GaplessInfo _gapless = GaplessInfo.None;
+
+    public GaplessInfo Gapless => _gapless;
 
     public bool TryOpen(IMediaByteSource src, MixFormat target, out DecodedInfo info)
     {
@@ -137,6 +141,10 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         _durationMs = sp.DurationMs;
         _gainLinear = sp.GainLinear;
         var stream = sp.OpenDecodeStream();
+        // MP3 only: read the Xing/LAME gapless tag out of the header BEFORE the codec owns the stream (seekable streams
+        // only — the probe restores Position; a live forward-only stream skips it). Source-rate values, converted below.
+        Mp3GaplessProbe.Result mp3Gapless = default;
+        bool hasMp3Gapless = _kind == WaveeDecoderKind.Mp3 && Mp3GaplessProbe.TryProbe(stream, out mp3Gapless);
         _reader = _kind switch
         {
             WaveeDecoderKind.Flac => new FlacSampleSource(stream),
@@ -149,9 +157,10 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         _resampler = srcRate != target.SampleRate ? new LinearResampler(srcRate, target.SampleRate, target.Channels) : null;
         _srcScratch = new float[MaxSrcFramesPerRead * _srcChannels];
         _conformed = new float[MaxSrcFramesPerRead * target.Channels];
+        _gapless = ResolveGapless(hasMp3Gapless, mp3Gapless, srcRate, target.SampleRate);
 
         WaveeLog.Instance.Event(WaveeLogLevel.Debug, "audio", "audiodiag.decoder",
-            $"[audiodiag] decoder kind={_kind} srcRate={srcRate} targetRate={target.SampleRate} srcCh={_srcChannels} targetCh={target.Channels} resampler={(_resampler is { IsActive: true } ? "active" : "passthrough")} gain={_gainLinear:0.000}");
+            $"[audiodiag] decoder kind={_kind} srcRate={srcRate} targetRate={target.SampleRate} srcCh={_srcChannels} targetCh={target.Channels} resampler={(_resampler is { IsActive: true } ? "active" : "passthrough")} gain={_gainLinear:0.000} leadIn={_gapless.LeadInFrames} trailPad={_gapless.TrailPadFrames} exact={_gapless.ExactFrames}");
 
         var codec = _kind switch
         {
@@ -244,6 +253,42 @@ internal sealed class SpotifyEngineAudioDecoder : IAudioDecoder
         _eof = false;
         return frame;
     }
+
+    // The honest per-codec gapless trim (W2 fix §3), reported in MIX-domain frames so the engine's TrimmingSource wrap
+    // and join arming stay codec-agnostic:
+    // - Vorbis: NO additional trim. The vendored NVorbis already consumes the spec priming packet (the first audio packet
+    //   emits nothing — StreamDecoder.cs ~520–524) and applies the EOS granule-position end trim (validLen backoff,
+    //   StreamDecoder.cs ~503–511), which is exactly Vorbis's gapless accounting. A blind "conservative lead-in" here
+    //   would cut real audio, so 0/0 IS the truthful value; ExactFrames stays unknown (probing the last granule would
+    //   seek to the stream end — a blocking read on a head-only fast-start stream).
+    // - FLAC: lossless (no encoder delay/pad), but STREAMINFO's total sample count pins ExactFrames so the emitted
+    //   length is exact and never depends on catalog duration metadata.
+    // - MP3: LAME encoder delay + end padding from the Xing header (when present + seekable), with the standard
+    //   529-sample decoder offset folded in (skip delay+529, trim padding−529).
+    GaplessInfo ResolveGapless(bool hasMp3Gapless, in Mp3GaplessProbe.Result mp3, int srcRate, int mixRate)
+    {
+        switch (_kind)
+        {
+            case WaveeDecoderKind.Flac when _reader is FlacSampleSource { TotalFrames: > 0 } flac:
+                return new GaplessInfo(0, 0, ToMixFrames(flac.TotalFrames, srcRate, mixRate), TailKnown: true);
+
+            case WaveeDecoderKind.Mp3 when hasMp3Gapless:
+                int leadSrc = mp3.DelaySamples + Mp3GaplessProbe.DecoderDelaySamples;
+                int padSrc = Math.Max(0, mp3.PaddingSamples - Mp3GaplessProbe.DecoderDelaySamples);
+                long exactSrc = mp3.TotalSamples;   // already frames×spf − delay − padding, or −1
+                return new GaplessInfo(
+                    (int)ToMixFrames(leadSrc, srcRate, mixRate),
+                    (int)ToMixFrames(padSrc, srcRate, mixRate),
+                    exactSrc > 0 ? ToMixFrames(exactSrc, srcRate, mixRate) : -1,
+                    TailKnown: exactSrc > 0);
+
+            default:
+                return GaplessInfo.None;
+        }
+    }
+
+    static long ToMixFrames(long srcFrames, int srcRate, int mixRate)
+        => srcRate <= 0 || srcRate == mixRate ? srcFrames : (long)Math.Round(srcFrames * (double)mixRate / srcRate);
 }
 
 /// <summary>
@@ -325,6 +370,36 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     // live crossfade bookkeeping that OpenSessionAsync's reset clobbered — instead of disposing B's session out of the mixer.
     long _crossfadeCommitSeq;
     (SpotifyMediaByteSource? Bytes, long StartMs, long DurMs, string Uri, long PrimaryId)? _committedActive;
+
+    // ── W2: the seam-correct 0 ms hand-off (the engine's gapless butt-join, never CommitCrossfade with fade 0) ─────────
+    // Phase 1 (CommitGaplessJoin): shortly before A's end, B's PREPARED voice is added to the LIVE mixer at A's estimated
+    // natural-end FRAME with a CONSTANT envelope — the same mixer edit VoiceScheduler.Commit's TransitionOutcome.Gapless
+    // arm performs. A is never faded or truncated; the WASAPI client never stops. Phase 2 (AnnounceGaplessJoin): when the
+    // write clock crosses the join frame, the bookkeeping/identity flips to B and ONE AudioTransitionKind.Started with
+    // EffectiveFadeMs=0 advances the controller WITHOUT a reload. All frames are mixer-domain (PcmAudioSession.SampleClock),
+    // so pauses/underruns cannot drift the join the way wall-clock scheduling would.
+    const int GaplessCommitLeadMs = 1500;   // commit inside the last ~1.5 s (several 200 ms ticks before the boundary)
+    const int EndedHoldMaxTicks = 20;       // Ended is held ≤ ~4 s while a prepare is still filling (degraded join > hard cut)
+    long _activeJoinFrame;        // the ACTIVE track's estimated natural-end frame (duration/seek-derived; write domain)
+    bool _joinPending;            // B is committed in the mixer, waiting for the clock to cross the join frame
+    string? _joinToken;           // pending-join identity (announce emits Started with these)
+    string _joinUri = "";
+    long _joinDurMs;
+    long _joinFrame;              // the mixer frame B starts sounding at
+    long _joinVoiceId;
+    IAudioSource? _joinVoice;     // B's (possibly trimmed) voice — becomes the session's transport target at announce
+    long _joinTotalFrames;
+    SpotifyAudioStream? _joinStream;          // B's kept stream — becomes _activeStream at announce
+    SpotifyMediaByteSource? _joinBytes;
+    int _endedHold;               // ticks left holding the Ended signal while the prepared slot is still filling
+    int _prepInFlight;            // >0 while a PrepareNextAsync op is queued/running on the pump ("the slot is filling")
+    int _prepRearmSent;           // once-per-track latch for the remaining-ms re-arm nudge (reset on open/seek/commit)
+    bool _promotePending;         // a degraded end-promote resumed the session; clear _clockStale on the next Playing tick
+
+    // The fade the mixer actually applies: the stored duration counts ONLY while crossfade is enabled — 0 == gapless join.
+    int EffectiveFadeMs => _crossfadeEnabled ? _crossfadeMs : 0;
+
+    static long MsToFrames(long ms, int rate) => ms <= 0 ? 0 : ms * rate / 1000;
 
     // CS0067 (declared, never raised HERE) is suppressed deliberately, NOT because the members are dead: both are REQUIRED
     // by IAudioOutputDeviceControl (Backend/AudioHost.cs) and both already have a live subscriber (LiveSessionHost turns a
@@ -448,7 +523,23 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     public void Seek(long positionMs)
     {
         long ms = Math.Max(0, positionMs);
-        Enqueue(async () => { if (_session is not null) await _session.SeekAsync(TimeSpan.FromMilliseconds(ms), SeekMode.Accurate).ConfigureAwait(false); });
+        Enqueue(async () =>
+        {
+            if (_session is null) return;
+            await _session.SeekAsync(TimeSpan.FromMilliseconds(ms), SeekMode.Accurate).ConfigureAwait(false);
+            if (_session is PcmAudioSession pcm)
+            {
+                // W2: the seek moved the active track's natural-end FRAME, so a join scheduled at the old frame would butt
+                // B into the middle of A — abandon it (the controller re-arms prepared-next) and re-derive the estimate.
+                // The session rebased its clock to the seek target (active-track-relative), so the position base resets too.
+                AbandonPendingJoin(pcm, "seek");
+                _activeStartMs = 0;
+                _activeJoinFrame = pcm.SampleClock + MsToFrames(Math.Max(0, _activeDurMs - ms), pcm.Format.SampleRate);
+                _gaplessArmed = 0;      // re-log the arm snapshot for the new endgame
+                _prepRearmSent = 0;     // a seek into the endgame may need a fresh remaining-ms re-arm nudge
+                _endedHold = 0;
+            }
+        });
     }
 
     public void SetVolume(double volume01)
@@ -642,9 +733,15 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             _activeDurMs = bytes.DurationMs;
             _activeUri = "";
             _crossfadeInFlight = false;
+            _endedHold = 0;
+            _prepRearmSent = 0;
+            _promotePending = false;
+            _activeJoinFrame = 0;
             if (session is PcmAudioSession pcm)
             {
                 _activePrimaryId = pcm.PrimaryVoiceIdValue;
+                // W2: the fresh primary voice starts at mixer frame 0 and is estimated to end at its declared duration.
+                _activeJoinFrame = MsToFrames(bytes.DurationMs, pcm.Format.SampleRate);
                 // Fix 2: re-arm THIS track if a mid-track default-endpoint switch adopts a different sample rate. The engine
                 // raises DeviceFormatChanged off its cold device thread; the handler enqueues a soft reload. Unsubscribed when
                 // this session is disposed (DisposeSessionAsync / the soft reload) so no handler leaks across loads.
@@ -741,7 +838,9 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         long seqBefore;
         lock (_gate)
         {
-            if (_crossfadeInFlight) return false;   // the current track stays only briefly off-pitch; B is never dropped
+            // W2: a PENDING gapless join holds B's voice in the live mixer exactly like an in-flight fade does — tearing
+            // the session down would drop B. Defer identically; the Completed edge re-arms the drain.
+            if (_crossfadeInFlight || _joinPending) return false;   // the current track stays only briefly off-pitch; B is never dropped
             old = _session;
             seqBefore = _crossfadeCommitSeq;
         }
@@ -863,7 +962,20 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _activeStream = null;
         var retiring = _retiringStream;
         _retiringStream = null;
-        // A manual load/stop supersedes any prepared next and any in-flight crossfade.
+        // A manual load/stop supersedes any prepared next, any in-flight crossfade, and any pending gapless join —
+        // the join's mixer voice dies with the session; only its kept stream needs an explicit dispose.
+        SpotifyAudioStream? joinStream;
+        lock (_gate)
+        {
+            joinStream = _joinStream;
+            _joinPending = false;
+            _joinStream = null; _joinBytes = null; _joinToken = null; _joinUri = ""; _joinDurMs = 0;
+            _joinFrame = 0; _joinVoiceId = 0; _joinVoice = null; _joinTotalFrames = 0;
+        }
+        _endedHold = 0;
+        _prepRearmSent = 0;
+        _promotePending = false;
+        _activeJoinFrame = 0;
         await DisposePreparedSlotAsync().ConfigureAwait(false);
         Volatile.Write(ref _softReloadPending, 0);   // drop any device-rate reload deferred for the track we're tearing down
         _crossfadeInFlight = false;
@@ -875,6 +987,7 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         if (old is not null) { try { await old.DisposeAsync().ConfigureAwait(false); } catch { } }
         if (stream is not null) { try { stream.Dispose(); } catch { } }
         if (retiring is not null) { try { retiring.Dispose(); } catch { } }
+        if (joinStream is not null) { try { joinStream.Dispose(); } catch { } }
     }
 
     // Dispose the prepared (not-yet-committed) slot and clear its fields. The prepared voice has NOT entered the mixer,
@@ -900,10 +1013,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     {
         var req = request;
         var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Interlocked.Increment(ref _prepInFlight);   // W2: Ended HOLDS (never hard-cuts) while the slot is still filling
         Enqueue(async () =>
         {
             try { await PrepareNextCoreAsync(req, ct).ConfigureAwait(false); tcs.TrySetResult(); }
             catch (Exception ex) { tcs.TrySetException(ex); }
+            finally { Interlocked.Decrement(ref _prepInFlight); }
         });
         return tcs.Task;
     }
@@ -1017,6 +1132,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             _activePrimaryId = id;
             _activeDurMs = _prepDurMs;
             _activeUri = uri;
+            // W2: transport now addresses B (post-hand-off seeks reach the audible track, not the retired primary), and
+            // the NEXT join arms off B's end frame.
+            if (item.AudioVoice is { } fadeVoice)
+                sess.SetActiveVoice(id, fadeVoice, TimeSpan.FromMilliseconds(_prepDurMs), item.TotalFrames);
+            _activeJoinFrame = start + MsToFrames(_prepDurMs, sess.Format.SampleRate);
+            _prepRearmSent = 0;
 
             // Snapshot the committed state so an aborting SoftReloadAsync can restore it (OpenSessionAsync's reset clobbers these).
             _committedActive = (_prepBytes, rawPos, _prepDurMs, uri, id);
@@ -1039,6 +1160,141 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
         _gaplessHardCutPending = 0;
     }
 
+    // ── W2 phase 1: the 0 ms gapless join. Add B's prepared voice into the LIVE mixer at A's estimated natural-end
+    // frame with a CONSTANT envelope (the engine's VoiceScheduler TransitionKind.Gapless butt-join shape): A is never
+    // faded or truncated, the IAudioClient never stops, and B stays silent until the clock reaches the join. NEVER route
+    // 0 ms through CommitCrossfade — GainEnvelope.Fade(…, 0 frames) folds to Constant, which is two voices at unity for
+    // the whole tail, not a butt-join. Runs on the Tick/Timer thread; the mixer edits go through the session's SPSC.
+    void CommitGaplessJoin(PcmAudioSession sess, IPreparedItem item)
+    {
+        long id = ++_nextVoiceId;
+        long clock = sess.SampleClock;
+        long join = Math.Max(_activeJoinFrame, clock);   // never in the past — a late commit degrades to a micro-gap join
+        float rg = ReplayGain.ScalarLinear(item.Loudness, sess.NormalizationMode, sess.ReferenceLufsValue);
+        int bodySupplied = _prepBytes?.ReopenBody is not null ? 1 : 0;
+        long durMs;
+        lock (_gate)
+        {
+            _joinPending = true;   // SoftReloadAsync defers on this exactly like on _crossfadeInFlight (B is in the mixer)
+            sess.AddCrossfadeVoice(item.AudioVoice!, GainEnvelope.Constant, join, rg, sess.BuildVoiceChain(), id);
+            _joinToken = _prepToken; _joinUri = _prepUri; _joinDurMs = durMs = _prepDurMs;
+            _joinFrame = join; _joinVoiceId = id; _joinVoice = item.AudioVoice; _joinTotalFrames = item.TotalFrames;
+            _joinStream = _prepStream; _joinBytes = _prepBytes;
+            // Clear the prepared slot WITHOUT disposing the item — its voice is now live in the mixer.
+            _prepItem = null; _prepStream = null; _prepBytes = null;
+            _prepToken = null; _prepUri = ""; _prepDurMs = 0; _prepOverlap = false;
+        }
+        long xruns = sess.XrunCount;
+        _log.Info($"[gapless] commit-join clock={clock} join={join} id={id} body={bodySupplied} durMs={durMs} xruns={xruns} xrunDelta={xruns - _gaplessXrunsAtArm}");
+    }
+
+    // ── W2 phase 2: the join went live — the write clock crossed B's first frame (the playhead follows within the
+    // in-flight buffer, ≲ a tick). Flip the active identity to B, rebase PositionMs via _activeStartMs exactly the way
+    // the fade commit does, and emit ONE Started with EffectiveFadeMs=0 so CommitPreparedTransitionAsync advances the
+    // session WITHOUT reloading. _crossfadeInFlight goes true so the existing Completed edge retires A's stream.
+    void AnnounceGaplessJoin(PcmAudioSession sess, long rawPos)
+    {
+        string token, uri;
+        lock (_gate)
+        {
+            if (!_joinPending) return;
+            _joinPending = false;
+            _crossfadeInFlight = true;
+            _retiringStream = _activeStream;
+            _activeStream = _joinStream;
+            _activeBytes = _joinBytes;
+            _committedToken = _joinToken;
+            token = _joinToken ?? "";
+            uri = _joinUri;
+            _activeStartMs = rawPos;
+            _activePrimaryId = _joinVoiceId;
+            _activeDurMs = _joinDurMs;
+            _activeUri = _joinUri;
+            _activeJoinFrame = _joinFrame + MsToFrames(_joinDurMs, sess.Format.SampleRate);
+            if (_joinVoice is { } voice)
+                sess.SetActiveVoice(_joinVoiceId, voice, TimeSpan.FromMilliseconds(_joinDurMs), _joinTotalFrames);
+            _committedActive = (_joinBytes, rawPos, _joinDurMs, _joinUri, _joinVoiceId);
+            _crossfadeCommitSeq++;
+            _joinToken = null; _joinUri = ""; _joinDurMs = 0; _joinFrame = 0; _joinVoiceId = 0;
+            _joinVoice = null; _joinTotalFrames = 0; _joinStream = null; _joinBytes = null;
+        }
+        _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, 0));
+        long xruns = SessionXruns();
+        _log.Info($"[gapless] join-live token={token} uri={uri} clock={SessionClock()} raw={rawPos} xruns={xruns} xrunDelta={xruns - _gaplessXrunsAtArm}");
+        _gaplessArmed = 0;
+        _gaplessHardCutPending = 0;
+        _prepRearmSent = 0;
+    }
+
+    // ── W2: a pending join whose frame is no longer valid (seek moved A's end / B's decode died before the join). The
+    // mixer has no voice removal, so pin B's envelope at 0 (a 1-frame fade-out in the past) and cut its byte source —
+    // the ring decode faults to EOF and the voice retires silently. A keeps playing untouched.
+    void AbandonPendingJoin(PcmAudioSession? sess, string reason)
+    {
+        SpotifyAudioStream? stream;
+        long voiceId;
+        lock (_gate)
+        {
+            if (!_joinPending) return;
+            _joinPending = false;
+            voiceId = _joinVoiceId;
+            stream = _joinStream;
+            _joinStream = null; _joinBytes = null; _joinToken = null; _joinUri = ""; _joinDurMs = 0;
+            _joinFrame = 0; _joinVoiceId = 0; _joinVoice = null; _joinTotalFrames = 0;
+        }
+        sess?.SetVoiceEnvelope(voiceId, GainEnvelope.Fade(FadeKind.Out, 0, 1, CrossCurve.Linear));
+        if (stream is not null) { try { stream.Dispose(); } catch { } }
+        _log.Info($"[gapless] join-abandoned id={voiceId} reason={reason}");
+    }
+
+    // ── W2 degraded promote ("never LoadAndPlayCurrent while the slot can be consumed"): A drained to Ended before a
+    // join committed (prepare landed late / commit window missed), but a READY prepared voice exists — promote it as the
+    // live session's NEW PRIMARY voice (SetVoice replaces the drained one; the ring is re-wrapped; the IAudioClient
+    // never stops) and resume. A bounded micro-gap (the Ended-detection ticks), never a device teardown. Returns true
+    // when promoted — the Ended signal is then suppressed (the Started transition advances the controller instead).
+    bool TryPromoteAtEnd()
+    {
+        if (_session is not PcmAudioSession sess) return false;
+        if (_prepItem is not { IsReady: true } item || !_prepOverlap || item.AudioVoice is not { } voice) return false;
+
+        string token, uri;
+        long durMs;
+        SpotifyAudioStream? endedStream;
+        lock (_gate)
+        {
+            long clock = sess.SampleClock;
+            sess.SetVoice(voice, TimeSpan.FromMilliseconds(_prepDurMs), item.TotalFrames,
+                sess.NormalizationMode, sess.ReferenceLufsValue, (float)_volume);
+            token = _prepToken ?? "";
+            uri = _prepUri;
+            durMs = _prepDurMs;
+            endedStream = _activeStream;      // A drained — its decode side is idle; safe to retire immediately
+            _activeStream = _prepStream;
+            _activeBytes = _prepBytes;
+            _committedToken = _prepToken;
+            _activeStartMs = 0;
+            _clockStale = true;               // raw still reads A's end until the resume rebases it — report 0, not A's dur
+            _promotePending = true;
+            _activePrimaryId = sess.PrimaryVoiceIdValue;
+            _activeDurMs = durMs;
+            _activeUri = uri;
+            _activeJoinFrame = clock + MsToFrames(durMs, sess.Format.SampleRate);
+            _committedActive = (_prepBytes, 0, durMs, uri, sess.PrimaryVoiceIdValue);
+            _crossfadeCommitSeq++;
+            // Clear the prepared slot WITHOUT disposing the item — its voice is now the session's primary.
+            _prepItem = null; _prepStream = null; _prepBytes = null;
+            _prepToken = null; _prepUri = ""; _prepDurMs = 0; _prepOverlap = false;
+        }
+        if (endedStream is not null) { try { endedStream.Dispose(); } catch { } }
+        if (_playIntent) { Enqueue(async () => { if (_session is not null) await _session.PlayAsync().ConfigureAwait(false); }); StartTicker(); }
+        _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Started, token, uri, 0, 0));
+        _log.Info($"[gapless] promote-at-end token={token} uri={uri} clock={SessionClock()} xruns={SessionXruns()}");
+        _gaplessArmed = 0;
+        _gaplessHardCutPending = 0;
+        _prepRearmSent = 0;
+        return true;
+    }
+
     // ── the poll tick: derive AudioHostSignals from the engine's reactive state ──────────────────────────────────────
 
     void StartTicker() => _ticker.Change(200, 200);
@@ -1048,6 +1304,12 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
     {
         if (_disposed) return;
         var state = _core.State.Peek();
+        if (_promotePending && state == PlaybackState.Playing)
+        {
+            // The degraded end-promote resumed (the session rebased its clock to B's 0) — the reported clock is honest again.
+            _promotePending = false;
+            _clockStale = false;
+        }
         long rawPos = RawPositionMs;
         long pos = PositionMs;
 
@@ -1064,34 +1326,70 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
             return;
         }
 
-        // ── prepared-next overlapping crossfade: commit when the active track enters its fade window ─────────────────
+        // ── prepared-next hand-off: fade > 0 commits an overlapping crossfade at the fade window; fade == 0 commits the
+        //    engine-seam gapless butt-join (W2 — B at A's natural-end frame, Constant envelope) inside the commit lead ──
         long activePos = rawPos - _activeStartMs;
-        long armAt = _activeDurMs > 0 ? Math.Max(0, _activeDurMs - Math.Max(_crossfadeMs, 2000)) : long.MaxValue;
-        if (state == PlaybackState.Playing && !_crossfadeInFlight && _activeDurMs > 0 && activePos >= armAt && _gaplessArmed == 0)
+        int fadeMs = EffectiveFadeMs;
+        long armAt = _activeDurMs > 0 ? Math.Max(0, _activeDurMs - Math.Max(fadeMs, 2000)) : long.MaxValue;
+        if (state == PlaybackState.Playing && !_crossfadeInFlight && !_joinPending && _activeDurMs > 0 && activePos >= armAt && _gaplessArmed == 0)
         {
             _gaplessArmed = 1;
             _gaplessXrunsAtArm = SessionXruns();
             int primed = _prepItem is { IsReady: true } ? 1 : 0;
             int body = _prepBytes?.ReopenBody is not null ? 1 : 0;
-            int reason = primed == 0 ? (_prepToken is null ? 4 : 2) : !_prepOverlap ? 3 : _crossfadeMs <= 0 ? 1 : 0;
-            _log.Info($"[gapless] arm remainMs={_activeDurMs - activePos} fadeMs={_crossfadeMs} overlap={_prepOverlap} primed={primed} body={body} reason={reason} clock={SessionClock()} xruns={_gaplessXrunsAtArm}");
+            int reason = primed == 0 ? (_prepToken is null ? 4 : 2) : !_prepOverlap ? 3 : 0;
+            _log.Info($"[gapless] arm remainMs={_activeDurMs - activePos} fadeMs={fadeMs} overlap={_prepOverlap} primed={primed} body={body} reason={reason} clock={SessionClock()} xruns={_gaplessXrunsAtArm}");
         }
-        if (state == PlaybackState.Playing && !_crossfadeInFlight
-            && _prepItem is { IsReady: true } item && _prepOverlap && _crossfadeMs > 0 && _activeDurMs > 0
-            && _session is PcmAudioSession sess
-            && activePos >= _activeDurMs - _crossfadeMs)
+        // ── W2 remaining-ms re-arm (once per track): the endgame opened with NOTHING prepared or in flight — nudge the
+        //    controller to re-resolve. Missed with an empty token: ClearPreparedToken("") is a no-op and the schedule's
+        //    signature guard makes a duplicate nudge free, so this can never cancel a live prepare.
+        if (state == PlaybackState.Playing && _prepRearmSent == 0 && _activeDurMs > 0
+            && !_crossfadeInFlight && !_joinPending
+            && _prepToken is null && Volatile.Read(ref _prepInFlight) == 0
+            && activePos >= _activeDurMs - EndingSoonMs(_activeDurMs))
         {
-            CommitCrossfade(sess, item, rawPos);
-            pos = PositionMs;   // re-read: now B-relative (≈0 at the hand-off)
+            _prepRearmSent = 1;
+            _log.Info($"[gapless] rearm remainMs={_activeDurMs - activePos} fadeMs={fadeMs} clock={SessionClock()}");
+            _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Missed, "", _activeUri, pos, 0, "ending-soon-unprepared"));
         }
-        // ── close the hand-off: once the fade has elapsed, retire A's stream and report Completed ─────────────────────
-        else if (_crossfadeInFlight && (rawPos - _activeStartMs) >= _crossfadeMs)
+        if (state == PlaybackState.Playing && !_crossfadeInFlight && !_joinPending
+            && _prepItem is { IsReady: true } item && _prepOverlap && _activeDurMs > 0
+            && _session is PcmAudioSession sess)
+        {
+            if (fadeMs > 0 && activePos >= _activeDurMs - fadeMs)
+            {
+                CommitCrossfade(sess, item, rawPos);
+                pos = PositionMs;   // re-read: now B-relative (≈0 at the hand-off)
+            }
+            else if (fadeMs <= 0 && activePos >= _activeDurMs - GaplessCommitLeadMs
+                     && Volatile.Read(ref _softReloading) == 0)   // never commit into a session a soft reload may replace
+            {
+                CommitGaplessJoin(sess, item);
+            }
+        }
+        // ── W2 phase 2: the scheduled join goes LIVE when the write clock crosses B's first frame ─────────────────────
+        if (_joinPending && _session is PcmAudioSession joinSess)
+        {
+            if (state == PlaybackState.Ended)
+            {
+                // B's voice died before the join (its decode faulted to EOF) — only then can the mixer drain while a join
+                // is pending. Fall back to the ordinary Ended path (the controller hard-cuts).
+                AbandonPendingJoin(joinSess, "ended-before-join");
+            }
+            else if (joinSess.SampleClock >= _joinFrame)
+            {
+                AnnounceGaplessJoin(joinSess, rawPos);
+                pos = PositionMs;   // re-read: now B-relative (≈0 at the hand-off)
+            }
+        }
+        // ── close the hand-off: once the fade has elapsed (0 for a gapless join), retire A's stream, report Completed ──
+        else if (_crossfadeInFlight && (rawPos - _activeStartMs) >= fadeMs)
         {
             _crossfadeInFlight = false;
             var retiring = _retiringStream;
             _retiringStream = null;
             if (retiring is not null) { try { retiring.Dispose(); } catch { } }
-            _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Completed, _committedToken ?? "", _activeUri, PositionMs, _crossfadeMs));
+            _transitions.OnNext(new AudioTransitionSignal(AudioTransitionKind.Completed, _committedToken ?? "", _activeUri, PositionMs, fadeMs));
             // Finding #4: a device-rate change deferred while this crossfade held both voices now re-arms — the session is
             // back to a single active voice, so a soft reload can safely re-open it at the live rate.
             if (Volatile.Read(ref _softReloadPending) == 1) TryStartSoftReloadDrain();
@@ -1113,18 +1411,39 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
                 if (_lastState != state) _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Buffering, pos));
                 break;
             case PlaybackState.Ended:
-                if (_lastState != PlaybackState.Ended)
+            {
+                bool endedEdge = _lastState != PlaybackState.Ended;
+                if (!endedEdge && _endedHold <= 0) break;   // steady-state Ended, already reported
+
+                // W2 degraded path: a READY prepared voice at (or after) the boundary promotes INTO the live session —
+                // a bounded micro-gap, never a device teardown. The Started transition advances the controller instead
+                // of the Ended signal.
+                if (TryPromoteAtEnd()) { _endedHold = 0; break; }
+
+                // W2: "never LoadAndPlayCurrent while the slot is still filling" — hold the Ended signal (bounded) while
+                // a PrepareNextAsync is queued/running; the promote above consumes the slot the moment it lands ready.
+                if (Volatile.Read(ref _prepInFlight) > 0 && (endedEdge || _endedHold > 0))
                 {
-                    _gaplessAEndClock = SessionClock();
-                    _gaplessAEndWall = Environment.TickCount64;
-                    int primed = _prepItem is { IsReady: true } ? 1 : 0;
-                    int body = _prepBytes?.ReopenBody is not null ? 1 : 0;
-                    _gaplessHardCutPending = _crossfadeInFlight ? 0 : 1;
-                    _log.Info($"[gapless] ended clock={_gaplessAEndClock} raw={rawPos} pos={pos} fadeMs={_crossfadeMs} overlap={_prepOverlap} primed={primed} body={body} inFlight={_crossfadeInFlight} xruns={SessionXruns()} xrunDelta={SessionXruns() - _gaplessXrunsAtArm}");
-                    StopTicker();
-                    _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Ended, pos));
+                    if (endedEdge)
+                    {
+                        _endedHold = EndedHoldMaxTicks;
+                        _log.Info($"[gapless] ended-hold clock={SessionClock()} raw={rawPos} holdTicks={_endedHold}");
+                    }
+                    else _endedHold--;
+                    if (_endedHold > 0) break;   // ticker stays alive; re-checked next tick
                 }
+                _endedHold = 0;
+
+                _gaplessAEndClock = SessionClock();
+                _gaplessAEndWall = Environment.TickCount64;
+                int primed = _prepItem is { IsReady: true } ? 1 : 0;
+                int body = _prepBytes?.ReopenBody is not null ? 1 : 0;
+                _gaplessHardCutPending = _crossfadeInFlight ? 0 : 1;
+                _log.Info($"[gapless] ended clock={_gaplessAEndClock} raw={rawPos} pos={pos} fadeMs={fadeMs} overlap={_prepOverlap} primed={primed} body={body} inFlight={_crossfadeInFlight} xruns={SessionXruns()} xrunDelta={SessionXruns() - _gaplessXrunsAtArm}");
+                StopTicker();
+                _signals.OnNext(new AudioHostSignal(AudioHostSignalKind.Ended, pos));
                 break;
+            }
         }
         _lastState = state;
     }
@@ -1150,6 +1469,15 @@ public sealed class FluentMediaAudioHost : IAudioHost, IAudioDspControl, IAudioO
 
     long SessionClock() => _session is PcmAudioSession s ? s.SampleClock : 0;
     long SessionXruns() => _session is PcmAudioSession s ? s.XrunCount : 0;
+
+    // The ending-soon margin (W2 fix §1): the overlap plus a worst-case prime budget (key + CDN + TryOpen + ring
+    // prefill), clamped to the full duration on shorter tracks. Mirrors Wavee.Backend.PreparedNextPolicy — the
+    // controller-side twin that decides WHEN to (re-)schedule; this host-side copy only times the re-arm nudge.
+    long EndingSoonMs(long durMs)
+    {
+        long margin = EffectiveFadeMs + 8000L;
+        return durMs > 0 && durMs < margin ? durMs : margin;
+    }
 
     static float DbToLinear(float db) => db == 0f ? 1f : (float)Math.Pow(10, db / 20.0);
 
