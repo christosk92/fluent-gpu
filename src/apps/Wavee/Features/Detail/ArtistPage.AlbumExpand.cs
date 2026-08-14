@@ -91,7 +91,7 @@ sealed class AlbumDrawerPanel : Component
 
     static readonly ColumnSet DrawerCols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: false);
     static readonly TrackSize[] DrawerColumns =
-        [TrackSize.Px(30f), TrackSize.Px(40f), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing "…" lane
+        [TrackSize.Px(30f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing "…" lane
     const float DrawerRowContentH = 40f;
 
     public override Element Render()

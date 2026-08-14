@@ -93,9 +93,9 @@ public sealed class AudioPlaybackStack : IAsyncDisposable
         if (formatProbe is not null) log.Info("audio format probe enabled (WAVEE_AUDIO_FORMAT_PROBE=1)");
         TrackResolver = new LiveTrackResolver(transport, KeyResolver, fetchTrackV4, fetchAudioFilesV5, fetchEpisodeV4,
             preferLossless: false, log, formatProbe,
-            // The persisted streaming-quality preference, read per resolve so a Settings change applies from the next
-            // track. Clamped to the Ogg tiers — Lossless is reserved (the picker shows it disabled, "Coming soon").
-            quality: () => (AudioQualityPreference)Math.Clamp(settings.Get(WaveeSettings.PlaybackQuality), 0, 2),
+            // User PlaybackQuality, capped by MeteredQualityCap when the connection is metered. Read per resolve so a
+            // Settings / network-cost change applies from the next track. Ogg rungs only — Lossless is reserved.
+            quality: () => NetworkPolicy.EffectiveQualityPreference(settings),
             ctx: session);
         Log(WaveeLogLevel.Debug, "audio.stack.created", "Audio playback stack created",
             WaveeLogField.Of("playplayLocal", PlayPlayLocalCompiled),
@@ -296,6 +296,11 @@ public sealed class FastTrackPlayback : IFastTrackResolver, IFastTrackWarmer
 
     public void Warm(Track track, string reason = "")
     {
+        if (NetworkPolicy.ShouldDeferPrefetch)
+        {
+            _log.Debug($"fast-warm {track.Uri}: skipped metered reason={reason}");
+            return;
+        }
         if (!_warmInFlight.TryAdd(track.Uri, 0))
         {
             _log.Debug($"fast-warm {track.Uri}: skipped duplicate reason={reason}");

@@ -13,10 +13,11 @@ namespace FluentGpu.WindowsApi.Network;
 /// <summary>
 /// The connectivity pillar: a thin, cold-path wrapper over the Win32 <b>Network List Manager</b> COM API
 /// (<c>netlistmgr.h</c>) exposing "are we online?", the coarse connectivity level, and a connection-point subscription
-/// for change notifications. Hand-bound through TerraFX's connection-point primitives plus the locally declared
-/// <see cref="INetworkListManager"/>/<see cref="INetworkListManagerEvents"/> (TerraFX does not project <c>netlistmgr</c>;
-/// see <see cref="NetworkListManagerComConstants"/>). Zero CsWinRT, zero <c>ComWrappers</c> on the call-OUT path, zero
-/// reflection — same doctrine as the V1 toast pillar.
+/// for change notifications, plus a cost/metered snapshot via <c>INetworkCostManager</c> (same coclass). Hand-bound
+/// through TerraFX's connection-point primitives plus the locally declared
+/// <see cref="INetworkListManager"/>/<see cref="INetworkListManagerEvents"/>/<see cref="INetworkCostManager"/>
+/// (TerraFX does not project <c>netlistmgr</c>; see <see cref="NetworkListManagerComConstants"/>). Zero CsWinRT, zero
+/// <c>ComWrappers</c> on the call-OUT path, zero reflection — same doctrine as the V1 toast pillar.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -133,6 +134,65 @@ public static unsafe class NetworkStatus
     /// per-event level refresh — <c>ConnectivityChanged</c> gives online/offline directly, only the level needs a round-trip).</summary>
     public static Task<NetworkConnectivityLevel> ReadConnectivityAsync()
         => MtaReader.Run(static () => GetConnectivity());
+
+    /// <summary>
+    /// Read the current connection's cost flags OFF the calling thread on the dedicated MTA reader
+    /// (<c>INetworkCostManager::GetCost</c> with a null destination = "this connection"). Fail-soft: any COM failure
+    /// (no NLM, QI for cost manager refused, <c>GetCost</c> failed) returns <see cref="NetworkCost.Unknown"/> —
+    /// unknown/unmetered, so a probe failure never throttles the user. Prefer this over an inline cost read on the UI
+    /// thread for the same apartment reason as <see cref="ReadAsync"/>.
+    /// </summary>
+    public static Task<NetworkCost> ReadCostAsync()
+        => MtaReader.Run(static () => ReadCost());
+
+    /// <summary>
+    /// One-shot <c>INetworkCostManager::GetCost(null dest)</c> on the calling thread (the MTA reader invokes this).
+    /// Fail-soft to <see cref="NetworkCost.Unknown"/> on any failure.
+    /// </summary>
+    private static NetworkCost ReadCost()
+    {
+        using var com = ComApartment.Enter();
+        INetworkListManager* mgr = TryCreateManager();
+        if (mgr == null)
+            return NetworkCost.Unknown;
+        INetworkCostManager* cost = null;
+        try
+        {
+            Guid iid = NetworkListManagerComConstants.IID_INetworkCostManager;
+            if (mgr->QueryInterface(&iid, (void**)&cost) < 0 || cost == null)
+                return NetworkCost.Unknown;
+
+            uint flags = 0;
+            if (cost->GetCost(&flags, null) < 0)
+                return NetworkCost.Unknown;
+            return MapCost((NLM_CONNECTION_COST)flags);
+        }
+        catch
+        {
+            return NetworkCost.Unknown;
+        }
+        finally
+        {
+            if (cost != null) cost->Release();
+            mgr->Release();
+        }
+    }
+
+    /// <summary>Distill <c>NLM_CONNECTION_COST</c> into <see cref="NetworkCost"/>: cost-type bits prefer Variable over
+    /// Fixed over Unrestricted (they are mutually exclusive on a healthy OS); the high bits map 1:1.</summary>
+    internal static NetworkCost MapCost(NLM_CONNECTION_COST flags)
+    {
+        NetworkCostKind kind =
+            (flags & NLM_CONNECTION_COST.Variable) != 0 ? NetworkCostKind.Variable :
+            (flags & NLM_CONNECTION_COST.Fixed) != 0 ? NetworkCostKind.Fixed :
+            (flags & NLM_CONNECTION_COST.Unrestricted) != 0 ? NetworkCostKind.Unrestricted :
+            NetworkCostKind.Unknown;
+        return new NetworkCost(
+            kind,
+            OverDataLimit: (flags & NLM_CONNECTION_COST.OverDataLimit) != 0,
+            ApproachingDataLimit: (flags & NLM_CONNECTION_COST.ApproachingDataLimit) != 0,
+            Roaming: (flags & NLM_CONNECTION_COST.Roaming) != 0);
+    }
 
     /// <summary>
     /// A process-wide, single-thread MTA executor for the off-thread NLM reads. One long-lived background thread placed in

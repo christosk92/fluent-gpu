@@ -28,9 +28,10 @@ namespace Wavee;
 //   transport (Play · Play next · Play after) → state (Save) → collection (Add to playlist · Move · Pin)
 //   → navigation (Open · Go to album · Go to artist) → Share → surface extras → destructive LAST (behind a separator).
 //
-// Surface EXTRAS are additive and documented per builder (queue rows keep Move up/down + Remove from queue, an editable
-// playlist keeps its owner block, a track keeps credits/song-radio/Video ▸). A core verb may be OMITTED only where the
-// seam genuinely does not exist for that kind — and then with a comment naming the reason, never silently.
+// Surface EXTRAS are additive and documented per builder (queue rows keep Move up/down + Remove from queue, sidebar
+// rows keep Move up/down + Remove for navbar customization, an editable playlist keeps its owner block, a track keeps
+// credits/song-radio/Video ▸). A core verb may be OMITTED only where the seam genuinely does not exist for that kind —
+// and then with a comment naming the reason, never silently.
 public static class Menus
 {
     const int MaxInlinePlaylists = 10;   // Add-to-playlist submenu cap; the rest via "More playlists…" → the picker
@@ -638,7 +639,8 @@ public static class Menus
         if (ContainerAddToPlaylistItem(in ctx) is { } add) rows.Add(add);
         rows.Add(ContainerActions.OpenItem.ToMenuItem(ctx));
         rows.Add(MenuFlyoutItem.Separator);
-        if (PinActions.Row(in ctx) is { } pinRow) rows.Add(pinRow);
+        if (PinActions.RowForId(s, SidebarPinId.Canonical(uri), SidebarPinKind.Playlist, uri, name) is { } pinRow)
+            rows.Add(pinRow);
         if (isOwner)
             rows.Add(ContainerActions.RenamePlaylist.ToMenuItem(ctx));
         if (isOwner && live)
@@ -668,45 +670,70 @@ public static class Menus
     /// <item><b>Show / podcast</b> — Play · Open · Pin · — · Copy link, built from explicit rows rather than a new
     /// <c>TargetKind.Show</c>. <b>Explicit non-goal</b> (§3.2.11): adding <c>TargetKind.Show</c> /
     /// <c>ActionTarget.ForShow</c>; if that lands later this arm migrates onto it.</item>
-    /// <item><b>Folder</b> — Expand/Collapse (label switches) · Pin, and NOTHING else. Spotify folder create/rename/move/
-    /// delete is deferred (locked decision 9) and must not appear, not even disabled: a greyed-out "Delete folder" is a
-    /// promise we are not keeping. A folder has no uri, so there is nothing to play and nothing to share.</item>
+    /// <item><b>Folder</b> — Expand/Collapse (label switches) · Pin. Spotify folder create/rename/move/delete is deferred
+    /// (locked decision 9) and must not appear, not even disabled. Navbar Move up/down (a pin-list or authored-list
+    /// reorder, not folder CRUD) arrive through <paramref name="layoutExtras"/>. A folder has no uri, so there is
+    /// nothing to play and nothing to share.</item>
     /// <item><b>App route</b> — Open · Pin.</item>
     /// </list>
     ///
     /// <paramref name="toggleFolder"/> is the surface's own expansion closure (null ⇒ the folder arm omits the
-    /// expand/collapse row rather than showing a dead one).</summary>
+    /// expand/collapse row rather than showing a dead one).
+    ///
+    /// <para><paramref name="layoutExtras"/> are the pane's navbar-customization verbs (Move up / Move down / Remove),
+    /// the same extras slot the queue row uses. Null when the row has no order of its own (a projected library leaf)
+    /// and is not a hand-placed item the document can drop. Inserted after Share and before any trailing destructive
+    /// block (Delete playlist), so drag is never the only way to reorder (P6).</para></summary>
     public static ContextMenuModel? SidebarEntry(ActionServices s, in SidebarLibraryEntry e,
-        Action? toggleFolder = null, bool folderExpanded = false)
+        Action? toggleFolder = null, bool folderExpanded = false,
+        IReadOnlyList<MenuFlyoutItem>? layoutExtras = null)
     {
-        switch (e.Kind)
+        ContextMenuModel? menu = e.Kind switch
         {
-            case SidebarEntryKind.Playlist:
-                return new ContextMenuModel(SidebarPlaylistRows(s, e.Uri, e.Name, e.IsOwner, e.CanEdit),
-                    header: Header(e.Cover, e.Uri, e.Name,
-                        e.OwnerName is { Length: > 0 } owner ? owner : Loc.Get(Strings.Sidebar.V3.Kind.Playlist)));
+            SidebarEntryKind.Playlist => new ContextMenuModel(SidebarPlaylistRows(s, e.Uri, e.Name, e.IsOwner, e.CanEdit),
+                header: Header(e.Cover, e.Uri, e.Name,
+                    e.OwnerName is { Length: > 0 } owner ? owner : Loc.Get(Strings.Sidebar.V3.Kind.Playlist))),
 
-            case SidebarEntryKind.Album:
-            case SidebarEntryKind.Artist:
-                // The album/artist arms ARE the card menu — same target kinds, same verbs, same pin placement.
-                return Card(s, e.Uri, e.Name, e.Cover,
-                    e.Creator is { Length: > 0 } ? e.Creator : null, e.Circular);
+            // The album/artist arms ARE the card menu — same target kinds, same verbs, same pin placement.
+            SidebarEntryKind.Album or SidebarEntryKind.Artist => Card(s, e.Uri, e.Name, e.Cover,
+                e.Creator is { Length: > 0 } ? e.Creator : null, e.Circular),
 
-            case SidebarEntryKind.Show:
-                return SidebarShowMenu(s, in e);
+            SidebarEntryKind.Show => SidebarShowMenu(s, in e),
+            SidebarEntryKind.Folder => SidebarFolderMenu(s, in e, toggleFolder, folderExpanded),
+            SidebarEntryKind.AppRoute => SidebarRouteMenu(s, in e),
+            SidebarEntryKind.Track => SidebarTrackMenu(s, in e),
+            _ => null,
+        };
+        return WithLayoutExtras(menu, layoutExtras);
+    }
 
-            case SidebarEntryKind.Folder:
-                return SidebarFolderMenu(s, in e, toggleFolder, folderExpanded);
+    /// <summary>Append navbar-customization extras after the entity verbs and before a trailing destructive group
+    /// (the playlist owner's Delete). A layout-only menu (an action shortcut, a hand-placed track) is just the extras.
+    /// Null extras, or an empty list, leave the menu unchanged — including a null menu, which still opens nothing.</summary>
+    public static ContextMenuModel? WithLayoutExtras(ContextMenuModel? menu, IReadOnlyList<MenuFlyoutItem>? extras)
+    {
+        if (extras is not { Count: > 0 }) return menu;
+        if (menu is not { } present) return new ContextMenuModel(CopyExtras(extras));
 
-            case SidebarEntryKind.AppRoute:
-                return SidebarRouteMenu(s, in e);
+        var rows = new List<MenuFlyoutItem>(present.Rows.Count + extras.Count + 1);
+        for (int i = 0; i < present.Rows.Count; i++) rows.Add(present.Rows[i]);
 
-            case SidebarEntryKind.Track:
-                return SidebarTrackMenu(s, in e);
+        int at = rows.Count;
+        // A trailing separator + one command is the destructive-last block (Delete playlist). Insert extras in front
+        // of that separator so Move up/down never land after a delete, and Remove stays with the extras rather than
+        // swapping places with an owner verb.
+        if (rows.Count >= 2 && rows[^2].IsSeparator) at = rows.Count - 2;
 
-            default:
-                return null;
-        }
+        if (at > 0 && !rows[at - 1].IsSeparator) rows.Insert(at++, MenuFlyoutItem.Separator);
+        for (int i = 0; i < extras.Count; i++) rows.Insert(at++, extras[i]);
+        return present with { Rows = rows };
+    }
+
+    static List<MenuFlyoutItem> CopyExtras(IReadOnlyList<MenuFlyoutItem> extras)
+    {
+        var rows = new List<MenuFlyoutItem>(extras.Count);
+        for (int i = 0; i < extras.Count; i++) rows.Add(extras[i]);
+        return rows;
     }
 
     /// <summary>Feed TRACK rows — the only producers are the track-yielding data sources (<c>wavee.queue</c>,

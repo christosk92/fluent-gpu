@@ -5,8 +5,27 @@ using TerraFX.Interop.DirectX;
 
 namespace FluentGpu.Rhi.D3D12;
 
+/// <summary>
+/// Cold copy of <c>IDXGIAdapter3.QueryVideoMemoryInfo</c> plus engine resource tallies. The render thread
+/// publishes (it owns the COM adapter pointer); UI / probes read this struct only — no DXGI types cross the seam.
+/// </summary>
+public readonly struct GpuVideoMemorySnapshot
+{
+    public ulong LocalCurrentUsage { get; init; }
+    public ulong LocalBudget { get; init; }
+    public ulong NonLocalCurrentUsage { get; init; }
+    public ulong NonLocalBudget { get; init; }
+    public long TrackedResourceBytes { get; init; }
+    public int TrackedResourceCount { get; init; }
+    public int AtlasImages { get; init; }
+    public int AtlasPages { get; init; }
+    public int CachedGlyphs { get; init; }
+    public bool Valid { get; init; }
+}
+
 internal static unsafe class D3D12MemoryDiagnostics
 {
+    private static GpuVideoMemorySnapshot _videoMemory;
     private static readonly object Gate = new();
     private static readonly Dictionary<nuint, Entry> Live = new();
     private static ulong _liveBytes;
@@ -88,6 +107,32 @@ internal static unsafe class D3D12MemoryDiagnostics
     internal static (long bytes, int count) LiveTotals()
     {
         lock (Gate) return ((long)_liveBytes, Live.Count);
+    }
+
+    /// <summary>Last render-thread video-memory snapshot. UI timers copy this POD; they must not call DXGI.</summary>
+    internal static GpuVideoMemorySnapshot LastVideoMemory => _videoMemory;
+
+    /// <summary>Publish a numeric snapshot assembled on the render thread (QueryVideoMemoryInfo already ran there).
+    /// LiveTotals is lock-protected and O(1); atlas/glyph counts are already-copied integers.</summary>
+    internal static void PublishVideoMemory(
+        ulong localUsage, ulong localBudget,
+        ulong nonLocalUsage, ulong nonLocalBudget,
+        int atlasImages, int atlasPages, int cachedGlyphs)
+    {
+        var (bytes, count) = LiveTotals();
+        _videoMemory = new GpuVideoMemorySnapshot
+        {
+            LocalCurrentUsage = localUsage,
+            LocalBudget = localBudget,
+            NonLocalCurrentUsage = nonLocalUsage,
+            NonLocalBudget = nonLocalBudget,
+            TrackedResourceBytes = bytes,
+            TrackedResourceCount = count,
+            AtlasImages = atlasImages,
+            AtlasPages = atlasPages,
+            CachedGlyphs = cachedGlyphs,
+            Valid = true,
+        };
     }
 
     public static void Resize(string target, uint width, uint height)

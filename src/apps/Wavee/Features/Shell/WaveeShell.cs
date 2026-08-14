@@ -6,6 +6,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
+using FluentGpu.Input;
 using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
@@ -32,6 +33,7 @@ sealed class WaveeShell : Component
     readonly List<Route> _history = new();
     readonly List<Route> _forwardHistory = new();
     readonly HistoryStore _historyStore = new();
+    readonly SessionSnapshotStore _session = new();
     readonly NavPreviewStore _navPreview = new();   // click→detail handoff: the card stashes its known cover/title/artist
     readonly HomeSectionPreviewStore _homeSectionPreview = new(); // Home source section → seeded drill page
     // Page-scoped shell MATERIAL: a page writes its art colour (flat tint) or Home's three washes here while active; the
@@ -67,7 +69,8 @@ sealed class WaveeShell : Component
     // recomputed on every viewport move but only PUBLISHED when a stage flips, exactly like the two-row toolbar's old
     // ToolbarLayout. Everything the bar's islands read comes from these signals, never from a frozen ctor arg.
     readonly Signal<MergedChromeLayout> _chromeLayout = new(MergedChromeLayout.FromWidth(0f, 1));
-    readonly Signal<int> _searchFocusRequest = new(0);      // Ctrl+K → put the caret in the field (a monotonic ticket)
+    readonly Signal<int> _searchFocusRequest = new(0);      // Ctrl+F → omnibar caret (Ctrl+K opens the command palette)
+    readonly Signal<bool> _paletteOpen = new(false);        // Ctrl+K command palette (WaveeCommandPalette)
     readonly Signal<bool> _searchFocused = new(false);
     readonly Signal<bool> _searchFlyoutOpen = new(false);
     readonly Signal<float> _tabNaturalExtent = new(ShellResponsiveLayout.ChromeTabMinW);
@@ -191,6 +194,7 @@ sealed class WaveeShell : Component
     static string HistoryFilePath() => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "Wavee", "WaveeMusic", "history.json");
+    static string SessionFilePath() => SessionSnapshotStore.DefaultPath();
 
     // Stress-probe nav seam (WAVEE_NAV_PROBE only): lets the WaveeNavProbe drive REAL navigation/theme/tab churn through
     // the same signals the chrome writes — no synthetic input, no reaching into private state. Inert in normal runs.
@@ -221,6 +225,8 @@ sealed class WaveeShell : Component
     {
         _settings = settings;
         RestorePinnedWorkspace();
+        _session.Init(SessionFilePath());
+        RestoreSessionNav();
         _sidebar = sidebar;
         // The service already seeded the ACTIVE design's pane triple in its own constructor (a dragged width verbatim, an
         // undragged one from that design's tier ladder at the pre-measure fallback), so the FIRST layout is already correct
@@ -321,6 +327,46 @@ sealed class WaveeShell : Component
         _route.Value = new Route(tab.Key, tab.Arg);
         if (tab.Key == "search" && tab.Arg is { Length: > 0 }) _searchText.Value = tab.Arg;
         SeedTabExtent();
+    }
+
+    /// <summary>Cold-start nav restore: AFTER settings + pinned tabs. Fail-soft — a bad snapshot never breaks boot.
+    /// Playback restore is a separate later consumer of the same document.</summary>
+    void RestoreSessionNav()
+    {
+        try
+        {
+            var snap = _session.Load();
+            var back = new List<SessionRouteDto>();
+            var fwd = new List<SessionRouteDto>();
+            if (!SessionSnapshotStore.TryApplyNav(snap?.Nav, back, fwd, out var active, out int tabId))
+                return;
+            _history.Clear();
+            _forwardHistory.Clear();
+            for (int h = 0; h < back.Count; h++) _history.Add(new Route(back[h].Name, back[h].Arg));
+            for (int h = 0; h < fwd.Count; h++) _forwardHistory.Add(new Route(fwd[h].Name, fwd[h].Arg));
+            _route.Value = new Route(active.Name, active.Arg);
+            _canBack.Value = _history.Count > 0;
+            _canForward.Value = _forwardHistory.Count > 0;
+            if (active.Name == "search" && active.Arg is { Length: > 0 }) _searchText.Value = active.Arg;
+            int idx = IndexOfTabId(tabId);
+            if (idx >= 0) _selectedTab.Value = idx;
+            // Update the selected tab's route in place without SavePinnedWorkspace — restore must not rewrite pins.
+            int i = _selectedTab.Peek();
+            if ((uint)i < (uint)_open.Count)
+            {
+                var (title, glyph) = ShellNav.Dest(active.Name, active.Arg);
+                _open[i] = _open[i] with { Key = active.Name, Label = title, Glyph = glyph, Arg = active.Arg };
+            }
+            SeedTabExtent();
+        }
+        catch
+        {
+            _history.Clear();
+            _forwardHistory.Clear();
+            _canBack.Value = false;
+            _canForward.Value = false;
+            _route.Value = new Route("home");
+        }
     }
 
     void SavePinnedWorkspace()
@@ -503,6 +549,10 @@ sealed class WaveeShell : Component
         _actions.Library = UseContext(LibraryBridge.Slot);
         _actions.Svc = UseContext(Services.Slot);
         _actions.Store = UseContext(LibraryStore.Slot);
+        // Jump List was built at PlaybackBridge.Activate (window exists) — attach the shell's history + the warm
+        // library so "Jump back in" can print real names instead of "Playlist" / a raw URI.
+        _actions.Playback?.JumpList?.AttachHistory(_historyStore);
+        _actions.Playback?.JumpList?.AttachLibrary(_actions.Store);
         _actions.Clipboard = UseContext(InputHooks.Current).Clipboard;
         _actions.Go = GoNav;
         _actions.Post = post;
@@ -518,6 +568,28 @@ sealed class WaveeShell : Component
             _actions.Svc?.RegisterSidebarSources(registry);
             _actions.Extensions = registry;
         }
+
+        // Deep-link drain: Pending is a monotonic ticket (same shape as _searchFocusRequest). Read .Value so this
+        // auto-tracked effect re-runs; the first tick also drains verbs posted before the shell mounted.
+        UseEffect(() =>
+        {
+            _ = DeepLinkChannel.Pending.Value;
+            DrainDeepLinks();
+        });
+        // Track-boundary announce: CurrentTrack only writes on a real change (not per-frame). Compose the string on
+        // that edge; skip when no AT client is listening so we don't allocate a spoken line nobody hears.
+        UseEffect(() =>
+        {
+            if (_actions.Playback is not { } playback) return;
+            var track = playback.CurrentTrack.Value;
+            if (track is null || !Announcer.IsAvailable) return;
+            string title = track.Title;
+            if (string.IsNullOrEmpty(title) || title == track.Uri) return;
+            string artist = track.Artists.Count > 0 ? track.Artists[0].Name : "";
+            Announcer.SayThrottled(artist.Length == 0 ? title : title + ", " + artist);
+        });
+        // Best-effort session flush on shell unmount. Process-exit Flush lives in Program.cs (another agent's file).
+        UseEffect(() => (Action?)(() => _session.Flush()), DepKey.Empty);
         // The row indicator / "Videos only" filter read the association plane + the curation through a process-wide
         // probe rather than context, because they run per ROW (a context read or a signal subscription per row is not
         // affordable there). Both halves of the has-video answer are attached here, and nothing else answers it.
@@ -575,16 +647,19 @@ sealed class WaveeShell : Component
         var column = new BoxEl
         {
             Direction = 1, Grow = 1f, Height = Prop.Of(() => vpSig.Value.Height),   // window-tall → content yields, never overflows the player bar
+            OnKeyDown = OnShellKey,   // Space = play/pause after focused routing (editors/buttons consume first)
             Children =
             [
                 // Zero-size, renders nothing: owns the ambient-cadence policy's two subscriptions (window activation +
                 // the debounced power poll). It lives here because the shell is the one always-mounted host in the tree.
                 Embed.Comp(() => new AmbientPowerPolicy.Watcher()),
-                // Shell-wide chords. InputHooks.KeyPreview is modifier-BLIND (Func<int,bool>), so the two shell verbs
+                // Shell-wide chords. InputHooks.KeyPreview is modifier-BLIND (Func<int,bool>), so the shell verbs
                 // ride the engine's KeyAccelerator seam instead — the dispatcher matches key+mods against any live,
                 // visible, enabled node AFTER focused routing declines it (the WinUI ProcessKeyboardAccelerators
                 // order). Zero-size + hit-test-free ⇒ pure keyboard surface, and it composes with the narrow drawer's
                 // own Escape KeyPreview rather than fighting it for the single preview slot.
+                // Bare Space is NOT an accelerator (OnKey only runs FindAccelerator for Ctrl/Alt or F1–F12) — it
+                // bubbles here via OnKeyDown after editors/clickables have had first refusal.
                 new BoxEl
                 {
                     Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
@@ -593,7 +668,22 @@ sealed class WaveeShell : Component
                 new BoxEl
                 {
                     Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
-                    Accelerator = FocusSearchChord, OnClick = FocusSearch,
+                    Accelerator = FocusSearchChord, OnClick = OpenPalette,
+                },
+                new BoxEl
+                {
+                    Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
+                    Accelerator = FindChord, OnClick = FocusFind,
+                },
+                new BoxEl
+                {
+                    Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
+                    Accelerator = BackChord, OnClick = Back,
+                },
+                new BoxEl
+                {
+                    Width = 0f, Height = 0f, Shrink = 0f, HitTestVisible = false,
+                    Accelerator = ForwardChord, OnClick = Forward,
                 },
                 // THE chrome row. One 48-DIP TitleBar in merged mode: the tabs island carries Wavee's nav cluster and
                 // the text-first strip, the flexible centre column carries the window-centred omnibar, and the trailing
@@ -1055,6 +1145,7 @@ sealed class WaveeShell : Component
                 Children = [Embed.Comp(() => new ImmersiveLyricsSurface())],
             });
         var shellWithOverlays = Ui.ZStack(tinted, immersiveLyricsLayer, runtimeBannerLayer, fileDropLayer,
+            WaveeCommandPalette.Overlay(_paletteOpen, GoNav, _actions, _settings, ToggleTheme),
             Embed.Comp(() => new ActionServicesOverlayBinder(_actions)),
             // Zero-size chrome INSIDE the OverlayHost subtree (so UseContext(Overlay.Service) resolves the real service —
             // the same reason ActionServicesOverlayBinder lives here): opens the one-time design chooser once per install,
@@ -1305,6 +1396,75 @@ sealed class WaveeShell : Component
         return (uint)i < (uint)_open.Count ? _open[i].Id : -1;
     }
 
+    /// <summary>Peek the selected tab's stable id without subscribing (event-handler / persist path).</summary>
+    int PeekActiveTabId()
+    {
+        int i = _selectedTab.Peek();
+        return (uint)i < (uint)_open.Count ? _open[i].Id : -1;
+    }
+
+    /// <summary>Zero-alloc persist: passes the live stacks; the store copies into reused buffers and debounces 2 s.</summary>
+    void CaptureNav()
+        => _session.UpdateNav(_route.Peek(), _history, _forwardHistory, PeekActiveTabId());
+
+    void DrainDeepLinks()
+    {
+        while (DeepLinkChannel.TryDequeue(out DeepLinkVerb verb))
+        {
+            try { ApplyDeepLink(verb); }
+            catch { /* a bad verb must not break the shell */ }
+        }
+    }
+
+    void ApplyDeepLink(DeepLinkVerb verb)
+    {
+        switch (verb.Kind)
+        {
+            case DeepLinkKind.Open:
+                GoDeepLinkOpen(verb.Route, verb.Arg);
+                break;
+            case DeepLinkKind.Play:
+            case DeepLinkKind.Resume:
+            case DeepLinkKind.Pause:
+                HandleDeepLinkPlayback(verb);
+                break;
+        }
+    }
+
+    /// <summary>Compose the shell's opaque nav key. Entity verbs arrive as <c>route=album&amp;arg=spotify:album:…</c>
+    /// and become <c>album:spotify:album:…</c>; a already-full key is passed through.</summary>
+    void GoDeepLinkOpen(string route, string arg)
+    {
+        string key = route;
+        string? a = arg.Length == 0 ? null : arg;
+        if (a is not null && route.IndexOf(':') < 0
+            && (route is "album" or "pl" or "artist" or "show" or "prerelease"))
+        {
+            key = route + ":" + a;
+            a = null;   // URI lives in the key; Arg is the display name, which a deep link does not carry
+        }
+        GoNav(key, a);
+    }
+
+    /// <summary>Play/resume from a <c>wavee://</c> verb. PlaybackBridge.Player is the shell's playback seam.</summary>
+    void HandleDeepLinkPlayback(DeepLinkVerb verb)
+    {
+        var playback = _actions.Playback;
+        if (playback is null) return;
+        switch (verb.Kind)
+        {
+            case DeepLinkKind.Play:
+                _ = playback.Player.PlayAsync(verb.Context);
+                break;
+            case DeepLinkKind.Resume:
+                _ = playback.Player.ResumeAsync();
+                break;
+            case DeepLinkKind.Pause:
+                _ = playback.Player.PauseAsync();
+                break;
+        }
+    }
+
     // ── navigation (the single source of truth the chrome reads) ─────────────────────────────────
     void Go(string key, string? arg, NavTransitionKind motion = NavTransitionKind.Forward)
     {
@@ -1319,6 +1479,7 @@ sealed class WaveeShell : Component
         _historyStore.Add(_route.Peek());
         RecordRecentSurface(_route.Peek());
         SyncActiveTab(_route.Peek());
+        CaptureNav();
     }
 
     // Addendum A5 — the `recent_surfaces` pin reason. Hooked to FORWARD navigation only: Back/Forward re-visit a surface
@@ -1345,6 +1506,7 @@ sealed class WaveeShell : Component
         _canBack.Value = _history.Count > 0;
         _historyStore.Add(_route.Peek());
         SyncActiveTab(_route.Peek());
+        CaptureNav();
     }
 
     void Forward()
@@ -1359,6 +1521,7 @@ sealed class WaveeShell : Component
         _canForward.Value = _forwardHistory.Count > 0;
         _historyStore.Add(_route.Peek());
         SyncActiveTab(_route.Peek());
+        CaptureNav();
     }
 
     void Home() => Go("home", null);
@@ -1513,14 +1676,41 @@ sealed class WaveeShell : Component
         return parts;
     }
 
-    // Shell-wide keyboard chords (see the accelerator hosts in the column). Ctrl+T opens a new Home tab; Ctrl+K puts the
-    // caret in the omnibar, EXPANDING it first when the ladder has collapsed it to the magnifier.
+    // Shell-wide keyboard chords (see the accelerator hosts in the column). Ctrl+T opens a new Home tab; Ctrl+K opens
+    // the command palette (subsumes the old omnibar focus). Ctrl+F focuses the omnibar. Alt+Left/Right = Back/Forward.
+    // Space = play/pause via OnShellKey (not an accelerator — InputDispatcher only matches Ctrl/Alt or F-keys).
+    // Mouse XButton1/2 are NOT delivered by the engine (InputDispatcher handles buttons 0/1/2 only) — no wiring.
     static readonly KeyAccelerator NewTabChord = new(Keys.T, KeyModifiers.Ctrl);
     static readonly KeyAccelerator FocusSearchChord = new(Keys.K, KeyModifiers.Ctrl);
+    static readonly KeyAccelerator FindChord = new(Keys.F, KeyModifiers.Ctrl);
+    static readonly KeyAccelerator BackChord = new(Keys.Left, KeyModifiers.Alt);
+    static readonly KeyAccelerator ForwardChord = new(Keys.Right, KeyModifiers.Alt);
 
-    void FocusSearch()
+    void OpenPalette() => _paletteOpen.Value = !_paletteOpen.Peek();
+
+    void FocusFind()
     {
+        // DetailTracks owns a private _searchExpanded with no shell-reachable focus ticket. Ctrl+F therefore focuses
+        // the omnibar (MergedChromeRow still honors FirstFocusableIn — Wave 1). In-page filter is a follow-up.
         _searchFocusRequest.Value = _searchFocusRequest.Peek() + 1;
+    }
+
+    void OnShellKey(KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Space || e.Mods != KeyModifiers.None) return;
+        if (FocusedIsTextEditor()) return;
+        if (_actions.Playback is not { } pb) return;
+        PlayerBarContent.TogglePlayPause(pb);
+        e.Handled = true;
+    }
+
+    bool FocusedIsTextEditor()
+    {
+        var focused = _inputHooks?.GetFocus?.Invoke() ?? default;
+        if (focused.IsNull || _contentScene is null || !_contentScene.IsLive(focused)) return false;
+        ref var ix = ref _contentScene.Interaction(focused);
+        return ix.Role == AutomationRole.Text
+               || (ix.HandlerMask & InteractionInfo.CharBit) != 0;
     }
 
     void ToggleTheme()

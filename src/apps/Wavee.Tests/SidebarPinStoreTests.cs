@@ -316,4 +316,43 @@ public class SidebarPinStoreTests
         Assert.True(s.IsPinned(id));
         Assert.Equal(0, s.IndexOf(id));
     }
+
+    [Fact]
+    public void Canonical_MapsABareEntityUriOntoThePrefixedPinId()
+    {
+        Assert.Equal("pl:spotify:playlist:x", SidebarPinId.Canonical("spotify:playlist:x"));
+        Assert.Equal("pl:spotify:playlist:x", SidebarPinId.Canonical("pl:spotify:playlist:x"));
+        Assert.Equal("album:spotify:album:x", SidebarPinId.Canonical("spotify:album:x"));
+        Assert.Equal("artist:spotify:artist:x", SidebarPinId.Canonical("spotify:artist:x"));
+        Assert.Equal("liked", SidebarPinId.Canonical("spotify:collection:tracks"));
+        Assert.Null(SidebarPinId.Canonical("spotify:track:x"));
+    }
+
+    [Fact]
+    public void ARawUriPin_IsFoundAndRemovedThroughTheCanonicalId()
+    {
+        // Card/hero drops used to persist the bare uri as SidebarPin.Id. The menu looks up pl:… / album:… / artist:…
+        // — without the alias those pins were immortal (Pin was a silent no-op, Unpin never appeared).
+        var s = new SidebarPinStore();
+        Assert.True(s.Pin(Pin("spotify:playlist:stuck", SidebarPinKind.Playlist, "spotify:playlist:stuck", "My Playlist #6")));
+        Assert.Equal("pl:spotify:playlist:stuck", s[0].Id);          // Pin canonicalizes on the way in
+        Assert.True(s.IsPinned("spotify:playlist:stuck"));
+        Assert.True(s.IsPinned("pl:spotify:playlist:stuck"));
+        Assert.Equal(0, s.Unpin("pl:spotify:playlist:stuck"));
+        Assert.Equal(0, s.Count);
+    }
+
+    [Fact]
+    public void LoadFrom_MigratesALegacyRawUriPin_AndDedupesThePrefixedTwin()
+    {
+        var s = new SidebarPinStore();
+        s.LoadFrom(
+        [
+            Pin("spotify:playlist:stuck", SidebarPinKind.Playlist, "spotify:playlist:stuck", "My Playlist #6"),
+            Pin("pl:spotify:playlist:stuck", SidebarPinKind.Playlist, "spotify:playlist:stuck", "My Playlist #6"),
+        ]);
+        Assert.Equal(new[] { "pl:spotify:playlist:stuck" }, IdsOf(s));
+        Assert.Equal(0, s.Unpin("spotify:playlist:stuck"));
+        Assert.Equal(0, s.Count);
+    }
 }

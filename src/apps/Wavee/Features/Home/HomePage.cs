@@ -12,6 +12,7 @@ using FluentGpu.Localization;
 using FluentGpu.Scene;
 using FluentGpu.Signals;
 using Wavee.Core;
+using Wavee.Core.Home;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -37,6 +38,10 @@ sealed class HomePage : Component
     {
         var svc    = UseContext(Services.Slot);
         var go     = UseContext(HistoryStore.NavCtx);
+        var homePrefs = UseContext(HomePreferences.Slot);
+        int layoutVersion = homePrefs?.LayoutVersion.Value ?? 0;
+        _homePrefs = homePrefs;
+        _renderLayoutVersion = layoutVersion;
         var bridge = UseContext(PlaybackBridge.Slot);
         var preview = UseContext(NavPreviewStore.Slot);    // pre-load: stash the card's known cover/title for the detail page
         var sectionPreview = UseContext(HomeSectionPreviewStore.Slot);
@@ -299,12 +304,9 @@ sealed class HomePage : Component
             var landing = Landing(feed);
             homeLayout.Configure(landing);
 
-            // The page is a FIXED table of rows in the prototype's order — not the server's. Each row resolves its own
-            // data (from the feed by kind, or from a service) and returns an empty box when it has none, so RowAt, KeyAt
-            // and Estimate all switch on the SAME enum and a new row cannot silently mis-size. This replaced the
-            // greeting + artists + N groups + timeline + tail index arithmetic, whose off-by-one hazards were the
-            // biggest structural risk in the page.
-            var rows = HomeFeedVirtualLayout.Rows;
+            // Rows come from the landing AFTER hide+reorder. A hidden Hero is omitted (no empty slot) and a
+            // user reorder is the order RowAt / KeyAt / Estimate all switch on.
+            var rows = homeLayout.Rows;
 
             string KeyAt(int index)
             {
@@ -361,6 +363,8 @@ sealed class HomePage : Component
             // The split row is sized by whichever of its two modules is taller; the estimator asks for both.
             HomeRow.EpisodesAndBooks => landing.Get(HomeGroupKind.QueueList)?.Group
                 ?? landing.Get(HomeGroupKind.RatedShelf)?.Group,
+            HomeRow.Queue => landing.Get(HomeGroupKind.QueueList)?.Group,
+            HomeRow.Books => landing.Get(HomeGroupKind.RatedShelf)?.Group,
             _ => null,
         };
 
@@ -379,7 +383,7 @@ sealed class HomePage : Component
             switch (row)
             {
                 case HomeRow.Chips:
-                    return GreetingBlock(name, feed, svc, post);
+                    return GreetingBlock(name, feed, svc, post, landing, go);
                 case HomeRow.Hero:
                     return landing.Get(HomeGroupKind.Hero) is { Group: { } h }
                         ? HomeModules.SourceModule(h,
@@ -429,6 +433,14 @@ sealed class HomePage : Component
                     if (books is null) return HomeModules.SplitSingle(left);
                     return HomeModules.SplitEven(left, right);
                 }
+                case HomeRow.Queue:
+                    return landing.Get(HomeGroupKind.QueueList)?.Group is { } queueOnly
+                        ? HomeModules.SplitSingle(HomeModules.UpNext(queueOnly, NavOf, ChromeOf, more.For(queueOnly, "queue")))
+                        : new BoxEl();
+                case HomeRow.Books:
+                    return landing.Get(HomeGroupKind.RatedShelf)?.Group is { } booksOnly
+                        ? HomeModules.SplitSingle(HomeModules.Audiobooks(booksOnly, NavOf, ChromeOf, more.For(booksOnly, "books")))
+                        : new BoxEl();
                 case HomeRow.Timeline:
                     return Embed.Comp(() => new HomeTimeline());
                 case HomeRow.Podcasts:
@@ -506,7 +518,7 @@ sealed class HomePage : Component
             Direction = 1,
             Gap = Spacing.XL,
             Padding = new Edges4(Spacing.PageWide, Spacing.XXL, Spacing.PageWide, PlayerDock.Reserve + Spacing.XXL),
-            Children = [ GreetingBlock(name, null, svc, post), state, tail ],
+            Children = [ GreetingBlock(name, null, svc, post, null, go), state, tail ],
         }) with { Grow = 1f, ScrollKey = "home" };
 
         // Swap one viewport for another. There is deliberately no outer ScrollView around VirtualHome: doing that would
@@ -597,29 +609,42 @@ sealed class HomePage : Component
     // your daylist") — the prototype has no standalone greeting block, because a page that opens with two stacked text
     // blocks before any content wastes its best row. With no hero on the page there is nowhere else for it to go, so it
     // comes back rather than being lost.
-    Element GreetingBlock(string? name, HomeFeed? feed, Services? svc, Action<Action> post)
+    Element GreetingBlock(string? name, HomeFeed? feed, Services? svc, Action<Action> post,
+        HomeLanding? landing, Action<string, string?>? go)
     {
-        bool hasHero = feed is not null && HasHero(feed);
+        // A hidden Hero must not steal the greeting — HasHero reads the PROJECTED landing, not the raw feed.
+        bool hasHero = landing?.Get(HomeGroupKind.Hero) is not null;
         Element? hero = hasHero ? null : GreetingHero(name, feed?.Greeting);
-        if (feed?.Chips is not { Count: > 0 } chips || svc is null) return hero ?? new BoxEl();
 
-        var chipRow = Ctx.Provide(HomeFacetChips.Props,
-            new HomeFacetChips.Model(chips, () => RefreshForFacet(svc, post)),
-            Embed.Comp(() => new HomeFacetChips()));
+        Element? chipRow = null;
+        if (feed?.Chips is { Count: > 0 } chips && svc is not null)
+            chipRow = Ctx.Provide(HomeFacetChips.Props,
+                new HomeFacetChips.Model(chips, () => RefreshForFacet(svc, post)),
+                Embed.Comp(() => new HomeFacetChips()));
 
-        return hero is null ? chipRow : new BoxEl
+        Element? customize = go is null ? null : HomeCustomizeAffordance.Button(go);
+        Element? body = hero is null ? chipRow : chipRow is null ? hero : new BoxEl
         {
             Direction = 1, Gap = Spacing.M, MinWidth = 0f,
             Children = [ hero, chipRow ],
         };
-    }
 
-    static bool HasHero(HomeFeed feed)
-    {
-        var gs = feed.Groups;
-        for (int i = 0; i < gs.Count; i++)
-            if (gs[i].Kind == HomeGroupKind.Hero && gs[i].Cards.Count > 0) return true;
-        return false;
+        if (customize is null) return body ?? new BoxEl();
+        if (body is null)
+            return new BoxEl
+            {
+                Direction = 0, Justify = FlexJustify.End, AlignItems = FlexAlign.Center, MinWidth = 0f,
+                Children = [ customize ],
+            };
+        return new BoxEl
+        {
+            Direction = 0, AlignItems = FlexAlign.Start, Gap = Spacing.S, MinWidth = 0f,
+            Children =
+            [
+                new BoxEl { Direction = 1, Grow = 1f, Basis = 0f, Shrink = 1f, MinWidth = 0f, Children = [ body ] },
+                customize,
+            ],
+        };
     }
 
     /// <summary>The greeting WORD — the server's own when it sent one, else a local-clock guess. Spotify's
@@ -687,16 +712,25 @@ sealed class HomePage : Component
     HomeFeed? _landingFeed;
     HomeModuleTitles? _landingTitles;
     HomeLanding? _landing;
+    HomeLayoutDoc? _landingLayout;
+    int _landingLayoutVersion = -1;
+    HomePreferences? _homePrefs;
+    int _renderLayoutVersion;
 
     HomeLanding Landing(HomeFeed feed)
     {
         var titles = HomeModuleCopy.Titles;
-        if (_landing is { } cached && ReferenceEquals(_landingFeed, feed) && titles.Equals(_landingTitles))
+        var layout = _homePrefs?.Layout ?? HomeLayoutDoc.Default;
+        int version = _renderLayoutVersion;
+        if (_landing is { } cached && ReferenceEquals(_landingFeed, feed) && titles.Equals(_landingTitles)
+            && version == _landingLayoutVersion && ReferenceEquals(_landingLayout, layout))
             return cached;
-        var landing = HomeLandingProjection.Project(feed, titles);
+        var landing = HomeLandingProjection.Project(feed, titles, layout);
         _landingFeed = feed;
         _landingTitles = titles;
         _landing = landing;
+        _landingLayout = layout;
+        _landingLayoutVersion = version;
         return landing;
     }
 
@@ -713,22 +747,6 @@ sealed class HomePage : Component
     }
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────────────────
-}
-
-/// <summary>
-/// Variable-height Home stack with kind-aware first estimates. The engine still measures every realized row and feeds
-/// the exact extent back through <see cref="IMeasuredVirtualLayout.SetMeasured"/>; these estimates only make the cold
-/// window/content extent credible before those measurements exist. The state is hoisted by HomePage and retained across
-/// refreshes, so steady scrolling remains the normal Fenwick-table path.
-/// </summary>
-/// <summary>The page's rows, in the prototype's order. This is a DESIGNED rhythm — cinematic, then dense, then a rail,
-/// then a band, then radial, then chips, then tabular, then a dual, then a timeline, then editorial, then the feed — and
-/// deliberately NOT the order Spotify returns sections in. Each row resolves its own data and renders nothing when it has
-/// none, which is what lets the table be fixed-length.</summary>
-enum HomeRow : byte
-{
-    Chips, Hero, Weekly, Quick, Recents, MixBand, Artists, ChipCards, Radio, EpisodesAndBooks,
-    Podcasts, Timeline, Sections, Editorial, Feed, Tail,
 }
 
 /// <summary>Every module's "Show all" flag, hoisted by the page so it survives the virtual list recycling its row. A
@@ -765,17 +783,13 @@ sealed class HomeShowAll
 /// cold window and content extent credible before those measurements exist. State is hoisted by HomePage and retained
 /// across refreshes, so steady scrolling remains the normal Fenwick-table path.
 ///
-/// <para>Because the row table is FIXED, <see cref="Estimate"/> switches on <see cref="HomeRow"/> and has no
-/// index arithmetic and no fallthrough arm — the two hazards that made the previous shape mis-size a row silently and
-/// flap the scroll anchor mid-scroll.</para></summary>
+/// <para>The row table is the landing's projected order (hide + reorder already applied). <see cref="Estimate"/>
+/// switches on <see cref="HomeRow"/> and has no index arithmetic and no fallthrough arm.</para></summary>
 sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 {
-    public static readonly HomeRow[] Rows =
-    [
-        HomeRow.Chips, HomeRow.Hero, HomeRow.Weekly, HomeRow.Quick, HomeRow.Recents, HomeRow.MixBand,
-        HomeRow.Artists, HomeRow.ChipCards, HomeRow.Radio, HomeRow.EpisodesAndBooks, HomeRow.Podcasts,
-        HomeRow.Timeline, HomeRow.Sections, HomeRow.Editorial, HomeRow.Feed, HomeRow.Tail,
-    ];
+    HomeRow[] _rows = HomeLandingProjection.DefaultRows;
+
+    public HomeRow[] Rows => _rows;
 
     readonly ExtentTable _extents = new(0, 1f);
     readonly record struct GroupMetric(int Count, bool Titled);
@@ -807,7 +821,27 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
         }
         int deck = landing.Sections.Count;
         if (deck != _sectionDeckCount) { _sectionDeckCount = deck; changed = true; }
+        if (!SameRows(_rows, landing.Rows))
+        {
+            _rows = CopyRows(landing.Rows);
+            changed = true;
+        }
         if (changed) _shapeVersion++;
+    }
+
+    static bool SameRows(HomeRow[] a, IReadOnlyList<HomeRow> b)
+    {
+        if (a.Length != b.Count) return false;
+        for (int i = 0; i < a.Length; i++)
+            if (a[i] != b[i]) return false;
+        return true;
+    }
+
+    static HomeRow[] CopyRows(IReadOnlyList<HomeRow> src)
+    {
+        var copy = new HomeRow[src.Count];
+        for (int i = 0; i < copy.Length; i++) copy[i] = src[i];
+        return copy;
     }
 
     static bool SameShape(Dictionary<HomeGroupKind, List<GroupMetric>> a,
@@ -860,7 +894,7 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
         // the measured list re-pins its scroll anchor mid-scroll.
         float available = MathF.Max(1f, MathF.Min(cross, WaveeSize.PageMaxW) - 2f * Spacing.PageWide);
         float gap = HomeModuleLayout.Gap(available);
-        var row = (uint)index < (uint)Rows.Length ? Rows[index] : HomeRow.Tail;
+        var row = (uint)index < (uint)_rows.Length ? _rows[index] : HomeRow.Tail;
 
         float Stack(HomeGroupKind kind, bool shelfOwnsHeader = false)
         {
@@ -923,6 +957,8 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
             HomeRow.Radio => RowStack(HomeGroupKind.RadioDial),
             // Side by side above the split threshold, stacked below — so the estimate is the max of the two, or the sum.
             HomeRow.EpisodesAndBooks => SplitExtent(Stack(HomeGroupKind.QueueList), Stack(HomeGroupKind.RatedShelf), available, gap),
+            HomeRow.Queue => RowStack(HomeGroupKind.QueueList),
+            HomeRow.Books => RowStack(HomeGroupKind.RatedShelf),
             HomeRow.Podcasts => RowStack(HomeGroupKind.PodcastShelf, shelfOwnsHeader: true),
             // Up to 8 rows in day groups (a 40 cover with 8 of padding a side); it hides itself when the feed is empty
             // and the measured pass corrects it.
@@ -953,25 +989,25 @@ sealed class HomeFeedVirtualLayout : IMeasuredVirtualLayout
 
     public RectF ItemRect(int index, float crossSize)
     {
-        Ensure(Rows.Length, crossSize);
+        Ensure(_rows.Length, crossSize);
         return new RectF(0f, _extents.OffsetOf(index), crossSize, _extents.ExtentAt(index));
     }
 
     public void SetMeasured(int index, float mainExtent, float crossSize)
     {
-        Ensure(Rows.Length, crossSize);
+        Ensure(_rows.Length, crossSize);
         _extents.SetExtent(index, mainExtent);
     }
 
     public float OffsetOf(int index, float crossSize)
     {
-        Ensure(Rows.Length, crossSize);
+        Ensure(_rows.Length, crossSize);
         return _extents.OffsetOf(index);
     }
 
     public int IndexAt(float offset, float crossSize)
     {
-        Ensure(Rows.Length, crossSize);
+        Ensure(_rows.Length, crossSize);
         return _extents.IndexAt(offset);
     }
 }

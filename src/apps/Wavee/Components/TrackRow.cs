@@ -101,6 +101,9 @@ internal static class TrackRow
     /// tie is broken DOWNWARD on purpose — the COMPACT density row is 40 DIPs tall (<see cref="RowHeightFor"/>), so a
     /// 40px thumb would fill it edge to edge with no breathing room at all.</summary>
     internal const float ThumbSize = WaveeSize.Thumb32;
+    /// <summary>The ♥ column. Sized to the 28 DIP like hit-target so the left cluster (# · ♥ · art) stays tight —
+    /// a wider lane used to read as empty gutter, worse on every unsaved row when the outline was hover-only.</summary>
+    internal const float HeartCol = 28f;
     internal const float CompactListItemExtent = ItemsView.ListItemExtent;
 
     // Track row height by density (0 Compact · 1 Default · 2 Cozy · 3 Comfortable).
@@ -715,17 +718,15 @@ internal static class TrackRow
     // `pop` (a caller-detected like EDGE, see LikeEdge) attaches the overshoot Enter to the keyed glyph for that ONE
     // render; any other render — recycling included — mounts the (possibly key-changed) glyph with Animate = null → snap.
     //
-    // SAVED IS A FACT, LIKING IS AN ACTION. A filled ♥ is visible AT REST whenever the track is saved — that is the whole
-    // question a listener asks while scanning a tracklist, and it must be answerable with no interaction at all. An
-    // UNSAVED heart is an action, so it stays hidden until row hover: the lane then costs nothing visually on the rows
-    // that have nothing to state. (Before this, album/playlist pages emitted no heart lane at all on the hero/vertical
-    // profile and dropped it early on the standard one, so "is this liked?" was simply unanswerable there.)
+    // Always painted at rest — filled when saved, outline when not. Saved-ness is a FACT the row owes the reader, and
+    // hiding the outline until hover left a 40-DIP dead gutter on every unsaved row (the common case). The outline is
+    // the like affordance sitting in a lane the table already reserved; it has to be there to click.
     internal static Element Heart(bool saved, Action? onLike, bool pop = false)
     {
-        var heart = new BoxEl
+        return new BoxEl
         {
-            Width = 28f, Height = 28f, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Corners = Radii.Circle(28f),
+            Width = HeartCol, Height = HeartCol, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            Corners = Radii.Circle(HeartCol),
             Cursor = onLike is null ? (CursorId?)null : CursorId.Hand, OnClick = onLike,
             // Its own affordance, not a handle for dragging the row (rows are Drag.Source): without this a press on the
             // heart arms the row drag and the like never fires. Same rule as MoreButton / the queue panel's row buttons.
@@ -740,16 +741,6 @@ internal static class TrackRow
                 },
             ],
         }.Interactive(Interaction.Subtle);
-        // The reveal rides a NON-INTERACTIVE wrapper, exactly like MoreButton. The heart itself owns a click, which makes
-        // it its own interaction scope — a boundary the hover cascade will not drive (backdrop-effects-animation.md §7:
-        // reveal crosses a boundary, control state never does). Put the HoverOpacity on the heart and it would only light
-        // from the pointer being on it, which is the one case where it is already visible.
-        return new BoxEl
-        {
-            Direction = 0, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Opacity = saved ? 1f : 0f, HoverOpacity = 1f,
-            Children = [heart],
-        };
     }
 
     // The trailing row "..." overflow button (Apple Music / Spotify): revealed on ROW hover — the same interactive-ancestor

@@ -79,6 +79,8 @@ sealed partial class SettingsPage
             SettingsSectionHeader(Loc.Get(Strings.Settings.Playback.AudioTitle), Icons.MusicNote),
             SettingsRow(Loc.Get(Strings.Settings.Playback.AudioQuality), Loc.Get(Strings.Settings.Playback.AudioSub),
                 QualityCombo(svc), Icons.MusicNote),
+            SettingsRow(Loc.Get(Strings.Settings.Playback.MeteredQuality), MeteredQualitySub(),
+                MeteredQualityCombo(svc), Icons.Globe),
             SettingsRow(Loc.Get(Strings.Settings.Playback.RememberVolume), Loc.Get(Strings.Settings.Playback.RememberVolumeSub),
                 Toggle(WaveeSettings.RememberVolume), Icons.Volume),
             SettingsRow(Loc.Get(Strings.Settings.Playback.Autoplay), Loc.Get(Strings.Settings.Playback.AutoplaySub),
@@ -314,6 +316,40 @@ sealed partial class SettingsPage
             {
                 if (settings is null || i < 0 || i > 2) return;
                 settings.Set(WaveeSettings.PlaybackQuality, i);
+                Bump();
+            });
+    }
+
+    static string MeteredQualitySub()
+    {
+        string sub = Loc.Get(Strings.Settings.Playback.MeteredQualitySub);
+        return NetworkPolicy.Metered.Value
+            ? sub + " · " + Loc.Get(Strings.Settings.Playback.MeteredHint)
+            : sub;
+    }
+
+    Element MeteredQualityCombo(Services? svc)
+    {
+        var settings = svc?.Settings;
+        string[] labels =
+        [
+            Loc.Get(Strings.Settings.Playback.QualityNormal),
+            Loc.Get(Strings.Settings.Playback.QualityHigh),
+            Loc.Get(Strings.Settings.Playback.QualityVeryHigh),
+        ];
+        string[] descriptions =
+        [
+            Loc.Get(Strings.Settings.Playback.QualityNormalSub),
+            Loc.Get(Strings.Settings.Playback.QualityHighSub),
+            Loc.Get(Strings.Settings.Playback.QualityVeryHighSub),
+        ];
+        return ComboBox.Create(labels, NetworkPolicy.MeteredQualityCap, width: 280f,
+            itemDescriptions: descriptions,
+            isEnabled: settings is not null,
+            onChange: i =>
+            {
+                if (settings is null || i < 0 || i > 2) return;
+                settings.Set(WaveeSettings.MeteredQualityCap, i);
                 Bump();
             });
     }

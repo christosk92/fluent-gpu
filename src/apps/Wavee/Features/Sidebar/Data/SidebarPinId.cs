@@ -48,6 +48,29 @@ public static class SidebarPinId
     /// case, so a pin made from the detail page and a pin made from a sidebar row are the SAME pin.</summary>
     public const string LikedSongsUri = "spotify:collection:tracks";
 
+    /// <summary>The one pin identity a store / menu / drop must use. Accepts a pin id, a bare entity uri, or a route
+    /// key and returns the canonical id — so a card drop that carried <c>spotify:playlist:…</c> and a menu that looks
+    /// up <c>pl:spotify:playlist:…</c> resolve to the SAME pin. Null = not pinnable.</summary>
+    public static string? Canonical(string? idOrUri)
+    {
+        if (string.IsNullOrEmpty(idOrUri)) return null;
+        if (KindOf(idOrUri) != SidebarPinKind.Route) return idOrUri;   // already a prefixed pin id
+        if (idOrUri.StartsWith("spotify:", StringComparison.Ordinal)
+            || idOrUri.StartsWith("wavee:", StringComparison.Ordinal))
+            return FromUri(idOrUri);                                   // an entity uri never becomes a route pin
+        return FromRoute(idOrUri);
+    }
+
+    /// <summary>The legacy raw-uri form a card/hero drop used to persist as <c>SidebarPin.Id</c> (the payload's uri,
+    /// not the pin id). Empty when the id is a route or folder. Used so <c>IsPinned</c>/<c>Unpin</c> still find those
+    /// rows until <c>LoadFrom</c> migrates them.</summary>
+    public static string LegacyUriAlias(string? pinId)
+    {
+        if (string.IsNullOrEmpty(pinId)) return "";
+        string uri = UriOf(pinId);
+        return uri.Length > 0 && !string.Equals(uri, pinId, StringComparison.Ordinal) ? uri : "";
+    }
+
     /// <summary>uri → pin id. Null = not pinnable. Tracks and episodes are NEVER pinnable (locked decision 4) and that is
     /// enforced HERE, in one function, rather than per menu.</summary>
     public static string? FromUri(string? uri) => uri switch

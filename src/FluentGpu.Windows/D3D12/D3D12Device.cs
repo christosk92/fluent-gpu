@@ -29,6 +29,8 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     private ID3D12Device* _device;
     private ID3D12CommandQueue* _queue;
     private IDXGIFactory4* _factory;
+    private IDXGIAdapter3* _adapter3;   // render-thread-owned; QueryVideoMemoryInfo only. UI reads GpuVideoMemorySnapshot.
+    private static long s_firstPresentQpc;   // QPC of the first successful Present (0 = none yet)
     private IDXGISwapChain3* _swapChain;
     private ID3D12DescriptorHeap* _rtvHeap;
     private uint _rtvSize;
@@ -360,6 +362,16 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
     /// <summary>Tracked live D3D12 resource totals (bytes + count) from <see cref="D3D12MemoryDiagnostics"/> — an O(1)
     /// read of the running tally for the MemCensus sampler.</summary>
     public (long bytes, int count) DiagResourceTotals => D3D12MemoryDiagnostics.LiveTotals();
+
+    /// <summary>Last render-thread <c>QueryVideoMemoryInfo</c> snapshot (numeric copy). UI timers read this; they must
+    /// not call DXGI. Empty until the first successful Present.</summary>
+    public GpuVideoMemorySnapshot VideoMemorySnapshot => D3D12MemoryDiagnostics.LastVideoMemory;
+
+    /// <summary>Process-global copy of <see cref="VideoMemorySnapshot"/> (one GPU device per process).</summary>
+    public static GpuVideoMemorySnapshot LastVideoMemory => D3D12MemoryDiagnostics.LastVideoMemory;
+
+    /// <summary>QPC timestamp of the first successful Present (0 = none yet). Startup probes subtract process start.</summary>
+    public static long FirstPresentQpc => s_firstPresentQpc;
 
     /// <summary>One-line GPU residency summary (glyph atlas + image texture store) for the MemCensus
     /// <c>GpuDetail</c> hook. Reads the stores' census accessors; null until the device is initialized. Tiny
@@ -3173,8 +3185,42 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             throw new InvalidOperationException($"Present failed: 0x{(uint)pr:X8}" + (reason != 0u ? $" (device removed reason 0x{reason:X8})" : ""));
         }
         if (_hintSettlePresent) { _hintSettlePresent = false; _ = DwmFlush(); }
+        if (s_firstPresentQpc == 0 && ReferenceEquals(target, _primarySwapchain))
+            s_firstPresentQpc = System.Diagnostics.Stopwatch.GetTimestamp();
+        PublishVideoMemorySnapshot();
         if (ReferenceEquals(target, _primarySwapchain)) SamplePresentStats();
         StoreActive();
+    }
+
+    void ReleaseAdapter3()
+    {
+        if (_adapter3 == null) return;
+        _adapter3->Release();
+        _adapter3 = null;
+    }
+
+    void EnsureAdapter3()
+    {
+        if (_adapter3 != null || _device == null || _factory == null) return;
+        LUID luid = _device->GetAdapterLuid();
+        IDXGIAdapter3* adapter = null;
+        if ((int)_factory->EnumAdapterByLuid(luid, __uuidof<IDXGIAdapter3>(), (void**)&adapter) >= 0 && adapter != null)
+            _adapter3 = adapter;
+    }
+
+    void PublishVideoMemorySnapshot()
+    {
+        EnsureAdapter3();
+        if (_adapter3 == null) return;
+        DXGI_QUERY_VIDEO_MEMORY_INFO local = default, nonLocal = default;
+        if ((int)_adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP.DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local) < 0) return;
+        _ = _adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP.DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal);
+        D3D12MemoryDiagnostics.PublishVideoMemory(
+            local.CurrentUsage, local.Budget,
+            nonLocal.CurrentUsage, nonLocal.Budget,
+            _imageTextures?.AtlasImageCount ?? 0,
+            _imageTextures?.AtlasPageCount ?? 0,
+            _glyphs?.CachedGlyphCount ?? 0);
     }
 
     // DXGI_STATUS_OCCLUDED — Present succeeded but the window is fully occluded (HWND flip-model). Not reliably returned
@@ -3701,6 +3747,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (_allocators[i] != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_allocators[i]); _allocators[i] = null; }
         if (_fence != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence); _fence = null; }
         if (_queue != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue); _queue = null; }
+        ReleaseAdapter3();
         if (_factory != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory); _factory = null; }
         if (_device != null) { global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device); _device = null; }
         if (_fenceEvent != HANDLE.NULL) { CloseHandle(_fenceEvent); _fenceEvent = HANDLE.NULL; }
@@ -3767,6 +3814,7 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             if (_allocators[i] != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_allocators[i]);
         if (_fence != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_fence);
         if (_queue != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_queue);
+        ReleaseAdapter3();
         if (_factory != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_factory);
         if (_device != null) global::FluentGpu.Interop.Generated.IUnknownVtbl.Release(_device);
         if (_fenceEvent != HANDLE.NULL) CloseHandle(_fenceEvent);

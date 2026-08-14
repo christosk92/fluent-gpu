@@ -149,6 +149,27 @@ headless PAL stays test-neutral and only the Win32 backend opts in. The producer
 `HKCU` scheme keys); `AppHost` subscribes next to the `OpenUri` wiring, stashes the payload, wakes a frame, and
 re-raises its own `AppHost.ActivationRedirected` to app code at the top of `Paint` (see input-a11y / hosting).
 
+`IPlatformApp` also exposes `event Action<int>? ThumbButtonClicked` — inbound clicks from the Windows 7+
+thumbnail toolbar (`ITaskbarList3.ThumbBarAddButtons`, produced outside the PAL by
+`FluentGpu.WindowsApi.Shell.TaskbarManager`). The payload is a plain `int` (the button's application-defined
+id) so the engine stays TerraFX-free. The Win32 backend raises it synchronously from `WM_COMMAND` when
+`HIWORD(wParam) == THBN_CLICKED (0x1800)`, carrying `LOWORD(wParam)`. The `WndProc` branch early-outs on any
+other `WM_COMMAND` (menus/accelerators) with no allocation. Same **UI-thread + stash/drain** discipline as
+`ActivationRedirected`: `AppHost` stashes the id, wakes a frame, and re-raises `AppHost.ThumbButtonClicked` at
+the top of `Paint`; `FluentApp.ThumbButtonClicked` relays it to app code. Default-interface-method; headless
+never fires.
+
+`IPlatformApp` also exposes `event Action? TaskbarButtonCreated` — explorer's registered
+`"TaskbarButtonCreated"` window message, broadcast when the window's taskbar button exists and again if
+explorer restarts. `ThumbBarAddButtons` is only legal after the button exists; a shell restart discards any
+previously added toolbar. The Win32 PAL registers the message once (`RegisterWindowMessageW`), allows it
+through UIPI (`ChangeWindowMessageFilterEx` / `MSGFLT_ALLOW`), and forwards it with the same stash/drain as
+`SystemColorsChanged`. **Known limitation:** the PAL does not itself re-add thumbnail buttons — callers must
+re-invoke `TaskbarManager.SetThumbButtons` (after `NotifyTaskbarButtonCreated` to reset the add-once latch)
+on this event. Calling `SetThumbButtons` after window show is the common-case first add; explorer-restart
+without a subscriber leaves the toolbar empty until the next explicit set. Default-interface-method; headless
+never fires.
+
 ### 1.2 Win32 reference impl (`FluentGpu.Windows` Pal/) — UI thread
 
 - **Window class:** `RegisterClassExW` once. Own redraw via DXGI/DComp, so `CS_HREDRAW|CS_VREDRAW`

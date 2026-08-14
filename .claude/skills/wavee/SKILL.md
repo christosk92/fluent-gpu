@@ -23,6 +23,8 @@ Read [wiring-discipline.md](wiring-discipline.md) before any seam/composition-ro
 ## Sub-skills
 
 - [wiring-discipline.md](wiring-discipline.md) — required deps, fail-loud stubs, go-live hooks
+- [home-layout.md](home-layout.md) — Home visibility + order (`home-layout.json`, reducer,
+  `HomeLandingProjection`, `HomeCustomizerPage`). Read before adding a landing module.
 - **`wavee-sidebar` skill** (`.claude/skills/wavee-sidebar/`) — the left sidebar: the three designs as documents
   over ONE `SidebarPane` renderer, the layout document/reducer/persistence, the projection→binder→planner
   pipeline, the customizer, and the extension registries. Read it before touching `Features/Sidebar/**`,

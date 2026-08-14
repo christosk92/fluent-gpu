@@ -214,6 +214,30 @@ public class PlayLogStoreTests : IDisposable
     }
 
     [Fact]
+    public void ContextTitle_RoundTripsAndSurfacesOnRecentContexts()
+    {
+        var store = Store();
+        Assert.True(store.Append("spotify:track:t1", "spotify:playlist:p1", Ms(0), "Summer Hits"));
+        store.SaveAndWait();
+
+        var reopened = Store();
+        Assert.Equal("Summer Hits", reopened.Entries[0].ContextTitle);
+        var row = Assert.Single(reopened.RecentContexts(8));
+        Assert.Equal("spotify:playlist:p1", row.Uri);
+        Assert.Equal("Summer Hits", row.Title);
+    }
+
+    [Fact]
+    public void LegacyFileWithoutTitle_LoadsWithNullTitle()
+    {
+        File.WriteAllText(_path,
+            "[{\"track\":\"spotify:track:t1\",\"context\":\"spotify:playlist:p1\",\"kind\":2,\"atMs\":1}]");
+        var store = Store();
+        Assert.Null(store.Entries[0].ContextTitle);
+        Assert.Null(Assert.Single(store.RecentContexts(8)).Title);
+    }
+
+    [Fact]
     public void PersistedFile_NeverExceedsTheRingCap()
     {
         var store = Store();

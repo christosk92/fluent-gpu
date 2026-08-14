@@ -331,6 +331,7 @@ sealed class SidebarPaneSlot : Component
         int baseDepth = treeNode ? Math.Max(0, row.Depth - treeDepth) : row.Depth;
 
         var snapshot = entry;   // an `in` parameter cannot be captured — copy the record struct for the lazy closures
+        string rowKey = row.Key;
         // Explicit locals, not inline conditionals: a lambda has no natural type, so a ternary against null would lean on
         // target typing inside an object initializer (the note SidebarSectionHeader already carries).
         Action? click = null;
@@ -338,7 +339,8 @@ sealed class SidebarPaneSlot : Component
         else if (route is { Length: > 0 } r) click = () => _o.Navigate(r, snapshot.Name);
 
         Func<ContextMenuModel?>? menu = null;
-        if (_o.Acts is { } acts) menu = () => Menus.SidebarEntry(acts, in snapshot);
+        if (_o.Acts is { } acts)
+            menu = () => Menus.SidebarEntry(acts, in snapshot, layoutExtras: NavExtras(section, index, item, rowKey));
 
         // A Reorderable installs its OWN drag source and position track; a second one is a documented stomp. A TRACK is
         // never a pin drag source at all (locked decision 4 is enforced by the KIND, not per surface).
@@ -421,10 +423,12 @@ sealed class SidebarPaneSlot : Component
 
         // Explicit locals, never a ternary against null: a lambda has no natural type in that position.
         Action activate = () => _o.ActivateFolder(folderId, snapshot.Name, index);
+        string rowKey = row.Key;
 
         Func<ContextMenuModel?>? menu = null;
         if (_o.Acts is { } acts)
-            menu = () => Menus.SidebarEntry(acts, in snapshot, activate, expanded);
+            menu = () => Menus.SidebarEntry(acts, in snapshot, activate, expanded,
+                layoutExtras: NavExtras(section, index, SidebarPaneText.ItemOf(section, rowKey), rowKey));
 
         bool reordering = _o.TryBandOf(index, out _);
         bool rootlistItem = section.Kind == SidebarSectionKind.PlaylistTree && !reordering;
@@ -536,7 +540,7 @@ sealed class SidebarPaneSlot : Component
             OnClick = () => _o.Navigate(key, null),
             Overflow = _o.Acts is not null && _o.MenuOverlay is not null,
             MenuOverlay = _o.MenuOverlay,
-            Menu = RouteMenu(item),
+            Menu = RouteMenu(section, item, index),
             Drag = drag,
             DropActive = drop is null ? null : () => _o.IsResourceDropActive(index),
             DropTarget = drop,
@@ -544,13 +548,14 @@ sealed class SidebarPaneSlot : Component
         return Indicator(SidebarEntityRow.Create(spec), selected, 0, height, key, section.Id);
     }
 
-    Func<ContextMenuModel?>? RouteMenu(SidebarItemSpec item)
+    Func<ContextMenuModel?>? RouteMenu(SidebarSectionSpec section, SidebarItemSpec item, int index)
     {
         if (_o.Acts is not { } acts) return null;
         string key = item.Key;
         var dest = ShellNav.Dest(key);
         var entry = SidebarLibraryEntry.ForRoute(key, dest.Title);
-        return () => Menus.SidebarEntry(acts, in entry);
+        var snapshot = item;
+        return () => Menus.SidebarEntry(acts, in entry, layoutExtras: NavExtras(section, index, snapshot, key));
     }
 
     /// <summary>A hand-placed TRACK (§C1.8.3): click PLAYS, it never navigates, and a hover/focus play glyph replaces the
@@ -578,7 +583,10 @@ sealed class SidebarPaneSlot : Component
             Playing = playing,
             PlayingAnimated = animated,
             Track = true,
+            Overflow = _o.MenuOverlay is not null && LayoutOnlyMenu(section, item, index, uri) is not null,
             OnClick = () => _o.Play(uri, asTrack: true),
+            MenuOverlay = _o.MenuOverlay,
+            Menu = LayoutOnlyMenu(section, item, index, uri),
         };
         return SidebarEntityRow.WithPlayTrackHint(SidebarEntityRow.Create(spec));
     }
@@ -589,7 +597,6 @@ sealed class SidebarPaneSlot : Component
     /// own sidebar look broken.</summary>
     Element ActionRow(SidebarSectionSpec section, SidebarItemSpec item, int index)
     {
-        _ = index;
         var binding = item.Action;
         var reg = _o.Registry;
         var acts = _o.Acts;
@@ -637,7 +644,10 @@ sealed class SidebarPaneSlot : Component
             Height = height,
             Leading = SidebarPaneIcon.Leading(item.IconOverride, icon, enabled),
             Gap = 12f,             // keep the bare-glyph rhythm even though the leading slot is authored
+            Overflow = _o.MenuOverlay is not null && LayoutOnlyMenu(section, item, index, item.Key) is not null,
             OnClick = click,
+            MenuOverlay = _o.MenuOverlay,
+            Menu = LayoutOnlyMenu(section, item, index, item.Key),
         };
         Element row = SidebarEntityRow.Create(spec);
         // grow: 1f — the tooltip wrapper is a flex ROW, so without it the DISABLED arm of this row (the only arm that
@@ -733,6 +743,7 @@ sealed class SidebarPaneSlot : Component
         var (playing, animated) = _o.RowPlayState(index);
         bool canPlay = resolved && section.Opts.PlayButton && uri.Length > 0 && entry.IsPlayable;
         var snapshot = entry;
+        string rowKey = row.Key;
 
         Action? activate = null;
         if (track) activate = () => _o.Play(uri, asTrack: true);
@@ -779,7 +790,8 @@ sealed class SidebarPaneSlot : Component
             Children = [.. children],
         };
         if (_o.Acts is { } acts && _o.MenuOverlay is { } svc && resolved)
-            card = card.WithContextMenu(svc, () => Menus.SidebarEntry(acts, in snapshot));
+            card = card.WithContextMenu(svc, () => Menus.SidebarEntry(acts, in snapshot,
+                layoutExtras: NavExtras(section, index, item, rowKey)));
         return card;
     }
 
@@ -1162,5 +1174,65 @@ sealed class SidebarPaneSlot : Component
     int PinSlot(string sectionId, int index)
         => _o.TryBandOf(index, out var band) && string.Equals(band.SectionId, sectionId, StringComparison.Ordinal)
             ? index - band.Start : -1;
+
+    /// <summary>A layout-only menu (action shortcuts, hand-placed tracks): no entity verbs, just the navbar extras.
+    /// Null when this row has nothing to move or remove, so a right-click opens nothing rather than an empty flyout.</summary>
+    Func<ContextMenuModel?>? LayoutOnlyMenu(SidebarSectionSpec section, SidebarItemSpec item, int index, string key)
+    {
+        if (NavExtras(section, index, item, key) is null) return null;
+        return () => Menus.WithLayoutExtras(null, NavExtras(section, index, item, key));
+    }
+
+    /// <summary>Move up / Move down / Remove for this row, or null when none apply. Built at menu-open time from the
+    /// live plan index (the slot recycles) so a pin mutation between render and right-click cannot offer a dead move.
+    ///
+    /// <para>Pinned rows do not get a Remove extra: Unpin already lives in the pin-state slot of the entity menu, and
+    /// duplicating it as a trailing destructive would show the same verb twice. Authored items (StaticLinks /
+    /// CustomGroup / Shortcuts) get Remove through <see cref="SidebarItemCommands"/>, which is also how a missing-entity
+    /// row already drops itself.</para></summary>
+    IReadOnlyList<MenuFlyoutItem>? NavExtras(SidebarSectionSpec section, int planIndex, SidebarItemSpec? item, string key)
+    {
+        int at = -1, count = 0;
+        if (_o.TryBandOf(planIndex, out var band) && string.Equals(band.SectionId, section.Id, StringComparison.Ordinal))
+        {
+            at = planIndex - band.Start;
+            count = band.Count;
+        }
+        else if (section.Kind == SidebarSectionKind.Pinned && _o.Prefs is { } prefs)
+        {
+            // The reorder band disarms while a pinned folder is expanded (slot math would move the wrong pin). Explicit
+            // Move up/down still address the pin store, matching the section-card menu's P6 rule.
+            string id = SidebarPinId.Canonical(key) ?? key;
+            at = prefs.Pins.IndexOf(id);
+            count = prefs.Pins.Count;
+        }
+
+        bool removable = !_o.Config.ReadOnly
+            && item is { Id.Length: > 0 }
+            && section.Kind != SidebarSectionKind.Pinned
+            && SidebarSectionKinds.AcceptsItems(section.Kind);
+
+        var layout = SidebarNavLayout.Decide(at, count, removable);
+        if (layout.IsEmpty) return null;
+
+        var rows = new List<MenuFlyoutItem>(3);
+        string sectionId = section.Id;
+        if (layout.MoveUp)
+            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveUp),
+                new IconRef { Glyph = Icons.ChevronUp, Font = Theme.IconFont }, true,
+                () => _o.MoveRowByKey(sectionId, key, -1)));
+        if (layout.MoveDown)
+            rows.Add(new MenuFlyoutItem(Loc.Get(Strings.Menu.MoveDown),
+                new IconRef { Glyph = Icons.ChevronDown, Font = Theme.IconFont }, true,
+                () => _o.MoveRowByKey(sectionId, key, 1)));
+        if (layout.Remove)
+        {
+            string itemId = item!.Id;
+            rows.Add(new MenuFlyoutItem(Loc.Get(SidebarPaneLoc.ItemRemove),
+                ActionIcons.Resolve(ActionIcons.Remove), true,
+                () => _o.Dispatch(SidebarItemCommands.Remove(sectionId, itemId))));
+        }
+        return rows;
+    }
 
 }

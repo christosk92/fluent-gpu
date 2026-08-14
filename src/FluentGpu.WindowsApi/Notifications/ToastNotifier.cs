@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.Versioning;
 using System.Threading;
 using FluentGpu.WindowsApi.Packaging;
+using TerraFX.Interop.Windows; // Pointer<T> (GetScheduledToastNotifications generic)
 using TerraFX.Interop.WinRT;
 using static TerraFX.Interop.WinRT.WinRT;
 using static TerraFX.Interop.Windows.Windows;
@@ -61,6 +63,8 @@ public sealed unsafe class ToastNotifier : IDisposable
     private const string RuntimeClass_XmlDocument = "Windows.Data.Xml.Dom.XmlDocument";
     private const string RuntimeClass_ToastNotification = "Windows.UI.Notifications.ToastNotification";
     private const string RuntimeClass_ToastNotificationManager = "Windows.UI.Notifications.ToastNotificationManager";
+    private const string RuntimeClass_NotificationData = "Windows.UI.Notifications.NotificationData";
+    private const string RuntimeClass_ScheduledToastNotification = "Windows.UI.Notifications.ScheduledToastNotification";
 
     // Benign RoInitialize results (already initialized / changed apartment mode) — gate on FAILED, not != S_OK.
     private const int S_FALSE = 1;
@@ -79,6 +83,11 @@ public sealed unsafe class ToastNotifier : IDisposable
     private IToastNotifier* _notifier;
     private IToastNotificationManagerStatics2* _managerStatics2; // history accessor (RemoveByTag/RemoveGroup/Clear)
     private IToastNotificationHistory* _history;
+    private IScheduledToastNotificationFactory* _scheduledFactory;
+
+    // Monotonic NotificationData sequence per (tag, group). The OS drops an update whose sequence is ≤ the last
+    // applied one; we increment under _gate so callers of Update never have to thread a counter.
+    private readonly Dictionary<string, uint> _updateSequence = new(StringComparer.Ordinal);
 
     // The activator (implement side): the singleton callback + its class-object registration.
     private ToastActivatorCallback? _callback;
@@ -179,6 +188,7 @@ public sealed unsafe class ToastNotifier : IDisposable
 
             _registered = false;
             _aumid = string.Empty;
+            _updateSequence.Clear();
         }
     }
 
@@ -217,28 +227,9 @@ public sealed unsafe class ToastNotifier : IDisposable
 
             EnsureRoInitialized();
 
-            // ── Build the XmlDocument and LoadXml the payload (XmlDocument is activatable → RoActivateInstance). ──
-            IXmlDocument* xmlDoc = null;
-            IInspectable* inspectable = null;
-            IXmlDocumentIO* xmlIo = null;
+            IXmlDocument* xmlDoc = LoadToastXml(toastXml);
             try
             {
-                using (var hsClass = new HStringHandle(RuntimeClass_XmlDocument))
-                {
-                    int hr = RoActivateInstance(hsClass.Value, &inspectable);
-                    ThrowIfFailed(hr, "RoActivateInstance(XmlDocument)");
-                }
-
-                Guid iidXmlIo = __uuidof<IXmlDocumentIO>();
-                ThrowIfFailed(inspectable->QueryInterface(&iidXmlIo, (void**)&xmlIo), "QI IXmlDocumentIO");
-
-                Guid iidXmlDoc = __uuidof<IXmlDocument>();
-                ThrowIfFailed(inspectable->QueryInterface(&iidXmlDoc, (void**)&xmlDoc), "QI IXmlDocument");
-
-                using (var hsPayload = new HStringHandle(toastXml))
-                    ThrowIfFailed(xmlIo->LoadXml(hsPayload.Value), "IXmlDocumentIO.LoadXml");
-
-                // ── Create the IToastNotification from the cached factory, then Show via the cached notifier. ──
                 EnsureToastFactory();
                 IToastNotification* toast = null;
                 ThrowIfFailed(_toastFactory->CreateToastNotification(xmlDoc, &toast), "CreateToastNotification");
@@ -258,9 +249,7 @@ public sealed unsafe class ToastNotifier : IDisposable
             }
             finally
             {
-                if (xmlIo != null) xmlIo->Release();
                 if (xmlDoc != null) xmlDoc->Release();
-                if (inspectable != null) inspectable->Release();
             }
         }
     }
@@ -332,6 +321,189 @@ public sealed unsafe class ToastNotifier : IDisposable
         }
     }
 
+    /// <summary>
+    /// Replace the data-bound placeholders of a live toast in place (<c>IToastNotifier2.UpdateWithTag</c> /
+    /// <c>UpdateWithTagAndGroup</c>) without re-showing it. Keys match the placeholders
+    /// <see cref="ToastBuilder.Progress"/> emits when <c>dataBound: true</c> (e.g. <c>progressValue</c>,
+    /// <c>progressStatus</c>). Sequence numbers increment automatically per tag/group so out-of-order updates are
+    /// dropped by the OS rather than flashing backwards. Same registration requirement as <see cref="Show(string,string?,string?)"/>.
+    /// </summary>
+    /// <param name="values">Placeholder name → replacement text. Null values are skipped; an empty map still bumps
+    /// the sequence (a no-op visual update that keeps the counter honest).</param>
+    /// <param name="tag">The tag the toast was shown with. Required — live update is tag-keyed.</param>
+    /// <param name="group">The group the toast was shown with, or <see langword="null"/> to use the tag-only path.</param>
+    /// <returns>The WinRT <c>NotificationUpdateResult</c> tri-state. An expired/dismissed toast is
+    /// <see cref="ToastUpdateResult.NotificationNotFound"/>, not an exception.</returns>
+    /// <exception cref="InvalidOperationException"><see cref="Register"/> was not called, or a WinRT step failed.</exception>
+    public ToastUpdateResult Update(IReadOnlyDictionary<string, string> values, string tag, string? group = null)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+
+        lock (_gate)
+        {
+            if (!_registered)
+                throw new InvalidOperationException("Call Register(activatorClsid) before Update.");
+
+            EnsureRoInitialized();
+            EnsureNotifier();
+
+            INotificationData* data = CreateNotificationData(values, NextSequence(tag, group));
+            IToastNotifier2* notifier2 = null;
+            try
+            {
+                Guid iid = __uuidof<IToastNotifier2>();
+                ThrowIfFailed(_notifier->QueryInterface(&iid, (void**)&notifier2), "QI IToastNotifier2");
+
+                NotificationUpdateResult native;
+                int hr;
+                using var hsTag = new HStringHandle(tag);
+                if (string.IsNullOrEmpty(group))
+                {
+                    hr = notifier2->UpdateWithTag(data, hsTag.Value, &native);
+                }
+                else
+                {
+                    using var hsGroup = new HStringHandle(group);
+                    hr = notifier2->UpdateWithTagAndGroup(data, hsTag.Value, hsGroup.Value, &native);
+                }
+                if (hr < 0)
+                    return ToastUpdateResult.Failed;
+                return (ToastUpdateResult)(int)native;
+            }
+            finally
+            {
+                if (notifier2 != null) notifier2->Release();
+                if (data != null) data->Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Schedule a toast for OS delivery at <paramref name="deliveryTime"/>. The process does NOT need to be running
+    /// when the time arrives — the Shell posts the toast from the scheduled payload. Same registration requirement as
+    /// <see cref="Show(ToastBuilder)"/>; returns the <c>AddToSchedule</c> HRESULT-as-bool (a past delivery time, or a
+    /// suppressed AUMID, yields <see langword="false"/> rather than throwing). Tag/group are applied via
+    /// <c>IScheduledToastNotification2</c> so <see cref="Unschedule"/> can find the entry.
+    /// </summary>
+    /// <param name="toast">The builder (XML + carried tag/group). <paramref name="tag"/> wins over the builder's tag.</param>
+    /// <param name="deliveryTime">UTC instant the Shell should show the toast. Must be in the future.</param>
+    /// <param name="tag">Identity for later <see cref="Unschedule"/> / replace. Required.</param>
+    /// <param name="group">Optional group identity, paired with <paramref name="tag"/>.</param>
+    public bool Schedule(ToastBuilder toast, DateTimeOffset deliveryTime, string tag, string? group = null)
+    {
+        ArgumentNullException.ThrowIfNull(toast);
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+        return Schedule(toast.BuildXml(), deliveryTime, tag, group ?? toast.GroupValue);
+    }
+
+    /// <summary>Schedule a toast from its XML payload. See <see cref="Schedule(ToastBuilder, DateTimeOffset, string, string?)"/>.</summary>
+    public bool Schedule(string toastXml, DateTimeOffset deliveryTime, string tag, string? group = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(toastXml);
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+
+        lock (_gate)
+        {
+            if (!_registered)
+                throw new InvalidOperationException("Call Register(activatorClsid) before Schedule.");
+
+            EnsureRoInitialized();
+            EnsureNotifier();
+            EnsureScheduledFactory();
+
+            IXmlDocument* xmlDoc = LoadToastXml(toastXml);
+            IScheduledToastNotification* scheduled = null;
+            try
+            {
+                WinRTDateTime nativeTime;
+                nativeTime.UniversalTime = deliveryTime.UtcDateTime.ToFileTimeUtc();
+                ThrowIfFailed(
+                    _scheduledFactory->CreateScheduledToastNotification(xmlDoc, nativeTime, &scheduled),
+                    "CreateScheduledToastNotification");
+
+                ApplyScheduledTagGroup(scheduled, tag, group);
+                int hr = _notifier->AddToSchedule(scheduled);
+                return hr >= 0;
+            }
+            finally
+            {
+                if (scheduled != null) scheduled->Release();
+                if (xmlDoc != null) xmlDoc->Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Remove every scheduled toast whose tag (and optional group) matches. A no-op when not registered or when nothing
+    /// matches — same shape as <see cref="RemoveByTag"/>. Delivery of an already-queued toast that has passed its
+    /// time is the OS's; this only affects still-pending entries.
+    /// </summary>
+    public void Unschedule(string tag, string? group = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(tag);
+        lock (_gate)
+        {
+            if (!_registered) return;
+            EnsureRoInitialized();
+            EnsureNotifier();
+
+            IScheduledToastView* view = null;
+            if (!TryGetScheduledView(&view) || view == null)
+                return;
+            try
+            {
+                uint size = 0;
+                if (view->get_Size(&size) < 0 || size == 0)
+                    return;
+                for (uint i = 0; i < size; i++)
+                {
+                    IScheduledToastNotification* item = null;
+                    if (view->GetAt(i, &item) < 0 || item == null)
+                        continue;
+                    try
+                    {
+                        if (ScheduledMatches(item, tag, group))
+                            _notifier->RemoveFromSchedule(item);
+                    }
+                    finally { item->Release(); }
+                }
+            }
+            finally { view->Release(); }
+        }
+    }
+
+    /// <summary>
+    /// Count of still-pending scheduled toasts for this AUMID (<c>IToastNotifier.GetScheduledToastNotifications</c>).
+    /// Returns 0 when not registered or the read fails. Call on launch to reconcile: the OS keeps the schedule across
+    /// process lifetimes, so a stale queue from a previous run is still there.
+    /// </summary>
+    public int CountScheduled()
+    {
+        lock (_gate)
+        {
+            if (!_registered) return 0;
+            try
+            {
+                EnsureRoInitialized();
+                EnsureNotifier();
+                IScheduledToastView* view = null;
+                if (!TryGetScheduledView(&view) || view == null)
+                    return 0;
+                try
+                {
+                    uint size = 0;
+                    return view->get_Size(&size) >= 0 ? (int)size : 0;
+                }
+                finally { view->Release(); }
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+    }
+
     /// <summary>Clear this app's entire toast history (banners + Action Center entries).</summary>
     public void ClearHistory()
     {
@@ -373,6 +545,170 @@ public sealed unsafe class ToastNotifier : IDisposable
         {
             if (!string.IsNullOrEmpty(tag)) { using var h = new HStringHandle(tag); ThrowIfFailed(t2->put_Tag(h.Value), "put_Tag"); }
             if (!string.IsNullOrEmpty(group)) { using var h = new HStringHandle(group); ThrowIfFailed(t2->put_Group(h.Value), "put_Group"); }
+        }
+        finally { t2->Release(); }
+    }
+
+    /// <summary>Set tag (and group) on a scheduled toast via <c>IScheduledToastNotification2</c>.</summary>
+    private static void ApplyScheduledTagGroup(IScheduledToastNotification* toast, string tag, string? group)
+    {
+        IScheduledToastNotification2* t2 = null;
+        Guid iid = __uuidof<IScheduledToastNotification2>();
+        if (toast->QueryInterface(&iid, (void**)&t2) < 0 || t2 == null) return;
+        try
+        {
+            using var hsTag = new HStringHandle(tag);
+            ThrowIfFailed(t2->put_Tag(hsTag.Value), "IScheduledToastNotification2.put_Tag");
+            if (!string.IsNullOrEmpty(group))
+            {
+                using var hsGroup = new HStringHandle(group);
+                ThrowIfFailed(t2->put_Group(hsGroup.Value), "IScheduledToastNotification2.put_Group");
+            }
+        }
+        finally { t2->Release(); }
+    }
+
+    /// <summary><c>RoActivateInstance(XmlDocument)</c> + <c>LoadXml</c>. Caller Releases the returned document.</summary>
+    private static IXmlDocument* LoadToastXml(string toastXml)
+    {
+        IXmlDocument* xmlDoc = null;
+        IInspectable* inspectable = null;
+        IXmlDocumentIO* xmlIo = null;
+        try
+        {
+            using (var hsClass = new HStringHandle(RuntimeClass_XmlDocument))
+                ThrowIfFailed(RoActivateInstance(hsClass.Value, &inspectable), "RoActivateInstance(XmlDocument)");
+
+            Guid iidXmlIo = __uuidof<IXmlDocumentIO>();
+            ThrowIfFailed(inspectable->QueryInterface(&iidXmlIo, (void**)&xmlIo), "QI IXmlDocumentIO");
+            Guid iidXmlDoc = __uuidof<IXmlDocument>();
+            ThrowIfFailed(inspectable->QueryInterface(&iidXmlDoc, (void**)&xmlDoc), "QI IXmlDocument");
+
+            using (var hsPayload = new HStringHandle(toastXml))
+                ThrowIfFailed(xmlIo->LoadXml(hsPayload.Value), "IXmlDocumentIO.LoadXml");
+            return xmlDoc;
+        }
+        catch
+        {
+            if (xmlDoc != null) xmlDoc->Release();
+            throw;
+        }
+        finally
+        {
+            if (xmlIo != null) xmlIo->Release();
+            if (inspectable != null) inspectable->Release();
+        }
+    }
+
+    /// <summary>
+    /// <c>RoActivateInstance(NotificationData)</c> (default ctor) → fill <c>Values</c> via the hand-rolled
+    /// <see cref="IStringMap"/> (call-OUT Insert) → <c>put_SequenceNumber</c>. Caller Releases the returned data.
+    /// </summary>
+    private static INotificationData* CreateNotificationData(IReadOnlyDictionary<string, string> values, uint sequence)
+    {
+        IInspectable* inspectable = null;
+        INotificationData* data = null;
+        try
+        {
+            using (var hsClass = new HStringHandle(RuntimeClass_NotificationData))
+                ThrowIfFailed(RoActivateInstance(hsClass.Value, &inspectable), "RoActivateInstance(NotificationData)");
+
+            Guid iid = __uuidof<INotificationData>();
+            ThrowIfFailed(inspectable->QueryInterface(&iid, (void**)&data), "QI INotificationData");
+
+            IMap<HSTRING, HSTRING>* map = null;
+            ThrowIfFailed(data->get_Values(&map), "INotificationData.get_Values");
+            try
+            {
+                var smap = (IStringMap*)map;
+                foreach (KeyValuePair<string, string> kv in values)
+                {
+                    using var hsK = new HStringHandle(kv.Key);
+                    using var hsV = new HStringHandle(kv.Value ?? string.Empty);
+                    byte replaced = 0;
+                    ThrowIfFailed(smap->Insert(hsK.Value, hsV.Value, &replaced), "IMap.Insert");
+                }
+            }
+            finally
+            {
+                if (map != null) ((IStringMap*)map)->Release();
+            }
+
+            ThrowIfFailed(data->put_SequenceNumber(sequence), "INotificationData.put_SequenceNumber");
+            return data;
+        }
+        catch
+        {
+            if (data != null) data->Release();
+            throw;
+        }
+        finally
+        {
+            if (inspectable != null) inspectable->Release();
+        }
+    }
+
+    private uint NextSequence(string tag, string? group)
+    {
+        string key = string.IsNullOrEmpty(group) ? tag : tag + "\n" + group;
+        _updateSequence.TryGetValue(key, out uint n);
+        n++;
+        _updateSequence[key] = n;
+        return n;
+    }
+
+    private void EnsureScheduledFactory()
+    {
+        if (_scheduledFactory != null)
+            return;
+        IScheduledToastNotificationFactory* factory = null;
+        using var hsClass = new HStringHandle(RuntimeClass_ScheduledToastNotification);
+        Guid iid = __uuidof<IScheduledToastNotificationFactory>();
+        ThrowIfFailed(RoGetActivationFactory(hsClass.Value, &iid, (void**)&factory),
+            "RoGetActivationFactory(ScheduledToastNotification)");
+        _scheduledFactory = factory;
+    }
+
+    private bool TryGetScheduledView(IScheduledToastView** view)
+    {
+        *view = null;
+        IVectorView<Pointer<IScheduledToastNotification>>* native = null;
+        int hr = _notifier->GetScheduledToastNotifications(&native);
+        if (hr < 0 || native == null)
+            return false;
+        *view = (IScheduledToastView*)native;
+        return true;
+    }
+
+    private static bool ScheduledMatches(IScheduledToastNotification* toast, string tag, string? group)
+    {
+        IScheduledToastNotification2* t2 = null;
+        Guid iid = __uuidof<IScheduledToastNotification2>();
+        if (toast->QueryInterface(&iid, (void**)&t2) < 0 || t2 == null)
+            return false;
+        try
+        {
+            HSTRING hsTag = default;
+            if (t2->get_Tag(&hsTag) < 0)
+                return false;
+            try
+            {
+                if (!string.Equals(HStringHandle.ToManaged(hsTag), tag, StringComparison.Ordinal))
+                    return false;
+            }
+            finally { WindowsDeleteString(hsTag); }
+
+            HSTRING hsGroup = default;
+            if (t2->get_Group(&hsGroup) < 0)
+                return string.IsNullOrEmpty(group);
+            try
+            {
+                string g = HStringHandle.ToManaged(hsGroup);
+                return string.IsNullOrEmpty(group)
+                    ? string.IsNullOrEmpty(g)
+                    : string.Equals(g, group, StringComparison.Ordinal);
+            }
+            finally { WindowsDeleteString(hsGroup); }
         }
         finally { t2->Release(); }
     }
@@ -443,6 +779,7 @@ public sealed unsafe class ToastNotifier : IDisposable
         // Release derived/QI'd pointers before their parents (reverse acquisition order).
         if (_history != null) { _history->Release(); _history = null; }
         if (_managerStatics2 != null) { _managerStatics2->Release(); _managerStatics2 = null; }
+        if (_scheduledFactory != null) { _scheduledFactory->Release(); _scheduledFactory = null; }
         if (_notifier != null) { _notifier->Release(); _notifier = null; }
         if (_managerStatics != null) { _managerStatics->Release(); _managerStatics = null; }
         if (_toastFactory != null) { _toastFactory->Release(); _toastFactory = null; }

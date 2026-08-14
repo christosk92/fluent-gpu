@@ -112,6 +112,20 @@ public class MenuGrammarTests
         Assert.Contains("Strings.Menu.PlayNow", queue, StringComparison.Ordinal);       // …and the queue-only verb
     }
 
+    /// <summary>The sidebar row menu takes the same extras slot the queue uses (Move up / Move down / Remove), inserted
+    /// after the entity verbs and before a trailing destructive block — drag is never the only way to reorder.</summary>
+    [Fact]
+    public void SidebarEntryMenu_TakesLayoutExtras()
+    {
+        string entry = Body(Menus(), "public static ContextMenuModel? SidebarEntry");
+        Assert.Contains("layoutExtras", entry, StringComparison.Ordinal);
+        Assert.Contains("WithLayoutExtras", entry, StringComparison.Ordinal);
+
+        string extras = Body(Menus(), "public static ContextMenuModel? WithLayoutExtras");
+        Assert.Contains("MenuFlyoutItem.Separator", extras, StringComparison.Ordinal);
+        Assert.Contains("rows[^2].IsSeparator", extras, StringComparison.Ordinal);
+    }
+
     /// <summary>The sidebar's feed TRACK row: rows-only, but the same core set (transport rows + the track rows).</summary>
     [Fact]
     public void SidebarTrackMenu_ReusesTheTrackGrammar()
@@ -183,7 +197,7 @@ public class MenuGrammarTests
                      "ContainerActions.PlayContext", "ContainerActions.PlayContextNext",
                      "ContainerActions.AddContextToQueue", "ContainerActions.SaveContext",
                      "ContainerAddToPlaylistItem(in ctx)", "ContainerActions.OpenItem",
-                     "PinActions.Row(in ctx)", "ShareItem(in ctx)",
+                     "PinActions.RowForId", "ShareItem(in ctx)",
                  })
             Assert.Contains(verb, rows, StringComparison.Ordinal);
 
@@ -191,6 +205,18 @@ public class MenuGrammarTests
         Assert.True(rows.IndexOf("ContainerActions.DeletePlaylist", StringComparison.Ordinal)
                     > rows.IndexOf("ShareItem(in ctx)", StringComparison.Ordinal),
             "Delete playlist stays destructive-last");
+    }
+
+    /// <summary>Every sidebar entity menu (projected row, folder, route, embed card) passes the pane's layout extras
+    /// through the same <c>SidebarEntry</c> extras slot — a row that can move by drag can also move from the menu.</summary>
+    [Fact]
+    public void SidebarPaneSlot_WiresLayoutExtrasOntoEveryEntityMenu()
+    {
+        string slot = File.ReadAllText(Path.Combine(AppRoot(), "Features", "Sidebar", "Pane", "SidebarPaneSlot.cs"));
+        Assert.Contains("layoutExtras: NavExtras", slot, StringComparison.Ordinal);
+        Assert.Contains("MoveRowByKey", slot, StringComparison.Ordinal);
+        Assert.Contains("Strings.Menu.MoveUp", slot, StringComparison.Ordinal);
+        Assert.Contains("SidebarPaneLoc.ItemRemove", slot, StringComparison.Ordinal);
     }
 
     /// <summary>The container track-set verbs resolve through the ONE seam drag &amp; drop deposits with — never a

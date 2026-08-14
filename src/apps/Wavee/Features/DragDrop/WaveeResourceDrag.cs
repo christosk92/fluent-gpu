@@ -114,7 +114,7 @@ sealed record WaveeResourceDragPayload(
     /// a card never knows it on its own, and claiming it falsely would offer a folder a move it cannot perform.</summary>
     public static WaveeResourceDragPayload ForEntity(WaveeResourceKind kind, string uri, string name,
                                                      Image? cover, ActionServices? acts, string? artUrl = null)
-        => new(kind, uri, uri, name,
+        => new(kind, SidebarPinId.Canonical(uri) ?? uri, uri, name,
                TrackResolver: ResolverFor(kind, uri, acts?.Svc),
                RootlistItem: WaveeRootlist.IsMember(acts, kind, uri),
                ArtUrl: artUrl ?? WaveeDragChipModel.ArtOf(cover));

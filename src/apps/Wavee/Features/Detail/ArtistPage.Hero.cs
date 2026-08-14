@@ -76,11 +76,18 @@ sealed partial class ArtistPage : Component
                 Width = MathF.Min(metrics.CopyMaxWidth, MathF.Max(1f, width - 2f * metrics.Gutter)),
                 MaxWidth = metrics.CopyMaxWidth,
                 MinWidth = 0f,
-                Gap = Spacing.M,
+                Gap = Spacing.S,
                 Enter = new EnterExit(Dy: Spacing.M, Opacity: 0f, Active: true),
                 Transition = MotionTok.EmphasizedEnter,
-                Children = [verified, name, bio, HeroMeta(a, metrics.Stacked),
-                            HeroActions(a, uri, play, shuffle, radio, metrics.Tier)],
+                Children =
+                [
+                    new BoxEl
+                    {
+                        Direction = 1, Gap = Spacing.S, MinWidth = 0f,
+                        Children = [verified, name, bio, HeroMeta(a, metrics.Stacked)],
+                    },
+                    HeroActions(a, uri, play, shuffle, radio, metrics.Tier),
+                ],
             };
         }
 
@@ -217,12 +224,12 @@ sealed partial class ArtistPage : Component
             SkeletonProxy = FollowButton.SkeletonShape,
         };
 
-        Element shuffleButton = tier is ArtistHeroTier.Wide or ArtistHeroTier.Medium
-            ? Button.Create(Loc.Get(Strings.Detail.Shuffle), shuffle, ButtonAppearance.Subtle, glyph: Icons.Shuffle)
-            : ToolTip.Wrap(IconButton.Create(Icons.Shuffle, shuffle), Loc.Get(Strings.Detail.Shuffle));
-        Element radioButton = tier is ArtistHeroTier.Wide or ArtistHeroTier.Medium
-            ? Button.Create(Loc.Get(Strings.Artist.ArtistRadio), radio, ButtonAppearance.Subtle, glyph: Icons.RadioTower)
-            : ToolTip.Wrap(IconButton.Create(Icons.RadioTower, radio), Loc.Get(Strings.Artist.ArtistRadio));
+        // Icon-only 36 circles — the labeled stock Button.Create arms were a second, larger grammar beside the
+        // Play / Follow capsules and made the row read as oversized (user report: "buttons are bigged").
+        Element shuffleButton = ToolTip.Wrap(
+            WaveeCta.Icon(Icons.Shuffle, shuffle, ButtonAppearance.Subtle), Loc.Get(Strings.Detail.Shuffle));
+        Element radioButton = ToolTip.Wrap(
+            WaveeCta.Icon(Icons.RadioTower, radio, ButtonAppearance.Subtle), Loc.Get(Strings.Artist.ArtistRadio));
 
         if (tier == ArtistHeroTier.Narrow)
         {
@@ -256,13 +263,17 @@ sealed partial class ArtistPage : Component
             ? Ui.Body(Count(a.Followers) + " " + Loc.Get(Strings.Artist.MetaFollowers)) with { Color = Tok.TextSecondary }
             : new BoxEl();
 
+        var kids = new System.Collections.Generic.List<Element>(3);
+        if (a.WorldRank > 0) kids.Add(rank);
+        if (a.MonthlyListeners > 0) kids.Add(listeners);
+        if (a.Followers > 0) kids.Add(followers);
         return new BoxEl
         {
             Direction = (byte)(stacked ? 1 : 0),
             AlignItems = stacked ? FlexAlign.Start : FlexAlign.Center,
             Gap = stacked ? Spacing.XS : Spacing.L,
             MinWidth = 0f,
-            Children = [rank, listeners, followers],
+            Children = kids.ToArray(),
         };
     }
 

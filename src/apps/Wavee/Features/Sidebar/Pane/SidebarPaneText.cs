@@ -160,6 +160,9 @@ static class SidebarPaneLoc
     public const string NewReleasesEmpty = "sidebar.newReleases.empty";
     public const string MissingEntity = "sidebar.customizer.missingEntity";
     public const string RemoveItem = "sidebar.customizer.undo.removeItem";
+    /// <summary>The row menu's Remove — the same word the customizer's item list already uses, so a shortcut removed
+    /// from the pane and one removed from the inspector cannot disagree in translation.</summary>
+    public const string ItemRemove = "sidebar.customizer.itemRemove";
     public const string PaneEmpty = "sidebar.customizer.empty";
     public const string PaneEmptySub = "sidebar.customizer.emptySub";
     /// <summary>R3.1.6: the generic empty line ("Nothing here yet"), replacing the borrowed

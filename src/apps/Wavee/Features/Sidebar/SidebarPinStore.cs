@@ -42,18 +42,30 @@ public sealed class SidebarPinStore : IReadOnlyList<SidebarPin>
     public int Count => _items.Count;
     public SidebarPin this[int i] => _items[i];
 
-    public bool IsPinned(string? pinId) => pinId is not null && _index.ContainsKey(pinId);
+    public bool IsPinned(string? pinId) => IndexOf(pinId) >= 0;
 
-    /// <summary>Position of a pin, or -1. Ordinal identity — never a value comparison over Name/Uri.</summary>
-    public int IndexOf(string? pinId) => pinId is not null && _index.TryGetValue(pinId, out int i) ? i : -1;
+    /// <summary>Position of a pin, or -1. Ordinal identity, plus the raw-uri alias a card drop used to persist
+    /// (<c>spotify:playlist:…</c> vs <c>pl:spotify:playlist:…</c>) so a menu looking up the canonical id still finds
+    /// the row.</summary>
+    public int IndexOf(string? pinId)
+    {
+        if (string.IsNullOrEmpty(pinId)) return -1;
+        if (_index.TryGetValue(pinId, out int i)) return i;
+        string? canon = SidebarPinId.Canonical(pinId);
+        if (canon is not null && _index.TryGetValue(canon, out i)) return i;
+        string alias = SidebarPinId.LegacyUriAlias(canon ?? pinId);
+        return alias.Length > 0 && _index.TryGetValue(alias, out i) ? i : -1;
+    }
 
     /// <summary>Append a pin. Returns false when already pinned (idempotent — the menu shows Unpin in that state) and
-    /// keeps the original position, so a double invoke can never reorder the list. UNLIMITED by decision 4.</summary>
+    /// keeps the original position, so a double invoke can never reorder the list. UNLIMITED by decision 4.
+    /// The id is canonicalized on the way in so a raw entity uri and a prefixed pin id cannot coexist.</summary>
     public bool Pin(SidebarPin pin)
     {
-        if (string.IsNullOrEmpty(pin.Id) || _index.ContainsKey(pin.Id)) return false;
-        _index[pin.Id] = _items.Count;
-        _items.Add(pin);
+        var stored = Canonicalize(pin);
+        if (string.IsNullOrEmpty(stored.Id) || IndexOf(stored.Id) >= 0) return false;
+        _index[stored.Id] = _items.Count;
+        _items.Add(stored);
         Bump();
         return true;
     }
@@ -63,9 +75,10 @@ public sealed class SidebarPinStore : IReadOnlyList<SidebarPin>
     /// land somewhere sane. Returns false when already pinned.</summary>
     public bool Insert(SidebarPin pin, int index)
     {
-        if (string.IsNullOrEmpty(pin.Id) || _index.ContainsKey(pin.Id)) return false;
+        var stored = Canonicalize(pin);
+        if (string.IsNullOrEmpty(stored.Id) || IndexOf(stored.Id) >= 0) return false;
         int at = index < 0 ? 0 : index > _items.Count ? _items.Count : index;
-        _items.Insert(at, pin);
+        _items.Insert(at, stored);
         Reindex(at);
         Bump();
         return true;
@@ -76,8 +89,9 @@ public sealed class SidebarPinStore : IReadOnlyList<SidebarPin>
     {
         int at = IndexOf(pinId);
         if (at < 0) return -1;
+        string storedId = _items[at].Id;
         _items.RemoveAt(at);
-        _index.Remove(pinId!);
+        _index.Remove(storedId);
         Reindex(at);
         Bump();
         return at;
@@ -122,12 +136,20 @@ public sealed class SidebarPinStore : IReadOnlyList<SidebarPin>
         if (pins is not null)
             for (int i = 0; i < pins.Count; i++)
             {
-                var p = pins[i];
+                var p = Canonicalize(pins[i]);
                 if (string.IsNullOrEmpty(p.Id) || _index.ContainsKey(p.Id)) continue;
                 _index[p.Id] = _items.Count;
                 _items.Add(p);
             }
         _version.Value = _version.Peek() + 1;
+    }
+
+    static SidebarPin Canonicalize(SidebarPin pin)
+    {
+        string? id = SidebarPinId.Canonical(pin.Id);
+        if (id is null || string.Equals(id, pin.Id, StringComparison.Ordinal)) return pin;
+        string uri = pin.Uri.Length > 0 ? pin.Uri : SidebarPinId.UriOf(id);
+        return pin with { Id = id, Uri = uri };
     }
 
     void Reindex(int from)

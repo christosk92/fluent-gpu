@@ -101,6 +101,8 @@ public sealed class PlaybackBridge
     // OS media surfaces (SMTC: lock screen, now-playing flyout, hardware media keys) mirrored from the unified state below.
     // Null when the platform refuses it or before Activate; every push is then a no-op.
     SystemMediaControlsBridge? _smtc;
+    TaskbarBridge? _taskbar;
+    JumpListBridge? _jumpList;
 
     // ── UI signals (read by components) ─────────────────────────────────────────────────────────────────────────────
     public Signal<Track?> CurrentTrack { get; } = new(null);
@@ -604,6 +606,11 @@ public sealed class PlaybackBridge
         {
             _smtc = new SystemMediaControlsBridge(this, _player, post);
             _smtc.Activate(FluentApp.WindowHandle);
+            _taskbar = new TaskbarBridge(this, _player, post);
+            _taskbar.Activate(FluentApp.WindowHandle);
+            _jumpList = new JumpListBridge(this, _player, post);
+            _jumpList.Activate();
+            WaveeNativeBoot.Install(post);
         }
         PlaybackBucketDiagnostics.Startup("bridge", "activated");
         PlaybackBucketDiagnostics.QueueIfChanged(ref _lastQueueDiagSig, "bridge.activate.initial",
@@ -712,6 +719,14 @@ public sealed class PlaybackBridge
     /// after <see cref="Activate"/>; UI-thread only, like the store it appends to. Null (never attached) simply records
     /// nothing — the bridge holds no opinion about whether the feature exists.</summary>
     public void AttachPlayLog(PlayLogStore? playLog) => _playLog = playLog;
+
+    /// <summary>The attached play log (null when the backend never called <see cref="AttachPlayLog"/>). Read by
+    /// <see cref="JumpListBridge"/> on a track-boundary rebuild.</summary>
+    internal PlayLogStore? PlayLog => _playLog;
+
+    /// <summary>The Jump List sibling (null before <see cref="Activate"/> / non-Windows). The shell can
+    /// <see cref="JumpListBridge.AttachHistory"/> once it has a <see cref="HistoryStore"/>.</summary>
+    public JumpListBridge? JumpList => _jumpList;
 
     /// <summary>Opens the video-override management surface (Settings → Playback). Wired by the shell; null (e.g. a
     /// headless/test bridge) means the override toasts below simply carry no action button rather than a dead one.</summary>
@@ -972,7 +987,8 @@ public sealed class PlaybackBridge
         // The local play log (§C1.8.1) — the sidebar's "Recently played" source. ONLY at a real track boundary: PushState
         // also fires on every pause/volume/heartbeat push, and the store's own 1 s (track, context) idempotence is a
         // second line of defence, not the gate. Null-safe: an unattached log records nothing.
-        if (trackBoundary && s.CurrentTrack is { } played) _playLog?.Append(played.Uri, s.ContextUri);
+        if (trackBoundary && s.CurrentTrack is { } played)
+            _playLog?.Append(played.Uri, s.ContextUri, contextTitle: JumpListBridge.FromTrack(played, s.ContextUri));
         // Coarse gate for the now-playing card overlays: true iff any card COULD match (mirrors NowPlayingOverlay.Matches,
         // which is false when both context and track are empty). Equality-gated by the setter, so an idle→idle push is free.
         HasActiveContext.Value = !string.IsNullOrEmpty(s.ContextUri) || s.CurrentTrack is not null;
@@ -1002,6 +1018,8 @@ public sealed class PlaybackBridge
         ActiveDeviceId.Value = s.ActiveDeviceId;
         PushPosition(s.PositionMs);
         _smtc?.OnStateChanged();   // metadata / play-status / prev-next availability → OS media surface
+        _taskbar?.OnStateChanged();
+        _jumpList?.OnStateChanged();
     }
 
     /// <summary>Element-IDENTITY equality for the <see cref="Queue"/> signal (see its remarks). Deliberately NOT the
@@ -1079,5 +1097,6 @@ public sealed class PlaybackBridge
         long dur = DurationMs.Value;
         PositionFrac.Value = dur > 0 ? Math.Clamp(ms / (float)dur, 0f, 1f) : 0f;
         _smtc?.OnPositionChanged(ms);   // ~1 Hz timeline scrub → OS media surface (throttled inside)
+        _taskbar?.OnPositionChanged(ms);
     }
 }

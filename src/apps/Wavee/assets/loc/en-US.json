@@ -421,7 +421,27 @@
     "single": "Single",
     "ep": "EP",
     "album": "Album",
-    "compilation": "Compilation"
+    "compilation": "Compilation",
+    "customize": "Customize Home",
+    "customizer": {
+      "title": "Customize Home",
+      "eyebrow": "Your Home",
+      "reset": "Reset",
+      "done": "Done",
+      "back": "Back",
+      "hiddenHint": "Hidden modules stay in this list so you can bring them back. Drag to reorder.",
+      "corrupt": "Home layout could not be read",
+      "corruptSub": "Your previous file was kept. Start fresh to replace it, or keep using the default layout.",
+      "faultDiscard": "Start fresh",
+      "hero": "Hero",
+      "weeklyPair": "Discover Weekly & Release Radar",
+      "undo": {
+        "hide": "Hide module",
+        "show": "Show module",
+        "move": "Reorder module",
+        "reset": "Reset Home layout"
+      }
+    }
   },
   "search": {
     "title": "Search Wavee",
@@ -598,6 +618,9 @@
       "audioTitle": "Audio",
       "audioQuality": "Audio quality",
       "audioSub": "Streaming quality for local playback - applies from the next track",
+      "meteredQuality": "On metered connections",
+      "meteredQualitySub": "Cap streaming quality when Windows reports a metered network",
+      "meteredHint": "This connection is metered — the cap above is in effect",
       "qualityNormal": "Normal",
       "qualityNormalSub": "96 kbps - about 0.04 GB/hour",
       "qualityHigh": "High",

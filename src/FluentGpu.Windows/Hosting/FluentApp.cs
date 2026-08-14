@@ -61,6 +61,20 @@ public static class FluentApp
     public static event Action<string>? ActivationRedirected;
 
     /// <summary>
+    /// Relay of the host's taskbar thumbnail-toolbar click event (button id). Forwarded from
+    /// <c>AppHost.ThumbButtonClicked</c> while a run is active and delivered on the UI thread, so handlers may write
+    /// signals that re-render. App-layer relay so page/app code can subscribe without holding the <c>AppHost</c>.
+    /// </summary>
+    public static event Action<int>? ThumbButtonClicked;
+
+    /// <summary>
+    /// Relay of the host's <c>TaskbarButtonCreated</c> event (explorer created or re-created this window's taskbar
+    /// button). Forwarded from <c>AppHost.TaskbarButtonCreated</c> on the UI thread. Thumbnail-toolbar callers re-add
+    /// buttons here after an explorer restart.
+    /// </summary>
+    public static event Action? TaskbarButtonCreated;
+
+    /// <summary>
     /// Relay of the host's OS color-settings-change event (Windows app dark/light flip or accent change), delivered on the
     /// UI thread at the top of a frame. App-layer relay (not an Engine-seam accessor) so page/app code can react —
     /// typically re-reading <see cref="SystemIsDark"/> while it follows the OS — without holding the <c>AppHost</c>.
@@ -209,6 +223,10 @@ public static class FluentApp
         // subscribes there). Forwarding the payload, not the handler chain — handlers attach to FluentApp.ActivationRedirected.
         Action<string> forwardActivation = uri => ActivationRedirected?.Invoke(uri);
         host.ActivationRedirected += forwardActivation;
+        Action<int> forwardThumbClick = id => ThumbButtonClicked?.Invoke(id);
+        host.ThumbButtonClicked += forwardThumbClick;
+        Action forwardTaskbarCreated = () => TaskbarButtonCreated?.Invoke();
+        host.TaskbarButtonCreated += forwardTaskbarCreated;
 
         // Live re-theme: on every theme change the host re-applies the OS window material so DWM's immersive-dark titlebar
         // and the Mica system backdrop flip to the new theme's variant (instant — the OS can't cross-fade its backdrop;

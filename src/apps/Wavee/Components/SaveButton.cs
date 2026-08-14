@@ -144,9 +144,9 @@ sealed class FollowButton : Component
         ColorF idleInk = _foreground ?? Tok.TextPrimary;
         return new BoxEl
         {
-            Direction = 0, Height = WaveeCta.PillHeight, Gap = Spacing.S,
+            Direction = 0, Height = WaveeCta.PillHeight, Gap = Spacing.XS,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-            Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = Radii.FullAll,
+            Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f), Corners = Radii.FullAll,
             BorderWidth = 1f, BorderColor = following ? Tok.AccentDefault
                 : _foreground is { } fg ? fg with { A = 0.42f } : Tok.StrokeControlDefault,
             HoverFill = _foreground is { } hover ? hover with { A = 0.12f } : Tok.FillSubtleSecondary,
@@ -167,9 +167,9 @@ sealed class FollowButton : Component
     // bordered pill, not a full-width default bar that would stretch across the actions row.
     public static Element SkeletonShape() => new BoxEl
     {
-        Direction = 0, Height = WaveeCta.PillHeight, Gap = Spacing.S,
+        Direction = 0, Height = WaveeCta.PillHeight, Gap = Spacing.XS,
         AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
-        Padding = new Edges4(Spacing.L, 0f, Spacing.L, 0f), Corners = Radii.FullAll,
+        Padding = new Edges4(Spacing.M, 0f, Spacing.M, 0f), Corners = Radii.FullAll,
         BorderWidth = 1f, BorderColor = Tok.StrokeControlDefault,
         Children =
         [

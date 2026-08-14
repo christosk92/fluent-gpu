@@ -1,8 +1,20 @@
 using System;
 using System.Collections.Generic;
 using Wavee.Core;
+using Wavee.Core.Home;
 
 namespace Wavee;
+
+/// <summary>The page's rows, in the prototype's order unless a <see cref="Wavee.Core.Home.HomeLayoutDoc"/> reorders
+/// the authored modules. Chrome rows (Chips / Artists / Timeline / Sections / Tail) are not user-orderable in v1.
+/// <see cref="Queue"/> / <see cref="Books"/> exist so a split pair that the user pulled apart does not render twice
+/// inside <see cref="EpisodesAndBooks"/>.</summary>
+enum HomeRow : byte
+{
+    Chips, Hero, Weekly, Quick, Recents, MixBand, Artists, ChipCards, Radio, EpisodesAndBooks,
+    Queue, Books,
+    Podcasts, Timeline, Sections, Editorial, Feed, Tail,
+}
 
 /// <summary>One app-authored Home module plus the source section that can satisfy a server-side "Show all". The
 /// module is a landing-page projection only: the source ledger remains untouched and owns drill-in/accounting.</summary>
@@ -17,9 +29,15 @@ internal sealed class HomeLanding
 
     public IReadOnlyList<HomeSection> Sections { get; private set; } = Array.Empty<HomeSection>();
 
+    /// <summary>The page's rows AFTER hide + reorder. Chrome rows (chips / artists / timeline / sections / tail)
+    /// stay at their designed anchors; a hidden module is omitted so it cannot leave a hole.</summary>
+    public IReadOnlyList<HomeRow> Rows { get; private set; } = HomeLandingProjection.DefaultRows;
+
     public HomeLandingModule? Get(HomeGroupKind kind) => _modules[(int)kind];
     internal void Set(HomeGroupKind kind, HomeLandingModule module) => _modules[(int)kind] = module;
+    internal void Clear(HomeGroupKind kind) => _modules[(int)kind] = null;
     internal void SetSections(IReadOnlyList<HomeSection> sections) => Sections = sections;
+    internal void SetRows(IReadOnlyList<HomeRow> rows) => Rows = rows;
 }
 
 /// <summary>Pure, engine-free Home landing projection. Source groups are concatenated in feed order and de-duplicated
@@ -38,7 +56,21 @@ internal static class HomeLandingProjection
         HomeGroupKind.DiscoverFeed,
     ];
 
+    /// <summary>The prototype's designed row table — chips first, tail last, chrome anchored after MixBand /
+    /// Podcasts. Used when no layout is supplied and as the chrome skeleton <see cref="ApplyLayout"/> fills.</summary>
+    public static readonly HomeRow[] DefaultRows =
+    [
+        HomeRow.Chips, HomeRow.Hero, HomeRow.Weekly, HomeRow.Quick, HomeRow.Recents, HomeRow.MixBand,
+        HomeRow.Artists, HomeRow.ChipCards, HomeRow.Radio, HomeRow.EpisodesAndBooks, HomeRow.Podcasts,
+        HomeRow.Timeline, HomeRow.Sections, HomeRow.Editorial, HomeRow.Feed, HomeRow.Tail,
+    ];
+
     public static HomeLanding Project(HomeFeed feed, HomeModuleTitles titles)
+        => Project(feed, titles, null);
+
+    /// <summary>Project the feed, then apply hide + reorder BEFORE the page synthesizes rows. A hidden Hero is
+    /// cleared (no empty slot) and <see cref="HomeLanding.Rows"/> follows the authored module order.</summary>
+    public static HomeLanding Project(HomeFeed feed, HomeModuleTitles titles, HomeLayoutDoc? layout)
     {
         var landing = new HomeLanding();
         var consumedSections = new HashSet<string>(StringComparer.Ordinal);
@@ -89,8 +121,75 @@ internal static class HomeLandingProjection
         }
 
         landing.SetSections(SectionDirectory(feed, consumedSections));
+        ApplyLayout(landing, layout ?? HomeLayoutDoc.Default);
         return landing;
     }
+
+    /// <summary>Hide authored-off modules, then build the row table from the remaining order. Chrome rows that
+    /// are not HomeGroupKind modules stay at their designed anchors (Artists after MixBand, Timeline + Sections
+    /// after Podcasts). QueueList + RatedShelf collapse to <see cref="HomeRow.EpisodesAndBooks"/> when adjacent.</summary>
+    public static void ApplyLayout(HomeLanding landing, HomeLayoutDoc layout)
+    {
+        var defaults = HomeLayoutModules.DefaultOrder;
+        for (int i = 0; i < defaults.Length; i++)
+            if (layout.IsHidden(defaults[i])) landing.Clear(defaults[i]);
+
+        var visible = layout.VisibleFixedModules();
+        var rows = new List<HomeRow>(visible.Count + 6) { HomeRow.Chips };
+        bool artists = false, afterPodcasts = false;
+        for (int i = 0; i < visible.Count; i++)
+        {
+            var kind = visible[i];
+            if (kind == HomeGroupKind.QueueList)
+            {
+                bool nextBooks = i + 1 < visible.Count && visible[i + 1] == HomeGroupKind.RatedShelf;
+                rows.Add(nextBooks ? HomeRow.EpisodesAndBooks : HomeRow.Queue);
+                if (nextBooks) i++;
+            }
+            else if (kind == HomeGroupKind.RatedShelf)
+            {
+                rows.Add(HomeRow.Books);
+            }
+            else
+            {
+                rows.Add(RowOf(kind));
+            }
+
+            if (kind == HomeGroupKind.MixBand) { rows.Add(HomeRow.Artists); artists = true; }
+            if (kind == HomeGroupKind.PodcastShelf)
+            {
+                rows.Add(HomeRow.Timeline);
+                rows.Add(HomeRow.Sections);
+                afterPodcasts = true;
+            }
+        }
+
+        if (!artists) rows.Add(HomeRow.Artists);
+        if (!afterPodcasts)
+        {
+            rows.Add(HomeRow.Timeline);
+            rows.Add(HomeRow.Sections);
+        }
+        rows.Add(HomeRow.Tail);
+        landing.SetRows(rows);
+    }
+
+    static HomeRow RowOf(HomeGroupKind kind) => kind switch
+    {
+        HomeGroupKind.Hero => HomeRow.Hero,
+        HomeGroupKind.WeeklyPair => HomeRow.Weekly,
+        HomeGroupKind.QuickGrid => HomeRow.Quick,
+        HomeGroupKind.Recents => HomeRow.Recents,
+        HomeGroupKind.MixBand => HomeRow.MixBand,
+        HomeGroupKind.ChipCards => HomeRow.ChipCards,
+        HomeGroupKind.RadioDial => HomeRow.Radio,
+        HomeGroupKind.QueueList => HomeRow.Queue,
+        HomeGroupKind.RatedShelf => HomeRow.Books,
+        HomeGroupKind.PodcastShelf => HomeRow.Podcasts,
+        HomeGroupKind.Featured => HomeRow.Editorial,
+        HomeGroupKind.DiscoverFeed => HomeRow.Feed,
+        _ => HomeRow.Tail,
+    };
 
     static List<HomeGroup> Groups(HomeFeed feed, HomeGroupKind kind)
     {

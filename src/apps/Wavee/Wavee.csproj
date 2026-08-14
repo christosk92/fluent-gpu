@@ -15,6 +15,10 @@
     <!-- The app version (Settings → About reads InformationalVersion via assembly metadata). -->
     <Version>0.1.1</Version>
     <InformationalVersion>0.1.1-dev</InformationalVersion>
+    <!-- Embeds the Wavee W-ribbon into the PE (Explorer / taskbar / Alt-Tab fallback). The Win32 window also loads
+         assets/AppIcon/appicon.ico next to the exe (Win32Platform.LoadAppIcon). Regenerate with
+         assets/AppIcon/generate-appicon.ps1 from the WaveeMusic source artwork. -->
+    <ApplicationIcon>assets\AppIcon\appicon.ico</ApplicationIcon>
   </PropertyGroup>
 
   <!-- Memory posture (2026-07 heap audit): the engine's PixelBufferPool bounds decoded-pixel retention; these bound

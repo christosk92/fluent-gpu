@@ -131,6 +131,7 @@ sealed class WaveeApp : Component
                 bridge.Volume.Value = Math.Clamp(_services.Settings.Get(WaveeSettings.SavedVolume), 0f, 1f);
 
             bridge.Activate(post);
+            PowerBridge.Attach(bridge, post, _services);
             libBridge.Activate(post);
             friendsBridge.Activate(post);
             notifications.Activate(post);
@@ -201,6 +202,10 @@ sealed class WaveeApp : Component
             }
         }, DepKey.Empty);
 
+        // Keep-awake is edge-triggered off IsPlaying + VideoSurface. Auto-tracked so those reads subscribe THIS
+        // effect, not the app-root render (a play/pause must not re-render the shell).
+        Context.UseEffect(PowerBridge.SyncFromSignals);
+
         // (Re)start the takeover login on every Auth flip to not-authenticated: the real backend kicks the silent-resume →
         // device-code two-pane; the fake demo seeds a demo challenge — but ONLY after it has authenticated once (wasAuthed),
         // so the initial launch goes straight to the shell with no takeover flash. WAVEE_FAKE_CHALLENGE skips this entirely.
@@ -241,7 +246,8 @@ sealed class WaveeApp : Component
             // the Settings page, the customizer route and the pin actions all read the SAME reference-stable instance, and
             // so the pin store / undo stack survive the takeover ↔ shell swap.
             Ctx.Provide(SidebarPreferences.Slot, _services.Sidebar,
-                leaf)))))));
+            Ctx.Provide(HomePreferences.Slot, _services.Home,
+                leaf))))))));
 
         // Debug-build FPS HUD on top (const-folds out of Release; subscribes to the host's per-frame stats). The HUD pill is
         // pinned top-right by a full-bleed PASS-THROUGH positioner (a PLAIN BoxEl — its HitTestPassThrough IS honoured, unlike

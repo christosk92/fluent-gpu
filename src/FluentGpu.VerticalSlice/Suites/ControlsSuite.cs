@@ -81,6 +81,7 @@ static class ControlsSuite
         ContextMenuChecks(strings);
         ToolTipStableWrapChecks(strings);
         SemanticZoomChecks(strings);
+        AutoSuggestProgrammaticFocusChecks(strings);
     }
 
     static void SemanticZoomChecks(StringTable strings)
@@ -8555,6 +8556,37 @@ static class ControlsSuite
         dispatcher.Dispatch([new InputEvent(InputKind.PointerUp, new Point2(35f, 28f), 0, 0, Pointer: PointerKind.Mouse)]);
         Check("gate.media-card.pointer-move-within suppresses touch and active capture", touchSuppressed && captureSuppressed,
             $"touch={touchSuppressed} capture={captureSuppressed}");
+    }
+
+    // Chrome-focus trap: SetFocus(AutoSuggestBox.PartRoot) paints a ring but OnChar walks ancestors only, so
+    // the inner EditableText never sees the character. FirstFocusableIn(partRoot) lands on the editor.
+    static void AutoSuggestProgrammaticFocusChecks(StringTable strings)
+    {
+        using var app = new HeadlessPlatformApp();
+        var window = new HeadlessWindow(new WindowDesc("asb-pf", new Size2(420, 160), 1f)); window.Show();
+        var device = new HeadlessGpuDevice();
+        var fonts = new HeadlessFontSystem(strings);
+        var text = new Signal<string>("");
+        using var host = new AppHost(app, window, device, fonts, strings,
+            new W0fStaticProbe { Build = () => AutoSuggestBox.Create([], "Search", 260f, text) });
+        host.RunFrame();
+
+        var chrome = FindRole(host.Scene, host.Scene.Root, AutomationRole.ComboBox);
+        host.Input.SetFocus(chrome, visual: true);
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'a'));
+        host.RunFrame();
+        bool chromeTrap = text.Peek() == "";
+
+        var editor = host.Input.FirstFocusableIn(chrome);
+        host.Input.SetFocus(editor, visual: true);
+        window.QueueInput(new InputEvent(InputKind.Char, default, 0, 'a'));
+        host.RunFrame();
+        bool typed = text.Peek() == "a";
+        var focusedRole = host.Scene.Interaction(host.Input.Focused).Role;
+        bool editorRole = focusedRole == AutomationRole.Text;
+        Check("gate.controls.autosuggest-programmatic-focus focusing AutoSuggestBox chrome swallows chars; FirstFocusableIn lands on the editor",
+            chromeTrap && typed && editorRole,
+            $"chromeTrap={chromeTrap} text='{text.Peek()}' focusedRole={focusedRole} editorNull={editor.IsNull}");
     }
 }
 

@@ -58,6 +58,11 @@ internal static class NetworkListManagerComConstants
     /// <c>DCB00C01-570F-4A9B-8D69-199FDBA5723B</c>) — passed to <c>CoCreateInstance</c>.</summary>
     internal static readonly Guid CLSID_NetworkListManager = new("DCB00C01-570F-4A9B-8D69-199FDBA5723B");
 
+    /// <summary>IID of <c>INetworkCostManager</c> (netlistmgr.h: <c>DCB00008-570F-4A9B-8D69-199FDBA5723B</c>) —
+    /// QI'd off the same <c>NetworkListManager</c> coclass as <see cref="INetworkListManager"/>. TerraFX does not
+    /// project it.</summary>
+    internal static readonly Guid IID_INetworkCostManager = new("DCB00008-570F-4A9B-8D69-199FDBA5723B");
+
     /// <summary>IID of <c>IConnectionPointContainer</c> (ocidl.h: <c>B196B284-BAB4-101A-B69C-00AA00341D07</c>). Stated
     /// explicitly (rather than via TerraFX's <c>__uuidof&lt;IConnectionPointContainer&gt;()</c>) so the connectivity
     /// connection-point QI is self-documenting and uses the same constant style as the netlistmgr IIDs above; the
@@ -161,6 +166,66 @@ internal readonly unsafe struct INetworkListManager
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal int GetConnectivity(NLM_CONNECTIVITY* pConnectivity)
         => ((delegate* unmanaged<INetworkListManager*, NLM_CONNECTIVITY*, int>)_lpVtbl[13])(Self(in this), pConnectivity);
+}
+
+/// <summary>
+/// The bit-flags returned by <c>INetworkCostManager::GetCost</c> (<c>netlistmgr.h NLM_CONNECTION_COST</c>). Cost-type
+/// bits (<c>UNKNOWN</c>/<c>UNRESTRICTED</c>/<c>FIXED</c>/<c>VARIABLE</c>) are mutually exclusive; the high bits are
+/// independent status flags. Declared here because TerraFX does not project <c>netlistmgr</c>.
+/// </summary>
+[Flags]
+internal enum NLM_CONNECTION_COST : uint
+{
+    Unknown = 0x0,
+    Unrestricted = 0x1,
+    Fixed = 0x2,
+    Variable = 0x4,
+    OverDataLimit = 0x10000,
+    Congested = 0x20000,
+    Roaming = 0x40000,
+    ApproachingDataLimit = 0x80000,
+}
+
+/// <summary>
+/// A call-OUT vtable wrapper over a native <c>INetworkCostManager</c> (IID <c>DCB00008-…</c>). The interface derives
+/// from <c>IUnknown</c> (not <c>IDispatch</c>), so own methods begin at slot 3:
+/// <c>GetCost</c> (3), <c>GetDataPlanStatus</c> (4), <c>SetDestinationAddresses</c> (5). Destination-address
+/// overloads take an <c>NLM_SOCKADDR*</c>; pass null for "the current connection". Obtained by QIing the
+/// <c>NetworkListManager</c> coclass.
+/// </summary>
+[SupportedOSPlatform("windows6.2")] // INetworkCostManager shipped in Windows 8.
+internal readonly unsafe struct INetworkCostManager
+{
+#pragma warning disable CS0649 // Field is never assigned to — it aliases native memory (the COM object's vtable slot).
+    private readonly void** _lpVtbl;
+#pragma warning restore CS0649
+
+    internal static INetworkCostManager* From(void* p) => (INetworkCostManager*)p;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static INetworkCostManager* Self(in INetworkCostManager self)
+        => (INetworkCostManager*)Unsafe.AsPointer(ref Unsafe.AsRef(in self));
+
+    /// <summary><c>IUnknown::Release</c> (slot 2).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal uint Release()
+        => ((delegate* unmanaged<INetworkCostManager*, uint>)_lpVtbl[2])(Self(in this));
+
+    /// <summary>
+    /// <c>HRESULT GetCost(DWORD* pCost, NLM_SOCKADDR* pDestIPAddr)</c> — vtable slot 3. Pass
+    /// <paramref name="pDestIPAddr"/> = null for the cost of the current connection.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetCost(uint* pCost, void* pDestIPAddr)
+        => ((delegate* unmanaged<INetworkCostManager*, uint*, void*, int>)_lpVtbl[3])(Self(in this), pCost, pDestIPAddr);
+
+    /// <summary>
+    /// <c>HRESULT GetDataPlanStatus(NLM_DATAPLAN_STATUS* pStatus, NLM_SOCKADDR* pDestIPAddr)</c> — vtable slot 4.
+    /// Declared so the vtable stays honest; the cost snapshot does not call it (pass null dest if you do).
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal int GetDataPlanStatus(void* pStatus, void* pDestIPAddr)
+        => ((delegate* unmanaged<INetworkCostManager*, void*, void*, int>)_lpVtbl[4])(Self(in this), pStatus, pDestIPAddr);
 }
 
 /// <summary>

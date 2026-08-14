@@ -1881,7 +1881,7 @@ sealed class RecentsPage : Component
     static readonly ColumnSet ChildCols = new(Album: false, By: false, Date: false, Video: false, Plays: false,
         Heart: true, Thumb: true, Actions: true);
     static readonly TrackSize[] ChildTracks =
-        [TrackSize.Px(30f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
+        [TrackSize.Px(30f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
 
     Element ChildRowContent(string uri, RowFacts facts, int index,
                             PlaybackBridge? bridge, LibraryBridge? lib, ActionServices? acts, IOverlayService? overlay)
@@ -1937,7 +1937,7 @@ sealed class RecentsPage : Component
     static readonly ColumnSet SingleRowCols = new(Album: false, By: false, Date: false, Video: false, Plays: false,
         Heart: true, Thumb: true, Actions: true);
     static readonly TrackSize[] SingleRowTracks =
-        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
+        [TrackSize.Px(36f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(1f), TrackSize.Px(52f), TrackSize.Px(40f)];
 
     Track ResolveTrack(string uri, RowFacts facts)
     {

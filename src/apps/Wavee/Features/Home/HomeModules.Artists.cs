@@ -178,7 +178,7 @@ sealed class HomeArtistRow : Component
     static readonly TrackSize[] TrackColumns =
     [
         TrackSize.Px(36f),                      // # ↔ play
-        TrackSize.Px(40f),                      // heart
+        TrackSize.Px(TrackRow.HeartCol),        // heart
         TrackSize.Px(TrackRow.ThumbSize),       // art
         TrackSize.Star(),                       // title
         TrackSize.Px(84f),                      // plays

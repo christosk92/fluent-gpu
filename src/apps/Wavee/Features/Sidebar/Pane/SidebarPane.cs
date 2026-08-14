@@ -1514,6 +1514,36 @@ sealed class SidebarPane : Component
         return default;
     }
 
+    /// <summary>Explicit Move up / Move down from a row's context menu (P6: drag is one way, never the only way).
+    /// Uses the same commit as an in-place drop when the reorder band is armed, and the pin store directly when that
+    /// band is disarmed (an expanded folder in Pinned — the same case the section-card menu already covers).</summary>
+    internal void MoveRowByKey(string sectionId, string key, int delta)
+    {
+        if (delta == 0 || key.Length == 0) return;
+        var section = SectionOf(sectionId);
+        if (section is null) return;
+
+        var band = BandFor(sectionId);
+        if (band.Count > 0)
+        {
+            int from = -1;
+            for (int s = 0; s < band.Count; s++)
+                if (string.Equals(KeyAt(sectionId, s), key, StringComparison.Ordinal)) { from = s; break; }
+            if (from < 0) return;
+            int to = from + delta;
+            if ((uint)to >= (uint)band.Count) return;
+            Commit(sectionId, from, to);
+            return;
+        }
+
+        if (section.Kind != SidebarSectionKind.Pinned || Prefs is not { } prefs) return;
+        string id = SidebarPinId.Canonical(key) ?? key;
+        int pinFrom = prefs.Pins.IndexOf(id);
+        int pinTo = pinFrom + delta;
+        if (pinFrom < 0 || (uint)pinTo >= (uint)prefs.Pins.Count) return;
+        prefs.MovePin(pinFrom, pinTo);
+    }
+
     /// <summary>A same-list drop. WHERE the order lives is the mode's business, so this hands the whole context to
     /// <see cref="SidebarPaneConfig.CommitReorder"/> (default: pin store for Pinned, the undoable <c>MoveItem</c> command
     /// for every other reorderable kind).</summary>
@@ -1551,8 +1581,9 @@ sealed class SidebarPane : Component
     {
         if (Prefs is not { } prefs) return;
         if (WaveeResourceDrag.Unwrap(payload) is not { } p || p.Id.Length == 0 || !p.TryPin(out var pinKind)) return;
+        string pinId = SidebarPinId.Canonical(p.Id) ?? p.Id;
 
-        int at = prefs.Pins.IndexOf(p.Id);
+        int at = prefs.Pins.IndexOf(pinId);
         if (at >= 0)
         {
             // Removing then inserting shifts every later index down by one, so a downward move lands one slot short
@@ -1560,8 +1591,8 @@ sealed class SidebarPane : Component
             prefs.MovePin(at, slot > at ? slot - 1 : slot);
             return;
         }
-        PinActions.Pin(prefs, p.Id, pinKind, p.Uri, p.Name);   // append + the toast whose action unpins
-        int now = prefs.Pins.IndexOf(p.Id);
+        PinActions.Pin(prefs, pinId, pinKind, p.Uri, p.Name);   // append + the toast whose action unpins
+        int now = prefs.Pins.IndexOf(pinId);
         if (now > slot) prefs.MovePin(now, slot);
     }
 

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using FluentGpu.Controls;
@@ -7,6 +9,8 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Rhi.D3D12;
+using FluentGpu.Signals;
 using Wavee.Backend.Audio;
 using static FluentGpu.Dsl.Ui;
 
@@ -76,7 +80,8 @@ sealed partial class SettingsPage
 
         string DiagInfo() =>
             $"Wavee {version}\nOS: {os}\nEngine: FluentGpu · {dotnet}\nData folder: {SettingsShared.AppDataRoot}\n" +
-            $"Playback runtime: {(svc?.Playback.RuntimeStatus.Value ?? PlaybackRuntimeStatus.NotApplicable).Outcome}";
+            $"Playback runtime: {(svc?.Playback.RuntimeStatus.Value ?? PlaybackRuntimeStatus.NotApplicable).Outcome}\n" +
+            WaveeNowReceipts.LastCopyText;
 
         var kids = new List<Element>
         {
@@ -85,6 +90,8 @@ sealed partial class SettingsPage
                 Strings.Settings.About.Build(version),
                 $"{os} · Engine: FluentGpu · {dotnet}",
                 isClosable: false),
+            SettingsSectionHeader("Wavee right now", Icons.Info),
+            Embed.Comp(() => new WaveeNowReceipts()),
             AboutLinksCard(hooks, DiagInfo, os),
             SettingsSectionHeader(Loc.Get(Strings.Settings.About.Licenses), Icons.Document),
         };
@@ -150,5 +157,134 @@ sealed partial class SettingsPage
                 ],
             })),
         ];
+    }
+
+    /// <summary>
+    /// Settings → About "Wavee right now" receipts. A 5s <see cref="Component.UseInterval"/> composes the strings;
+    /// Render never reads process/GPU/FPS itself (no per-frame <see cref="FluentGpu.Hosting.FrameDiagnostics"/> subscribe).
+    /// Mounted via Embed.Comp so the interval lives on this child, not behind SettingsPage's tab switch.
+    /// </summary>
+    sealed class WaveeNowReceipts : Component
+    {
+        internal static string LastCopyText { get; private set; } = "";
+
+        const float TickMs = 5000f;
+        readonly Signal<string> _workingSet = new("—");
+        readonly Signal<string> _managed = new("—");
+        readonly Signal<string> _uptime = new("—");
+        readonly Signal<string> _fps = new("—");
+        readonly Signal<string> _gpuAssets = new("—");
+        readonly Signal<string> _appExcl = new("—");
+        readonly Signal<string> _detail = new("—");
+
+        public override Element Render()
+        {
+            UseEffect(Tick, DepKey.Empty);
+            UseInterval(Tick, TickMs);
+            return SettingsCard.Create(new SettingsCard.Options
+            {
+                Alignment = SettingsCard.ContentAlignment.Left,
+                Content = new BoxEl
+                {
+                    Direction = 1, Gap = Spacing.XS,
+                    Children =
+                    [
+                        ReceiptLine(_workingSet, "Working set"),
+                        ReceiptLine(_managed, "Managed heap"),
+                        ReceiptLine(_uptime, "Uptime"),
+                        ReceiptLine(_fps, "FPS"),
+                        ReceiptLine(_gpuAssets, "GPU assets"),
+                        ReceiptLine(_appExcl, "App memory excl. GPU assets"),
+                        new TextEl(_detail) { Size = 12f, Color = Tok.TextTertiary, Wrap = TextWrap.Wrap },
+                    ],
+                },
+            });
+        }
+
+        void Tick()
+        {
+            using var proc = Process.GetCurrentProcess();
+            proc.Refresh();
+            long ws = proc.WorkingSet64;
+            long managed = GC.GetTotalMemory(forceFullCollection: false);
+            TimeSpan up = DateTime.Now - proc.StartTime;
+            double fps = WaveeStartupBench.Host?.LastStats.Fps ?? 0;
+            var snap = D3D12Device.LastVideoMemory;
+
+            _workingSet.Value = FormatBytes(ws);
+            _managed.Value = FormatBytes(managed);
+            _uptime.Value = FormatUptime(up);
+            _fps.Value = fps > 0 ? fps.ToString("0.0", CultureInfo.InvariantCulture) : "—";
+
+            if (!snap.Valid)
+            {
+                _gpuAssets.Value = "— (no Present yet)";
+                _appExcl.Value = "—";
+                _detail.Value = "GPU video-memory snapshot publishes on the render thread after the first Present.";
+            }
+            else
+            {
+                bool sharedIgpu = ClassifySharedIgpu(in snap);
+                ulong sharedSeg = sharedIgpu ? snap.LocalCurrentUsage : snap.NonLocalCurrentUsage;
+                long excl = ws - (long)sharedSeg;
+                if (excl < 0) excl = 0;
+                string kind = sharedIgpu ? "shared / iGPU" : "discrete";
+                _gpuAssets.Value = FormatBytes((long)snap.LocalCurrentUsage)
+                    + " local  ·  " + FormatBytes((long)snap.NonLocalCurrentUsage) + " non-local";
+                _appExcl.Value = FormatBytes(excl) + "  (" + kind + ")";
+                _detail.Value =
+                    "Local budget " + FormatBytes((long)snap.LocalBudget)
+                    + "  ·  non-local budget " + FormatBytes((long)snap.NonLocalBudget)
+                    + "  ·  tracked D3D12 " + FormatBytes(snap.TrackedResourceBytes)
+                    + " (" + snap.TrackedResourceCount.ToString(CultureInfo.InvariantCulture) + ")"
+                    + "  ·  atlas " + snap.AtlasImages.ToString(CultureInfo.InvariantCulture)
+                    + "/" + snap.AtlasPages.ToString(CultureInfo.InvariantCulture)
+                    + "  ·  glyphs " + snap.CachedGlyphs.ToString(CultureInfo.InvariantCulture)
+                    + ". App excl. GPU ≈ working set − "
+                    + (sharedIgpu ? "LOCAL (UMA/shared)" : "NON_LOCAL (system-memory overlap)")
+                    + ".";
+            }
+
+            LastCopyText =
+                "Working set: " + _workingSet.Peek()
+                + "\nManaged heap: " + _managed.Peek()
+                + "\nUptime: " + _uptime.Peek()
+                + "\nFPS: " + _fps.Peek()
+                + "\nGPU assets: " + _gpuAssets.Peek()
+                + "\nApp memory excl. GPU assets: " + _appExcl.Peek()
+                + "\n" + _detail.Peek();
+        }
+
+        static bool ClassifySharedIgpu(in GpuVideoMemorySnapshot snap)
+        {
+            if (GpuProfile.IsWeak) return true;
+            if (GpuProfile.Tier == GpuPowerTier.Strong) return false;
+            // Unknown: task heuristic — NON_LOCAL bulk of the DXGI usage ⇒ shared/iGPU; LOCAL dominates ⇒ discrete.
+            return snap.NonLocalCurrentUsage >= snap.LocalCurrentUsage && snap.NonLocalCurrentUsage > 0;
+        }
+
+        static Element ReceiptLine(Signal<string> value, string label) => new BoxEl
+        {
+            Direction = 0, Gap = Spacing.S, AlignItems = FlexAlign.Center,
+            Children =
+            [
+                new TextEl(label) { Size = 12f, Color = Tok.TextSecondary, Shrink = 0f },
+                new TextEl(value) { Size = 13f, Weight = 600, Color = Tok.TextPrimary, Grow = 1f, MinWidth = 0f, Wrap = TextWrap.Wrap },
+            ],
+        };
+
+        static string FormatBytes(long bytes)
+        {
+            double mb = bytes / 1048576.0;
+            return mb.ToString("0.0", CultureInfo.InvariantCulture) + " MB";
+        }
+
+        static string FormatUptime(TimeSpan t)
+        {
+            if (t.TotalDays >= 1) return ((int)t.TotalDays).ToString(CultureInfo.InvariantCulture) + "d " + t.Hours.ToString(CultureInfo.InvariantCulture) + "h";
+            if (t.TotalHours >= 1) return ((int)t.TotalHours).ToString(CultureInfo.InvariantCulture) + "h " + t.Minutes.ToString(CultureInfo.InvariantCulture) + "m";
+            if (t.TotalMinutes >= 1) return ((int)t.TotalMinutes).ToString(CultureInfo.InvariantCulture) + "m " + t.Seconds.ToString(CultureInfo.InvariantCulture) + "s";
+            return Math.Max(0, (int)t.TotalSeconds).ToString(CultureInfo.InvariantCulture) + "s";
+        }
     }
 }

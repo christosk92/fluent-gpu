@@ -1,4 +1,6 @@
-﻿using FluentGpu.Foundation;
+﻿using System.Diagnostics;
+using System.Threading;
+using FluentGpu.Foundation;
 using FluentGpu.Rhi;
 using FluentGpu.Scene;
 
@@ -733,11 +735,14 @@ public static class SceneRecorder
         }
     }
 
-    // Walk recurses once per tree level with a heavy frame and NO release-mode cap — stack headroom assumes tree depth
-    // stays in the low hundreds. This tripwire catches a runaway/cyclic tree long before stack exhaustion would.
-    // NOTE: `depth` carries a z-band in the high bits (drag ghost = 1<<16, connected-anim overlays = (1<<16)|1 — see
-    // Record's top-band walks); only the low 16 bits count recursion levels within a band.
-    private const int MaxRecordDepth = 512;
+    // Walk is recursive with a ~21 KB frame (Wavee.exe.80200.dmp: SP delta 0x54F0). A depth NUMBER cap blanks real
+    // pages (detail tracklists sit deeper than the hero). The dump was a CYCLE — the same node on the current path —
+    // which we abort. Acyclic trees of any depth keep painting (until the native stack would overflow ~70, which no
+    // real Wavee page reaches). NOTE: `depth` still carries a z-band in the high bits for painter order; that is
+    // unrelated to this guard.
+    [ThreadStatic] static uint[]? t_walkPath;
+    [ThreadStatic] static int t_walkPathLen;
+    private static int s_cycleAbortLogged;
 
     /// <summary>Sort depth for the drop-spotlight scrim band. The high 16 bits of a record depth are the Z-BAND (0 = the
     /// main pass + orphan fallback, 1 = the drag ghost, (1&lt;&lt;16)|1 = connected-animation overlays, (1&lt;&lt;16)|2 =
@@ -745,16 +750,34 @@ public static class SceneRecorder
     /// below every hoisted drag/overlay visual — so it takes the top of band 0's depth range.</summary>
     private const int ScrimBandDepth = (1 << 16) - 1;
 
-    /// <summary>[Conditional("DEBUG")] record-depth tripwire: a scene deeper than <see cref="MaxRecordDepth"/> levels
-    /// (within its z-band — the high bits of <paramref name="depth"/> are the band, not recursion) is a runaway (a
-    /// reconciler cycle or pathological nesting), not a real UI — fail loudly here instead of overflowing the
-    /// render-thread stack mid-<see cref="Walk"/>. Erased from Release/Ship.</summary>
-    [System.Diagnostics.Conditional("DEBUG")]
-    private static void AssertRecordDepth(int depth, NodeHandle node)
+    /// <summary>Push <paramref name="node"/> onto the current Walk path. False if it is already on the path (a
+    /// reconciler cycle). O(depth) int compares — noise next to Walk's per-node work. Thread-static: Record is
+    /// single-threaded per scene, and a second thread gets its own path.</summary>
+    private static bool PushWalkPath(NodeHandle node)
     {
-        if ((depth & 0xFFFF) > MaxRecordDepth)
-            throw new InvalidOperationException($"SceneRecorder.Walk exceeded {MaxRecordDepth} levels at node {node.Raw.Index} — runaway/cyclic scene tree.");
+        uint idx = node.Raw.Index;
+        uint[] path = t_walkPath ??= new uint[64];
+        int n = t_walkPathLen;
+        for (int i = 0; i < n; i++)
+        {
+            if (path[i] != idx) continue;
+            if (Interlocked.Exchange(ref s_cycleAbortLogged, 1) == 0)
+                Trace.WriteLine($"SceneRecorder.Walk cycle at node {idx} (path depth {n}).");
+            Debug.Fail($"SceneRecorder.Walk cycle at node {idx}.");
+            return false;
+        }
+        if (n == path.Length)
+        {
+            var grown = new uint[path.Length * 2];
+            Array.Copy(path, grown, n);
+            t_walkPath = path = grown;
+        }
+        path[n] = idx;
+        t_walkPathLen = n + 1;
+        return true;
     }
+
+    private static void PopWalkPath() => t_walkPathLen--;
 
     // True when a direct child provably, fully, opaquely covers this node's VISIBLE rect — so the node's own fill/border
     // are dead pixels the child overwrites (all children paint AFTER the node's own visual, in painter order). ALWAYS ON;
@@ -819,11 +842,31 @@ public static class SceneRecorder
                                          ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
                                          ref RecordAccumulator stats)
     {
-        AssertRecordDepth(depth, node);
         if (!skipRoots.IsEmpty && ContainsNode(skipRoots, node)) return default;   // subtree renders in its own popup window
-        NodeFlags flags = scene.Flags(node);
-        if ((flags & NodeFlags.Visible) == 0) return default;   // invisible subtree contributes nothing
+        if ((scene.Flags(node) & NodeFlags.Visible) == 0) return default;
+        if (!PushWalkPath(node)) return default;
+        try
+        {
+            return WalkCore(scene, dl, images, node, parentWorld, parentOpacity, depth, clip, in focus, in textEdit,
+                scrollThumb, scrollTrack, parentScaleX, parentScaleY, parentInMotion, globalBlurHold,
+                parentScrollInMotion, parentUserScrollActive, inherited, skipRoots, spans, spanFrame,
+                spanReuseDisabled, spanStoreEnabled, ref stats);
+        }
+        finally
+        {
+            PopWalkPath();
+        }
+    }
+
+    private static SpanRecordResult WalkCore(SceneStore scene, DrawList dl, ImageCache? images, NodeHandle node, Affine2D parentWorld, float parentOpacity,
+                                         int depth, RectF clip, in FocusVisualStyle focus, in TextEditStyle textEdit, ColorF scrollThumb, ColorF scrollTrack,
+                                         float parentScaleX, float parentScaleY, bool parentInMotion, bool globalBlurHold,
+                                         bool parentScrollInMotion, bool parentUserScrollActive, InheritedState inherited,
+                                         ReadOnlySpan<NodeHandle> skipRoots, SpanTable? spans, uint spanFrame, bool spanReuseDisabled, bool spanStoreEnabled,
+                                         ref RecordAccumulator stats)
+    {
         stats.NodesVisited++;
+        NodeFlags flags = scene.Flags(node);
         bool maybeSparsePaint = (flags & NodeFlags.SparsePaint) != 0;
         bool hasInteractionAnim = (flags & NodeFlags.InteractionAnim) != 0;
         ref InteractionInfo interaction = ref scene.Interaction(node);

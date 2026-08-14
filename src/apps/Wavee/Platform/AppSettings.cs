@@ -138,6 +138,9 @@ static class WaveeSettings
     // shown disabled in the picker). Read per resolve, so a change applies from the next track (already-resolved tracks
     // keep their cached file selection).
     public static readonly SettingKey<int> PlaybackQuality = new("playback.quality", 2);
+    // Cap applied WHEN the connection is metered (NetworkCostKind.Fixed / Variable). Same 0..2 ladder as PlaybackQuality.
+    // Default 1 = High160 so a metered laptop does not silently stay on Very High.
+    public static readonly SettingKey<int> MeteredQualityCap = new("playback.quality.meteredCap", 1);
     // Volume persistence: when RememberVolume, SavedVolume (0..1) seeds the device volume at launch and is written back
     // (debounced) as the user adjusts it.
     public static readonly SettingKey<bool> RememberVolume = new("playback.volume.remember", true);

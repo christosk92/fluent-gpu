@@ -58,14 +58,16 @@ sealed class LibraryV3Search : Component
         bool open = prefs?.V3SearchOpen.Value ?? false;
         string text = prefs?.V3Search.Value ?? "";
 
-        // Focus the field once per OPEN. If the caret ever fails to land here, the fallback target is
-        // EditableText.PartText (see §3.2.5's implementation obligation) — do not ship the transition without checking
-        // that typing lands in the field.
+        // Focus the editor once per OPEN. PartRoot is the ComboBox chrome; OnChar walks ancestors only, so
+        // focusing chrome paints a ring that cannot type. FirstFocusableIn lands on the chromeless EditableText
+        // (query button is later in document order). See .claude/skills/wavee/focus-pitfalls.md.
         UseLayoutEffect(() =>
         {
             if (!open) return;
-            var node = fieldNode.Value;
-            if (!node.IsNull) hooks.FocusNode?.Invoke(node, true);
+            var chrome = fieldNode.Value;
+            if (chrome.IsNull) return;
+            var editor = hooks.FirstFocusableIn?.Invoke(chrome) ?? NodeHandle.Null;
+            if (!editor.IsNull) hooks.FocusNode?.Invoke(editor, true);
         }, DepKey.From(open ? 1 : 0));
 
         // A search FLATTENS the tree (Foundation obligation 3), so there is no folder to be "inside" of: leave any

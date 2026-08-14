@@ -145,6 +145,38 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// WM_COPYDATA case (which the OS dispatches on the window's own thread), so subscribers run UI-thread-safe.</summary>
     internal static void RaiseActivationRedirected(string payload) => s_activationRedirected?.Invoke(payload);
 
+    // ── thumbnail-toolbar click (IPlatformApp.ThumbButtonClicked) ───────────────────────────────────────────────────
+    // WM_COMMAND / THBN_CLICKED lands in Win32Window.Handle32 and routes here (static bridge, same single-window
+    // rationale as the activation redirect). Payload is the button id (LOWORD(wParam)) — a plain int, TerraFX-free.
+    private static Action<int>? s_thumbButtonClicked;
+
+    /// <inheritdoc/>
+    public event Action<int>? ThumbButtonClicked
+    {
+        add => s_thumbButtonClicked += value;
+        remove => s_thumbButtonClicked -= value;
+    }
+
+    /// <summary>Raise <see cref="ThumbButtonClicked"/> on the UI thread. Called by <see cref="Win32Window"/>'s
+    /// WM_COMMAND / THBN_CLICKED case (OS-dispatched on the window's own thread).</summary>
+    internal static void RaiseThumbButtonClicked(int id) => s_thumbButtonClicked?.Invoke(id);
+
+    // ── taskbar button created (IPlatformApp.TaskbarButtonCreated) ──────────────────────────────────────────────────
+    // The registered "TaskbarButtonCreated" message lands in Win32Window.Handle32 (runtime msg id, not a WM_* const)
+    // and routes here. Callers re-add thumbnail buttons after explorer restart.
+    private static Action? s_taskbarButtonCreated;
+
+    /// <inheritdoc/>
+    public event Action? TaskbarButtonCreated
+    {
+        add => s_taskbarButtonCreated += value;
+        remove => s_taskbarButtonCreated -= value;
+    }
+
+    /// <summary>Raise <see cref="TaskbarButtonCreated"/> on the UI thread (explorer posts the registered message on the
+    /// window's own thread).</summary>
+    internal static void RaiseTaskbarButtonCreated() => s_taskbarButtonCreated?.Invoke();
+
     // ── OS color settings change (IPlatformApp.SystemColorsChanged) ─────────────────────────────────────────────────
     // WM_SETTINGCHANGE("ImmersiveColorSet") lands in Win32Window.Handle32 and routes here (static bridge, same single-
     // window rationale as the activation redirect above). The host re-reads OS dark/accent and re-themes live.
@@ -202,6 +234,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                        WM_KEYUP = 0x0101, WM_SYSKEYUP = 0x0105,
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
                        WM_COPYDATA = 0x004A,   // single-instance activation redirect (SingleInstanceGate → ActivationRedirected)
+                       WM_COMMAND = 0x0111,    // menu/accelerator/control; HIWORD==THBN_CLICKED (0x1800) = thumb-toolbar click
                        WM_SETTINGCHANGE = 0x001A,   // OS settings change; lParam names the area ("ImmersiveColorSet" = dark-mode/accent)
                        WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F,
                        WM_IME_SETCONTEXT = 0x0281,
@@ -633,6 +666,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // elsewhere here). The cookie MUST equal FluentGpu.WindowsApi.Activation.SingleInstanceGate.ActivationCopyDataCookie
     // ('F''G''A''C') — the two assemblies are independent peers and cannot share the constant.
     private const nuint ActivationCopyDataCookie = 0x46474143;
+    private const uint THBN_CLICKED = 0x1800;          // winuser.h — thumbnail-toolbar click notification
+    private const uint MsgfltAllow = 1;                // MSGFLT_ALLOW — ChangeWindowMessageFilterEx
+    private static uint s_taskbarButtonCreatedMsg;     // RegisterWindowMessageW("TaskbarButtonCreated")
 
     [StructLayout(LayoutKind.Sequential)]
     private struct COPYDATASTRUCT { public nuint dwData; public uint cbData; public nint lpData; }
@@ -655,6 +691,10 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
             // Process-wide + irreversible: route the mouse through the unified WM_POINTER pipeline (PT_MOUSE) so the one
             // pump path serves mouse, touch and pen. Done once at first window creation, before any window exists.
             EnableMouseInPointer(true);
+            // Explorer broadcasts this registered message when the window's taskbar button exists (and again if
+            // explorer restarts). ThumbBarAddButtons is only legal after it; cached once, compared in Handle32.
+            fixed (char* tbb = "TaskbarButtonCreated")
+                s_taskbarButtonCreatedMsg = RegisterWindowMessageW(tbb);
             fixed (char* cn = ClassName)
             {
                 WNDCLASSEXW wc = default;
@@ -688,6 +728,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
         }
         s_constructing = null;
         _textInput = new Win32TextInput(_hwnd);
+        // UIPI otherwise drops the registered TaskbarButtonCreated broadcast (explorer → this HWND). Best-effort.
+        if (s_taskbarButtonCreatedMsg != 0)
+            ChangeWindowMessageFilterEx(_hwnd, s_taskbarButtonCreatedMsg, MsgfltAllow, null);
         // Create this before the window is handed to AppHost: Wake may be called from the render thread, so lazy
         // creation in Wake/WaitForWork would race and could leave the waiter observing a different handle.
         _presentAckEvent = CreateEventW(null, BOOL.FALSE, BOOL.FALSE, null);
@@ -1471,6 +1514,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     private bool Handle32(HWND hWnd, uint msg, WPARAM wParam, LPARAM lParam, out LRESULT result)
     {
         result = default;
+        // TaskbarButtonCreated is a registered (runtime) message — cannot live in the compile-time WM_* switch.
+        // One uint compare per message; the id is 0 until the first window registers it.
+        if (s_taskbarButtonCreatedMsg != 0 && msg == s_taskbarButtonCreatedMsg)
+        {
+            Win32App.RaiseTaskbarButtonCreated();
+            return false;   // don't consume — DefWindowProc still runs
+        }
         long lp = (long)(nint)lParam;
         switch (msg)
         {
@@ -1928,6 +1978,13 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 }
                 return false;
             }
+            case WM_COMMAND:
+                // Thumbnail-toolbar click: HIWORD(wParam) == THBN_CLICKED. WM_COMMAND also fires for menus/accelerators
+                // — cheap reject first so those take DefWindowProc with zero alloc (no string, no delegate alloc).
+                if (((nuint)wParam >> 16) != THBN_CLICKED) return false;
+                Win32App.RaiseThumbButtonClicked(unchecked((int)((nuint)wParam & 0xFFFF)));
+                result = (LRESULT)0;
+                return true;
             case WM_SETCURSOR:
                 // Re-assert the engine-chosen cursor while over the client area; let DefWindowProc style the chrome.
                 if (((long)(nint)lParam & 0xFFFF) == HTCLIENT) { ApplyCursor(); result = (LRESULT)1; return true; }

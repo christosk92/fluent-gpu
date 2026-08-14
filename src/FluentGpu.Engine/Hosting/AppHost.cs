@@ -512,6 +512,11 @@ public sealed class AppHost : IDisposable
     private Action<RectF>? _onOccludedRectChanged;     // SIP OccludedRect → caret reflow (unsubscribed in Dispose)
     private bool _pendingSystemColors;                 // OS color-settings change (WM_SETTINGCHANGE) pending; drained at Paint top
     private Action? _onSystemColorsChanged;            // cached subscription (unsubscribed in Dispose)
+    private bool _pendingThumbClick;                   // thumbnail-toolbar click pending; drained at Paint top
+    private int _pendingThumbButtonId;                 // valid when _pendingThumbClick (0 is a legal button id)
+    private Action<int>? _onThumbButtonClicked;        // cached subscription (unsubscribed in Dispose)
+    private bool _pendingTaskbarButtonCreated;         // explorer created/recreated the taskbar button
+    private Action? _onTaskbarButtonCreated;           // cached subscription (unsubscribed in Dispose)
 
     /// <summary>Raised on the UI thread when the OS color settings change (Windows app dark/light flip or accent change),
     /// delivered at the top of the next frame so handlers may freely mutate the theme / write signals. App code reacts by
@@ -527,6 +532,21 @@ public sealed class AppHost : IDisposable
     /// <c>FluentGpu.WindowsApi.Activation.SingleInstanceGate</c> on the sender side; never fires under the headless PAL.
     /// </summary>
     public event Action<string>? ActivationRedirected;
+
+    /// <summary>
+    /// Raised on the UI thread when the user clicks a taskbar thumbnail-toolbar button, carrying the button's
+    /// application-defined id. Wired from <see cref="IPlatformApp.ThumbButtonClicked"/> and delivered at the top of the
+    /// next frame, so handlers may freely mutate signals. Never fires under the headless PAL.
+    /// </summary>
+    public event Action<int>? ThumbButtonClicked;
+
+    /// <summary>
+    /// Raised on the UI thread when explorer creates (or re-creates, after a shell restart) this window's taskbar
+    /// button. Wired from <see cref="IPlatformApp.TaskbarButtonCreated"/> and delivered at the top of the next frame.
+    /// Thumbnail-toolbar callers re-invoke <c>TaskbarManager.SetThumbButtons</c> here (after
+    /// <c>NotifyTaskbarButtonCreated</c> to reset the add-once latch). Never fires under the headless PAL.
+    /// </summary>
+    public event Action? TaskbarButtonCreated;
 
     // ── live re-theme (Tok.Use/SetAccent → animated in-place re-render, no remount) ──────────────────
     // A theme mutation bumps Tok.Epoch. Paint() detects the change at the top of the flush, re-renders every mounted
@@ -2140,6 +2160,14 @@ public sealed class AppHost : IDisposable
         // delivers this on the UI thread (no PostMessage hop needed, unlike a cross-thread notification activator).
         _onActivationRedirected = uri => { _pendingActivation = uri; WakeFrame(); };
         app.ActivationRedirected += _onActivationRedirected;
+        // Thumbnail-toolbar click: the PAL raises this on the UI thread from WM_COMMAND/THBN_CLICKED. Stash the id +
+        // WakeFrame; Paint() drains at the top and re-raises so app handlers may write signals this same frame.
+        _onThumbButtonClicked = id => { _pendingThumbButtonId = id; _pendingThumbClick = true; WakeFrame(); };
+        app.ThumbButtonClicked += _onThumbButtonClicked;
+        // Explorer created/recreated the taskbar button (registered TaskbarButtonCreated message). Same stash/drain as
+        // SystemColorsChanged — app code re-adds the thumbnail toolbar after a shell restart.
+        _onTaskbarButtonCreated = () => { _pendingTaskbarButtonCreated = true; WakeFrame(); };
+        app.TaskbarButtonCreated += _onTaskbarButtonCreated;
         // Inbound OS color-settings change (dark-mode/accent flip): the PAL raises this on the UI thread from
         // WM_SETTINGCHANGE. Stash + WakeFrame; Paint() drains the flag at the top and re-raises the public event so app
         // code (which owns the System/Light/Dark mode decision) re-reads the OS state and triggers a live re-theme.
@@ -2705,6 +2733,16 @@ public sealed class AppHost : IDisposable
             {
                 _pendingSystemColors = false;
                 SystemColorsChanged?.Invoke();
+            }
+            if (_pendingThumbClick)
+            {
+                _pendingThumbClick = false;
+                ThumbButtonClicked?.Invoke(_pendingThumbButtonId);
+            }
+            if (_pendingTaskbarButtonCreated)
+            {
+                _pendingTaskbarButtonCreated = false;
+                TaskbarButtonCreated?.Invoke();
             }
 
             long frameStart = Stopwatch.GetTimestamp();
@@ -4348,6 +4386,8 @@ public sealed class AppHost : IDisposable
         // Detach the activation-redirect subscription so a disposed host's IPlatformApp keeps no callback into it.
         if (_onActivationRedirected is { } onAct) { _app.ActivationRedirected -= onAct; _onActivationRedirected = null; }
         if (_onSystemColorsChanged is { } onSys) { _app.SystemColorsChanged -= onSys; _onSystemColorsChanged = null; }
+        if (_onThumbButtonClicked is { } onThumb) { _app.ThumbButtonClicked -= onThumb; _onThumbButtonClicked = null; }
+        if (_onTaskbarButtonCreated is { } onTbb) { _app.TaskbarButtonCreated -= onTbb; _onTaskbarButtonCreated = null; }
         // Symmetric SIP teardown: drop the OccludedRect subscription so a disposed host's window TextInput keeps no
         // callback into it (the SIP reflow closure captures _dispatcher).
         if (_onOccludedRectChanged is { } onOcc) { _window.TextInput.OccludedRectChanged -= onOcc; _onOccludedRectChanged = null; }

@@ -356,8 +356,8 @@ sealed class TrackList : Component
         // via hover ⋯ / context menu" — but this profile is FORCED at every width by the "Hero" page-layout setting
         // (DetailShell), so an album/playlist page in that layout could not state whether a song was saved at all, at any
         // width (user report 2026-08-10: "on album/playlist pages it's not visible if a song is liked or not"). Saved-ness
-        // is a FACT the row owes the reader; the lane is invisible on unsaved rows (TrackRow.Heart), so it costs nothing
-        // where there is nothing to state, and the menu/swipe verbs remain the a11y path.
+        // is a FACT the row owes the reader; the outline heart stays painted on unsaved rows so the like is always
+        // reachable and the left cluster does not collapse into a dead gutter. The menu/swipe verbs remain the a11y path.
         // By/Date follow the SAME tier gates as the standard profile: the vertical SYSTEM is forced at every width by
         // the "Hero" page-layout setting (DetailShell), so hard-false here silently dropped Date-added/Added-by on WIDE
         // hero pages (user report 2026-07-23). At genuinely narrow widths the tiers hide them exactly as before; the
@@ -381,9 +381,8 @@ sealed class TrackList : Component
             // the glyph a wide-window luxury and forced the fact into the artist subline below — one fact in two lanes.
             Video: s.Model.HasVideo && tier < 6,
             Plays: s.Config.ShowPlays && tier < 3,
-            // Survives to tier 4 (was < 4) — the lane is now invisible on unsaved rows, so it stops competing for width
-            // on the rows that have nothing to state, and a 40-DIP lane that answers "is this in my library?" earns its
-            // place further down the ladder than one that showed an empty outline heart on every row.
+            // Survives to tier 4 (was < 4) — a 28-DIP lane that answers "is this in my library?" (and is the like
+            // affordance) earns its place further down the ladder than the old 40-DIP hover-only gutter.
             Heart: tier < 5,
             Thumb: s.Config.ShowArtThumb && tier < 5,
             // Video lane hosts More (rest=Movie / hover=bare "…") — reserve the trailing Actions track only when
@@ -431,7 +430,7 @@ sealed class TrackList : Component
     {
         if (_tracksBySet.TryGetValue(s, out var cached)) return cached;
         var t = new List<TrackSize>(10) { TrackSize.Px(36f) };
-        if (s.Heart) t.Add(TrackSize.Px(40f));         // ♥ moved to the LEFT cluster — between # and the art thumb
+        if (s.Heart) t.Add(TrackSize.Px(TrackRow.HeartCol));  // ♥ in the LEFT cluster — between # and the art thumb
         if (s.Thumb) t.Add(TrackSize.Px(ThumbSize));   // dedicated art column: the Title header aligns over the title text, not the art
         t.Add(TrackSize.Star(TitleStar));
         // Album is a SECOND star track at AlbumStar : TitleStar (0.75 : 1), not a fixed 180 DIP lane. Two consequences,
@@ -463,14 +462,14 @@ sealed class TrackList : Component
     /// starting under the title. It also reclaims the dead band to the left of the drawer that a title-aligned indent
     /// left empty.
     ///
-    /// It has to be DERIVED, not constant: the leading cluster is 36 / 76 / 112 wide depending on which columns the
+    /// It has to be DERIVED, not constant: the leading cluster is 36 / 76 / 108 wide depending on which columns the
     /// tier kept, so the original hard-coded <c>PadX + ThumbSize</c> (52) landed mid-♥-column at every wide tier.</summary>
     static float ArtCentreIndent(in ColumnSet s)
     {
         float gap = TrackRow.ColGapFor(s.Tier);
         float x = TrackRow.PadXFor(s.Tier) - TrackRow.RowInset;   // the grid's own left pad
         x += 36f;                                                 // the # column
-        if (s.Heart) x += gap + 40f;
+        if (s.Heart) x += gap + TrackRow.HeartCol;
         // Land on the MIDDLE of the art so the rail drops from the centre of the cover, not its edge.
         return s.Thumb ? x + gap + TrackRow.ThumbSize / 2f : x + gap;
     }

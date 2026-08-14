@@ -179,7 +179,13 @@ sealed class MergedSearchField : Component
         int request = _focusRequest.Value;
         UseLayoutEffect(() =>
         {
-            if (request > 0 && !field.Value.IsNull) hooks.FocusNode?.Invoke(field.Value, true);
+            // PartRoot is the ComboBox chrome, not the editor. OnChar/OnKey walk ancestors only, so focusing
+            // the chrome paints a ring that cannot type. FirstFocusableIn lands on the chromeless EditableText;
+            // OnFocusChanged on PartRoot still fires because GotFocus bubbles (InputDispatcher.SetFocus).
+            if (request <= 0 || field.Value.IsNull) return;
+            var chrome = field.Value;
+            var editor = hooks.FirstFocusableIn?.Invoke(chrome) ?? NodeHandle.Null;
+            if (!editor.IsNull) hooks.FocusNode?.Invoke(editor, true);
         }, DepKey.From(request));
 
         float width = _layout.Value.SearchWidth;

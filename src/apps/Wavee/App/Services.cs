@@ -209,6 +209,9 @@ public sealed class Services
     /// app root via <c>SidebarPreferences.Slot</c>. Constructed in the shared private ctor, so both CreateFake and
     /// CreateReal get one — local preferences are real on every backend (the settings store already is).</summary>
     public SidebarPreferences Sidebar { get; }
+    /// <summary>Home layout preferences (visibility + order). Local document beside sidebar-layout.json; real on
+    /// every backend. Provided at the app root via <c>HomePreferences.Slot</c>.</summary>
+    public HomePreferences Home { get; }
     /// <summary>The local "recently played" log (§C1.8.1) — a ring of the last 200 playback starts beside
     /// <c>history.json</c>. Appended by <see cref="PlaybackBridge"/> at every real track boundary and read by the
     /// sidebar's <c>wavee.history.played</c> source. Local state, so it is real on BOTH backends (the settings-store
@@ -272,6 +275,7 @@ public sealed class Services
         // both backends get one; the store's Load() is the only I/O and it never throws (a missing file is a first run, a
         // bad one is a fault that suppresses writes and loads the built-in Curated default in memory).
         Sidebar = new SidebarPreferences(settings, SidebarLayoutStore.ForApp());
+        Home = new HomePreferences(HomeLayoutStore.ForApp());
         Playback = new PlaybackBridge(player, devices, session);
         // Seed the movable video surface from persisted settings BEFORE the first frame, so the remembered placement is
         // already in effect rather than popping in after the shell mounts.

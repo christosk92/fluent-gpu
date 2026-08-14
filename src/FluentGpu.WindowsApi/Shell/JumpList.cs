@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.Versioning;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -30,19 +31,42 @@ public readonly record struct JumpTask(
     int IconIndex = 0);
 
 /// <summary>
-/// The taskbar Jump List's custom user-tasks section, over <c>ICustomDestinationList</c> (the Windows 7+ API).
-/// <see cref="SetTasks"/> rebuilds the entire user-tasks list; <see cref="Clear"/> removes the custom list. Each task is
-/// an <c>IShellLinkW</c> (the same shell-link object a <c>.lnk</c> file wraps) whose visible label is written through
-/// its <c>IPropertyStore</c> as <c>PKEY_Title</c> — the documented way to title a Jump List task that is a launch
-/// command rather than a document. Flat call-OUT COM (hand-declared CLSIDs, <c>__uuidof&lt;T&gt;()</c> IIDs,
-/// <c>iface-&gt;Method(...)</c> through TerraFX vtable structs); AOT-clean.
+/// A single custom-category destination in the taskbar Jump List — the same launch-command shape as
+/// <see cref="JumpTask"/> (exe + arguments), published under a named category via
+/// <see cref="JumpList.SetCategory"/>. Distinct from a user task only in where the shell draws it (a titled group
+/// above the Tasks section, rather than the Tasks section itself).
+/// </summary>
+/// <param name="Title">The visible label of the item. Required.</param>
+/// <param name="ExePath">Absolute path to the executable to launch — typically <see cref="Environment.ProcessPath"/>.</param>
+/// <param name="Arguments">Command-line arguments passed to <paramref name="ExePath"/>. Used as the identity when
+/// filtering against the user-removed list returned by <c>BeginList</c> — items the user pinned-off MUST NOT be
+/// re-added in the same transaction or <c>CommitList</c>/<c>AppendCategory</c> fails.</param>
+/// <param name="IconPath">Optional icon file path. Null = no icon.</param>
+/// <param name="Description">Optional tooltip text. Null = none.</param>
+/// <param name="IconIndex">The icon resource index within <paramref name="IconPath"/> (default 0).</param>
+public readonly record struct JumpListItem(
+    string Title,
+    string ExePath,
+    string Arguments,
+    string? IconPath = null,
+    string? Description = null,
+    int IconIndex = 0);
+
+/// <summary>
+/// The taskbar Jump List's custom user-tasks section and custom categories, over <c>ICustomDestinationList</c>
+/// (the Windows 7+ API). <see cref="SetTasks"/> rebuilds the user-tasks list; <see cref="SetCategory"/> rebuilds
+/// tasks plus one named custom category in a single Begin/Commit transaction (a Jump List cannot be edited
+/// incrementally — every publish is a full rebuild). <see cref="Clear"/> removes the custom list. Each entry is
+/// an <c>IShellLinkW</c> whose visible label is written through its <c>IPropertyStore</c> as <c>PKEY_Title</c>.
+/// Flat call-OUT COM (hand-declared CLSIDs, <c>__uuidof&lt;T&gt;()</c> IIDs, <c>iface-&gt;Method(...)</c> through
+/// TerraFX vtable structs); AOT-clean.
 /// </summary>
 /// <remarks>
 /// <para>
 /// <b>Threading / apartment.</b> The Jump List COM objects are apartment-threaded; call <see cref="SetTasks"/> /
-/// <see cref="Clear"/> on the <b>UI (STA) thread</b>. <see cref="EnsureSta"/> initializes COM (STA) on the calling
-/// thread, tolerating the benign already-initialized results. These do not take a window handle — a Jump List is
-/// per-application (keyed by AUMID), not per-window.
+/// <see cref="SetCategory"/> / <see cref="Clear"/> on the <b>UI (STA) thread</b>. <see cref="EnsureSta"/> initializes
+/// COM (STA) on the calling thread, tolerating the benign already-initialized results. These do not take a window
+/// handle — a Jump List is per-application (keyed by AUMID), not per-window.
 /// </para>
 /// <para>
 /// <b>AUMID.</b> If <c>aumid</c> is supplied, <c>ICustomDestinationList::SetAppID</c> targets that
@@ -51,11 +75,15 @@ public readonly record struct JumpTask(
 /// taskbar group. If null, the list targets the process's current AUMID (the shell's default association for this exe).
 /// </para>
 /// <para>
-/// <b>The BeginList → AddUserTasks → CommitList transaction.</b> <c>BeginList</c> opens an edit and reports how many
-/// slots the shell will show (and which items the user has removed — honored implicitly here by simply not re-adding
-/// removed items, which a full rebuild does not track; this is a deliberate simplicity choice for v1). The user tasks
-/// are added as one <c>IObjectArray</c> (an <c>IObjectCollection</c> of links), then <c>CommitList</c> publishes the
-/// list atomically. Any failure aborts via <c>AbortList</c> so a half-built list is never committed.
+/// <b>The BeginList → AddUserTasks / AppendCategory → CommitList transaction.</b> <c>BeginList</c> opens an edit,
+/// reports the visible slot count, and returns the <c>IObjectArray</c> of destinations the user has removed. Those
+/// items MUST NOT be re-added in the same transaction or <c>AppendCategory</c>/<c>CommitList</c> fails — this type
+/// filters category items (and user tasks) against that list by comparing the shell-link <c>GetArguments</c> string
+/// to <see cref="JumpListItem.Arguments"/> / <see cref="JumpTask.Arguments"/>. User tasks are added as one
+/// <c>IObjectArray</c>, then (for <see cref="SetCategory"/>) one custom category via <c>AppendCategory</c>, then
+/// <c>CommitList</c> publishes atomically. Any failure aborts via <c>AbortList</c> so a half-built list is never
+/// committed. Because <c>BeginList</c> starts a fresh list, a caller that wants to keep tasks when publishing a
+/// category must pass them to <see cref="SetCategory"/> in the same call.
 /// </para>
 /// <para>
 /// References:
@@ -90,6 +118,10 @@ public static unsafe class JumpList
         new(0xF29F85E0, 0x4FF9, 0x1068, 0xAB, 0x91, 0x08, 0x00, 0x2B, 0x27, 0xB3, 0xD9);
     private const uint PIDSI_TITLE = 2;
 
+    // GetArguments buffer: shell-link arguments can exceed MAX_PATH; 4 KiB is the documented INFOTIPSIZE-class ceiling
+    // used by explorer for Jump List argument compares.
+    private const int ArgumentsBufferChars = 4096;
+
     // S_FALSE (already-initialized STA, same model) is a positive HRESULT, so `hr < 0` already tolerates it; only the
     // changed-model result needs an explicit exemption.
     private const int RPC_E_CHANGED_MODE = unchecked((int)0x80010106);
@@ -97,7 +129,8 @@ public static unsafe class JumpList
     /// <summary>
     /// Replace the custom user-tasks section of the application's Jump List with <paramref name="tasks"/> (in order).
     /// Passing an empty <paramref name="tasks"/> commits an empty user-tasks list (use <see cref="Clear"/> to remove the
-    /// custom list entirely). UI/STA thread.
+    /// custom list entirely). UI/STA thread. Tasks whose arguments match an item the user removed are skipped (the
+    /// <c>BeginList</c> removed-items contract — re-adding them fails the commit).
     /// </summary>
     /// <param name="aumid">The target application's AUMID, or <see langword="null"/> to use the process's current AUMID.
     /// Must match the AUMID the app otherwise advertises.</param>
@@ -106,41 +139,26 @@ public static unsafe class JumpList
     public static void SetTasks(string? aumid = null, params JumpTask[] tasks)
     {
         ArgumentNullException.ThrowIfNull(tasks);
-        EnsureSta();
+        Commit(aumid, tasks, categoryTitle: null, categoryItems: null);
+    }
 
-        ICustomDestinationList* list = CreateDestinationList();
-        bool listBegun = false;
-        try
-        {
-            if (!string.IsNullOrEmpty(aumid))
-                fixed (char* pAumid = aumid)
-                    ThrowIfFailed(list->SetAppID(pAumid), "ICustomDestinationList.SetAppID");
-
-            // BeginList opens the edit and hands back the (ignored here) removed-items array and the visible slot count.
-            uint maxSlots = 0;
-            Guid iidObjArray = __uuidof<IObjectArray>();
-            IObjectArray* removed = null;
-            ThrowIfFailed(list->BeginList(&maxSlots, &iidObjArray, (void**)&removed), "ICustomDestinationList.BeginList");
-            listBegun = true;
-            if (removed != null) removed->Release();   // we do not reconcile against user-removed items in v1.
-
-            IObjectArray* taskArray = BuildTaskArray(tasks);
-            try
-            {
-                ThrowIfFailed(list->AddUserTasks(taskArray), "ICustomDestinationList.AddUserTasks");
-                ThrowIfFailed(list->CommitList(), "ICustomDestinationList.CommitList");
-                listBegun = false;   // committed — no abort needed.
-            }
-            finally
-            {
-                if (taskArray != null) taskArray->Release();
-            }
-        }
-        finally
-        {
-            if (listBegun) list->AbortList();   // never leave a half-built list open.
-            list->Release();
-        }
+    /// <summary>
+    /// Rebuild the Jump List with one named custom category and, optionally, the user-tasks section, in a single
+    /// <c>BeginList</c>/<c>CommitList</c> transaction. Category items (and tasks) whose arguments match a
+    /// user-removed destination are filtered out — re-adding them makes <c>AppendCategory</c>/<c>CommitList</c> fail.
+    /// Because a Jump List cannot be patched in place, pass any tasks that should survive in the same call; omitting
+    /// them clears the Tasks section. UI/STA thread.
+    /// </summary>
+    /// <param name="categoryTitle">The visible category heading (e.g. "Recent albums"). Required.</param>
+    /// <param name="items">The category destinations, in display order. Empty is legal (the category is then omitted).</param>
+    /// <param name="tasks">Optional user tasks published in the same transaction. Null or empty = no Tasks section.</param>
+    /// <param name="aumid">The target AUMID, or <see langword="null"/> for the process's current AUMID.</param>
+    /// <exception cref="InvalidOperationException">A COM step failed; the partial list is aborted, not committed.</exception>
+    public static void SetCategory(string categoryTitle, JumpListItem[] items, JumpTask[]? tasks = null, string? aumid = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(categoryTitle);
+        ArgumentNullException.ThrowIfNull(items);
+        Commit(aumid, tasks ?? [], categoryTitle, items);
     }
 
     /// <summary>
@@ -168,6 +186,73 @@ public static unsafe class JumpList
         finally { list->Release(); }
     }
 
+    // ── transaction ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// One BeginList → (AddUserTasks) → (AppendCategory) → CommitList. <paramref name="categoryTitle"/> null skips
+    /// the category; <paramref name="categoryItems"/> is ignored in that case. Removed destinations from
+    /// <c>BeginList</c> are collected by argument string and applied as a filter on both arrays.
+    /// </summary>
+    private static void Commit(string? aumid, JumpTask[] tasks, string? categoryTitle, JumpListItem[]? categoryItems)
+    {
+        EnsureSta();
+
+        ICustomDestinationList* list = CreateDestinationList();
+        bool listBegun = false;
+        IObjectArray* removed = null;
+        try
+        {
+            if (!string.IsNullOrEmpty(aumid))
+                fixed (char* pAumid = aumid)
+                    ThrowIfFailed(list->SetAppID(pAumid), "ICustomDestinationList.SetAppID");
+
+            uint maxSlots = 0;
+            Guid iidObjArray = __uuidof<IObjectArray>();
+            ThrowIfFailed(list->BeginList(&maxSlots, &iidObjArray, (void**)&removed), "ICustomDestinationList.BeginList");
+            listBegun = true;
+
+            HashSet<string> removedArgs = CollectRemovedArguments(removed);
+
+            IObjectArray* taskArray = BuildLinkArray(tasks, removedArgs);
+            try
+            {
+                ThrowIfFailed(list->AddUserTasks(taskArray), "ICustomDestinationList.AddUserTasks");
+            }
+            finally
+            {
+                if (taskArray != null) taskArray->Release();
+            }
+
+            if (categoryTitle is not null && categoryItems is not null)
+            {
+                IObjectArray* catArray = BuildLinkArray(categoryItems, removedArgs);
+                try
+                {
+                    uint count = 0;
+                    catArray->GetCount(&count);
+                    if (count > 0)
+                    {
+                        fixed (char* pTitle = categoryTitle)
+                            ThrowIfFailed(list->AppendCategory(pTitle, catArray), "ICustomDestinationList.AppendCategory");
+                    }
+                }
+                finally
+                {
+                    if (catArray != null) catArray->Release();
+                }
+            }
+
+            ThrowIfFailed(list->CommitList(), "ICustomDestinationList.CommitList");
+            listBegun = false;   // committed — no abort needed.
+        }
+        finally
+        {
+            if (removed != null) removed->Release();
+            if (listBegun) list->AbortList();   // never leave a half-built list open.
+            list->Release();
+        }
+    }
+
     // ── construction helpers ───────────────────────────────────────────────────────────────────────────────────────
 
     private static ICustomDestinationList* CreateDestinationList()
@@ -181,9 +266,75 @@ public static unsafe class JumpList
         return list;
     }
 
-    /// <summary>Build an <c>IObjectCollection</c> of titled <c>IShellLinkW</c>s and return it QI'd as
-    /// <c>IObjectArray</c> (what <c>AddUserTasks</c> consumes). The caller releases the returned array.</summary>
-    private static IObjectArray* BuildTaskArray(JumpTask[] tasks)
+    /// <summary>
+    /// Walk the <c>BeginList</c> removed-items array, QIing each as <c>IShellLinkW</c> and reading
+    /// <c>GetArguments</c>. Non-link destinations (e.g. <c>IShellItem</c> documents) are skipped — this pillar
+    /// publishes launch-command links, so argument-string identity is the matching key.
+    /// </summary>
+    private static HashSet<string> CollectRemovedArguments(IObjectArray* removed)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        if (removed == null)
+            return set;
+
+        uint count = 0;
+        if (removed->GetCount(&count).FAILED || count == 0)
+            return set;
+
+        Guid iidLink = __uuidof<IShellLinkW>();
+        char* buf = stackalloc char[ArgumentsBufferChars];
+        for (uint i = 0; i < count; i++)
+        {
+            IShellLinkW* link = null;
+            if (removed->GetAt(i, &iidLink, (void**)&link).FAILED || link == null)
+                continue;
+            try
+            {
+                if (link->GetArguments(buf, ArgumentsBufferChars).SUCCEEDED)
+                    set.Add(new string(buf));
+            }
+            finally { link->Release(); }
+        }
+        return set;
+    }
+
+    /// <summary>Build an <c>IObjectCollection</c> of titled <c>IShellLinkW</c>s for user tasks, skipping any whose
+    /// arguments are in <paramref name="removedArgs"/>. Caller releases the returned <c>IObjectArray</c>.</summary>
+    private static IObjectArray* BuildLinkArray(JumpTask[] tasks, HashSet<string> removedArgs)
+    {
+        IObjectCollection* collection = CreateCollection();
+        try
+        {
+            foreach (JumpTask task in tasks)
+            {
+                if (removedArgs.Contains(task.Arguments ?? string.Empty))
+                    continue;
+                AddLink(collection, task.Title, task.ExePath, task.Arguments, task.IconPath, task.Description, task.IconIndex);
+            }
+            return QiObjectArray(collection);
+        }
+        finally { collection->Release(); }
+    }
+
+    /// <summary>Build an <c>IObjectCollection</c> of titled <c>IShellLinkW</c>s for a custom category, skipping any
+    /// whose arguments are in <paramref name="removedArgs"/>. Caller releases the returned <c>IObjectArray</c>.</summary>
+    private static IObjectArray* BuildLinkArray(JumpListItem[] items, HashSet<string> removedArgs)
+    {
+        IObjectCollection* collection = CreateCollection();
+        try
+        {
+            foreach (JumpListItem item in items)
+            {
+                if (removedArgs.Contains(item.Arguments ?? string.Empty))
+                    continue;
+                AddLink(collection, item.Title, item.ExePath, item.Arguments, item.IconPath, item.Description, item.IconIndex);
+            }
+            return QiObjectArray(collection);
+        }
+        finally { collection->Release(); }
+    }
+
+    private static IObjectCollection* CreateCollection()
     {
         Guid clsidColl = CLSID_EnumerableObjectCollection;
         Guid iidColl = __uuidof<IObjectCollection>();
@@ -191,33 +342,37 @@ public static unsafe class JumpList
         ThrowIfFailed(
             CoCreateInstance(&clsidColl, null, (uint)CLSCTX.CLSCTX_INPROC_SERVER, &iidColl, (void**)&collection),
             "CoCreateInstance(CLSID_EnumerableObjectCollection)");
-        try
-        {
-            foreach (JumpTask task in tasks)
-            {
-                IShellLinkW* link = CreateTaskLink(task);
-                try
-                {
-                    // AddObject takes IUnknown*; the link is added by reference (the collection AddRefs it).
-                    ThrowIfFailed(collection->AddObject((IUnknown*)link), "IObjectCollection.AddObject");
-                }
-                finally { if (link != null) link->Release(); }
-            }
-
-            IObjectArray* array = null;
-            Guid iidArray = __uuidof<IObjectArray>();
-            ThrowIfFailed(collection->QueryInterface(&iidArray, (void**)&array), "QI IObjectArray");
-            return array;
-        }
-        finally { collection->Release(); }
+        return collection;
     }
 
-    /// <summary>Create one <c>IShellLinkW</c> for a task: exe path, arguments, optional icon/description, and the visible
-    /// title written through the link's <c>IPropertyStore</c> as <c>PKEY_Title</c>. Caller releases the returned link.</summary>
-    private static IShellLinkW* CreateTaskLink(JumpTask task)
+    private static IObjectArray* QiObjectArray(IObjectCollection* collection)
     {
-        ArgumentException.ThrowIfNullOrEmpty(task.Title);
-        ArgumentException.ThrowIfNullOrEmpty(task.ExePath);
+        IObjectArray* array = null;
+        Guid iidArray = __uuidof<IObjectArray>();
+        ThrowIfFailed(collection->QueryInterface(&iidArray, (void**)&array), "QI IObjectArray");
+        return array;
+    }
+
+    private static void AddLink(
+        IObjectCollection* collection,
+        string title, string exePath, string? arguments, string? iconPath, string? description, int iconIndex)
+    {
+        IShellLinkW* link = CreateLink(title, exePath, arguments, iconPath, description, iconIndex);
+        try
+        {
+            ThrowIfFailed(collection->AddObject((IUnknown*)link), "IObjectCollection.AddObject");
+        }
+        finally { if (link != null) link->Release(); }
+    }
+
+    /// <summary>Create one <c>IShellLinkW</c>: exe path, arguments, optional icon/description, and the visible
+    /// title written through the link's <c>IPropertyStore</c> as <c>PKEY_Title</c>. Shared by tasks and category
+    /// items. Caller releases the returned link.</summary>
+    private static IShellLinkW* CreateLink(
+        string title, string exePath, string? arguments, string? iconPath, string? description, int iconIndex)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(title);
+        ArgumentException.ThrowIfNullOrEmpty(exePath);
 
         Guid clsid = CLSID_ShellLink;
         Guid iid = __uuidof<IShellLinkW>();
@@ -227,21 +382,21 @@ public static unsafe class JumpList
             "CoCreateInstance(CLSID_ShellLink)");
         try
         {
-            fixed (char* pExe = task.ExePath)
+            fixed (char* pExe = exePath)
                 ThrowIfFailed(link->SetPath(pExe), "IShellLinkW.SetPath");
 
-            fixed (char* pArgs = task.Arguments ?? string.Empty)
+            fixed (char* pArgs = arguments ?? string.Empty)
                 ThrowIfFailed(link->SetArguments(pArgs), "IShellLinkW.SetArguments");
 
-            if (!string.IsNullOrEmpty(task.Description))
-                fixed (char* pDesc = task.Description)
+            if (!string.IsNullOrEmpty(description))
+                fixed (char* pDesc = description)
                     ThrowIfFailed(link->SetDescription(pDesc), "IShellLinkW.SetDescription");
 
-            if (!string.IsNullOrEmpty(task.IconPath))
-                fixed (char* pIcon = task.IconPath)
-                    ThrowIfFailed(link->SetIconLocation(pIcon, task.IconIndex), "IShellLinkW.SetIconLocation");
+            if (!string.IsNullOrEmpty(iconPath))
+                fixed (char* pIcon = iconPath)
+                    ThrowIfFailed(link->SetIconLocation(pIcon, iconIndex), "IShellLinkW.SetIconLocation");
 
-            SetLinkTitle(link, task.Title);
+            SetLinkTitle(link, title);
             return link;
         }
         catch

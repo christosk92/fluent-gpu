@@ -2,6 +2,7 @@ using System.IO;
 using FluentGpu;             // FluentApp
 using FluentGpu.Dsl;         // Theme (startup theme seed)
 using FluentGpu.Foundation;  // Diag
+using FluentGpu.WindowsApi.Activation;
 
 namespace Wavee;
 
@@ -88,6 +89,8 @@ static class Program
 
         if (Array.IndexOf(args, "--perf-bench") >= 0)
             Environment.SetEnvironmentVariable("WAVEE_PERF_BENCH", "1");
+        if (Array.IndexOf(args, "--startup-bench") >= 0)
+            Environment.SetEnvironmentVariable("WAVEE_STARTUP_BENCH", "1");
 
         int frames = -1;
         string? screenshot = null;
@@ -275,6 +278,38 @@ static class Program
             return;
         }
 
+        // Single-instance + wavee:// protocol — normal windowed path only. Probes already returned above;
+        // --screenshot / --frames (harness) skip the gate so a visual-diff loop can spawn freely.
+        SingleInstanceGate? instanceGate = null;
+        if (screenshot is null && frames < 0)
+        {
+            instanceGate = new SingleInstanceGate();
+            var activation = ActivationArgs.FromCurrentProcess("wavee");
+            string payload = activation.Kind == ActivationKind.Launch ? "" : activation.Argument;
+            if (!instanceGate.TryAcquire("Wavee", "FluentGpuWindow", payload))
+            {
+                instanceGate.Dispose();
+                return;
+            }
+            try
+            {
+                string? exe = Environment.ProcessPath;
+                if (exe is { Length: > 0 })
+                    ProtocolRegistrar.RegisterProtocol("wavee", exe, "Wavee", iconPath: WaveeAppIcon.Path());
+            }
+            catch (Exception ex)
+            {
+                WaveeLog.Instance.Warn("app", "wavee:// protocol registration failed", ex);
+            }
+            if (activation.Kind is ActivationKind.Protocol or ActivationKind.File or ActivationKind.ToastActivated)
+                DeepLinkChannel.Post(activation.Argument);
+            FluentApp.ActivationRedirected += raw =>
+            {
+                DeepLinkChannel.Post(raw);
+                DeepLink.WakeWindow();
+            };
+        }
+
         try
         {
             // Diagnostic harness chain (each gated by its own env flag; all return false in a normal run): the nav/scroll
@@ -295,7 +330,8 @@ static class Program
                 // this is the only app-reachable point that holds the AppHost. AmbientPowerPolicy.Watcher (mounted in
                 // WaveeShell) feeds it the focus edges and the debounced power poll from there on.
                 AmbientPowerPolicy.Attach(h);
-                return WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
+                WaveeStartupBench.NoteHost(h);
+                return WaveeStartupBench.TryRun(h, w, d) || WaveePerfBench.TryRun(h, w, d) || WaveeNavProbe.TryRun(h, w, d) || WaveeResizeProbe.TryRun(h, w, d) || WaveeMemSoak.TryRun(h, w, d);
             };
             // customFrame:true → the in-app TitleBar (WaveeShell) draws the extended caption buttons + drag region.
             // micaAlt → Mica BaseAlt (the flatter File-Explorer tint, matching WaveeMusic's MicaBackdrop Kind="BaseAlt")
@@ -340,6 +376,10 @@ static class Program
             }
             catch { }
             throw;
+        }
+        finally
+        {
+            instanceGate?.Dispose();
         }
         WaveeLog.Instance.Info("app", "Wavee exiting");
         WaveeLog.Instance.Flush();

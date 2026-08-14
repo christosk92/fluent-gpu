@@ -43,32 +43,22 @@ public class RowAffordanceGrammarTests
     public void TheHeartLane_SurvivesToTheSameTierAsTheArtThumb()
     {
         string setFor = Body(DetailTracks(), "ColumnSet SetFor(");
-        // The lane renders nothing on an unsaved row, so it no longer competes for width where there is nothing to
-        // state — which is what lets it survive past the tier an always-drawn outline heart had to be dropped at.
+        // The outline stays painted on unsaved rows (the like affordance), so the lane has to earn its width. It still
+        // shares the art-thumb gate — dropping it earlier would hide saved-ness on the same narrow panes that keep art.
         Assert.Equal(2, Count(setFor, "Heart: tier < 5"));
         Assert.DoesNotContain("Heart: tier < 4", setFor, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void TheHeart_ShowsAtRestOnlyWhenSaved()
+    public void TheHeart_ShowsAtRestWhetherSavedOrNot()
     {
         string heart = Body(TrackRow(), "internal static Element Heart(");
-        // Saved ⇒ visible with no interaction (the FACT); unsaved ⇒ revealed on row hover (the ACTION).
-        Assert.Contains("Opacity = saved ? 1f : 0f", heart, StringComparison.Ordinal);
-        Assert.Contains("HoverOpacity = 1f", heart, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void TheHeartsReveal_RidesANonInteractiveWrapper()
-    {
-        string heart = Body(TrackRow(), "internal static Element Heart(");
-        int click = heart.IndexOf("OnClick = onLike", StringComparison.Ordinal);
-        int reveal = heart.IndexOf("Opacity = saved ? 1f : 0f", StringComparison.Ordinal);
-        Assert.True(click >= 0 && reveal > click,
-            "the reveal must sit on a wrapper AROUND the clickable heart, not on the heart itself: a node that owns a "
-            + "click is its own interaction scope, and the hover cascade does not drive a boundary's own state "
-            + "(backdrop-effects-animation.md §7). On the heart, HoverOpacity would only light from the pointer already "
-            + "being on it — the one case where it is visible anyway.");
+        // Filled when saved, outline when not — both at rest. A hover-only unsaved heart left a dead gutter in the
+        // left cluster (user report: "lots of dead space, especially if heart is not visible").
+        Assert.DoesNotContain("Opacity = saved ? 1f : 0f", heart, StringComparison.Ordinal);
+        Assert.DoesNotContain("HoverOpacity", heart, StringComparison.Ordinal);
+        Assert.Contains("Icons.HeartFill", heart, StringComparison.Ordinal);
+        Assert.Contains("Icons.Heart", heart, StringComparison.Ordinal);
     }
 
     // ── Rule 2: every row affordance blocks the row's drag arm ───────────────────────────────────────────────────────

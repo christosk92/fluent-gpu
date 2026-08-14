@@ -45,6 +45,80 @@ internal readonly unsafe struct HStringHandle : IDisposable
 
     /// <summary>Delete the handle (no-op for a NULL handle).</summary>
     public void Dispose() => WindowsDeleteString(Value);
+
+    /// <summary>Copy an <c>HSTRING</c> the ABI handed us (an [out] string we own) into a managed string. Does NOT
+    /// delete <paramref name="h"/> — the caller still <c>WindowsDeleteString</c>s it.</summary>
+    internal static string ToManaged(HSTRING h)
+    {
+        uint len;
+        char* p = WindowsGetStringRawBuffer(h, &len);
+        return p == null || len == 0 ? string.Empty : new string(p, 0, (int)len);
+    }
+}
+
+/// <summary>
+/// Call-OUT vtable over WinRT <c>IMap&lt;HSTRING, HSTRING&gt;</c> (Windows.Foundation.Collections). Used to fill
+/// <c>INotificationData.Values</c> without going through TerraFX's generic <c>IMap&lt;K,V&gt;</c> (the parameterized-IID
+/// / generic-binding quirk that kept live-update a fast-follow). Layout is IInspectable (0-5) + IIterable.First (6) +
+/// IMap: Lookup (7), get_Size (8), HasKey (9), GetView (10), Insert (11), Remove (12), Clear (13). Only Release and
+/// Insert are typed — the map pointer arrives from <c>INotificationData.get_Values</c>, so no QI/IID is needed.
+/// </summary>
+/// <remarks>
+/// Choice vs <c>INotificationDataFactory.CreateNotificationDataWithValuesAndSequenceNumber(IIterable&lt;IKeyValuePair&gt;)</c>:
+/// that factory takes a call-IN collection we would have to implement (<c>IIterable</c> + <c>IIterator</c> +
+/// <c>IKeyValuePair</c> CCWs). Filling the OS-owned map is call-OUT and reuses the existing
+/// <c>RoActivateInstance(NotificationData)</c> default ctor. Insert ABI is
+/// <c>HRESULT Insert(HSTRING key, HSTRING value, boolean* replaced)</c> (WinRT boolean = byte).
+/// </remarks>
+[SupportedOSPlatform("windows8.0")]
+internal readonly unsafe struct IStringMap
+{
+#pragma warning disable CS0649
+    private readonly void** _lpVtbl;
+#pragma warning restore CS0649
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static IStringMap* Self(in IStringMap self)
+        => (IStringMap*)System.Runtime.CompilerServices.Unsafe.AsPointer(ref System.Runtime.CompilerServices.Unsafe.AsRef(in self));
+
+    /// <summary><c>IUnknown::Release</c> (slot 2).</summary>
+    internal uint Release()
+        => ((delegate* unmanaged<IStringMap*, uint>)_lpVtbl[2])(Self(in this));
+
+    /// <summary><c>HRESULT Insert(HSTRING key, HSTRING value, boolean* replaced)</c> — vtable slot 11.</summary>
+    internal int Insert(HSTRING key, HSTRING value, byte* replaced)
+        => ((delegate* unmanaged<IStringMap*, HSTRING, HSTRING, byte*, int>)_lpVtbl[11])(Self(in this), key, value, replaced);
+}
+
+/// <summary>
+/// Call-OUT vtable over WinRT <c>IVectorView&lt;ScheduledToastNotification&gt;</c> returned by
+/// <c>IToastNotifier.GetScheduledToastNotifications</c>. Layout is IInspectable (0-5) + IIterable.First (6) +
+/// IVectorView: GetAt (7), get_Size (8). Hand-rolled for the same generic-binding reason as <see cref="IStringMap"/>.
+/// </summary>
+[SupportedOSPlatform("windows8.0")]
+internal readonly unsafe struct IScheduledToastView
+{
+#pragma warning disable CS0649
+    private readonly void** _lpVtbl;
+#pragma warning restore CS0649
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static IScheduledToastView* Self(in IScheduledToastView self)
+        => (IScheduledToastView*)System.Runtime.CompilerServices.Unsafe.AsPointer(
+            ref System.Runtime.CompilerServices.Unsafe.AsRef(in self));
+
+    internal uint Release()
+        => ((delegate* unmanaged<IScheduledToastView*, uint>)_lpVtbl[2])(Self(in this));
+
+    /// <summary><c>HRESULT GetAt(uint index, IScheduledToastNotification** item)</c> — vtable slot 7. The returned
+    /// pointer is AddRef'd; the caller Releases it.</summary>
+    internal int GetAt(uint index, IScheduledToastNotification** item)
+        => ((delegate* unmanaged<IScheduledToastView*, uint, IScheduledToastNotification**, int>)_lpVtbl[7])(
+            Self(in this), index, item);
+
+    /// <summary><c>HRESULT get_Size(uint* size)</c> — vtable slot 8.</summary>
+    internal int get_Size(uint* size)
+        => ((delegate* unmanaged<IScheduledToastView*, uint*, int>)_lpVtbl[8])(Self(in this), size);
 }
 
 /// <summary>

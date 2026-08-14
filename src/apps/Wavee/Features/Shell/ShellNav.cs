@@ -58,6 +58,8 @@ static class ShellNav
             // and glyph here like any other page. The key is `SidebarLayoutMenu.CustomizeRoute`, spelled as a LITERAL
             // because this file is source-included by src/apps/Wavee.Tests and that engine-bound file is not.
             "sidebar-customize" => (Loc.Get(Strings.Sidebar.Customizer.Title), Icons.Edit),
+            // Home layout customizer (T0.2). Literal key — this file is source-included by Wavee.Tests.
+            "home-customize" => (Loc.Get(Strings.Home.Customizer.Title), Icons.Edit),
             _          => (Loc.Get(Strings.Nav.YourLibrary), Icons.MusicNote),
         };
     }

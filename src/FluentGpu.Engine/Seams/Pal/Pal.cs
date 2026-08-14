@@ -360,6 +360,29 @@ public interface IPlatformApp : IDisposable
     event Action<string>? ActivationRedirected { add { } remove { } }
 
     /// <summary>
+    /// Raised when the user clicks a taskbar thumbnail-toolbar button (<c>ITaskbarList3.ThumbBarAddButtons</c>). The
+    /// payload is the button's application-defined id (<c>LOWORD(wParam)</c> of <c>WM_COMMAND</c> /
+    /// <c>THBN_CLICKED</c>) — a plain <see cref="int"/> so this seam stays TerraFX-free. The buttons themselves are
+    /// produced outside the PAL by <c>FluentGpu.WindowsApi.Shell.TaskbarManager</c>.
+    /// <para>
+    /// THREADING CONTRACT — delivered on the UI thread. The Win32 backend raises it synchronously from
+    /// <c>WM_COMMAND</c> (OS-dispatched on the window's own thread), so subscribers may touch non-thread-safe host
+    /// state (e.g. <c>AppHost.WakeFrame</c>) directly. Default implementation never fires (headless / non-Windows
+    /// backends). Same stash/drain discipline as <see cref="ActivationRedirected"/>: <c>AppHost</c> stashes the id and
+    /// re-raises at the top of <c>Paint</c>.
+    /// </para>
+    /// </summary>
+    event Action<int>? ThumbButtonClicked { add { } remove { } }
+
+    /// <summary>
+    /// Raised when explorer creates (or re-creates) this window's taskbar button — the registered
+    /// <c>TaskbarButtonCreated</c> window message. <c>ITaskbarList3.ThumbBarAddButtons</c> is only legal after this;
+    /// explorer also re-broadcasts it after a shell restart, which discards any previously added thumbnail toolbar.
+    /// Default implementation never fires. Same UI-thread + stash/drain discipline as <see cref="SystemColorsChanged"/>.
+    /// </summary>
+    event Action? TaskbarButtonCreated { add { } remove { } }
+
+    /// <summary>
     /// Raised when the OS color settings change — the user flips Windows' app dark/light mode or changes the system
     /// accent (Settings ▸ Colors). Carries no payload: subscribers re-read the current OS state (the host facade exposes
     /// it) and decide what to apply, so a single signal covers both the theme and the accent. The Win32 backend raises it

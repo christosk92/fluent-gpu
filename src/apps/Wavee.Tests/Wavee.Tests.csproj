@@ -98,6 +98,9 @@
     <!-- Home's landing projection is engine-free: tests pin one authored module per kind while the source ledger stays
          lossless for the Zune-style section directory. -->
     <Compile Include="..\Wavee\Features\Home\HomeLandingProjection.cs" />
+    <!-- Home layout document + store (System.Text.Json + Wavee.Core.Home only) — HomeLayoutTests. -->
+    <Compile Include="..\Wavee\Features\Home\Persistence\HomeLayoutDoc.cs" />
+    <Compile Include="..\Wavee\Features\Home\Persistence\HomeLayoutStore.cs" />
     <Compile Include="..\Wavee\Features\Home\HomeHeroLayout.cs" />
     <!-- Home's "Show all" cursor arithmetic: raw-vs-deduped offsets and the three termination rules (a null cursor, a
          cursor at/behind the offset that produced it, and an all-duplicate page). System + Wavee.Core only — split out
@@ -148,6 +151,7 @@
     <Compile Include="..\Wavee\Features\Sidebar\Curated\SidebarCustomizerLayout.cs" />
     <Compile Include="..\Wavee\App\SidebarBootstrap.cs" Link="SidebarBootstrap.cs" />
     <Compile Include="..\Wavee\App\PlayLogStore.cs" Link="PlayLogStore.cs" />
+    <Compile Include="..\Wavee\App\SessionSnapshotStore.cs" Link="SessionSnapshotStore.cs" />
     <!-- the teaching-tip service's PURE half: the acknowledged-id set codec + the one gating decision (System + BCL only;
          the engine-bound WaveeTips.cs service that consumes it is deliberately NOT included) — WaveeTipsCoreTests -->
     <Compile Include="..\Wavee\App\WaveeTipsCore.cs" Link="WaveeTipsCore.cs" />

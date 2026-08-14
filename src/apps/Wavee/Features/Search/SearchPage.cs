@@ -354,7 +354,7 @@ sealed class SearchSongs : Component
 
     static readonly ColumnSet Cols = new(Album: false, By: false, Date: false, Video: false, Plays: false, Heart: true, Thumb: true);
     static readonly TrackSize[] Columns =
-        [TrackSize.Px(36f), TrackSize.Px(40f), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing 40px = the "…" overflow lane
+        [TrackSize.Px(36f), TrackSize.Px(TrackRow.HeartCol), TrackSize.Px(TrackRow.ThumbSize), TrackSize.Star(), TrackSize.Px(52f), TrackSize.Px(40f)];   // trailing 40px = the "…" overflow lane
     const float RowContentH = 56f;
     const float RowExtent = 60f;
     readonly SwipeGroup _swipeGroup = new();

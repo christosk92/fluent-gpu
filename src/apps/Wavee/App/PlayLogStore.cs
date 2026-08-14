@@ -33,14 +33,14 @@ public enum PlayContextKind : byte
 
 /// <summary>One playback start. <c>ContextUri</c> is what the user pressed play ON (album/playlist/artist/show); it is
 /// empty for a bare track play, in which case the sidebar falls back to a Track row.</summary>
-public readonly record struct PlayLogEntry(string TrackUri, string ContextUri, PlayContextKind ContextKind, long PlayedAtMs)
+public readonly record struct PlayLogEntry(string TrackUri, string ContextUri, PlayContextKind ContextKind, long PlayedAtMs, string? ContextTitle = null)
 {
     public DateTime PlayedAtUtc => DateTimeOffset.FromUnixTimeMilliseconds(PlayedAtMs).UtcDateTime;
 }
 
 /// <summary>One row of the sidebar's context-first "recently played" projection: the newest play of a distinct context,
 /// or (when a play had no context) the track itself.</summary>
-public readonly record struct PlayLogContext(string Uri, PlayContextKind Kind, long PlayedAtMs, string TrackUri)
+public readonly record struct PlayLogContext(string Uri, PlayContextKind Kind, long PlayedAtMs, string TrackUri, string? Title = null)
 {
     /// <summary>True when this row is a bare track (no context) and must render as a Track row, not a container.</summary>
     public bool IsTrack => Kind == PlayContextKind.None;
@@ -96,7 +96,7 @@ public sealed class PlayLogStore
             {
                 var d = dtos[i];
                 if (string.IsNullOrEmpty(d.Track)) continue;                 // a row with no track is unusable
-                _entries.Add(new PlayLogEntry(d.Track!, d.Context ?? "", KindOfByte(d.Kind), d.AtMs));
+                _entries.Add(new PlayLogEntry(d.Track!, d.Context ?? "", KindOfByte(d.Kind), d.AtMs, d.Title));
             }
             TrimToCap();
             // No revision bump: no listeners exist yet at startup time (the HistoryStore.LoadFromDisk contract).
@@ -111,11 +111,12 @@ public sealed class PlayLogStore
     /// <summary>Record one playback start. Idempotent at the boundary: a repeat of the SAME (track, context) pair within
     /// one second is treated as the same play (a push storm at a track edge must not fill the ring). Returns whether the
     /// append was accepted.</summary>
-    public bool Append(string? trackUri, string? contextUri, long atMs = 0)
+    public bool Append(string? trackUri, string? contextUri, long atMs = 0, string? contextTitle = null)
     {
         if (string.IsNullOrEmpty(trackUri)) return false;
         if (atMs <= 0) atMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         string context = contextUri ?? "";
+        string? title = string.IsNullOrEmpty(contextTitle) ? null : contextTitle;
 
         if (_entries.Count > 0)
         {
@@ -126,7 +127,7 @@ public sealed class PlayLogStore
                 return false;
         }
 
-        _entries.Add(new PlayLogEntry(trackUri!, context, ClassifyContext(context), atMs));
+        _entries.Add(new PlayLogEntry(trackUri!, context, ClassifyContext(context), atMs, title));
         TrimToCap();
         _revision.Value++;
         ScheduleSave();
@@ -151,7 +152,8 @@ public sealed class PlayLogStore
                 key,
                 hasContext ? e.ContextKind : PlayContextKind.None,
                 e.PlayedAtMs,
-                e.TrackUri));
+                e.TrackUri,
+                e.ContextTitle));
         }
         return rows;
     }
@@ -238,7 +240,7 @@ public sealed class PlayLogStore
         for (int i = 0; i < count; i++)
         {
             var e = _entries[start + i];
-            snapshot[i] = new PlayLogEntryDto(e.TrackUri, e.ContextUri.Length == 0 ? null : e.ContextUri, (byte)e.ContextKind, e.PlayedAtMs);
+            snapshot[i] = new PlayLogEntryDto(e.TrackUri, e.ContextUri.Length == 0 ? null : e.ContextUri, (byte)e.ContextKind, e.PlayedAtMs, e.ContextTitle);
         }
         return snapshot;
     }
@@ -314,7 +316,7 @@ public sealed class PlayLogStore
 
 // AOT-safe source-gen JSON for the persisted play log (the HistoryJsonCtx precedent). Short member names: the file is
 // written at every listening session and 200 rows of verbose keys is pure waste.
-internal readonly record struct PlayLogEntryDto(string Track, string? Context, byte Kind, long AtMs);
+internal readonly record struct PlayLogEntryDto(string Track, string? Context, byte Kind, long AtMs, string? Title = null);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 [JsonSerializable(typeof(PlayLogEntryDto[]))]
