@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using FluentGpu;
 using FluentGpu.Animation;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -239,7 +240,9 @@ sealed class WaveeShell : Component
         if (Diag.EnvFlag("WAVEE_LYRICS_OPEN") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Lyrics; }
         if (Diag.EnvFlag("WAVEE_NOWPLAYING_OPEN")) { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = RailMode.Details; }
 
-        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_RAIL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH") || Diag.EnvFlag("WAVEE_SIDEBAR_MODE_SHOT") || Diag.EnvFlag("WAVEE_SIDEBAR_V3_SHOT") || Diag.EnvFlag("WAVEE_SIDEBAR_VISUAL_SHOT"))
+        // WAVEE_STARTUP_BENCH belongs in this list even though it drives no navigation: the bench's "session restored"
+        // mark is the first frame on which ProbeNav is non-null, so without the flag here that timing reads n/a forever.
+        if (Diag.EnvFlag("WAVEE_NAV_PROBE") || Diag.EnvFlag("WAVEE_RESIZE_PROBE") || Diag.EnvFlag("WAVEE_CONN_STRESS") || Diag.EnvFlag("WAVEE_TRACKLIST_SHOT") || Diag.EnvFlag("WAVEE_HERO_SHOT") || Diag.EnvFlag("WAVEE_SHELF_SHOT") || Diag.EnvFlag("WAVEE_RAIL_SHOT") || Diag.EnvFlag("WAVEE_HOME_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_RAIL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_PROBE") || Diag.EnvFlag("WAVEE_LIVE_LYRICS_SCROLL_PROBE") || Diag.EnvFlag("WAVEE_LYRICS_ADVANCE_PROBE") || Diag.EnvFlag("WAVEE_MEM_SOAK") || Diag.EnvFlag("WAVEE_PERF_BENCH") || Diag.EnvFlag("WAVEE_STARTUP_BENCH") || Diag.EnvFlag("WAVEE_SIDEBAR_MODE_SHOT") || Diag.EnvFlag("WAVEE_SIDEBAR_V3_SHOT") || Diag.EnvFlag("WAVEE_SIDEBAR_VISUAL_SHOT"))
         {
             ProbeNav = GoNav; ProbeBack = Back; ProbeForward = Forward; ProbeTheme = ToggleTheme; ProbeOpenTab = OpenNewTab;
             ProbeRail = m => { _shellUi.RailOpen.Value = true; _shellUi.Mode.Value = (RailMode)m; };
@@ -588,8 +591,17 @@ sealed class WaveeShell : Component
             string artist = track.Artists.Count > 0 ? track.Artists[0].Name : "";
             Announcer.SayThrottled(artist.Length == 0 ? title : title + ", " + artist);
         });
-        // Best-effort session flush on shell unmount. Process-exit Flush lives in Program.cs (another agent's file).
+        // Best-effort session flush on shell unmount. Process-exit Flush lives in Program.cs.
         UseEffect(() => (Action?)(() => _session.Flush()), DepKey.Empty);
+        // Mouse side buttons / keyboard Back-Forward keys arrive as an OS COMMAND (WM_APPCOMMAND), not as a click at a
+        // position, so they cannot be an Accelerator box like Alt+Left/Right — they come in through the PAL seam and land
+        // on the same Back()/Forward() the chord boxes use. Subscribed once for the shell's lifetime.
+        UseEffect(() =>
+        {
+            Action<int> onNav = which => { if (which == 0) Back(); else Forward(); };
+            FluentApp.AppNavigationCommand += onNav;
+            return () => FluentApp.AppNavigationCommand -= onNav;
+        }, DepKey.Empty);
         // The row indicator / "Videos only" filter read the association plane + the curation through a process-wide
         // probe rather than context, because they run per ROW (a context read or a signal subscription per row is not
         // affordable there). Both halves of the has-video answer are attached here, and nothing else answers it.

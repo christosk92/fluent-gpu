@@ -77,6 +77,18 @@ sealed partial class SettingsPage
             Bump();
         }, style: SettingsCard.CompactToggleStyle());
 
+        // The scheme association is applied AT THE TOGGLE, not at next launch: a user who turns this on expects the very
+        // next spotify: link to open here, and one who turns it off expects the scheme handed straight back.
+        Element SpotifyLinksToggle() => ToggleSwitch.Create(
+            new Signal<bool>(settings?.Get(WaveeSettings.HandleSpotifyLinks) ?? false), onChange: _ =>
+            {
+                if (settings is null) return;
+                bool next = !settings.Get(WaveeSettings.HandleSpotifyLinks);
+                settings.Set(WaveeSettings.HandleSpotifyLinks, next);
+                DeepLink.SyncSpotifySchemeRegistration(next);
+                Bump();
+            }, style: SettingsCard.CompactToggleStyle());
+
         // (The "Use base Mica" row is gone, but NOT because the shell covers the backdrop — it does the opposite: the
         // authenticated shell is bare Mica with translucent content-layer rungs over it, so the DWM material is visible
         // through every chrome band. The row went away because MicaAlt is the one right answer for that stack and a
@@ -155,6 +167,9 @@ sealed partial class SettingsPage
             // would be a conditional hook (it would vanish from the page's hook order the moment another tab renders).
             SettingsSectionHeader(Loc.Get(Strings.Settings.Sidebar.Title), Icons.SplitView),
             Embed.Comp(() => new SidebarSettingsCard()),
+            SettingsSectionHeader(Loc.Get(Strings.Settings.Links.Title), Icons.Link),
+            SettingsRow(Loc.Get(Strings.Settings.Links.Spotify), Loc.Get(Strings.Settings.Links.SpotifySub),
+                SpotifyLinksToggle(), Icons.Link),
             SettingsSectionHeader(Loc.Get(Strings.Settings.Language.Title), Icons.Globe),
             SettingsRow(Loc.Get(Strings.Settings.Language.Label), Loc.Get(Strings.Settings.Language.RestartSub),
                 ComboBox.Create(languageOptions.Labels, _language, width: 260f, isEnabled: settings is not null,

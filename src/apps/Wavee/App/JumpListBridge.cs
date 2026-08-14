@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.Versioning;
 using FluentGpu.Localization;
+using FluentGpu.WindowsApi.Notifications;
 using FluentGpu.WindowsApi.Shell;
 using Wavee.Backend.Metadata;
 using Wavee.Backend.Persistence;
@@ -136,7 +137,12 @@ public sealed class JumpListBridge
                 new("Search", exe, "wavee://open?route=search", icon, "Search"),
             };
             JumpListItem[] items = BuildCategory(exe, icon);
-            JumpList.SetCategory("Jump back in", items, tasks);
+            // Pass the AUMID the toast layer actually registered rather than relying on the process default association:
+            // the shell keys a custom destination list by AUMID, so if these two ever disagree the list is written for an
+            // identity the taskbar button does not have and silently never appears. Empty (Register not called yet) keeps
+            // the old default-association behaviour.
+            string? aumid = ToastNotifier.Default.Aumid is { Length: > 0 } id ? id : null;
+            JumpList.SetCategory("Jump back in", items, tasks, aumid);
         }
         catch (Exception)
         {

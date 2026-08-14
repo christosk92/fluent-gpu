@@ -141,6 +141,10 @@ static class WaveeSettings
     // Cap applied WHEN the connection is metered (NetworkCostKind.Fixed / Variable). Same 0..2 ladder as PlaybackQuality.
     // Default 1 = High160 so a metered laptop does not silently stay on Very High.
     public static readonly SettingKey<int> MeteredQualityCap = new("playback.quality.meteredCap", 1);
+    // Handle spotify: links with Wavee. OFF by default and deliberately so (the calm contract): silently taking the scheme
+    // from an installed Spotify would break the user's muscle memory without being asked. Toggling it registers /
+    // unregisters the HKCU scheme association at once, so the change is visible immediately rather than at next launch.
+    public static readonly SettingKey<bool> HandleSpotifyLinks = new("app.protocol.spotify", false);
     // Volume persistence: when RememberVolume, SavedVolume (0..1) seeds the device volume at launch and is written back
     // (debounced) as the user adjusts it.
     public static readonly SettingKey<bool> RememberVolume = new("playback.volume.remember", true);

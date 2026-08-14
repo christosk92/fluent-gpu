@@ -375,6 +375,19 @@ public interface IPlatformApp : IDisposable
     event Action<int>? ThumbButtonClicked { add { } remove { } }
 
     /// <summary>
+    /// Raised when the OS reports a browser-style navigation command — a mouse's side buttons (XButton1/2) or a keyboard
+    /// Back/Forward key. The payload is <c>0 = Back</c>, <c>1 = Forward</c>: a plain <see cref="int"/> so this seam stays
+    /// TerraFX-free, and deliberately NOT a pointer button, because those buttons are not a click at a position — the OS
+    /// delivers them as a command (Win32 <c>WM_APPCOMMAND</c>) and an app is expected to act on them globally.
+    /// <para>
+    /// THREADING CONTRACT — delivered on the UI thread, same stash/drain discipline as <see cref="ThumbButtonClicked"/>
+    /// (<c>AppHost</c> stashes and re-raises at the top of <c>Paint</c>). Default implementation never fires (headless /
+    /// non-Windows backends; macOS has no equivalent side-button command and is expected to leave this silent).
+    /// </para>
+    /// </summary>
+    event Action<int>? AppNavigationCommand { add { } remove { } }
+
+    /// <summary>
     /// Raised when explorer creates (or re-creates) this window's taskbar button — the registered
     /// <c>TaskbarButtonCreated</c> window message. <c>ITaskbarList3.ThumbBarAddButtons</c> is only legal after this;
     /// explorer also re-broadcasts it after a shell restart, which discards any previously added thumbnail toolbar.

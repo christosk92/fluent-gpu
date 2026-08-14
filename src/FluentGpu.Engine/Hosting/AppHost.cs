@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using FluentGpu.Animation;
@@ -515,6 +515,12 @@ public sealed class AppHost : IDisposable
     private bool _pendingThumbClick;                   // thumbnail-toolbar click pending; drained at Paint top
     private int _pendingThumbButtonId;                 // valid when _pendingThumbClick (0 is a legal button id)
     private Action<int>? _onThumbButtonClicked;        // cached subscription (unsubscribed in Dispose)
+    // App navigation command (mouse side buttons / Back-Forward keys). Coalesced to the LAST command of the frame: the
+    // OS can deliver a burst if the user mashes the button, and replaying every one of them would blow through the
+    // history stack in a single frame.
+    private bool _pendingAppNavigation;
+    private int _pendingAppNavigationWhich;
+    private Action<int>? _onAppNavigationCommand;      // cached subscription (unsubscribed in Dispose)
     private bool _pendingTaskbarButtonCreated;         // explorer created/recreated the taskbar button
     private Action? _onTaskbarButtonCreated;           // cached subscription (unsubscribed in Dispose)
 
@@ -539,6 +545,15 @@ public sealed class AppHost : IDisposable
     /// next frame, so handlers may freely mutate signals. Never fires under the headless PAL.
     /// </summary>
     public event Action<int>? ThumbButtonClicked;
+
+    /// <summary>
+    /// Raised on the UI thread when the OS reports a browser-style navigation command — a mouse's side buttons
+    /// (XButton1/2) or a keyboard Back/Forward key. Payload is <c>0 = Back</c>, <c>1 = Forward</c>. Wired from
+    /// <see cref="FluentGpu.Pal.IPlatformApp.AppNavigationCommand"/> and delivered at the top of the next frame, so
+    /// handlers may navigate and mutate signals freely. Coalesced to the last command of the frame (a mashed side button
+    /// must not walk the whole history stack in one frame). Never fires under the headless PAL.
+    /// </summary>
+    public event Action<int>? AppNavigationCommand;
 
     /// <summary>
     /// Raised on the UI thread when explorer creates (or re-creates, after a shell restart) this window's taskbar
@@ -2164,6 +2179,8 @@ public sealed class AppHost : IDisposable
         // WakeFrame; Paint() drains at the top and re-raises so app handlers may write signals this same frame.
         _onThumbButtonClicked = id => { _pendingThumbButtonId = id; _pendingThumbClick = true; WakeFrame(); };
         app.ThumbButtonClicked += _onThumbButtonClicked;
+        _onAppNavigationCommand = which => { _pendingAppNavigationWhich = which; _pendingAppNavigation = true; WakeFrame(); };
+        app.AppNavigationCommand += _onAppNavigationCommand;
         // Explorer created/recreated the taskbar button (registered TaskbarButtonCreated message). Same stash/drain as
         // SystemColorsChanged — app code re-adds the thumbnail toolbar after a shell restart.
         _onTaskbarButtonCreated = () => { _pendingTaskbarButtonCreated = true; WakeFrame(); };
@@ -2738,6 +2755,11 @@ public sealed class AppHost : IDisposable
             {
                 _pendingThumbClick = false;
                 ThumbButtonClicked?.Invoke(_pendingThumbButtonId);
+            }
+            if (_pendingAppNavigation)
+            {
+                _pendingAppNavigation = false;
+                AppNavigationCommand?.Invoke(_pendingAppNavigationWhich);
             }
             if (_pendingTaskbarButtonCreated)
             {
@@ -4387,6 +4409,7 @@ public sealed class AppHost : IDisposable
         if (_onActivationRedirected is { } onAct) { _app.ActivationRedirected -= onAct; _onActivationRedirected = null; }
         if (_onSystemColorsChanged is { } onSys) { _app.SystemColorsChanged -= onSys; _onSystemColorsChanged = null; }
         if (_onThumbButtonClicked is { } onThumb) { _app.ThumbButtonClicked -= onThumb; _onThumbButtonClicked = null; }
+        if (_onAppNavigationCommand is { } onNav) { _app.AppNavigationCommand -= onNav; _onAppNavigationCommand = null; }
         if (_onTaskbarButtonCreated is { } onTbb) { _app.TaskbarButtonCreated -= onTbb; _onTaskbarButtonCreated = null; }
         // Symmetric SIP teardown: drop the OccludedRect subscription so a disposed host's window TextInput keeps no
         // callback into it (the SIP reflow closure captures _dispatcher).

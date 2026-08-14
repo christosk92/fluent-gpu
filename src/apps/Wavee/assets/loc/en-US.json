@@ -552,6 +552,11 @@
       "customize": "Customize sidebar",
       "customizeSub": "Add, reorder and configure the sections in Custom"
     },
+    "links": {
+      "title": "Links",
+      "spotify": "Open spotify: links in Wavee",
+      "spotifySub": "Off by default. Turning this on makes Wavee the handler for spotify: links; turning it off gives it back."
+    },
     "tabs": {
       "general": "General",
       "playback": "Playback",

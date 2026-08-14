@@ -161,6 +161,31 @@ public sealed unsafe partial class Win32App : IPlatformApp
     /// WM_COMMAND / THBN_CLICKED case (OS-dispatched on the window's own thread).</summary>
     internal static void RaiseThumbButtonClicked(int id) => s_thumbButtonClicked?.Invoke(id);
 
+    // ── app navigation command (IPlatformApp.AppNavigationCommand) ──────────────────────────────────────────────────
+    // WM_APPCOMMAND lands in Win32Window.Handle32 and routes here (static bridge, same single-window rationale as the
+    // activation redirect). This is the message Windows defines for a mouse's side buttons and for keyboards with
+    // dedicated Back/Forward keys — the same one browsers listen to. Payload is a small enum-as-int so the seam stays
+    // TerraFX-free: 0 = Back, 1 = Forward.
+    private static Action<int>? s_appNavigationCommand;
+
+    /// <inheritdoc/>
+    public event Action<int>? AppNavigationCommand
+    {
+        add => s_appNavigationCommand += value;
+        remove => s_appNavigationCommand -= value;
+    }
+
+    /// <summary>Raise <see cref="AppNavigationCommand"/> on the UI thread. Called by <see cref="Win32Window"/>'s
+    /// WM_APPCOMMAND case (OS-dispatched on the window's own thread). Returns true when a subscriber existed, so the
+    /// window can report the command as handled instead of letting DefWindowProc pass it up the shell chain.</summary>
+    internal static bool RaiseAppNavigationCommand(int which)
+    {
+        var handler = s_appNavigationCommand;
+        if (handler is null) return false;
+        handler(which);
+        return true;
+    }
+
     // ── taskbar button created (IPlatformApp.TaskbarButtonCreated) ──────────────────────────────────────────────────
     // The registered "TaskbarButtonCreated" message lands in Win32Window.Handle32 (runtime msg id, not a WM_* const)
     // and routes here. Callers re-add thumbnail buttons after explorer restart.
@@ -235,6 +260,7 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                        WM_CHAR = 0x0102, WM_ACTIVATE = 0x0006, WM_SETCURSOR = 0x0020, WM_CAPTURECHANGED = 0x0215,
                        WM_COPYDATA = 0x004A,   // single-instance activation redirect (SingleInstanceGate → ActivationRedirected)
                        WM_COMMAND = 0x0111,    // menu/accelerator/control; HIWORD==THBN_CLICKED (0x1800) = thumb-toolbar click
+                       WM_APPCOMMAND = 0x0319, // mouse side buttons / Back-Forward keys (browser-style navigation)
                        WM_SETTINGCHANGE = 0x001A,   // OS settings change; lParam names the area ("ImmersiveColorSet" = dark-mode/accent)
                        WM_IME_STARTCOMPOSITION = 0x010D, WM_IME_ENDCOMPOSITION = 0x010E, WM_IME_COMPOSITION = 0x010F,
                        WM_IME_SETCONTEXT = 0x0281,
@@ -330,7 +356,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // contact back onto the engine's 0=left/1=right/2=middle convention (touch/pen down is always the primary action).
     private const uint POINTER_CHANGE_FIRSTBUTTON_DOWN = 1, POINTER_CHANGE_FIRSTBUTTON_UP = 2,
                        POINTER_CHANGE_SECONDBUTTON_DOWN = 3, POINTER_CHANGE_SECONDBUTTON_UP = 4,
-                       POINTER_CHANGE_THIRDBUTTON_DOWN = 5, POINTER_CHANGE_THIRDBUTTON_UP = 6;
+                       POINTER_CHANGE_THIRDBUTTON_DOWN = 5, POINTER_CHANGE_THIRDBUTTON_UP = 6,
+                       POINTER_CHANGE_FOURTHBUTTON_DOWN = 7, POINTER_CHANGE_FOURTHBUTTON_UP = 8,
+                       POINTER_CHANGE_FIFTHBUTTON_DOWN = 9, POINTER_CHANGE_FIFTHBUTTON_UP = 10;
     // Synthetic PointerId for caption events the NC path injects into the client stream — high enough never to collide
     // with a real OS pointer id (and past InputEventRing.IdSlots so it is simply not coalesced against a real contact).
     private const uint NcSyntheticPointerId = 0xFFFFFFFE;
@@ -667,6 +695,9 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     // ('F''G''A''C') — the two assemblies are independent peers and cannot share the constant.
     private const nuint ActivationCopyDataCookie = 0x46474143;
     private const uint THBN_CLICKED = 0x1800;          // winuser.h — thumbnail-toolbar click notification
+    // WM_APPCOMMAND (winuser.h): the command is GET_APPCOMMAND_LPARAM(lParam) = HIWORD(lParam) & ~FAPPCOMMAND_MASK.
+    private const int FAPPCOMMAND_MASK = 0xF000;
+    private const int APPCOMMAND_BROWSER_BACKWARD = 1, APPCOMMAND_BROWSER_FORWARD = 2;
     private const uint MsgfltAllow = 1;                // MSGFLT_ALLOW — ChangeWindowMessageFilterEx
     private static uint s_taskbarButtonCreatedMsg;     // RegisterWindowMessageW("TaskbarButtonCreated")
 
@@ -1985,6 +2016,17 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
                 Win32App.RaiseThumbButtonClicked(unchecked((int)((nuint)wParam & 0xFFFF)));
                 result = (LRESULT)0;
                 return true;
+            case WM_APPCOMMAND:
+            {
+                // Mouse side buttons / keyboard Back-Forward keys. The command is the high word of lParam with the device
+                // bits masked off. Only the two navigation commands are claimed; everything else (media keys, volume)
+                // falls through to DefWindowProc so the shell still handles it.
+                int cmd = unchecked((int)(((ulong)(nint)lParam >> 16) & ~(ulong)FAPPCOMMAND_MASK));
+                int which = cmd == APPCOMMAND_BROWSER_BACKWARD ? 0 : cmd == APPCOMMAND_BROWSER_FORWARD ? 1 : -1;
+                if (which < 0 || !Win32App.RaiseAppNavigationCommand(which)) return false;
+                result = (LRESULT)1;   // "handled" per WM_APPCOMMAND docs
+                return true;
+            }
             case WM_SETCURSOR:
                 // Re-assert the engine-chosen cursor while over the client area; let DefWindowProc style the chrome.
                 if (((long)(nint)lParam & 0xFFFF) == HTCLIENT) { ApplyCursor(); result = (LRESULT)1; return true; }
@@ -2345,6 +2387,12 @@ public sealed unsafe partial class Win32Window : IPlatformWindow
     {
         POINTER_CHANGE_SECONDBUTTON_DOWN or POINTER_CHANGE_SECONDBUTTON_UP => 1,
         POINTER_CHANGE_THIRDBUTTON_DOWN or POINTER_CHANGE_THIRDBUTTON_UP => 2,
+        // The side buttons (XButton1/2) must NOT fall through to 0 — that made a mouse "back" press arrive as a LEFT
+        // click and activate whatever sat under the cursor. The engine ignores buttons > 2 (InputDispatcher's
+        // `if (e.Button != 0) break;`), so distinct ids make them inert here; navigation rides WM_APPCOMMAND instead,
+        // which is the message Windows defines for those buttons and the one browsers use.
+        POINTER_CHANGE_FOURTHBUTTON_DOWN or POINTER_CHANGE_FOURTHBUTTON_UP => 3,
+        POINTER_CHANGE_FIFTHBUTTON_DOWN or POINTER_CHANGE_FIFTHBUTTON_UP => 4,
         _ => 0,   // FIRSTBUTTON (left) or no/other change
     };
 

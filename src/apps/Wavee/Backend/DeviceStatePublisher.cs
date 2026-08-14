@@ -185,6 +185,18 @@ public sealed class DeviceStatePublisher : IPlaybackProjection, IConnectCommandA
         _ = PublishAsync(PutStateReasonKind.BecameInactive, false);
     }
 
+    /// <summary>Re-announce this device to the cluster with <see cref="PutStateReasonKind.NewConnection"/> — the same
+    /// announce a fresh dealer connection id triggers. The caller is a resume from OS SLEEP: the socket may look alive
+    /// while the server has long since dropped our device, so without this the device silently vanishes from other
+    /// clients' picker until something else forces a publish. Deliberately NOT
+    /// <see cref="PublishStateChanged"/> — that is a PlayerStateChanged reason and does not re-register the device.
+    /// Muted while ownership is retired (we are not the active device; announcing would steal the cluster back).</summary>
+    public void AnnounceNewConnection()
+    {
+        lock (_gate) { if (_ownershipRetired) return; }
+        _ = PublishAsync(PutStateReasonKind.NewConnection, IsLocallyPlaying());
+    }
+
     public void NoteCommand(in ConnectCommandAttribution attribution)
     {
         lock (_gate) _lastCommand = attribution;

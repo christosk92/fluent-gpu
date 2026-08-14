@@ -1,4 +1,4 @@
-using FluentGpu.Dsl;
+﻿using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Hosting;
@@ -66,6 +66,13 @@ public static class FluentApp
     /// signals that re-render. App-layer relay so page/app code can subscribe without holding the <c>AppHost</c>.
     /// </summary>
     public static event Action<int>? ThumbButtonClicked;
+
+    /// <summary>
+    /// Relay of the host's app-navigation command — a mouse's side buttons (XButton1/2) or a keyboard Back/Forward key.
+    /// Payload is <c>0 = Back</c>, <c>1 = Forward</c>. Forwarded from <c>AppHost.AppNavigationCommand</c> while a run is
+    /// active and delivered on the UI thread, so handlers may navigate and write signals directly.
+    /// </summary>
+    public static event Action<int>? AppNavigationCommand;
 
     /// <summary>
     /// Relay of the host's <c>TaskbarButtonCreated</c> event (explorer created or re-created this window's taskbar
@@ -225,6 +232,8 @@ public static class FluentApp
         host.ActivationRedirected += forwardActivation;
         Action<int> forwardThumbClick = id => ThumbButtonClicked?.Invoke(id);
         host.ThumbButtonClicked += forwardThumbClick;
+        Action<int> forwardAppNav = which => AppNavigationCommand?.Invoke(which);
+        host.AppNavigationCommand += forwardAppNav;
         Action forwardTaskbarCreated = () => TaskbarButtonCreated?.Invoke();
         host.TaskbarButtonCreated += forwardTaskbarCreated;
 

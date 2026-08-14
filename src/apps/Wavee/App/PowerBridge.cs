@@ -170,16 +170,13 @@ static class PowerBridge
         catch { }
     }
 
-    /// <summary>
-    /// TODO(T1.4): <c>DeviceStatePublisher.PublishAsync(PutStateReasonKind.NewConnection)</c> is private and
-    /// <see cref="LiveConnect"/> does not expose the publisher. A resume re-announce is therefore not wired.
-    /// When Connect grows a public <c>AnnounceNewConnection</c>, call it here from the UI thread.
-    /// </summary>
+    /// <summary>Re-announce this device to the Connect cluster after an OS resume (UI thread). A sleeping machine loses its
+    /// device registration server-side even when the socket still looks alive, so without this the device quietly stops
+    /// appearing in other clients' picker until some other publish happens to fire. No-op before login (no live host).</summary>
     public static void ReannounceConnect()
     {
-        // Reachable instance: Services.LiveHost.Connect — but the only public publish is RepublishPlayerState
-        // (PlayerStateChanged), which is not a NewConnection announce. Intentionally not a substitute.
-        _ = _services?.LiveHost?.Connect;
+        try { _services?.LiveHost?.Connect?.AnnounceNewConnection(); }
+        catch (Exception) { /* a resume must never fault on a publish; the next real edge republishes */ }
     }
 
     public static void Shutdown()

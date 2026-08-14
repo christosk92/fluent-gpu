@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentGpu.Hooks;
+using FluentGpu.Input;
 using FluentGpu.Signals;
 using Wavee.Core;
 
@@ -135,10 +136,22 @@ public sealed class LibraryBridge : IUndoTarget
         var next = new HashSet<string>(cur);
         if (saved) next.Add(uri); else next.Remove(uri);
         PublishSaved(next);                      // optimistic, URI-selective subscribers update this frame
+        AnnounceSaved(saved, name);
         // Record BEFORE the async reconcile so the entry exists to flip Failed if the write faults immediately.
         long id = _activity.IsSuppressed ? -1 : _activity.Record(saved ? ActivityKind.Save : ActivityKind.Unsave, uri, name);
         var task = _mut.SetSavedAsync(uri, saved);   // reconcile (re-emits the confirmed set via the bridge subscription)
         if (id >= 0) _ = task.ContinueWith(t => { if (t.IsFaulted) _activity.MarkFailed(id); }, TaskScheduler.Default);
+    }
+
+    // Save/unsave is a silent visual flip (a heart fills), so a screen-reader user gets no confirmation that the thing they
+    // pressed actually happened. Announced HERE rather than per affordance: every heart, menu item, row action and drop
+    // target routes through SetSaved, so one call covers them all and none can drift. Composed on the event, never per
+    // frame; throttled so holding a key or a fast unsave-resave burst does not flood the reader.
+    static void AnnounceSaved(bool saved, string? name)
+    {
+        if (!Announcer.IsAvailable) return;
+        string what = saved ? "Saved" : "Removed from library";
+        Announcer.SayThrottled(string.IsNullOrEmpty(name) ? what : what + ": " + name);
     }
 
     void PublishSaved(IReadOnlySet<string> next)

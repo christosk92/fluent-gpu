@@ -52,6 +52,10 @@ public sealed class LiveConnect : IDisposable
     /// <summary>Re-publish the player state for a wire-visible change that produced no playback event (a music-video
     /// association landing under the playing track). One PutState, no host/kind change.</summary>
     public void RepublishPlayerState() => _publisher.PublishStateChanged();
+    /// <summary>Re-announce this device to the cluster (a <c>NewConnection</c> PutState) after an OS resume — a sleeping
+    /// machine's device registration is gone even when the socket looks alive. Not the same as
+    /// <see cref="RepublishPlayerState"/>, which only reports transport state.</summary>
+    public void AnnounceNewConnection() => _publisher.AnnounceNewConnection();
     readonly ConnectService _connect;
     readonly DeviceStatePublisher _publisher;
     readonly ConnectStateBuilder _stateBuilder;

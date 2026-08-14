@@ -296,6 +296,9 @@ static class Program
                 string? exe = Environment.ProcessPath;
                 if (exe is { Length: > 0 })
                     ProtocolRegistrar.RegisterProtocol("wavee", exe, "Wavee", iconPath: WaveeAppIcon.Path());
+                // The opt-in spotify: handler follows the setting in both directions, so turning it off in a previous
+                // session actually gives the scheme back rather than leaving a stale HKCU association behind.
+                DeepLink.SyncSpotifySchemeRegistration(settings.Get(WaveeSettings.HandleSpotifyLinks));
             }
             catch (Exception ex)
             {

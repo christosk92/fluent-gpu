@@ -3208,8 +3208,15 @@ public sealed unsafe partial class D3D12Device : IGpuDevice
             _adapter3 = adapter;
     }
 
+    // The receipts UI reads this on a 5 s timer, so producing it every Present would spend two DXGI calls per frame to
+    // refresh a value nobody looks at 299 times out of 300. Sample on a cold cadence instead: ~1 Hz at 60 fps.
+    const int VideoMemorySampleEveryNPresents = 60;
+    int _videoMemorySampleCountdown;
+
     void PublishVideoMemorySnapshot()
     {
+        if (--_videoMemorySampleCountdown > 0) return;
+        _videoMemorySampleCountdown = VideoMemorySampleEveryNPresents;
         EnsureAdapter3();
         if (_adapter3 == null) return;
         DXGI_QUERY_VIDEO_MEMORY_INFO local = default, nonLocal = default;

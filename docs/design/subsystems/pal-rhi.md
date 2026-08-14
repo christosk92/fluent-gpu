@@ -159,6 +159,20 @@ other `WM_COMMAND` (menus/accelerators) with no allocation. Same **UI-thread + s
 the top of `Paint`; `FluentApp.ThumbButtonClicked` relays it to app code. Default-interface-method; headless
 never fires.
 
+`IPlatformApp` also exposes `event Action<int>? AppNavigationCommand` — a browser-style navigation command from
+the OS: a mouse's side buttons (XButton1/2) or a keyboard Back/Forward key. Payload is `0 = Back`, `1 = Forward`
+(a plain `int`, so the seam stays TerraFX-free). It is deliberately **not** a pointer button: the OS delivers
+these as a command (`WM_APPCOMMAND`), not as a click at a position, and an app acts on them globally rather than
+against whatever sits under the cursor. The Win32 backend reads `GET_APPCOMMAND_LPARAM(lParam)`, claims only
+`APPCOMMAND_BROWSER_BACKWARD/FORWARD`, and reports handled (`1`) only when a subscriber exists — every other
+command (media keys, volume) falls through to `DefWindowProc` so the shell still handles it. Relatedly, the Win32
+pointer path maps `POINTER_CHANGE_FOURTH/FIFTHBUTTON_*` to button ids `3`/`4` instead of letting them fall
+through to `0`; the engine ignores buttons `> 2`, so a side button can no longer synthesize a phantom LEFT click
+over whatever the cursor happens to be on. Same **UI-thread + stash/drain** discipline as `ThumbButtonClicked`,
+and the stash keeps only the LAST command of the frame (a mashed side button must not walk the whole history
+stack in one frame). Default-interface-method; headless never fires, and macOS is expected to leave it silent
+(no equivalent OS command).
+
 `IPlatformApp` also exposes `event Action? TaskbarButtonCreated` — explorer's registered
 `"TaskbarButtonCreated"` window message, broadcast when the window's taskbar button exists and again if
 explorer restarts. `ThumbBarAddButtons` is only legal after the button exists; a shell restart discards any

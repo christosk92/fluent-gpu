@@ -1,6 +1,8 @@
+using System;
 using System.Runtime.InteropServices;
 using FluentGpu;
 using FluentGpu.Signals;
+using FluentGpu.WindowsApi.Activation;
 
 namespace Wavee;
 
@@ -25,6 +27,7 @@ public static partial class DeepLink
     public static bool TryParse(string? raw, out DeepLinkVerb verb)
     {
         verb = default;
+        if (TryParseSpotifyUri(raw, out verb)) return true;
         if (!TryExtractUri(raw, out string text)) return false;
         if (!Uri.TryCreate(text, UriKind.Absolute, out Uri? uri)) return false;
         if (!string.Equals(uri.Scheme, "wavee", StringComparison.OrdinalIgnoreCase)) return false;
@@ -65,6 +68,26 @@ public static partial class DeepLink
         return false;
     }
 
+    /// <summary>Register or unregister the OPT-IN <c>spotify:</c> scheme association (HKCU) to match
+    /// <c>WaveeSettings.HandleSpotifyLinks</c>. Called at boot and again whenever the setting is toggled, so the two can
+    /// never drift. Off is the default and unregisters: taking the scheme from an installed Spotify without being asked
+    /// would break the user's muscle memory. Never throws — a registry write we are not allowed to make must not stop
+    /// the app from starting.</summary>
+    public static void SyncSpotifySchemeRegistration(bool handleSpotifyLinks)
+    {
+        try
+        {
+            if (!handleSpotifyLinks) { ProtocolRegistrar.UnregisterProtocol("spotify"); return; }
+            string? exe = Environment.ProcessPath;
+            if (exe is { Length: > 0 })
+                ProtocolRegistrar.RegisterProtocol("spotify", exe, "Wavee", iconPath: WaveeAppIcon.Path());
+        }
+        catch (Exception ex)
+        {
+            WaveeLog.Instance.Warn("app", "spotify: protocol registration sync failed", ex);
+        }
+    }
+
     /// <summary>Restore (if minimized) and foreground the FluentApp window. No-op when the HWND is not up yet.
     /// App-side P/Invoke — <c>FluentGpu.Windows</c> has no public wake/activate helper.</summary>
     public static void WakeWindow()
@@ -73,6 +96,45 @@ public static partial class DeepLink
         if (hwnd == 0) return;
         ShowWindow(hwnd, IsIconic(hwnd) ? SwRestore : SwShow);
         SetForegroundWindow(hwnd);
+    }
+
+    /// <summary>Translate a bare Spotify entity URI into the equivalent Wavee verb, so the opt-in <c>spotify:</c> handler
+    /// (<c>WaveeSettings.HandleSpotifyLinks</c>) can share ONE activation path with <c>wavee://</c>. Pages become
+    /// <see cref="DeepLinkKind.Open"/> on the shell's own route names; a track becomes <see cref="DeepLinkKind.Play"/>
+    /// (which is what clicking a shared track link means) and therefore rides the context resolver like any other play.
+    /// Everything else — users, concerts, search links, <c>https://open.spotify.com/…</c> web links (those go to the
+    /// browser, not to us) — is refused rather than guessed at.</summary>
+    static bool TryParseSpotifyUri(string? raw, out DeepLinkVerb verb)
+    {
+        verb = default;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        ReadOnlySpan<char> s = raw.AsSpan().Trim();
+        if (s.Length >= 2 && s[0] == '"' && s[^1] == '"') s = s[1..^1].Trim();
+        if (!s.StartsWith("spotify:", StringComparison.OrdinalIgnoreCase)) return false;
+
+        // spotify:<kind>:<id> — reject the nested/extra-segment forms (spotify:user:x:playlist:y) rather than guessing.
+        ReadOnlySpan<char> rest = s["spotify:".Length..];
+        int colon = rest.IndexOf(':');
+        if (colon <= 0 || colon + 1 >= rest.Length) return false;
+        ReadOnlySpan<char> kind = rest[..colon];
+        ReadOnlySpan<char> id = rest[(colon + 1)..];
+        if (id.IndexOf(':') >= 0 || id.IndexOfAny(' ', '\t', '"') >= 0) return false;
+
+        string uri = s.ToString();
+        if (kind.Equals("track", StringComparison.OrdinalIgnoreCase))
+        {
+            verb = new DeepLinkVerb(DeepLinkKind.Play, "", "", uri);
+            return true;
+        }
+        string? route =
+            kind.Equals("album", StringComparison.OrdinalIgnoreCase) ? "album"
+            : kind.Equals("playlist", StringComparison.OrdinalIgnoreCase) ? "pl"
+            : kind.Equals("artist", StringComparison.OrdinalIgnoreCase) ? "artist"
+            : kind.Equals("show", StringComparison.OrdinalIgnoreCase) ? "show"
+            : null;
+        if (route is null) return false;
+        verb = new DeepLinkVerb(DeepLinkKind.Open, route, uri, "");
+        return true;
     }
 
     static bool TryExtractUri(string? raw, out string uri)
