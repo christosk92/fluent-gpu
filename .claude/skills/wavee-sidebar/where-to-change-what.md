@@ -68,7 +68,10 @@ Everything visual is in one place now. **Do not** add a metric to a mode compone
 | section rhythm | `SidebarPaneMetrics.{SectionGap, HeaderBodyGap}`, applied renderer-side by `SidebarPaneSlot.Banded` as **padding on a wrapper** — padding is unambiguously part of the slot's measured height, so `RepeatLayout.VariableList`'s extent stays honest and scroll anchoring cannot drift. (Suppressed for the pane's first row and directly after a `Divider`/`HeaderLabel`.) |
 | count badges | `Shared/SidebarCounts.cs` (`Badge`/`Number`/`Pending`, `PlateW/PlateH`). The one quiet number. |
 | the empty-pinned drop zone | `Shared/SidebarPinDropZone.cs` (`RestHeight 56` / `ActiveHeight 72`) — and re-check the mount's VariableList extent follows the 56↔72 change. |
-| a row kind's layout | `Pane/SidebarPaneSlot.cs` (the 13-arm switch at the top of `Render`) |
+| a row kind's layout | `Pane/SidebarPaneSlot.cs` (the kind switch at the top of `Render`) |
+| the rootlist DROP CUES (line + Into plate) | `Pane/SidebarPaneSlot.cs` → `InsertionLine()` / `DropPlate()`. **Every `Prop.Of` in them reads `_scope.Index.Value`** — bindings are mount-only, so a captured index draws for the row the slot first mounted with (see [pitfalls.md](pitfalls.md)). Guarded by `SidebarPaneInvariantTests` |
+| the "+" create affordance (any surface) | `Shared/SidebarPinDropZone.cs` → `SidebarCreateButton`. Turn it on in a header with `SidebarPaneConfig.HeaderCreate`; its drop specs live where the drop DECISION does — `SidebarPane.HeaderCreateDropSpec` / `SidebarPaneSlot.FolderCreateDropSpec` |
+| the tree MULTI-SELECTION | rules: `Data/SidebarTreeSelection.cs` (pure, `SidebarTreeSelectionTests`). Ownership + epochs: `Pane/SidebarPane.cs` (`TreeSelection`, `SelectionVersion`, `ChecksVisible`, `MutateSelection`, `TreeVisibleOrder`, `TreeDragPayload`). Row wiring: `Pane/SidebarPaneSlot.cs` → `ApplyTreeSelection` + `Shared/SidebarEntityRow.cs` (`OnActivate`, `OnEscape`, `ChecksVisible`, `CheckLane`, `MultiSelected`) |
 | a row's text / subtitle / icon fallback | `Pane/SidebarPaneText.cs` |
 | the rail | `Pane/SidebarPaneRail.cs` + `Shared/SidebarRailItem.cs`; *content* is decided by `SidebarRowPlanner.BuildRail` (`ShowInRail`, per-kind caps, `RailTileCap = 40`) |
 | skeletons | `Shared/SidebarSkeletons.cs` |

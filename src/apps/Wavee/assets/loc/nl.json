@@ -253,6 +253,13 @@
     "dropToPin": "Sleep items hierheen om ze vast te maken",
     "songCount": "{count, plural, one {# nummer} other {# nummers}}",
     "createPlaylistTooltip": "Playlist maken",
+    "createTooltip": "Playlist of map maken",
+    "select": "Selecteren",
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "folderCreatedWith": "“{name}” gemaakt met {count, plural, one {# item} other {# items}}",
+    "empty": {
+      "playlists": "Nog geen playlists — gebruik + om er een te maken"
+    },
     "newPlaylist": "Mijn playlist",
     "pinnedToast": "“{name}” vastgemaakt",
     "unpinnedToast": "“{name}” losgemaakt",
@@ -642,6 +649,7 @@
 
   "menu": {
     "artistUnavailable": "De artiest van dit album is niet gevonden",
+    "moveManyToFolder": "{count} verplaatsen naar map…",
     "moveUp": "Omhoog verplaatsen",
     "moveDown": "Omlaag verplaatsen",
     "saveToLiked": "Opslaan in Nummers die je leuk vindt",

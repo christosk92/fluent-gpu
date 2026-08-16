@@ -130,20 +130,63 @@ sealed class DetailPage : Component
             return WithOwners(kind, id, loaded);   // the page's owner identities, for the store-change predicate below
         }, preview ?? PendingSeed(kind), route.Name).Loadable;
 
-        // §4.1 — open-playlist LIVE in-place refresh (kills the skeleton flash). Subscribe the REAL store; when a push lands
-        // for THIS playlist (or a Bulk), debounce the burst 150ms, re-run the SAME load off-thread, and SetReady the SAME
-        // loadable in place — NEVER SetPending (that would re-seed to Empty = the shimmer). The UseResource dep stays
-        // route.Name, untouched. Offline / fake backend (RealStore null) → a no-op. The subscription reads the LIVE route
-        // (so one mount-lifetime subscription serves successive playlists), and eager-push context tracks the open uri.
+        // LIVE in-place refresh: an active page re-projects resident store data into the SAME loadable, never Pending.
+        // This path is deliberately separate from the initial hydrated load. A store notification must not schedule
+        // the hydration/revalidation that can write the same playlist and close a refresh loop. KeepAlive parking and
+        // window suspension tear down the subscription, pump, and open-context ownership; reactivation catches up once.
         var post = Context.UsePost();
         var realStore = svc.RealStore;
         var realSync = svc.RealSync;
-        UseEffect(() => realSync?.SetOpenContext(kind == DetailKind.Playlist ? id : null), route.Name);
+        var active = UseIsActive();
+        var activationSeen = UseRef(false);
+        var wasActive = UseRef(false);
         Context.UseSignalEffect(() =>
         {
-            if (realStore is null) return;
-            var gate = new object();
-            System.Threading.CancellationTokenSource? debounce = null;
+            bool nowActive = active.Value;
+            var activeRoute = _route.Value;   // route swaps also release the old subscription/context before re-arming
+            bool reactivated = nowActive && activationSeen.Value && !wasActive.Value;
+            wasActive.Value = nowActive;
+            if (nowActive) activationSeen.Value = true;
+            if (realStore is null || !nowActive) return;
+
+            var (openKind, openId) = ParseDetail(activeRoute);
+            if (openKind == DetailKind.Playlist && openId is not null) realSync?.SetOpenContext(openId);
+            var pump = new DetailLiveRefresh(async ct =>
+            {
+                var (k, pid) = ParseDetail(_route.Peek());
+                var fresh = await RefreshAsync(svc, k, pid, ct).ConfigureAwait(false);
+                if (ct.IsCancellationRequested) return;
+                post(() =>
+                {
+                    if (ct.IsCancellationRequested) return;
+                    // Nav-away race: the load may land after the user routed to a DIFFERENT detail page, which now
+                    // reuses this same loadable cell. Re-resolve the LIVE route and drop the write unless it still
+                    // points at the page this pass loaded — otherwise the old model flashes into the new page.
+                    var (k2, pid2) = ParseDetail(_route.Peek());
+                    if (k2 != k || pid2 != pid) return;
+                    // Re-publish the owner snapshot on the UI thread, from the model that is about to be committed:
+                    // a collaborator added while the page was open widens the set this page reacts to.
+                    var next = WithOwners(k, pid, WithNotice(k, model, fresh, lib, pid));
+                    // Same latch on the live path: a bulk refresh (music-video detection, hydration) re-maps the
+                    // model and can name the cover by a different size hash again; a genuine cover change (an
+                    // edit, a daylist rollover) is DIFFERENT art and still wins.
+                    next = next with { Cover = ImageSource.PreferVisible(next.Cover, model.Value.Peek().Cover) };
+                    // Reorder-in-flight (§P1.11): while a SAME-LIST drag session is live over THIS playlist the
+                    // rows under the pointer are the ones being aimed with. Committing a re-projection now
+                    // yanks the insertion geometry out from under the gesture (the list re-keys, the gap moves,
+                    // the drop lands somewhere else), so the model is HELD and applied the moment the session
+                    // ends. A foreign session (a drag from another list, a file drag) is not deferred — it has
+                    // no stake in this list's order.
+                    if (k == DetailKind.Playlist && PlaylistReorderDefer.TryHold(model, next, pid)) return;
+                    model.SetReady(next);
+                });
+            }, onStorm: passes =>
+            {
+                var (_, stormId) = ParseDetail(_route.Peek());
+                WaveeLog.Instance.Event(WaveeLogLevel.Warning, "detail", "detail.refresh.storm",
+                    "detail refresh exceeded the bounded steady-state rate",
+                    fields: [WaveeLogField.Of("contextUri", stormId ?? "liked"), WaveeLogField.Of("passes", passes)]);
+            });
             var sub = realStore.Changes.Subscribe(Wavee.Backend.Observers.From<Wavee.Backend.StoreChange>(c =>
             {
                 var (k, pid) = ParseDetail(_route.Peek());
@@ -168,55 +211,14 @@ sealed class DetailPage : Component
                     _ => false,
                 };
                 if (!relevant) return;
-                System.Threading.CancellationTokenSource cts;
-                lock (gate) { debounce?.Cancel(); debounce?.Dispose(); debounce = cts = new System.Threading.CancellationTokenSource(); }
-                var token = cts.Token;
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        // Short settle: long enough to fold a diff-apply + hydration burst into one re-map, short enough
-                        // that a SELF-action (unlike the row you're looking at) reads as immediate, not laggy.
-                        await Task.Delay(50, token).ConfigureAwait(false);
-                        var fresh = await LoadAsync(svc, k, pid, token).ConfigureAwait(false);
-                        if (!token.IsCancellationRequested) post(() =>
-                        {
-                            if (token.IsCancellationRequested) return;
-                            // Nav-away race: the debounced load may land after the user routed to a DIFFERENT detail page,
-                            // which now reuses this same loadable cell. Re-resolve the LIVE route and drop the write unless
-                            // it still points at THIS page — otherwise the old model flashes into the new page.
-                            var (k2, pid2) = ParseDetail(_route.Peek());
-                            if (k2 != k || pid2 != pid) return;
-                            // Re-publish the owner snapshot on the UI thread, from the model that is about to be
-                            // committed: a collaborator added while the page was open widens the set this page reacts to.
-                            var next = WithOwners(k, pid, WithNotice(k, model, fresh, lib, pid));
-                            // Same latch on the live path: a bulk refresh (music-video detection, hydration) re-maps the
-                            // model and can name the cover by a different size hash again; a genuine cover change (an
-                            // edit, a daylist rollover) is DIFFERENT art and still wins.
-                            next = next with { Cover = ImageSource.PreferVisible(next.Cover, model.Value.Peek().Cover) };
-                            // Reorder-in-flight (§P1.11): while a SAME-LIST drag session is live over THIS playlist the
-                            // rows under the pointer are the ones being aimed with. Committing a re-projection now
-                            // yanks the insertion geometry out from under the gesture (the list re-keys, the gap moves,
-                            // the drop lands somewhere else), so the model is HELD and applied the moment the session
-                            // ends. A foreign session (a drag from another list, a file drag) is not deferred — it has
-                            // no stake in this list's order.
-                            if (k == DetailKind.Playlist && WaveeResourceDrag.LiveSameListReorder(pid))
-                            {
-                                PlaylistReorderDefer.Hold(model, next);
-                                return;
-                            }
-                            model.SetReady(next);
-                        });
-                    }
-                    catch (OperationCanceledException) { }
-                    catch { /* a failed background refresh keeps the current content — never surfaces */ }
-                });
+                pump.Request();
             }));
+            if (reactivated) pump.Request();
             Reactive.OnCleanup(() =>
             {
                 sub.Dispose();
-                lock (gate) { debounce?.Cancel(); debounce?.Dispose(); debounce = null; }
-                realSync?.SetOpenContext(null);
+                pump.Dispose();
+                if (openKind == DetailKind.Playlist && openId is not null) realSync?.ClearOpenContext(openId);
             });
         });
 
@@ -336,10 +338,20 @@ sealed class DetailPage : Component
 
     internal static async Task<DetailModel> LoadAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
     {
-        DetailKind.Playlist => await LoadPlaylistWithSaveCountAsync(svc, id ?? "", ct),
-        DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct)),
+        DetailKind.Playlist => await LoadPlaylistWithSaveCountAsync(svc, id ?? "", HydrationLevel.Open, ct),
+        DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(ct: ct)),
         DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", ct: ct)),
-        _ => await LoadAlbumDetailAsync(svc, id ?? "", ct),
+        _ => await LoadAlbumDetailAsync(svc, id ?? "", HydrationLevel.Rich, ct),
+    };
+
+    /// <summary>Re-project resident data after a store signal. None is load-bearing: this path must never schedule the
+    /// hydration/revalidation that can produce another store signal and close a refresh loop.</summary>
+    internal static async Task<DetailModel> RefreshAsync(Services svc, DetailKind kind, string? id, CancellationToken ct) => kind switch
+    {
+        DetailKind.Playlist => await LoadPlaylistWithSaveCountAsync(svc, id ?? "", HydrationLevel.None, ct),
+        DetailKind.Liked => MapLiked(await svc.Library.GetLikedSongsAsync(HydrationLevel.None, ct)),
+        DetailKind.Show => MapShow(await svc.Library.GetShowAsync(id ?? "", HydrationLevel.None, ct)),
+        _ => await LoadAlbumDetailAsync(svc, id ?? "", HydrationLevel.None, ct),
     };
 
     /// <summary>The album detail load, with the ONE extra hop an upcoming release needs.
@@ -348,7 +360,7 @@ sealed class DetailPage : Component
     /// The REVERSE hop (album → prerelease link, for the pre-save heart) is deliberately gated: kind 138 404s for almost
     /// every album, so it is only asked when the album already looks upcoming. A normal album open costs exactly what it
     /// costs today.</summary>
-    static async Task<DetailModel> LoadAlbumDetailAsync(Services svc, string id, CancellationToken ct)
+    static async Task<DetailModel> LoadAlbumDetailAsync(Services svc, string id, HydrationLevel level, CancellationToken ct)
     {
         string albumUri = id;
         PreReleaseLink? link = null;
@@ -358,9 +370,9 @@ sealed class DetailPage : Component
             if (link is null) return DetailModel.Empty;   // unresolvable (offline / 404 / dead entity) → the existing empty state
             albumUri = link.AlbumUri;
         }
-        // Rich, not Open: the ©/℗ line and the Plays star ride the SAME catalogue POST as the tracklist (kind 183
-        // fused + one trait POST), so awaiting them here costs nothing extra and stops them popping in after paint.
-        var album = await svc.Library.GetAlbumAsync(albumUri, HydrationLevel.Rich, ct).ConfigureAwait(false);
+        // Initial navigation asks for Rich: the ©/℗ line and Plays star ride the same catalogue POST as the tracklist.
+        // Store-triggered refresh passes None and only re-projects the already-resident album.
+        var album = await svc.Library.GetAlbumAsync(albumUri, level, ct).ConfigureAwait(false);
         if (link is null
             && (album.IsPreRelease || PreReleaseDerivation.UpcomingAt(album, DateTimeOffset.UtcNow) is not null))
             link = await svc.PreRelease.ResolveAsync(albumUri, ct).ConfigureAwait(false);
@@ -371,12 +383,12 @@ sealed class DetailPage : Component
     /// header is now the canonical permission state (<c>LibrarySync.SetOpenContext</c> seeds <c>IsPublic</c> /
     /// <c>BasePermissionRevision</c> / <c>Capabilities.IsCollaborative</c> on open, and a dealer permission push
     /// updates it and bumps the uri), so the page reads it instead of paying a request per open and racing the push.</summary>
-    static async Task<Playlist?> LoadPlaylistAsync(Services svc, string uri, CancellationToken ct)
-        => await svc.Library.GetPlaylistAsync(uri, ct: ct).ConfigureAwait(false);
+    static async Task<Playlist?> LoadPlaylistAsync(Services svc, string uri, HydrationLevel level, CancellationToken ct)
+        => await svc.Library.GetPlaylistAsync(uri, level, ct).ConfigureAwait(false);
 
     internal static async Task<DetailModel?> ReloadPlaylistDetailAsync(Services svc, string uri, CancellationToken ct = default)
     {
-        var p = await LoadPlaylistAsync(svc, uri, ct).ConfigureAwait(false);
+        var p = await LoadPlaylistAsync(svc, uri, HydrationLevel.Open, ct).ConfigureAwait(false);
         return p is null ? null : MapPlaylist(p);
     }
 
@@ -408,12 +420,12 @@ sealed class DetailPage : Component
     /// it exists so a hung spclient connection can never hold a painted header hostage to a decorative number.</summary>
     static readonly TimeSpan SaveCountGrace = TimeSpan.FromMilliseconds(250);
 
-    static async Task<DetailModel> LoadPlaylistWithSaveCountAsync(Services svc, string id, CancellationToken ct)
+    static async Task<DetailModel> LoadPlaylistWithSaveCountAsync(Services svc, string id, HydrationLevel level, CancellationToken ct)
     {
         // Started FIRST and awaited last: the count rides along inside the playlist load's own latency instead of
         // adding to it. Never awaited without a grace window — see SaveCountGrace.
         var saves = svc.PlaylistPopcount.GetSaveCountAsync(PlaylistUri(id), ct);
-        var playlist = await LoadPlaylistAsync(svc, id, ct).ConfigureAwait(false);
+        var playlist = await LoadPlaylistAsync(svc, id, level, ct).ConfigureAwait(false);
 
         long? count = null;
         try { count = await saves.WaitAsync(SaveCountGrace, ct).ConfigureAwait(false); }
@@ -495,7 +507,7 @@ sealed class DetailPage : Component
     static void LogVideoSweep(string kind, string contextUri, IReadOnlyList<Track> tracks)
     {
         var log = WaveeLog.Instance;
-        if (!log.IsEnabled(WaveeLogLevel.Info)) return;
+        if (!log.IsEnabled(WaveeLogLevel.Debug)) return;
         int withVideo = 0, overrideOnly = 0, noRow = 0, negative = 0;
         var missSample = new System.Text.StringBuilder();
         int sampled = 0;
@@ -513,7 +525,7 @@ sealed class DetailPage : Component
                 sampled++;
             }
         }
-        log.Event(WaveeLogLevel.Info, "detail", "video.assoc.page", "detail-page music-video roll-up computed",
+        log.Event(WaveeLogLevel.Debug, "detail", "video.assoc.page", "detail-page music-video roll-up computed",
             fields:
             [
                 WaveeLogField.Of("kind", kind), WaveeLogField.Of("contextUri", contextUri),

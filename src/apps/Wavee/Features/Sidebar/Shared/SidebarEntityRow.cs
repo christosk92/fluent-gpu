@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -100,13 +100,18 @@ struct SidebarRowSpec
         MenuOverlay = null;
         Menu = null;
         Drag = null;
-        DropCue = null;
+        DropActive = null;
         DropTarget = null;
+        CheckLane = null;
+        MultiSelected = false;
+        ChecksVisible = null;
         Animate = null;
         Caption = null;
         Focusable = false;
         OnRename = null;
         OnMove = null;
+        OnActivate = null;
+        OnEscape = null;
     }
 
     // ── identity ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -211,17 +216,16 @@ struct SidebarRowSpec
     /// <summary>Optional resource destination (playlist deposit and/or pinned-band insertion).</summary>
     public DropTargetSpec? DropTarget;
 
-    /// <summary>Cold compatibility cue for a live resource drag, for the surfaces whose only outcome is "this row takes
-    /// it" (the create affordance, a rail tile). A tree row uses <see cref="DropCue"/> instead — it has three outcomes
-    /// and one boolean cannot tell them apart.</summary>
+    /// <summary>Cold compatibility cue for a live resource drag, for the WHOLE-ROW surfaces whose only outcome is
+    /// "this row takes it" — the rail folder flyout's rows (<c>SidebarRailFolderFlyout</c>), which are rebuilt on every
+    /// open and never recycled.
+    ///
+    /// <para><b>A PLAN ROW DOES NOT USE THIS.</b> Its <c>Into</c> plate is drawn by the slot's own always-mounted
+    /// <c>SidebarPaneSlot.DropPlate()</c>, UNDER the row, because the reconciler wires bound thunks at MOUNT ONLY: a
+    /// per-row thunk built here captures <c>enabled &amp;&amp; selected</c> — and, in the retired <c>DropCue</c> form,
+    /// the row's plan index — as VALUES, so a recycled slot kept answering for the row it was first mounted with. That
+    /// is the stale-cue defect, and deleting <c>DropCue</c> is what removed the shape that carried it.</para></summary>
     public Func<bool>? DropActive;
-
-    /// <summary>The PUBLISHED drop slot for this row (<c>SidebarPane.DropSlotFor</c>), as a probe.
-    /// <para>THE PLATE MEANS EXACTLY ONE THING: <c>Into</c> — a deposit, into this folder or this playlist. An ordering
-    /// (Before/After/EndOfList) draws the row-owned insertion LINE instead and leaves the plate off. That split is the
-    /// whole of D1: the three outcomes used to be pixel-identical, so the surface could not say which one a drop meant.
-    /// Set this OR <see cref="DropActive"/>, never both.</para></summary>
-    public Func<SidebarDropSlot>? DropCue;
 
     /// <summary>The row's layout transition. Leave null when a <c>Reorderable</c> wraps the row — <c>Reorderable.Item</c>
     /// applies <c>LayoutTransition.Slide</c> FLIP itself, and an authored offset hint plus a position track is a
@@ -230,6 +234,22 @@ struct SidebarRowSpec
 
     /// <summary>An extra caption line under the subtitle (the keyboard-reorder position announcement, "3 of 12").</summary>
     public string? Caption;
+
+    /// <summary>The MULTI-SELECT check lane (<c>SelectorVisualsBound.BoundCheckLane</c>), rendered as the row's FIRST
+    /// child. Bound throughout — visibility and checked state are both thunks — so a selection change re-skins the lane
+    /// without re-rendering the row. Null on every row that is not a multi-selectable tree row.
+    /// <para>Rule 4 survives it: the lane changes the row's WIDTH allocation, never its height.</para></summary>
+    public Element? CheckLane;
+
+    /// <summary>This row is in the tree MULTI-SELECTION (not the open route). Draws the quiet
+    /// <c>Tok.FillSubtleSecondary</c> plate; the accent <c>SelectedRest</c> plate and the pill stay ROUTE-only, so the
+    /// two selections can never be mistaken for one another. A static value, re-rendered on the row's own epoch.</summary>
+    public bool MultiSelected;
+
+    /// <summary>Is the check lane currently visible? Read at PRESS/KEY time to synthesize WinUI's multi-select tap
+    /// (<c>SelectorVisualsBound.MultiSelectMods</c>: while the lane is up, a plain tap TOGGLES into the selection
+    /// instead of replacing it). A probe, never a value — the lane appears and disappears under a mounted row.</summary>
+    public Func<bool>? ChecksVisible;
 
     /// <summary>Make the row itself a focus stop. Leave false when a <c>Reorderable</c> wraps it — its wrapper is the
     /// focus stop and the keyboard-lift key handler, and two stops per row would double the tab order.</summary>
@@ -251,6 +271,21 @@ struct SidebarRowSpec
     /// keyboard-lift handler, and two of each per row is a documented stomp. The command itself decides the ends of the
     /// run, so a move that cannot happen is a silent no-op rather than a wrap-around.</para></summary>
     public Action<int>? OnMove;
+
+    /// <summary>ACTIVATION WITH MODIFIERS — the multi-select gesture seam, set only by a PlaylistTree row that is not
+    /// inside a <c>Reorderable</c> band. When present it REPLACES <see cref="OnClick"/>: the row wires
+    /// <c>OnPointerReleased</c> (the detail track-row shape, <c>DetailTracks</c>) so Ctrl/Shift reach the handler, and
+    /// Enter/Space reach it through the row's one key handler.
+    ///
+    /// <para>The row applies WinUI's tap rule before calling: a DOUBLE click always activates plainly
+    /// (<c>KeyModifiers.None</c> — navigate, or toggle the folder), and a single tap while <see cref="ChecksVisible"/>
+    /// is up gets Ctrl synthesized, i.e. toggles into the selection.</para></summary>
+    public Action<KeyModifiers>? OnActivate;
+
+    /// <summary>ESCAPE on a focused row: clear the selection and leave check mode. Its own member rather than a
+    /// modifier on <see cref="OnActivate"/> — "cancel" is not an activation, and encoding it as one is how one chord
+    /// ends up meaning two things.</summary>
+    public Action? OnEscape;
 }
 
 static class SidebarEntityRow
@@ -263,15 +298,31 @@ static class SidebarEntityRow
     public static float HeightFor(SidebarDensity density, bool hasSubtitle)
         => SidebarRowMetrics.HeightFor(density, hasSubtitle);
 
-    /// <summary>The row's keyboard verbs: <b>F2</b> = rename, <b>Alt+↑/↓</b> = move one position. Built outside
-    /// <see cref="Create"/>'s object initializer because an <c>in</c> parameter cannot be captured by a lambda.</summary>
-    static Action<KeyEventArgs> KeyHandler(Action? rename, Action<int>? move) => e =>
+    /// <summary>The row's keyboard verbs: <b>F2</b> = rename, <b>Alt+↑/↓</b> = move one position and — on a
+    /// multi-selectable tree row — <b>Enter</b> = activate, <b>Space</b> = toggle into the selection, <b>Escape</b> =
+    /// clear it. ONE handler, because <c>InputDispatcher</c> routes keys from the focused node upward and a row can only
+    /// have one. Built outside <see cref="Create"/>'s object initializer because an <c>in</c> parameter cannot be
+    /// captured by a lambda.</summary>
+    static Action<KeyEventArgs> KeyHandler(Action? rename, Action<int>? move, Action<KeyModifiers>? activate,
+                                           Action? escape) => e =>
     {
         if (rename is not null && e.KeyCode == Keys.F2 && e.Mods == KeyModifiers.None)
         {
             e.Handled = true;
             rename();
             return;
+        }
+        switch (e.KeyCode)
+        {
+            // Enter INVOKES (WinUI never multi-select-synthesizes the EnterKey trigger); Space TOGGLES into the
+            // selection; Escape cancels it. Each arm is inert when its command is absent, so a row that only renames
+            // keeps exactly the behaviour it had.
+            case Keys.Enter when activate is not null:
+                e.Handled = true; activate(KeyModifiers.None); return;
+            case Keys.Space when activate is not null && !e.IsRepeat:
+                e.Handled = true; activate(e.Mods | KeyModifiers.Ctrl); return;
+            case Keys.Escape when escape is not null:
+                e.Handled = true; escape(); return;
         }
         // Exactly Alt — Alt+Shift+↑ belongs to whatever claims it next, and swallowing it here would make this row the
         // reason that chord does nothing.
@@ -299,13 +350,19 @@ static class SidebarEntityRow
         float art = float.IsNaN(spec.ArtSize) ? SidebarRowMetrics.ArtFor(spec.Density) : spec.ArtSize;
         bool bareGlyph = spec.Leading is null && spec.Glyph is { Length: > 0 };
         float gap = float.IsNaN(spec.Gap) ? (bareGlyph ? 12f : 10f) : spec.Gap;
-        // Copies: an `in` parameter cannot be captured by the bound paint thunk. The PLATE has exactly one meaning now —
-        // `Into` — so a tree row's cue is folded down to that single question here, once, and both the fill and the
-        // border read the same answer.
-        var dropCue = spec.DropCue;
-        var dropActive = dropCue is not null
-            ? () => SidebarDropCue.DrawsPlate(dropCue().Kind)
-            : spec.DropActive;
+        // A copy: an `in` parameter cannot be captured by the bound paint thunk. This is the WHOLE-ROW cue only (the
+        // rail folder flyout's rows). A PLAN ROW's `Into` plate is the slot's own `DropPlate()` under the row, because a
+        // thunk built here is wired at MOUNT and would answer for the row this slot first mounted with.
+        var plateOn = spec.DropActive;
+        var activate = spec.OnActivate;
+        var checksVisible = spec.ChecksVisible;
+        // The row's RESTING plate, as a VALUE, re-asserted on every reconcile (and therefore re-entering the 83 ms
+        // BrushTransition cross-fade for free): the open ROUTE takes the accent plate, a row in the tree MULTI-SELECTION
+        // takes the quiet one. Two selections, two skins, and the pill stays route-only.
+        ColorF rest = !enabled ? ColorF.Transparent
+            : selected ? WaveeColors.SelectedRest
+            : spec.MultiSelected ? Tok.FillSubtleSecondary
+            : ColorF.Transparent;
 
         // ── leading column ──────────────────────────────────────────────────────────────────────────────────────────
         Element leading;
@@ -336,11 +393,16 @@ static class SidebarEntityRow
 
         // ── children ────────────────────────────────────────────────────────────────────────────────────────────────
         int count = 2                                                   // leading cluster + text
+                  + (spec.CheckLane is null ? 0 : 1)
                   + (spec.Playing ? 1 : 0)
                   + (spec.Trailing is null ? 0 : 1)
                   + (ShowsOverflow(in spec) ? 1 : 0);
         var kids = new Element[count];
         int k = 0;
+        // FIRST, ahead of the leading cluster: WinUI's inline multi-select lane slides in from −28 px and pushes the
+        // row's content right. It is `Flow.Show`-gated and bound, so it costs a mounted-but-hidden node and no
+        // re-render when the selection changes.
+        if (spec.CheckLane is { } checkLane) kids[k++] = checkLane;
         kids[k++] = spec.TreeNode
             ? TreeLeading(leading, spec.LeadingChevron, spec.TreeDepth, spec.TreeContinuationMask, height)
             : StandardLeading(leading, spec.LeadingChevron, gap);
@@ -364,24 +426,34 @@ static class SidebarEntityRow
             // black and cuts this row out of it, so the row is being presented as one of a handful of answers — a single
             // 1-DIP accent border was far too quiet to carry that, especially next to SidebarPinDropZone's dashed accent
             // card. Bound, never re-rendered: this runs while a drag is live, inside the 0-alloc frame region.
-            Fill = dropActive is null
-                ? (enabled && selected ? WaveeColors.SelectedRest : ColorF.Transparent)
-                : Prop.Of(() => dropActive() ? Tok.AccentDefault with { A = 0.18f }
-                              : enabled && selected ? WaveeColors.SelectedRest : ColorF.Transparent),
+            Fill = plateOn is null
+                ? rest
+                : Prop.Of(() => plateOn() ? Tok.AccentDefault with { A = 0.18f } : rest),
             HoverFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedHover : Tok.FillSubtleSecondary,
             PressedFill = !enabled ? ColorF.Transparent : selected ? WaveeColors.SelectedPressed : Tok.FillSubtleTertiary,
-            BorderWidth = dropActive is null ? 0f : 1f,
-            BorderColor = dropActive is null ? ColorF.Transparent
-                : Prop.Of(() => dropActive() ? Tok.AccentDefault : ColorF.Transparent),
+            BorderWidth = plateOn is null ? 0f : 1f,
+            BorderColor = plateOn is null ? ColorF.Transparent
+                : Prop.Of(() => plateOn() ? Tok.AccentDefault : ColorF.Transparent),
             Opacity = enabled ? 1f : 0.55f,
             IsEnabled = enabled,
-            OnClick = enabled ? spec.OnClick : null,
-            Focusable = spec.Focusable || (enabled && (spec.OnRename is not null || spec.OnMove is not null)),
-            // F2 renames, Alt+↑/↓ reorders — ONE handler, because InputDispatcher routes keys from the focused node
-            // upward and a row can only have one. Both arms are no-ops when their command is absent, so a row that can
-            // only be renamed keeps exactly the behaviour it had.
-            OnKeyDown = enabled && (spec.OnRename is not null || spec.OnMove is not null)
-                ? KeyHandler(spec.OnRename, spec.OnMove)
+            // A row that carries `OnActivate` wires the POINTER-RELEASED path instead, because `OnClick` throws the
+            // modifiers away and Ctrl/Shift ARE the gesture on a multi-selectable tree row (the detail track-row shape).
+            OnClick = enabled && activate is null ? spec.OnClick : null,
+            OnPointerReleased = enabled && activate is not null
+                ? args => activate(args.ClickCount >= 2
+                                       // A DOUBLE click always activates plainly — navigate, or toggle the folder —
+                                       // even while the check lane is up, which is WinUI's DoubleTap rule.
+                                       ? KeyModifiers.None
+                                       : SelectorVisualsBound.MultiSelectMods(checksVisible?.Invoke() ?? false, args.Mods))
+                : null,
+            Focusable = spec.Focusable
+                        || (enabled && (spec.OnRename is not null || spec.OnMove is not null || activate is not null)),
+            // F2 renames, Alt+↑/↓ reorders, Enter/Space/Escape drive the selection — ONE handler, because
+            // InputDispatcher routes keys from the focused node upward and a row can only have one. Every arm is a
+            // no-op when its command is absent, so a row that can only be renamed keeps exactly the behaviour it had.
+            OnKeyDown = enabled && (spec.OnRename is not null || spec.OnMove is not null
+                                    || activate is not null || spec.OnEscape is not null)
+                ? KeyHandler(spec.OnRename, spec.OnMove, activate, spec.OnEscape)
                 : null,
             // Stationary lift at the standard 0.4 source dim. This is the RESOURCE drag only: a row inside a
             // reorderable band carries no Drag payload at all (Reorderable.Item installs its own source and position
@@ -406,7 +478,7 @@ static class SidebarEntityRow
     /// <summary>The 3-DIP reserve where the selection accent sits. The MOVING pill is the single overlay
     /// <see cref="SidebarSelectionPill"/>, so the reserve exists purely to keep row content from shifting as selection
     /// moves.</summary>
-    public static Element SelGutter() => new BoxEl { Width = 3f, Shrink = 0f };
+    public static Element SelGutter() => new BoxEl { Width = SidebarRowGeometry.SelGutterWidth, Shrink = 0f };
 
     /// <summary>The ordinary row's leading cluster, factored so the selection gutter and optional disclosure do not
     /// consume the row's text gap as separate flex children.</summary>
@@ -433,7 +505,10 @@ static class SidebarEntityRow
         if (levels > 0) children[i++] = TreeGuides(levels, continuationMask, height);
         children[i++] = new BoxEl
         {
-            Width = Spacing.L, Height = height, Shrink = 0f,
+            // The fixed disclosure cell. Its width — and the guide cells' and the gutter's — come from
+            // `SidebarRowGeometry`, which is also what `TreeContentX` sums: the caret and `PickDepth` read that sum, so
+            // a literal here would put the insertion line at a depth the row does not draw (F2).
+            Width = SidebarRowGeometry.TreeChevronCell, Height = height, Shrink = 0f,
             AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             HitTestPassThrough = true,
             Children = chevron is null ? [] : [chevron],
@@ -469,13 +544,13 @@ static class SidebarEntityRow
                 });
             cells[level - 1] = new BoxEl
             {
-                Width = Spacing.M, Height = height, Shrink = 0f, ZStack = true,
+                Width = SidebarRowGeometry.TreeGuideStep, Height = height, Shrink = 0f, ZStack = true,
                 HitTestPassThrough = true, Children = [.. marks],
             };
         }
         return new BoxEl
         {
-            Direction = 0, Width = depth * Spacing.M, Height = height, Shrink = 0f,
+            Direction = 0, Width = depth * SidebarRowGeometry.TreeGuideStep, Height = height, Shrink = 0f,
             HitTestPassThrough = true, Children = cells,
         };
     }

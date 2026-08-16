@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Wavee;
 using Wavee.Core;
 using Xunit;
@@ -25,13 +25,13 @@ public class RootlistSlotResolverTests
         IsFolder: false, FolderExpanded: false, FolderHasChildren: false,
         Depth: depth, NextVisibleDepth: nextDepth < 0 ? depth : nextDepth,
         CenterAccepts: centerAccepts,
-        SourceIsSelf: false, SourceIsAncestorOfRow: false, SortedNonCustom: false, RootlistLoaded: true);
+        SourceIsSelf: false, SortedNonCustom: false, RootlistLoaded: true);
 
     static SidebarRowFacts FolderRow(bool expanded, bool hasChildren, int depth = 0, int nextDepth = -1) => new(
         IsFolder: true, FolderExpanded: expanded, FolderHasChildren: hasChildren,
         Depth: depth, NextVisibleDepth: nextDepth < 0 ? depth : nextDepth,
         CenterAccepts: true,
-        SourceIsSelf: false, SourceIsAncestorOfRow: false, SortedNonCustom: false, RootlistLoaded: true);
+        SourceIsSelf: false, SortedNonCustom: false, RootlistLoaded: true);
 
     /// <summary>Resolve with the pointer parked over the row's LABEL (x far past the indent ladder) — the default
     /// position, and therefore the one that must mean "stay at this row's depth".</summary>
@@ -176,17 +176,35 @@ public class RootlistSlotResolverTests
     }
 
     [Theory]
-    [InlineData(6f, 0)]      // hard left, at the depth-0 indent
-    [InlineData(18f, 1)]     // one indent step in
-    [InlineData(30f, 2)]     // two steps: the row's own depth
+    [InlineData(25f, 0)]     // TreeContentX(0) — where a depth-0 row starts drawing
+    [InlineData(37f, 1)]     // TreeContentX(1)
+    [InlineData(49f, 2)]     // TreeContentX(2): the row's own depth
     [InlineData(999f, 2)]    // past the ladder: clamped to Max
     [InlineData(-50f, 0)]    // before the row: clamped to Min
-    public void DepthPick_ReadsTheIndentLadderFromPointerX(float x, int expected)
+    public void DepthPick_ReadsTheTreeContentLadderFromPointerX(float x, int expected)
     {
+        // THE LADDER IS THE ROW'S OWN. It used to be `IndentFor` (6 + 12·d), ~19 DIP left of where a tree row actually
+        // draws — so every band sat under the connector art, depth 0 needed x < 12, and the outdent gesture was
+        // effectively unreachable with a pointer (F3). `TreeContentX` is the sum the row itself lays out.
         var f = Leaf(depth: 2, nextDepth: 0);
         var slot = At(0.9f, in f, x: x);
         Assert.Equal(SidebarDropKind.After, slot.Kind);
         Assert.Equal(expected, slot.Depth);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public void DepthPick_TheOutdentBandIsReachable(int depth)
+    {
+        // THE NUMERIC CHECK BEHIND F3. Parked on the row's own content origin the pick is that depth; half a step plus
+        // 5 DIP to the LEFT of it — a deliberate slide, still inside the row — it is one shallower. depth 1: 37 → 26.
+        // depth 2: 49 → 38.
+        var f = Leaf(depth: depth, nextDepth: 0);
+        float here = SidebarRowGeometry.TreeContentX(depth);
+        float outdent = here - SidebarRowGeometry.TreeGuideStep / 2f - 5f;
+        Assert.Equal(depth, At(0.9f, in f, x: here).Depth);
+        Assert.Equal(depth - 1, At(0.9f, in f, x: outdent).Depth);
     }
 
     [Fact]
@@ -194,19 +212,19 @@ public class RootlistSlotResolverTests
     {
         var f = Leaf(depth: 2, nextDepth: 0);
         var previous = new SidebarDropSlot(3, SidebarDropKind.After, 1, SidebarDropRefusal.None);
-        // The 1→2 boundary sits at RowInsetLeft + 1.5·IndentStep = 24. Inside 4 DIP of it the previous depth holds…
-        Assert.Equal(1, RootlistSlotResolver.Resolve(3, 0.9f, 25f, 44f, in f, in previous).Depth);
+        // The 1→2 boundary sits at TreeContentX(1) + 0.5·TreeGuideStep = 43. Inside 4 DIP of it the previous holds…
+        Assert.Equal(1, RootlistSlotResolver.Resolve(3, 0.9f, 44f, 44f, in f, in previous).Depth);
         // …and past it the pick commits.
-        Assert.Equal(2, RootlistSlotResolver.Resolve(3, 0.9f, 30f, 44f, in f, in previous).Depth);
+        Assert.Equal(2, RootlistSlotResolver.Resolve(3, 0.9f, 49f, 44f, in f, in previous).Depth);
         // With no previous slot there is nothing to hold: the raw pick wins.
-        Assert.Equal(2, RootlistSlotResolver.Resolve(3, 0.9f, 25f, 44f, in f, SidebarDropSlot.None).Depth);
+        Assert.Equal(2, RootlistSlotResolver.Resolve(3, 0.9f, 44f, 44f, in f, SidebarDropSlot.None).Depth);
     }
 
     [Fact]
     public void DepthPick_IsInertWhenTheSlotIsUnambiguous()
     {
         var f = Leaf(depth: 1, nextDepth: 1);
-        foreach (float x in new[] { -10f, 0f, 6f, 18f, 300f })
+        foreach (float x in new[] { -10f, 0f, 25f, 37f, 300f })
             Assert.Equal(1, At(0.9f, in f, x: x).Depth);
     }
 
@@ -304,5 +322,76 @@ public class RootlistSlotResolverTests
         Assert.False(RootlistUndoAnchors.TryResolve(lone, "pl:spotify:playlist:a", out _, out _));
         Assert.False(RootlistUndoAnchors.TryResolve(Tree(), "pl:spotify:playlist:missing", out _, out _));
         Assert.False(RootlistUndoAnchors.TryResolve(null, "pl:spotify:playlist:a", out _, out _));
+    }
+
+    // ── the BATCH anchor (Undo for a multi-select) ──────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void BatchAnchors_SkipTheOtherSELECTEDRows_SoEveryAnchorSurvivesTheMove()
+    {
+        // b and c are adjacent selected siblings inside g. c may NOT anchor on b — b is in flight too. Both fall back
+        // to the previous unselected sibling, which for the first child of a folder is the folder itself (Inside).
+        Assert.True(RootlistUndoAnchors.TryResolveMany(Tree(),
+            ["pl:spotify:playlist:b", "pl:spotify:playlist:c"], out var undo));
+        Assert.Equal(2, undo.Count);
+        foreach (var m in undo)
+        {
+            Assert.Equal(new RootlistItemRef("g", true), m.Target);
+            Assert.Equal(RootlistDropPlacement.Inside, m.Placement);
+        }
+        // Inside appends, so the run replays FORWARD and b lands ahead of c again.
+        Assert.Equal(new RootlistItemRef("spotify:playlist:b", false), undo[0].Source);
+        Assert.Equal(new RootlistItemRef("spotify:playlist:c", false), undo[1].Source);
+    }
+
+    [Fact]
+    public void BatchAnchors_ShareAnAfterAnchor_AndThereforeReplayInREVERSE()
+    {
+        // a · [g(b,c)] · d — select the folder g and d. g anchors After a; d anchors After g, which is selected, so it
+        // falls through to… a as well. Two moves onto ONE After anchor: issuing them forward would swap them, so the
+        // run reverses (the same rule RootlistBatchOrder.For owns).
+        Assert.True(RootlistUndoAnchors.TryResolveMany(Tree(), ["folder:g", "pl:spotify:playlist:d"], out var undo));
+        Assert.Equal(2, undo.Count);
+        foreach (var m in undo)
+        {
+            Assert.Equal(new RootlistItemRef("spotify:playlist:a", false), m.Target);
+            Assert.Equal(RootlistDropPlacement.After, m.Placement);
+        }
+        Assert.Equal(new RootlistItemRef("spotify:playlist:d", false), undo[0].Source);   // reversed
+        Assert.Equal(new RootlistItemRef("g", true), undo[1].Source);
+    }
+
+    [Fact]
+    public void BatchAnchors_DropTheDescendantsOfASelectedFolder_AndRefuseWhenAnyItemHasNoAnchor()
+    {
+        // b rides inside g. Undoing it separately would address an index g's own op has already moved.
+        Assert.True(RootlistUndoAnchors.TryResolveMany(Tree(), ["folder:g", "pl:spotify:playlist:b"], out var undo));
+        Assert.Single(undo);
+        Assert.Equal(new RootlistItemRef("g", true), undo[0].Source);
+
+        // The whole tree selected: the first top-level item has nothing left to anchor against, so the batch has NO
+        // undo at all rather than a partial one that would scatter the rest.
+        List<SidebarLibraryEntry> lone = [Pl("a")];
+        Assert.False(RootlistUndoAnchors.TryResolveMany(lone, ["pl:spotify:playlist:a"], out _));
+        Assert.False(RootlistUndoAnchors.TryResolveMany(Tree(), [], out _));
+        Assert.False(RootlistUndoAnchors.TryResolveMany(null, ["pl:spotify:playlist:a"], out _));
+    }
+
+    [Fact]
+    public void TheSingleAnchor_IsTheBatchOfONE()
+    {
+        // No parallel single-item rule: TryResolve is TryResolveMany with a list of one, and it must keep answering
+        // exactly what it answered before.
+        foreach (string id in new[] { "pl:spotify:playlist:a", "pl:spotify:playlist:b", "pl:spotify:playlist:c",
+                                      "pl:spotify:playlist:d", "folder:g" })
+        {
+            bool one = RootlistUndoAnchors.TryResolve(Tree(), id, out var anchor, out var placement);
+            bool many = RootlistUndoAnchors.TryResolveMany(Tree(), [id], out var undo);
+            Assert.Equal(one, many);
+            if (!one) continue;
+            Assert.Single(undo);
+            Assert.Equal(anchor, undo[0].Target);
+            Assert.Equal(placement, undo[0].Placement);
+        }
     }
 }

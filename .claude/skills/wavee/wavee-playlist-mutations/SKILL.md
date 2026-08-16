@@ -173,6 +173,8 @@ read as an echo). Every revision writer routes through it: `PlaylistFetcher.Stor
 ## 7. Seam + UI surface
 
 `IPlaylistMutationSource` (`SeamPorts.cs:74`) as landed. Note the shapes that differ from the design doc:
+rootlist moves are the **batch** `MoveRootlistItemsAsync(IReadOnlyList<RootlistMove>, ct)` with the single-item call as
+its N=1 sugar (see *Batch moves* below);
 `MoveRowsAsync(uri, rows, **int toIndex**, ct)` — the anchor is derived **in the backend** by `BuildKeyedMove`;
 `CreatePlaylist(name, placement)` is **synchronous** and returns `PlaylistCreated(Uri, Completion)` (the optimistic
 row is already in the store); folder CRUD is `CreateFolderAsync` / `RenameFolderAsync` / `DeleteFolderAsync`.
@@ -209,26 +211,81 @@ gating every edit affordance through `PlaylistInlineEdit.Editable`.
 is **split**: the rows half refuses at the drop verdict (`PlaylistDropRefusal.Syncing`); the anchor half is checked
 at commit in `DepositAtAsync`, the first moment a slot exists. `TryBlockMove` (keyboard) checks both up front.
 
-### Rootlist moves — the two legality checkers, and the one commit
+### Rootlist moves — ONE legality authority, and one commit
 
-**The check is deliberately split across two layers, over two different data structures:**
+**`RootlistOps.CheckMove(store.Rootlist(), source, target, placement)` is the only decider in the app.** It runs over
+the **flat marker stream** (`RootlistEntry[]` — a folder is a balanced `start-group` / `end-group` pair, kind 1 / 2),
+which is the very structure the write indexes into, and it is literally `TryBuildMove(…, out RootlistMoveCheck)` with
+the op discarded — so "the cue says yes" and "the writer can build it" cannot differ.
 
-| | `RootlistOps.CheckMove` / `TryBuildMove(…, out RootlistMoveCheck)` | `RootlistTreeMoves.Check` |
-|---|---|---|
-| lives in | `Backend/Playlists/RootlistOps.cs` (backend, engine-free) | `Features/Sidebar/Data/RootlistSlotResolver.cs` (UI, engine-free) |
-| decides over | the **flat marker stream** (`RootlistEntry[]` — a folder is a balanced `start-group`/`end-group` pair) | the **depth-first flattened projection tree** (`SidebarProjectionInput.PlaylistTree`) |
-| answers with | `RootlistMoveCheck {Ok, Missing, SameItem, Invalid, NoOp, Cycle}` | `SidebarDropRefusal {…, NoOp, IntoItself, IntoDescendant}` |
-| when | at build time, the authority on the index math that ships | at **hover**, so the cue can refuse *before* the drop |
+| | |
+|---|---|
+| lives in | `Backend/Playlists/RootlistOps.cs` (backend, engine-free) |
+| decides over | the flat marker stream — `IStore.Rootlist()` |
+| answers with | `RootlistMoveCheck {Ok, Missing, SameItem, Invalid, NoOp, Cycle}` |
+| batch form | `RootlistOps.CheckMoves(entries, IReadOnlyList<RootlistMove>)` — the same enum for a whole multi-selection |
+| reached by | **exactly one call site**: `RootlistDropDecision.Check` (`Features/Sidebar/Data/RootlistDropDecision.cs`) |
+| reached from | `LibraryBridge.CheckRootlistMove` (the app-side accessor, over the attached `IStore`) · the sidebar drop cue · the rail folder tile · `RootlistTreeNav` (the "Move to folder…" picker + the menu's `HasDestinations`) |
+| UI mapping | ONE table, `RootlistDropDecision.RefusalFor`: `Ok→None`, `NoOp→NoOp`, `Cycle→IntoDescendant`, `SameItem→Self`, `Missing`/`Invalid`→`Unavailable` |
 
-They agree by construction rather than by duplication: an entry's half-open span is "itself plus every following
-entry deeper than it" on the tree side and "everything the balanced marker pair encloses" on the stream side — the
-same rows — and both compute the destination with the same three-way placement rule
-(`Before ⇒ targetFrom`, `After ⇒ targetEnd`, `Inside ⇒ append`). Neither is a copy of the other's *math*; the tree
-side exists because `TryBuildMove` sits three layers below the pointer and used to reach the user as a bare
-`false` — nothing happened, no toast, no cue. Adding a reason to `TryBuildMove` (the 6-arg overload; the 4-arg one
-is kept for `PlaylistMoveOpsTests`) is what let the refusal be *named* at all.
+**There is no second checker.** `RootlistTreeMoves.Check`/`TryRange` — a copy of the index math over the *flattened
+projection tree* — was **deleted on 2026-08-16**, along with the pane's own `SourceContainsRow` cycle walk. It could not
+tell "after the folder" from "after the folder's last child" (a tree row list has no end marker between them), so it
+called legal moves `NoOp`: the user was told "Already there" for a perfectly good filing, and the picker silently hid
+legal destinations. `RootlistDropScenarioTests.NoRefusalIsEverComputedFromAMarkerFreeTree` is the guard — it scans app
+CODE (comments stripped) for the deleted names and asserts `RootlistOps.CheckMove` still has exactly one call site.
 
-**One chokepoint.** Every rootlist move in the app — a sidebar drop, a collapsed-rail folder drop, the row menu's
+**A refused move is a THROW, not a quiet return.** `PlaylistMutationSource.MoveRootlistItemAsync` used to `return` when
+`TryBuildMove` refused, so the awaiting caller completed successfully and posted "Moved to …" for a move that was never
+sent. It now throws a typed `PlaylistMutationException`: `NoOp`/`SameItem` → `PlaylistMutationFailure.NoOp` ("Already
+there", `drag.alreadyThere` for `PlaylistEditVerb.Reorder`), `Cycle`/`Invalid` → `PlaylistMutationFailure.Invalid`
+("Can't move here", `drag.cantMoveHere`), anything else → `Conflict`. Both new kinds are **informational**, not errors
+— nothing was lost. Pinned by `RootlistMoveSeamTests` (which also pins *one legal move ⇒ exactly one POST*).
+
+### Batch moves — ONE seam, ONE delta
+
+A multi-selection drop is one gesture, so it is one write:
+`IPlaylistMutationSource.MoveRootlistItemsAsync(IReadOnlyList<RootlistMove> moves, ct)`, where
+`RootlistMove = (RootlistItemRef Source, RootlistItemRef Target, RootlistDropPlacement Placement)`.
+`MoveRootlistItemAsync(source, target, placement)` is the **N=1 sugar over it** — literally
+`MoveRootlistItemsAsync([new(source, target, placement)])`. There is no second write path, so nothing can drift.
+
+| | |
+|---|---|
+| builder | `RootlistOps.TryBuildMoves(entries, moves, out ops, out reason)` — the ops of ONE `Delta` |
+| writer | `PlaylistMutationSource.MoveRootlistItemsAsync` → the shared `RunRootlistOpAsync(logKey, build, ct)` loop folder CRUD uses (build → apply locally → POST → adopt, ONE 409 rebase, ONE rollback of `before`) |
+| checker | `RootlistOps.CheckMoves` — `TryBuildMoves` with the ops discarded (the drop cue's authority, so cue and writer cannot disagree) |
+| bridge | `LibraryBridge.MoveRootlistItemsAsync` |
+
+**Sequential index math.** Each move is built with `TryBuildMove` against the CURRENT marker stream and then
+`ApplyLocally`'d before the next one is built — because that is exactly how the server applies the ops of one Delta
+("each against the state left by the preceding ones", `RootlistOps.ApplyLocally`). Building all N against the original
+stream would post indices that are already stale by the second op. Multi-op rootlist deltas are the shape
+`BuildCreateFolder` (2 ADDs) already ships, and the sequential build lives **inside** the `build(entries)` delegate, so
+the 409 rebase attempt re-derives **every** op against the freshly bootstrapped stream.
+
+**Three batch-only rules** (all of them "a batch is not N separate drops"):
+
+- **the gather** — a source that IS the target is dropped from the batch up front. Dropping a multi-selection right
+  after one of its own members is legal: the anchor stays, the others close up around it. Only when EVERY move is such
+  a self-pair is the batch `SameItem`, which is what keeps the N=1 "onto itself" answer unchanged.
+- **a per-move `NoOp` is skipped** (a member already sitting where the batch is headed must not veto the members that
+  are really moving), while `Cycle` / `Missing` / `Invalid` on ANY move **refuses the whole batch** with that reason —
+  half a filing is worse than none.
+- **net-identity** — two real ops can cancel out (`{B,C} Before D` on `[A,B,C,D,E]`). Per-op checks cannot see that, so
+  the FINAL uri stream is compared to the input: equal ⇒ `NoOp`, nothing posted.
+
+**Submission order is the caller's.** Which order a same-target batch is handed over lives in the UI
+(`RootlistBatchOrder.For`): `Before(t)` / `Inside(folder)` iterate the sources in tree order, `After(t)` / `EndOfList`
+in **reverse** tree order, so each op lands adjacent to the anchor and the selection keeps its own order. The seam
+executes the list it is given, in the order it is given. Worked examples (pinned in `RootlistFolderOpsTests`, through
+`dest = to > from ? to - Length : to`): `[A,B,C,D,E]` move `{B,D}` After E in reverse ⇒ `[A,C,E,B,D]` (forward would
+give `[A,C,E,D,B]`); Before A in tree order ⇒ `[B,D,A,C,E]`; Inside F in tree order appends before the end marker.
+
+A refused batch is a **throw**, same as N=1 (`MoveRefused(reason)`); `RootlistMoveSeamTests` pins one delta with one
+MOV per item, the rollback of the whole tree on a transport fault, and the 409 re-derivation of every op.
+
+**One chokepoint.** Every rootlist move in the app**One chokepoint.** Every rootlist move in the app — a sidebar drop, a collapsed-rail folder drop, the row menu's
 Move up / Move down / **Move to folder…** / Move out of, and Alt+↑/↓ — resolves its `(RootlistItemRef, placement)`
 and then calls **`WaveeResourceDrop.MoveRootlist` → `LibraryBridge.MoveRootlistItemAsync`**; the four non-mouse
 verbs funnel through `FolderActions.Commit` first. There is no second mutation path, which is why every one of them

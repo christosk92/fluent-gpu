@@ -58,6 +58,12 @@ sealed class ArtistPopular : Component
     ActionServices? _acts;
     IOverlayService? _overlay;
     int _total;
+    // ROW SELECTION — the same contract every other track list in the app has (DetailTracks' external SelectionModel):
+    // a single click SELECTS (Ctrl toggles, Shift extends from the anchor) and a DOUBLE click plays. It lives on the
+    // component rather than on the list because PagedShelf hard-wires its ItemsView to ItemsSelectionMode.None, and a
+    // chart row's selection has to survive the page flips that slide the realized window. Read through `Version`, so a
+    // selection change re-skins the realized pills on the COMPOSITOR instead of re-rendering the chart.
+    readonly SelectionModel _selection = new() { Mode = ItemsSelectionMode.Extended };
 
     public ArtistPopular(IReadOnlyList<Track> tracks, string ctx, PlaybackBridge? bridge, Services svc, string title, Func<ColorF> accent)
     {
@@ -105,6 +111,9 @@ sealed class ArtistPopular : Component
         int counted = CountedRows(_live, total);
         // The back-channel the shelf's frozen closures read (see the field docs) — written BEFORE the shelf builds.
         _total = total; _go = go; _lib = lib; _acts = acts; _overlay = menuOverlay;
+        // Selection indices are chart ordinals; the extended list only ever GROWS past the seed, so raising the
+        // count keeps every existing selection valid (SelectionModel trims on shrink, which is the revalidation case).
+        _selection.ItemCount = total;
         ColorF accent = _accent();
         // Never offer more columns than the rows can fill: a ≤5-track chart is ONE full-width column, not two
         // half-empty ones (the shelf's own fit is count-independent, so this is where that clamp lives).
@@ -199,16 +208,59 @@ sealed class ArtistPopular : Component
         // reads the item's reorder axis off its PARENT container's main axis, and a shelf CELL is a column — so a
         // VERTICAL lift runs along that axis and the drag wins outright, while a HORIZONTAL sweep is perpendicular
         // to it, finds the shelf's overflowing horizontal viewport, and yields to the pan that pages the chart.
+        // ZStack (not Direction 1) so the WinUI left accent selection bar can overlay the row without displacing a
+        // single pixel of it — the DetailTracks skin's shape exactly. A ZStack child with no declared width still
+        // fills the slot (FlexLayout.ArrangeZStack), so the row keeps the cell's full width and its own 56px height.
         BoxEl row = new BoxEl
         {
-            Direction = 1,
-            // No selection model on this chart — one track, always a COPY.
-            Draggable = Drag.Source(WaveeDragKinds.Resource, () => WaveeResourceDragPayload.ForTrack(t)),
-            Children = [content],
+            ZStack = true,
+            // The chart is not an editable playlist, so a drop is always a COPY — but the payload still carries the
+            // whole SELECTION when the pressed row is part of it, exactly like a detail-page track drag.
+            Draggable = Drag.Source(WaveeDragKinds.Resource, () => ChartDragPayload(i)),
+            Children = [content, SelectionPill(i)],
         };
         return _acts is { } a && _overlay is { } ov
             ? row.WithContextMenu(ov, () => TrackContextMenu.BuildSingle(a, t))
             : row;
+    }
+
+    /// <summary>The WinUI ListView left accent selection bar — the app's ONE selection cue for a track row (see
+    /// <c>DetailTracks.BoundRowSkin</c>: selection never changes the fill). ALWAYS mounted and revealed by a BOUND
+    /// opacity over the model's <c>Version</c>, so selecting a row is a compositor-only re-skin: no chart re-render, no
+    /// remount, and none of the realized window's Enter transitions replay.</summary>
+    Element SelectionPill(int index)
+    {
+        var sel = _selection;
+        return new BoxEl
+        {
+            Key = "row-pill", Width = 3f, Height = 16f, Margin = new Edges4(2f, 0f, 0f, 0f),
+            Corners = CornerRadius4.All(1.5f), AlignSelf = FlexAlign.Center,
+            Fill = _accent(), HitTestVisible = false,
+            Opacity = Prop.Of(() => { _ = sel.Version.Value; return sel.IsSelected(index) ? 1f : 0f; }),
+        };
+    }
+
+    /// <summary>The dragged payload: the whole selection when the pressed row is part of it, else just that row.
+    /// <c>ForTracks</c> is the no-membership builder (its own doc names this chart) — with no SourcePlaylistUri /
+    /// SourceRows behind it every destination correctly treats the drop as a COPY rather than a move. Runs ONCE, at
+    /// promotion.</summary>
+    WaveeResourceDragPayload? ChartDragPayload(int index)
+    {
+        var list = _live;
+        if ((uint)index >= (uint)list.Count) return null;
+        if (!_selection.IsSelected(index) || _selection.SelectedCount <= 1)
+            return WaveeResourceDragPayload.ForTrack(list[index]);
+        int n = Math.Min(_selection.ItemCount, list.Count);
+        var picked = new List<Track>(_selection.SelectedCount);
+        for (int i = 0; i < n; i++) if (_selection.IsSelected(i)) picked.Add(list[i]);
+        return WaveeResourceDragPayload.ForTracks(picked) ?? WaveeResourceDragPayload.ForTrack(list[index]);
+    }
+
+    /// <summary>A chart row was tapped: WinUI Extended selection (plain = replace, Ctrl = toggle, Shift = range).</summary>
+    void SelectRow(int index, KeyModifiers mods)
+    {
+        _selection.OnInteractedAction(index, (mods & KeyModifiers.Ctrl) != 0, (mods & KeyModifiers.Shift) != 0);
+        if ((mods & KeyModifiers.Shift) == 0) _selection.AnchorIndex = index;
     }
 
     // The density-tier tag that rides in the row KEY. A LITERAL per band, never a concat: Card runs on every realize, a
@@ -274,7 +326,7 @@ sealed class ArtistPopular : Component
     // ── the prototype row (shared by live rows and the skeleton) ────────────────────────────────────────────
     static Element Row(Track t, int index, in TrackRow.State st, float art, bool showDuration,
                        bool fullPlays, bool stackSub, Element? featLine, Action onPlay, Action? onLike,
-                       IReadSignal<bool>? hoverPaused = null)
+                       IReadSignal<bool>? hoverPaused = null, Action<KeyModifiers>? onTap = null)
     {
         // Tight cells: feat and plays stop competing for one line — feat keeps line 2, plays moves to line 3
         // (where the full count always fits). Rows without a feat line never cramped, so they stay 2-line.
@@ -315,7 +367,18 @@ sealed class ArtistPopular : Component
             PressScale = WaveeMotion.ScaleSubtle.Press, BorderWidth = 1f,
             BorderColor = ColorF.Transparent,
             HoverBorderColor = Tok.StrokeCardDefault,
-            Role = AutomationRole.Button, OnClick = onPlay,
+            Role = AutomationRole.Button,
+            // Single click SELECTS, DOUBLE click plays — the DetailTracks contract (BoundRowSkin's OnPointerReleased),
+            // so every track list in the app answers a click the same way. Playing on a single click stays available
+            // exactly where it is elsewhere: the hover play affordance, i.e. TrackRow.NumberCell's number↔play swap in
+            // the # cell below, which is wired to the same `onPlay`. No `onTap` (the SKELETON, which has no selection
+            // model behind it) keeps the plain click-invokes shape, so the shimmer row stays structurally identical.
+            OnClick = onTap is null ? onPlay : null,
+            OnPointerReleased = onTap is null ? null : args =>
+            {
+                if (args.ClickCount >= 2) onPlay();
+                else onTap(args.Mods);
+            },
             // Enter/exit write hoverPaused (EQ stop-tick) and keep PointerBit for HoverOpacity inheritance.
             OnHoverMove = hoverPaused is Signal<bool> hs
                 ? _ => { if (!hs.Peek()) hs.Value = true; }
@@ -473,7 +536,8 @@ sealed class ArtistPopular : Component
                 onPlay: () => TrackRow.Invoke(_o._bridge, t, () => _ = _o._svc.Player.PlayContextTrackAsync(
                     _o._ctx, new PlaybackContextTrack(t.Uri), _index)),
                 onLike: t.Uri.Length > 0 ? () => _lib?.ToggleSaved(t.Uri, t.Title) : null,
-                hoverPaused: hovered);
+                hoverPaused: hovered,
+                onTap: mods => _o.SelectRow(_index, mods));
         }
     }
 

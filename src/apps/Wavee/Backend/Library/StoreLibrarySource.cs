@@ -72,6 +72,8 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     // ── single-item reads ──
     public async Task<Playlist?> GetPlaylistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
+        if (level == HydrationLevel.None) return ComposePlaylist(uri, prefetchUsers: false);
+
         // The playlist plane is LibrarySync's, so the open plan is the one place that knows a baseline changes the
         // shape of the ask: no membership ⇒ nothing to paint ⇒ block on Open; a baseline ⇒ paint the cache now and let
         // the loop's own 5-minute/dirty gates decide whether it revalidates (OpenPolicy — design §2.1).
@@ -82,14 +84,19 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         if (plan.Background != HydrationLevel.None)
             _ = _hydration.EnsureAsync(uri, Max(plan.Background, level),
                 new HydrationOptions(HydrationMode.Background, plan.Revalidate, TraitSurface.PlaylistOpen), ct);
+        return ComposePlaylist(uri, prefetchUsers: true);
+    }
+
+    Playlist? ComposePlaylist(string uri, bool prefetchUsers)
+    {
         var header = _store.GetPlaylist(uri);
         if (header is null) return null;
         var revision = _store.PlaylistRevision(uri);
         if (header.Tuning is { } tuning && (revision is null || !BytesEqual(tuning.Revision, revision)))
             header = header with { Tuning = null };
         var members = _store.Membership(uri);
-        PrefetchPlaylistUsers(uri, header, members);
-        var owner = OverlayOwner(uri, header, collectionDependency: false);
+        if (prefetchUsers) PrefetchPlaylistUsers(uri, header, members);
+        var owner = OverlayOwner(uri, header, collectionDependency: false, requestMissing: prefetchUsers);
         var tracks = JoinMembership(uri, members);
         Image? cover = header.Cover ?? MosaicCover(TilesFromTracks(tracks));   // cover-less → mosaic/single for the detail hero too
         return header with
@@ -126,6 +133,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     public async Task<Album?> GetAlbumAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
+        if (level == HydrationLevel.None) return _store.GetAlbum(uri);
         // Ensure THEN read: the ladder writes the store, the store is the single read model. The surface tag is what
         // picks the trait bundle the album rung awaits (RowBundle|PlayCount|Publishing) — see TraitPolicy.
         await _hydration.EnsureAsync(uri, level, new HydrationOptions(Surface: TraitSurface.AlbumOpen), ct).ConfigureAwait(false);
@@ -134,6 +142,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
 
     public async Task<Artist?> GetArtistAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
+        if (level == HydrationLevel.None) return _store.GetArtist(uri);
         // No trait surface: an artist rung's own traits ride the chart step inside ArtistHydration (ArtistPopular).
         await _hydration.EnsureAsync(uri, level, HydrationOptions.Default, ct).ConfigureAwait(false);
         return _store.GetArtist(uri);
@@ -228,7 +237,7 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     // Liked Songs is an ADD-ORDERED collection (newest first — the Spotify default) with the add date a first-class,
     // sortable column: join the timestamped set and stamp AddedAt onto the read-model copy (same shape JoinMembership
     // gives playlist rows), so the detail surface derives the Date-added column + default sort from the data itself.
-    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         var items = SortedByAddedDesc(_store.SavedItems("liked"));
         var list = new List<Track>(items.Count);
@@ -241,8 +250,9 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         // Liked is a COLLECTION: its rung is about its members, so one background ask replaces the two fire-and-forget
         // hooks this used to fan out (paged member hydrate + video/adornment detect). CollectionHydration pages the
         // saved set at 300 and asks for the LikedSongs trait bundle itself — see design §2.3.
-        _ = _hydration.EnsureAsync(LikedCollectionUri, HydrationLevel.Open,
-            new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.LikedSongs), ct);
+        if (level != HydrationLevel.None)
+            _ = _hydration.EnsureAsync(LikedCollectionUri, HydrationLevel.Open,
+                new HydrationOptions(HydrationMode.Background, Surface: TraitSurface.LikedSongs), ct);
         return Task.FromResult<IReadOnlyList<Track>>(list);
     }
 
@@ -465,6 +475,8 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     public Task<IReadOnlyList<Show>> GetShowsAsync(CancellationToken ct = default) => Task.FromResult(JoinSet("shows", _store.GetShow));
     public async Task<Show?> GetShowAsync(string uri, HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
+        if (level == HydrationLevel.None) return ComposeShow(uri);
+
         // THE open plan, from the ONE table (OpenPolicy — design §2.1), exactly like GetPlaylistAsync above. A show is
         // (Open, Full): Open = header + membership + the FIRST page of episodes at Episode.Open, awaited because it is
         // the page the user is looking at; Full = the remaining pages, enqueued on the pump and repainted in place as
@@ -478,6 +490,11 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
         if (plan.Background != HydrationLevel.None)
             _ = _hydration.EnsureAsync(uri, Max(plan.Background, level),
                 new HydrationOptions(HydrationMode.Background, plan.Revalidate, TraitSurface.ShowOpen, Priority: -1), ct);
+        return ComposeShow(uri);
+    }
+
+    Show? ComposeShow(string uri)
+    {
         var show = _store.GetShow(uri);
         if (show is null) return null;
         var members = _store.Membership(uri);
@@ -601,12 +618,12 @@ public sealed class StoreLibrarySource : ICatalogSource, IPodcastSource, ISource
     /// <summary>The resolved owner for a playlist header: the store's own <c>Owner</c> row when one has landed, the
     /// header's embedded (usually id-only) owner otherwise — and an ASK for the row when it has not, in the background
     /// mode so nothing on screen waits for a byline. The ledger dedupes the repeat asks a re-render produces.</summary>
-    Owner? OverlayOwner(string playlistUri, Playlist header, bool collectionDependency)
+    Owner? OverlayOwner(string playlistUri, Playlist header, bool collectionDependency, bool requestMissing = true)
     {
         var raw = RawOwnerId(header);
         if (raw.Length == 0) return header.Owner;
         if (_store.GetOwner(raw) is { } resolved) return resolved;
-        EnsureOwners(new[] { raw });
+        if (requestMissing) EnsureOwners(new[] { raw });
         return header.Owner;
     }
 

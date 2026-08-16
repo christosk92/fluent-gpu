@@ -7,7 +7,7 @@ namespace Wavee;
 // kill-switch arm — is unit-tested engine-free by src/apps/Wavee.Tests, exactly like ActionRules.cs.
 
 /// <summary>Which pin row a menu shows. An ABSOLUTE-state pair, never a toggle: the deliberate precedent is
-/// <c>Menus.VisibilityItem</c> ("a mis-checked toggle would invert the user's intent"), and it matches Spotify's own
+/// <c>Menus.AccessItem</c> ("a mis-checked toggle would invert the user's intent"), and it matches Spotify's own
 /// menu, which shows exactly one of "Pin to sidebar" / "Unpin from sidebar".</summary>
 public enum PinRowKind : byte
 {

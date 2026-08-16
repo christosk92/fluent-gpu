@@ -141,10 +141,10 @@ public sealed class AggregateCatalog : IMusicLibrary, ICollectionEvents
         return r;
     }
 
-    public async Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    public async Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
     {
         var r = new List<Track>();
-        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetLikedSongsAsync(ct).ConfigureAwait(false));
+        foreach (var s in _reg.CatalogSources) r.AddRange(await s.GetLikedSongsAsync(level, ct).ConfigureAwait(false));
         return r;
     }
 

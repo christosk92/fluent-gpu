@@ -1,6 +1,8 @@
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Wavee;
 using Wavee.Backend.Hydration;
 using Xunit;
 
@@ -108,5 +110,23 @@ public class HydrationPumpTests
         for (int i = 0; i < 200 && order.Count < 3; i++) await Task.Delay(5);
 
         Assert.Equal(["open-a", "open-b", "prefetch"], order);
+    }
+
+    [Fact]
+    public void FullQueueWarning_IsSampledWhileDroppedCountRemainsExact()
+    {
+        var block = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var sink = new CapturingWaveeLog { MinLevel = WaveeLogLevel.Warning };
+        using var pump = new HydrationPump(CancellationToken.None, new WaveeLogger(sink, "hydration"),
+            concurrency: 1, capacity: 1);
+        pump.Enqueue(10, _ => block.Task);
+        SpinWait.SpinUntil(() => pump.Running == 1, TimeSpan.FromSeconds(5));
+        pump.Enqueue(0, _ => Task.CompletedTask);   // occupy the sole queue slot
+
+        for (int i = 0; i < 512; i++) pump.Enqueue(-1, _ => Task.CompletedTask);
+
+        Assert.Equal(512, pump.Dropped);
+        Assert.Equal(3, sink.Entries.Count(e => e.EventId == "hydration.pump.full"));   // drops 1, 256, 512
+        block.SetResult();
     }
 }

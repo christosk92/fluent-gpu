@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Google.Protobuf;
 using Wavee.Backend;
 using Wavee.Backend.Collections;
+using Wavee.Backend.Hydration;
 using Wavee.Backend.Playlists;
 using Wavee.Backend.Spotify;
 using Wavee.Backend.Sync;
@@ -183,6 +185,55 @@ public class LibrarySyncTests
         foreach (var u in uris) c.Items.Add(new Pl.Item { Uri = u });
         slc.Contents = c;
         return slc.ToByteArray();
+    }
+
+    // -- the open page must NEVER queue behind a write --------------------------------------------------------------
+    // The sync loop is a SINGLE-READER FIFO, so a DrainWrites command parked on a slow POST holds every later command
+    // behind it - OpenPlaylist included. That is exactly why a playlist which already has a membership baseline must
+    // not reach LibrarySync.OpenPlaylistAsync on the read path: OpenPolicy hands a baselined open a background-only
+    // plan and PlaylistHydration answers it with the fire-and-forget Revalidate, so the page paints the cache NOW and
+    // lets the loop's own 5-minute/dirty gates decide whether anything is fetched. Pinned here because the failure mode
+    // hides behind a fast server: with a slow one, the page's own optimistic edit waits out the whole write.
+    [Fact]
+    public async Task OpenPlaylist_WhileADrainIsInFlight_ServesTheCachedSnapshotImmediately()
+    {
+        const string uri = "spotify:playlist:p1";
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await using var h = new SyncHarness(HydrateResponder,
+            // The mutation transport parks: the drain command owns the loop until the test lets go.
+            transportRespond: _ => { release.Task.GetAwaiter().GetResult(); return new Resp(true, Array.Empty<byte>(), 200); });
+
+        // A resident baseline plus a LOCAL edit whose optimistic effect is already in the store.
+        h.Store.UpsertPlaylist(new Playlist("p1", uri, "Mine", null, "bob", null, 0));
+        h.Store.SetMembership(uri, new[] { M("aaaaaaaaaaaaaa01", "spotify:track:a") }, Rev24(1));
+        h.Mut.Edit(uri, new[]
+        {
+            new PlaylistOp(PlaylistOpKind.Add, FromIndex: 1,
+                Items: new[] { new PlaylistMember("aaaaaaaaaaaaaa02", "spotify:track:b", "bob", 7) }),
+        }, Rev24(1));
+
+        // The optimistic row is resident BEFORE anything touches the wire - this is what the page has to be able to read.
+        Assert.Equal(new[] { "aaaaaaaaaaaaaa01", "aaaaaaaaaaaaaa02" }, h.Store.Membership(uri).Select(m => m.ItemId).ToArray());
+
+        var drain = h.Sync.DrainWritesAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(80, TestContext.Current.CancellationToken);
+        Assert.False(drain.IsCompleted);                       // the loop really is parked on the write
+
+        // (a) The cached snapshot serves NOW: the read model is complete and unaffected by the parked write.
+        Assert.Equal(new[] { "aaaaaaaaaaaaaa01", "aaaaaaaaaaaaaa02" }, h.Store.Membership(uri).Select(m => m.ItemId).ToArray());
+        // (b) ...and the on-open plan for a baselined playlist never blocks on that loop.
+        var plan = OpenPolicy.For(EntityKind.Playlist, hasBaseline: true);
+        Assert.Equal(HydrationLevel.None, plan.Blocking);
+        Assert.Equal(HydrationLevel.Open, plan.Background);
+        Assert.True(plan.Revalidate);
+        // (c) The distinction matters: the BLOCKING open really does queue behind the drain.
+        var queued = h.Sync.OpenPlaylistAsync(uri, TestContext.Current.CancellationToken);
+        await Task.Delay(80, TestContext.Current.CancellationToken);
+        Assert.False(queued.IsCompleted);
+
+        release.SetResult();
+        await drain;
+        await queued;
     }
 
     // ── the attribute-aware heal gate (Date-added / Added-by regression) ──────────────────────────────────────────────
@@ -887,6 +938,42 @@ public class LibrarySyncTests
         h.Sync.SetOpenContext(uri);
         await h.Sync.WaitForIdleAsync();
         Assert.Equal(2, h.Sync.PermissionSeeds);
+    }
+
+    [Fact]
+    public async Task ClearOpenContext_OnlyTheCurrentOwnerCanClearTheSlot()
+    {
+        const string oldUri = "spotify:playlist:old";
+        const string currentUri = "spotify:playlist:current";
+        int diffs = 0;
+        await using var h = new SyncHarness(req =>
+        {
+            if (req.Url.Contains("/diff?"))
+            {
+                Interlocked.Increment(ref diffs);
+                return Ok(new Pl.SelectedListContent { UpToDate = true }.ToByteArray());
+            }
+            return Ok(Array.Empty<byte>());
+        });
+        h.Store.SetMembership(currentUri,
+            [new PlaylistMember("i1", "spotify:track:t1", "alice", 1_700_000_000_000L)], Rev24(1));
+
+        h.Sync.SetOpenContext(currentUri);
+        h.Sync.ClearOpenContext(oldUri);   // delayed cleanup from the outgoing page
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, currentUri,
+            NewRev: Rev24(2), Ops: Array.Empty<PlaylistOp>()));
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, Volatile.Read(ref diffs));
+        Assert.Equal(0, h.Sync.PushMarkedDirty);
+
+        h.Sync.ClearOpenContext(currentUri);
+        h.Sync.Enqueue(new SyncCommand(SyncKind.PlaylistPush, currentUri,
+            NewRev: Rev24(3), Ops: Array.Empty<PlaylistOp>()));
+        await h.Sync.WaitForIdleAsync();
+
+        Assert.Equal(1, Volatile.Read(ref diffs));
+        Assert.Equal(1, h.Sync.PushMarkedDirty);
     }
 
     // A playlist someone else owns has no editable permission state (and the endpoint 403s) — never spend the GET.

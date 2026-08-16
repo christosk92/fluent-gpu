@@ -33,6 +33,19 @@ static class PlaylistMutationDiagnostics
             WaveeLogField.Of("uri", playlistUri), WaveeLogField.Of("status", status),
             WaveeLogField.Of("op", op));
 
+    /// <summary>A rootlist move was applied to the LOCAL marker stream and acked by the server. The reply carries no
+    /// contents, so this is the only record that the tree the user is looking at is the tree the server now holds.</summary>
+    public static void RootlistMoveApplied(string source, string placement, long ms) =>
+        WaveeLog.Instance.Info(Category, "rootlist.move.applied", "rootlist move applied locally and acked",
+            WaveeLogField.Of("source", source), WaveeLogField.Of("placement", placement),
+            WaveeLogField.Of("ms", ms));
+
+    /// <summary>The optimistic rootlist rows were put back because the write did not land. Never silent: the row the
+    /// user watched move is about to jump back, and this is why.</summary>
+    public static void RootlistMoveRolledBack(string reason) =>
+        WaveeLog.Instance.Info(Category, "rootlist.move.rolledback", "rootlist rows restored — the write did not land",
+            WaveeLogField.Of("reason", reason));
+
     public static void RootlistConflict(string playlistUri) =>
         WaveeLog.Instance.Info(Category, "rootlist.revision.conflict", "rootlist revision conflict — rebased",
             WaveeLogField.Of("uri", playlistUri));

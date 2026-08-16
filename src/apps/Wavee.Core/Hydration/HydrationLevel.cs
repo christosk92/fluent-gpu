@@ -9,7 +9,8 @@ namespace Wavee.Core;
 /// (kind, level)) plus <c>Artist.OverviewFetchedAt</c>, never a field on this enum.</summary>
 public enum HydrationLevel : byte
 {
-    /// <summary>Nothing resident (or a row so thin it cannot even be named).</summary>
+    /// <summary>Nothing resident (or a row so thin it cannot even be named). When supplied as a request level, this
+    /// means a strict resident-store read: no ledger ask, revalidation, pump enqueue, or external I/O.</summary>
     None = 0,
     /// <summary>Named. Enough for a link, a chip, a queue label.</summary>
     Identity = 1,

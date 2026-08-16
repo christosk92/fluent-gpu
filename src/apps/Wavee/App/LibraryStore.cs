@@ -75,7 +75,7 @@ public sealed class LibraryStore
     public void EnsureAlbums() { if (_albumsLoaded) return; _albumsLoaded = true; Fill(Albums, _lib.GetAlbumsAsync); }
     public void EnsureArtists() { if (_artistsLoaded) return; _artistsLoaded = true; Fill(Artists, _lib.GetArtistsAsync); }
     public void EnsurePlaylists() { if (_playlistsLoaded) return; _playlistsLoaded = true; Fill(Playlists, _lib.GetPlaylistsAsync); }
-    public void EnsureLiked() { if (_likedLoaded) return; _likedLoaded = true; Fill(Liked, _lib.GetLikedSongsAsync); }
+    public void EnsureLiked() { if (_likedLoaded) return; _likedLoaded = true; Fill(Liked, ct => _lib.GetLikedSongsAsync(ct: ct)); }
     public void EnsureShows() { if (_showsLoaded) return; _showsLoaded = true; Fill(Shows, _lib.GetShowsAsync); }
     public void EnsureStats() { if (_statsLoaded) return; _statsLoaded = true; Fill(Stats, _lib.GetStatsAsync); }
     /// <summary>Idempotent warmer for the folder-capable tree (mirrors <see cref="EnsurePlaylists"/>).</summary>
@@ -118,7 +118,7 @@ public sealed class LibraryStore
 
         _subs.Add(_mut.SavedChanged.Subscribe(_ => post(() =>
         {
-            if (_likedLoaded) Refresh(Liked, _lib.GetLikedSongsAsync);
+            if (_likedLoaded) Refresh(Liked, ct => _lib.GetLikedSongsAsync(ct: ct));
             if (_statsLoaded) Refresh(Stats, _lib.GetStatsAsync);    // the liked count lives in stats
             if (_addedAtLoaded) Refresh(AddedAt, _lib.GetLibraryAddedAtAsync);   // a save/unsave moves a "recently added" stamp
             _details.Remove("liked"); _detailLru.Remove("liked");    // the liked track SET changed → reload its detail fresh
@@ -144,7 +144,7 @@ public sealed class LibraryStore
             case CollectionKind.Artists when _artistsLoaded: Refresh(Artists, _lib.GetArtistsAsync); break;
             case CollectionKind.Shows when _showsLoaded: Refresh(Shows, _lib.GetShowsAsync); break;
             case CollectionKind.Playlists when _playlistsLoaded: Refresh(Playlists, _lib.GetPlaylistsAsync); break;
-            case CollectionKind.Liked when _likedLoaded: Refresh(Liked, _lib.GetLikedSongsAsync); break;
+            case CollectionKind.Liked when _likedLoaded: Refresh(Liked, ct => _lib.GetLikedSongsAsync(ct: ct)); break;
         }
         // The tree rides the Playlists arm (the rootlist is what changed); the added-at map rides EVERY kind, because any
         // save/unsave in any collection moves a stamp.

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Wavee.Core.Sidebar;
 using Xunit;
@@ -234,6 +234,9 @@ public sealed class SidebarRailPlannerTests
         Assert.Equal(new[] { "home", "liked", "albums" }, KeysOf(plan));
     }
 
+    /// <summary>The rail is TOP LEVEL ONLY. A 56-DIP strip has no indent lane and no disclosure, so a nested tile was
+    /// indistinguishable from a top-level one; a folder's contents are reached through its tile's side flyout
+    /// (<c>SidebarRailFolderFlyout</c>) instead, which is why nothing is lost by dropping them from the strip.</summary>
     [Fact]
     public void PlaylistTree_ContributesArtTilesForLeavesAndFolderTilesForFolders()
     {
@@ -248,9 +251,31 @@ public sealed class SidebarRailPlannerTests
         };
         var plan = SidebarRowPlanner.BuildRail(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
 
-        Assert.Equal(new[] { SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow, SidebarRowKind.EntityRow },
-            KindsOf(plan));
-        Assert.Equal("folder:f1", plan.Rows[0].Key);
+        Assert.Equal(new[] { SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow }, KindsOf(plan));
+        Assert.Equal(new[] { "folder:f1", "pl:spotify:playlist:b" }, KeysOf(plan));
+    }
+
+    [Fact]
+    public void PlaylistTree_RailNeverTilesANestedEntry_AtAnyDepth()
+    {
+        var input = new SidebarProjectionInput
+        {
+            PlaylistTree =
+            [
+                Playlist("top", "Top", 0),
+                Folder("g", "Chill", 0, 1),
+                Playlist("b", "Nested", 2, 1),
+                Folder("k", "Deep", 1, 3),
+                Playlist("f", "Deeper", 4, 2),
+                Playlist("tail", "Tail", 5),
+            ],
+        };
+
+        var plan = SidebarRowPlanner.BuildRail(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
+
+        Assert.Equal(new[] { "pl:spotify:playlist:top", "folder:g", "pl:spotify:playlist:tail" }, KeysOf(plan));
+        // Every entry the plan aliases is top level too — a filtered tile must not leak an orphan entry either.
+        Assert.All(plan.Entries, e => Assert.Equal(0, e.Depth));
     }
 
     [Fact]
@@ -277,11 +302,10 @@ public sealed class SidebarRailPlannerTests
         var plan = SidebarRowPlanner.BuildRail(
             Doc(Sec("t", SidebarSectionKind.PlaylistTree, query: query)), input);
 
-        Assert.Equal(new[]
-        {
-            "pl:spotify:playlist:a-root", "folder:keep", "pl:spotify:playlist:a-child",
-            "pl:spotify:playlist:z-child", "pl:spotify:playlist:z-root",
-        }, KeysOf(plan));
+        // Top level only: the folder survives (its descendants still match, so it is not pruned) but its children are
+        // reached through the folder flyout, not through tiles of their own.
+        Assert.Equal(new[] { "pl:spotify:playlist:a-root", "folder:keep", "pl:spotify:playlist:z-root" },
+            KeysOf(plan));
         Assert.DoesNotContain(plan.Rows, row => row.Key == "folder:empty");
     }
 
@@ -377,8 +401,9 @@ public sealed class SidebarRailPlannerTests
 
         var plan = SidebarRowPlanner.BuildRail(SidebarTemplates.Build(SidebarTemplates.Curated), input);
 
-        // 2 pin tiles · rule · 5 shortcut glyphs · rule · folder + 2 leaves. Jump back in ships ShowInRail:false, and its
-        // two flanking dividers collapse into the single quiet rule before the shortcuts.
+        // 2 pin tiles · rule · 5 shortcut glyphs · rule · folder + its ONE top-level sibling ("Inner" sits inside the
+        // folder, and the rail is top level only). Jump back in ships ShowInRail:false, and its two flanking dividers
+        // collapse into the single quiet rule before the shortcuts.
         Assert.Equal(new[]
         {
             SidebarRowKind.EntityRow, SidebarRowKind.EntityRow,
@@ -386,7 +411,7 @@ public sealed class SidebarRailPlannerTests
             SidebarRowKind.IconRow, SidebarRowKind.IconRow, SidebarRowKind.IconRow, SidebarRowKind.IconRow,
             SidebarRowKind.IconRow,
             SidebarRowKind.Divider,
-            SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow, SidebarRowKind.EntityRow,
+            SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
         }, KindsOf(plan));
 
         Assert.Equal(new[] { "liked", "albums", "artists", "podcasts", "local" },

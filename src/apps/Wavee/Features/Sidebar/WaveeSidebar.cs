@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Hooks;
@@ -78,12 +79,16 @@ sealed class WaveeSidebar : Component
             // Classic has no library-only search head (its Playlists section is a tree, not an EntityList).
             SearchHead = false,
             OnCreatePlaylist = CreatePlaylist,
+            // The PlaylistTree header's "+" — Classic's ONE create affordance now that the trailing create ROW is gone.
+            // A config flag, never a Design branch (rule 1).
+            HeaderCreate = true,
             // PHASE 1 — the shortcut band is no longer a config delegate: it is the FIRST SECTION of the document
             // BuildDocument returns (Decision A), so the renderer needs no `NavBand`/`RailHead` seam and the rail form
             // rides the planner's existing `ShowInRail`.
             // The rail's create-playlist affordance. A rail plan is tiles-from-sections and cannot express authored
             // chrome, so Classic's landed 40-DIP "+" tile is appended by the pane instead of planned.
-            RailFooter = () => Embed.Comp(() => new SidebarCreateButton(CreatePlaylist, SidebarRailItem.Box, 16f)),
+            RailFooter = () => Embed.Comp(() => new SidebarCreateButton(
+                CreatePlaylist, menu: CreateMenu, box: SidebarRailItem.Box, glyph: 16f)),
         }, DepKey.Empty);
 
         return Embed.Comp(() => new SidebarPane(config, _route, _go, _compact, _expandedWidth));
@@ -138,5 +143,19 @@ sealed class WaveeSidebar : Component
     {
         if (_acts is not { } acts) return;
         PlaylistCreateFlow.Create(acts, default, navigate: true);
+    }
+
+    /// <summary>The rail "+"'s flyout — the SAME two verbs the expanded pane's header "+" offers, so a collapsed
+    /// sidebar can create a folder too. Built at open time; null (no services yet) makes the button fall back to its
+    /// plain create-playlist click rather than opening an empty flyout.</summary>
+    ContextMenuModel? CreateMenu()
+    {
+        if (_acts is not { } acts || acts.Library is null) return null;
+        return new ContextMenuModel(new List<MenuFlyoutItem>(2)
+        {
+            new(Loc.Get(Strings.Detail.NewPlaylist), ActionIcons.Resolve(ActionIcons.Add), true, CreatePlaylist),
+            new(Loc.Get(Strings.Sidebar.CreateFolder), ActionIcons.Resolve(ActionIcons.Folder),
+                acts.Overlay is not null, () => FolderActions.NewFolder(acts, null)),
+        });
     }
 }

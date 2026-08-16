@@ -133,7 +133,7 @@ public interface IMusicLibrary
     // Per-collection read paths — the sidebar's "Your Library" rows route to their own page, each loading its own slice.
     Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default);
-    Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
 
     // Sidebar IA read paths — the "Your Library" badge counts, the FLAT playlist list (what every pre-folder consumer
     // reads), and the folder-capable TREE beside it. Async so the shell can skeleton-load them like everything else.

@@ -159,6 +159,7 @@ sealed class NowPlayingPanel : Component
                         lib is null ? new BoxEl() : Embed.Comp(() => new SaveButton(track.Uri, 16f, 36f, track.Title)) with { Key = "save:" + track.Uri },
                     ],
                 },
+                Embed.Comp(() => new NpvLyricsPeek()) with { Key = "npv-lyrics:" + track.Id },
             ],
         };
     }

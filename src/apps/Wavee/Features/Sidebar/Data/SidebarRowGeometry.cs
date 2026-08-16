@@ -73,6 +73,35 @@ static class SidebarRowGeometry
     /// <summary>The deepest level the indent ladder honours; beyond it rows stop marching right.</summary>
     public const int MaxIndentDepth = 4;
 
+    // ── THE ONE TREE-CONTENT ORIGIN ──────────────────────────────────────────────────────────────────────────────────
+    // A TREE row is not laid out on `IndentFor(depth)`: `SidebarEntityRow.TreeLeading` pads the row ONCE at IndentFor(0)
+    // and then spends real cells — the selection gutter, one connector cell per level, and a fixed disclosure cell —
+    // before the row's art begins. The caret used to be translated by `IndentFor(depth)` and `PickDepth` used to read
+    // the same ladder BACKWARDS, so the line painted roughly one whole level left of what it meant and the outdent band
+    // (x < 12) was practically unreachable with a pointer (F2/F3). The three constants below are the layout's own, they
+    // live HERE because this file is the engine-free one a test can reach, and `TreeLeading` now CONSUMES them — so the
+    // rendered row, the caret and the depth pick cannot disagree by construction.
+
+    /// <summary>The 3-DIP selection-accent reserve every row leads with (<c>SidebarEntityRow.SelGutter</c>).</summary>
+    public const float SelGutterWidth = 3f;
+
+    /// <summary>One tree connector cell (12 — the engine's <c>Spacing.M</c>). Equal to <see cref="IndentStep"/> by
+    /// design: a tree level and an indent level are the same step, drawn two different ways.</summary>
+    public const float TreeGuideStep = IndentStep;
+
+    /// <summary>The fixed disclosure cell every tree row reserves at EVERY depth (16 — the engine's <c>Spacing.L</c>),
+    /// so folder and leaf art share one column.</summary>
+    public const float TreeChevronCell = 16f;
+
+    /// <summary>THE x at which a tree row's CONTENT (its art, and therefore the caret that means "insert at this depth")
+    /// begins: <c>IndentFor(0) + SelGutter + depth·TreeGuideStep + TreeChevronCell</c> — 25, 37, 49, … Row-relative,
+    /// like the pointer x the resolver reads.</summary>
+    public static float TreeContentX(int depth)
+    {
+        int d = depth < 0 ? 0 : depth > MaxIndentDepth ? MaxIndentDepth : depth;
+        return IndentFor(0) + SelGutterWidth + d * TreeGuideStep + TreeChevronCell;
+    }
+
     /// <summary>Left padding for a nesting depth: <see cref="RowInsetLeft"/> base + <see cref="IndentStep"/> per level,
     /// clamped at <see cref="MaxIndentDepth"/> levels.</summary>
     public static float IndentFor(int depth)

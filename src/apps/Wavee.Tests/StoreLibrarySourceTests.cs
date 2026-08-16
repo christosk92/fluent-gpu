@@ -79,6 +79,30 @@ public class StoreLibrarySourceTests
     }
 
     [Fact]
+    public async Task NoneReads_ReturnResidentDetailModels_WithoutAnyHydrationAsk()
+    {
+        const string playlistUri = "spotify:playlist:p";
+        var store = new InMemoryStore();
+        store.UpsertTrack(Trk("t1"));
+        store.UpsertPlaylist(new Playlist("p", playlistUri, "Resident playlist", null, "Me", null, 1));
+        store.SetMembership(playlistUri,
+            [new PlaylistMember("i1", "spotify:track:t1", null, 0)], null);
+        store.SetSaved("liked", "spotify:track:t1", true, SyncState.Confirmed);
+        store.UpsertAlbum(new Album("a1", "spotify:album:a1", "Resident album", null, [], 2020, 1));
+        store.UpsertShow(new Show("s1", "spotify:show:s1", "Resident show", "Publisher", null));
+        var rec = new RecordingHydrator(store);
+        var src = new StoreLibrarySource(store, Recording(rec), OfflineOnlineCatalog.Instance);
+
+        Assert.Equal("Resident playlist", (await src.GetPlaylistAsync(playlistUri, HydrationLevel.None))!.Name);
+        Assert.Equal("Tt1", Assert.Single(await src.GetLikedSongsAsync(HydrationLevel.None)).Title);
+        Assert.Equal("Resident album", (await src.GetAlbumAsync("spotify:album:a1", HydrationLevel.None))!.Name);
+        Assert.Equal("Resident show", (await src.GetShowAsync("spotify:show:s1", HydrationLevel.None))!.Name);
+
+        Assert.Empty(rec.Batches);
+        Assert.Empty(rec.TraitCalls);
+    }
+
+    [Fact]
     public async Task GetShows_JoinsSavedShows()
     {
         var store = new InMemoryStore();

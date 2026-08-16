@@ -291,7 +291,7 @@ public sealed class SidebarChurnTests
         {
             SidebarRowKind.FolderHeader, SidebarRowKind.SectionHeader, SidebarRowKind.HeaderLabel,
             SidebarRowKind.Divider, SidebarRowKind.Empty, SidebarRowKind.Skeleton,
-            SidebarRowKind.CreateAction, SidebarRowKind.PromptRow,
+            SidebarRowKind.PromptRow,
         })
             Assert.Empty(Sweep(new[] { Row(kind, "pl:one", entryIndex: 0) }, entries, section, "pl:one"));
         Assert.Empty(Sweep(new[] { Row(SidebarRowKind.EntityRow, "pl:missing") }, entries, Section(), "pl:missing"));
@@ -319,5 +319,144 @@ public sealed class SidebarChurnTests
             Sweep(new[] { Row(SidebarRowKind.EntityCard, "pl:card", entryIndex: 0) }, entries, Section(), "pl:card"));
         // An UNRESOLVED card falls back to the pin route derived from its (empty) uri — i.e. nothing.
         Assert.Empty(Sweep(new[] { Row(SidebarRowKind.EntityCard, "pl:card") }, entries, Section(), "pl:card"));
+    }
+
+    // ── F3d: the pill's opacity is a BOUND read, so it can never be stale (#22/#23 — two selection pills) ─────────────
+    //
+    // The defect: two rows drew the left accent pill at once — the route-selected row plus either the previously opened
+    // route's row or, once its node had been recycled, the NOW-PLAYING row. `SidebarSelectionPill` rendered
+    // `Opacity = selected ? 1f : 0f` as a MOUNT-TIME literal off the slot's snapshot while the pane's moving-pill
+    // transaction wrote the same node's opacity channel directly, so any write that lit a node the row's own state
+    // called dark simply stuck. The opacity is now derived from the slot's LIVE state on every read, through the same
+    // one owner the selection sweep uses. These drive that production rule directly.
+
+    /// <summary>The pill probe, wired EXACTLY as <c>SidebarPaneSlot.PillState</c> wires it: the slot's snapshot
+    /// (route/indent/top, taken at render time) re-derived against the live route AND the pane's row-level verdict
+    /// (<see cref="SidebarRowResolve.SelectsRoute"/>). Everything reactive about it — the index signal, the row epoch —
+    /// only decides WHEN it is read; what it returns is this.</summary>
+    sealed class PillProbe
+    {
+        readonly IReadOnlyList<SidebarRow> _rows;
+        readonly IReadOnlyList<SidebarLibraryEntry> _entries;
+        readonly SidebarSectionSpec _section;
+        readonly Func<string> _liveRoute;
+        readonly int _index;
+        readonly SidebarPillState _snapshot;   // the SLOT writes this on ITS render; the pill never re-mounts for it
+
+        public PillProbe(IReadOnlyList<SidebarRow> rows, IReadOnlyList<SidebarLibraryEntry> entries,
+                         SidebarSectionSpec section, int index, string? route, Func<string> liveRoute)
+        {
+            _rows = rows; _entries = entries; _section = section; _index = index; _liveRoute = liveRoute;
+            // The mount-time snapshot deliberately carries the WRONG Selected (the frozen literal's whole problem):
+            // nothing downstream may depend on it.
+            _snapshot = new SidebarPillState(route, Selected: false, Indent: 0f, Top: 14f);
+            Mounts++;
+        }
+
+        public int Mounts { get; private set; }
+
+        public SidebarPillState Read()
+        {
+            string live = _liveRoute();
+            var row = _rows[_index];
+            return _snapshot.For(live, SidebarRowResolve.SelectsRoute(in row, _entries, _section, live));
+        }
+
+        public float Opacity => Read().Opacity;
+    }
+
+    /// <summary>Two entity rows plus a now-playing row — the shape both screenshots showed.</summary>
+    static (SidebarRow[] Rows, SidebarLibraryEntry[] Entries, SidebarSectionSpec Section) PillPlan()
+    {
+        var entries = new[] { Playlist("pl:a"), Playlist("pl:b"), Playlist("pl:playing") };
+        var rows = new[]
+        {
+            Row(SidebarRowKind.EntityRow, "pl:a", entryIndex: 0),
+            Row(SidebarRowKind.EntityRow, "pl:b", entryIndex: 1),
+            Row(SidebarRowKind.EntityRow, "pl:playing", entryIndex: 2),
+        };
+        return (rows, entries, Section());
+    }
+
+    [Fact]
+    public void ARouteMove_DarkensTheOldPill_AndLightsTheNewOne_WithoutARemount()
+    {
+        var (rows, entries, section) = PillPlan();
+        string route = "pl:a";
+        var a = new PillProbe(rows, entries, section, 0, "pl:a", () => route);
+        var b = new PillProbe(rows, entries, section, 1, "pl:b", () => route);
+
+        Assert.True(a.Read().Selected);
+        Assert.Equal(SidebarPillState.LitOpacity, a.Opacity);
+        Assert.False(b.Read().Selected);
+        Assert.Equal(SidebarPillState.DarkOpacity, b.Opacity);
+
+        // The pane's ONE route read moves the selection from row A to row B (RefreshSelection bumps exactly these two).
+        route = "pl:b";
+        Assert.Equal(new[] { 0, 1 }, Flipped(Sweep(rows, entries, section, "pl:a"),
+                                             Sweep(rows, entries, section, "pl:b")));
+
+        // …and the OLD row is dark on its very next read — no re-render, no transaction, no remount required.
+        Assert.False(a.Read().Selected);
+        Assert.Equal(SidebarPillState.DarkOpacity, a.Opacity);
+        Assert.True(b.Read().Selected);
+        Assert.Equal(SidebarPillState.LitOpacity, b.Opacity);
+        Assert.Equal(1, a.Mounts);
+        Assert.Equal(1, b.Mounts);
+
+        // Navigating somewhere the sidebar cannot show leaves EVERY pill dark — never the last-lit one.
+        route = "settings";
+        Assert.Equal(SidebarPillState.DarkOpacity, a.Opacity);
+        Assert.Equal(SidebarPillState.DarkOpacity, b.Opacity);
+    }
+
+    [Fact]
+    public void ExactlyOnePillIsLit_AndNeverThePlayingRow()
+    {
+        var (rows, entries, section) = PillPlan();
+        string route = "pl:a";
+        var probes = new[]
+        {
+            new PillProbe(rows, entries, section, 0, "pl:a", () => route),
+            new PillProbe(rows, entries, section, 1, "pl:b", () => route),
+            // Row 2 is the NOW-PLAYING row (the ||| glyph). Playback is not an input to the pill at all — which is the
+            // point: there is no argument by which it could ever light one.
+            new PillProbe(rows, entries, section, 2, "pl:playing", () => route),
+        };
+
+        foreach (string open in new[] { "pl:a", "pl:b", "pl:playing", "settings", "" })
+        {
+            route = open;
+            int lit = 0;
+            for (int i = 0; i < probes.Length; i++) if (probes[i].Read().Selected) lit++;
+            Assert.True(lit <= 1);
+            // The playing row's pill is lit ONLY when that playlist is also the open route — and then it is the open
+            // route's pill, drawn on a row that also happens to be playing. One cue, one meaning.
+            Assert.Equal(string.Equals(open, "pl:playing", StringComparison.Ordinal), probes[2].Read().Selected);
+        }
+    }
+
+    [Fact]
+    public void ThePillRule_IsRouteIdentity_AndAgreesWithTheSweep()
+    {
+        Assert.True(SidebarPillState.Lit("pl:a", "pl:a"));
+        Assert.False(SidebarPillState.Lit("pl:a", "pl:A"));      // ordinal: a route key is an id, not display text
+        Assert.False(SidebarPillState.Lit("pl:a", ""));          // no route open ⇒ nothing is lit
+        Assert.False(SidebarPillState.Lit("", "pl:a"));          // a folder/track/chrome row has no route
+        Assert.False(SidebarPillState.Lit(null, "pl:a"));
+
+        // …and it is the SAME verdict the entity rule gives, so the pill can never disagree with the plate under it.
+        var entry = Playlist("pl:a");
+        Assert.Equal(SidebarRowResolve.EntrySelects(in entry, "pl:a"),
+                     SidebarPillState.Lit(entry.RouteKey, "pl:a"));
+        Assert.Equal(SidebarRowResolve.EntrySelects(in entry, "pl:b"),
+                     SidebarPillState.Lit(entry.RouteKey, "pl:b"));
+
+        // Opacity is DERIVED from the verdict — the two values the bound channel may ever write.
+        Assert.Equal(1f, new SidebarPillState("pl:a", true, 0f, 0f).Opacity);
+        Assert.Equal(0f, new SidebarPillState("pl:a", false, 0f, 0f).Opacity);
+        // The pane's verdict is a veto: a snapshot whose route matches is still dark when the ROW does not select.
+        Assert.False(new SidebarPillState("pl:a", true, 0f, 0f).For("pl:a", rowSelectsRoute: false).Selected);
+        Assert.True(new SidebarPillState("pl:a", false, 0f, 0f).For("pl:a", rowSelectsRoute: true).Selected);
     }
 }

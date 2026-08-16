@@ -445,7 +445,8 @@ public sealed class ItemsView : Component
     /// reorder substrate (the ListView/GridView/TreeView preset, via ReorderList.OffsetFor / OffsetFor2D over RESTING
     /// indices) supplies it; returns (0,0) for the dragged item and every non-displaced item. ItemsView seeds each
     /// realized row's AnimEngine TranslateX/Y track from this so displaced siblings glide aside (WinUI
-    /// MoveItemsForLiveReorder), and the motion survives recycling because it is re-seeded each realize.</summary>
+    /// MoveItemsForLiveReorder). The seed is EDGE-triggered on <see cref="DisplacementVersion"/> (there is no
+    /// per-realize hook), so a row recycled into the window mid-gesture carries its slot's translate until the next bump.</summary>
     public Func<int, (float dx, float dy)>? ItemDisplacement;
     /// <summary>Bumped by the owner on every drag-delta / dwell-commit; ItemsView subscribes (its <c>.Value</c>) so the
     /// frozen-ComponentEl boundary (Reconciler.cs:220-221 — a parent bump alone never re-renders this autonomous
@@ -1580,8 +1581,10 @@ public sealed class ItemsView : Component
         // AnimEngine TranslateX/Y track to its target displacement (in DIP), reading the row's CURRENT translate as the
         // animation start so a retarget is velocity-continuous. The track (not BoxEl.OffsetX/Y) owns the channel, so the
         // displacement survives every reconcile (ApplyBox only writes LocalTransform from a NON-ZERO static offset,
-        // Reconciler.cs:935-947 — the rows carry none, so the AnimEngine track is never clobbered) and is re-seeded on
-        // each realize from ItemDisplacement (recycling-safe). The seed goes through AnimEngine.SeedValue under the
+        // Reconciler.cs:935-947 — the rows carry none, so the AnimEngine track is never clobbered). NOTE: there is no
+        // per-realize hook — the pass runs ONLY on this effect's own edge (dispVer/insertionVer), so a row recycled into
+        // the window mid-gap keeps whatever translate its slot carried until the next bump. That is also why the reset
+        // must be latched: see DisplacementEngaged below. The seed goes through AnimEngine.SeedValue under the
         // host-owned MotionTok.ItemPlacement token, so the ENGINE owns the dynamics and the reduced-motion policy; this
         // body is cold/edge-triggered, never a frame phase.
         UseLayoutEffect(() =>
@@ -1592,6 +1595,12 @@ public sealed class ItemsView : Component
             // OPACITY seed — a same-list source is "in the chip", so it must HIDE, not merely dim (design ruling (a)).
             var disp = ins is { Active: true } ? ins.Displacement : ItemDisplacement;
             bool insHides = ins is not null && (ins.HidesSources || ins.OpacityEngaged);
+            // The DISPLACEMENT channel's own latch, symmetric with the opacity one. A gap that moved rows owes them a
+            // write back to (0,0) on its CLOSE edge, and the close edge is exactly the pass where `disp` has already
+            // gone null (the plan cleared) — so keying the early-out on opacity facts alone strands every displaced row
+            // at +GapExtent forever whenever nothing HID (a cross-list copy, or any owner that wires only
+            // DisplacementVersion). The seed loop latches this on and the reset pass latches it back off.
+            bool insEngaged = insHides || (ins is not null && ins.DisplacementEngaged);
             var anim = Context.Anim;
             if (anim is null || sceneRef is null) return;
             var motion = DisplacementMotion;           // one token read per bump (readonly POD — no per-row resolve, no alloc)
@@ -1603,7 +1612,7 @@ public sealed class ItemsView : Component
             lastEntranceVer.Value = dispVer;
             var flip = entranceEdge ? ItemFlipFrom : null;   // optional FLIP start override (data-reorder glide)
             var fade = entranceEdge ? ItemFadeFrom : null;   // optional opacity seed + stagger delay (added-row ease-in)
-            if (disp is null && !insHides && flip is null && fade is null) return;
+            if (disp is null && !insEngaged && flip is null && fade is null) return;
             var vp = viewportNode.Value;
             if (vp.IsNull || !sceneRef.IsLive(vp)) return;
             int dragged = DraggedSlot?.Peek() ?? -1;   // resting index whose translate DragController owns (skip the seed)
@@ -1625,7 +1634,7 @@ public sealed class ItemsView : Component
             }
 
             var n = first;
-            bool anyHidden = false;
+            bool anyHidden = false, anyMoved = false;
             for (int ord = 0; !n.IsNull && sceneRef.IsLive(n); ord++, n = sceneRef.NextSibling(n))
             {
                 int item = ord < prefix ? ord : restingBase + ord - prefix;
@@ -1639,6 +1648,7 @@ public sealed class ItemsView : Component
                 // currently leaves it null) or its index doesn't align with the realized window.
                 if ((sceneRef.Flags(n) & NodeFlags.DragGhost) != 0 || item == dragged) continue;
                 (float dx, float dy) = disp is null ? (0f, 0f) : disp(item);   // (0,0) for non-displaced items
+                anyMoved |= dx != 0f || dy != 0f;      // latch: this pass parted rows, so the close edge owes them a reset
                 var fd = fade?.Invoke(item);           // opacity seed (from→1) + the row's stagger delay
                 float delay = fd?.delayMs ?? 0f;
                 ref NodePaint p = ref sceneRef.Paint(n);
@@ -1661,7 +1671,7 @@ public sealed class ItemsView : Component
                 if (MathF.Abs(opacity - p.Opacity) > 0.01f)
                     anim.SeedValue(n, AnimChannel.Opacity, opacity, in motion, delayMs: delay);
             }
-            if (ins is not null) ins.OpacityEngaged = anyHidden;
+            if (ins is not null) { ins.OpacityEngaged = anyHidden; ins.DisplacementEngaged = anyMoved; }
         }, HashCode.Combine(dispVer, insertionVer));
 
         // ── item template: content wrapped in the WinUI ItemContainer chrome (or the L4 skin's chrome) ──
@@ -1933,6 +1943,11 @@ internal sealed class ItemsViewInsertion
     /// <summary>Latched by the displacement seed: source rows are currently hidden, so the next pass must run even
     /// after the gesture ends (to animate them back to full opacity).</summary>
     internal bool OpacityEngaged;
+    /// <summary>Latched by the displacement seed (mirror of <see cref="OpacityEngaged"/>): rows are currently parted by
+    /// the gap, so the next pass must run even once the plan is gone — that pass is the one that writes them back to
+    /// (0,0). Without it a gap that hid nothing (a cross-list copy; an owner wiring only <c>DisplacementVersion</c>)
+    /// closes with its rows stranded at +GapExtent, overlapping the rows below and leaving a blank band.</summary>
+    internal bool DisplacementEngaged;
 
     private int[] _sources = [];
     private int _sourceCount;
@@ -2120,8 +2135,9 @@ internal sealed class ItemsViewInsertion
         _sourceCount = 0;
         _dragSource = NodeHandle.Null;
         if (SlotSignal.Peek() >= 0) SlotSignal.Value = -1;
-        // OpacityEngaged forces one more seed pass so hidden rows animate back to full opacity.
-        if (changed || OpacityEngaged) Bump();
+        // Opacity/DisplacementEngaged force one more seed pass so hidden rows animate back to full opacity and parted
+        // rows glide back to (0,0). Both latches clear themselves inside that pass.
+        if (changed || OpacityEngaged || DisplacementEngaged) Bump();
     }
 
     private void Bump() => Version.Value = Version.Peek() + 1;

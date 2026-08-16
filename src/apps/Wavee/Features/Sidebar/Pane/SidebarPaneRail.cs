@@ -121,23 +121,40 @@ static class SidebarPaneRail
                     drop, dropActive: depositable ? () => owner.IsRailDropActive(depositUri) : null);
             }
 
-            // A folder cannot disclose inside a 56-DIP strip, so its tile EXPANDS THE PANE and opens that folder — the
-            // only sane resolution of a disclosure in a rail (the landed Classic rule).
+            // A folder cannot disclose inside a 56-DIP strip, so its tile opens a SIDE FLYOUT listing its contents,
+            // anchored to the tile's right edge — the same stacked drill-in the concert date flyout uses, with a back
+            // header (see `SidebarRailFolderFlyout`). It used to EXPAND THE PANE instead, which answered "show me this
+            // folder" by discarding the collapsed layout the user had chosen; that route survives as the tile's own
+            // context menu (Expand folder), so nothing was taken away.
             case SidebarRowKind.FolderHeader when row.EntryIndex >= 0 && row.EntryIndex < entries.Count:
             {
                 var entry = entries[row.EntryIndex];
                 string folderId = entry.FolderId;
                 string cueKey = entry.Id;
+                string sectionId = row.SectionId;
+                var snapshot = entry;   // an `in`-carried row's entry cannot be captured — copy the record struct
                 // D16 — the tile is a real DESTINATION now, not just a way back into the pane. Into, and only Into:
                 // a 56-DIP strip has nothing above or below a tile to be "before" or "after".
                 var target = WaveeResourceDragPayload.FromEntry(entry, owner.Acts?.Svc, rootlistItem: true);
                 var folderDrop = folderId.Length > 0 ? owner.RailFolderDropSpec(entry, target) : null;
-                return SidebarRailItem.Icon("rail:" + entry.Id, Icons.Folder, false, () =>
-                {
-                    owner.Prefs?.SetCollapsed(false);
-                    owner.Prefs?.SetFolderExpanded(folderId, true);
-                }, entry.Name.Length > 0 ? entry.Name : SidebarPaneText.ShortUri(entry.Id),
-                    folderDrop, folderDrop is null ? null : () => owner.IsRailDropActive(cueKey));
+                // The FULL folder menu, unchanged (`Menus.SidebarFolderRows` through `Menus.SidebarEntry`) — a rail tile
+                // is the same rootlist folder as its expanded row, so right-click cannot offer less. Its Expand verb is
+                // the pane-expanding gesture the click used to be.
+                Func<ContextMenuModel?>? menu = owner.Acts is { } acts
+                    ? () => Menus.SidebarEntry(acts, in snapshot,
+                        folderId.Length > 0 ? () => owner.ExpandFolderInPane(folderId) : null,
+                        folderExpanded: owner.Prefs?.IsFolderExpanded(folderId) ?? false)
+                    : null;
+                string key = SidebarPane.RailTileKey(in entry);
+                string name = entry.Name.Length > 0 ? entry.Name : SidebarPaneText.ShortUri(entry.Id);
+                // A 56-DIP strip has no room for a label OR a count, so the tooltip carries both — the tile's only
+                // chance to say which folder it is and how much is inside before it is opened.
+                string tip = name + " · " + Strings.Sidebar.V3.ItemCount(entry.ChildCount);
+                return SidebarRailItem.Icon(key, Icons.Folder, false,
+                    () => owner.OpenRailFolderFlyout(sectionId, in snapshot), tip,
+                    folderDrop, folderDrop is null ? null : () => owner.IsRailDropActive(cueKey),
+                    onRealized: h => owner.RegisterRailNode(key, h),
+                    menuOverlay: owner.MenuOverlay, menu: menu);
             }
 
             // A hand-placed item (a route shortcut / a link) or a whole-section tile (Concerts, an extension contribution).

@@ -104,6 +104,15 @@
     <Compile Include="..\Wavee\Features\Detail\PlaylistEditErrorKinds.cs" />
     <Compile Include="..\Wavee\Features\Detail\PlaylistPageNoticeRules.cs" />
     <Compile Include="..\Wavee\Features\Detail\DetailOwnerIds.cs" />
+    <!-- The open detail page's live-refresh driver (System.Threading only): single-flight + coalescing, so an
+         optimistic playlist edit is never starved by the store traffic the refresh itself provokes.
+         DetailLiveRefreshTests. -->
+    <Compile Include="..\Wavee\Features\Detail\DetailLiveRefresh.cs" />
+    <!-- The framework's PURE insertion/reorder geometry (System only, no engine types). Wavee's playlist track list
+         declares an InsertionOptions over a list that ALSO carries an appended "Recommended songs" section, and the
+         trailing-section rule is what stops the drop gap painting over that section's header.
+         PlaylistInsertionGeometryTests; the engine-side gate is VerticalSlice `sortable.gap`. -->
+    <Compile Include="..\..\FluentGpu.Controls\SortableMath.cs" />
     <Compile Include="..\Wavee\Features\Shell\ShellResponsiveLayout.cs" />
     <!-- the merged chrome row's PURE priority ladder (System only, exactly like its sibling above) — MergedChromeLayoutTests -->
     <Compile Include="..\Wavee\Features\Shell\MergedChromeLayout.cs" />

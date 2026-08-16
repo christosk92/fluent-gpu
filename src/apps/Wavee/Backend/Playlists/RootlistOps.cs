@@ -286,6 +286,74 @@ public static class RootlistOps
         return reason;
     }
 
+    /// <summary>Build the ops for a whole ORDERED batch of moves — one <c>Delta</c>'s worth (multi-op rootlist deltas
+    /// already ship: <see cref="BuildCreateFolder"/> is two ADDs).
+    ///
+    /// <para>The index math is <see cref="TryBuildMove"/>'s, unchanged and un-duplicated: each move is built against the
+    /// CURRENT marker stream and then <see cref="ApplyLocally"/>'d before the next one is built, because that is exactly
+    /// how the server applies the ops of one Delta ("each against the state left by the preceding ones"). Building all N
+    /// against the original stream would post indices that are already stale by the second op.</para>
+    ///
+    /// <para>Three batch-only rules, all of them "a batch is not N separate drops":</para>
+    /// <list type="bullet">
+    /// <item>a source that IS the target is dropped from the batch up front — dropping a multi-selection right after one
+    /// of its own members is a legal GATHER (the other members close up around it), not a
+    /// <see cref="RootlistMoveCheck.SameItem"/>. Only when EVERY move is that self-pair is the batch
+    /// <see cref="RootlistMoveCheck.SameItem"/>, which is what keeps the N=1 "onto itself" answer unchanged;</item>
+    /// <item>a per-move <see cref="RootlistMoveCheck.NoOp"/> is skipped (a member already sitting where the batch is
+    /// headed does not refuse the other members), while <see cref="RootlistMoveCheck.Cycle"/> /
+    /// <see cref="RootlistMoveCheck.Missing"/> / <see cref="RootlistMoveCheck.Invalid"/> on ANY move refuses the WHOLE
+    /// batch with that reason — half a filing is worse than none;</item>
+    /// <item>two real ops can net to identity (<c>{B,C} Before D</c> on <c>[…B,C,D…]</c>), so the FINAL uri stream is
+    /// compared to the input: equal ⇒ <see cref="RootlistMoveCheck.NoOp"/> and nothing is posted.</item>
+    /// </list></summary>
+    public static bool TryBuildMoves(IReadOnlyList<RootlistEntry> entries, IReadOnlyList<RootlistMove> moves,
+                                     out IReadOnlyList<PlaylistOp> ops, out RootlistMoveCheck reason)
+    {
+        ops = Array.Empty<PlaylistOp>();
+        if (moves.Count == 0) { reason = RootlistMoveCheck.NoOp; return false; }
+
+        var built = new List<PlaylistOp>(moves.Count);
+        var current = entries;
+        int gathered = 0;
+        for (int i = 0; i < moves.Count; i++)
+        {
+            var move = moves[i];
+            if (move.Source == move.Target) { gathered++; continue; }        // the gather — legal, and it moves nothing
+            if (TryBuildMove(current, move.Source, move.Target, move.Placement, out var op, out var r) && op is not null)
+            {
+                built.Add(op);
+                current = ApplyLocally(current, [op]);                       // the stream the NEXT op indexes into
+                continue;
+            }
+            if (r is RootlistMoveCheck.NoOp or RootlistMoveCheck.SameItem) continue;
+            reason = r;
+            return false;
+        }
+        if (gathered == moves.Count) { reason = RootlistMoveCheck.SameItem; return false; }
+        if (SameStream(entries, current)) { reason = RootlistMoveCheck.NoOp; return false; }
+        ops = built;
+        reason = RootlistMoveCheck.Ok;
+        return true;
+    }
+
+    /// <summary>Would this batch be accepted, and if not why? The pure mirror of <see cref="TryBuildMoves"/> (it IS that
+    /// builder with the ops discarded), so the drop cue and the writer cannot disagree.</summary>
+    public static RootlistMoveCheck CheckMoves(IReadOnlyList<RootlistEntry> entries, IReadOnlyList<RootlistMove> moves)
+    {
+        TryBuildMoves(entries, moves, out _, out var reason);
+        return reason;
+    }
+
+    static bool SameStream(IReadOnlyList<RootlistEntry> a, IReadOnlyList<RootlistEntry> b)
+    {
+        if (ReferenceEquals(a, b)) return true;
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (!string.Equals(a[i].Uri, b[i].Uri, StringComparison.Ordinal)) return false;
+        return true;
+    }
+
     // ── folder CRUD (the pure builders; every one of them is byte-exact against a desktop capture) ────────────────────
     // A folder is a BALANCED MARKER PAIR inside the flat rootlist item stream:
     //     spotify:start-group:{groupId}:{urlencoded name}   …children…   spotify:end-group:{groupId}
@@ -380,10 +448,11 @@ public static class RootlistOps
         };
     }
 
-    /// <summary>Apply index ADD/REM rootlist ops to the marker stream LOCALLY, producing the rows the server will now
-    /// hold. The rootlist <c>/changes</c> reply for a folder op carries revision bookkeeping only (golden
-    /// a164-folder-create-response has no contents), so the optimistic tree has to be computed here rather than read out
-    /// of the response. Ops apply in order, each against the state left by the preceding ones.</summary>
+    /// <summary>Apply positional rootlist ops (index ADD / index REM / index MOV) to the marker stream LOCALLY,
+    /// producing the rows the server will now hold. EVERY rootlist <c>/changes</c> reply carries revision bookkeeping
+    /// only (goldens a164-folder-create-response / b049 prove it: no contents), so the new tree has to be computed here
+    /// rather than read out of the response — that is why a move that only POSTed left the sidebar stale. Ops apply in
+    /// order, each against the state left by the preceding ones.</summary>
     public static IReadOnlyList<RootlistEntry> ApplyLocally(IReadOnlyList<RootlistEntry> entries, IReadOnlyList<PlaylistOp> ops)
     {
         var uris = new List<string>(entries.Count + ops.Count);
@@ -409,8 +478,25 @@ public static class RootlistOps
                     uris.RemoveRange(op.FromIndex, op.Length);
                     stamps.RemoveRange(op.FromIndex, op.Length);
                     break;
+                // The positional MOV, with the SAME semantics PlaylistDiffApplier (and the server) run: the destination
+                // is expressed against the PRE-removal stream, so a forward move shifts back by the length it lifted.
+                case PlaylistOpKind.Move when !op.ItemsAsKey:
+                    if (op.FromIndex < 0 || op.Length < 0 || op.FromIndex + op.Length > uris.Count)
+                        throw new ArgumentOutOfRangeException(nameof(ops), "rootlist MOV source out of range");
+                    if (op.ToIndex < 0 || op.ToIndex > uris.Count)
+                        throw new ArgumentOutOfRangeException(nameof(ops), "rootlist MOV dest out of range");
+                    var movedUris = uris.GetRange(op.FromIndex, op.Length);
+                    var movedStamps = stamps.GetRange(op.FromIndex, op.Length);
+                    uris.RemoveRange(op.FromIndex, op.Length);
+                    stamps.RemoveRange(op.FromIndex, op.Length);
+                    int dest = op.ToIndex > op.FromIndex ? op.ToIndex - op.Length : op.ToIndex;
+                    if (dest < 0)
+                        throw new ArgumentOutOfRangeException(nameof(ops), "rootlist MOV dest inside the moved range");
+                    uris.InsertRange(dest, movedUris);
+                    stamps.InsertRange(dest, movedStamps);
+                    break;
                 default:
-                    throw new ArgumentOutOfRangeException(nameof(ops), "only index ADD/REM rootlist ops can be applied locally");
+                    throw new ArgumentOutOfRangeException(nameof(ops), "only positional ADD/REM/MOV rootlist ops can be applied locally");
             }
         }
         return RootlistTreeBuilder.EntriesFromUris(uris, stamps);

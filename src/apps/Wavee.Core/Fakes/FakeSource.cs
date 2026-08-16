@@ -44,7 +44,7 @@ public sealed class FakeSource : ICatalogSource
     /// structure <c>FakeData.UserPlaylists</c> flattens, so the leaves and the flat list agree by construction.</summary>
     public Task<IReadOnlyList<PlaylistNode>> GetPlaylistTreeAsync(CancellationToken ct = default)
         => Task.FromResult(FakeData.PlaylistTree());
-    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Track>>(System.Array.Empty<Track>());
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)
         => Task.FromResult(new SearchResults(System.Array.Empty<Track>(), System.Array.Empty<Album>(), System.Array.Empty<Artist>(), System.Array.Empty<Playlist>()));

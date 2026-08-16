@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -6,6 +6,7 @@ using FluentGpu.Hooks;
 using FluentGpu.Input;
 using FluentGpu.Localization;
 using FluentGpu.Signals;
+using Wavee.Backend.Playlists;
 using Wavee.Core;
 
 namespace Wavee;
@@ -35,6 +36,7 @@ public sealed class LibraryBridge : IUndoTarget
     readonly Dictionary<string, Signal<int>> _pendingByUri = new(StringComparer.Ordinal);
     readonly HashSet<string> _editedUris = new(StringComparer.Ordinal);
     Wavee.Backend.MutationEngine? _mutations;
+    Wavee.Backend.IStore? _store;
     Action<Action> _post = static a => a();
     bool _active;
 
@@ -74,6 +76,28 @@ public sealed class LibraryBridge : IUndoTarget
         _mutations = engine;
         if (_active) SubscribePending();
     }
+
+    // ── the rootlist marker stream (THE legality authority) ────────────────────────────────────────────────────────
+    /// <summary>Attach the real store. Called by the composition root beside <see cref="AttachMutations"/> and for the
+    /// same reason: the bridge is built in the Services ctor, before the store exists.</summary>
+    public void AttachRootlist(Wavee.Backend.IStore store) => _store = store;
+
+    /// <summary>The rootlist EXACTLY as the server holds it — the flat marker stream with its balanced
+    /// start-group/end-group (kind 1/2) rows. The sidebar's projection tree is built from this very list
+    /// (<c>RootlistTreeBuilder.Build</c>), so it is the one representation in which "where does this land" and "is it
+    /// legal" have the same answer as the write itself.
+    /// <para>Null on a build with no real store. Callers must refuse rather than guess — an ordering decided against a
+    /// stream nobody has would land at an index that means nothing.</para></summary>
+    public IReadOnlyList<Wavee.Backend.RootlistEntry>? RootlistMarkers => _store?.Rootlist();
+
+    /// <summary>Would this rootlist move be accepted, and if not why? THE one legality question in the app: the sidebar
+    /// drop cue, the rail folder tile and the "Move to folder…" picker all ask it here, and
+    /// <c>PlaylistMutationSource.MoveRootlistItemAsync</c> re-asks the same builder when it writes — so a cue that says
+    /// yes cannot be followed by a write that quietly does nothing (F1/F3).
+    /// <para><see cref="RootlistMoveCheck.Missing"/> when there is no marker stream at all.</para></summary>
+    public RootlistMoveCheck CheckRootlistMove(RootlistItemRef source, RootlistItemRef target,
+                                               RootlistDropPlacement placement)
+        => RootlistDropDecision.Check(RootlistMarkers, source, target, placement);
 
     void SubscribePending()
     {
@@ -350,6 +374,11 @@ public sealed class LibraryBridge : IUndoTarget
     public Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
                                       RootlistDropPlacement placement, CancellationToken ct = default)
         => _playlistEdits.MoveRootlistItemAsync(source, target, placement, ct);
+
+    /// <summary>Move a whole ordered batch (a multi-selection drop) as ONE revisioned write — one Delta, one optimistic
+    /// apply, one rollback. The submission ORDER is the caller's (see <c>RootlistBatchOrder</c>); the seam executes it.</summary>
+    public Task MoveRootlistItemsAsync(IReadOnlyList<RootlistMove> moves, CancellationToken ct = default)
+        => _playlistEdits.MoveRootlistItemsAsync(moves, ct);
 
     public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
     {

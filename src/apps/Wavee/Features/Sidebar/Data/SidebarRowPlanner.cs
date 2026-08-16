@@ -34,7 +34,10 @@ public enum SidebarRowKind : byte
     Placeholder   = 7,   // a missing entity (fallback title/art, dimmed)
     Empty         = 8,   // a section resolved to zero rows
     Skeleton      = 9,   // the section's source is still pending
-    CreateAction  = 10,  // the "+" affordance a PlaylistTree section owns
+    // 10 was CreateAction — the "+" ROW a PlaylistTree section used to own at its end. DELETED: the affordance is now
+    // the section HEADER's "+" (SidebarPaneConfig.HeaderCreate) plus the rail's, which is where Library V3 already put
+    // it. The VALUE is left unused rather than reclaimed: the kind is the ItemsView's ContentType (one recycle pool per
+    // kind) and the planner tests pin the row SEQUENCE, so renumbering would silently re-pool every existing row.
     EntityCard    = 11,  // the EntityEmbed hero card: taller row, cover-left, play affordance
     PromptRow     = 12,  // an actionable degraded state (e.g. Concerts' "Set your location" row)
     // PHASE 2 / Decision B — EDIT MODE ONLY. One uniform-height header card standing in for a whole section while the
@@ -153,16 +156,10 @@ public readonly record struct SidebarProjectionInput(
     // section's tiles (the utility links a mode places after its playlists) out of the rail entirely. A per-tree ceiling
     // is the input option that keeps document order from becoming a race for tiles.
     // Appended AFTER ExtensionSlices deliberately: every existing positional/named construction is untouched.
-    int RailTreeCap = 0,
-    // Whether a PlaylistTree section SKIPS its trailing "create playlist" affordance ROW. INVERTED so the struct's zero
-    // value is the landed behaviour (the Ready=0 / ConcertsLocationUnset convention: `default(SidebarProjectionInput)`
-    // must plan like a fresh input — a positional default of `true` is silently lost on `default(T)`). False = emit the
-    // row (Classic's document depends on it: that row IS Classic's create affordance). A pane whose own CHROME already
-    // carries a create button — Library V3's header "+" — passes true, because two create affordances for one command is
-    // exactly the per-mode duplication the unified renderer exists to remove, and under a non-playlist lens
-    // (Albums / Artists) a trailing "create playlist" row is simply wrong.
-    // Appended AFTER RailTreeCap deliberately: every existing positional/named construction is untouched.
-    bool SuppressTreeCreateRow = false);
+    // (`SuppressTreeCreateRow` lived here. It is GONE with the row it suppressed: the create affordance is the
+    // section HEADER's "+" now — chrome the RENDERER owns per `SidebarPaneConfig.HeaderCreate` — so the planner has
+    // nothing to emit and therefore nothing to suppress.)
+    int RailTreeCap = 0);
 
 /// <summary>Caller-owned row/entry storage. Hand the SAME instance to every <c>Build</c> for a given pane and a warm
 /// re-plan reuses its capacity (the 10k-library alloc bound). The returned plan's lists ALIAS these buffers, so a plan
@@ -509,13 +506,13 @@ public static class SidebarRowPlanner
         if (input.TreeState == SidebarSourceState.Pending && (tree is null || tree.Count == 0))
         {
             EmitSkeletons(s, depth, ref st);
-            if (!input.SuppressTreeCreateRow) Add(ref st, Chrome(SidebarRowKind.CreateAction, s, depth));
             return;
         }
         if (tree is null || tree.Count == 0)
         {
+            // The kind's ordinary Empty hint, and nothing else. It used to be followed by the create ROW, which is why
+            // an empty tree planned two rows; the affordance is the header's "+" now and the hint names it.
             Add(ref st, Chrome(SidebarRowKind.Empty, s, depth));
-            if (!input.SuppressTreeCreateRow) Add(ref st, Chrome(SidebarRowKind.CreateAction, s, depth));
             return;
         }
 
@@ -528,10 +525,9 @@ public static class SidebarRowPlanner
             PlanQueriedPlaylistTree(s, depth, tree, s.Query, in input, ref st);
 
         // The closing gutter, and only where there is a tree to close: an empty section's placeholder is not something
-        // you can drop AFTER, and a skeleton has no order yet. Placed before the create row so "below everything" is the
-        // tree's own slot rather than the create affordance's (D3).
+        // you can drop AFTER, and a skeleton has no order yet. It is now the section's LAST row outright — the create
+        // row that used to sit under it (and squat this very slot, D3) is gone.
         if (EmittedTreeRows(in st)) Add(ref st, Chrome(SidebarRowKind.TreeEnd, s, depth));
-        if (!input.SuppressTreeCreateRow) Add(ref st, Chrome(SidebarRowKind.CreateAction, s, depth));
     }
 
     /// <summary>Did the tree body just emit a real, orderable row? A trailing Empty/Skeleton means it did not.</summary>
@@ -927,6 +923,11 @@ public static class SidebarRowPlanner
 
         // A grid (and a search result) has no folder chrome: it is the same flatten-to-entities projection the expanded
         // pane uses. A null query preserves source order; an authored query applies its sort/qualifier/kind constraints.
+        //
+        // DELIBERATELY EXEMPT from the top-level-only rule the LIST arm below applies. This arm draws no folder tiles at
+        // all, so there is no disclosure to reach a nested playlist through — filtering by depth here would make a
+        // nested playlist unreachable from the rail rather than merely un-tiled, and a search that could not find one
+        // would be a search that lies.
         if (search is not null || s.Opts.Presentation == SidebarPresentation.Grid)
         {
             var q = SidebarSectionKinds.EffectiveQuery(SidebarSectionKind.PlaylistTree, s.Query);
@@ -966,6 +967,13 @@ public static class SidebarRowPlanner
         {
             if (s.Query is not null && st.TreeVisible[i] == 0) continue;
             var source = tree[i];
+            // TOP LEVEL ONLY. A 56-DIP strip has no indent lane and no disclosure, so a nested playlist tile was
+            // indistinguishable from a top-level one: the rail read as a flat pile whose order nobody could explain, and
+            // an expanded folder silently doubled the strip's length. A folder's CONTENTS are reachable from its tile —
+            // it opens the side flyout (`SidebarRailFolderFlyout`) — so nothing is lost by keeping the tiles to depth 0.
+            // Skipped BEFORE the sibling cursor below, which is per-parent: a nested slot we never draw must not consume
+            // its folder's cursor.
+            if (source.Depth > 0) continue;
             SidebarLibraryEntry e;
             if (s.Query is null || source.Kind == SidebarEntryKind.Folder) e = source;
             else

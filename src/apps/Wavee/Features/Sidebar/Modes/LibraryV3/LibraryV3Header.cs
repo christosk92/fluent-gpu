@@ -65,7 +65,8 @@ sealed class LibraryV3Header : Component
                 Size = 15f, Weight = 600, Color = Tok.TextPrimary,
                 Grow = 1f, Basis = 0f, MaxLines = 1, Trim = TextTrim.CharacterEllipsis,
             },
-            Embed.Comp(() => new SidebarCreateButton(_session.CreatePlaylist, 28f, 14f)),
+            Embed.Comp(() => new SidebarCreateButton(
+                _session.CreatePlaylist, menu: CreateMenu, box: 28f, glyph: 14f)),
             ToolTip.Wrap(new BoxEl
             {
                 Key = "v3-overflow",
@@ -101,6 +102,19 @@ sealed class LibraryV3Header : Component
             Padding = SidebarPaneMetrics.BandInset,
             Children = [.. kids],
         };
+    }
+
+    /// <summary>The header "+"'s flyout — [New playlist · New folder], the same two verbs every other "+" in the app
+    /// offers. Built at OPEN time; null (no library bridge yet) makes the button fall back to its plain click.</summary>
+    ContextMenuModel? CreateMenu()
+    {
+        if (_session is not { Acts: { Library: not null } acts } session) return null;
+        return new ContextMenuModel(new List<MenuFlyoutItem>(2)
+        {
+            new(Loc.Get(Strings.Detail.NewPlaylist), ActionIcons.Resolve(ActionIcons.Add), true, session.CreatePlaylist),
+            new(Loc.Get(Strings.Sidebar.CreateFolder), ActionIcons.Resolve(ActionIcons.Folder),
+                acts.Overlay is not null, () => FolderActions.NewFolder(acts, null)),
+        });
     }
 
     /// <summary>The overflow rows, built at OPEN time (§3.2.3's exact order).</summary>

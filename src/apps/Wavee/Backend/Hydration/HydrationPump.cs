@@ -97,10 +97,11 @@ public sealed class HydrationPump : IDisposable
         }
         if (shed)
         {
-            Interlocked.Increment(ref _dropped);
-            _log.Event(WaveeLogLevel.Warning, "hydration.pump.full", "hydration queue full — lowest-priority job dropped",
-                fields: [WaveeLogField.Of("capacity", _capacity), WaveeLogField.Of("priority", priority),
-                         WaveeLogField.Of("droppedPriority", evicted), WaveeLogField.Of("dropped", Volatile.Read(ref _dropped))]);
+            int dropped = Interlocked.Increment(ref _dropped);
+            if (dropped == 1 || (dropped & 255) == 0)
+                _log.Event(WaveeLogLevel.Warning, "hydration.pump.full", "hydration queue full — lowest-priority job dropped",
+                    fields: [WaveeLogField.Of("capacity", _capacity), WaveeLogField.Of("priority", priority),
+                             WaveeLogField.Of("droppedPriority", evicted), WaveeLogField.Of("dropped", dropped)]);
         }
         Kick();
     }

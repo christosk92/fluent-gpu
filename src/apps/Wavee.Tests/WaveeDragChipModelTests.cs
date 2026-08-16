@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Wavee.Core;
 using Xunit;
@@ -70,6 +70,23 @@ public class WaveeDragChipModelTests
         var chip = WaveeDragChipModel.For("Chill Mix", null, Array.Empty<Track>());
         Assert.Equal("Chill Mix", chip.Title);
         Assert.Equal(1, chip.Count);
+    }
+
+    [Fact]
+    public void RootlistMultiSelect_CountsTheSelection_SoTheBadgeAndTheStackAppear()
+    {
+        // A sidebar multi-select carries no tracks at all — several playlists/folders being re-filed. The count badge
+        // and the stacked backdrop are the ONE visual that says "five things", so it rides the same Count a song
+        // selection does; the title is the payload's own "{n} items" label.
+        var chip = WaveeDragChipModel.For("3 items", "https://i/cover", tracks: null, rootlistCount: 3);
+        Assert.Equal("3 items", chip.Title);
+        Assert.Null(chip.Subtitle);
+        Assert.Equal(3, chip.Count);
+
+        // One rootlist item is one item: no badge, no stack (and the default keeps every non-rootlist caller at 1).
+        Assert.Equal(1, WaveeDragChipModel.For("Chill Mix", null, null, rootlistCount: 1).Count);
+        Assert.Equal(1, WaveeDragChipModel.For("Chill Mix", null, null, rootlistCount: 0).Count);
+        Assert.Equal(1, WaveeDragChipModel.For("Chill Mix", null, null).Count);
     }
 
     [Fact]

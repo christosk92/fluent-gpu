@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
@@ -203,6 +205,174 @@ public class SidebarPaneInvariantTests
             @"SectionReorder\.Item\(\s*index - cardBand\.Start,\s*content is BoxEl \w+ \? \w+ with \{ Grow = 1f, Shrink = 1f, MinWidth = 0f \}"),
             src);
     }
+
+    // ── THE ONE SELECTION PILL (#22/#23 — two pills lit at once) ─────────────────────────────────────────────────────
+
+    /// <summary>THE PILL'S OPACITY MAY NOT BE AUTHORED. It used to render <c>Opacity = selected ? 1f : 0f</c> — a value
+    /// frozen at the render that produced it — while <c>SidebarPane</c>'s moving-pill transaction wrote the SAME node's
+    /// opacity channel directly. Every stale-pill report reduces to that split ownership: a force-completed flight
+    /// snapping <c>visible: true</c>, or a route→node registration whose slot had since been recycled onto another row,
+    /// lit a node whose own state said dark, and nothing re-derived it. The opacity is now ONE bound read of the slot's
+    /// live state (<c>SidebarPillState.Opacity</c>, the drop cue's discipline), so it re-evaluates on the row's own
+    /// epoch with no re-render. The file is engine-bound and cannot be source-included, so this is a source scan.</summary>
+    [Fact]
+    public void TheSelectionPill_BindsItsOpacity_AndAuthorsNoLiteral()
+    {
+        string src = ReadAppSource(@"Features\Sidebar\Shared\SidebarSelectionPill.cs");
+        if (src is null) return;
+        // Comments are stripped first: the file documents the retired spelling on purpose, and a guard that forbids
+        // NAMING the defect would only get the explanation deleted.
+        string code = Code(src);
+        // The retired spelling, in every form a "harmless" reintroduction would take.
+        Assert.DoesNotMatch(new Regex(@"Opacity\s*=\s*[^;,]*\?\s*1f\s*:\s*0f"), code);
+        Assert.DoesNotMatch(new Regex(@"Opacity\s*=\s*(selected|state\.Selected|[01](\.0+)?f)\s*[,;]"), code);
+        // …and the positive: one mount-stable bound channel, fed by the slot's live probe.
+        Assert.Matches(new Regex(@"Opacity\s*=\s*_opacity\s*,"), code);
+        Assert.Contains("Prop.Of(() => _state().Opacity)", code);
+    }
+
+    /// <summary>THE PANE MAY ONLY ASSERT WHAT THE BOUND READ WOULD ALREADY SAY. A force-complete used to snap the
+    /// previous flight's incoming half to a LITERAL <c>visible: true</c> — which is the previously-opened route's node,
+    /// and after a recycle whichever row inherited it (the now-playing one, in the reported case). Both halves now
+    /// settle at the derived verdict, and the route→node registry is re-validated before the transaction touches a
+    /// node at all.</summary>
+    [Fact]
+    public void TheSelectionTransaction_DerivesVisibility_AndRevalidatesItsRegistry()
+    {
+        string code = Code(ReadAppSource(@"Features\Sidebar\Pane\SidebarPane.cs"));
+        if (code is null) return;
+        Assert.DoesNotMatch(new Regex(@"SnapVertical\(anim, _selectionFlight(From|To), visible: (true|false)\)"), code);
+        Assert.Equal(2, Regex.Matches(code, @"visible: PillDrawsSelected\(_selectionFlight(From|To)\)").Count);
+        // The pill's verdict comes from the ONE rule, never from a second string compare typed here.
+        Assert.Contains("SidebarPillState.Lit(route, SelectedRoutePeek)", code);
+        // A live node is not enough: the reverse index has to agree the node still draws that route.
+        Assert.Contains("_selectionRouteByNode.TryGetValue((int)registration.Node.Raw.Index, out var bound)", code);
+    }
+
+    /// <summary>THE PILL IS SELECTION, THE <c>|||</c> GLYPH IS PLAYBACK. A row's <c>selected</c> is resolved by the pane
+    /// through <c>SidebarRowResolve</c> and is route-only; the now-playing pair is a separate read. Folding the two
+    /// (<c>selected || playing</c>) is the one edit that would make the playing row wear the accent pill, so it is
+    /// pinned negatively here — and the probe the bound opacity reads is pinned positively.</summary>
+    [Fact]
+    public void ARowsSelection_IsRouteOnly_AndNeverFoldsPlayback()
+    {
+        string code = Code(ReadAppSource(@"Features\Sidebar\Pane\SidebarPaneSlot.cs"));
+        if (code is null) return;
+        Assert.DoesNotMatch(new Regex(@"bool selected\s*=\s*[^;]*\bplaying\b"), code);
+        Assert.DoesNotMatch(new Regex(@"Selected\s*=\s*[^,;]*\bplaying\b"), code);
+        // Every selection read in the slot goes through a route-only owner: the pane's per-ROW verdict, or — for a grid
+        // CELL, which is not a plan row — the same resolver's per-ENTRY predicate the row-level sweep ORs across.
+        foreach (Match m in Regex.Matches(code, @"bool selected\s*=\s*([^;]+);"))
+            Assert.Contains(m.Groups[1].Value.Trim(), new[]
+            {
+                "_o.RowSelectsRoute(index, sel)",
+                "SidebarRowResolve.EntrySelects(in entry, sel)",
+            });
+        // The probe: the slot's snapshot re-derived against the LIVE route and the pane's row verdict, every read.
+        Assert.Contains("_pillState.For(selectedRoute, _o.RowSelectsRoute(index, selectedRoute))", code);
+    }
+
+    // ── THE DROP CUE READS THE LIVE SLOT INDEX (the two-insertion-lines defect) ──────────────────────────────────────
+
+    /// <summary>EVERY BOUND THUNK ON A PER-ROW CUE MUST READ <c>_scope.Index.Value</c>.
+    ///
+    /// <para>The reconciler wires a node's bound <c>Prop&lt;T&gt;</c> thunks at MOUNT and never again — Update rewrites
+    /// props, not bindings. The insertion line's key is the constant <c>"drop-line"</c> and the Into plate's is
+    /// <c>"drop-plate"</c>, so when an <c>ItemsView</c> slot recycles onto another plan row the reconciler pairs those
+    /// children by <c>(Key, type)</c> and UPDATES them — while the entity row beside them, keyed by the row's own key,
+    /// genuinely remounts. A thunk that captured the plan <c>index</c> therefore kept answering for the row this slot
+    /// was FIRST mounted with: after an auto-scrolled drag the user saw TWO insertion lines at once (the armed row's
+    /// and a recycled slot's ghost), and the slot holding index 0's stale binding could never draw "before the first
+    /// row". The row HEIGHT had the same defect, one step quieter.</para>
+    ///
+    /// <para>The fix is structural and therefore scannable: every thunk in those two builders re-reads the slot's live
+    /// index (which subscribes the binding to the recycle write) and the row epoch beside it (which covers a same-index
+    /// re-plan) before it asks the pane anything. The files are engine-bound and cannot be source-included, so this is
+    /// a source scan — the same idiom as the pill guards above.</para></summary>
+    [Fact]
+    public void ThePerRowDropCues_BindAgainstTheLiveSlotIndex()
+    {
+        string code = Code(ReadAppSource(@"Features\Sidebar\Pane\SidebarPaneSlot.cs"));
+        if (code is null) return;
+
+        foreach (string builder in new[] { "Element InsertionLine()", "Element DropPlate()" })
+        {
+            string body = Balanced(code, builder);
+            Assert.NotEqual("", body);
+            var thunks = PropOfThunks(body);
+            Assert.NotEmpty(thunks);
+            foreach (string thunk in thunks)
+                Assert.Contains("_scope.Index.Value", thunk, StringComparison.Ordinal);
+        }
+
+        // …and the LIVE height, off the same live index: a captured `height` is the same defect one step quieter.
+        Assert.Contains("_o.RowExtentOf(i)", code, StringComparison.Ordinal);
+        // The retired shapes, in every spelling a "harmless" reintroduction would take.
+        Assert.DoesNotMatch(new Regex(@"InsertionLine\(\s*index"), code);
+        Assert.DoesNotContain("DropCue = ", code, StringComparison.Ordinal);
+    }
+
+    /// <summary>THE ROW NO LONGER OWNS THE "INTO" PLATE. <c>SidebarEntityRow.Create</c> used to bind
+    /// <c>Fill</c>/<c>BorderColor</c> off a <c>SidebarRowSpec.DropCue</c> thunk that ALSO folded
+    /// <c>enabled &amp;&amp; selected</c> — captured as values at the render that built it. Because bindings are wired
+    /// at mount only, a same-keyed re-render (exactly what <c>RefreshSelection</c>'s epoch bump produces) left the old
+    /// thunk in place and the resting route plate stayed on the PREVIOUS route until the row scrolled out and
+    /// remounted. <c>DropCue</c> is deleted, the row's fills are static values again, and the plate is the slot's own
+    /// always-mounted <c>DropPlate()</c> under the row.</summary>
+    [Fact]
+    public void TheEntityRow_KeepsItsFillsStatic_AndOwnsNoTreeDropCue()
+    {
+        string code = Code(ReadAppSource(@"Features\Sidebar\Shared\SidebarEntityRow.cs"));
+        if (code is null) return;
+        Assert.DoesNotContain("DropCue", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("Prop.Of(() => dropActive()", code, StringComparison.Ordinal);
+        // The resting plate is now ONE precomputed value covering route selection AND the tree multi-selection, so the
+        // whole-row `DropActive` cue (the rail folder flyout's rows) composites over it instead of restating it.
+        Assert.Contains("Fill = plateOn is null", code, StringComparison.Ordinal);
+        Assert.Matches(new Regex(@"ColorF rest = !enabled \? ColorF\.Transparent"), code);
+    }
+
+    /// <summary>Every <c>Prop.Of(</c> invocation in <paramref name="body"/>, as its balanced argument span.</summary>
+    static List<string> PropOfThunks(string body)
+    {
+        var found = new List<string>();
+        const string token = "Prop.Of(";
+        for (int at = body.IndexOf(token, StringComparison.Ordinal); at >= 0;
+             at = body.IndexOf(token, at + token.Length, StringComparison.Ordinal))
+        {
+            int open = at + token.Length - 1;
+            int depth = 0;
+            for (int i = open; i < body.Length; i++)
+            {
+                if (body[i] == '(') depth++;
+                else if (body[i] == ')' && --depth == 0) { found.Add(body[open..(i + 1)]); break; }
+            }
+        }
+        return found;
+    }
+
+    /// <summary>The brace-balanced body of the member whose signature is <paramref name="signature"/> — expression-bodied
+    /// members included (the builders here are <c>=&gt; new BoxEl { … }</c>).</summary>
+    static string Balanced(string code, string signature)
+    {
+        int at = code.IndexOf(signature, StringComparison.Ordinal);
+        if (at < 0) return "";
+        int open = code.IndexOf('{', at + signature.Length);
+        if (open < 0) return "";
+        int depth = 0;
+        for (int i = open; i < code.Length; i++)
+        {
+            if (code[i] == '{') depth++;
+            else if (code[i] == '}' && --depth == 0) return code[open..(i + 1)];
+        }
+        return "";
+    }
+
+    /// <summary>Source with its whole-line comments removed. A drift guard must scan the CODE: the files it guards are
+    /// expected to name the retired spelling in prose (that is how the next reader learns why the rule exists), and a
+    /// guard that cannot tell the two apart pressures the explanation out of the file.</summary>
+    static string Code(string src)
+        => src is null ? null! : Regex.Replace(src, @"^[ \t]*//.*$", "", RegexOptions.Multiline);
 
     /// <summary>Read one app source file, or null (test skipped) on a binary-only run.</summary>
     static string ReadAppSource(string relativePath)

@@ -36,7 +36,7 @@ public sealed class SidebarRowExtentsTests
         var rows = new List<SidebarRow>
         {
             Row(SidebarRowKind.EntityRow), Row(SidebarRowKind.IconRow), Row(SidebarRowKind.Placeholder),
-            Row(SidebarRowKind.FolderHeader), Row(SidebarRowKind.Skeleton), Row(SidebarRowKind.CreateAction),
+            Row(SidebarRowKind.FolderHeader), Row(SidebarRowKind.Skeleton),
         };
         for (int i = 0; i < rows.Count; i++)
         {
@@ -137,7 +137,6 @@ public sealed class SidebarRowExtentsTests
             Row(SidebarRowKind.EntityRow),
             Row(SidebarRowKind.EntityRow),
             Row(SidebarRowKind.TreeEnd),
-            Row(SidebarRowKind.CreateAction),
         };
         float ExtentOf(int i) => H(rows, i, section);
 
@@ -149,8 +148,9 @@ public sealed class SidebarRowExtentsTests
             Assert.Equal(running, SidebarRowGeometry.ContentYOf(i, rows.Count, ExtentOf), 3);
             running += ExtentOf(i);
         }
-        // 30 header (first row, no air) + 44 folder + 44 + 44 + 24 tree end + 44 create
-        Assert.Equal(30f + 44f + 44f + 44f + 24f + 44f, running, 3);
+        // 30 header (first row, no air) + 44 folder + 44 + 44 + 24 tree end. The trailing 44-DIP CREATE row is gone:
+        // the affordance is the section header's "+", which is chrome inside the header band's own extent.
+        Assert.Equal(30f + 44f + 44f + 44f + 24f, running, 3);
         Assert.Equal(running, SidebarRowGeometry.ContentYOf(rows.Count, rows.Count, ExtentOf), 3);
     }
 }

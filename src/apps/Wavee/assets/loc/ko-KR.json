@@ -253,6 +253,13 @@
     "dropToPin": "고정하려면 여기에 놓으세요",
     "songCount": "{count, plural, other {#곡}}",
     "createPlaylistTooltip": "플레이리스트 만들기",
+    "createTooltip": "플레이리스트 또는 폴더 만들기",
+    "select": "선택",
+    "itemCount": "{count, plural, other {항목 #개}}",
+    "folderCreatedWith": "{count, plural, other {항목 #개}}(으)로 “{name}”을(를) 만들었습니다",
+    "empty": {
+      "playlists": "아직 플레이리스트가 없습니다 — +를 눌러 만드세요"
+    },
     "newPlaylist": "내 플레이리스트",
     "pinnedToast": "“{name}”을(를) 고정했습니다",
     "unpinnedToast": "“{name}”의 고정을 해제했습니다",
@@ -642,6 +649,7 @@
 
   "menu": {
     "artistUnavailable": "이 앨범의 아티스트를 찾지 못했습니다",
+    "moveManyToFolder": "{count}개를 폴더로 이동…",
     "moveUp": "위로 이동",
     "moveDown": "아래로 이동",
     "saveToLiked": "좋아요 표시한 곡에 저장",

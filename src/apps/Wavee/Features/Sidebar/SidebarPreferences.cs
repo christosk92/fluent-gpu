@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Hooks;
 using FluentGpu.Signals;
@@ -28,6 +28,19 @@ public sealed class SidebarPreferences
     /// <summary>The app-root context channel. The instance is reference-stable for the process lifetime, so the provide
     /// never churns its consumers (the <c>ActionServices</c> precedent).</summary>
     public static readonly Context<SidebarPreferences?> Slot = new(null);
+
+    /// <summary>DRAG PEEK — TRANSIENT, never persisted, never a write to <see cref="Collapsed"/>: a collapsed sidebar is
+    /// PRESENTED expanded for the rest of one drag once the pointer dwells on the rail (<c>SidebarPane.DragPeekMs</c>).
+    /// <para>It lives on the service because the peek has TWO readers that must agree. The pane decides its own
+    /// presentation (<c>SidebarPane.Render</c>'s <c>compact</c>), but the SHELL owns the sidebar COLUMN's width and clips
+    /// it (<c>WaveeShell</c>: <c>Width = presentedCompact ? CompactRailW : _sidebarWidth</c> on a <c>ClipToBounds</c>
+    /// box). A peek only the pane could see therefore laid the expanded rows out at the full pane width and then
+    /// scissored them to the 56-DIP rail — the reported "dim rail of cover tiles with tree connector lines and no
+    /// labels" is those rows' first 56 DIP: selection gutter + tree guides + art, every label cut off. Worse, flipping
+    /// the pane out of compact clears the rail layer's <c>HitTestVisible</c>, so the rail tiles that WERE valid targets
+    /// lost their drop-spotlight cut-outs at the same moment (the engine's hit-reachability gate). One signal, both
+    /// readers, and the shell's <c>SidebarPaneAnim</c> animates the widening for free.</para></summary>
+    public Signal<bool> DragPeek { get; } = new(false);
 
     readonly IAppSettings _settings;
     readonly SidebarLayoutStore _store;

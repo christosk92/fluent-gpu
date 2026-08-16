@@ -1105,7 +1105,13 @@ static class PlaylistInlineEdit
     /// <summary>Append the playlist-owner overflow items (Invite collaborators · Delete playlist) to <paramref name="items"/>.
     /// Fully capability-gated (SpotifyEditsLive ∧ IsOwner), so both the rail's owner ⋯ menu and the vertical hero's More
     /// menu call it unconditionally and get identical rows. Invite reuses the shared access flyout; delete confirms then
-    /// navigates home via <paramref name="h"/>. Every row carries a glyph so the menu's icon column stays consistent.</summary>
+    /// navigates home via <paramref name="h"/>. Every row carries a glyph so the menu's icon column stays consistent.
+    ///
+    /// <para>The sidebar row menus fold their permission verbs into an <c>Access ▸</c> submenu (<c>Menus.AccessItem</c>)
+    /// because they carry fourteen-plus verbs; this menu carries TWO, and the page it hangs off already exposes the
+    /// visibility/collaborative pair as an inline access flyout beside it. Grouping two rows into a cascade would add a
+    /// click and a second door onto the same state, so this one stays flat — the shared rule the sidebar and this menu
+    /// do keep is that <b>Rename is never hidden in a submenu or a strip</b>, and destructive is last.</para></summary>
     internal static void AppendOwnerItems(List<MenuFlyoutItem> items, IOverlayService? overlay, LibraryBridge? lib,
         Services? svc, Loadable<DetailModel> full, DetailHandlers h, Func<NodeHandle> anchor, Ref<OverlayHandle?> accessHandle)
     {

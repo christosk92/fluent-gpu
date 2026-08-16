@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using FluentGpu.Controls;
 using FluentGpu.Dsl;
@@ -19,8 +19,9 @@ namespace Wavee;
 // no pointer travel at all.
 //
 // WHAT IT REUSES. The flyout shell, the search field and the row rhythm are `PlaylistPickerPanel`'s; the legality rule
-// is `RootlistTreeNav`/`RootlistTreeMoves` (the same table the drop cue draws its refusals from, so the picker cannot
-// offer a destination a drag would refuse); and the commit is `FolderActions.Commit` — i.e. `WaveeResourceDrop.
+// is `RootlistOps.CheckMoves` over the store's marker stream, reached through `RootlistTreeNav` (the same authority the
+// drop cue refuses with, so the picker cannot offer a destination a drag would refuse); and the commit is
+// `FolderActions.Commit` — i.e. `WaveeResourceDrop.
 // MoveRootlist`, the very call a DROP makes, with its awaited failure mapping, its announce, its "Moved to {name}"
 // toast and its Undo.
 //
@@ -28,26 +29,36 @@ namespace Wavee;
 // gone by invoke time, so there is no anchor node left to place against. Exactly the reason `Menus.OpenPicker` hosts
 // the playlist picker the same way.
 
-/// <summary>Opens the "Move to folder…" destination picker for one rootlist row.</summary>
+/// <summary>Opens the "Move to folder…" / "Move {n} to folder…" destination picker for a rootlist selection.</summary>
 static class RootlistFolderPicker
 {
-    /// <summary>Open the picker for <paramref name="entryId"/> (a <c>SidebarLibraryEntry.Id</c>). Silent no-op when the
-    /// row is not in the published tree or when it has nowhere legal to go — an empty picker is a worse answer than a
-    /// verb the menu did not offer, which is why <c>NavExtras</c> decides the same question before drawing the row.</summary>
-    public static void Open(ActionServices s, string entryId)
+    /// <summary>Open the picker for a whole selection of <c>SidebarLibraryEntry.Id</c>s. Silent no-op when none of the
+    /// rows is in the published tree or when the selection has nowhere legal to go — an empty picker is a worse answer
+    /// than a verb the menu did not offer, which is why <c>NavExtras</c> decides the same question before drawing the row.
+    /// <para>The destination list is built from the BATCH: a folder is offered only if the WHOLE selection may be filed
+    /// into it (<c>RootlistDropDecision.Check</c> over <c>RootlistBatchOrder.For</c>), so every selected subtree drops
+    /// out for the same reason a drag refuses it — one authority, asked once.</para></summary>
+    public static void Open(ActionServices s, IReadOnlyList<string> entryIds)
     {
-        if (s.Overlay is not { } overlay || s.Library is null) return;
+        if (s.Overlay is not { } overlay || s.Library is not { } lib) return;
         var tree = s.Sidebar?.Binder?.CurrentInput.PlaylistTree;
-        if (!RootlistTreeNav.TryEntry(tree, entryId, out var entry)) return;
+        var markers = lib.RootlistMarkers;
+        var selection = RootlistSelection.Normalize(tree, entryIds);
+        if (selection.Count == 0) return;
 
         // A SNAPSHOT, taken at open. Component props freeze at mount, and the projection is not a signal this panel can
         // subscribe to — so the list the user sees is the tree as it stood when the menu verb fired. The COMMIT re-reads
         // the live tree (below), which is what keeps a mid-flight desktop rootlist change from landing the move against
         // stale sibling indices: the worst case is a destination that has since disappeared, and that commit resolves to
         // nothing rather than to the wrong folder.
+        var ids = new string[selection.Count];
+        for (int i = 0; i < selection.Count; i++) ids[i] = selection[i].Id;
         var destinations = new List<RootlistFolderChoice>();
-        RootlistTreeNav.PickerDestinations(tree, entryId, destinations);
+        RootlistTreeNav.PickerDestinations(tree, markers, ids, destinations);
         if (destinations.Count == 0) return;
+
+        // The panel names WHAT is moving: one row by name, a selection by its count.
+        string subject = selection.Count == 1 ? selection[0].Name : Strings.Sidebar.ItemCount(selection.Count);
 
         OverlayHandle? handle = null;
         handle = ContentDialog.Show(overlay, d =>
@@ -59,26 +70,31 @@ static class RootlistFolderPicker
             d.Content = Embed.Comp(() => new RootlistFolderPickerPanel
             {
                 Destinations = destinations,
-                Source = entry.Name,
-                Pick = choice => { Commit(s, entryId, in choice); handle?.Close(); },
+                Source = subject,
+                Pick = choice => { Commit(s, ids, in choice); handle?.Close(); },
             });
         });
     }
 
-    /// <summary>Commit one picked destination against the LIVE tree.</summary>
-    static void Commit(ActionServices s, string entryId, in RootlistFolderChoice choice)
+    /// <summary>The N=1 sugar — a row menu's "Move to folder…" is a selection of one.</summary>
+    public static void Open(ActionServices s, string entryId) => Open(s, [entryId]);
+
+    /// <summary>Commit one picked destination against the LIVE tree, as ONE batch.</summary>
+    static void Commit(ActionServices s, IReadOnlyList<string> entryIds, in RootlistFolderChoice choice)
     {
         var tree = s.Sidebar?.Binder?.CurrentInput.PlaylistTree;
-        if (!RootlistTreeNav.TryEntry(tree, entryId, out var live)) return;
+        var markers = s.Library?.RootlistMarkers;
+        var live = RootlistSelection.Normalize(tree, entryIds);
+        if (live.Count == 0) return;
         if (choice.IsTopLevel)
         {
             // Top level = "after everything at depth 0". TryRange's exclusive end is what lands it after a TRAILING
             // FOLDER instead of inside it — the same anchor the tree-end drop slot uses.
-            if (RootlistTreeNav.TryTopLevelAnchor(tree, entryId, out var anchor))
-                FolderActions.Commit(s, in live, anchor, RootlistDropPlacement.After, "");
+            if (RootlistTreeNav.TryTopLevelAnchor(tree, markers, entryIds, out var anchor))
+                FolderActions.Commit(s, live, anchor, RootlistDropPlacement.After, "");
             return;
         }
-        FolderActions.Commit(s, in live, new RootlistItemRef(choice.FolderId, IsFolder: true),
+        FolderActions.Commit(s, live, new RootlistItemRef(choice.FolderId, IsFolder: true),
                              RootlistDropPlacement.Inside, choice.Name);
     }
 }

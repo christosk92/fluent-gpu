@@ -148,6 +148,54 @@ public class MembershipDiffTests
         Assert.NotEqual(MembershipDiff.RowKey(t, 3), MembershipDiff.RowKey(t, 4));
     }
 
+    // -- the keyed MOVE keeps every row addressable (the "blank slot after a reorder" report) -----------------------
+    // A same-list drag commits ONE item-keyed MOV. The list the page re-projects afterwards must therefore diff as a
+    // pure MOVE: no adds, no removes, no null-keyed rows. A row that lost its identity across the swap would diff as a
+    // remove+add, which is exactly what renders as an empty row-height band where the moved row used to be.
+    [Fact]
+    public void KeyedMove_DiffsAsMovesOnly_WithNoNullOrEmptyRowKeys()
+    {
+        var before = Tracks("a", "b", "c", "d");
+        var after = Tracks("b", "c", "d", "a");        // row "a" dragged to the end - same uids, new order
+
+        var d = MembershipDiff.Diff(before, after);
+
+        Assert.Empty(d.Adds);
+        Assert.Empty(d.Removes);
+        Assert.Equal(4, d.Moves.Count);
+        Assert.False(d.IsReset);
+        Assert.Equal(1.0, d.RetainedFraction);
+        // Every change names a real row on BOTH sides - nothing is a phantom insert or a phantom removal.
+        Assert.All(d.Moves, m =>
+        {
+            Assert.False(string.IsNullOrEmpty(m.Key));
+            Assert.NotNull(m.OldIndex);
+            Assert.NotNull(m.NewIndex);
+        });
+        var moved = d.Moves.Single(m => m.Key == "uid-a");
+        Assert.Equal((0, 3), (moved.OldIndex!.Value, moved.NewIndex!.Value));
+        // ...and the per-row identity the list keys its slots by survives the move unchanged.
+        Assert.Equal(MembershipDiff.RowKey(before[0], 0), MembershipDiff.RowKey(after[3], 3));
+    }
+
+    [Fact]
+    public void KeyedMove_OfDuplicateUris_StillMovesTheRowThatWasDragged()
+    {
+        // The same song twice: only the per-row ItemId distinguishes them, and the wire's keyed MOV moves exactly one.
+        var a1 = T("dup", "uid-1");
+        var a2 = T("dup", "uid-2");
+        var other = T("x", "uid-x");
+        var d = MembershipDiff.Diff(new[] { a1, a2, other }, new[] { a2, other, a1 });
+
+        Assert.Empty(d.Adds);
+        Assert.Empty(d.Removes);
+        Assert.Equal(3, d.Moves.Count);
+        Assert.Equal((0, 2), Value(d.Moves.Single(m => m.Key == "uid-1")));
+        Assert.Equal((1, 0), Value(d.Moves.Single(m => m.Key == "uid-2")));
+
+        static (int, int) Value(RowChange c) => (c.OldIndex!.Value, c.NewIndex!.Value);
+    }
+
     [Fact]
     public void RowKeyMatches_IsFalseForEmptyKeys_AndForAForeignKeyShape()
     {

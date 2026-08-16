@@ -67,9 +67,14 @@ public sealed class LocalPlaylistMutationSource : IPlaylistMutationSource
     public Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default)
         => throw SpotifyOnly(playlistUri);
 
+    // Local playlists are not in the rootlist at all, so there is nothing to move — but a no-op is the HONEST answer
+    // here (unlike folder CRUD below): the sidebar's move verbs are shape-checked against this seam offline.
+    public Task MoveRootlistItemsAsync(IReadOnlyList<RootlistMove> moves, CancellationToken ct = default)
+        => Task.CompletedTask;
+
     public Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
                                       RootlistDropPlacement placement, CancellationToken ct = default)
-        => Task.CompletedTask;
+        => MoveRootlistItemsAsync([new RootlistMove(source, target, placement)], ct);
 
     // Folder CRUD is a Spotify ROOTLIST operation: local playlists are not in the rootlist at all, so there is no
     // honest local behaviour to fall back to. Named throws (wiring discipline) — never a silent no-op.

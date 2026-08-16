@@ -1,5 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using Wavee.Backend;
+using Wavee.Backend.Playlists;
 using Wavee.Core;
 
 namespace Wavee;
@@ -11,13 +13,15 @@ namespace Wavee;
 // only user could not move a playlist at all. A drag is one of several ways to reorder, never the only one (P6).
 //
 // THE MODEL. Everything a menu verb, an Alt+arrow accelerator and the folder picker need is a question about the SAME
-// depth-first flattened tree the cue resolver already decides against (`RootlistTreeMoves`): who are my siblings, where
-// am I among them, and which folders may I be filed into. Those three answers are pure, so they live here — engine-free
-// (System + Wavee.Core only), source-included by `Wavee.Tests` exactly like `RootlistSlotResolver`, and driven by
-// `FolderActionsTests` / `SidebarNavExtrasTests` / `RootlistFolderPickerTests` as the REAL rules rather than a copy.
+// depth-first flattened tree the pane's drop mapper resolves against: who are my siblings, where am I among them, and
+// which folders may I be filed into. STRUCTURE is answered from that tree; LEGALITY is not answered here at all — the
+// "may I" arms below ask `RootlistDropDecision.Check` (i.e. `RootlistOps.CheckMoves` over the store's real marker
+// stream), the very same authority the drop cue refuses with, so the picker cannot offer a destination a drag would
+// refuse and neither of them can invent a rule. Pure, source-included by `Wavee.Tests` exactly like
+// `RootlistSlotResolver`, and driven by `FolderActionsTests` / `SidebarNavExtrasTests` / `RootlistFolderPickerTests`.
 //
 // Every verb these answers feed commits through the ONE seam a drop uses (`WaveeResourceDrop.MoveRootlist` →
-// `MoveRootlistItemAsync`), so the menu, the keyboard and the pointer cannot disagree about what a move is, what it
+// `MoveRootlistItemsAsync`), so the menu, the keyboard and the pointer cannot disagree about what a move is, what it
 // announces, or what its Undo restores.
 
 /// <summary>Where one entry sits among its SIBLINGS (the entries sharing its parent folder), and the two neighbours a
@@ -105,48 +109,65 @@ public static class RootlistTreeNav
     /// first (<see cref="RootlistFolderChoice.IsTopLevel"/>), then the legal folders in tree order.
     /// <para>Top level leads because it is the destination with no folder to scroll to and the one a user reaching for
     /// this verb most often wants — it is the un-nest.</para></summary>
-    public static void PickerDestinations(IReadOnlyList<SidebarLibraryEntry>? tree, string sourceId,
+    public static void PickerDestinations(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                          IReadOnlyList<RootlistEntry>? markers, IReadOnlyList<string> sourceIds,
                                           List<RootlistFolderChoice> into)
     {
         ArgumentNullException.ThrowIfNull(into);
         into.Clear();
-        if (TryTopLevelAnchor(tree, sourceId, out _)) into.Add(new RootlistFolderChoice("", "", 0));
-        FolderChoices(tree, sourceId, into);
+        var sources = RootlistSelection.Refs(RootlistSelection.Normalize(tree, sourceIds));
+        if (sources.Count == 0) return;
+        if (TryTopLevelAnchor(tree, markers, sourceIds, out _)) into.Add(new RootlistFolderChoice("", "", 0));
+        FolderChoices(tree, markers, sources, into);
     }
+
+    /// <summary>The N=1 sugar. A selection of one is a batch of one — there is no second destination rule.</summary>
+    public static void PickerDestinations(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                          IReadOnlyList<RootlistEntry>? markers, string sourceId,
+                                          List<RootlistFolderChoice> into)
+        => PickerDestinations(tree, markers, [sourceId], into);
 
     /// <summary>Is there anywhere at all to file <paramref name="sourceId"/>? The allocation-free question behind the
     /// menu's "Move to folder…" row — a verb that would open an EMPTY picker must be absent, not present and useless.</summary>
-    public static bool HasDestinations(IReadOnlyList<SidebarLibraryEntry>? tree, string sourceId)
+    public static bool HasDestinations(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                       IReadOnlyList<RootlistEntry>? markers, IReadOnlyList<string> sourceIds)
     {
-        if (TryTopLevelAnchor(tree, sourceId, out _)) return true;
-        if (tree is null || string.IsNullOrEmpty(sourceId)) return false;
+        if (tree is null) return false;
+        var sources = RootlistSelection.Refs(RootlistSelection.Normalize(tree, sourceIds));
+        if (sources.Count == 0) return false;
+        if (TryTopLevelAnchor(tree, markers, sourceIds, out _)) return true;
         for (int i = 0; i < tree.Count; i++)
         {
             var e = tree[i];
             if (!e.IsFolder || e.FolderId.Length == 0) continue;
-            if (RootlistTreeMoves.Check(tree, sourceId, e.Id, RootlistDropPlacement.Inside) == SidebarDropRefusal.None)
-                return true;
+            if (RootlistDropDecision.Check(markers, sources, RefOf(in e), RootlistDropPlacement.Inside)
+                == RootlistMoveCheck.Ok) return true;
         }
         return false;
     }
 
+    /// <summary>The N=1 sugar (the row menu's "Move to folder…" arm asks about exactly one row).</summary>
+    public static bool HasDestinations(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                       IReadOnlyList<RootlistEntry>? markers, string sourceId)
+        => HasDestinations(tree, markers, [sourceId]);
+
     /// <summary>The folders <paramref name="sourceId"/> may be filed into, in tree order, APPENDED to
     /// <paramref name="into"/> (caller-owned, so the picker's list costs no allocation per keystroke).
     ///
-    /// <para>Legality is <see cref="RootlistTreeMoves.Check"/> — the SAME table the drop cue draws its refusals from —
-    /// so the picker cannot offer a destination a drag would refuse: the source's own subtree (a folder into itself or
-    /// its descendant) and the folder it is already the last child of both drop out, without this file re-deriving a
-    /// second copy of the cycle rule.</para></summary>
-    static void FolderChoices(IReadOnlyList<SidebarLibraryEntry>? tree, string sourceId,
-                              List<RootlistFolderChoice> into)
+    /// <para>Legality is <see cref="RootlistDropDecision.Check"/> — i.e. <c>RootlistOps.CheckMove</c> over the store's
+    /// real marker stream, the SAME authority the drop cue refuses with — so the picker cannot offer a destination a
+    /// drag would refuse: the source's own subtree (a folder into itself or its descendant) and the folder it is
+    /// already the last child of both drop out, without this file carrying a second copy of the cycle rule.</para></summary>
+    static void FolderChoices(IReadOnlyList<SidebarLibraryEntry>? tree, IReadOnlyList<RootlistEntry>? markers,
+                              IReadOnlyList<RootlistItemRef> sources, List<RootlistFolderChoice> into)
     {
-        if (tree is null || tree.Count == 0 || string.IsNullOrEmpty(sourceId)) return;
+        if (tree is null || tree.Count == 0 || sources.Count == 0) return;
         for (int i = 0; i < tree.Count; i++)
         {
             var e = tree[i];
             if (!e.IsFolder || e.FolderId.Length == 0) continue;
-            if (RootlistTreeMoves.Check(tree, sourceId, e.Id, RootlistDropPlacement.Inside) != SidebarDropRefusal.None)
-                continue;
+            if (RootlistDropDecision.Check(markers, sources, RefOf(in e), RootlistDropPlacement.Inside)
+                != RootlistMoveCheck.Ok) continue;
             into.Add(new RootlistFolderChoice(e.FolderId, e.Name, e.Depth));
         }
     }
@@ -154,21 +175,32 @@ public static class RootlistTreeNav
     /// <summary>The anchor behind the picker's pinned <b>Top level</b> row: the LAST top-level entry, landed After.
     /// <para>False when there is no such move to make — the tree is empty, or the source is itself the last top-level
     /// entry (landing after itself is where it already is). The row is then absent rather than dead.</para></summary>
-    public static bool TryTopLevelAnchor(IReadOnlyList<SidebarLibraryEntry>? tree, string sourceId,
+    public static bool TryTopLevelAnchor(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                         IReadOnlyList<RootlistEntry>? markers, IReadOnlyList<string> sourceIds,
                                          out RootlistItemRef anchor)
     {
         anchor = new RootlistItemRef("", false);
-        if (tree is null || tree.Count == 0 || string.IsNullOrEmpty(sourceId)) return false;
+        if (tree is null || tree.Count == 0) return false;
+        var sources = RootlistSelection.Refs(RootlistSelection.Normalize(tree, sourceIds));
+        if (sources.Count == 0) return false;
         int last = -1;
         for (int i = 0; i < tree.Count; i++)
             if (tree[i].Depth == 0) last = i;
         if (last < 0) return false;
         var entry = tree[last];
-        if (RootlistTreeMoves.Check(tree, sourceId, entry.Id, RootlistDropPlacement.After) != SidebarDropRefusal.None)
-            return false;
+        // The batch rides the SAME anchor: the last top-level entry, landed After. A selection that CONTAINS that entry
+        // is not refused — the builder drops the self-pair as a legal GATHER and files the rest around it.
+        if (RootlistDropDecision.Check(markers, sources, RefOf(in entry), RootlistDropPlacement.After,
+                                       endOfList: true) != RootlistMoveCheck.Ok) return false;
         anchor = RefOf(in entry);
         return anchor.Key.Length > 0;
     }
+
+    /// <summary>The N=1 sugar.</summary>
+    public static bool TryTopLevelAnchor(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                         IReadOnlyList<RootlistEntry>? markers, string sourceId,
+                                         out RootlistItemRef anchor)
+        => TryTopLevelAnchor(tree, markers, [sourceId], out anchor);
 
     /// <summary>The entry with this id, or false. One linear scan — the tree is the projection's own flattened list, and
     /// a menu open is not a hot path.</summary>
@@ -208,4 +240,110 @@ public static class RootlistTreeNav
         => entry.IsFolder
             ? new RootlistItemRef(entry.FolderId, IsFolder: true)
             : new RootlistItemRef(entry.Uri, IsFolder: false);
+}
+
+/// <summary>THE SELECTION → SOURCES rule. A multi-select is not "the ids the user clicked": it is those ids in TREE
+/// ORDER with every descendant of a selected FOLDER dropped, because a folder already carries its subtree with it and
+/// asking the seam to move a child that is riding inside its own parent is a move against an index that will not exist
+/// by the time the parent's op has been applied.
+///
+/// <para>Pure and engine-free like the rest of <c>Data/</c>: the pane's drag source, the row menu's "Move {n} to
+/// folder…" and the folder picker all normalise through this ONE function, so the payload, the cue and the commit can
+/// never disagree about which items a gesture is carrying.</para></summary>
+public static class RootlistSelection
+{
+    /// <summary>The selected entries in TREE ORDER, with the descendants of any selected folder removed.</summary>
+    public static IReadOnlyList<SidebarLibraryEntry> Normalize(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                                              IReadOnlySet<string>? ids)
+    {
+        if (tree is null || tree.Count == 0 || ids is null || ids.Count == 0)
+            return Array.Empty<SidebarLibraryEntry>();
+
+        var picked = new List<SidebarLibraryEntry>(ids.Count);
+        for (int i = 0; i < tree.Count; i++)
+        {
+            var e = tree[i];
+            if (!ids.Contains(e.Id)) continue;
+            picked.Add(e);
+            if (!e.IsFolder) continue;
+            // The whole subtree rides WITH the folder: skip every following row deeper than it, selected or not.
+            int depth = e.Depth;
+            while (i + 1 < tree.Count && tree[i + 1].Depth > depth) i++;
+        }
+        return picked;
+    }
+
+    /// <summary>The id-list overload — the shape a menu verb and the picker hold (a <c>Signal</c>-free list of row
+    /// ids). Same rule, one HashSet.</summary>
+    public static IReadOnlyList<SidebarLibraryEntry> Normalize(IReadOnlyList<SidebarLibraryEntry>? tree,
+                                                              IReadOnlyList<string>? ids)
+    {
+        if (ids is null || ids.Count == 0) return Array.Empty<SidebarLibraryEntry>();
+        var set = new HashSet<string>(ids.Count, StringComparer.Ordinal);
+        for (int i = 0; i < ids.Count; i++) set.Add(ids[i]);
+        return Normalize(tree, set);
+    }
+
+    /// <summary>The seam refs of an ORDERED entry run — a folder by its group id, a playlist by its uri
+    /// (<see cref="RootlistTreeNav.RefOf"/>, the one owner of that rule). Entries with no addressable ref drop out
+    /// rather than reaching the seam as an empty key.</summary>
+    public static IReadOnlyList<RootlistItemRef> Refs(IReadOnlyList<SidebarLibraryEntry>? entries)
+    {
+        if (entries is null || entries.Count == 0) return Array.Empty<RootlistItemRef>();
+        var refs = new List<RootlistItemRef>(entries.Count);
+        for (int i = 0; i < entries.Count; i++)
+        {
+            var r = RootlistTreeNav.RefOf(entries[i]);
+            if (r.Key.Length > 0) refs.Add(r);
+        }
+        return refs;
+    }
+}
+
+/// <summary>THE SAME-TARGET ORDERING RULE — the one reason a batch move is not N separate drops.
+///
+/// <para>Every move in a batch is expressed against the SAME anchor, and each op lands ADJACENT to that anchor. So the
+/// order the ops are issued in is what decides the order the items end up in, and the correct order depends on which
+/// side of the anchor they land:</para>
+/// <list type="bullet">
+/// <item><b>Before(t)</b> and <b>Inside(folder)</b> iterate the sources in TREE ORDER — each one lands immediately
+/// before the anchor (or appended last inside the folder), so the run rebuilds itself front to back.</item>
+/// <item><b>After(t)</b> — including the tree's END slot, which is expressed as "After the last top-level entry" —
+/// iterates in REVERSE tree order, because each op lands immediately AFTER the anchor and therefore ahead of everything
+/// issued before it.</item>
+/// </list>
+///
+/// <para>Worked against <c>RootlistOps.TryBuildMoves</c> (which applies each op locally before building the next) on
+/// <c>[A,B,C,D,E]</c> with the selection <c>{B,D}</c>:</para>
+/// <code>
+///   After E   (reverse: D, then B)  ⇒ [A,B,C,E,D] ⇒ [A,C,E,B,D]      // forward would give [A,C,E,D,B]
+///   Before A  (forward: B, then D)  ⇒ [B,A,C,D,E] ⇒ [B,D,A,C,E]
+///   Inside F  (forward: B, then D)  ⇒ appended in order, B before D
+/// </code>
+///
+/// <para>Pinned by <c>RootlistBatchOrderTests</c> against the real builder, not against a restatement of this comment.
+/// A source whose ref has no key drops out here rather than reaching the seam.</para></summary>
+public static class RootlistBatchOrder
+{
+    /// <summary>The ordered batch one drop / one menu verb issues, ready for
+    /// <c>IPlaylistMutationSource.MoveRootlistItemsAsync</c>.</summary>
+    /// <param name="orderedSources">The selection in TREE ORDER (<see cref="RootlistSelection"/>).</param>
+    /// <param name="endOfList">This is the tree's END slot. It is already expressed as
+    /// <see cref="RootlistDropPlacement.After"/> the last top-level entry, so it reverses for the same reason — the
+    /// flag exists so a caller states the intent rather than relying on that coincidence.</param>
+    public static IReadOnlyList<RootlistMove> For(IReadOnlyList<RootlistItemRef>? orderedSources,
+                                                 RootlistItemRef target, RootlistDropPlacement placement,
+                                                 bool endOfList = false)
+    {
+        if (orderedSources is null || orderedSources.Count == 0) return Array.Empty<RootlistMove>();
+        bool reverse = endOfList || placement == RootlistDropPlacement.After;
+        var moves = new List<RootlistMove>(orderedSources.Count);
+        for (int i = 0; i < orderedSources.Count; i++)
+        {
+            var source = orderedSources[reverse ? orderedSources.Count - 1 - i : i];
+            if (source.Key.Length == 0) continue;
+            moves.Add(new RootlistMove(source, target, placement));
+        }
+        return moves;
+    }
 }

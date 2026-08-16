@@ -65,7 +65,7 @@ public sealed class LocalSource : ICatalogSource
         => Task.FromResult<IReadOnlyList<Album>>(System.Array.Empty<Album>());
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Artist>>(System.Array.Empty<Artist>());
-    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Track>>(System.Array.Empty<Track>());
 
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)

@@ -138,7 +138,7 @@ public sealed class UserPlaylistSource : ICatalogSource
     public Task<IReadOnlyList<LibraryItem>> GetLibraryAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<LibraryItem>>(System.Array.Empty<LibraryItem>());
     public Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Album>>(System.Array.Empty<Album>());
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Artist>>(System.Array.Empty<Artist>());
-    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Track>>(System.Array.Empty<Track>());
+    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Track>>(System.Array.Empty<Track>());
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default) => Task.FromResult(SearchResults.Empty);
     public Task<HomeContribution> GetHomeAsync(CancellationToken ct = default) => Task.FromResult(new HomeContribution(System.Array.Empty<HomeGroup>(), 60));
     public Task<LibraryStats> GetStatsAsync(CancellationToken ct = default) => Task.FromResult(new LibraryStats(0, 0, 0, 0));

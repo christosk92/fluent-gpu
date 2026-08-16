@@ -1,4 +1,4 @@
-namespace FluentGpu.Controls;
+﻿namespace FluentGpu.Controls;
 
 /// <summary>
 /// THE insertion/reorder geometry — pure, static and allocation-free, so the framework (not the app) owns every
@@ -199,12 +199,22 @@ public readonly record struct InsertionPlan(int FirstItem, int Count, int Slot, 
         => !IsActive || !SameList ? 0 : SortableMath.RemovedBefore(SlotItem, sortedSources);
 
     /// <summary>THE displacement of resting ITEM <paramref name="item"/> (absolute index — sources are absolute too):
-    /// <c>extent·(N·[i ≥ slot] − removedBefore(i))</c> for a move, <c>gapExtent·[i ≥ slot]</c> for a copy. Items
-    /// OUTSIDE the insertable range return 0 — a sticky prefix must not be displaced (C1) and an appended
-    /// recommendation section must not ride the gap down (A12).</summary>
+    /// <c>extent·(N·[i ≥ slot] − removedBefore(i))</c> for a move, <c>gapExtent·[i ≥ slot]</c> for a copy.
+    /// <para>A LEADING item (a sticky hero/chrome prefix, <c>item &lt; FirstItem</c>) is never displaced — C1.</para>
+    /// <para>A TRAILING item (an appended section — a "Recommended songs" header and its cards — at or past
+    /// <c>FirstItem+Count</c>) rides the range's NET growth, i.e. exactly what the insertable range's own tail moved
+    /// by. For a same-list move that is <b>0</b> (Σremoval == N, the content height is invariant) which is A12 as
+    /// written; for a CROSS-LIST copy the content genuinely grows by <see cref="GapExtent"/>, so the section moves
+    /// down with it. Returning a flat 0 there opened the gap UNDERNEATH the section: the in-gap preview — drawn at
+    /// the gap's leading edge, which for a bottom slot is the section's own top — painted straight over its
+    /// header.</para></summary>
     public float DisplacementFor(int item, ReadOnlySpan<int> sortedSources)
     {
-        if (!IsActive || item < FirstItem || item >= FirstItem + Count) return 0f;
+        if (!IsActive || item < FirstItem) return 0f;
+        // Clamp (rather than special-case) the trailing rows onto the range's exclusive end: the displacement of the
+        // hypothetical row at FirstItem+Count IS the net growth, so the section can never disagree with the last
+        // insertable row it sits under.
+        if (item > FirstItem + Count) item = FirstItem + Count;
         float dy = item >= SlotItem ? GapExtent : 0f;
         if (SameList) dy -= SortableMath.RemovedBefore(item, sortedSources) * ItemExtent;
         return dy;

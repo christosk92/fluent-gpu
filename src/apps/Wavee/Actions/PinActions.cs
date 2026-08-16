@@ -6,7 +6,7 @@ namespace Wavee;
 
 /// <summary>
 /// The pin action pair (v1 spec F.5.2) — an ABSOLUTE-STATE pair, not a toggle row. This follows the deliberate
-/// precedent set by <c>Menus.VisibilityItem</c> ("Explicit absolute-state rows (not a toggle): a mis-checked toggle
+/// precedent set by <c>Menus.AccessItem</c> ("Explicit absolute-state rows (not a toggle): a mis-checked toggle
 /// would invert the user's intent") and matches Spotify's own menu, which shows exactly one of "Pin to sidebar" /
 /// "Unpin from sidebar". Which one a menu inserts is <see cref="Row"/>'s decision, delegated to the engine-free
 /// <see cref="PinRowRule"/>.

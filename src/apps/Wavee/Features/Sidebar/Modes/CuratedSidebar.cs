@@ -101,6 +101,9 @@ sealed class CuratedSidebar : Component
             Edit = ReadEditSession,
             OnCustomize = OpenCustomizer,
             OnCreatePlaylist = CreatePlaylist,
+            // Same affordance as Classic's: a "+" in every PlaylistTree section header. A config flag, never a Design
+            // branch (rule 1) — and the reason the renderer needs to know nothing about which mode it is drawing.
+            HeaderCreate = true,
         }, DepKey.Empty);
 
         return Embed.Comp(() => new SidebarPane(config, _route, _go, _compact, _expandedWidth, _inDrawer));
@@ -151,7 +154,7 @@ sealed class CuratedSidebar : Component
         _go(SidebarLayoutMenu.CustomizeRoute, null);
     }
 
-    /// <summary>The PlaylistTree section's create affordance (§C5.1's <c>CreateAction</c> row) — the ONE create path
+    /// <summary>The PlaylistTree header "+"'s plain-click verb — the ONE create path
     /// (<see cref="PlaylistCreateFlow"/>), so Classic, V3 and Curated cannot drift on what "+" does or on what it names
     /// the playlist.</summary>
     void CreatePlaylist()

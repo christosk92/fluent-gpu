@@ -1,5 +1,6 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Wavee;
+using Wavee.Backend.Playlists;
 using Wavee.Core;
 using Xunit;
 
@@ -16,11 +17,10 @@ namespace Wavee.Tests;
 /// </summary>
 public class RootlistRefusalTests
 {
-    static SidebarRowFacts Row(bool folder = false, bool self = false, bool ancestor = false,
-                               bool sorted = false, bool loaded = true) => new(
+    static SidebarRowFacts Row(bool folder = false, bool self = false, bool sorted = false, bool loaded = true) => new(
         IsFolder: folder, FolderExpanded: false, FolderHasChildren: false,
         Depth: 0, NextVisibleDepth: 0, CenterAccepts: folder,
-        SourceIsSelf: self, SourceIsAncestorOfRow: ancestor, SortedNonCustom: sorted, RootlistLoaded: loaded);
+        SourceIsSelf: self, SortedNonCustom: sorted, RootlistLoaded: loaded);
 
     static SidebarDropSlot At(float t, in SidebarRowFacts f)
         => RootlistSlotResolver.Resolve(2, t, 200f, 44f, in f, SidebarDropSlot.None);
@@ -41,13 +41,6 @@ public class RootlistRefusalTests
         Assert.Equal(SidebarDropRefusal.IntoItself, At(0.5f, Row(folder: true, self: true)).Refusal);
         // The same folder's EDGES are the ordinary self refusal — the user is aiming at an ordering, not at the folder.
         Assert.Equal(SidebarDropRefusal.Self, At(0.02f, Row(folder: true, self: true)).Refusal);
-    }
-
-    [Fact]
-    public void IntoDescendant_RefusesARowInsideTheDraggedFolder()
-    {
-        Assert.Equal(SidebarDropRefusal.IntoDescendant, At(0.5f, Row(folder: true, ancestor: true)).Refusal);
-        Assert.Equal(SidebarDropRefusal.IntoDescendant, At(0.1f, Row(ancestor: true)).Refusal);
     }
 
     [Fact]
@@ -82,77 +75,103 @@ public class RootlistRefusalTests
             RootlistSlotResolver.Resolve(-1, 0.5f, 200f, 44f, Row(), SidebarDropSlot.None).Refusal);
     }
 
-    // ── NoOp / cycle, decided against real sibling order ─────────────────────────────────────────────────────────────
+    // ── NoOp / cycle / self, decided against THE MARKER STREAM ──────────────────
+    //
+    // These used to be answered by `RootlistTreeMoves.Check` over a flattened entry list with NO end-group rows — a
+    // second copy of the index math whose "Inside" landed at the folder's END and therefore called a perfectly legal
+    // filing a no-op (F1). The copy is deleted: every one of them is now `RootlistOps.CheckMove` over the same marker
+    // stream the write indexes into, mapped by the ONE `RootlistDropDecision.RefusalFor` table.
 
-    static SidebarLibraryEntry Pl(string slug, int depth = 0, string parent = "")
-        => new("pl:spotify:playlist:" + slug, SidebarEntryKind.Playlist, "spotify:playlist:" + slug, slug, "",
-               null, null, 0, 0, 1, 0, 0, depth, false, SidebarPlaylistFlavor.None) { ParentFolderId = parent };
+    static SidebarDropRefusal Check(string sourceId, string targetId, RootlistDropPlacement placement)
+    {
+        var tree = SidebarTreeFixture.Tree();
+        return RootlistDropDecision.RefusalFor(RootlistDropDecision.Check(
+            SidebarTreeFixture.Markers(), SidebarTreeFixture.Ref(tree, sourceId),
+            SidebarTreeFixture.Ref(tree, targetId), placement));
+    }
 
-    static SidebarLibraryEntry Fold(string id, int depth = 0, string parent = "")
-        => new("folder:" + id, SidebarEntryKind.Folder, "", id, "", null, null, 0, 0, 1, 0, 0, depth, false,
-               SidebarPlaylistFlavor.None) { FolderId = id, ParentFolderId = parent };
-
-    //  a · [g: b, c] · d
-    static List<SidebarLibraryEntry> Tree() => [Pl("a"), Fold("g"), Pl("b", 1, "g"), Pl("c", 1, "g"), Pl("d")];
-
-    const string A = "pl:spotify:playlist:a";
-    const string B = "pl:spotify:playlist:b";
-    const string C = "pl:spotify:playlist:c";
-    const string D = "pl:spotify:playlist:d";
-    const string G = "folder:g";
+    static string A => SidebarTreeFixture.Pl("a");
+    static string B => SidebarTreeFixture.Pl("b");
+    static string C => SidebarTreeFixture.Pl("c");
+    static string D => SidebarTreeFixture.Pl("d");
+    static string G => SidebarTreeFixture.Fo("g");
 
     [Fact]
     public void NoOp_RefusesBothEdgesOfTheSpanTheItemAlreadyOccupies()
     {
-        var tree = Tree();
         // "Before the row right after me" and "after the row right before me" are the same place I am already in — the
         // two gestures a reorder produces most often, and the two that used to fail silently.
-        Assert.Equal(SidebarDropRefusal.NoOp, RootlistTreeMoves.Check(tree, B, C, RootlistDropPlacement.Before));
-        Assert.Equal(SidebarDropRefusal.NoOp, RootlistTreeMoves.Check(tree, C, B, RootlistDropPlacement.After));
-        // Onto itself, either way round.
-        Assert.Equal(SidebarDropRefusal.NoOp, RootlistTreeMoves.Check(tree, B, B, RootlistDropPlacement.Before));
-        Assert.Equal(SidebarDropRefusal.NoOp, RootlistTreeMoves.Check(tree, B, B, RootlistDropPlacement.After));
+        Assert.Equal(SidebarDropRefusal.NoOp, Check(B, C, RootlistDropPlacement.Before));
+        Assert.Equal(SidebarDropRefusal.NoOp, Check(C, B, RootlistDropPlacement.After));
+        // Onto itself, either way round: the stream calls that SameItem, and the table says "this row IS the drag".
+        Assert.Equal(SidebarDropRefusal.Self, Check(B, B, RootlistDropPlacement.Before));
+        Assert.Equal(SidebarDropRefusal.Self, Check(B, B, RootlistDropPlacement.After));
         // The folder's LAST child, appended back into that same folder.
-        Assert.Equal(SidebarDropRefusal.NoOp, RootlistTreeMoves.Check(tree, C, G, RootlistDropPlacement.Inside));
+        Assert.Equal(SidebarDropRefusal.NoOp, Check(SidebarTreeFixture.Fo("k"), G, RootlistDropPlacement.Inside));
     }
 
     [Fact]
     public void RealMoves_AreNotRefused()
     {
-        var tree = Tree();
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(tree, A, C, RootlistDropPlacement.After));
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(tree, B, G, RootlistDropPlacement.After));
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(tree, A, G, RootlistDropPlacement.Inside));
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(tree, D, A, RootlistDropPlacement.Before));
+        Assert.Equal(SidebarDropRefusal.None, Check(A, C, RootlistDropPlacement.After));
+        Assert.Equal(SidebarDropRefusal.None, Check(B, G, RootlistDropPlacement.After));
+        Assert.Equal(SidebarDropRefusal.None, Check(A, G, RootlistDropPlacement.Inside));
+        Assert.Equal(SidebarDropRefusal.None, Check(D, A, RootlistDropPlacement.Before));
+        // F1 — THE FLYOUT'S "ALREADY THERE". Filing a NON-last child into its own folder is a real move (it becomes
+        // the last one). The deleted flattened check mapped Inside to the folder's end index and refused it as a no-op,
+        // which is exactly the bug the user hit dropping a playlist onto a folder that already held it.
+        Assert.Equal(SidebarDropRefusal.None, Check(B, G, RootlistDropPlacement.Inside));
     }
 
     [Fact]
     public void Cycle_RefusesAFolderFiledIntoItsOwnSubtree()
     {
-        var tree = Tree();
-        Assert.Equal(SidebarDropRefusal.IntoDescendant, RootlistTreeMoves.Check(tree, G, B, RootlistDropPlacement.Before));
-        Assert.Equal(SidebarDropRefusal.IntoDescendant, RootlistTreeMoves.Check(tree, G, B, RootlistDropPlacement.After));
-        // Into the dragged folder ITSELF has its own sentence — "can't move a folder into itself".
-        Assert.Equal(SidebarDropRefusal.IntoItself, RootlistTreeMoves.Check(tree, G, G, RootlistDropPlacement.Inside));
+        Assert.Equal(SidebarDropRefusal.IntoDescendant, Check(G, B, RootlistDropPlacement.Before));
+        Assert.Equal(SidebarDropRefusal.IntoDescendant, Check(G, B, RootlistDropPlacement.After));
+        Assert.Equal(SidebarDropRefusal.IntoDescendant,
+                     Check(G, SidebarTreeFixture.Fo("k"), RootlistDropPlacement.Inside));
+        // Into the dragged folder ITSELF is the identity answer; the RESOLVER turns that into its own sentence
+        // ("can't move a folder into itself") from the row facts — see IntoItself above.
+        Assert.Equal(SidebarDropRefusal.Self, Check(G, G, RootlistDropPlacement.Inside));
     }
 
     [Fact]
-    public void AnUnknownRowIsNotARefusal()
+    public void AnUnknownRowOrAMissingStream_IsRefusedRatherThanArmed()
     {
-        // The tree may simply not be showing it (a collapsed folder, a search filter). Inventing a refusal there would
-        // accuse a perfectly legal drop.
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(Tree(), "pl:missing", A, RootlistDropPlacement.After));
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(Tree(), A, "pl:missing", RootlistDropPlacement.After));
-        Assert.Equal(SidebarDropRefusal.None, RootlistTreeMoves.Check(null, A, D, RootlistDropPlacement.After));
+        // The OPPOSITE of the old flattened rule, deliberately. "The tree may not be showing it, so allow it" was a
+        // guess: a destination we cannot find in the marker stream has no index, and arming a slot for it is what let a
+        // drop silently do nothing. Unavailable is the honest answer, and it carries a sentence.
+        Assert.Equal(SidebarDropRefusal.Unavailable, Check("pl:missing", A, RootlistDropPlacement.After));
+        Assert.Equal(SidebarDropRefusal.Unavailable, Check(A, "pl:missing", RootlistDropPlacement.After));
+        Assert.Equal(SidebarDropRefusal.Unavailable, RootlistDropDecision.RefusalFor(RootlistDropDecision.Check(
+            null, new RootlistItemRef("spotify:playlist:a", false), new RootlistItemRef("spotify:playlist:d", false),
+            RootlistDropPlacement.After)));
     }
 
     [Fact]
-    public void TreeRanges_CoverAFoldersWholeSubtree()
+    public void TheTableIsTotal_AndMapsEveryCheckToExactlyOneRefusal()
     {
-        var tree = Tree();
-        Assert.True(RootlistTreeMoves.TryRange(tree, G, out int start, out int end));
-        Assert.Equal((1, 4), (start, end));                    // the folder plus both children
-        Assert.True(RootlistTreeMoves.TryRange(tree, B, out int leafStart, out int leafEnd));
-        Assert.Equal((2, 3), (leafStart, leafEnd));
+        // Every value of the ONE table, so a new RootlistMoveCheck cannot land silently in the default arm without
+        // this failing first.
+        Assert.Equal(SidebarDropRefusal.None, RootlistDropDecision.RefusalFor(RootlistMoveCheck.Ok));
+        Assert.Equal(SidebarDropRefusal.NoOp, RootlistDropDecision.RefusalFor(RootlistMoveCheck.NoOp));
+        Assert.Equal(SidebarDropRefusal.IntoDescendant, RootlistDropDecision.RefusalFor(RootlistMoveCheck.Cycle));
+        Assert.Equal(SidebarDropRefusal.Self, RootlistDropDecision.RefusalFor(RootlistMoveCheck.SameItem));
+        Assert.Equal(SidebarDropRefusal.Unavailable, RootlistDropDecision.RefusalFor(RootlistMoveCheck.Missing));
+        Assert.Equal(SidebarDropRefusal.Unavailable, RootlistDropDecision.RefusalFor(RootlistMoveCheck.Invalid));
+    }
+
+    [Fact]
+    public void AFolderMovesItsWholeSubtree_MarkersAndAll()
+    {
+        // What the deleted `TryRange` used to assert over the flattened list, asked of the stream that actually gets
+        // written: Chill spans its start marker, b, c, Deep's whole pair and its own end marker.
+        var markers = SidebarTreeFixture.Markers();
+        Assert.True(RootlistOps.TryBuildMove(markers, new RootlistItemRef("g", IsFolder: true),
+                                             new RootlistItemRef("spotify:playlist:d", false),
+                                             RootlistDropPlacement.After, out var op, out var reason));
+        Assert.Equal(RootlistMoveCheck.Ok, reason);
+        Assert.Equal(1, op!.FromIndex);      // the start-group row
+        Assert.Equal(7, op!.Length);         // start . b . c . [Deep start . f . Deep end] . end
     }
 }

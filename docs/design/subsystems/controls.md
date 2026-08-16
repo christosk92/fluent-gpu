@@ -871,7 +871,7 @@ dot, the in-gap preview lifecycle, the source-row hide and the optimistic-member
 | `GapPreview` / `PreviewCap` | the app owns the CARDS; the view owns their position and the gap size (`DefaultPreviewCap = 3`) |
 | `Caption` / `RefusalCaption` | per-move drop caption; the reason a kind-matched payload was turned away |
 | `OnLanded(slot, count)` | the post-drop edge an app renders its own flash from (the framework ships no app visual beyond line + gap) |
-| `Range` | the INSERTABLE sub-range; default `(PersistentPrefixCount, count − prefix)`. A list that appends rows the insertion does not address (a "Recommended" header + rows) must bound it or they ride the gap down |
+| `Range` | the INSERTABLE sub-range; default `(PersistentPrefixCount, count − prefix)`. A list that appends rows the insertion does not address (a "Recommended" header + rows) must bound it, or they become droppable slots. Bounding does not freeze them: a trailing row rides the range's NET growth (see `DisplacementFor` below) |
 | `VisualPolicy` / `SpotlightWhen` | drag-dim participation (defaults to `Spotlight`); return false for a same-list reorder so the app never dims for it |
 | `Transparent` | sit this gesture out entirely — no acceptance, no refusal cue, no spotlight. The list that COULD take drops and is turning this one away wants `CanAccept` + `RefusalCaption`; `Transparent` is for the surface that could never take it *here* (an album page's track table), where a caption would accuse rather than explain |
 
@@ -884,8 +884,13 @@ variable-extent forms), `Plan(...) → InsertionPlan`, and the `RemovedBefore`/`
 sorted source span. The `InsertionPlan` record is the single answer the view and the preview both read:
 `GapRows` = exactly `N` for a same-list move (virtual removal balances it) but `min(N, PreviewCap)` for a copy — an
 exact-N gap for a 500-track copy would blow the viewport; `DisplacementFor(item)` = `extent · (N·[item ≥ slot] −
-removedBefore(item))`, whose Σ over the list is zero, so content height never changes and the gap is exact rather than
-one row too big; `PreviewOffset`/`PreviewY` give the line and the preview ONE position derived from the same extent
+removedBefore(item))`, whose Σ over a same-list move is zero, so content height never changes and the gap is exact
+rather than one row too big; a LEADING item (below `FirstItem` — a sticky hero/chrome prefix) never moves (C1), and a
+TRAILING item (at or past `FirstItem + Count` — an appended "Recommended songs" section) is evaluated at the range's
+exclusive end, i.e. it rides the range's **net growth**: 0 for a same-list move (A12 as written) and the full
+`GapExtent` for a cross-list copy, which genuinely grows the list. A flat 0 there opened the copy's gap *underneath*
+the appended section, so the in-gap preview — drawn at the gap's leading edge, which for a bottom slot IS that
+section's top — painted over its header; `PreviewOffset`/`PreviewY` give the line and the preview ONE position derived from the same extent
 (the preview must read `GapExtent`, never recompute one). Gates: `sortable.{slot,gap,empty,normalize}` (the pure math,
 in `ControlsSuite`) + `e11virt.insertion` / `.previewpos` / `.empty` (the live destination, in `ScrollSuite`).
 

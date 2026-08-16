@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
 using System.Text.Json;
@@ -266,31 +266,80 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         return true;
     }
 
-    public async Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
-                                            RootlistDropPlacement placement, CancellationToken ct = default)
+    /// <summary>Move a batch of rootlist rows (or whole folder subtrees) — LOCAL-FIRST, then the wire, as ONE Delta.
+    ///
+    /// <para>The rootlist <c>/changes</c> reply carries revision bookkeeping and NO contents, and the dealer echo that
+    /// follows is a head-only push at the revision we just stored — so it is correctly echo-dropped and never triggers
+    /// a GET. That is the whole bug this shape fixes: a move that only POSTed produced a perfectly successful await, a
+    /// truthful-looking "Moved to …" toast, and a sidebar that did not move until some unrelated rootlist change
+    /// happened to force a refetch. The new tree can only come from applying the ops ourselves.</para>
+    ///
+    /// <para>So: apply optimistically BEFORE the POST (1-arg <c>SetRootlist</c> — rows now, the revision we still trust
+    /// preserved), and on the ack re-stamp those rows with the revision the reply advanced to. Anything that means the
+    /// write did not land — a transport fault, a rejection, a refusal discovered on a rebuilt attempt — puts the
+    /// pre-move rows back. That is <see cref="RunRootlistOpAsync"/>, the same three moves folder CRUD makes; the only
+    /// thing this adds is WHAT to build.</para>
+    ///
+    /// <para>N items are ONE delta, ONE optimistic apply, ONE POST and ONE rollback: the sequential build lives INSIDE
+    /// the builder delegate (<see cref="RootlistOps.TryBuildMoves"/>), so the 409 rebase attempt re-derives every op
+    /// against the refreshed marker stream rather than replaying indices the server has already invalidated. A refused
+    /// build is a THROW, never a quiet return (F3): the caller must not toast "Moved to …" for a batch never sent.</para></summary>
+    public async Task MoveRootlistItemsAsync(IReadOnlyList<RootlistMove> moves, CancellationToken ct = default)
     {
         RequireStore();
-        await _rootlistLane.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            var store = _store!;
-            // One optimistic retry: a 409 refreshes the rootlist/revision inside TryPost, then the move is recomputed
-            // against those new marker indices. Replaying the old positional op would move the wrong subtree.
-            for (int attempt = 0; attempt < 2; attempt++)
-            {
-                if (!RootlistOps.TryBuildMove(store.Rootlist(), source, target, placement, out var move)
-                    || move is null) return;
-                var outcome = await RootlistOps.TryPostRootlistOpsAsync(store, _transport, _spclientBaseUrl, _ctx(), [move!],
-                    source.Key, ct).ConfigureAwait(false);
-                if (outcome == RootlistPostOutcome.Applied) return;
-                if (outcome == RootlistPostOutcome.Retry)
-                    throw new PlaylistMutationException(PlaylistMutationFailure.Unknown,
-                        "Spotify could not be reached — that change was not saved.");
-            }
-            throw new PlaylistMutationException(PlaylistMutationFailure.Conflict, "Your library changed while that was saving — try again.");
-        }
-        finally { _rootlistLane.Release(); }
+        // One log key for the whole batch: the first source, and how many rode with it.
+        string logKey = moves.Count == 0 ? "rootlist"
+                      : moves.Count == 1 ? moves[0].Source.Key
+                      : $"{moves[0].Source.Key} +{moves.Count - 1}";
+        long startedAt = Environment.TickCount64;
+        await RunRootlistOpAsync(logKey,
+            entries => RootlistOps.TryBuildMoves(entries, moves, out var ops, out var reason)
+                ? ops
+                : throw MoveRefused(reason), ct).ConfigureAwait(false);
+        PlaylistMutationDiagnostics.RootlistMoveApplied(logKey, moves.Count == 0 ? "" : moves[0].Placement.ToString(),
+                                                        Environment.TickCount64 - startedAt);
     }
+
+    /// <summary>The N=1 sugar. There is no second write path: one move is a batch of one.</summary>
+    public Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
+                                      RootlistDropPlacement placement, CancellationToken ct = default)
+        => MoveRootlistItemsAsync([new RootlistMove(source, target, placement)], ct);
+
+    /// <summary>Put <paramref name="before"/> back — but ONLY if the store still holds the exact rows we invented. A 409
+    /// bootstrap (or a dealer push) may already have replaced them with server truth, and restoring a pre-move snapshot
+    /// over that would resurrect rows the server no longer has. Returns the still-outstanding optimistic rows (null once
+    /// there is nothing left to undo) so a caller can keep tracking it with one assignment.</summary>
+    static IReadOnlyList<RootlistEntry>? RollbackRootlist(IStore store, IReadOnlyList<RootlistEntry> before,
+                                                          IReadOnlyList<RootlistEntry>? optimistic, string reason)
+    {
+        if (optimistic is null) return null;
+        if (!ReferenceEquals(store.Rootlist(), optimistic)) return null;   // server truth already landed on top of ours
+        store.SetRootlist(before);
+        store.Bump("rootlist", CollectionKind.Playlists);
+        PlaylistMutationDiagnostics.RootlistMoveRolledBack(reason);
+        return null;
+    }
+
+    static string ReasonOf(Exception ex) => ex switch
+    {
+        PlaylistMutationException pme => pme.Kind.ToString(),
+        OperationCanceledException => "canceled",
+        _ => ex.GetType().Name,
+    };
+
+    /// <summary>The typed refusal for a rootlist move whose op could not be built. One kind per reason, because each is
+    /// a different sentence upstream (<c>PlaylistEditErrorKinds</c>): "Already there" for a destination the item
+    /// already occupies, "Can't move here" for a placement this stream cannot express, and the ordinary conflict copy
+    /// for a source/target that is no longer in the rootlist at all (the tree moved under the gesture).</summary>
+    static PlaylistMutationException MoveRefused(RootlistMoveCheck reason) => reason switch
+    {
+        RootlistMoveCheck.NoOp or RootlistMoveCheck.SameItem =>
+            new PlaylistMutationException(PlaylistMutationFailure.NoOp, "That is already where it is."),
+        RootlistMoveCheck.Cycle or RootlistMoveCheck.Invalid =>
+            new PlaylistMutationException(PlaylistMutationFailure.Invalid, "That move cannot be expressed in the rootlist."),
+        _ => new PlaylistMutationException(PlaylistMutationFailure.Conflict,
+                                           "Your library changed while that was saving — try again."),
+    };
 
     public Task UpdateDetailsAsync(string playlistUri, string? name, string? description, bool? collaborative, CancellationToken ct = default)
     {
@@ -362,6 +411,12 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
             }
             if (index < 0) throw new InvalidOperationException($"Playlist '{playlistUri}' is not in the user's rootlist.");
             var rem = new PlaylistOp(PlaylistOpKind.Remove, FromIndex: index, Length: 1);
+            // Local-first, like every other rootlist write: the reply has no contents, so the row can only leave the
+            // tree because we removed it. A failed POST puts it straight back.
+            var before = store.Rootlist();
+            IReadOnlyList<RootlistEntry>? optimistic = RootlistOps.ApplyLocally(before, new[] { rem });
+            store.SetRootlist(optimistic);
+            store.Bump("rootlist", CollectionKind.Playlists);
             try
             {
                 await RootlistOps.PostRootlistOpsAsync(store, _transport, _spclientBaseUrl, ctx, new[] { rem }, ct, playlistUri)
@@ -369,9 +424,11 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
             }
             catch (Exception ex)
             {
+                RollbackRootlist(store, before, optimistic, ReasonOf(ex));
                 PlaylistMutationDiagnostics.DeleteFailed(playlistUri, ex);
                 throw;
             }
+            store.SetRootlist(optimistic, store.RootlistRevision());   // the reply advanced the revision; the ROWS are ours
         }
         finally { _rootlistLane.Release(); }
         store.SetSaved("playlists", playlistUri, false, SyncState.Confirmed);
@@ -551,33 +608,49 @@ public sealed class PlaylistMutationSource : IPlaylistMutationSource
         PlaylistMutationDiagnostics.FolderDeleted(groupId);
     }
 
-    /// <summary>Build-post-adopt under the rootlist lane, with ONE rebase: a 409 has already refreshed the rootlist
-    /// inside <see cref="RootlistOps.TryPostRootlistOpsAsync"/>, so the second attempt rebuilds its indices against the
-    /// marker stream that actually exists. The optimistic tree is computed locally because a rootlist /changes reply
-    /// carries revision bookkeeping only.</summary>
+    /// <summary>Build-apply-post-adopt under the rootlist lane, with ONE rebase: a 409 has already refreshed the
+    /// rootlist inside <see cref="RootlistOps.TryPostRootlistOpsAsync"/>, so the second attempt rebuilds its indices
+    /// against the marker stream that actually exists. The tree is computed locally because a rootlist /changes reply
+    /// carries revision bookkeeping only.
+    /// <para>It is applied BEFORE the POST (the same order <c>MoveRootlistItemsAsync</c> uses): a new folder appears
+    /// under the cursor instead of after a round trip, and a write that does not land puts <c>before</c> back rather
+    /// than leaving a folder the server never got.</para></summary>
     async Task RunRootlistOpAsync(string logKey, Func<IReadOnlyList<RootlistEntry>, IReadOnlyList<PlaylistOp>> build, CancellationToken ct)
     {
         var store = _store!;
         await _rootlistLane.WaitAsync(ct).ConfigureAwait(false);
+        var before = store.Rootlist();
+        IReadOnlyList<RootlistEntry>? optimistic = null;
         try
         {
             for (int attempt = 0; attempt < 2; attempt++)
             {
                 var entries = store.Rootlist();
                 var ops = build(entries);
-                var applied = RootlistOps.ApplyLocally(entries, ops);
+                optimistic = RootlistOps.ApplyLocally(entries, ops);
+                store.SetRootlist(optimistic);                          // rows now; the revision we still trust stands
+                store.Bump("rootlist", CollectionKind.Playlists);
                 var outcome = await RootlistOps.TryPostRootlistOpsAsync(store, _transport, _spclientBaseUrl, _ctx(), ops, logKey, ct)
                     .ConfigureAwait(false);
-                if (outcome == RootlistPostOutcome.Rebased) continue;   // 409: the bootstrap already refreshed the rootlist
+                if (outcome == RootlistPostOutcome.Rebased)
+                {   // 409: the bootstrap already refreshed the rootlist — undo ours only if that GET carried nothing.
+                    optimistic = RollbackRootlist(store, before, optimistic, "rebased-without-contents");
+                    continue;
+                }
                 if (outcome == RootlistPostOutcome.Retry)
                     throw new PlaylistMutationException(PlaylistMutationFailure.Unknown,
                         "Spotify could not be reached — that change was not saved.");
-                store.SetRootlist(applied, store.RootlistRevision());   // the reply advanced the revision; the ROWS are ours
+                store.SetRootlist(optimistic, store.RootlistRevision());   // the reply advanced the revision; the ROWS are ours
                 store.Bump("rootlist", CollectionKind.Playlists);
                 return;
             }
             throw new PlaylistMutationException(PlaylistMutationFailure.Conflict,
                 "Your library changed while that was saving — try again.");
+        }
+        catch (Exception ex)
+        {
+            RollbackRootlist(store, before, optimistic, ReasonOf(ex));
+            throw;
         }
         finally { _rootlistLane.Release(); }
     }

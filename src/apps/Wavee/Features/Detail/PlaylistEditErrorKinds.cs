@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Wavee.Core;
 
 namespace Wavee;
@@ -61,11 +61,22 @@ static class PlaylistEditErrorKinds
             ? Strings.Drag.StillSyncing
             : Strings.Detail.Edit.PendingSync,
         PlaylistMutationFailure.NotSupported => Strings.Detail.Edit.OfflineSpotifyEdits,
+        // A move the seam REFUSED to build. For a reorder these are the drag chip's own two sentences, so the toast and
+        // the cue tell one story: "Already there" for a destination the item already occupies, "Can't move here" for a
+        // placement the rootlist cannot express. They are not "something went wrong" — nothing did.
+        PlaylistMutationFailure.NoOp => verb == PlaylistEditVerb.Reorder
+            ? Strings.Drag.AlreadyThere
+            : Strings.Detail.Edit.Failed,
+        PlaylistMutationFailure.Invalid => verb == PlaylistEditVerb.Reorder
+            ? Strings.Drag.CantMoveHere
+            : Strings.Detail.Edit.Failed,
         _ => Strings.Detail.Edit.Failed,
     };
 
-    /// <summary>Offline and Pending are not failures the user has to fix — the edit is kept and will sync. They are
-    /// INFORMATIONAL; everything else is an error the edit did not survive.</summary>
+    /// <summary>Offline and Pending are not failures the user has to fix — the edit is kept and will sync; NoOp and
+    /// Invalid are not failures at all — the drop asked for a place the list already is, or for one it cannot express,
+    /// and nothing was lost. All four are INFORMATIONAL; everything else is an error the edit did not survive.</summary>
     public static bool IsInformational(PlaylistMutationFailure kind)
-        => kind is PlaylistMutationFailure.Offline or PlaylistMutationFailure.Pending;
+        => kind is PlaylistMutationFailure.Offline or PlaylistMutationFailure.Pending
+                or PlaylistMutationFailure.NoOp or PlaylistMutationFailure.Invalid;
 }

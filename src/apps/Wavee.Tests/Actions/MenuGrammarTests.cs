@@ -130,14 +130,24 @@ public class MenuGrammarTests
         Assert.Contains("Strings.Menu.PlayNow", queue, StringComparison.Ordinal);       // …and the queue-only verb
     }
 
-    /// <summary>The sidebar row menu takes the same extras slot the queue uses (Move up / Move down / Remove), inserted
-    /// after the entity verbs and before a trailing destructive block — drag is never the only way to reorder.</summary>
+    /// <summary>The sidebar row menu takes the pane's per-row layout verbs through <c>SidebarMenuExtras</c>, SPLIT by
+    /// where the grammar puts them: the playlist and folder arms — the two with an <b>Organize ▸</b> submenu — fold
+    /// <c>Organize</c> INSIDE it and append only <c>Trailing</c>; every other arm keeps the flat additive slot the queue
+    /// row uses, inserted before any trailing destructive block. Appending all of them flat is what used to render
+    /// "Move up" below "Invite collaborators" on a playlist row.</summary>
     [Fact]
-    public void SidebarEntryMenu_TakesLayoutExtras()
+    public void SidebarEntryMenu_SplitsLayoutExtras_FoldingTheOrganizeOnesIntoTheSubmenu()
     {
         string entry = Body(Menus(), "public static ContextMenuModel? SidebarEntry");
-        Assert.Contains("layoutExtras", entry, StringComparison.Ordinal);
-        Assert.Contains("WithLayoutExtras", entry, StringComparison.Ordinal);
+        Assert.Contains("SidebarMenuExtras extras = default", entry, StringComparison.Ordinal);
+        // The two folding arms consume Organize inside their own builder and append only Trailing…
+        Assert.Contains("SidebarPlaylistMenu(s, in e, in extras), extras.Trailing", entry, StringComparison.Ordinal);
+        Assert.Contains("folderExpanded, in extras), extras.Trailing", entry, StringComparison.Ordinal);
+        // …and every other arm still takes the whole slot flat.
+        Assert.Contains("WithLayoutExtras(menu, extras.Flat())", entry, StringComparison.Ordinal);
+
+        string flat = Body(Menus(), "public IReadOnlyList<MenuFlyoutItem>? Flat()");
+        Assert.Contains("Organize.Count + Trailing.Count", flat, StringComparison.Ordinal);
 
         string extras = Body(Menus(), "public static ContextMenuModel? WithLayoutExtras");
         Assert.Contains("MenuFlyoutItem.Separator", extras, StringComparison.Ordinal);
@@ -205,34 +215,107 @@ public class MenuGrammarTests
         Assert.Contains("ShareItem(in ctx)", rows, StringComparison.Ordinal);
     }
 
-    /// <summary>The sidebar playlist row (Classic + V3 + Curated share it) carries the same container core set.</summary>
+    /// <summary>The sidebar playlist row (Classic + V3 + Curated share it) leads with the SAME transport strip the media
+    /// card and the track menu use — <c>ContainerStrip</c>, one builder — rather than repeating Play · Play next · Play
+    /// after · Save as four of its fourteen rows. Liked Songs drops Save there exactly as it does on a card.</summary>
     [Fact]
-    public void SidebarPlaylistRows_CarryTheContainerCoreSet()
+    public void SidebarPlaylistMenu_LeadsWithTheSharedTransportStrip()
     {
-        string rows = Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows");
+        string menu = Body(Menus(), "static ContextMenuModel SidebarPlaylistMenu");
+        Assert.Contains("ContainerStrip(in ctx, liked)", menu, StringComparison.Ordinal);
+        Assert.Contains("SidebarPinId.LikedSongsUri", menu, StringComparison.Ordinal);
+        Assert.Contains("SidebarPlaylistRows(", menu, StringComparison.Ordinal);
+        Assert.Contains("extras.Organize", menu, StringComparison.Ordinal);
+
+        // The strip is the ONE component, not a sidebar copy: the four verbs are declared once, in ContainerStrip.
+        string strip = Body(Menus(), "static AppBarCommand[] ContainerStrip");
         foreach (string verb in new[]
                  {
                      "ContainerActions.PlayContext", "ContainerActions.PlayContextNext",
                      "ContainerActions.AddContextToQueue", "ContainerActions.SaveContext",
-                     "ContainerAddToPlaylistItem(in ctx)", "ContainerActions.OpenItem",
-                     "PinActions.RowForId", "ShareItem(in ctx)",
+                 })
+            Assert.Contains(verb, strip, StringComparison.Ordinal);
+        // …and therefore NOT re-declared as rows.
+        string rows = Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows");
+        Assert.DoesNotContain("ContainerActions.PlayContext", rows, StringComparison.Ordinal);
+        Assert.DoesNotContain("ContainerActions.SaveContext", rows, StringComparison.Ordinal);
+    }
+
+    /// <summary>The playlist rows under the strip, as FOUR groups: primary (Add to playlist ▸ · Open) → organize
+    /// (Organize ▸ · Rename playlist) → access &amp; sharing (Access ▸ · Share ▸) → destructive (Delete playlist), each
+    /// behind its own separator. Every verb the flat list carried is still here; the positional and permission ones just
+    /// moved one level down into the two submenus that name them.</summary>
+    [Fact]
+    public void SidebarPlaylistRows_GroupTheContainerCoreSet_WithDeleteLast()
+    {
+        string rows = Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows");
+        foreach (string verb in new[]
+                 {
+                     "ContainerAddToPlaylistItem(in ctx)", "ContainerActions.OpenItem", "OrganizeItem(organize",
+                     "ContainerActions.RenamePlaylist", "AccessItem(in ctx, uri)", "ShareItem(in ctx)",
+                     "ContainerActions.DeletePlaylist",
                  })
             Assert.Contains(verb, rows, StringComparison.Ordinal);
 
-        // …and the surface extras stay where they were: the owner block and the destructive delete, last.
-        Assert.True(rows.IndexOf("ContainerActions.DeletePlaylist", StringComparison.Ordinal)
-                    > rows.IndexOf("ShareItem(in ctx)", StringComparison.Ordinal),
-            "Delete playlist stays destructive-last");
+        int open = rows.IndexOf("ContainerActions.OpenItem", StringComparison.Ordinal);
+        int organize = rows.IndexOf("OrganizeItem(organize", StringComparison.Ordinal);
+        int rename = rows.IndexOf("ContainerActions.RenamePlaylist", StringComparison.Ordinal);
+        int access = rows.IndexOf("AccessItem(in ctx, uri)", StringComparison.Ordinal);
+        int share = rows.IndexOf("ShareItem(in ctx)", StringComparison.Ordinal);
+        int delete = rows.IndexOf("ContainerActions.DeletePlaylist", StringComparison.Ordinal);
+        Assert.True(organize > open, "Open (primary) precedes Organize");
+        Assert.True(rename > organize, "Organize ▸ precedes Rename");
+        Assert.True(access > rename, "the organize group precedes the access group");
+        Assert.True(share > access, "Access ▸ precedes Share ▸");
+        Assert.True(delete > share, "Delete playlist stays destructive-last");
+        // …and nothing trails Delete inside the builder.
+        Assert.DoesNotContain("rows.Add(", rows[delete..], StringComparison.Ordinal);
     }
 
-    /// <summary>Visibility ▸ reports where the playlist actually stands. The sidebar summary that feeds this menu
-    /// carries no visibility at all, so the rows used to render unchecked whatever the state was; they now read the
-    /// STORE header (the canonical permission state — seeded on open, flipped by a dealer push) at menu-open, and the
-    /// submenu gained the Collaborative toggle that used to exist only inside the detail page's access flyout.</summary>
+    /// <summary><b>Organize ▸</b> is ONE submenu shared by the playlist arm and the folder arm — the positional moves
+    /// the pane computes, then "Move out of {parent}", then Pin behind a separator (a different list). It is absent, not
+    /// empty, when nothing applies.</summary>
     [Fact]
-    public void SidebarVisibilitySubmenu_ChecksTheLiveStateAndCarriesTheCollaborativeToggle()
+    public void OrganizeSubmenu_HoldsTheMovesAndThePin_AndIsSharedByBothArms()
     {
-        string body = Body(Menus(), "static MenuFlyoutItem VisibilityItem(ActionServices s");
+        string organize = Body(Menus(), "static MenuFlyoutItem? OrganizeItem");
+        Assert.Contains("moves[i]", organize, StringComparison.Ordinal);
+        Assert.Contains("MenuFlyoutItem.Separator", organize, StringComparison.Ordinal);
+        Assert.Contains("Strings.Menu.Organize", organize, StringComparison.Ordinal);
+        Assert.Contains("if (items.Count == 0) return null;", organize, StringComparison.Ordinal);
+        // The moves lead, then the lift, then the pin — near-to-far, and the pin last because it is another list.
+        int moves = organize.IndexOf("moves[i]", StringComparison.Ordinal);
+        int lift = organize.IndexOf("moveOut is { } lift", StringComparison.Ordinal);
+        int pin = organize.IndexOf("pin is { } pinRow", StringComparison.Ordinal);
+        Assert.True(lift > moves && pin > lift, "Move up/down · Move to folder… · Move out of {parent} · ─ · Pin");
+
+        // ONE builder, both arms — the pin row and "Move out of" no longer sit flat in either menu.
+        Assert.Contains("OrganizeItem(organize", Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows"),
+                        StringComparison.Ordinal);
+        Assert.Contains("OrganizeItem(organize", Body(Menus(), "static List<MenuFlyoutItem> SidebarFolderRows"),
+                        StringComparison.Ordinal);
+    }
+
+    /// <summary><b>Access ▸</b> is the ONE submenu for who may see and who may edit: it absorbed the old top-level
+    /// Visibility ▸ AND the Invite-collaborators row that used to sit loose beside it — three owner-only permission
+    /// verbs under one name, one row where there were two.
+    ///
+    /// <para>It still reports where the playlist actually stands. The sidebar summary that feeds this menu carries no
+    /// visibility at all, so the rows used to render unchecked whatever the state was; they read the STORE header (the
+    /// canonical permission state — seeded on open, flipped by a dealer push) at menu-open.</para></summary>
+    [Fact]
+    public void SidebarAccessSubmenu_ChecksTheLiveState_AndCarriesCollaborativeAndInvite()
+    {
+        string body = Body(Menus(), "static MenuFlyoutItem AccessItem(in ActionContext ctx");
+        Assert.Contains("Strings.Menu.Access", body, StringComparison.Ordinal);
+        // Invite moved INSIDE, and is the only place it now lives on this menu.
+        Assert.Contains("ContainerActions.InviteCollaborators.ToMenuItem(ctx)", body, StringComparison.Ordinal);
+        Assert.Equal(1, Count(Menus(), "ContainerActions.InviteCollaborators"));
+        // The old top-level Visibility ▸ submenu is gone, not merely bypassed.
+        Assert.Equal(0, Count(Menus(), "VisibilityItem("));
+        // …and Access ▸ is gated on owner + live at the one call site.
+        Assert.Contains("if (isOwner && live) rows.Add(AccessItem(in ctx, uri));",
+                        Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows"), StringComparison.Ordinal);
 
         // Read the header — never a GET, and never a guessed check mark.
         Assert.Contains("RealStore?.GetPlaylist(uri)", body, StringComparison.Ordinal);
@@ -254,7 +337,7 @@ public class MenuGrammarTests
     public void SidebarPaneSlot_WiresLayoutExtrasOntoEveryEntityMenu()
     {
         string slot = File.ReadAllText(Path.Combine(AppRoot(), "Features", "Sidebar", "Pane", "SidebarPaneSlot.cs"));
-        Assert.Contains("layoutExtras: NavExtras", slot, StringComparison.Ordinal);
+        Assert.Contains("extras: NavExtras", slot, StringComparison.Ordinal);
         Assert.Contains("MoveRowByKey", slot, StringComparison.Ordinal);
         Assert.Contains("Strings.Menu.MoveUp", slot, StringComparison.Ordinal);
         Assert.Contains("SidebarPaneLoc.ItemRemove", slot, StringComparison.Ordinal);
@@ -466,8 +549,9 @@ public class MenuGrammarTests
     }
 
     /// <summary>The folder row menu, shared by Classic / Library V3 / Curated through one builder. ORDER: the disclosure
-    /// and creation verbs first, then the management block (Pin · Rename · Move out of {parent}), then Delete folder,
-    /// destructive-LAST exactly as a playlist's Delete is.
+    /// and creation verbs first, then the management block (<b>Organize ▸</b> — the same submenu the playlist arm gets,
+    /// holding the moves, "Move out of {parent}" and Pin — then Rename folder), then Delete folder, destructive-LAST
+    /// exactly as a playlist's Delete is. No transport strip: a folder has nothing to play.
     ///
     /// <para>These rows used to be [Expand/Collapse · Pin] and nothing else, with a comment saying folder CRUD must not
     /// appear "not even disabled" (the old locked decision 9). The wire landed with P3, so the lock is lifted and the
@@ -487,17 +571,34 @@ public class MenuGrammarTests
         // Real commands, not promises.
         Assert.Contains("FolderActions.", rows, StringComparison.Ordinal);
 
+        // The positional verbs and the pin live in Organize ▸ (the playlist arm's submenu), never flat in this list.
+        Assert.Contains("OrganizeItem(organize, moveOut, PinActions.RowForEntry(s, in e))", rows, StringComparison.Ordinal);
+        int create = rows.IndexOf("Strings.Sidebar.NewFolderInside", StringComparison.Ordinal);
+        int organize = rows.IndexOf("OrganizeItem(", StringComparison.Ordinal);
+        Assert.True(organize > create, "the creation verbs lead; Organize ▸ opens the management block");
+
         int rename = rows.IndexOf("Strings.Sidebar.RenameFolder", StringComparison.Ordinal);
+        Assert.True(rename > organize, "Organize ▸ precedes Rename folder");
         int delete = rows.IndexOf("Strings.Sidebar.DeleteFolder", StringComparison.Ordinal);
         Assert.True(rename >= 0 && delete > rename, "Rename comes before Delete");
         // …and nothing is added after Delete: destructive-last, with no verb trailing it.
         Assert.DoesNotContain("rows.Add(", rows[delete..], StringComparison.Ordinal);
 
-        // The create row keeps CLICK = new playlist and gains the folder verb as a menu.
-        string createRow = Body(Source("Features/Sidebar/Pane", "SidebarPaneSlot.cs"), "Element CreateRow(SidebarSectionSpec section)");
-        Assert.Contains("Strings.Sidebar.CreateFolder", createRow, StringComparison.Ordinal);
-        Assert.Contains("FolderActions.NewFolder(", createRow, StringComparison.Ordinal);
-        Assert.Contains("OnClick = click", createRow, StringComparison.Ordinal);
+        // The tree's CREATE AFFORDANCE is the section header's "+" now — the trailing `CreateAction` ROW is deleted —
+        // and it carries the same two verbs: click still creates a PLAYLIST, the flyout adds the folder.
+        string createMenu = Body(Source("Features/Sidebar/Pane", "SidebarPane.cs"), "internal ContextMenuModel? CreateMenu()");
+        Assert.Contains("Strings.Detail.NewPlaylist", createMenu, StringComparison.Ordinal);
+        Assert.Contains("Strings.Sidebar.CreateFolder", createMenu, StringComparison.Ordinal);
+        Assert.Contains("FolderActions.NewFolder(", createMenu, StringComparison.Ordinal);
+        Assert.Contains("CreatePlaylist", createMenu, StringComparison.Ordinal);
+        // …and nothing BUILDS or PLANS a create row any more (the deleted kind may still be NAMED in prose, as the
+        // thing that was replaced — the same convention the lock claim below follows).
+        string slot = Source("Features/Sidebar/Pane", "SidebarPaneSlot.cs");
+        Assert.Equal(0, Count(slot, "SidebarRowKind.CreateAction"));
+        Assert.Equal(0, Count(slot, "Element CreateRow("));
+        string planner = Source("Features/Sidebar/Data", "SidebarRowPlanner.cs");
+        Assert.Equal(0, Count(planner, "bool SuppressTreeCreateRow"));
+        Assert.Equal(0, Count(planner, "input.SuppressTreeCreateRow"));
 
         // The LOCK CLAIM is gone everywhere it was stated (the number may still be named, as the thing that was lifted).
         Assert.Equal(0, Count(Menus(), "NO folder CRUD"));
@@ -514,26 +615,51 @@ public class MenuGrammarTests
     {
         string rows = Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows");
         Assert.Contains("parentFolderId.Length > 0", rows, StringComparison.Ordinal);
-        Assert.Contains("Strings.Menu.MoveOutOf(parentFolderName)", rows, StringComparison.Ordinal);
+        Assert.Contains("Strings.Menu.MoveOutOf(MenuLabel.Clip(parentFolderName))", rows, StringComparison.Ordinal);
         Assert.Contains("FolderActions.MoveOut(", rows, StringComparison.Ordinal);
 
-        // …fed by the projection's parent-folder facts, through the one SidebarEntry arm.
-        string entry = Body(Menus(), "public static ContextMenuModel? SidebarEntry");
-        Assert.Contains("e.ParentFolderId, e.ParentFolderName", entry, StringComparison.Ordinal);
+        // …fed by the projection's parent-folder facts, through the one playlist arm.
+        string menu = Body(Menus(), "static ContextMenuModel SidebarPlaylistMenu");
+        Assert.Contains("e.ParentFolderId, e.ParentFolderName", menu, StringComparison.Ordinal);
+    }
+
+    /// <summary>A long dynamic name inside a menu label is CLIPPED where the label is minted. A menu row's label is a
+    /// single-line text element with no trimming of its own, so "Move out of “{a 90-character folder name}”" widened the
+    /// whole flyout and every row in it. Both producers of that label clip; the clipper is pure and directly driven.</summary>
+    [Fact]
+    public void ALongInterpolatedNameIsClippedBeforeItReachesTheLabel()
+    {
+        Assert.Contains("MenuLabel.Clip(parentFolderName)", Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows"),
+                        StringComparison.Ordinal);
+        Assert.Contains("MenuLabel.Clip(parentName)", Body(Menus(), "static List<MenuFlyoutItem> SidebarFolderRows"),
+                        StringComparison.Ordinal);
+
+        // A name that fits is never decorated…
+        Assert.Equal("Chill", MenuLabel.Clip("Chill"));
+        Assert.Equal("", MenuLabel.Clip(null));
+        Assert.Equal(new string('x', MenuLabel.NameChars), MenuLabel.Clip(new string('x', MenuLabel.NameChars)));
+        // …and one that does not comes back at the width, ellipsis included, with no dangling space before it.
+        string clipped = MenuLabel.Clip(new string('x', MenuLabel.NameChars + 40));
+        Assert.Equal(MenuLabel.NameChars, clipped.Length);
+        Assert.EndsWith("…", clipped, StringComparison.Ordinal);
+        Assert.Equal("Late night…", MenuLabel.Clip("Late night listening", 12));
     }
 
     /// <summary>A rootlist TREE row's menu gains the organisation verbs — <b>Move up · Move down · Move to folder…</b> —
-    /// through the same additive <c>layoutExtras</c> slot the navbar-customization verbs use, so the entity grammar
-    /// above them is untouched. Reordering the rootlist used to be a drag and nothing else (D12).
+    /// through the pane's <c>SidebarMenuExtras.Organize</c> group, which the playlist and folder arms fold into their
+    /// Organize ▸ submenu beside Pin. Reordering the rootlist used to be a drag and nothing else (D12).
+    ///
+    /// <para>Remove is the one TRAILING extra: it deletes the row from the user's document, so it stays at the bottom
+    /// with the destructive block rather than joining the moves.</para>
     ///
     /// <para>"Move out of {parent}" is deliberately NOT among them: it already lives in the entity rows themselves, on
     /// every surface that shows the row (a pinned playlist row is the same rootlist member as its tree row), and a
     /// second copy in the extras would show one verb twice on the one row that gets both.</para></summary>
     [Fact]
-    public void SidebarTreeRows_GainTheRootlistMoveVerbs_Additively()
+    public void SidebarTreeRows_GainTheRootlistMoveVerbs_InTheOrganizeGroup()
     {
         string extras = Body(Source("Features/Sidebar/Pane", "SidebarPaneSlot.cs"),
-                             "IReadOnlyList<MenuFlyoutItem>? NavExtras(");
+                             "SidebarMenuExtras NavExtras(");
         foreach (string verb in new[] { "Strings.Menu.MoveUp", "Strings.Menu.MoveDown", "Strings.Menu.MoveToFolder" })
             Assert.Contains(verb, extras, StringComparison.Ordinal);
 
@@ -541,6 +667,10 @@ public class MenuGrammarTests
         int down = extras.IndexOf("FolderActions.MoveDown(", StringComparison.Ordinal);
         int to = extras.IndexOf("FolderActions.MoveTo(", StringComparison.Ordinal);
         Assert.True(up >= 0 && down > up && to > down, "Move up · Move down · Move to folder…, in that order");
+
+        // The split: the moves are the Organize group, Remove is the trailing one.
+        Assert.Contains("new SidebarMenuExtras(rows.Count > 0 ? rows : null, trailing)", extras, StringComparison.Ordinal);
+        Assert.Contains("SidebarPaneLoc.ItemRemove", extras, StringComparison.Ordinal);
 
         Assert.DoesNotContain("Strings.Menu.MoveOutOf", extras, StringComparison.Ordinal);
         Assert.Contains("Strings.Menu.MoveOutOf", Body(Menus(), "static List<MenuFlyoutItem> SidebarPlaylistRows"),
@@ -559,18 +689,27 @@ public class MenuGrammarTests
         string folder = Source("Actions", "FolderActions.cs");
         Assert.Equal(1, Count(folder, "WaveeResourceDrop.MoveRootlist("));       // exactly one commit path
         Assert.Equal(0, Count(folder, "ex.Message"));
-        // The verbs reach it through the one chokepoint, and never call the seam themselves.
-        Assert.Equal(0, Count(Body(folder, "public static void Move(ActionServices s, string entryId, int delta)"),
-                              "MoveRootlistItemAsync"));
-        Assert.Equal(0, Count(Body(folder, "public static void MoveOut(ActionServices s, string entryId)"),
-                              "MoveRootlistItemAsync"));
+        // The verbs reach it through the one chokepoint, and never call the seam themselves — in EITHER form (the
+        // single-item name is a prefix of the batch one, so both are excluded explicitly).
+        foreach (string verb in new[]
+                 {
+                     "public static void Move(ActionServices s, string entryId, int delta)",
+                     "public static void MoveOut(ActionServices s, string entryId)",
+                 })
+        {
+            Assert.Equal(0, Count(Body(folder, verb), "MoveRootlistItemAsync"));
+            Assert.Equal(0, Count(Body(folder, verb), "MoveRootlistItemsAsync"));
+        }
         // The picker's commit is the same chokepoint (its rows are destinations, not a second mutation path).
         Assert.Contains("FolderActions.Commit(", Source("Features/Sidebar", "RootlistFolderPicker.cs"),
                         StringComparison.Ordinal);
 
         string seam = Body(Source("Features/DragDrop", "WaveeResourceDrag.cs"),
                            "public static void MoveRootlist(ActionServices acts");
-        Assert.Contains("await lib.MoveRootlistItemAsync", seam, StringComparison.Ordinal);
+        // ONE drop, ONE delta: the seam awaits the BATCH form even for a single item (the single-item method is the
+        // N=1 sugar over it), so a multi-select cannot become N racing writes.
+        Assert.Contains("await lib.MoveRootlistItemsAsync", seam, StringComparison.Ordinal);
+        Assert.Equal(0, Count(seam, "MoveRootlistItemAsync("));
         Assert.Contains("PlaylistEditVerb.Reorder", seam, StringComparison.Ordinal);
         Assert.Contains("Confirm(acts", seam, StringComparison.Ordinal);
     }

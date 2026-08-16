@@ -20,9 +20,21 @@ static class PlaylistReorderDefer
     // is the same threading contract every other UI-thread-owned map in the app has.
     static readonly Dictionary<object, DetailModel> s_pending = new(ReferenceEqualityComparer.Instance);
 
-    /// <summary>Hold <paramref name="model"/> for <paramref name="target"/> instead of publishing it. Last writer wins:
-    /// a burst of pushes during one gesture converges to the newest snapshot, which is the only one worth applying.</summary>
-    public static void Hold(Loadable<DetailModel> target, DetailModel model) => s_pending[target] = model;
+    /// <summary>Hold <paramref name="model"/> for <paramref name="target"/> instead of publishing it — but ONLY while a
+    /// same-list reorder of <paramref name="playlistUri"/> is genuinely live. Returns false when there is nothing to
+    /// defer to, and the caller must publish immediately.
+    /// <para>The liveness test lives HERE, in the same statement as the write, rather than at the call site: the
+    /// deferral is released by a drag-epoch edge, so a model parked after the LAST such edge would wait for the next
+    /// drag to end — an unbounded delay on the drop's own result. Checking and holding atomically on the UI thread
+    /// makes that window structurally impossible.</para>
+    /// <para>Last writer wins: a burst of pushes during one gesture converges to the newest snapshot, which is the only
+    /// one worth applying.</para></summary>
+    public static bool TryHold(Loadable<DetailModel> target, DetailModel model, string? playlistUri)
+    {
+        if (!WaveeResourceDrag.LiveSameListReorder(playlistUri)) return false;
+        s_pending[target] = model;
+        return true;
+    }
 
     /// <summary>Publish whatever was held for <paramref name="target"/> (no-op when nothing was). Called when the drag
     /// session ends — drop, cancel and Escape alike, so there is no path that strands a deferred model.</summary>

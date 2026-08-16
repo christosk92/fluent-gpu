@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,10 +35,16 @@ sealed record WaveeResourceDragPayload(
     IReadOnlyList<PlaylistRowRef>? SourceRows = null,
     Func<CancellationToken, Task<IReadOnlyList<Track>>>? TrackResolver = null,
     bool RootlistItem = false,
-    string? ArtUrl = null)
+    string? ArtUrl = null,
+    IReadOnlyList<RootlistItemRef>? RootlistItems = null)
 {
+    /// <summary>How many ROOTLIST items this drag is carrying: the whole normalised selection for a multi-select
+    /// (<see cref="FromEntries"/>), 1 for an ordinary single rootlist drag, 0 for a payload that is not a rootlist item
+    /// at all. The chip's count badge and the "Moved {n} items to {name}" toast both read this — it is the ONE count.</summary>
+    public int RootlistCount => RootlistItems?.Count ?? (RootlistItem ? 1 : 0);
+
     /// <summary>This payload's chip data (the engine-free resolution rules).</summary>
-    public WaveeDragChipModel ChipModel() => WaveeDragChipModel.For(Name, ArtUrl, Tracks);
+    public WaveeDragChipModel ChipModel() => WaveeDragChipModel.For(Name, ArtUrl, Tracks, RootlistCount);
 
     public bool CanPin => Kind is WaveeResourceKind.Route or WaveeResourceKind.Playlist or WaveeResourceKind.Album
         or WaveeResourceKind.Artist or WaveeResourceKind.Show or WaveeResourceKind.Folder;
@@ -71,6 +77,39 @@ sealed record WaveeResourceDragPayload(
         return new(kind, entry.Id, entry.Uri, entry.Name,
             TrackResolver: ResolverFor(kind, entry.Uri, svc), RootlistItem: rootlistItem,
             ArtUrl: WaveeDragChipModel.ArtOf(entry.Cover));
+    }
+
+    /// <summary>A MULTI-SELECT of sidebar tree rows, lifted as ONE payload.
+    ///
+    /// <para><paramref name="orderedTreeEntries"/> is the selection already normalised — tree order, descendants of a
+    /// selected folder dropped (<c>RootlistSelection.Normalize</c>). The payload's display identity is the FIRST
+    /// entry's (kind, id, uri, art) so every surface that reads one item still reads a real one; the whole selection
+    /// travels as <see cref="RootlistItems"/>, which is what the drop decision checks and what the commit moves.</para>
+    ///
+    /// <para>A selection of TWO OR MORE carries NO track resolver: a rootlist multi-select is an ORGANISATION gesture,
+    /// and offering "deposit the first playlist's songs" for a drag the user aimed at five rows would deposit a lie.
+    /// N=1 is byte-for-byte <see cref="FromEntry"/>, which is why there is no second single-item path.</para></summary>
+    public static WaveeResourceDragPayload FromEntries(IReadOnlyList<SidebarLibraryEntry> orderedTreeEntries,
+                                                       Services? svc)
+    {
+        if (orderedTreeEntries is not { Count: > 0 })
+        {
+            // Nothing to lift. Logged rather than thrown: a drag source is a pointer path, and an empty selection is a
+            // caller bug — but an inert payload (empty key ⇒ every target refuses it) is a better failure than a crash.
+            svc?.Log.Warn("drag", "rootlist drag payload requested for an EMPTY selection");
+            return new(WaveeResourceKind.Playlist, "", "", "", RootlistItem: true,
+                       RootlistItems: Array.Empty<RootlistItemRef>());
+        }
+
+        var first = orderedTreeEntries[0];
+        int n = orderedTreeEntries.Count;
+        if (n == 1) return FromEntry(first, svc, rootlistItem: true);
+
+        var refs = new RootlistItemRef[n];
+        for (int i = 0; i < n; i++) refs[i] = RootlistTreeNav.RefOf(orderedTreeEntries[i]);
+        var kind = WaveeDragKindMap.Of(first.Kind);
+        return new(kind, first.Id, first.Uri, Strings.Sidebar.ItemCount(n), RootlistItem: true,
+                   ArtUrl: WaveeDragChipModel.ArtOf(first.Cover), RootlistItems: refs);
     }
 
     public static WaveeResourceDragPayload FromDestination(SidebarDestination destination, ActionServices? acts)
@@ -317,20 +356,36 @@ static class WaveeResourceDrop
     /// announces it for a screen reader (the same discipline as <c>FolderActions</c> and the bridge's announced-edit
     /// chokepoint), and offers the INVERSE move as Undo. The inverse rides the very same seam, so there is no second
     /// mutation path to keep in sync — <paramref name="undoAnchor"/> is simply where the item was before.</para></summary>
-    /// <param name="destinationName">The folder the item landed in; empty = the top level ("Your Library").</param>
+    /// <para>ONE drop issues ONE <c>MoveRootlistItemsAsync</c> — a multi-select is a BATCH, never N drops: the seam
+    /// applies its ops sequentially inside one Delta, so the relative order of the moved items survives (the ordering
+    /// rule itself is <c>RootlistBatchOrder.For</c>, and it is the same list the cue's legality check asked about).</para>
+    /// <param name="destinationName">The folder the items landed in; empty = the top level ("Your Library").</param>
+    /// <param name="undoMoves">The pre-move anchors (<c>RootlistUndoAnchors.TryResolveMany</c>), replayed as ONE batch.
+    /// Null/empty ⇒ the toast appears WITHOUT Undo rather than offering one that would land somewhere else.</param>
     public static void MoveRootlist(ActionServices acts, object? payload, RootlistItemRef target,
                                     RootlistDropPlacement placement, string? destinationName,
-                                    RootlistItemRef? undoAnchor = null,
-                                    RootlistDropPlacement undoPlacement = RootlistDropPlacement.After)
+                                    IReadOnlyList<RootlistMove>? undoMoves = null)
     {
-        if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { RootlistItem: true } source) return;
-        var sourceRef = RootRef(source);
-        if (sourceRef.Key.Length == 0 || target.Key.Length == 0) return;
+        if (acts.Library is not { } lib || WaveeResourceDrag.Unwrap(payload) is not { RootlistItem: true } source)
+        {
+            // Not a refusal the user aimed at — a payload that never belonged to the rootlist, or a host with no
+            // library bridge. It is still LOGGED: a drop that reaches this line and vanishes is the exact shape of
+            // failure this whole change exists to remove.
+            acts.Svc?.Log.Warn("drag", "rootlist move ignored: no library bridge, or the payload is not a rootlist item");
+            return;
+        }
+        var moves = RootlistBatchOrder.For(RootRefs(source), target, placement);
+        if (moves.Count == 0 || target.Key.Length == 0)
+        {
+            acts.Svc?.Log.Warn("drag", $"rootlist move ignored: sources={source.RootlistCount} target='{target.Key}'");
+            Toast.Show(Loc.Get(Strings.Drag.CantMoveHere), new ToastOptions { Severity = InfoBarSeverity.Informational });
+            return;
+        }
         _ = Run();
 
         async Task Run()
         {
-            try { await lib.MoveRootlistItemAsync(sourceRef, target, placement).ConfigureAwait(false); }
+            try { await lib.MoveRootlistItemsAsync(moves).ConfigureAwait(false); }
             // Mapped by VERB: this is an ORDERING that did not stick, not an add and not a remove — never the raw
             // exception text.
             catch (Exception ex)
@@ -338,40 +393,79 @@ static class WaveeResourceDrop
                 acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder));
                 return;
             }
-            acts.Post?.Invoke(() => Confirm(acts, lib, sourceRef, destinationName, undoAnchor, undoPlacement));
+            acts.Post?.Invoke(() => Confirm(acts, lib, moves.Count, destinationName, undoMoves));
         }
     }
 
-    static void Confirm(ActionServices acts, LibraryBridge lib, RootlistItemRef source, string? destinationName,
-                        RootlistItemRef? undoAnchor, RootlistDropPlacement undoPlacement)
+    static void Confirm(ActionServices acts, LibraryBridge lib, int count, string? destinationName,
+                        IReadOnlyList<RootlistMove>? undoMoves)
     {
-        string where = destinationName is { Length: > 0 } name
-            ? Strings.Drag.MovedTo(name)
-            : Loc.Get(Strings.Drag.MovedToLibrary);
+        // ONE sentence per outcome, and the plural one NAMES the destination too: "Moved to Your Library" cannot carry
+        // a count, and a 5-item filing that reports the singular reads as a move that only took one of them.
+        string where = count > 1
+            ? Strings.Drag.MovedManyTo(count, destinationName is { Length: > 0 } many
+                                              ? many : Loc.Get(Strings.Sidebar.YourLibrary))
+            : destinationName is { Length: > 0 } name ? Strings.Drag.MovedTo(name)
+                                                     : Loc.Get(Strings.Drag.MovedToLibrary);
         // A rootlist move is a SILENT structural change to a list the user may not be looking at — announced for the
         // same reason a folder create is (FolderActions.Announce): one call at the one chokepoint.
         if (Announcer.IsAvailable) Announcer.SayThrottled(where);
         var options = new ToastOptions { Severity = InfoBarSeverity.Success };
-        if (undoAnchor is { } anchor && anchor.Key.Length > 0)
+        if (undoMoves is { Count: > 0 } undo)
             options = options with
             {
                 ActionLabel = Loc.Get(Strings.Sidebar.Pin.Undo),
-                OnAction = () => _ = UndoAsync(acts, lib, source, anchor, undoPlacement),
+                OnAction = () => _ = UndoAsync(acts, lib, undo),
             };
         Toast.Show(where, options);
     }
 
-    static async Task UndoAsync(ActionServices acts, LibraryBridge lib, RootlistItemRef source,
-                                RootlistItemRef anchor, RootlistDropPlacement placement)
+    static async Task UndoAsync(ActionServices acts, LibraryBridge lib, IReadOnlyList<RootlistMove> undo)
     {
-        try { await lib.MoveRootlistItemAsync(source, anchor, placement).ConfigureAwait(false); }
+        // The inverse rides the very same seam in ONE batch, so an undone multi-select restores in one Delta rather
+        // than as N racing writes.
+        try { await lib.MoveRootlistItemsAsync(undo).ConfigureAwait(false); }
         catch (Exception ex) { acts.Post?.Invoke(() => PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder)); }
     }
 
-    static RootlistItemRef RootRef(WaveeResourceDragPayload payload)
+    /// <summary>THE rootlist references a drag PAYLOAD moves AS, in tree order — a folder by its group id, a playlist by
+    /// its uri. A single-item drag answers a list of ONE, which is why the decision, the cue and the commit have no
+    /// separate single-item path at all.
+    /// <para>Shared with the sidebar's drop decision so the cue's legality question and the mutation address the same
+    /// items (<c>RootlistTreeNav.RefOf</c> is the same rule over a projection ENTRY — a different input shape).</para></summary>
+    internal static IReadOnlyList<RootlistItemRef> RootRefs(WaveeResourceDragPayload payload)
+        => payload.RootlistItems is { Count: > 0 } many ? many : [SingleRef(payload)];
+
+    static RootlistItemRef SingleRef(WaveeResourceDragPayload payload)
         => payload.Kind == WaveeResourceKind.Folder
             ? new RootlistItemRef(SidebarPinId.FolderIdOf(payload.Id), IsFolder: true)
             : new RootlistItemRef(payload.Uri, IsFolder: false);
+
+    /// <summary>Is this tree row one of the items the drag is CARRYING? The resolver's <c>SourceIsSelf</c> fact, and the
+    /// only payload legality question left in the geometry layer — "into MYSELF" and "before myself" need two different
+    /// sentences where the marker stream reports one <c>SameItem</c>.
+    /// <para>Asks the row BOTH ways because the two identities the sidebar addresses a row by are different strings: the
+    /// projection's entry id (<c>pl:&lt;uri&gt;</c> / <c>folder:&lt;groupId&gt;</c>) and the bare uri the seam moves a
+    /// playlist as.</para></summary>
+    public static bool IsSource(WaveeResourceDragPayload? payload, string entryId, string uri)
+    {
+        if (payload is null) return false;
+        if (payload.RootlistItems is { Count: > 0 } refs)
+        {
+            string folderId = SidebarPinId.FolderIdOf(entryId);
+            for (int i = 0; i < refs.Count; i++)
+            {
+                var r = refs[i];
+                if (r.Key.Length == 0) continue;
+                if (r.IsFolder
+                    ? folderId.Length > 0 && string.Equals(r.Key, folderId, StringComparison.Ordinal)
+                    : uri.Length > 0 && string.Equals(r.Key, uri, StringComparison.Ordinal)) return true;
+            }
+            return false;
+        }
+        return (entryId.Length > 0 && string.Equals(payload.Id, entryId, StringComparison.Ordinal))
+            || (uri.Length > 0 && string.Equals(payload.Uri, uri, StringComparison.Ordinal));
+    }
 
     /// <summary>Commit one playlist deposit. Same-playlist row drags move stable membership rows; every other resource
     /// resolves to an ordered track snapshot and copies it. A null insertion index means append (sidebar target).</summary>

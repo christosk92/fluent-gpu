@@ -99,11 +99,12 @@ public sealed class SidebarRowPlannerTests
                 items: [Route("i1", "liked"), Route("i2", "albums")]),
             [SidebarRowKind.SectionHeader, SidebarRowKind.IconRow, SidebarRowKind.IconRow]);
 
-        // TreeEnd is the tree's closing gutter — the "top level, at the end" drop slot — and it is planned BEFORE the
-        // create row, which is the row that used to occupy that spot and duplicate a dragged playlist into a new one.
+        // TreeEnd is the tree's closing gutter — the "top level, at the end" drop slot — and it is now the section's
+        // LAST row outright. The create ROW that used to follow it (and squat that very slot, duplicating a dragged
+        // playlist into a new one) is deleted: the affordance is the section HEADER's "+".
         Check(Sec("s", SidebarSectionKind.PlaylistTree),
             [SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
-             SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction]);
+             SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd]);
 
         Check(Sec("s", SidebarSectionKind.EntityList, query: SidebarEntityQuery.Default),
             [SidebarRowKind.SectionHeader, SidebarRowKind.EntityRow, SidebarRowKind.EntityRow,
@@ -314,9 +315,10 @@ public sealed class SidebarRowPlannerTests
             SidebarRowKind.Skeleton}, KindsOf(SidebarRowPlanner.Build(
                 Doc(Sec("s", SidebarSectionKind.EntityList, query: SidebarEntityQuery.Default)), pending)));
 
-        // A pending tree still shows its create affordance — that row is authored chrome, not data.
+        // A pending tree plans SKELETONS and nothing else. Its create affordance is the header's "+", which is chrome
+        // the renderer draws inside the header row — so it survives a pending source without costing a planned row.
         Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.Skeleton, SidebarRowKind.Skeleton,
-            SidebarRowKind.Skeleton, SidebarRowKind.CreateAction}, KindsOf(SidebarRowPlanner.Build(
+            SidebarRowKind.Skeleton}, KindsOf(SidebarRowPlanner.Build(
                 Doc(Sec("s", SidebarSectionKind.PlaylistTree)), pending)));
 
         Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.Skeleton, SidebarRowKind.Skeleton,
@@ -351,8 +353,8 @@ public sealed class SidebarRowPlannerTests
             Assert.Equal("s", plan.Rows[1].Key);
         }
 
-        // A tree with nothing in it still offers "create".
-        Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.Empty, SidebarRowKind.CreateAction},
+        // An EMPTY tree is the kind's ordinary Empty hint and nothing else — the hint itself names the header "+".
+        Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.Empty},
             KindsOf(SidebarRowPlanner.Build(Doc(Sec("s", SidebarSectionKind.PlaylistTree)), empty)));
     }
 
@@ -414,7 +416,7 @@ public sealed class SidebarRowPlannerTests
     // ── the playlist tree ────────────────────────────────────────────────────────────────────────────────────────────
 
     [Fact]
-    public void PlaylistTree_EmitsDepthAwareFolderHeaders_AndCreateActionLast()
+    public void PlaylistTree_EmitsDepthAwareFolderHeaders_AndTheClosingGutterLast()
     {
         var tree = new[]
         {
@@ -429,14 +431,13 @@ public sealed class SidebarRowPlannerTests
 
         Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
             SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow, SidebarRowKind.EntityRow,
-            SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction}, KindsOf(plan));
+            SidebarRowKind.TreeEnd}, KindsOf(plan));
 
-        Assert.Equal(new byte[] { 0, 0, 1, 1, 2, 0, 0, 0 }, DepthsOf(plan));
-        // The closing gutter sits between the last tree row and the create affordance, in that order — it owns the
-        // end-of-list drop slot and the create row must no longer accept a rootlist payload at all.
-        Assert.Equal(SidebarRowKind.TreeEnd, plan.Rows[^2].Kind);
-        Assert.Equal(-1, plan.Rows[^2].EntryIndex);
-        Assert.Equal(SidebarRowKind.CreateAction, plan.Rows[^1].Kind);
+        Assert.Equal(new byte[] { 0, 0, 1, 1, 2, 0, 0 }, DepthsOf(plan));
+        // The closing gutter is the section's LAST row — it owns the "top level, at the end" drop slot, and there is no
+        // longer a create row underneath it to accept a rootlist payload that was aimed here.
+        Assert.Equal(SidebarRowKind.TreeEnd, plan.Rows[^1].Kind);
+        Assert.Equal(-1, plan.Rows[^1].EntryIndex);
         Assert.Equal("folder:f1", plan.Rows[1].Key);
     }
 
@@ -461,7 +462,7 @@ public sealed class SidebarRowPlannerTests
         var plan = SidebarRowPlanner.Build(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
 
         Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
-            SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction}, KindsOf(plan));
+            SidebarRowKind.TreeEnd}, KindsOf(plan));
         Assert.Equal("folder:f1", plan.Rows[1].Key);
         Assert.Equal("pl:spotify:playlist:c", plan.Rows[2].Key);
     }
@@ -566,7 +567,7 @@ public sealed class SidebarRowPlannerTests
         Assert.Equal(new[]
         {
             SidebarRowKind.SectionHeader, SidebarRowKind.GridStrip,
-            SidebarRowKind.GridStrip, SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction,
+            SidebarRowKind.GridStrip, SidebarRowKind.TreeEnd,
         }, KindsOf(source));
         Assert.Equal(2, source.Rows[1].ItemCount);
         Assert.Equal(1, source.Rows[2].ItemCount);
@@ -606,8 +607,8 @@ public sealed class SidebarRowPlannerTests
 
         // The tree flattens while searching: matching leaves only, no folder chrome.
         var tree = SidebarRowPlanner.Build(Doc(Sec("t", SidebarSectionKind.PlaylistTree)), input);
-        Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd,
-            SidebarRowKind.CreateAction}, KindsOf(tree));
+        Assert.Equal(new[] {SidebarRowKind.SectionHeader, SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd},
+            KindsOf(tree));
         Assert.Equal(0, tree.Rows[1].Depth);
 
         // Shortcuts and links are app destinations, not library rows — search never filters them.
@@ -901,7 +902,7 @@ public sealed class SidebarRowPlannerTests
             SidebarRowKind.IconRow, SidebarRowKind.IconRow,
             SidebarRowKind.Divider,
             SidebarRowKind.SectionHeader, SidebarRowKind.FolderHeader, SidebarRowKind.EntityRow,
-            SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd, SidebarRowKind.CreateAction,
+            SidebarRowKind.EntityRow, SidebarRowKind.TreeEnd,
         }, KindsOf(plan));
     }
 

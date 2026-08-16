@@ -1,4 +1,4 @@
-using FluentGpu.Foundation;
+﻿using FluentGpu.Foundation;
 using FluentGpu.Scene;
 
 namespace FluentGpu.Input;
@@ -578,13 +578,24 @@ public sealed class DragController
         _scene.Mark(node, NodeFlags.TransformDirty | NodeFlags.PaintDirty);
     }
 
-    /// <summary>Arena-lite: a dominant-axis gesture PERPENDICULAR to the item's reorder axis (its parent container's
-    /// main axis) yields when a scrollable ancestor actually overflows along the gesture axis — the pan owns it.</summary>
+    /// <summary>Arena-lite: a dominant-axis gesture PERPENDICULAR to the item's reorder axis (its nearest FLEX
+    /// container ancestor's main axis) yields when a scrollable ancestor actually overflows along the gesture axis —
+    /// the pan owns it.
+    /// <para>ZStack ancestors are SKIPPED when resolving that axis. A z-stack has no main axis at all — every child
+    /// overlays at the origin (<c>FlexLayout.ArrangeZStack</c>) — but it is stored as an ordinary container whose
+    /// <c>Direction</c> keeps its 0 (row) default, so reading it here meant "this item drags horizontally". A row
+    /// wrapped in an overlay stack (a selection pill, an always-mounted insertion-line cue — Wavee's sidebar rows) then
+    /// had its axis INVERTED: a downward drag inside a vertically scrolling list looked like a cross-axis pan, the
+    /// candidate silently disarmed at the drag box, and the gesture produced nothing at all while the click still
+    /// worked. Gate: <c>e5dragdrop.overlayaxis</c>.</para></summary>
     private bool YieldsToPan(float dx, float dy)
     {
         bool vertical = MathF.Abs(dy) >= MathF.Abs(dx);
         var parent = _scene.Parent(_node);
-        bool itemDragsHorizontally = !parent.IsNull && _scene.Layout(parent).Direction == 0;   // 0 = row container
+        var axisOwner = parent;
+        while (!axisOwner.IsNull && (_scene.Flags(axisOwner) & NodeFlags.ZStack) != 0)
+            axisOwner = _scene.Parent(axisOwner);              // an overlay stack has no main axis — keep walking
+        bool itemDragsHorizontally = !axisOwner.IsNull && _scene.Layout(axisOwner).Direction == 0;   // 0 = row container
         if (vertical != itemDragsHorizontally) return false;   // gesture runs along the item's own axis → the drag wins
 
         for (var n = parent; !n.IsNull; n = _scene.Parent(n))

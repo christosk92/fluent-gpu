@@ -84,6 +84,30 @@ writes in the pane are: `_rowCount` from a `UseLayoutEffect`; a single `_countSe
 exists* (provably not a backwards write — nothing has read it yet); and `_dispVersion` from `Choreograph`, which
 runs inside the plan memo and is read only by the `ItemsView` child that renders after it.
 
+### Bind wiring is MOUNT-ONLY — a per-row bound thunk must read `_scope.Index.Value`, never a captured index
+
+The reconciler registers a node's bound `Prop<T>` thunks when the node **mounts** and never again: `Update` rewrites
+props, not bindings. In a recycling `ItemsView` that is a trap with teeth, because a slot's children are paired by
+`(Key, type)` — a child with a CONSTANT key (`"drop-line"`, `"drop-plate"`) is **Updated** across a recycle while the
+entity row beside it, keyed by the row's own key, genuinely remounts.
+
+So a thunk that captured its plan `index` (or the row `height`, or `enabled && selected`) keeps answering for the row
+the slot was FIRST mounted with. Two shipped defects, one mechanism:
+
+- **Two insertion lines after an auto-scrolled drag**, and no line reachable for "before the first row" — the armed
+  row's caret plus a recycled slot's ghost, and the slot that had inherited index 0's binding.
+- **A stale route plate.** `SidebarEntityRow.Create` bound `Fill`/`BorderColor` off `SidebarRowSpec.DropCue` folded
+  with `enabled && selected`; `RefreshSelection` bumps the two flipped rows' epochs → same `Key` → Update → the new
+  thunk is ignored, so the resting plate stayed on the OLD route until the row scrolled out.
+
+**The rule.** Every per-row bound thunk opens with `int i = _scope.Index.Value; _ = _o.SubscribeRowEpoch(i);` and asks
+the pane from `i` (the `PillState` discipline). Reading `Index` subscribes the binding to the recycle write; reading
+the row epoch covers a same-index re-plan. Anything that is not a live read — a height, a colour that folds selection —
+goes back to a **static** value the reconciler re-asserts every render. `DropCue` is deleted; the `Into` plate is the
+slot's own always-mounted `DropPlate()` under the row. Pinned by
+`SidebarPaneInvariantTests.ThePerRowDropCues_BindAgainstTheLiveSlotIndex` (a source scan over every `Prop.Of(` in
+`InsertionLine`/`DropPlate`) and `.TheEntityRow_KeepsItsFillsStatic_AndOwnsNoTreeDropCue`.
+
 ### A bound row is a frozen child — `SubscribeEpoch()` is load-bearing
 
 Re-planning in `SidebarPane` does **not** re-render a realized slot. `SidebarPane.SubscribeEpoch()` reads the
@@ -101,10 +125,11 @@ a mount with **no binder at all** (a probe / headless mount) would honestly clai
 `SidebarPane.Input()` compensates explicitly by forcing `LibraryState`/`TreeState`/`RecentsState`/
 `NewReleasesState`/`ConcertsState` to `Pending` when `Prefs?.Binder is null` (`Pane/SidebarPane.cs:384-399`).
 
-The same discipline forced an **inverted flag name**: `SidebarProjectionInput.SuppressTreeCreateRow`
-(`SidebarRowPlanner.cs:145-153`) rather than a positive `TreeCreateRow`, because a positional default of `true`
-is silently lost on `default(T)` and Classic's document *depends* on that create row existing. There is no field
-named `TreeCreateRow`. When you add a bool to a POD input, make **false the landed behaviour**.
+The same discipline once forced an **inverted flag name**: `SidebarProjectionInput.SuppressTreeCreateRow` rather than
+a positive `TreeCreateRow`, because a positional default of `true` is silently lost on `default(T)`. Both that flag and
+the `CreateAction` row it suppressed are now **deleted** (the create affordance is the section header's "+", chrome the
+renderer owns per `SidebarPaneConfig.HeaderCreate`) — but the rule that produced the name still binds: when you add a
+bool to a POD input, make **false the landed behaviour**.
 
 ---
 
@@ -290,7 +315,7 @@ Verified reference counts across all of `src/apps`, including the tests.
 | `SidebarLayoutMenu.HeaderButton` | **Deleted** (defect 15). `SidebarLayoutMenu.cs` records why in a comment; do not re-add it. |
 | loc `sidebar.pin.showAll`, `sidebar.pin.showLess` | **Retired** — gone from all three locales. |
 | loc `sidebar.pin.position` | **KEEP — still live, but through a NEW owner.** The old path (`CzLoc.Position` → the customizer outline) died with the outline; the key is now `SidebarPaneLoc.ReorderPosition` (`Pane/SidebarPaneText.cs`), the position clause inside every section-card reorder ANNOUNCEMENT (`SidebarPane.SectionAnnounce`). Retiring it would silently render `[sidebar.pin.position]` into a screen-reader sentence. |
-| loc `sidebar.createPlaylist` | **Retired** — gone from all three locales. Every call site uses the sibling `sidebar.createPlaylistTooltip`. |
+| loc `sidebar.createPlaylist` | **Retired** — gone from all three locales. Every call site uses the sibling `sidebar.createPlaylistTooltip` (the plain-click "+") or `sidebar.createTooltip` (the "+ with a flyout"). |
 | loc `sidebar.createFolder` | Already **gone** from all three source locales (it survives only in stale `bin/` output). |
 | loc `sidebar.customizer.{outline, preview, previewExpanded, previewRail, previewDrawer, previewHint, addFirst, startFromTemplate, liftHint, visibleCount, topBar, topBarGlobal, topBarEmpty, curatedLayout, curatedInactive}` | **Retired** — gone from all three locales. They labelled the outline / preview columns and the standalone "Top bar" card, all deleted in Phase 3. `sidebar.customizer.empty`/`emptySub` are **KEPT**: they are live through `SidebarPaneLoc.PaneEmpty`. |
 | `Shared/SidebarNavBandModel.cs` | **0 production references** since Phase 1 (the band renders as an ordinary section). Retained deliberately: its `KindOf`/`RouteKeyOf`/`SelectsRoute`/`Shape` are the band's pure shaping rules and `SidebarNavBandTests` drives them. Its own file header still describes a `SidebarNavBand` component that no longer exists. |

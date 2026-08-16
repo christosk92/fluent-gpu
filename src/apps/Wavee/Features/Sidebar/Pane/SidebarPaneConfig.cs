@@ -53,6 +53,19 @@ sealed record SidebarPaneConfig
     /// Classic is read-only; Curated is not; V3 is (its chrome owns its state).</summary>
     public bool ReadOnly { get; init; }
 
+    /// <summary>Put a "+" CREATE affordance in every <c>PlaylistTree</c> section header (a flyout offering
+    /// <i>New playlist</i> / <i>New folder</i>, and a drop destination that makes a new folder out of what you drop on
+    /// it). Default false.
+    ///
+    /// <para>A CONFIG MEMBER, never a <c>Design</c> branch (rule 1). Classic and Curated set it; Library V3 does not,
+    /// because its own chrome already carries a "+" and two create affordances for one command is exactly the per-mode
+    /// duplication the unified renderer exists to remove.</para>
+    ///
+    /// <para>It replaces the deleted <c>CreateAction</c> ROW: a permanently-mounted row at the end of a 10k-playlist
+    /// tree bought one command at the cost of the section's rhythm, and it also owned the "top level, at the end" drop
+    /// slot that belongs to the tree's own closing gutter.</para></summary>
+    public bool HeaderCreate { get; init; }
+
     /// <summary>Render the pane's own library-only search box above the scroll surface (only when the document actually
     /// contains a visible EntityList — searching a pane with no library list would filter nothing).</summary>
     public bool SearchHead { get; init; }
@@ -142,8 +155,9 @@ sealed record SidebarPaneConfig
     /// surfaces render without their action rather than with a dead one.</summary>
     public Action? OnCustomize { get; init; }
 
-    /// <summary>Create a playlist (the PlaylistTree section's create row + the rail footer). Null ⇒ the create row is
-    /// still planned but inert, which is the honest shape for a mount with no library bridge.</summary>
+    /// <summary>Create a playlist — the plain-click half of the header/rail "+" and the first row of its flyout. Null
+    /// ⇒ the header "+" is not offered at all (see <see cref="HeaderCreate"/>) rather than offered dead, which is the
+    /// honest shape for a mount with no library bridge.</summary>
     public Action? OnCreatePlaylist { get; init; }
 }
 

@@ -122,7 +122,7 @@ public sealed class SpotifyExportSource : ICatalogSource
     public Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Artist>>(System.Array.Empty<Artist>());
 
-    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default)
+    public Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<Track>>(FakeData.LikedSongs(Math.Max(1, _x.LikedCount)));
 
     public Task<SearchResults> SearchAsync(string query, CancellationToken ct = default)

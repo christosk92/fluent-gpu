@@ -230,9 +230,9 @@ sealed class LibraryV3Sidebar : Component
         }
 
         _pins.Set(published, 0, skip);
-        // SuppressTreeCreateRow: V3's header already carries the create "+" (§3.2.3), and a trailing "create playlist"
-        // row under an Albums/Artists lens would be plain wrong. The empty-library CTA lives in the chrome's empty state.
-        input = input with { Pins = _pins, ExpandedFolders = null, SuppressTreeCreateRow = true };
+        // V3's header carries the create "+" (§3.2.3) and its config leaves `HeaderCreate` false, so the section header
+        // does not add a second one. The empty-library CTA lives in the chrome's empty state.
+        input = input with { Pins = _pins, ExpandedFolders = null };
         return group
             ? (input with { PlaylistTree = session.View.Rows })
             : (input with { Library = session.View.Rows });
@@ -341,9 +341,23 @@ sealed class LibraryV3Sidebar : Component
             [
                 SidebarRailItem.Icon("v3-rail-expand", Icons.List, false, session.Expand,
                                      Loc.Get(Strings.Sidebar.V3.Expand)),
-                Embed.Comp(() => new SidebarCreateButton(session.CreatePlaylist, SidebarRailItem.Box, 16f)),
+                Embed.Comp(() => new SidebarCreateButton(
+                    session.CreatePlaylist, menu: CreateMenu, box: SidebarRailItem.Box, glyph: 16f)),
             ],
         };
+    }
+
+    /// <summary>The rail "+"'s flyout — the same two verbs the header's "+" carries, so a collapsed V3 pane can create
+    /// a folder too. Built at open time; null falls back to the plain create-playlist click.</summary>
+    ContextMenuModel? CreateMenu()
+    {
+        if (_session is not { Acts: { Library: not null } acts } session) return null;
+        return new ContextMenuModel(new List<MenuFlyoutItem>(2)
+        {
+            new(Loc.Get(Strings.Detail.NewPlaylist), ActionIcons.Resolve(ActionIcons.Add), true, session.CreatePlaylist),
+            new(Loc.Get(Strings.Sidebar.CreateFolder), ActionIcons.Resolve(ActionIcons.Folder),
+                acts.Overlay is not null, () => FolderActions.NewFolder(acts, null)),
+        });
     }
 
     // ── derived geometry ─────────────────────────────────────────────────────────────────────────────────────────────

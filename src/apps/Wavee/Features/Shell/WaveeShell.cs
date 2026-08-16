@@ -769,7 +769,10 @@ sealed class WaveeShell : Component
                             // separate itself from this band.
                             Direction = 1, Shrink = 0f, ClipToBounds = true,
                             OnRealized = h => _sidebarPaneNode = h,
-                            Width = Prop.Of(() => presentedCompact.Value
+                            // A live DRAG PEEK presents the pane expanded, so this column must widen with it — it is
+                            // ClipToBounds, and a 56-DIP column around expanded rows renders them as a strip of art +
+                            // tree connectors with every label cut off (SidebarPreferences.DragPeek carries the why).
+                            Width = Prop.Of(() => presentedCompact.Value && !_sidebar.DragPeek.Value
                                 ? ShellResponsiveLayout.CompactRailW : _sidebarWidth.Value),
                             // SidebarPaneAnim eases the COLLAPSE toggle (56↔expanded) as a clip+translate reveal — the pane
                             // is ClipToBounds so the reveal scissors its content. During a drag the suppression arbiter

@@ -69,7 +69,6 @@ static class SidebarRowExtents
             case SidebarRowKind.Placeholder:
             case SidebarRowKind.FolderHeader:
             case SidebarRowKind.Skeleton:
-            case SidebarRowKind.CreateAction:
                 return SidebarRowGeometry.HeightFor(section.Opts);
 
             case SidebarRowKind.Empty:

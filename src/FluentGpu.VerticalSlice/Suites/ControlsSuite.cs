@@ -58,6 +58,7 @@ static class ControlsSuite
         E5DragDropChecks(strings);
         SortableMathChecks();
         SortableSurfaceChecks(strings);
+        SortableCloseChecks(strings);
         VirtualDisclosureChecks(strings);
         VirtualDisclosureFastPathChecks(strings);
         FocusRingChecks(strings);
@@ -3436,6 +3437,78 @@ static class ControlsSuite
                 $"overflow={overflows} yielded={yielded} along={alongDrags} noOverflow={noOverflowDrags} axis={axisDrags}");
         }
 
+        // e5dragdrop.overlayaxis — THE SIDEBAR-ROW SHAPE (Wavee SidebarPaneSlot.Indicator / DropCueOverlay): a
+        // draggable row that a ZStack wraps together with its selection pill and an always-mounted insertion-line cue,
+        // inside the pane's VERTICALLY scrolling list. A ZStack has NO main axis — every child overlays at the origin
+        // (ArrangeZStack) — so it can never stand for "the item's reorder axis" the way a flex row/column does. But
+        // Ui.ZStack leaves Direction at its 0 default, and arena-lite (YieldsToPan) read Direction==0 as "this item
+        // drags HORIZONTALLY". That inverted the arbitration for every overlay-wrapped row in a vertical scroller: a
+        // downward drag looked like a cross-axis PAN, so the candidate silently disarmed at the drag box and the
+        // gesture produced nothing at all — no dim, no chip, no cue — while the click still worked. (Wavee symptom:
+        // pressing a sidebar playlist row and moving 30px did nothing.)
+        //
+        // The row here carries EVERY ingredient the real one does — OnClick, Focusable + OnKeyDown, a click-primary
+        // x2 drag box, Draggable and DropTarget on the SAME node, a HitTestVisible=false overlay with BOUND
+        // Width/Transform/Opacity — so the gate also pins that none of those is what blocks the arm.
+        {
+            Element SidebarRow(string key, bool overlayWrapped)
+            {
+                var row = new BoxEl
+                {
+                    Key = key, Width = 220f, Height = 40f,
+                    OnClick = static () => { },
+                    Focusable = true,
+                    OnKeyDown = static _ => { },
+                    Draggable = Drag.Source("res", () => key,
+                                            thresholdMultiplier: Drag.ClickPrimaryThresholdMultiplier),
+                    DropTarget = Drop.Target<string>("res", accepts: static _ => true, onDrop: static (_, _) => { }),
+                };
+                if (!overlayWrapped) return row;
+                return ZStack(
+                    row,
+                    new BoxEl { Key = "pill", Width = 3f, Height = 16f, HitTestVisible = false },
+                    new BoxEl
+                    {
+                        Key = "drop-line",
+                        Height = 2f,
+                        Width = Prop.Of(static () => 200f),
+                        Opacity = Prop.Of(static () => 0f),
+                        Transform = Prop.Of(static () => Affine2D.Translation(0f, 38f)),
+                        HitTestVisible = false,
+                    });
+            }
+
+            (bool armed, bool active, bool session, bool sourceIsRow) Probe(bool overlayWrapped)
+            {
+                var scene = new SceneStore();
+                var rows = new Element[8];
+                for (int i = 0; i < rows.Length; i++) rows[i] = SidebarRow("r" + i, overlayWrapped);
+                new TreeReconciler(scene, strings).ReconcileRoot(new ScrollEl
+                {
+                    Width = 240, Height = 120,
+                    Content = new BoxEl { Direction = 1, Children = rows },
+                }, null);
+                new FlexLayout(scene, fonts).Run(scene.Root);
+                var disp = new InputDispatcher(scene);
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerDown, new Point2(110, 20), 0, 0) });
+                bool armed = disp.Drag.IsArmed;
+                // 30px DOWN (2px of horizontal noise) — the gesture the user makes on a sidebar row.
+                disp.Dispatch(new[] { new InputEvent(InputKind.PointerMove, new Point2(112, 50), 0, 0) });
+                bool active = disp.Drag.IsActive;
+                bool session = disp.DragDrop.IsActive && (string)disp.DragDrop.Session.Payload! == "r0";
+                bool src = disp.DragDrop.Session.Source == disp.Drag.ActiveNode && !disp.Drag.ActiveNode.IsNull;
+                disp.Dispatch(new[] { new InputEvent(InputKind.Key, default, 0, Keys.Escape) });
+                return (armed, active, session, src);
+            }
+
+            var bare = Probe(overlayWrapped: false);
+            var wrapped = Probe(overlayWrapped: true);
+
+            Check("e5dragdrop.overlayaxis a draggable row wrapped in a ZStack (selection pill + insertion-line overlay) inside a vertical scroller still promotes a VERTICAL drag and opens the L2 session — a ZStack has no main axis, so arena-lite must not read it as a row container and yield the gesture to the pan",
+                bare is (true, true, true, true) && wrapped is (true, true, true, true),
+                $"bare={bare} zstackWrapped={wrapped}");
+        }
+
         // e5dragdrop.6 — ReorderList midpoint slot math: the dragged item's centre crossing a sibling's midpoint
         // claims its slot (GetDragOverIndex — ListViewBase_Partial_Reorder.cpp:984-1063); the SHOWN target waits on
         // the 200ms live-reorder dwell that re-arms on every pending change (LISTVIEW_LIVEREORDER_TIMER :50, restart
@@ -5000,6 +5073,107 @@ static class ControlsSuite
     // These replace the former VirtualInsertionPreviewController checks: that class computed a single capped suffix
     // gap with NO removal accounting, which is exactly the A4/A5 bug pair (a gap one block too big, a preview placed
     // in the wrong space). SortableMath now owns the whole family and the invariants are asserted directly.
+    // sortable.close - F5. THE GAP-CLOSE EDGE, on the DISPLACEMENT channel. A gap that parted rows owes them a write
+    // back to (0,0), and that write necessarily lands in a pass where `disp` has ALREADY gone null (the plan cleared).
+    // Keyed on opacity facts alone (HidesSources/OpacityEngaged) the pass early-returned on every close where nothing
+    // HID: a cross-list COPY hides no source, and an owner that wires only DisplacementVersion (Wavee's track list -
+    // no ItemDisplacement of its own) never supplies a provider to fall back to. The commit-awaiting handoff then puts
+    // Clear() AFTER the owner's own dispVer bump, so the entrance channel's edge (ItemFlipFrom/ItemFadeFrom, non-null
+    // delegates) is spent too and NOTHING wrote the rows back - every row below the gap, and the whole trailing section
+    // riding the range's net growth, stayed at +GapExtent forever: overlapping rows plus a blank band, until the page
+    // was navigated away. Case A (same-list move) is the control that always worked - hiding latched the pass on.
+    static void SortableCloseChecks(StringTable strings)
+    {
+        // Every realized row, after settle: parked at its layout slot (Dy 0), fully opaque, and strictly non-overlapping.
+        static (bool Ok, float MaxDy, float MinOp, float Overlap, int Rows) Parked(SceneStore scene, NodeHandle content, float rowH)
+        {
+            float maxDy = 0f, minOp = 1f, overlap = 0f, prevBottom = float.NegativeInfinity;
+            int rows = 0;
+            for (var n = scene.FirstChild(content); !n.IsNull && scene.IsLive(n); n = scene.NextSibling(n), rows++)
+            {
+                var paint = scene.Paint(n);
+                maxDy = MathF.Max(maxDy, MathF.Abs(paint.LocalTransform.Dy));
+                minOp = MathF.Min(minOp, paint.Opacity);
+                float y = scene.AbsoluteRect(n).Y;
+                if (rows > 0) overlap = MathF.Max(overlap, prevBottom - y);
+                prevBottom = y + rowH;
+            }
+            return (rows > 0 && maxDy < 0.5f && minOp > 0.95f && overlap < 0.5f, maxDy, minOp, overlap, rows);
+        }
+
+        // One case = one host. `sameList` picks the shape: A = same-list MOVE (sources hide), B = cross-list COPY
+        // (nothing hides - the leak). Both run the SAME script: hover (gap opens) -> drop onto a commit that is still
+        // in flight (so `_awaiting` latches and the gap is HELD) -> the owner bumps dispVer ONCE, and that bump is
+        // CONSUMED by its own effect run (spending `entranceEdge`, exactly as Wavee's Choreograph does) -> only then
+        // does the membership token arrive and close the gap through Clear(), which bumps the insertion channel alone.
+        static (bool Ok, float MaxDy, float MinOp, float Overlap, int Rows, long Alloc, bool Parted) RunCase(
+            StringTable strings, bool sameList, bool measureAlloc)
+        {
+            using var app = new HeadlessPlatformApp();
+            var window = new HeadlessWindow(new WindowDesc("sortable-close", new Size2(320, 1760), 1f));
+            window.Show();
+            var probe = new SortableCloseProbe
+            {
+                SameList = sameList,
+                Sources = sameList ? [0, 2] : [],
+                DraggedCount = 3,
+                Pending = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously),
+            };
+            using var host = new AppHost(app, window, new HeadlessGpuDevice(), new HeadlessFontSystem(strings), strings, probe);
+            for (int i = 0; i < 4; i++) host.RunFrame();
+            var scene = host.Scene;
+            var vp = FindScrollable(scene, scene.Root);
+            scene.TryGetScroll(vp, out var sc);
+            var rect = scene.AbsoluteRect(vp);
+            // Two lead rows (2x40 measured) then 20 DIP past item 2's centre => the NN/g rule claims slot 1.
+            var p = new Point2(rect.X + 100f, rect.Y + 100f);
+
+            host.Input.DragDrop.ExternalBegin("res", "payload", p, KeyModifiers.None);
+            var hit = host.Input.DiagHitTest(p);
+            host.Input.DragDrop.Move(hit, p, 0f, 0f, KeyModifiers.None);
+            for (int i = 0; i < 60; i++) host.RunFrame();
+
+            // The gap really opened (else the close assertion below is vacuous): rows below the slot parted, and the
+            // trailing section rides the range's NET growth - 0 for a move, the full capped gap for a copy.
+            float partedDy = 0f;
+            for (var n = scene.FirstChild(sc.ContentNode); !n.IsNull && scene.IsLive(n); n = scene.NextSibling(n))
+                partedDy = MathF.Max(partedDy, MathF.Abs(scene.Paint(n).LocalTransform.Dy));
+            bool parted = partedDy > 1f;
+
+            // Warm path: a pointer move INSIDE the live slot re-runs the whole geometry and must allocate nothing.
+            long alloc = 0;
+            if (measureAlloc)
+            {
+                for (int k = 0; k < 4; k++) host.Input.DragDrop.Move(hit, p, 0f, 0f, KeyModifiers.None);
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int k = 0; k < 16; k++)
+                    host.Input.DragDrop.Move(hit, new Point2(p.X, p.Y + (k % 5) * 0.5f), 0f, 0f, KeyModifiers.None);
+                alloc = GC.GetAllocatedBytesForCurrentThread() - before;
+            }
+
+            host.Input.DragDrop.TryDrop(p, KeyModifiers.None, out _);
+            probe.Ver.Value = probe.Ver.Peek() + 1;
+            for (int i = 0; i < 8; i++) host.RunFrame();
+
+            probe.Ctl.ObserveInsertionMembership(new object());
+            probe.Pending!.TrySetResult(true);
+            for (int i = 0; i < 120; i++) host.RunFrame();
+
+            var r = Parked(scene, sc.ContentNode, SortableCloseProbe.RowH);
+            return (r.Ok, r.MaxDy, r.MinOp, r.Overlap, r.Rows, alloc, parted);
+        }
+
+        var move = RunCase(strings, sameList: true, measureAlloc: true);
+        var copy = RunCase(strings, sameList: false, measureAlloc: false);
+
+        Check("sortable.close the gap's CLOSE edge is symmetric on the DISPLACEMENT channel, not only the opacity one: a list wiring only DisplacementVersion (no ItemDisplacement) with non-null entrance seeds writes every parted row back to (0,0) - same-list move AND cross-list copy, trailing section included - even though the commit-awaiting membership handoff fires Clear() a bump LATER than the owner's own dispVer choreography, so no row is left stranded at +GapExtent overlapping the rows below",
+            move.Ok && copy.Ok && move.Parted && copy.Parted
+            && move.Rows >= SortableCloseProbe.N && copy.Rows >= SortableCloseProbe.N && move.Alloc == 0,
+            $"move=(ok={move.Ok} dy={move.MaxDy:0.##} op={move.MinOp:0.##} overlap={move.Overlap:0.##} rows={move.Rows} parted={move.Parted}) " +
+            $"copy=(ok={copy.Ok} dy={copy.MaxDy:0.##} op={copy.MinOp:0.##} overlap={copy.Overlap:0.##} rows={copy.Rows} parted={copy.Parted}) " +
+            $"overAlloc={move.Alloc}B");
+    }
+
     static void SortableSurfaceChecks(StringTable strings)
     {
         var fonts = new HeadlessFontSystem(strings);
@@ -5324,9 +5498,23 @@ static class ControlsSuite
                 && Near(copy.DisplacementFor(6, sources), 120f)
                 && !copy.IsHiddenSource(6, sources);
 
-            Check("sortable.gap virtual removal opens an EXACT N*extent same-list gap over a non-contiguous dragged set with a net-zero content-height delta, hides exactly the source rows, positions the preview by the removals above it, leaves items outside the insertable range untouched, and caps a cross-list copy's gap at the preview cap",
-                exactGap && reflow && bounded && hides && preview && bigGap && bigNet && capped,
-                $"gap={exactGap} reflow={reflow} bounded={bounded} hides={hides} preview={preview} big=({bigGap},{bigNet}) copy={capped}");
+            // A12, stated as the NET-growth rule it always was. An appended trailing section (Wavee's "Recommended
+            // songs" header + cards, items 38/39 here) must ride exactly what the insertable range's own tail moved
+            // by: 0 for a same-list move (`bounded` above), the FULL gap for a cross-list copy - otherwise the copy's
+            // gap opens underneath the section and the in-gap preview paints over its header. Pinned at the very
+            // BOTTOM slot too, where no insertable row moves at all and the section is the only thing that can.
+            var tailCopy = SortableMath.Plan(2, 36, 36, 2, e, sameList: false, previewCap: 3);
+            var tailMove = SortableMath.Plan(2, 36, 36, 2, e, sameList: true, previewCap: 3);
+            bool trailing = Near(copy.DisplacementFor(38, sources), 120f)      // copy: the section rides the gap down
+                && Near(copy.DisplacementFor(39, sources), 120f)               // ...every appended row, by the same amount
+                && Near(tailCopy.DisplacementFor(37, sources), 0f)             // bottom slot: no insertable row moves
+                && Near(tailCopy.DisplacementFor(38, sources), 80f)            // ...but the section still makes room
+                && Near(tailMove.DisplacementFor(38, sources), 0f)             // move: sum(removal) == N => nothing to make
+                && Near(tailCopy.DisplacementFor(1, sources), 0f);             // the sticky prefix never moves (C1)
+
+            Check("sortable.gap virtual removal opens an EXACT N*extent same-list gap over a non-contiguous dragged set with a net-zero content-height delta, hides exactly the source rows, positions the preview by the removals above it, never moves the leading prefix, rides an appended trailing section on the range's NET growth (0 for a move, the full gap for a copy), and caps a cross-list copy's gap at the preview cap",
+                exactGap && reflow && bounded && hides && preview && bigGap && bigNet && capped && trailing,
+                $"gap={exactGap} reflow={reflow} bounded={bounded} hides={hides} preview={preview} big=({bigGap},{bigNet}) copy={capped} trailing={trailing}");
         }
 
         // sortable.empty - S5 cause 2. An EMPTY (or still-loading) destination resolves to slot 0 with a live gap so
@@ -5336,7 +5524,10 @@ static class ControlsSuite
                 sameList: false, previewCap: 3);
             bool active = empty.IsActive && empty.Slot == 0 && Near(empty.GapExtent, 80f)
                 && Near(empty.PreviewOffset(120f, default), 120f);
-            bool noRows = Near(empty.DisplacementFor(2, default), 0f) && Near(empty.DisplacementFor(0, default), 0f);
+            // Nothing insertable to move, and the leading prefix never moves; an appended row at the range's end still
+            // rides the gap so the append has somewhere to land (the trailing NET-growth rule above).
+            bool noRows = Near(empty.DisplacementFor(0, default), 0f) && Near(empty.DisplacementFor(1, default), 0f)
+                && Near(empty.DisplacementFor(2, default), 80f);
             bool slotZero = SortableMath.SlotFromOffset(999f, 120f, 40f, 0) == 0
                 && SortableMath.SlotFromOffset(999f, default, 0) == 0;
             // A payload with nothing in it, or a list with no usable extent, is inert - no phantom gap.
@@ -8811,4 +9002,54 @@ sealed class SemanticZoomControlProbe : Component
             Controller = Controller,
             CanChangeViews = _canChangeViews,
         });
+}
+
+// The F5 shape, verbatim: a bound ItemsView whose owner wires the displacement CHANNEL (DisplacementVersion) but no
+// ItemDisplacement provider, plus non-null entrance seeds - Wavee's playlist track list. Items 0..1 lead the insertable
+// range, 2..37 are insertable, 38..39 trail it, and the window is tall enough that ALL of them realize (the trailing
+// section is exactly what rides a cross-list copy's net growth, so it has to be under the assertion).
+sealed class SortableCloseProbe : Component
+{
+    public const int N = 40;
+    public const float RowH = 40f;
+    public const int First = 2;
+    public const int Insertable = 36;
+    static readonly ColorF PreviewFill = ColorF.FromRgba(220, 90, 90);
+
+    public readonly ItemsViewController Ctl = new();
+    public readonly Signal<int> Ver = new(0);
+    public bool SameList = true;
+    public int[] Sources = [];
+    public int DraggedCount = 3;
+    public TaskCompletionSource<bool>? Pending;
+
+    public override Element Render()
+        => ItemsView.CreateBound(N,
+            static _ => new BoxEl { Height = RowH, Fill = ColorF.FromRgba(38, 44, 52) },
+            RepeatLayout.Stack(RowH),
+            new ListOptions
+            {
+                Overscan = 2,
+                Controller = Ctl,
+                // The channel WITHOUT a provider - the exact wiring that made the close edge unreachable.
+                Reorder = new ReorderOptions { DisplacementVersion = Ver },
+                // Non-null delegates whose per-item answer is null (the app's "no row is being dealt right now" state):
+                // enough to defeat the `flip is null && fade is null` half of the early-out on the bump that spends the
+                // entrance edge, and nothing at all on the close bump that follows it.
+                Entrance = new EntranceOptions { ItemFlipFrom = static _ => null, ItemFadeFrom = static _ => null },
+                Insertion = new InsertionOptions
+                {
+                    AcceptKinds = ["res"],
+                    IsSameList = _ => SameList,
+                    SourceIndices = _ => Sources,
+                    DraggedCount = _ => DraggedCount,
+                    Range = () => (First, Insertable),
+                    PreviewCap = 3,
+                    OnDeposit = (_, _) => Pending?.Task ?? Task.FromResult(true),
+                    GapPreview = static (_, _) => new BoxEl
+                    {
+                        Key = "sortable-close-preview", Height = 8f, Fill = PreviewFill, HitTestVisible = false,
+                    },
+                },
+            });
 }

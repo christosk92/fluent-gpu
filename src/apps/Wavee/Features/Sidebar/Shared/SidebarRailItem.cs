@@ -3,6 +3,7 @@ using FluentGpu.Controls;
 using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Input;
+using FluentGpu.Scene;
 using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
@@ -31,11 +32,20 @@ static class SidebarRailItem
     /// <param name="drop">Optional deposit destination (a FOLDER tile takes a rootlist filing — Into, and only Into).</param>
     /// <param name="dropActive">Its cue, BOUND: the rail subtree is memoized, so a cue that needed a render would never
     /// appear. An armed folder tile takes the accent plate the selection ladder already owns.</param>
+    /// <param name="onRealized">The tile's realized node. A tile that ANCHORS something (a folder tile's side flyout)
+    /// needs its handle, and the rail is built by a static helper inside a memoized subtree — it has no hooks, so the
+    /// handle is handed back to a caller that outlives the rebuild (<c>SidebarPane.RegisterRailNode</c>).</param>
+    /// <param name="menuOverlay">/<paramref name="menu"/> — right-click (and the context-menu key) on the tile. Supplied
+    /// as a PAIR: a factory with nowhere to open is dead code, so a half-wired call attaches nothing rather than
+    /// swallowing the gesture. The factory is invoked AT OPEN TIME, never at render time.</param>
     public static Element Icon(string key, string glyph, bool selected, Action? onClick, string? tooltip = null,
-                               DropTargetSpec? drop = null, Func<bool>? dropActive = null)
+                               DropTargetSpec? drop = null, Func<bool>? dropActive = null,
+                               Action<NodeHandle>? onRealized = null,
+                               IOverlayService? menuOverlay = null, Func<ContextMenuModel?>? menu = null)
     {
         var tile = new BoxEl
         {
+            OnRealized = onRealized,
             Key = key,
             Width = Box, Height = Box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(6f),
@@ -51,6 +61,9 @@ static class SidebarRailItem
             DropTarget = drop,
             Children = [Ui.Icon(glyph, 16f, selected ? Tok.TextPrimary : Tok.TextSecondary)],
         };
+        // ContextMenu.Attach CHAINS onto whatever OnRealized is already there (the SidebarEntityRow contract), so the
+        // anchor registration above survives the attach.
+        if (menuOverlay is not null && menu is not null) tile = tile.WithContextMenu(menuOverlay, menu);
         return Tip(tile, tooltip);
     }
 

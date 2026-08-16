@@ -14,8 +14,9 @@ namespace Wavee;
 //
 // WEIGHT POLICY: 400 and 600 only, with two documented divergences. The three DISPLAY-FACE identity aliases
 // (ArtistDisplay / ArtistTitle / ArtistCompactTitle) keep their documented 700 — the masthead voice, not UI labels.
-// PivotLabel keeps SemiLight 350 — the same WinUI SemiLight the engine's own Pivot control (FluentGpu.Controls/Pivot.cs)
-// already uses for its header row; a pivot is a control cut, not a body-text weight, so it is not bound by the policy.
+// PivotLabel and NpvLyric keep SemiLight 350 — the same WinUI SemiLight the engine's own Pivot control
+// (FluentGpu.Controls/Pivot.cs) already uses for its header row; a pivot / Zune lyric reel is a control cut, not a
+// body-text weight, so it is not bound by the policy.
 public static class WaveeType
 {
     /// <summary>Track / album / playlist titles in lists. → Ui.BodyStrong (14 / 20 / 600).</summary>
@@ -201,6 +202,15 @@ public static class WaveeType
         FontFamily = "Segoe UI Variable Display",
         Size = 19f,
         LineHeight = 25f,
+        Weight = 350,
+        CharSpacing = -6f,
+    };
+
+    /// <summary>NPV lyrics-peek reel — Subtitle's 20/28 pair in the display face at SemiLight 350 (same sanctioned
+    /// cut as <see cref="PivotLabel"/>). The thin Zune voice of the daylist digits, at a line-readable size.</summary>
+    public static TextEl NpvLyric(string s) => Ui.Subtitle(s) with
+    {
+        FontFamily = "Segoe UI Variable Display",
         Weight = 350,
         CharSpacing = -6f,
     };

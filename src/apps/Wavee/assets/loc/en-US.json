@@ -25,6 +25,10 @@
     "$comment2": "The RESTING verb: what the chip says while the drag is travelling and no target is under the pointer. Most of a gesture is spent in that state, and without it the chip named only the song — so the drag never stated what it was FOR. Superseded per-target by the captions above the moment something accepts, and by a refusal reason when something refuses.",
     "dragOntoPlaylist": "Drag onto a playlist to add",
     "newPlaylistFromThis": "New playlist from this",
+    "$comment4": "MULTI-SELECT + CREATE-BY-DROP. A rootlist drag may carry a whole selection (WaveeResourceDragPayload.RootlistItems), so every sentence that can name a count does — a 5-item filing reported in the singular reads as a move that only took one of them.",
+    "newFolderFromThis": "{count, plural, one {New folder from this} other {New folder with # items}}",
+    "newFolderInside": "New folder inside {name}",
+    "movedManyTo": "Moved {count, plural, one {# item} other {# items}} to {name}",
     "moveTracks": "{count, plural, one {Move # song} other {Move # songs}}",
     "addTracks": "{count, plural, one {Add # song} other {Add # songs}}",
     "addToQueue": "Add to queue",
@@ -1175,6 +1179,13 @@
     "dropToPin": "Drop items here to pin",
     "songCount": "{count, plural, one {# song} other {# songs}}",
     "createPlaylistTooltip": "Create playlist",
+    "createTooltip": "Create playlist or folder",
+    "select": "Select",
+    "itemCount": "{count, plural, one {# item} other {# items}}",
+    "folderCreatedWith": "Created “{name}” with {count, plural, one {# item} other {# items}}",
+    "empty": {
+      "playlists": "No playlists yet — use + to create one"
+    },
     "newPlaylist": "My Playlist",
     "newFolder": "New Folder",
     "createFolder": "New folder",
@@ -1235,6 +1246,9 @@
       "undo": "Undo",
       "emptyHint": "Or use the pin action on any library item.",
       "position": "{index} of {count}"
+    },
+    "rail": {
+      "folderFlyoutBack": "Back"
     },
     "section": {
       "pinned": "Pinned",
@@ -1567,6 +1581,7 @@
     "morePlaylists": "More playlists…",
     "moveToPlaylist": "Move to playlist",
     "moveToFolder": "Move to folder…",
+    "moveManyToFolder": "Move {count} to folder…",
     "movedToPlaylist": "Moved to {name}",
     "moveOutOf": "Move out of {name}",
     "goToAlbum": "Go to album",
@@ -1585,6 +1600,8 @@
     "renamePlaylist": "Rename playlist",
     "rename": "Rename",
     "visibility": "Visibility",
+    "organize": "Organize",
+    "access": "Access",
     "makePublic": "Make public",
     "makePrivate": "Make private",
     "viewCredits": "View credits",

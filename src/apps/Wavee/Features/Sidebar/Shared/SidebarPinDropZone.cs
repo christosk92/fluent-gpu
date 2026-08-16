@@ -5,6 +5,8 @@ using FluentGpu.Dsl;
 using FluentGpu.Foundation;
 using FluentGpu.Hooks;
 using FluentGpu.Localization;
+using FluentGpu.Scene;
+using FluentGpu.Signals;
 using static FluentGpu.Dsl.Ui;
 
 namespace Wavee;
@@ -119,33 +121,100 @@ sealed class SidebarPinDropZone : Component
 }
 
 /// <summary>
-/// A "+" create affordance: a subtle icon button that creates a playlist directly. Shared by the pane's PlaylistTree
-/// header, the compact rail's footer and Library V3's header/rail — a MOVE out of <c>WaveeSidebar.cs</c> (unchanged
-/// visuals) so retiring Classic's hand-built body does not take it down with it.
+/// THE "+" CREATE AFFORDANCE. One component for every surface that offers it: the pane's PlaylistTree section header,
+/// a folder row's trailing slot, the compact rail's footer and Library V3's header — so "what does + do" cannot drift
+/// per design (the whole reason this component exists rather than four hand-built boxes).
 ///
-/// <para>§3.1.6: it used to open a MenuFlyout offering "Playlist" / "Folder", but Spotify folder create/rename/delete
-/// is deferred and the "Folder" arm was a no-op — dead UI that promises a command we do not have. The
-/// flyout, the Overlay.Service/OverlayHandle plumbing and the anchor ref are gone with it; the button is a direct invoke
-/// wearing the create-playlist tooltip.</para>
+/// <para><b>It grew back its flyout.</b> §3.1.6 deleted the old [Playlist · Folder] menu because Spotify folder
+/// create/rename/delete did not exist and the Folder arm was a no-op — dead UI promising a command we did not have.
+/// The wire landed with P3 (<c>FolderActions</c>), so the reason is gone: a caller that passes <paramref
+/// name="menu"/> gets a real flyout anchored at the button, built at OPEN time (labels resolve then, never at render
+/// time — the culture-epoch rule) exactly like <c>SidebarPaneSortButton</c>. A caller that passes none keeps the plain
+/// direct invoke it had.</para>
+///
+/// <para><b>It is also a DROP DESTINATION.</b> Dropping playlists on it creates a folder holding them; dropping a
+/// track set on the header "+" creates a playlist from them. The cue is the <c>SidebarPinDropZone</c> idiom — a BOUND
+/// accent plate, because this runs while a drag is live and a re-render per pointer move is exactly what a cue cannot
+/// afford. The spec and its <paramref name="dropActive"/> probe are the CALLER's: only the pane knows what a drop
+/// there means, and one drop decision lives in one place (rule 10).</para>
+///
+/// <para><b>The hover reveal</b> (<paramref name="revealOpacity"/>, the folder-row instance): the engine's reveal
+/// cascade lights <c>HoverOpacity</c> on ROW hover with no app hover tracking — but hover flags are NOT updated while
+/// a drag is live, so the BOUND base opacity is what shows the "+" mid-gesture. Two owners, one channel, and neither
+/// needs the other to work.</para>
+///
+/// <para><c>BlocksDragArm</c> stops the drag-arm walk here, so pressing "+" on a draggable row neither arms that row's
+/// drag nor toggles the folder under it (the click dispatch already stops at the nearest clickable).</para>
 /// </summary>
 sealed class SidebarCreateButton : Component
 {
     readonly Action _onPlaylist;
+    readonly Func<ContextMenuModel?>? _menu;
+    readonly DropTargetSpec? _drop;
+    readonly Func<bool>? _dropActive;
+    readonly Func<float>? _revealOpacity;
     readonly float _box, _glyph;
 
-    public SidebarCreateButton(Action onPlaylist, float box = 24f, float glyph = 14f)
+    public SidebarCreateButton(Action onPlaylist,
+                               Func<ContextMenuModel?>? menu = null,
+                               DropTargetSpec? drop = null,
+                               Func<bool>? dropActive = null,
+                               Func<float>? revealOpacity = null,
+                               float box = 24f, float glyph = 14f)
     {
-        _onPlaylist = onPlaylist; _box = box; _glyph = glyph;
+        _onPlaylist = onPlaylist; _menu = menu; _drop = drop; _dropActive = dropActive;
+        _revealOpacity = revealOpacity; _box = box; _glyph = glyph;
     }
 
-    public override Element Render() => ToolTip.Wrap(
-        new BoxEl
+    public override Element Render()
+    {
+        var anchor = UseRef<NodeHandle>(default);
+        var handle = UseRef<OverlayHandle?>(null);
+        var svc = UseContext(Overlay.Service);
+
+        void Activate()
         {
-            Width = _box, Height = _box, AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
+            // No menu, no overlay service, or a factory that answered nothing: the button keeps its ONE verb rather
+            // than opening an empty flyout — an affordance that opens nothing reads as broken.
+            if (_menu is null || svc is null) { _onPlaylist(); return; }
+            if (handle.Value is { IsOpen: true } open) { open.Close(); return; }
+            if (_menu() is not { } model || model.Rows.Count == 0) { _onPlaylist(); return; }
+            handle.Value = svc.Open(
+                () => anchor.Value,
+                () => MenuFlyout.Create(model.Rows, () => handle.Value?.Close()),
+                FlyoutPlacement.BottomEdgeAlignedRight,
+                new PopupOptions(FocusTrap: true, DismissBehavior: DismissBehavior.LightDismiss, Chrome: PopupChrome.Popup)
+                { ConstrainToRootBounds = false });
+            handle.Value.ClosedAction = () => handle.Value = null;
+        }
+
+        var box = new BoxEl
+        {
+            Width = _box, Height = _box, Shrink = 0f,
+            AlignItems = FlexAlign.Center, Justify = FlexJustify.Center,
             Corners = CornerRadius4.All(4f),
             Role = AutomationRole.Button, Cursor = CursorId.Hand, Focusable = true,
-            OnClick = _onPlaylist,
-            Children = [ Icon(Icons.Add, _glyph, Tok.TextSecondary) ],
-        }.Interactive(Interaction.Subtle),
-        Loc.Get(Strings.Sidebar.CreatePlaylistTooltip));
+            // dnd recipe 1: the arm walk stops here, so pressing "+" is never a handle for dragging the row under it.
+            BlocksDragArm = true,
+            OnRealized = h => anchor.Value = h,
+            OnClick = Activate,
+            DropTarget = _drop,
+            Children = [Icon(Icons.Add, _glyph, Tok.TextSecondary)],
+        }.Interactive(Interaction.Subtle);
+
+        // AFTER Interactive: it rewrites Fill/BorderColor wholesale from the recipe, so the drag cue has to land on top
+        // of it rather than under it.
+        if (_dropActive is { } cue)
+            box = box with
+            {
+                Fill = Prop.Of(() => cue() ? Tok.AccentDefault with { A = 0.18f } : ColorF.Transparent),
+                BorderColor = Prop.Of(() => cue() ? Tok.AccentDefault : ColorF.Transparent),
+                BorderWidth = 1f,
+            };
+        if (_revealOpacity is { } reveal) box = box with { Opacity = Prop.Of(reveal), HoverOpacity = 1f };
+
+        return ToolTip.Wrap(box, Loc.Get(_menu is null
+            ? Strings.Sidebar.CreatePlaylistTooltip
+            : Strings.Sidebar.CreateTooltip));
+    }
 }

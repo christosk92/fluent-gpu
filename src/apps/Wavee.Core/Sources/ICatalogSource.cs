@@ -59,7 +59,7 @@ public interface ICatalogSource : ISource
     Task<IReadOnlyList<PlaylistSummary>> GetPlaylistsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Album>> GetAlbumsAsync(CancellationToken ct = default);
     Task<IReadOnlyList<Artist>> GetArtistsAsync(CancellationToken ct = default);
-    Task<IReadOnlyList<Track>> GetLikedSongsAsync(CancellationToken ct = default);
+    Task<IReadOnlyList<Track>> GetLikedSongsAsync(HydrationLevel level = HydrationLevel.Open, CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, CancellationToken ct = default);
     Task<SearchResults> SearchAsync(string query, SearchFacet facet, int offset, int limit, CancellationToken ct = default)
         => SearchAsync(query, ct);

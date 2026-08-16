@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Runtime.CompilerServices;
 using Wavee;
@@ -121,9 +121,9 @@ public class FolderActionsTests
         string body = Body(FolderActions(), signature);
         Assert.Contains("Tree(s)", body, StringComparison.Ordinal);
         Assert.Contains("RootlistTreeNav.TryEntry", body, StringComparison.Ordinal);
-        Assert.Contains("Commit(s, in entry", body, StringComparison.Ordinal);
+        Assert.Contains("Commit(s, [entry]", body, StringComparison.Ordinal);
         // No second mutation path: the verb never calls the seam itself.
-        Assert.DoesNotContain("MoveRootlistItemAsync", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("MoveRootlistItem", body, StringComparison.Ordinal);
     }
 
     /// <summary>The one commit: the pre-move Undo anchor is captured BEFORE the mutation (afterwards, where the item
@@ -135,7 +135,27 @@ public class FolderActionsTests
         int anchor = body.IndexOf("RootlistUndoAnchors.TryResolve", StringComparison.Ordinal);
         int commit = body.IndexOf("WaveeResourceDrop.MoveRootlist", StringComparison.Ordinal);
         Assert.True(anchor >= 0 && commit > anchor, "the undo anchor must be resolved before the move is issued");
-        Assert.Contains("WaveeResourceDragPayload.FromEntry", body, StringComparison.Ordinal);
+        Assert.Contains("WaveeResourceDragPayload.FromEntries", body, StringComparison.Ordinal);
+        // The BATCH shape: N anchors resolved in one pass, N items lifted as one payload, ONE move issued.
+        Assert.Contains("RootlistUndoAnchors.TryResolveMany", body, StringComparison.Ordinal);
+    }
+
+    /// <summary>"New folder from this" is create-then-move, and it is honest about not being atomic: a move that fails
+    /// after a successful create reports through the Reorder verb and leaves the (expanded) folder behind.</summary>
+    [Fact]
+    public void NewFolderWith_CreatesThenFilesInONEBatch_AndSaysSoWhenTheSecondHalfFails()
+    {
+        string body = Body(FolderActions(), "public static void NewFolderWith(ActionServices s");
+        int create = body.IndexOf("CreateFolderAsync", StringComparison.Ordinal);
+        int move = body.IndexOf("MoveRootlistItemsAsync", StringComparison.Ordinal);
+        Assert.True(create >= 0 && move > create, "the folder must exist before anything is filed into it");
+        // ONE batch, ordered by the one rule.
+        Assert.Contains("RootlistBatchOrder.For", body, StringComparison.Ordinal);
+        Assert.Equal(1, Count(body, "MoveRootlistItemsAsync"));
+        // The failed-move arm: mapped by verb, folder left expanded, never raw exception text.
+        Assert.Contains("PlaylistEditVerb.Reorder", body, StringComparison.Ordinal);
+        Assert.Contains("SetFolderExpanded", body, StringComparison.Ordinal);
+        Assert.Equal(0, Count(body, "ex.Message"));
     }
 
     /// <summary>"Move out of {parent}" was fire-and-forget with an error-only toast: a successful un-nest said nothing

@@ -68,6 +68,16 @@ public interface IPlaylistMutationSource
     Task SetPlaylistVisibilityAsync(string playlistUri, bool isPublic, CancellationToken ct = default);
     Task DeletePlaylistAsync(string playlistUri, CancellationToken ct = default);
     Task<string> CreateContributorInviteAsync(string playlistUri, CancellationToken ct = default);
+    /// <summary>Move a whole ORDERED batch of rootlist rows/folders in ONE revisioned write. The moves are executed in
+    /// the order given, each op built against the stream the preceding ops left behind — which is exactly how the
+    /// server applies the ops of one <c>Delta</c> — so the batch is one POST, one optimistic apply and one rollback.
+    /// <para>WHICH order a same-target batch is submitted in is a UI decision (drop <em>after</em> an anchor iterates
+    /// the sources in reverse so each op lands adjacent to it); the seam only executes the list it is handed.</para>
+    /// <para>Refusals are typed throws, never a quiet return: a batch is refused whole when ANY move is a cycle /
+    /// missing / inexpressible, and a batch whose ops net to identity is a <see cref="PlaylistMutationFailure.NoOp"/>
+    /// with nothing posted.</para></summary>
+    Task MoveRootlistItemsAsync(IReadOnlyList<RootlistMove> moves, CancellationToken ct = default);
+    /// <summary>The N=1 sugar over <see cref="MoveRootlistItemsAsync"/> — there is only one implementation.</summary>
     Task MoveRootlistItemAsync(RootlistItemRef source, RootlistItemRef target,
                                RootlistDropPlacement placement, CancellationToken ct = default);
 
@@ -85,6 +95,10 @@ public interface IPlaylistMutationSource
 public readonly record struct RootlistItemRef(string Key, bool IsFolder);
 public enum RootlistDropPlacement : byte { Before, After, Inside }
 
+/// <summary>One element of a rootlist move batch: move <paramref name="Source"/> to <paramref name="Placement"/> of
+/// <paramref name="Target"/>. A batch is applied in list order (see <see cref="IPlaylistMutationSource.MoveRootlistItemsAsync"/>).</summary>
+public readonly record struct RootlistMove(RootlistItemRef Source, RootlistItemRef Target, RootlistDropPlacement Placement);
+
 /// <summary>Applies one server-advertised automatic-playlist tuning option.</summary>
 public interface IPlaylistTuningSource
 {
@@ -98,7 +112,12 @@ public interface IPlaylistTuningSource
 
 /// <summary>Why a playlist mutation could not be completed. <see cref="Unknown"/> is the catch-all the UI renders as the
 /// generic "couldn't save your change" copy — it is never a message passthrough.</summary>
-public enum PlaylistMutationFailure : byte { Unknown = 0, Conflict, Forbidden, Deleted, Offline, Pending, NotSupported }
+/// <remarks><see cref="NoOp"/> and <see cref="Invalid"/> exist because a REFUSED write used to return quietly: a
+/// rootlist move whose op could not be built (the destination is where the item already is, or the placement is one the
+/// marker stream cannot express) left <c>MoveRootlistItemAsync</c> with nothing to post and it simply returned — so the
+/// caller posted its "Moved to …" confirmation for a move that never happened. Both are now thrown, and both have their
+/// own sentence.</remarks>
+public enum PlaylistMutationFailure : byte { Unknown = 0, Conflict, Forbidden, Deleted, Offline, Pending, NotSupported, NoOp, Invalid }
 
 /// <summary>The ONLY failure type a playlist mutation surfaces to the UI (docs plan P1 "Shared contracts").</summary>
 public sealed class PlaylistMutationException : Exception

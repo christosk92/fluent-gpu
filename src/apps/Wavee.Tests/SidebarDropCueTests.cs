@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Wavee;
 using Xunit;
 
@@ -79,7 +79,7 @@ public class SidebarDropCueTests
     {
         var facts = new SidebarRowFacts(
             IsFolder: true, FolderExpanded: false, FolderHasChildren: true, Depth: 1, NextVisibleDepth: 0,
-            CenterAccepts: true, SourceIsSelf: true, SourceIsAncestorOfRow: false, SortedNonCustom: true,
+            CenterAccepts: true, SourceIsSelf: true, SortedNonCustom: true,
             RootlistLoaded: true);
         foreach (float t in new[] { 0f, 0.2f, 0.5f, 0.8f, 1f })
         {
@@ -109,7 +109,9 @@ public class SidebarDropCueTests
     public void LineWidth_IsTheContentLaneMinusTheDepthIndent(int depth)
     {
         const float content = 300f;
-        float expected = content - SidebarRowGeometry.IndentFor(depth) - SidebarRowGeometry.RowInsetRight;
+        // THE TREE-CONTENT ORIGIN, not the outer indent ladder: the caret starts where the row at that depth starts
+        // DRAWING (gutter + connector cells + the disclosure cell), which is the whole of the F2 fix.
+        float expected = content - SidebarRowGeometry.TreeContentX(depth) - SidebarRowGeometry.RowInsetRight;
         Assert.Equal(expected, SidebarDropCue.LineWidth(content, depth), 3);
         // A deeper caret is strictly shorter — that IS the depth cue.
         if (depth > 0)

@@ -1,5 +1,7 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Wavee;
+using Wavee.Backend;
+using Wavee.Backend.Playlists;
 
 namespace Wavee.Tests;
 
@@ -60,6 +62,44 @@ static class SidebarTreeFixture
         Folder("h", "Trailing", 0),
         Playlist("e", 1, "h", "Trailing"),
     ];
+
+    /// <summary>THE SAME TREE AS THE SERVER HOLDS IT — the flat marker stream with balanced start-group/end-group rows.
+    /// Legality is decided against THIS (<c>RootlistOps.CheckMove</c>), never against the flattened entry list, so every
+    /// suite that asks "may this move" has to bring one. Built with the production uri builders + parser, so the fixture
+    /// cannot encode a marker shape the app would not.</summary>
+    public static IReadOnlyList<RootlistEntry> Markers() => MarkersOf(Tree());
+
+    /// <summary>The marker stream a flattened projection tree stands for. TEST-ONLY: the app never goes this direction
+    /// (the tree is built FROM the stream), but a fixture that hand-writes both would let them drift.</summary>
+    public static IReadOnlyList<RootlistEntry> MarkersOf(IReadOnlyList<SidebarLibraryEntry> tree)
+    {
+        var uris = new List<string>(tree.Count * 2);
+        var open = new List<SidebarLibraryEntry>();
+        foreach (var e in tree)
+        {
+            while (open.Count > 0 && open[^1].Depth >= e.Depth)
+            {
+                uris.Add(RootlistOps.EndGroupUri(open[^1].FolderId));
+                open.RemoveAt(open.Count - 1);
+            }
+            if (e.Kind == SidebarEntryKind.Folder)
+            {
+                uris.Add(RootlistOps.StartGroupUri(e.FolderId, e.Name));
+                open.Add(e);
+            }
+            else uris.Add(e.Uri);
+        }
+        for (int i = open.Count - 1; i >= 0; i--) uris.Add(RootlistOps.EndGroupUri(open[i].FolderId));
+        return RootlistTreeBuilder.EntriesFromUris(uris);
+    }
+
+    /// <summary>The seam ref one fixture row moves AS — a folder by group id, a playlist by uri.</summary>
+    public static Wavee.Core.RootlistItemRef Ref(IReadOnlyList<SidebarLibraryEntry> tree, string entryId)
+    {
+        foreach (var e in tree)
+            if (e.Id == entryId) return RootlistTreeNav.RefOf(in e);
+        return new Wavee.Core.RootlistItemRef("", false);
+    }
 
     /// <summary>The entry id of a playlist row, as the verbs address it.</summary>
     public static string Pl(string slug) => SidebarPinId.PlaylistPrefix + PlaylistUriPrefix + slug;

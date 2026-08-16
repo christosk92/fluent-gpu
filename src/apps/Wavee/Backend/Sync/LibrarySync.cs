@@ -173,6 +173,18 @@ public sealed class LibrarySync : IPlaylistTuningSource, IAsyncDisposable
         TrySeedPermissionForOpen(uri);
     }
 
+    /// <summary>Clear the visible playlist only when this caller still owns the slot. A parked page's delayed cleanup
+    /// must not clobber the context installed by the page that replaced it.</summary>
+    public void ClearOpenContext(string uri)
+    {
+        lock (_gate)
+        {
+            if (_openUri != uri) return;
+            _openUri = null;
+            _openPermissionSeeded = false;
+        }
+    }
+
     /// <summary>Seed the open playlist's base permission ONCE per open context, as soon as an owned header exists.
     ///
     /// <para>The gate cannot live in <see cref="SetOpenContext"/> alone. <see cref="IsOwned"/> reads the STORE header,

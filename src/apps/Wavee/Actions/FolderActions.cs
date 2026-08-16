@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using FluentGpu.Controls;
@@ -11,7 +11,7 @@ namespace Wavee;
 /// <summary>
 /// Rootlist FOLDER commands — create, rename, move out, delete — behind the P3 seam
 /// (<c>CreateFolderAsync</c> / <c>RenameFolderAsync</c> / <c>DeleteFolderAsync</c> / the existing
-/// <c>MoveRootlistItemAsync</c>). Registered ONCE, in the shared row menus, so Classic, Library V3 and Wavee Curated
+/// <c>MoveRootlistItemsAsync</c>). Registered ONCE, in the shared row menus, so Classic, Library V3 and Wavee Curated
 /// all get the same verbs from the same builder.
 ///
 /// <para>Folder CRUD was locked out of the UI (the old "locked decision 9") for as long as the wire for it did not
@@ -61,6 +61,64 @@ static class FolderActions
                 // Created OPEN: the folder exists to hold things, and one that opens closed reads as a failed create.
                 s.Sidebar?.SetFolderExpanded(groupId, true);
                 Announce(Strings.Sidebar.FolderCreated, name);
+            });
+        }
+    }
+
+    /// <summary>"New folder from this" / "New folder inside {name}" — the DROP-ON-PLUS verb: create a folder and file
+    /// the dragged rootlist items into it in one gesture, with no naming dialog in the way (the toast's Rename action is
+    /// the rename, offered after the fact so the gesture completes at pointer-up).
+    ///
+    /// <para>Create THEN move, which is exactly <c>SidebarPane.CreatePlaylistFromDrag</c>'s shape and carries the same
+    /// honest caveat: <b>the two halves are not atomic.</b> The rootlist has no "create a group around these items" op,
+    /// so a move that fails after a successful create leaves the (empty, expanded) folder in place and reports the
+    /// failure through <c>PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder)</c>. That is stated rather than hidden:
+    /// the user sees a new empty folder and a sentence saying the filing did not stick, which they can undo by deleting
+    /// it — strictly better than a silent half-move.</para>
+    ///
+    /// <para>The items are filed <c>Inside</c> the new folder in TREE ORDER (<c>RootlistBatchOrder.For</c>), as ONE
+    /// <c>MoveRootlistItemsAsync</c>, so the selection keeps its relative order.</para></summary>
+    public static void NewFolderWith(ActionServices s, string? parentFolderId, IReadOnlyList<RootlistItemRef> items)
+    {
+        if (s.Library is not { } lib || items is not { Count: > 0 }) return;
+        _ = Run();
+
+        async Task Run()
+        {
+            string name = Loc.Get(Strings.Sidebar.NewFolder);
+            string groupId;
+            try
+            {
+                groupId = await lib.CreateFolderAsync(name, new RootlistPlacement(parentFolderId))
+                                   .ConfigureAwait(false);
+            }
+            catch (Exception ex) { Post(s, () => PlaylistEditErrors.Toast(ex)); return; }
+
+            var moves = RootlistBatchOrder.For(items, new RootlistItemRef(groupId, IsFolder: true),
+                                               RootlistDropPlacement.Inside);
+            try { await lib.MoveRootlistItemsAsync(moves).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                // The folder EXISTS — say what failed, and leave it (see the non-atomicity note above).
+                Post(s, () =>
+                {
+                    s.Sidebar?.SetFolderExpanded(groupId, true);
+                    PlaylistEditErrors.Toast(ex, PlaylistEditVerb.Reorder);
+                });
+                return;
+            }
+
+            Post(s, () =>
+            {
+                // Created OPEN: the folder was made to hold these items, and one that opens closed reads as a failure.
+                s.Sidebar?.SetFolderExpanded(groupId, true);
+                Announce(Strings.Sidebar.FolderCreated, name);
+                Toast.Show(Strings.Sidebar.FolderCreatedWith(name, moves.Count), new ToastOptions
+                {
+                    Severity = InfoBarSeverity.Success,
+                    ActionLabel = Loc.Get(Strings.Sidebar.RenameFolder),
+                    OnAction = () => Rename(s, groupId, name),
+                });
             });
         }
     }
@@ -129,12 +187,15 @@ static class FolderActions
         }
         // The destination is the folder the row is ALREADY in — a within-run move never changes its parent, so the
         // confirmation names that folder (or Your Library at top level).
-        Commit(s, in entry, target, placement, entry.ParentFolderName);
+        Commit(s, [entry], target, placement, entry.ParentFolderName);
     }
 
     /// <summary>"Move to folder…" — the picker. Opening it is all this does; the commit is the picker's, through the
     /// same <see cref="Commit"/> chokepoint.</summary>
     public static void MoveTo(ActionServices s, string entryId) => RootlistFolderPicker.Open(s, entryId);
+
+    /// <summary>"Move {n} to folder…" — the same picker over a whole multi-selection.</summary>
+    public static void MoveTo(ActionServices s, IReadOnlyList<string> entryIds) => RootlistFolderPicker.Open(s, entryIds);
 
     /// <summary>"Move out of {parent}" — lift one playlist or folder one level up, landing it immediately after the
     /// folder it came out of. The same rootlist MOVE a drag performs, offered as a command so a drag is never the only
@@ -152,27 +213,34 @@ static class FolderActions
         // the confirmation must name (Your Library when the parent is itself top-level).
         string destination = RootlistTreeNav.TryFolder(tree, entry.ParentFolderId, out var parent)
             ? parent.ParentFolderName : "";
-        Commit(s, in entry, new RootlistItemRef(entry.ParentFolderId, IsFolder: true),
+        Commit(s, [entry], new RootlistItemRef(entry.ParentFolderId, IsFolder: true),
                RootlistDropPlacement.After, destination);
     }
 
-    /// <summary>THE ONE COMMIT for every organisation verb. Captures the pre-move Undo anchor (once the rootlist has
-    /// moved, where the item used to be is unknowable), then hands the move to the drop seam — which awaits it, maps a
-    /// failure by VERB (<c>PlaylistEditVerb.Reorder</c>, never raw exception text), announces the result and shows the
-    /// "Moved to {name}" toast with Undo.</summary>
-    internal static void Commit(ActionServices s, in SidebarLibraryEntry entry, RootlistItemRef target,
+    /// <summary>THE ONE COMMIT for every organisation verb, single row or whole selection. Captures the pre-move Undo
+    /// anchors (once the rootlist has moved, where the items used to be is unknowable), then hands ONE batch to the drop
+    /// seam — which awaits it, maps a failure by VERB (<c>PlaylistEditVerb.Reorder</c>, never raw exception text),
+    /// announces the result and shows the "Moved to {name}" / "Moved {n} items to {name}" toast with Undo.
+    /// <para><paramref name="entries"/> must already be normalised (tree order, no descendants of a selected folder) —
+    /// <c>RootlistSelection.Normalize</c> is the one owner of that rule. A single-row verb passes a list of one, which
+    /// is why there is no second commit path.</para></summary>
+    internal static void Commit(ActionServices s, IReadOnlyList<SidebarLibraryEntry> entries, RootlistItemRef target,
                                 RootlistDropPlacement placement, string destinationName)
     {
-        if (target.Key.Length == 0) return;
-        var payload = WaveeResourceDragPayload.FromEntry(entry, s.Svc, rootlistItem: true);
-        RootlistItemRef? undoAnchor = null;
-        var undoPlacement = RootlistDropPlacement.After;
-        if (RootlistUndoAnchors.TryResolve(Tree(s), entry.Id, out var anchor, out var anchorPlacement))
+        if (entries is not { Count: > 0 }) return;
+        if (target.Key.Length == 0)
         {
-            undoAnchor = anchor;
-            undoPlacement = anchorPlacement;
+            // The destination went away between opening the menu and invoking it. Logged rather than returned in
+            // silence — the seam below would have said so, and a verb that does nothing is indistinguishable from a
+            // broken one.
+            s.Svc?.Log.Warn("sidebar", "rootlist move verb ignored: the destination is no longer in the rootlist");
+            return;
         }
-        WaveeResourceDrop.MoveRootlist(s, payload, target, placement, destinationName, undoAnchor, undoPlacement);
+        var payload = WaveeResourceDragPayload.FromEntries(entries, s.Svc);
+        var ids = new string[entries.Count];
+        for (int i = 0; i < entries.Count; i++) ids[i] = entries[i].Id;
+        RootlistUndoAnchors.TryResolveMany(Tree(s), ids, out var undo);
+        WaveeResourceDrop.MoveRootlist(s, payload, target, placement, destinationName, undo);
     }
 
     /// <summary>The DEPTH-FIRST FLATTENED rootlist tree the projection is currently publishing — the same list

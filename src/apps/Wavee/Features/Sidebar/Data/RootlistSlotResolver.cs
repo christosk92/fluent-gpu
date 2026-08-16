@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Wavee.Core;
 
@@ -63,13 +63,17 @@ public enum SidebarDropRefusal : byte
     Unavailable = 7,
 }
 
-/// <summary>Everything the resolver needs about ONE row, and nothing about the renderer. The payload-dependent members
-/// (<see cref="SourceIsSelf"/>, <see cref="SourceIsAncestorOfRow"/>) are computed at HOVER, because that is the first
-/// moment the payload exists; the structural ones come from the plan.</summary>
+/// <summary>Everything the resolver needs about ONE row, and nothing about the renderer. The one payload-dependent
+/// member (<see cref="SourceIsSelf"/>) is computed at HOVER, because that is the first moment the payload exists; the
+/// structural ones come from the plan.</summary>
 /// <param name="NextVisibleDepth">Depth of the next VISIBLE tree row; 0 when this is the last tree row. Together with
 /// <paramref name="Depth"/> it is the whole depth-ambiguity story: a slot is ambiguous iff the two differ downward.</param>
 /// <param name="CenterAccepts">This row has a dead centre that DEPOSITS: a folder (always), or an editable playlist
 /// whose centre takes the payload's tracks (the retained copy gesture).</param>
+/// <param name="SourceIsSelf">This row IS the dragged item. The one payload fact the resolver still reads, because
+/// "into MYSELF" and "before myself" need two different sentences and the marker-stream check
+/// (<c>RootlistOps.CheckMove</c>) collapses both into <c>SameItem</c>. Every OTHER legality question — the cycle, the
+/// no-op — is the marker stream's, never re-derived here (F1/F3).</param>
 /// <param name="IsListEnd">The synthetic <c>TreeEnd</c> row: the whole row is one <see cref="SidebarDropKind.EndOfList"/>
 /// slot at depth 0, with no bands at all.</param>
 public readonly record struct SidebarRowFacts(
@@ -80,7 +84,6 @@ public readonly record struct SidebarRowFacts(
     int NextVisibleDepth,
     bool CenterAccepts,
     bool SourceIsSelf,
-    bool SourceIsAncestorOfRow,
     bool SortedNonCustom,
     bool RootlistLoaded)
 {
@@ -179,7 +182,6 @@ public static class RootlistSlotResolver
         // Into the dragged folder itself gets its OWN sentence: "can't move a folder into itself" says the thing the
         // user tried, where the generic "can't move here" would leave them guessing which rule they hit.
         if (f.SourceIsSelf) return kind == SidebarDropKind.Into ? SidebarDropRefusal.IntoItself : SidebarDropRefusal.Self;
-        if (f.SourceIsAncestorOfRow) return SidebarDropRefusal.IntoDescendant;
         // A non-custom SORT cannot show a positional insert, so an ORDERING is refused with the fix ("clear sorting");
         // a DEPOSIT into a folder or a playlist is unaffected by how the list happens to be sorted and stays legal.
         if (f.SortedNonCustom && kind is SidebarDropKind.Before or SidebarDropKind.After or SidebarDropKind.EndOfList)
@@ -237,7 +239,11 @@ public static class RootlistSlotResolver
         if (min >= max) return max;
         if (!float.IsFinite(xInRow)) return max;
 
-        float steps = (xInRow - SidebarRowGeometry.RowInsetLeft) / SidebarRowGeometry.IndentStep;
+        // THE LADDER IS THE ROW'S OWN (F2/F3). `TreeContentX(d)` is where a tree row at depth d actually starts drawing
+        // — gutter + connector cells + the fixed disclosure cell — so travelling one cell left is exactly one outdent.
+        // Reading `IndentFor` here instead put every boundary ~19 DIP too far left, which made depth 0 unreachable and
+        // turned "move out of this folder" into "move INTO it".
+        float steps = (xInRow - SidebarRowGeometry.TreeContentX(0)) / SidebarRowGeometry.TreeGuideStep;
         int picked = (int)MathF.Round(steps);
         if (picked < min) picked = min;
         if (picked > max) picked = max;
@@ -247,8 +253,8 @@ public static class RootlistSlotResolver
         if (previous.Kind == SidebarDropKind.After && previous.Depth >= min && previous.Depth <= max
             && previous.Depth != picked)
         {
-            float boundary = SidebarRowGeometry.RowInsetLeft
-                + (previous.Depth + (picked > previous.Depth ? 0.5f : -0.5f)) * SidebarRowGeometry.IndentStep;
+            float boundary = SidebarRowGeometry.TreeContentX(0)
+                + (previous.Depth + (picked > previous.Depth ? 0.5f : -0.5f)) * SidebarRowGeometry.TreeGuideStep;
             float travelled = MathF.Abs(xInRow - boundary);
             if (travelled < DepthHysteresis) return previous.Depth;
         }
@@ -279,10 +285,12 @@ public static class SidebarDropCue
     /// <summary>Does this slot draw the accent plate? (The one predicate the row's Fill/Border binds read.)</summary>
     public static bool DrawsPlate(SidebarDropKind kind) => kind == SidebarDropKind.Into;
 
-    /// <summary>The caret's width: the row's content lane minus the depth indent and the row's trailing inset.</summary>
+    /// <summary>The caret's width: the row's content lane from <see cref="SidebarRowGeometry.TreeContentX"/> — the x the
+    /// row itself starts drawing at for that depth — to the row's trailing inset. ONE origin with the caret's transform
+    /// and with <c>PickDepth</c>.</summary>
     public static float LineWidth(float contentWidth, int depth)
     {
-        float w = contentWidth - SidebarRowGeometry.IndentFor(depth) - SidebarRowGeometry.RowInsetRight;
+        float w = contentWidth - SidebarRowGeometry.TreeContentX(depth) - SidebarRowGeometry.RowInsetRight;
         return w > 0f ? w : 0f;
     }
 
@@ -294,76 +302,17 @@ public static class SidebarDropCue
             : MathF.Max(0f, rowHeight - LineThickness);
 }
 
-/// <summary>Legality of one resolved (source → target, placement) move, decided against the sidebar's own DEPTH-FIRST
-/// FLATTENED TREE rather than against the backend's marker stream.
-///
-/// <para><b>Why here and not in <c>RootlistOps</c>.</b> <c>RootlistOps.TryBuildMove</c> already refuses a cycle and an
-/// adjacent no-op — but it does so three layers below the pointer and by returning <c>false</c>, which reaches the user
-/// as absolutely nothing happening (D2/D8). The rules are re-expressed over the tree the sidebar already holds so the
-/// refusal can be drawn WHERE THE CUE IS, before the drop. The two agree by construction: a folder's range in the
-/// flattened tree ("every following entry deeper than it") is the same span its balanced marker pair encloses, and the
-/// destination index is computed with the same three-way placement rule.</para></summary>
-public static class RootlistTreeMoves
-{
-    /// <summary>Refuse this move, or <see cref="SidebarDropRefusal.None"/>. An unknown source/target is NOT a refusal —
-    /// the tree may simply not be showing it, and inventing a refusal there would accuse a legal drop.</summary>
-    public static SidebarDropRefusal Check(IReadOnlyList<SidebarLibraryEntry>? tree, string sourceId, string targetId,
-                                           RootlistDropPlacement placement)
-    {
-        if (tree is null || tree.Count == 0) return SidebarDropRefusal.None;
-        if (!TryRange(tree, sourceId, out int from, out int end)) return SidebarDropRefusal.None;
-        if (!TryRange(tree, targetId, out int targetFrom, out int targetEnd)) return SidebarDropRefusal.None;
-        // The item IS the target. Into it is "a folder into itself"; an ordering against itself is simply where it is.
-        if (targetFrom == from)
-            return placement == RootlistDropPlacement.Inside ? SidebarDropRefusal.IntoItself : SidebarDropRefusal.NoOp;
-        // The TARGET lives inside the source's own span — decided before the destination index, because a folder aimed
-        // at its own last child computes a destination that happens to look like a no-op while the user was plainly
-        // trying to file it into itself. Naming the reason they hit is the whole point of the table.
-        if (targetFrom > from && targetFrom < end) return SidebarDropRefusal.IntoDescendant;
-        int to = placement switch
-        {
-            RootlistDropPlacement.Before => targetFrom,
-            // Inside = APPEND as the container's last child, which is the same index as "after everything it holds".
-            _ => targetEnd,
-        };
-        // Strictly inside the source's own span: filing a folder into its own subtree.
-        if (to > from && to < end) return SidebarDropRefusal.IntoDescendant;
-        // Landing on either edge of the span it already occupies: the item is already there.
-        if (to == from || to == end) return SidebarDropRefusal.NoOp;
-        return SidebarDropRefusal.None;
-    }
-
-    /// <summary>The half-open span one entry occupies in the flattened tree: a leaf is one row; a folder is itself plus
-    /// every following entry deeper than it.</summary>
-    public static bool TryRange(IReadOnlyList<SidebarLibraryEntry> tree, string id, out int start, out int end)
-    {
-        start = end = -1;
-        if (string.IsNullOrEmpty(id)) return false;
-        for (int i = 0; i < tree.Count; i++)
-        {
-            if (!string.Equals(tree[i].Id, id, StringComparison.Ordinal)) continue;
-            start = i;
-            if (!tree[i].IsFolder) { end = i + 1; return true; }
-            int depth = tree[i].Depth;
-            int j = i + 1;
-            while (j < tree.Count && tree[j].Depth > depth) j++;
-            end = j;
-            return true;
-        }
-        return false;
-    }
-}
-
 /// <summary>Where a rootlist item CAME FROM, so a completed move can be offered back as Undo.
 ///
 /// <para>Pure, over the SAME depth-first flattened tree the planner consumes (<c>SidebarProjectionInput.PlaylistTree</c>
 /// — the full tree, not the expansion-filtered plan), so the anchor is the item's real pre-move sibling and not
 /// whichever row happened to be visible. Expressed as an ordinary <c>(RootlistItemRef, RootlistDropPlacement)</c> pair,
-/// which means the inverse rides the very same <c>MoveRootlistItemAsync</c> seam the forward move did — no second
+/// which means the inverse rides the very same <c>MoveRootlistItemsAsync</c> seam the forward move did — no second
 /// mutation path, and nothing to keep in sync.</para></summary>
 public static class RootlistUndoAnchors
 {
-    /// <summary>Resolve the move that would put <paramref name="entryId"/> back exactly where it is now.
+    /// <summary>Resolve the move that would put <paramref name="entryId"/> back exactly where it is now. The N=1 sugar
+    /// over <see cref="TryResolveMany"/> — one item is a selection of one, and there is no second anchor rule.
     /// <para>False when there is nothing to anchor against (the item is the tree's only member, or it is not in the
     /// tree at all) — the caller then shows its confirmation toast WITHOUT an Undo action rather than offering one that
     /// would land somewhere else.</para></summary>
@@ -372,38 +321,104 @@ public static class RootlistUndoAnchors
     {
         anchor = default;
         placement = RootlistDropPlacement.After;
-        if (tree is null || string.IsNullOrEmpty(entryId)) return false;
+        if (!TryResolveMany(tree, [entryId], out var undo) || undo.Count != 1) return false;
+        anchor = undo[0].Target;
+        placement = undo[0].Placement;
+        return true;
+    }
+
+    /// <summary>Resolve the BATCH that would put a whole multi-selection back exactly where it is now, computed BEFORE
+    /// the move (once the rootlist has shifted, where the items used to be is unknowable).
+    ///
+    /// <para>Each item anchors on its previous <b>UNSELECTED</b> sibling (After) → its next unselected sibling (Before)
+    /// → its parent folder (Inside). Unselected siblings are the only rows guaranteed not to have moved, so every
+    /// anchor still means the same place in the POST-move stream. Anchoring on a selected neighbour would chain the
+    /// undo onto a row that is itself in flight.</para>
+    ///
+    /// <para>The emitted ORDER is <see cref="RootlistBatchOrder.For"/>'s, applied per run of items that share an anchor
+    /// — a contiguous selected run collapses onto ONE unselected neighbour, and issuing those After-anchored moves
+    /// forward would reverse the run. That is the same rule the forward batch obeys, reached through the same function
+    /// rather than restated here.</para>
+    ///
+    /// <para>False if ANY item has no resolvable anchor (a selection containing the tree's only top-level item): a
+    /// partial Undo would scatter the rest, so the toast simply carries no Undo — the existing single-item rule.</para></summary>
+    public static bool TryResolveMany(IReadOnlyList<SidebarLibraryEntry>? tree, IReadOnlyList<string> ids,
+                                      out IReadOnlyList<RootlistMove> undo)
+    {
+        undo = Array.Empty<RootlistMove>();
+        if (tree is null || ids is null || ids.Count == 0) return false;
+
+        // The selection as the MOVE sees it: tree order, descendants of a selected folder dropped. Anchoring a row that
+        // is riding inside a selected folder would undo it against an index the parent's own op has already moved.
+        var selected = RootlistSelection.Normalize(tree, ids);
+        if (selected.Count == 0) return false;
+        var chosen = new HashSet<string>(selected.Count, StringComparer.Ordinal);
+        for (int i = 0; i < selected.Count; i++) chosen.Add(selected[i].Id);
+
+        var sources = new List<RootlistItemRef>(selected.Count);
+        var anchors = new List<(RootlistItemRef Target, RootlistDropPlacement Placement)>(selected.Count);
+        for (int i = 0; i < selected.Count; i++)
+        {
+            var self = selected[i];
+            var source = RefOf(self);
+            if (source.Key.Length == 0) return false;
+            if (!TryAnchor(tree, in self, chosen, out var target, out var placement)) return false;
+            sources.Add(source);
+            anchors.Add((target, placement));
+        }
+
+        var moves = new List<RootlistMove>(sources.Count);
+        for (int start = 0; start < sources.Count;)
+        {
+            int end = start + 1;
+            while (end < sources.Count && anchors[end] == anchors[start]) end++;
+            var run = sources.GetRange(start, end - start);
+            moves.AddRange(RootlistBatchOrder.For(run, anchors[start].Target, anchors[start].Placement));
+            start = end;
+        }
+        if (moves.Count == 0) return false;
+        undo = moves;
+        return true;
+    }
+
+    /// <summary>Where ONE item came from, expressed against a row the batch is NOT moving.</summary>
+    static bool TryAnchor(IReadOnlyList<SidebarLibraryEntry> tree, in SidebarLibraryEntry self,
+                          HashSet<string> selected, out RootlistItemRef anchor, out RootlistDropPlacement placement)
+    {
+        anchor = default;
+        placement = RootlistDropPlacement.After;
 
         int at = -1;
         for (int i = 0; i < tree.Count; i++)
-            if (string.Equals(tree[i].Id, entryId, StringComparison.Ordinal)) { at = i; break; }
+            if (string.Equals(tree[i].Id, self.Id, StringComparison.Ordinal)) { at = i; break; }
         if (at < 0) return false;
-
-        var self = tree[at];
         int depth = self.Depth;
 
-        // The PREVIOUS sibling — the exact anchor whenever one exists.
+        // The PREVIOUS unselected sibling — the exact anchor whenever one exists.
         for (int i = at - 1; i >= 0; i--)
         {
             int d = tree[i].Depth;
             if (d > depth) continue;                 // a descendant of an earlier sibling
-            if (d < depth) break;                    // the parent: this item is the first child
+            if (d < depth) break;                    // the parent: this item is the first (unselected-wise) child
+            if (selected.Contains(tree[i].Id)) continue;
             anchor = RefOf(tree[i]);
             placement = RootlistDropPlacement.After;
             return anchor.Key.Length > 0;
         }
 
-        // First among its siblings: anchor on the NEXT one instead.
-        int end = at + 1;
-        while (end < tree.Count && tree[end].Depth > depth) end++;
-        if (end < tree.Count && tree[end].Depth == depth)
+        // First among its unselected siblings: anchor on the next one instead.
+        for (int i = at + 1; i < tree.Count; i++)
         {
-            anchor = RefOf(tree[end]);
+            int d = tree[i].Depth;
+            if (d > depth) continue;                 // this item's own subtree, or a later sibling's
+            if (d < depth) break;                    // out of the folder: there is no next sibling
+            if (selected.Contains(tree[i].Id)) continue;
+            anchor = RefOf(tree[i]);
             placement = RootlistDropPlacement.Before;
             return anchor.Key.Length > 0;
         }
 
-        // The ONLY child of its folder: append back into that folder.
+        // The only UNSELECTED-adjacent child of its folder: append back into that folder.
         if (self.ParentFolderId is { Length: > 0 } parent)
         {
             anchor = new RootlistItemRef(parent, IsFolder: true);

@@ -560,6 +560,10 @@ public sealed class Services
         // The pending-edit chip / notification line read the durable outbox through the bridge; the bridge is built
         // in the Services ctor, before the store and the outbox exist, so the engine is attached here instead.
         svc.LibraryBridge.AttachMutations(mutEngine);
+        // …and the STORE, for the same reason: every rootlist legality question (the sidebar drop cue, the rail folder
+        // tile, the "Move to folder…" picker) is decided against `IStore.Rootlist()`, the marker stream the write
+        // itself indexes into.
+        svc.LibraryBridge.AttachRootlist(store);
         svc.RealResyncQueue = resyncQueue;
         svc.RealSessionHost = sessionHost;
         svc.EchoRing = echoRing;
